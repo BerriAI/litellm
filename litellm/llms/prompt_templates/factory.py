@@ -115,6 +115,26 @@ def llama_2_chat_pt(messages):
     return prompt
 
 
+def convert_to_ollama_image(openai_image_url: str):
+    try:
+        if openai_image_url.startswith("http"):
+            openai_image_url = convert_url_to_base64(url=openai_image_url)
+
+        if openai_image_url.startswith("data:image/"):
+            # Extract the base64 image data
+            base64_data = openai_image_url.split("data:image/")[1].split(";base64,")[1]
+        else:
+            base64_data = openai_image_url
+
+        return base64_data
+    except Exception as e:
+        if "Error: Unable to fetch image from URL" in str(e):
+            raise e
+        raise Exception(
+            """Image url not in expected format. Example Expected input - "image_url": "data:image/jpeg;base64,{base64_image}". """
+        )
+
+
 def ollama_pt(
     model, messages
 ):  # https://github.com/ollama/ollama/blob/af4cf55884ac54b9e637cd71dadfe9b7a5685877/docs/modelfile.md#template
@@ -147,8 +167,10 @@ def ollama_pt(
                         if element["type"] == "text":
                             prompt += element["text"]
                         elif element["type"] == "image_url":
-                            image_url = element["image_url"]["url"]
-                            images.append(image_url)
+                            base64_image = convert_to_ollama_image(
+                                element["image_url"]["url"]
+                            )
+                            images.append(base64_image)
         return {"prompt": prompt, "images": images}
     else:
         prompt = "".join(
@@ -1509,11 +1531,12 @@ def _gemini_vision_convert_messages(messages: list):
                     raise Exception(
                         "gemini image conversion failed please run `pip install Pillow`"
                     )
-                
+
                 if "base64" in img:
                     # Case 2: Base64 image data
                     import base64
                     import io
+
                     # Extract the base64 image data
                     base64_data = img.split("base64,")[1]
 

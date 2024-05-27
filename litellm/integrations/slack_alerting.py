@@ -1,20 +1,50 @@
 #### What this does ####
 #    Class for sending Slack Alerts #
-import dotenv, os
-from litellm.proxy._types import UserAPIKeyAuth, CallInfo
+import dotenv, os, traceback
+from litellm.proxy._types import UserAPIKeyAuth, CallInfo, AlertType
 from litellm._logging import verbose_logger, verbose_proxy_logger
 import litellm, threading
-from typing import List, Literal, Any, Union, Optional, Dict
+from typing import List, Literal, Any, Union, Optional, Dict, Set
 from litellm.caching import DualCache
-import asyncio
+import asyncio, time
 import aiohttp
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 import datetime
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from enum import Enum
 from datetime import datetime as dt, timedelta, timezone
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.proxy._types import WebhookEvent
 import random
+from typing import TypedDict
+from openai import APIError
+
+import litellm.types
+from litellm.types.router import LiteLLM_Params
+
+
+class BaseOutageModel(TypedDict):
+    alerts: List[int]
+    minor_alert_sent: bool
+    major_alert_sent: bool
+    last_updated_at: float
+
+
+class OutageModel(BaseOutageModel):
+    model_id: str
+
+
+class ProviderRegionOutageModel(BaseOutageModel):
+    provider_region_id: str
+    deployment_ids: Set[str]
+
+
+# we use this for the email header, please send a test email if you change this. verify it looks good on email
+LITELLM_LOGO_URL = "https://litellm-listing.s3.amazonaws.com/litellm_logo.png"
+EMAIL_LOGO_URL = os.getenv(
+    "SMTP_SENDER_LOGO", "https://litellm-listing.s3.amazonaws.com/litellm_logo.png"
+)
+EMAIL_SUPPORT_CONTACT = os.getenv("EMAIL_SUPPORT_CONTACT", "support@berri.ai")
 
 
 class LiteLLMBase(BaseModel):
@@ -30,19 +60,55 @@ class LiteLLMBase(BaseModel):
             return self.dict()
 
 
+class SlackAlertingArgsEnum(Enum):
+    daily_report_frequency: int = 12 * 60 * 60
+    report_check_interval: int = 5 * 60
+    budget_alert_ttl: int = 24 * 60 * 60
+    outage_alert_ttl: int = 1 * 60
+    region_outage_alert_ttl: int = 1 * 60
+    minor_outage_alert_threshold: int = 1 * 5
+    major_outage_alert_threshold: int = 1 * 10
+    max_outage_alert_list_size: int = 1 * 10
+
+
 class SlackAlertingArgs(LiteLLMBase):
-    default_daily_report_frequency: int = 12 * 60 * 60  # 12 hours
-    daily_report_frequency: int = int(
-        os.getenv("SLACK_DAILY_REPORT_FREQUENCY", default_daily_report_frequency)
+    daily_report_frequency: int = Field(
+        default=int(
+            os.getenv(
+                "SLACK_DAILY_REPORT_FREQUENCY",
+                SlackAlertingArgsEnum.daily_report_frequency.value,
+            )
+        ),
+        description="Frequency of receiving deployment latency/failure reports. Default is 12hours. Value is in seconds.",
     )
-    report_check_interval: int = 5 * 60  # 5 minutes
-    budget_alert_ttl: int = 24 * 60 * 60  # 24 hours
-
-
-class WebhookEvent(CallInfo):
-    event: Literal["budget_crossed", "threshold_crossed", "projected_limit_exceeded"]
-    event_group: Literal["user", "key", "team", "proxy"]
-    event_message: str  # human-readable description of event
+    report_check_interval: int = Field(
+        default=SlackAlertingArgsEnum.report_check_interval.value,
+        description="Frequency of checking cache if report should be sent. Background process. Default is once per hour. Value is in seconds.",
+    )  # 5 minutes
+    budget_alert_ttl: int = Field(
+        default=SlackAlertingArgsEnum.budget_alert_ttl.value,
+        description="Cache ttl for budgets alerts. Prevents spamming same alert, each time budget is crossed. Value is in seconds.",
+    )  # 24 hours
+    outage_alert_ttl: int = Field(
+        default=SlackAlertingArgsEnum.outage_alert_ttl.value,
+        description="Cache ttl for model outage alerts. Sets time-window for errors. Default is 1 minute. Value is in seconds.",
+    )  # 1 minute ttl
+    region_outage_alert_ttl: int = Field(
+        default=SlackAlertingArgsEnum.region_outage_alert_ttl.value,
+        description="Cache ttl for provider-region based outage alerts. Alert sent if 2+ models in same region report errors. Sets time-window for errors. Default is 1 minute. Value is in seconds.",
+    )  # 1 minute ttl
+    minor_outage_alert_threshold: int = Field(
+        default=SlackAlertingArgsEnum.minor_outage_alert_threshold.value,
+        description="The number of errors that count as a model/region minor outage. ('400' error code is not counted).",
+    )
+    major_outage_alert_threshold: int = Field(
+        default=SlackAlertingArgsEnum.major_outage_alert_threshold.value,
+        description="The number of errors that countas a model/region major outage. ('400' error code is not counted).",
+    )
+    max_outage_alert_list_size: int = Field(
+        default=SlackAlertingArgsEnum.max_outage_alert_list_size.value,
+        description="Maximum number of errors to store in cache. For a given model/region. Prevents memory leaks.",
+    )  # prevent memory leak
 
 
 class DeploymentMetrics(LiteLLMBase):
@@ -86,19 +152,7 @@ class SlackAlerting(CustomLogger):
         internal_usage_cache: Optional[DualCache] = None,
         alerting_threshold: float = 300,  # threshold for slow / hanging llm responses (in seconds)
         alerting: Optional[List] = [],
-        alert_types: List[
-            Literal[
-                "llm_exceptions",
-                "llm_too_slow",
-                "llm_requests_hanging",
-                "budget_alerts",
-                "db_exceptions",
-                "daily_reports",
-                "spend_reports",
-                "cooldown_deployment",
-                "new_model_added",
-            ]
-        ] = [
+        alert_types: List[AlertType] = [
             "llm_exceptions",
             "llm_too_slow",
             "llm_requests_hanging",
@@ -108,6 +162,7 @@ class SlackAlerting(CustomLogger):
             "spend_reports",
             "cooldown_deployment",
             "new_model_added",
+            "outage_alerts",
         ],
         alert_to_webhook_url: Optional[
             Dict
@@ -124,6 +179,7 @@ class SlackAlerting(CustomLogger):
         self.is_running = False
         self.alerting_args = SlackAlertingArgs(**alerting_args)
         self.default_webhook_url = default_webhook_url
+        self.llm_router: Optional[litellm.Router] = None
 
     def update_values(
         self,
@@ -132,6 +188,7 @@ class SlackAlerting(CustomLogger):
         alert_types: Optional[List] = None,
         alert_to_webhook_url: Optional[Dict] = None,
         alerting_args: Optional[Dict] = None,
+        llm_router: Optional[litellm.Router] = None,
     ):
         if alerting is not None:
             self.alerting = alerting
@@ -147,6 +204,8 @@ class SlackAlerting(CustomLogger):
                 self.alert_to_webhook_url = alert_to_webhook_url
             else:
                 self.alert_to_webhook_url.update(alert_to_webhook_url)
+        if llm_router is not None:
+            self.llm_router = llm_router
 
     async def deployment_in_cooldown(self):
         pass
@@ -375,6 +434,9 @@ class SlackAlerting(CustomLogger):
             keys=combined_metrics_keys
         )  # [1, 2, None, ..]
 
+        if combined_metrics_values is None:
+            return False
+
         all_none = True
         for val in combined_metrics_values:
             if val is not None and val > 0:
@@ -426,7 +488,7 @@ class SlackAlerting(CustomLogger):
         ]
 
         # format alert -> return the litellm model name + api base
-        message = f"\n\nHere are today's key metrics 📈: \n\n"
+        message = f"\n\nTime: `{time.time()}`s\nHere are today's key metrics 📈: \n\n"
 
         message += "\n\n*❗️ Top Deployments with Most Failed Requests:*\n\n"
         if not top_5_failed:
@@ -476,6 +538,8 @@ class SlackAlerting(CustomLogger):
         await self.internal_usage_cache.async_batch_set_cache(
             cache_list=combined_metrics_cache_keys
         )
+
+        message += f"\n\nNext Run is in: `{time.time() + self.alerting_args.daily_report_frequency}`s"
 
         # send alert
         await self.send_alert(message=message, level="Low", alert_type="daily_reports")
@@ -648,6 +712,9 @@ class SlackAlerting(CustomLogger):
             _id = user_info.token
 
         # percent of max_budget left to spend
+        if user_info.max_budget is None:
+            return
+
         if user_info.max_budget > 0:
             percent_left = (
                 user_info.max_budget - user_info.spend
@@ -658,10 +725,10 @@ class SlackAlerting(CustomLogger):
         # check if crossed budget
         if user_info.spend >= user_info.max_budget:
             event = "budget_crossed"
-            event_message += "Budget Crossed"
+            event_message += f"Budget Crossed\n Total Budget:`{user_info.max_budget}`"
         elif percent_left <= 0.05:
             event = "threshold_crossed"
-            event_message += "5% Threshold Crossed"
+            event_message += "5% Threshold Crossed "
         elif percent_left <= 0.15:
             event = "threshold_crossed"
             event_message += "15% Threshold Crossed"
@@ -690,6 +757,308 @@ class SlackAlerting(CustomLogger):
 
             return
         return
+
+    def _count_outage_alerts(self, alerts: List[int]) -> str:
+        """
+        Parameters:
+        - alerts: List[int] -> list of error codes (either 408 or 500+)
+
+        Returns:
+        - str -> formatted string. This is an alert message, giving a human-friendly description of the errors.
+        """
+        error_breakdown = {"Timeout Errors": 0, "API Errors": 0, "Unknown Errors": 0}
+        for alert in alerts:
+            if alert == 408:
+                error_breakdown["Timeout Errors"] += 1
+            elif alert >= 500:
+                error_breakdown["API Errors"] += 1
+            else:
+                error_breakdown["Unknown Errors"] += 1
+
+        error_msg = ""
+        for key, value in error_breakdown.items():
+            if value > 0:
+                error_msg += "\n{}: {}\n".format(key, value)
+
+        return error_msg
+
+    def _outage_alert_msg_factory(
+        self,
+        alert_type: Literal["Major", "Minor"],
+        key: Literal["Model", "Region"],
+        key_val: str,
+        provider: str,
+        api_base: Optional[str],
+        outage_value: BaseOutageModel,
+    ) -> str:
+        """Format an alert message for slack"""
+        headers = {f"{key} Name": key_val, "Provider": provider}
+        if api_base is not None:
+            headers["API Base"] = api_base  # type: ignore
+
+        headers_str = "\n"
+        for k, v in headers.items():
+            headers_str += f"*{k}:* `{v}`\n"
+        return f"""\n\n
+*⚠️ {alert_type} Service Outage*
+
+{headers_str}
+
+*Errors:*
+{self._count_outage_alerts(alerts=outage_value["alerts"])}
+
+*Last Check:* `{round(time.time() - outage_value["last_updated_at"], 4)}s ago`\n\n
+"""
+
+    async def region_outage_alerts(
+        self,
+        exception: APIError,
+        deployment_id: str,
+    ) -> None:
+        """
+        Send slack alert if specific provider region is having an outage.
+
+        Track for 408 (Timeout) and >=500 Error codes
+        """
+        ## CREATE (PROVIDER+REGION) ID ##
+        if self.llm_router is None:
+            return
+
+        deployment = self.llm_router.get_deployment(model_id=deployment_id)
+
+        if deployment is None:
+            return
+
+        model = deployment.litellm_params.model
+        ### GET PROVIDER ###
+        provider = deployment.litellm_params.custom_llm_provider
+        if provider is None:
+            model, provider, _, _ = litellm.get_llm_provider(model=model)
+
+        ### GET REGION ###
+        region_name = deployment.litellm_params.region_name
+        if region_name is None:
+            region_name = litellm.utils._get_model_region(
+                custom_llm_provider=provider, litellm_params=deployment.litellm_params
+            )
+
+        if region_name is None:
+            return
+
+        ### UNIQUE CACHE KEY ###
+        cache_key = provider + region_name
+
+        outage_value: Optional[ProviderRegionOutageModel] = (
+            await self.internal_usage_cache.async_get_cache(key=cache_key)
+        )
+
+        if (
+            getattr(exception, "status_code", None) is None
+            or (
+                exception.status_code != 408  # type: ignore
+                and exception.status_code < 500  # type: ignore
+            )
+            or self.llm_router is None
+        ):
+            return
+
+        if outage_value is None:
+            _deployment_set = set()
+            _deployment_set.add(deployment_id)
+            outage_value = ProviderRegionOutageModel(
+                provider_region_id=cache_key,
+                alerts=[exception.status_code],  # type: ignore
+                minor_alert_sent=False,
+                major_alert_sent=False,
+                last_updated_at=time.time(),
+                deployment_ids=_deployment_set,
+            )
+
+            ## add to cache ##
+            await self.internal_usage_cache.async_set_cache(
+                key=cache_key,
+                value=outage_value,
+                ttl=self.alerting_args.region_outage_alert_ttl,
+            )
+            return
+
+        if len(outage_value["alerts"]) < self.alerting_args.max_outage_alert_list_size:
+            outage_value["alerts"].append(exception.status_code)  # type: ignore
+        else:  # prevent memory leaks
+            pass
+        _deployment_set = outage_value["deployment_ids"]
+        _deployment_set.add(deployment_id)
+        outage_value["deployment_ids"] = _deployment_set
+        outage_value["last_updated_at"] = time.time()
+
+        ## MINOR OUTAGE ALERT SENT ##
+        if (
+            outage_value["minor_alert_sent"] == False
+            and len(outage_value["alerts"])
+            >= self.alerting_args.minor_outage_alert_threshold
+            and len(_deployment_set) > 1  # make sure it's not just 1 bad deployment
+        ):
+            msg = self._outage_alert_msg_factory(
+                alert_type="Minor",
+                key="Region",
+                key_val=region_name,
+                api_base=None,
+                outage_value=outage_value,
+                provider=provider,
+            )
+            # send minor alert
+            await self.send_alert(
+                message=msg, level="Medium", alert_type="outage_alerts"
+            )
+            # set to true
+            outage_value["minor_alert_sent"] = True
+
+        ## MAJOR OUTAGE ALERT SENT ##
+        elif (
+            outage_value["major_alert_sent"] == False
+            and len(outage_value["alerts"])
+            >= self.alerting_args.major_outage_alert_threshold
+            and len(_deployment_set) > 1  # make sure it's not just 1 bad deployment
+        ):
+            msg = self._outage_alert_msg_factory(
+                alert_type="Major",
+                key="Region",
+                key_val=region_name,
+                api_base=None,
+                outage_value=outage_value,
+                provider=provider,
+            )
+
+            # send minor alert
+            await self.send_alert(message=msg, level="High", alert_type="outage_alerts")
+            # set to true
+            outage_value["major_alert_sent"] = True
+
+        ## update cache ##
+        await self.internal_usage_cache.async_set_cache(
+            key=cache_key, value=outage_value
+        )
+
+    async def outage_alerts(
+        self,
+        exception: APIError,
+        deployment_id: str,
+    ) -> None:
+        """
+        Send slack alert if model is badly configured / having an outage (408, 401, 429, >=500).
+
+        key = model_id
+
+        value = {
+        - model_id
+        - threshold
+        - alerts []
+        }
+
+        ttl = 1hr
+        max_alerts_size = 10
+        """
+        try:
+            outage_value: Optional[OutageModel] = await self.internal_usage_cache.async_get_cache(key=deployment_id)  # type: ignore
+            if (
+                getattr(exception, "status_code", None) is None
+                or (
+                    exception.status_code != 408  # type: ignore
+                    and exception.status_code < 500  # type: ignore
+                )
+                or self.llm_router is None
+            ):
+                return
+
+            ### EXTRACT MODEL DETAILS ###
+            deployment = self.llm_router.get_deployment(model_id=deployment_id)
+            if deployment is None:
+                return
+
+            model = deployment.litellm_params.model
+            provider = deployment.litellm_params.custom_llm_provider
+            if provider is None:
+                try:
+                    model, provider, _, _ = litellm.get_llm_provider(model=model)
+                except Exception as e:
+                    provider = ""
+            api_base = litellm.get_api_base(
+                model=model, optional_params=deployment.litellm_params
+            )
+
+            if outage_value is None:
+                outage_value = OutageModel(
+                    model_id=deployment_id,
+                    alerts=[exception.status_code],  # type: ignore
+                    minor_alert_sent=False,
+                    major_alert_sent=False,
+                    last_updated_at=time.time(),
+                )
+
+                ## add to cache ##
+                await self.internal_usage_cache.async_set_cache(
+                    key=deployment_id,
+                    value=outage_value,
+                    ttl=self.alerting_args.outage_alert_ttl,
+                )
+                return
+
+            if (
+                len(outage_value["alerts"])
+                < self.alerting_args.max_outage_alert_list_size
+            ):
+                outage_value["alerts"].append(exception.status_code)  # type: ignore
+            else:  # prevent memory leaks
+                pass
+
+            outage_value["last_updated_at"] = time.time()
+
+            ## MINOR OUTAGE ALERT SENT ##
+            if (
+                outage_value["minor_alert_sent"] == False
+                and len(outage_value["alerts"])
+                >= self.alerting_args.minor_outage_alert_threshold
+            ):
+                msg = self._outage_alert_msg_factory(
+                    alert_type="Minor",
+                    key="Model",
+                    key_val=model,
+                    api_base=api_base,
+                    outage_value=outage_value,
+                    provider=provider,
+                )
+                # send minor alert
+                await self.send_alert(
+                    message=msg, level="Medium", alert_type="outage_alerts"
+                )
+                # set to true
+                outage_value["minor_alert_sent"] = True
+            elif (
+                outage_value["major_alert_sent"] == False
+                and len(outage_value["alerts"])
+                >= self.alerting_args.major_outage_alert_threshold
+            ):
+                msg = self._outage_alert_msg_factory(
+                    alert_type="Major",
+                    key="Model",
+                    key_val=model,
+                    api_base=api_base,
+                    outage_value=outage_value,
+                    provider=provider,
+                )
+                # send minor alert
+                await self.send_alert(
+                    message=msg, level="High", alert_type="outage_alerts"
+                )
+                # set to true
+                outage_value["major_alert_sent"] = True
+
+            ## update cache ##
+            await self.internal_usage_cache.async_set_cache(
+                key=deployment_id, value=outage_value
+            )
+        except Exception as e:
+            pass
 
     async def model_added_alert(
         self, model_name: str, litellm_model_name: str, passed_model_info: Any
@@ -740,10 +1109,12 @@ Model Info:
 ```
 """
 
-        await self.send_alert(
+        alert_val = self.send_alert(
             message=message, level="Low", alert_type="new_model_added"
         )
-        pass
+
+        if alert_val is not None and asyncio.iscoroutine(alert_val):
+            await alert_val
 
     async def model_removed_alert(self, model_name: str):
         pass
@@ -776,21 +1147,159 @@ Model Info:
 
         return False
 
+    async def send_key_created_email(self, webhook_event: WebhookEvent) -> bool:
+        from litellm.proxy.utils import send_email
+
+        if self.alerting is None or "email" not in self.alerting:
+            # do nothing if user does not want email alerts
+            return False
+
+        # make sure this is a premium user
+        from litellm.proxy.proxy_server import premium_user
+        from litellm.proxy.proxy_server import CommonProxyErrors, prisma_client
+
+        if premium_user != True:
+            raise Exception(
+                f"Trying to use Email Alerting on key creation\n {CommonProxyErrors.not_premium_user.value}"
+            )
+
+        event_name = webhook_event.event_message
+        recipient_email = webhook_event.user_email
+        recipient_user_id = webhook_event.user_id
+        if (
+            recipient_email is None
+            and recipient_user_id is not None
+            and prisma_client is not None
+        ):
+            user_row = await prisma_client.db.litellm_usertable.find_unique(
+                where={"user_id": recipient_user_id}
+            )
+
+            if user_row is not None:
+                recipient_email = user_row.user_email
+
+        key_name = webhook_event.key_alias
+        key_token = webhook_event.token
+        key_budget = webhook_event.max_budget
+
+        email_html_content = "Alert from LiteLLM Server"
+        if recipient_email is None:
+            verbose_proxy_logger.error(
+                "Trying to send email alert to no recipient", extra=webhook_event.dict()
+            )
+        email_html_content = f"""
+            <img src="{EMAIL_LOGO_URL}" alt="LiteLLM Logo" width="150" height="50" />
+
+            <p> Hi {recipient_email}, <br/>
+ 
+            I'm happy to provide you with an OpenAI Proxy API Key, loaded with ${key_budget} per month. <br /> <br />
+
+            <b>
+            Key: <pre>{key_token}</pre> <br>
+            </b>
+
+            <h2>Usage Example</h2>
+
+            Detailed Documentation on <a href="https://docs.litellm.ai/docs/proxy/user_keys">Usage with OpenAI Python SDK, Langchain, LlamaIndex, Curl</a>
+
+            <pre>
+
+            import openai
+            client = openai.OpenAI(
+                api_key="{key_token}",
+                base_url={os.getenv("PROXY_BASE_URL", "http://0.0.0.0:4000")}
+            )
+
+            response = client.chat.completions.create(
+                model="gpt-3.5-turbo", # model to send to the proxy
+                messages = [
+                    {{
+                        "role": "user",
+                        "content": "this is a test request, write a short poem"
+                    }}
+                ]
+            )
+
+            </pre>
+
+
+            If you have any questions, please send an email to {EMAIL_SUPPORT_CONTACT} <br /> <br />
+
+            Best, <br />
+            The LiteLLM team <br />
+            """
+
+        payload = webhook_event.model_dump_json()
+        email_event = {
+            "to": recipient_email,
+            "subject": f"LiteLLM: {event_name}",
+            "html": email_html_content,
+        }
+
+        response = await send_email(
+            receiver_email=email_event["to"],
+            subject=email_event["subject"],
+            html=email_event["html"],
+        )
+
+        return False
+
+    async def send_email_alert_using_smtp(self, webhook_event: WebhookEvent) -> bool:
+        """
+        Sends structured Email alert to an SMTP server
+
+        Currently only implemented for budget alerts
+
+        Returns -> True if sent, False if not.
+        """
+        from litellm.proxy.utils import send_email
+
+        event_name = webhook_event.event_message
+        recipient_email = webhook_event.user_email
+        user_name = webhook_event.user_id
+        max_budget = webhook_event.max_budget
+        email_html_content = "Alert from LiteLLM Server"
+        if recipient_email is None:
+            verbose_proxy_logger.error(
+                "Trying to send email alert to no recipient", extra=webhook_event.dict()
+            )
+
+        if webhook_event.event == "budget_crossed":
+            email_html_content = f"""
+            <img src="{EMAIL_LOGO_URL}" alt="LiteLLM Logo" width="150" height="50" />
+
+            <p> Hi {user_name}, <br/>
+
+            Your LLM API usage this month has reached your account's <b> monthly budget of ${max_budget} </b> <br /> <br />
+
+            API requests will be rejected until either (a) you increase your monthly budget or (b) your monthly usage resets at the beginning of the next calendar month. <br /> <br />
+
+            If you have any questions, please send an email to {EMAIL_SUPPORT_CONTACT} <br /> <br />
+
+            Best, <br />
+            The LiteLLM team <br />
+            """
+
+        payload = webhook_event.model_dump_json()
+        email_event = {
+            "to": recipient_email,
+            "subject": f"LiteLLM: {event_name}",
+            "html": email_html_content,
+        }
+
+        response = await send_email(
+            receiver_email=email_event["to"],
+            subject=email_event["subject"],
+            html=email_event["html"],
+        )
+
+        return False
+
     async def send_alert(
         self,
         message: str,
         level: Literal["Low", "Medium", "High"],
-        alert_type: Literal[
-            "llm_exceptions",
-            "llm_too_slow",
-            "llm_requests_hanging",
-            "budget_alerts",
-            "db_exceptions",
-            "daily_reports",
-            "spend_reports",
-            "new_model_added",
-            "cooldown_deployment",
-        ],
+        alert_type: Literal[AlertType],
         user_info: Optional[WebhookEvent] = None,
         **kwargs,
     ):
@@ -817,6 +1326,14 @@ Model Info:
             and user_info is not None
         ):
             await self.send_webhook_alert(webhook_event=user_info)
+
+        if (
+            "email" in self.alerting
+            and alert_type == "budget_alerts"
+            and user_info is not None
+        ):
+            # only send budget alerts over Email
+            await self.send_email_alert_using_smtp(webhook_event=user_info)
 
         if "slack" not in self.alerting:
             return
@@ -905,18 +1422,36 @@ Model Info:
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         """Log failure + deployment latency"""
-        if "daily_reports" in self.alert_types:
-            model_id = (
-                kwargs.get("litellm_params", {}).get("model_info", {}).get("id", "")
-            )
-            await self.async_update_daily_reports(
-                DeploymentMetrics(
-                    id=model_id,
-                    failed_request=True,
-                    latency_per_output_token=None,
-                    updated_at=litellm.utils.get_utc_datetime(),
-                )
-            )
+        _litellm_params = kwargs.get("litellm_params", {})
+        _model_info = _litellm_params.get("model_info", {}) or {}
+        model_id = _model_info.get("id", "")
+        try:
+            if "daily_reports" in self.alert_types:
+                try:
+                    await self.async_update_daily_reports(
+                        DeploymentMetrics(
+                            id=model_id,
+                            failed_request=True,
+                            latency_per_output_token=None,
+                            updated_at=litellm.utils.get_utc_datetime(),
+                        )
+                    )
+                except Exception as e:
+                    verbose_logger.debug(f"Exception raises -{str(e)}")
+
+            if isinstance(kwargs.get("exception", ""), APIError):
+                if "outage_alerts" in self.alert_types:
+                    await self.outage_alerts(
+                        exception=kwargs["exception"],
+                        deployment_id=model_id,
+                    )
+
+                if "region_outage_alerts" in self.alert_types:
+                    await self.region_outage_alerts(
+                        exception=kwargs["exception"], deployment_id=model_id
+                    )
+        except Exception as e:
+            pass
 
     async def _run_scheduler_helper(self, llm_router) -> bool:
         """
@@ -928,40 +1463,26 @@ Model Info:
 
         report_sent = await self.internal_usage_cache.async_get_cache(
             key=SlackAlertingCacheKeys.report_sent_key.value
-        )  # None | datetime
+        )  # None | float
 
-        current_time = litellm.utils.get_utc_datetime()
+        current_time = time.time()
 
         if report_sent is None:
-            _current_time = current_time.isoformat()
             await self.internal_usage_cache.async_set_cache(
                 key=SlackAlertingCacheKeys.report_sent_key.value,
-                value=_current_time,
+                value=current_time,
             )
-        else:
+        elif isinstance(report_sent, float):
             # Check if current time - interval >= time last sent
-            delta_naive = timedelta(seconds=self.alerting_args.daily_report_frequency)
-            if isinstance(report_sent, str):
-                report_sent = dt.fromisoformat(report_sent)
+            interval_seconds = self.alerting_args.daily_report_frequency
 
-            # Ensure report_sent is an aware datetime object
-            if report_sent.tzinfo is None:
-                report_sent = report_sent.replace(tzinfo=timezone.utc)
-
-            # Calculate delta as an aware datetime object with the same timezone as report_sent
-            delta = report_sent - delta_naive
-
-            current_time_utc = current_time.astimezone(timezone.utc)
-            delta_utc = delta.astimezone(timezone.utc)
-
-            if current_time_utc >= delta_utc:
+            if current_time - report_sent >= interval_seconds:
                 # Sneak in the reporting logic here
                 await self.send_daily_reports(router=llm_router)
                 # Also, don't forget to update the report_sent time after sending the report!
-                _current_time = current_time.isoformat()
                 await self.internal_usage_cache.async_set_cache(
                     key=SlackAlertingCacheKeys.report_sent_key.value,
-                    value=_current_time,
+                    value=current_time,
                 )
                 report_sent_bool = True
 

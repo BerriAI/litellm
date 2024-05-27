@@ -48,6 +48,7 @@ from litellm.types.router import (
     RetryPolicy,
     AlertingConfig,
     DeploymentTypedDict,
+    ModelGroupInfo,
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.azure import get_azure_ad_token_from_oidc
@@ -3045,6 +3046,100 @@ class Router:
                     return model
         return None
 
+    def get_model_group_info(self, model_group: str) -> Optional[ModelGroupInfo]:
+        """
+        For a given model group name, return the combined model info
+
+        Returns:
+        - ModelGroupInfo if able to construct a model group
+        - None if error constructing model group info
+        """
+
+        model_group_info: Optional[ModelGroupInfo] = None
+
+        for model in self.model_list:
+            if "model_name" in model and model["model_name"] == model_group:
+                # model in model group found #
+                litellm_params = LiteLLM_Params(**model["litellm_params"])
+                # get model info
+                try:
+                    model_info = litellm.get_model_info(model=litellm_params.model)
+                except Exception as e:
+                    continue
+                # get llm provider
+                try:
+                    model, llm_provider, _, _ = litellm.get_llm_provider(
+                        model=litellm_params.model,
+                        custom_llm_provider=litellm_params.custom_llm_provider,
+                    )
+                except Exception as e:
+                    continue
+
+                if model_group_info is None:
+                    model_group_info = ModelGroupInfo(
+                        model_group=model_group, providers=[llm_provider], **model_info  # type: ignore
+                    )
+                else:
+                    # if max_input_tokens > curr
+                    # if max_output_tokens > curr
+                    # if input_cost_per_token > curr
+                    # if output_cost_per_token > curr
+                    # supports_parallel_function_calling == True
+                    # supports_vision == True
+                    # supports_function_calling == True
+                    if llm_provider not in model_group_info.providers:
+                        model_group_info.providers.append(llm_provider)
+                    if model_info.get("max_input_tokens", None) is not None and (
+                        model_group_info.max_input_tokens is None
+                        or model_info["max_input_tokens"]
+                        > model_group_info.max_input_tokens
+                    ):
+                        model_group_info.max_input_tokens = model_info[
+                            "max_input_tokens"
+                        ]
+                    if model_info.get("max_output_tokens", None) is not None and (
+                        model_group_info.max_output_tokens is None
+                        or model_info["max_output_tokens"]
+                        > model_group_info.max_output_tokens
+                    ):
+                        model_group_info.max_output_tokens = model_info[
+                            "max_output_tokens"
+                        ]
+                    if model_info.get("input_cost_per_token", None) is not None and (
+                        model_group_info.input_cost_per_token is None
+                        or model_info["input_cost_per_token"]
+                        > model_group_info.input_cost_per_token
+                    ):
+                        model_group_info.input_cost_per_token = model_info[
+                            "input_cost_per_token"
+                        ]
+                    if model_info.get("output_cost_per_token", None) is not None and (
+                        model_group_info.output_cost_per_token is None
+                        or model_info["output_cost_per_token"]
+                        > model_group_info.output_cost_per_token
+                    ):
+                        model_group_info.output_cost_per_token = model_info[
+                            "output_cost_per_token"
+                        ]
+                    if (
+                        model_info.get("supports_parallel_function_calling", None)
+                        is not None
+                        and model_info["supports_parallel_function_calling"] == True  # type: ignore
+                    ):
+                        model_group_info.supports_parallel_function_calling = True
+                    if (
+                        model_info.get("supports_vision", None) is not None
+                        and model_info["supports_vision"] == True  # type: ignore
+                    ):
+                        model_group_info.supports_vision = True
+                    if (
+                        model_info.get("supports_function_calling", None) is not None
+                        and model_info["supports_function_calling"] == True  # type: ignore
+                    ):
+                        model_group_info.supports_function_calling = True
+
+        return model_group_info
+
     def get_model_ids(self) -> List[str]:
         """
         Returns list of model id's.
@@ -3324,7 +3419,7 @@ class Router:
                     invalid_model_indices.append(idx)
                     continue
 
-            ## INVALID PARAMS ## -> catch 'gpt-3.5-turbo-16k' not supporting 'response_object' param
+            ## INVALID PARAMS ## -> catch 'gpt-3.5-turbo-16k' not supporting 'response_format' param
             if request_kwargs is not None and litellm.drop_params == False:
                 # get supported params
                 model, custom_llm_provider, _, _ = litellm.get_llm_provider(
@@ -3342,10 +3437,14 @@ class Router:
                     non_default_params = litellm.utils.get_non_default_params(
                         passed_params=request_kwargs
                     )
+                    special_params = ["response_format"]
                     # check if all params are supported
                     for k, v in non_default_params.items():
-                        if k not in supported_openai_params:
+                        if k not in supported_openai_params and k in special_params:
                             # if not -> invalid model
+                            verbose_router_logger.debug(
+                                f"INVALID MODEL INDEX @ REQUEST KWARG FILTERING, k={k}"
+                            )
                             invalid_model_indices.append(idx)
 
         if len(invalid_model_indices) == len(_returned_deployments):
@@ -3420,6 +3519,7 @@ class Router:
         ## get healthy deployments
         ### get all deployments
         healthy_deployments = [m for m in self.model_list if m["model_name"] == model]
+
         if len(healthy_deployments) == 0:
             # check if the user sent in a deployment name instead
             healthy_deployments = [
@@ -3510,7 +3610,7 @@ class Router:
             if _allowed_model_region is None:
                 _allowed_model_region = "n/a"
             raise ValueError(
-                f"{RouterErrors.no_deployments_available.value}, Try again in {self.cooldown_time} seconds. Passed model={model}. Enable pre-call-checks={self.enable_pre_call_checks}, allowed_model_region={_allowed_model_region}"
+                f"{RouterErrors.no_deployments_available.value}, Try again in {self.cooldown_time} seconds. Passed model={model}. pre-call-checks={self.enable_pre_call_checks}, allowed_model_region={_allowed_model_region}"
             )
 
         if (
@@ -3871,13 +3971,13 @@ class Router:
                 _api_base = litellm.get_api_base(
                     model=_model_name, optional_params=temp_litellm_params
                 )
-                asyncio.create_task(
-                    proxy_logging_obj.slack_alerting_instance.send_alert(
-                        message=f"Router: Cooling down Deployment:\nModel Name: `{_model_name}`\nAPI Base: `{_api_base}`\nCooldown Time: `{cooldown_time} seconds`\nException Status Code: `{str(exception_status)}`\n\nChange 'cooldown_time' + 'allowed_fails' under 'Router Settings' on proxy UI, or via config - https://docs.litellm.ai/docs/proxy/reliability#fallbacks--retries--timeouts--cooldowns",
-                        alert_type="cooldown_deployment",
-                        level="Low",
-                    )
-                )
+                # asyncio.create_task(
+                #     proxy_logging_obj.slack_alerting_instance.send_alert(
+                #         message=f"Router: Cooling down Deployment:\nModel Name: `{_model_name}`\nAPI Base: `{_api_base}`\nCooldown Time: `{cooldown_time} seconds`\nException Status Code: `{str(exception_status)}`\n\nChange 'cooldown_time' + 'allowed_fails' under 'Router Settings' on proxy UI, or via config - https://docs.litellm.ai/docs/proxy/reliability#fallbacks--retries--timeouts--cooldowns",
+                #         alert_type="cooldown_deployment",
+                #         level="Low",
+                #     )
+                # )
         except Exception as e:
             pass
 

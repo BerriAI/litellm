@@ -69,6 +69,7 @@ retry = True
 ### AUTH ###
 api_key: Optional[str] = None
 openai_key: Optional[str] = None
+databricks_key: Optional[str] = None
 azure_key: Optional[str] = None
 anthropic_key: Optional[str] = None
 replicate_key: Optional[str] = None
@@ -97,6 +98,7 @@ ssl_verify: bool = True
 disable_streaming_logging: bool = False
 ### GUARDRAILS ###
 llamaguard_model_name: Optional[str] = None
+openai_moderations_model_name: Optional[str] = None
 presidio_ad_hoc_recognizers: Optional[str] = None
 google_moderation_confidence_threshold: Optional[float] = None
 llamaguard_unsafe_content_categories: Optional[str] = None
@@ -615,6 +617,7 @@ provider_list: List = [
     "watsonx",
     "triton",
     "predibase",
+    "databricks",
     "custom",  # custom apis
 ]
 
@@ -727,9 +730,11 @@ from .utils import (
     ModelResponse,
     ImageResponse,
     ImageObject,
+    get_provider_fields,
 )
 from .llms.huggingface_restapi import HuggingfaceConfig
 from .llms.anthropic import AnthropicConfig
+from .llms.databricks import DatabricksConfig, DatabricksEmbeddingConfig
 from .llms.predibase import PredibaseConfig
 from .llms.anthropic_text import AnthropicTextConfig
 from .llms.replicate import ReplicateConfig

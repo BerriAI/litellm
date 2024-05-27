@@ -25,6 +25,7 @@ model LiteLLM_BudgetTable {
   organization LiteLLM_OrganizationTable[] // multiple orgs can have the same budget
   keys LiteLLM_VerificationToken[] // multiple keys can have the same budget
   end_users LiteLLM_EndUserTable[] // multiple end-users can have the same budget
+  team_membership LiteLLM_TeamMembership[] // budgets of Users within a Team 
 }
 
 // Models on proxy
@@ -174,7 +175,10 @@ model LiteLLM_SpendLogs {
   completion_tokens   Int     @default(0)
   startTime           DateTime // Assuming start_time is a DateTime field
   endTime             DateTime // Assuming end_time is a DateTime field
+  completionStartTime DateTime? // Assuming completionStartTime is a DateTime field
   model               String   @default("")
+  model_id            String?   @default("") // the model id stored in proxy model db
+  model_group         String?   @default("") // public model_name / model_group
   api_base            String   @default("")
   user                String   @default("")
   metadata            Json     @default("{}")
@@ -207,4 +211,14 @@ model LiteLLM_UserNotifications {
   models              String[]
   justification       String
   status              String // approved, disapproved, pending
+}
+
+model LiteLLM_TeamMembership {
+  // Use this table to track the Internal User's Spend within a Team + Set Budgets, rpm limits for the user within the team
+  user_id    String
+  team_id    String
+  spend      Float    @default(0.0)
+  budget_id String?
+  litellm_budget_table LiteLLM_BudgetTable?   @relation(fields: [budget_id], references: [budget_id])
+  @@id([user_id, team_id])
 }

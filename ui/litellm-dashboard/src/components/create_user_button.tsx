@@ -10,7 +10,11 @@ interface CreateuserProps {
   teams: any[] | null;
 }
 
-const Createuser: React.FC<CreateuserProps> = ({ userID, accessToken, teams }) => {
+const Createuser: React.FC<CreateuserProps> = ({
+  userID,
+  accessToken,
+  teams,
+}) => {
   const [form] = Form.useForm();
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [apiuser, setApiuser] = useState<string | null>(null);
@@ -73,7 +77,7 @@ const Createuser: React.FC<CreateuserProps> = ({ userID, accessToken, teams }) =
 
   return (
     <div>
-      <Button2 className="mx-auto" onClick={() => setIsModalVisible(true)}>
+      <Button2 className="mx-auto mb-0" onClick={() => setIsModalVisible(true)}>
         + Invite User
       </Button2>
       <Modal
@@ -84,8 +88,12 @@ const Createuser: React.FC<CreateuserProps> = ({ userID, accessToken, teams }) =
         onOk={handleOk}
         onCancel={handleCancel}
       >
-        <Text className="mb-1">Invite a user to login to the Admin UI and create Keys</Text>
-        <Text className="mb-6"><b>Note: SSO Setup Required for this</b></Text>
+        <Text className="mb-1">
+          Invite a user to login to the Admin UI and create Keys
+        </Text>
+        <Text className="mb-6">
+          <b>Note: SSO Setup Required for this</b>
+        </Text>
         <Form
           form={form}
           onFinish={handleCreate}
@@ -97,10 +105,7 @@ const Createuser: React.FC<CreateuserProps> = ({ userID, accessToken, teams }) =
             <TextInput placeholder="" />
           </Form.Item>
           <Form.Item label="Team ID" name="team_id">
-          <Select
-              placeholder="Select Team ID"
-              style={{ width: "100%" }}
-            >
+            <Select placeholder="Select Team ID" style={{ width: "100%" }}>
               {teams ? (
                 teams.map((team: any) => (
                   <Option key={team.team_id} value={team.team_id}>
@@ -131,12 +136,16 @@ const Createuser: React.FC<CreateuserProps> = ({ userID, accessToken, teams }) =
           footer={null}
         >
           <p>
-            User has been created to access your proxy. Please Ask them to Log In.
+            User has been created to access your proxy. Please Ask them to Log
+            In.
           </p>
           <br></br>
 
-          <p><b>Note: This Feature is only supported through SSO on the Admin UI</b></p>
-          
+          <p>
+            <b>
+              Note: This Feature is only supported through SSO on the Admin UI
+            </b>
+          </p>
         </Modal>
       )}
     </div>

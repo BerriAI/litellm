@@ -8,6 +8,7 @@ Get alerts for:
 - Budget Tracking per key/user
 - Spend Reports - Weekly & Monthly spend per Team, Tag
 - Failed db read/writes
+- Model outage alerting
 - Daily Reports:
     - **LLM** Top 5 slowest deployments
     - **LLM** Top 5 deployments with most failed requests
@@ -74,21 +75,19 @@ general_settings:
 All Possible Alert Types
 
 ```python
-alert_types: 
-Optional[
-List[
-    Literal[
-        "llm_exceptions",
-        "llm_too_slow",
-        "llm_requests_hanging",
-        "budget_alerts",
-        "db_exceptions",
-        "daily_reports",
-        "spend_reports",
-        "cooldown_deployment",
-        "new_model_added",
-    ]
+AlertType = Literal[
+    "llm_exceptions",
+    "llm_too_slow",
+    "llm_requests_hanging",
+    "budget_alerts",
+    "db_exceptions",
+    "daily_reports",
+    "spend_reports",
+    "cooldown_deployment",
+    "new_model_added",
+    "outage_alerts",
 ]
+
 ```
 
 
@@ -201,3 +200,31 @@ curl -X GET --location 'http://0.0.0.0:4000/health/services?service=webhook' \
     * "proxy": The event is related to a proxy.
 
 - `event_message` *str*: A human-readable description of the event.
+
+## Advanced - Region-outage alerting (✨ Enterprise feature)
+
+:::info
+[Get a free 2-week license](https://forms.gle/P518LXsAZ7PhXpDn8)
+:::
+
+Setup alerts if a provider region is having an outage. 
+
+```yaml
+general_settings:
+    alerting: ["slack"]
+    alert_types: ["region_outage_alerts"] 
+```
+
+By default this will trigger if multiple models in a region fail 5+ requests in 1 minute. '400' status code errors are not counted (i.e. BadRequestErrors).
+
+Control thresholds with: 
+
+```yaml
+general_settings:
+    alerting: ["slack"]
+    alert_types: ["region_outage_alerts"] 
+    alerting_args:
+        region_outage_alert_ttl: 60 # time-window in seconds
+        minor_outage_alert_threshold: 5 # number of errors to trigger a minor alert
+        major_outage_alert_threshold: 10 # number of errors to trigger a major alert
+```
