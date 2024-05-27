@@ -579,17 +579,14 @@ export const modelInfoCall = async (
   }
 };
 
-
-export const modelHubCall = async (
-  accessToken: String,
-  userID: String,
-  userRole: String
-) => {
+export const modelHubCall = async (accessToken: String) => {
   /**
    * Get all models on proxy
    */
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/model_group/info` : `/model_group/info`;
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/model_group/info`
+      : `/model_group/info`;
 
     //message.info("Requesting model data");
     const response = await fetch(url, {
@@ -616,8 +613,6 @@ export const modelHubCall = async (
     throw error;
   }
 };
-
-
 
 export const modelMetricsCall = async (
   accessToken: String,
