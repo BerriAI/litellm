@@ -11,7 +11,7 @@ Anthropic, OpenAI, Mistral, Llama and Gemini LLMs are Supported on Clarifai.
 To obtain your Clarifai Personal access token follow this [link](https://docs.clarifai.com/clarifai-basics/authentication/personal-access-tokens/). Optionally the PAT can also be passed in `completion` function.
 
 ```python
-os.environ["CALRIFAI_API_KEY"] = "YOUR_CLARIFAI_PAT"  # CLARIFAI_PAT
+os.environ["CLARIFAI_API_KEY"] = "YOUR_CLARIFAI_PAT"  # CLARIFAI_PAT
 ```
 
 ## Usage
