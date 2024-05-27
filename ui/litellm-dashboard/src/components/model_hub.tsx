@@ -31,12 +31,14 @@ interface ModelHubProps {
 }
 
 interface ModelInfo {
-  model_group: string;
-  mode: string;
-  supports_function_calling: boolean;
-  supports_vision: boolean;
-  max_input_tokens?: number;
-  max_output_tokens?: number;
+    model_group: string;
+    mode: string;
+    supports_function_calling: boolean;
+    supports_vision: boolean;
+    max_input_tokens?: number;
+    max_output_tokens?: number;
+    supported_openai_params?: string[];
+
 
   // Add other properties if needed
 }
@@ -127,29 +129,14 @@ const ModelHub: React.FC<ModelHubProps> = ({
                     />
                   </Tooltip>
                 </pre>
+              <div className='my-5'>
 
-                <div className="my-5">
-                  <Text>Mode: {model.mode}</Text>
-                  <Text>
-                    Supports Function Calling:{" "}
-                    {model?.supports_function_calling == true ? "Yes" : "No"}
-                  </Text>
-                  <Text>
-                    Supports Vision:{" "}
-                    {model?.supports_vision == true ? "Yes" : "No"}
-                  </Text>
-                  <Text>
-                    Max Input Tokens:{" "}
-                    {model?.max_input_tokens ? model?.max_input_tokens : "N/A"}
-                  </Text>
-                  <Text>
-                    Max Output Tokens:{" "}
-                    {model?.max_output_tokens
-                      ? model?.max_output_tokens
-                      : "N/A"}
-                  </Text>
-                </div>
-
+              <Text>Mode: {model.mode}</Text>
+              <Text>Supports Function Calling: {model?.supports_function_calling == true ? "Yes" : "No"}</Text>
+              <Text>Supports Vision: {model?.supports_vision == true ? "Yes" : "No"}</Text>
+              <Text>Max Input Tokens: {model?.max_input_tokens ? model?.max_input_tokens : "N/A"}</Text>
+              <Text>Max Output Tokens: {model?.max_output_tokens ? model?.max_output_tokens : "N/A"}</Text>
+              </div>
                 <div style={{ marginTop: "auto", textAlign: "right" }}>
                   <a
                     href="#"
@@ -165,7 +152,7 @@ const ModelHub: React.FC<ModelHubProps> = ({
       </div>
 
       <Modal
-        title="Model Usage"
+        title={selectedModel && selectedModel.model_group ? selectedModel.model_group : "Unknown Model"}
         width={800}
         visible={isModalVisible}
         footer={null}
@@ -174,20 +161,19 @@ const ModelHub: React.FC<ModelHubProps> = ({
       >
         {selectedModel && (
           <div>
-            <p>
-              <strong>Model Name:</strong> {selectedModel.model_group}
-            </p>
-
+            <p className='mb-4'><strong>Model Information & Usage</strong></p>
+           
             <TabGroup>
-              <TabList>
-                <Tab>OpenAI Python SDK</Tab>
-                <Tab>LlamaIndex</Tab>
-                <Tab>Langchain Py</Tab>
-              </TabList>
-              <TabPanels>
-                <TabPanel>
-                  <SyntaxHighlighter language="python">
-                    {`
+                  <TabList>
+                    <Tab>OpenAI Python SDK</Tab>
+                    <Tab>Supported OpenAI Params</Tab>
+                    <Tab>LlamaIndex</Tab>
+                    <Tab>Langchain Py</Tab>
+                  </TabList>
+                  <TabPanels>
+                    <TabPanel>
+                      <SyntaxHighlighter language="python">
+                        {`
 import openai
 client = openai.OpenAI(
     api_key="your_api_key",
@@ -206,8 +192,13 @@ response = client.chat.completions.create(
 
 print(response)
             `}
-                  </SyntaxHighlighter>
-                </TabPanel>
+                      </SyntaxHighlighter>
+                    </TabPanel>
+                    <TabPanel>
+                    <SyntaxHighlighter language="python">
+                        {`${selectedModel.supported_openai_params?.map((param) => `${param}\n`).join('')}`}
+                        </SyntaxHighlighter>
+                        </TabPanel>
                 <TabPanel>
                   <SyntaxHighlighter language="python">
                     {`
