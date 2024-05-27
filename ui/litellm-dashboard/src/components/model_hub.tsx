@@ -39,6 +39,7 @@ interface ModelInfo {
     max_output_tokens?: number;
     supported_openai_params?: string[];
 
+
   // Add other properties if needed
 }
 
@@ -128,8 +129,6 @@ const ModelHub: React.FC<ModelHubProps> = ({
                     />
                   </Tooltip>
                 </pre>
-              
-
               <div className='my-5'>
 
               <Text>Mode: {model.mode}</Text>
@@ -153,7 +152,6 @@ const ModelHub: React.FC<ModelHubProps> = ({
       </div>
 
       <Modal
-
         title={selectedModel && selectedModel.model_group ? selectedModel.model_group : "Unknown Model"}
         width={800}
         visible={isModalVisible}
@@ -201,9 +199,9 @@ print(response)
                         {`${selectedModel.supported_openai_params?.map((param) => `${param}\n`).join('')}`}
                         </SyntaxHighlighter>
                         </TabPanel>
-                    <TabPanel>
-                      <SyntaxHighlighter language="python">
-                        {`
+                <TabPanel>
+                  <SyntaxHighlighter language="python">
+                    {`
 import os, dotenv
 
 from llama_index.llms import AzureOpenAI

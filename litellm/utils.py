@@ -5797,30 +5797,11 @@ def get_optional_params(
             model=model, custom_llm_provider=custom_llm_provider
         )
         _check_valid_arg(supported_params=supported_params)
-        if temperature is not None:
-            if (
-                temperature == 0 and model == "mistralai/Mistral-7B-Instruct-v0.1"
-            ):  # this model does no support temperature == 0
-                temperature = 0.0001  # close to 0
-            optional_params["temperature"] = temperature
-        if top_p:
-            optional_params["top_p"] = top_p
-        if n:
-            optional_params["n"] = n
-        if stream:
-            optional_params["stream"] = stream
-        if stop:
-            optional_params["stop"] = stop
-        if max_tokens:
-            optional_params["max_tokens"] = max_tokens
-        if presence_penalty:
-            optional_params["presence_penalty"] = presence_penalty
-        if frequency_penalty:
-            optional_params["frequency_penalty"] = frequency_penalty
-        if logit_bias:
-            optional_params["logit_bias"] = logit_bias
-        if user:
-            optional_params["user"] = user
+        optional_params = litellm.DeepInfraConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+        )
     elif custom_llm_provider == "perplexity":
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider
@@ -6604,19 +6585,7 @@ def get_supported_openai_params(
     elif custom_llm_provider == "petals":
         return ["max_tokens", "temperature", "top_p", "stream"]
     elif custom_llm_provider == "deepinfra":
-        return [
-            "temperature",
-            "top_p",
-            "n",
-            "stream",
-            "stop",
-            "max_tokens",
-            "presence_penalty",
-            "frequency_penalty",
-            "logit_bias",
-            "user",
-            "response_format",
-        ]
+        return litellm.DeepInfraConfig().get_supported_openai_params()
     elif custom_llm_provider == "perplexity":
         return [
             "temperature",
