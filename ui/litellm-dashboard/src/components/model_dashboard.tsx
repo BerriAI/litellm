@@ -1133,8 +1133,11 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                           fontSize: "11px"
                         }}
                       >
-                        ✨ Created At
-                      </TableHeaderCell>
+                        {
+                          premiumUser ? "Created At" : <a href="https://forms.gle/W3U4PZpJGFHWtHyA9" target="_blank" style={{color: "#72bcd4" }}> ✨ Created At</a>
+                        }
+
+                        </TableHeaderCell>
                       <TableHeaderCell
                         style={{
                           maxWidth: "100px",
@@ -1143,7 +1146,9 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                           fontSize: "11px"
                         }}
                       >
-                        ✨ Created By
+                        {
+                          premiumUser ? "Created By" : <a href="https://forms.gle/W3U4PZpJGFHWtHyA9" target="_blank" style={{color: "#72bcd4" }}> ✨ Created By</a>
+                        }
                       </TableHeaderCell>
                       <TableHeaderCell
                         style={{
@@ -1171,7 +1176,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                           selectedModelGroup === ""
                       )
                       .map((model: any, index: number) => (
-                        <TableRow key={index}>
+                        <TableRow key={index} style={{ maxHeight: "1px", minHeight: "1px" }}>
                           <TableCell
                             style={{
                               maxWidth: "100px",
@@ -1246,13 +1251,17 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                           </TableCell>
                           <TableCell>
                           <p style={{ fontSize: "10px" }}>
-                            {formatCreatedAt(model.model_info.created_at) || "-"}
+                            {
+                              premiumUser ? formatCreatedAt(model.model_info.created_at) || "-" : "-"
+                            }
                             </p>
                            
                           </TableCell>
                           <TableCell>
                           <p style={{ fontSize: "10px" }}>
-                            {model.model_info.created_by || "-"}
+                            {
+                              premiumUser ? model.model_info.created_by || "-" : "-"
+                            }
                             </p>
                           </TableCell>
                           <TableCell

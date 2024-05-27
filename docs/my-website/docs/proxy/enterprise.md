@@ -21,6 +21,7 @@ Features:
 - ✅ Don't log/store specific requests to Langfuse, Sentry, etc. (eg confidential LLM requests)
 - ✅ Tracking Spend for Custom Tags
 - ✅ Custom Branding + Routes on Swagger Docs
+- ✅ Audit Logs for `Created At, Created By` when Models Added
 
 
 ## Content Moderation
