@@ -39,11 +39,6 @@ interface ModelInfo {
     max_output_tokens?: number;
     supported_openai_params?: string[];
 
-    // Add other properties if needed
-
-  }
-
-
   // Add other properties if needed
 }
 
@@ -133,31 +128,7 @@ const ModelHub: React.FC<ModelHubProps> = ({
                     />
                   </Tooltip>
                 </pre>
-
-        
-          {modelHubData && modelHubData.map((model: ModelInfo) => (
-
-            <Card
-
-              key={model.model_group}
-
-              className="mt-5 mx-8"
-
-            >
-
-
-
-              <pre className='flex justify-between'>
-                
-
-                <Title>{model.model_group}</Title>
-                <Tooltip title={model.model_group}>
-
-                    <CopyOutlined onClick={() => copyToClipboard(model.model_group)} style={{ cursor: 'pointer', marginRight: '10px' }} />
-
-                    </Tooltip>
-
-              </pre>
+              
 
               <div className='my-5'>
 
@@ -166,26 +137,7 @@ const ModelHub: React.FC<ModelHubProps> = ({
               <Text>Supports Vision: {model?.supports_vision == true ? "Yes" : "No"}</Text>
               <Text>Max Input Tokens: {model?.max_input_tokens ? model?.max_input_tokens : "N/A"}</Text>
               <Text>Max Output Tokens: {model?.max_output_tokens ? model?.max_output_tokens : "N/A"}</Text>
-              
-
               </div>
-
-              <div style={{ marginTop: 'auto', textAlign: 'right' }}>
-
-            
-
-                <a href="#" onClick={() => showModal(model)} style={{ color: '#1890ff', fontSize: 'smaller' }}>
-
-                  View more <RightOutlined />
-
-                </a>
-
-              </div>
-
-            </Card>
-
-          ))}
-
                 <div style={{ marginTop: "auto", textAlign: "right" }}>
                   <a
                     href="#"
@@ -211,11 +163,7 @@ const ModelHub: React.FC<ModelHubProps> = ({
       >
         {selectedModel && (
           <div>
-            <p>
-              <strong>Model Name:</strong> {selectedModel.model_group}
-            </p>
-
-            <p className='mb-4'><strong>Model Information & Usage:</strong> {selectedModel.model_group}</p>
+            <p className='mb-4'><strong>Model Information & Usage</strong></p>
            
             <TabGroup>
                   <TabList>
