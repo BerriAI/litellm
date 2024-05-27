@@ -3072,7 +3072,7 @@ class Router:
                         model=litellm_params.model,
                         custom_llm_provider=litellm_params.custom_llm_provider,
                     )
-                except Exception as e:
+                except litellm.exceptions.BadRequestError as e:
                     continue
 
                 if model_group_info is None:
@@ -3124,19 +3124,23 @@ class Router:
                     if (
                         model_info.get("supports_parallel_function_calling", None)
                         is not None
-                        and model_info["supports_parallel_function_calling"] == True  # type: ignore
+                        and model_info["supports_parallel_function_calling"] is True  # type: ignore
                     ):
                         model_group_info.supports_parallel_function_calling = True
                     if (
                         model_info.get("supports_vision", None) is not None
-                        and model_info["supports_vision"] == True  # type: ignore
+                        and model_info["supports_vision"] is True  # type: ignore
                     ):
                         model_group_info.supports_vision = True
                     if (
                         model_info.get("supports_function_calling", None) is not None
-                        and model_info["supports_function_calling"] == True  # type: ignore
+                        and model_info["supports_function_calling"] is True  # type: ignore
                     ):
                         model_group_info.supports_function_calling = True
+                    if model_info.get("supported_openai_params", None) is not None:
+                        model_group_info.supported_openai_params = model_info[
+                            "supported_openai_params"
+                        ]
 
         return model_group_info
 
