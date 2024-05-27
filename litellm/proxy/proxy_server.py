@@ -6772,7 +6772,7 @@ async def view_spend_logs(
                 table_name="spend", query_type="find_all"
             )
 
-            return spend_log
+            return spend_logs
 
         return None
 
