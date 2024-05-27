@@ -6094,7 +6094,7 @@ async def get_global_activity_model(
 
         sql_query = """
         SELECT
-            model,
+            model_group AS model,
             date_trunc('day', "startTime") AS date,
             COUNT(*) AS api_requests,
             SUM(total_tokens) AS total_tokens
