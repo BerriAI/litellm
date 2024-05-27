@@ -1173,7 +1173,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                             }}
                           >
                             <p style={{ fontSize: "10px" }}>
-                            {model.model_name}
+                            {model.model_name || "-"}
                             </p>
                           </TableCell>
                           <TableCell
@@ -1184,7 +1184,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                             }}
                           >
                             <p style={{ fontSize: "10px" }}>
-                            {model.provider}
+                            {model.provider || "-"}
                             </p>
                           </TableCell>
                           {userRole === "Admin" && (
@@ -1205,7 +1205,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                               }}
                               title={model && model.api_base ? model.api_base : ""}
                             >
-                              {model && model.api_base ? model.api_base.slice(0, 20) : null}
+                              {model && model.api_base ? model.api_base.slice(0, 20) : "-"}
                             </pre>
                             </Tooltip>
                           </TableCell>
@@ -1218,9 +1218,11 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                               wordBreak: "break-word",
                             }}
                           >
+                            <pre style={{ fontSize: "10px" }}>
                             {model.input_cost ||
                               model.litellm_params.input_cost_per_token ||
-                              null}
+                              "-"}
+                            </pre>
                           </TableCell>
                           <TableCell
                             style={{
@@ -1229,19 +1231,21 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                               wordBreak: "break-word",
                             }}
                           >
+                            <pre style={{ fontSize: "10px" }}>
                             {model.output_cost ||
                               model.litellm_params.output_cost_per_token ||
-                              null}
+                              "-"}
+                            </pre>
                           </TableCell>
                           <TableCell>
                           <p style={{ fontSize: "10px" }}>
-                            {formatCreatedAt(model.model_info.created_at)}
+                            {formatCreatedAt(model.model_info.created_at) || "-"}
                             </p>
                            
                           </TableCell>
                           <TableCell>
                           <p style={{ fontSize: "10px" }}>
-                            {model.model_info.created_by}
+                            {model.model_info.created_by || "-"}
                             </p>
                           </TableCell>
                           <TableCell
