@@ -309,9 +309,10 @@ def select_azure_base_url_or_endpoint(azure_client_params: dict):
 
 def get_azure_ad_token_from_oidc(azure_ad_token: str):
     azure_client_id = os.getenv("AZURE_CLIENT_ID", None)
-    azure_tenant = os.getenv("AZURE_TENANT_ID", None)
+    azure_tenant_id = os.getenv("AZURE_TENANT_ID", None)
+    azure_authority_host = os.getenv("AZURE_AUTHORITY_HOST", "https://login.microsoftonline.com")
 
-    if azure_client_id is None or azure_tenant is None:
+    if azure_client_id is None or azure_tenant_id is None:
         raise AzureOpenAIError(
             status_code=422,
             message="AZURE_CLIENT_ID and AZURE_TENANT_ID must be set",
@@ -326,7 +327,7 @@ def get_azure_ad_token_from_oidc(azure_ad_token: str):
         )
 
     req_token = httpx.post(
-        f"https://login.microsoftonline.com/{azure_tenant}/oauth2/v2.0/token",
+        f"{azure_authority_host}/{azure_tenant_id}/oauth2/v2.0/token",
         data={
             "client_id": azure_client_id,
             "grant_type": "client_credentials",
