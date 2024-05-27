@@ -197,21 +197,10 @@ print(response)
                       </SyntaxHighlighter>
                     </TabPanel>
                     <TabPanel>
-
-                      
-                        {
-                          selectedModel?.supported_openai_params?.map((param) => (
-                            
-                             <pre key={param}>
-                              {param}
-                             </pre>
-                            
-                              
-                          ))
-                        }
-                         
-
-                    </TabPanel>
+                    <SyntaxHighlighter language="python">
+                        {`${selectedModel.supported_openai_params?.map((param) => `${param}\n`).join('')}`}
+                        </SyntaxHighlighter>
+                        </TabPanel>
                     <TabPanel>
                       <SyntaxHighlighter language="python">
                         {`
