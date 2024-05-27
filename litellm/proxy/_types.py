@@ -984,10 +984,6 @@ class LiteLLM_VerificationToken(LiteLLMBase):
 
     org_id: Optional[str] = None  # org id for a given key
 
-    # hidden params used for parallel request limiting, not required to create a token
-    user_id_rate_limits: Optional[dict] = None
-    team_id_rate_limits: Optional[dict] = None
-
     class Config:
         protected_namespaces = ()
 
