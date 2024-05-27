@@ -140,7 +140,6 @@ class ProxyLogging:
         print_verbose(f"INITIALIZING LITELLM CALLBACKS!")
         self.service_logging_obj = ServiceLogging()
         litellm.callbacks.append(self.max_parallel_request_limiter)
-        litellm.callbacks.append(self.max_tpm_rpm_limiter)
         litellm.callbacks.append(self.max_budget_limiter)
         litellm.callbacks.append(self.cache_control_check)
         litellm.callbacks.append(self.service_logging_obj)
