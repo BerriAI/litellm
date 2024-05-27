@@ -176,7 +176,7 @@ async def test_router_retry_policy(error_type):
     except Exception as e:
         print("got an exception", e)
         pass
-    asyncio.sleep(0.05)
+    await asyncio.sleep(0.05)
 
     print("customHandler.previous_models: ", customHandler.previous_models)
 
@@ -263,7 +263,7 @@ async def test_dynamic_router_retry_policy(model_group):
     except Exception as e:
         print("got an exception", e)
         pass
-    asyncio.sleep(0.05)
+    await asyncio.sleep(0.05)
 
     print("customHandler.previous_models: ", customHandler.previous_models)
 

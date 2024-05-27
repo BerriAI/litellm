@@ -195,7 +195,7 @@ async def test_get_available_endpoints_tpm_rpm_check_async(ans_rpm):
 
     await asyncio.gather(*[_deploy(*t) for t in [*d1, *d2]])
 
-    asyncio.sleep(3)
+    await asyncio.sleep(3)
 
     ## CHECK WHAT'S SELECTED ##
     d_ans = await lowest_cost_logger.async_get_available_deployments(
