@@ -325,5 +325,7 @@ class InvalidRequestError(openai.BadRequestError):  # type: ignore
         self.model = model
         self.llm_provider = llm_provider
         super().__init__(
-            self.message, f"{self.model}"
+            self.message,
+            response=None,
+            body=f"{self.model}",
         )  # Call the base class constructor with the parameters it needs

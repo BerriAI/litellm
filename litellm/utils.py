@@ -9699,6 +9699,7 @@ def exception_type(
                             message=f"AlephAlphaException - {original_exception.message}",
                             llm_provider="aleph_alpha",
                             model=model,
+                            response=original_exception.response,
                         )
                     elif original_exception.status_code == 400:
                         exception_mapping_worked = True

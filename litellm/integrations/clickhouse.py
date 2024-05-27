@@ -275,6 +275,7 @@ class ClickhouseLogger:
                 response_obj=response_obj,
                 start_time=start_time,
                 end_time=end_time,
+                end_user_id=None,
             )
             metadata = payload.get("metadata", "") or ""
             request_tags = payload.get("request_tags", "") or ""
