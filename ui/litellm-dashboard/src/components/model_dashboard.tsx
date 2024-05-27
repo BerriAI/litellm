@@ -1062,7 +1062,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
               </div>
               <Card>
                 <Table
-                  className="mt-5"
                   style={{ maxWidth: "1500px", width: "100%" }}
                 >
                   <TableHead>
@@ -1072,6 +1071,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                           maxWidth: "150px",
                           whiteSpace: "normal",
                           wordBreak: "break-word",
+                          fontSize: "11px"
                         }}
                       >
                         Public Model Name
@@ -1081,6 +1081,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                           maxWidth: "100px",
                           whiteSpace: "normal",
                           wordBreak: "break-word",
+                          fontSize: "11px"
                         }}
                       >
                         Provider
@@ -1091,6 +1092,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                             maxWidth: "150px",
                             whiteSpace: "normal",
                             wordBreak: "break-word",
+                            fontSize: "11px"
                           }}
                         >
                           API Base
@@ -1101,6 +1103,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                           maxWidth: "85px",
                           whiteSpace: "normal",
                           wordBreak: "break-word",
+                          fontSize: "11px"
                         }}
                       >
                         Input Price{" "}
@@ -1113,6 +1116,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                           maxWidth: "85px",
                           whiteSpace: "normal",
                           wordBreak: "break-word",
+                          fontSize: "11px"
                         }}
                       >
                         Output Price{" "}
@@ -1123,27 +1127,30 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                       
                       <TableHeaderCell
                         style={{
-                          maxWidth: "50px",
+                          maxWidth: "100px",
                           whiteSpace: "normal",
                           wordBreak: "break-word",
+                          fontSize: "11px"
                         }}
                       >
-                        Created At
+                        ✨ Created At
+                      </TableHeaderCell>
+                      <TableHeaderCell
+                        style={{
+                          maxWidth: "100px",
+                          whiteSpace: "normal",
+                          wordBreak: "break-word",
+                          fontSize: "11px"
+                        }}
+                      >
+                        ✨ Created By
                       </TableHeaderCell>
                       <TableHeaderCell
                         style={{
                           maxWidth: "50px",
                           whiteSpace: "normal",
                           wordBreak: "break-word",
-                        }}
-                      >
-                        Created By
-                      </TableHeaderCell>
-                      <TableHeaderCell
-                        style={{
-                          maxWidth: "50px",
-                          whiteSpace: "normal",
-                          wordBreak: "break-word",
+                          fontSize: "11px"
                         }}
                       >
                         Status
