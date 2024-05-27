@@ -22,52 +22,33 @@ import { Modal, Tooltip } from "antd";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 
 interface ModelHubProps {
-  userID: string | null;
-  userRole: string | null;
-  token: string | null;
   accessToken: string | null;
-  keys: any; // Replace with the appropriate type for 'keys' prop
-  premiumUser: boolean;
+  publicPage: boolean;
 }
 
 interface ModelInfo {
-    model_group: string;
-    mode: string;
-    supports_function_calling: boolean;
-    supports_vision: boolean;
-    max_input_tokens?: number;
-    max_output_tokens?: number;
-    supported_openai_params?: string[];
-
-
-  // Add other properties if needed
+  model_group: string;
+  mode: string;
+  supports_function_calling: boolean;
+  supports_vision: boolean;
+  max_input_tokens?: number;
+  max_output_tokens?: number;
+  supported_openai_params?: string[];
 }
 
-const ModelHub: React.FC<ModelHubProps> = ({
-  userID,
-
-  userRole,
-
-  token,
-
-  accessToken,
-
-  keys,
-
-  premiumUser,
-}) => {
+const ModelHub: React.FC<ModelHubProps> = ({ accessToken, publicPage }) => {
   const [modelHubData, setModelHubData] = useState<ModelInfo[] | null>(null);
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [selectedModel, setSelectedModel] = useState<null | ModelInfo>(null);
 
   useEffect(() => {
-    if (!accessToken || !token || !userRole || !userID) {
+    if (!accessToken) {
       return;
     }
 
     const fetchData = async () => {
       try {
-        const _modelHubData = await modelHubCall(accessToken, userID, userRole);
+        const _modelHubData = await modelHubCall(accessToken);
 
         console.log("ModelHubData:", _modelHubData);
 
@@ -78,7 +59,7 @@ const ModelHub: React.FC<ModelHubProps> = ({
     };
 
     fetchData();
-  }, [accessToken, token, userRole, userID]);
+  }, [accessToken]);
 
   const showModal = (model: ModelInfo) => {
     setSelectedModel(model);
@@ -109,11 +90,13 @@ const ModelHub: React.FC<ModelHubProps> = ({
 
         <div className="flex items-center">
           <Title className="ml-8 text-center ">Model Hub</Title>
-          <Button className="ml-4">
-            <a href="https://forms.gle/W3U4PZpJGFHWtHyA9" target="_blank">
-              ✨ Make Public
-            </a>
-          </Button>
+          {publicPage == false && (
+            <Button className="ml-4">
+              <a href="https://forms.gle/W3U4PZpJGFHWtHyA9" target="_blank">
+                ✨ Make Public
+              </a>
+            </Button>
+          )}
         </div>
 
         <div className="grid grid-cols-2 gap-6 sm:grid-cols-3 lg:grid-cols-4">
@@ -129,14 +112,27 @@ const ModelHub: React.FC<ModelHubProps> = ({
                     />
                   </Tooltip>
                 </pre>
-              <div className='my-5'>
-
-              <Text>Mode: {model.mode}</Text>
-              <Text>Supports Function Calling: {model?.supports_function_calling == true ? "Yes" : "No"}</Text>
-              <Text>Supports Vision: {model?.supports_vision == true ? "Yes" : "No"}</Text>
-              <Text>Max Input Tokens: {model?.max_input_tokens ? model?.max_input_tokens : "N/A"}</Text>
-              <Text>Max Output Tokens: {model?.max_output_tokens ? model?.max_output_tokens : "N/A"}</Text>
-              </div>
+                <div className="my-5">
+                  <Text>Mode: {model.mode}</Text>
+                  <Text>
+                    Supports Function Calling:{" "}
+                    {model?.supports_function_calling == true ? "Yes" : "No"}
+                  </Text>
+                  <Text>
+                    Supports Vision:{" "}
+                    {model?.supports_vision == true ? "Yes" : "No"}
+                  </Text>
+                  <Text>
+                    Max Input Tokens:{" "}
+                    {model?.max_input_tokens ? model?.max_input_tokens : "N/A"}
+                  </Text>
+                  <Text>
+                    Max Output Tokens:{" "}
+                    {model?.max_output_tokens
+                      ? model?.max_output_tokens
+                      : "N/A"}
+                  </Text>
+                </div>
                 <div style={{ marginTop: "auto", textAlign: "right" }}>
                   <a
                     href="#"
@@ -152,7 +148,11 @@ const ModelHub: React.FC<ModelHubProps> = ({
       </div>
 
       <Modal
-        title={selectedModel && selectedModel.model_group ? selectedModel.model_group : "Unknown Model"}
+        title={
+          selectedModel && selectedModel.model_group
+            ? selectedModel.model_group
+            : "Unknown Model"
+        }
         width={800}
         visible={isModalVisible}
         footer={null}
@@ -161,19 +161,21 @@ const ModelHub: React.FC<ModelHubProps> = ({
       >
         {selectedModel && (
           <div>
-            <p className='mb-4'><strong>Model Information & Usage</strong></p>
-           
+            <p className="mb-4">
+              <strong>Model Information & Usage</strong>
+            </p>
+
             <TabGroup>
-                  <TabList>
-                    <Tab>OpenAI Python SDK</Tab>
-                    <Tab>Supported OpenAI Params</Tab>
-                    <Tab>LlamaIndex</Tab>
-                    <Tab>Langchain Py</Tab>
-                  </TabList>
-                  <TabPanels>
-                    <TabPanel>
-                      <SyntaxHighlighter language="python">
-                        {`
+              <TabList>
+                <Tab>OpenAI Python SDK</Tab>
+                <Tab>Supported OpenAI Params</Tab>
+                <Tab>LlamaIndex</Tab>
+                <Tab>Langchain Py</Tab>
+              </TabList>
+              <TabPanels>
+                <TabPanel>
+                  <SyntaxHighlighter language="python">
+                    {`
 import openai
 client = openai.OpenAI(
     api_key="your_api_key",
@@ -192,13 +194,13 @@ response = client.chat.completions.create(
 
 print(response)
             `}
-                      </SyntaxHighlighter>
-                    </TabPanel>
-                    <TabPanel>
-                    <SyntaxHighlighter language="python">
-                        {`${selectedModel.supported_openai_params?.map((param) => `${param}\n`).join('')}`}
-                        </SyntaxHighlighter>
-                        </TabPanel>
+                  </SyntaxHighlighter>
+                </TabPanel>
+                <TabPanel>
+                  <SyntaxHighlighter language="python">
+                    {`${selectedModel.supported_openai_params?.map((param) => `${param}\n`).join("")}`}
+                  </SyntaxHighlighter>
+                </TabPanel>
                 <TabPanel>
                   <SyntaxHighlighter language="python">
                     {`
