@@ -13,6 +13,8 @@ import pytest
 import litellm
 from litellm import embedding, completion, completion_cost, Timeout, ModelResponse
 from litellm import RateLimitError
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from unittest.mock import patch, AsyncMock, Mock
 
 # litellm.num_retries = 3
 litellm.cache = None
@@ -486,7 +488,7 @@ def test_completion_bedrock_mistral_completion_auth():
             messages=messages,
             max_tokens=10,
             temperature=0.1,
-        )
+        )  # type: ignore
         # Add any assertions here to check the response
         assert len(response.choices) > 0
         assert len(response.choices[0].message.content) > 0
@@ -501,3 +503,36 @@ def test_completion_bedrock_mistral_completion_auth():
 
 
 # test_completion_bedrock_mistral_completion_auth()
+
+
+def test_bedrock_ptu():
+    """
+    Check if a url with 'modelId' passed in, is created correctly
+
+    Reference: https://github.com/BerriAI/litellm/issues/3805
+    """
+    client = HTTPHandler()
+
+    with patch.object(client, "post", new=Mock()) as mock_client_post:
+        litellm.set_verbose = True
+        from openai.types.chat import ChatCompletion
+
+        model_id = (
+            "arn:aws:bedrock:us-west-2:888602223428:provisioned-model/8fxff74qyhs3"
+        )
+        try:
+            response = litellm.completion(
+                model="bedrock/anthropic.claude-instant-v1",
+                messages=[{"role": "user", "content": "What's AWS?"}],
+                model_id=model_id,
+                client=client,
+            )
+        except Exception as e:
+            pass
+
+        assert "url" in mock_client_post.call_args.kwargs
+        assert (
+            mock_client_post.call_args.kwargs["url"]
+            == "https://bedrock-runtime.us-west-2.amazonaws.com/model/arn%3Aaws%3Abedrock%3Aus-west-2%3A888602223428%3Aprovisioned-model%2F8fxff74qyhs3/invoke"
+        )
+        mock_client_post.assert_called_once()

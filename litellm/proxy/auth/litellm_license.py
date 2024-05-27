@@ -35,8 +35,11 @@ class LicenseCheck:
             return False
 
     def is_premium(self) -> bool:
-        if self.license_str is None:
+        try:
+            if self.license_str is None:
+                return False
+            elif self._verify(license_str=self.license_str):
+                return True
             return False
-        elif self._verify(license_str=self.license_str):
-            return True
-        return False
+        except Exception as e:
+            return False

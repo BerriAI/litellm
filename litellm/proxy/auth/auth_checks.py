@@ -123,18 +123,8 @@ def _allowed_routes_check(user_route: str, allowed_routes: list) -> bool:
     """
     for allowed_route in allowed_routes:
         if (
-            allowed_route == LiteLLMRoutes.openai_routes.name
-            and user_route in LiteLLMRoutes.openai_routes.value
-        ):
-            return True
-        elif (
-            allowed_route == LiteLLMRoutes.info_routes.name
-            and user_route in LiteLLMRoutes.info_routes.value
-        ):
-            return True
-        elif (
-            allowed_route == LiteLLMRoutes.management_routes.name
-            and user_route in LiteLLMRoutes.management_routes.value
+            allowed_route in LiteLLMRoutes.__members__
+            and user_route in LiteLLMRoutes[allowed_route].value
         ):
             return True
         elif allowed_route == user_route:
@@ -152,17 +142,11 @@ def allowed_routes_check(
     """
 
     if user_role == "proxy_admin":
-        if litellm_proxy_roles.admin_allowed_routes is None:
-            is_allowed = _allowed_routes_check(
-                user_route=user_route, allowed_routes=["management_routes"]
-            )
-            return is_allowed
-        elif litellm_proxy_roles.admin_allowed_routes is not None:
-            is_allowed = _allowed_routes_check(
-                user_route=user_route,
-                allowed_routes=litellm_proxy_roles.admin_allowed_routes,
-            )
-            return is_allowed
+        is_allowed = _allowed_routes_check(
+            user_route=user_route,
+            allowed_routes=litellm_proxy_roles.admin_allowed_routes,
+        )
+        return is_allowed
 
     elif user_role == "team":
         if litellm_proxy_roles.team_allowed_routes is None:
@@ -219,7 +203,8 @@ async def get_end_user_object(
     # else, check db
     try:
         response = await prisma_client.db.litellm_endusertable.find_unique(
-            where={"user_id": end_user_id}
+            where={"user_id": end_user_id},
+            include={"litellm_budget_table": True},
         )
 
         if response is None:

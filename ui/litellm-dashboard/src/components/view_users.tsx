@@ -19,7 +19,7 @@ import {
   TabPanel,
   Select,
   SelectItem,
-  Dialog, 
+  Dialog,
   DialogPanel,
   Icon,
   TextInput,
@@ -82,8 +82,6 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
     if (accessToken && token && userRole && userID) {
       fetchData();
     }
-
-
   }, [accessToken, token, userRole, userID, currentPage]);
 
   if (!userData) {
@@ -102,7 +100,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
     return (
       <div className="flex justify-between items-center">
         <div>
-          Showing Page {currentPage+1} of {totalPages}
+          Showing Page {currentPage + 1} of {totalPages}
         </div>
         <div className="flex">
           <button
@@ -129,17 +127,17 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   return (
     <div style={{ width: "100%" }}>
       <Grid className="gap-2 p-2 h-[80vh] w-full mt-8">
-        <CreateUser userID={userID} accessToken={accessToken} teams={teams}/>
+        <CreateUser userID={userID} accessToken={accessToken} teams={teams} />
         <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[80vh] mb-4">
-        <div className="mb-4 mt-1">
-        <Text>These are Users on LiteLLM that created API Keys. Automatically tracked by LiteLLM</Text>
-       
-        </div>
+          <div className="mb-4 mt-1">
+            <Text>
+              These are Users on LiteLLM that created API Keys. Automatically
+              tracked by LiteLLM
+            </Text>
+          </div>
           <TabGroup>
-
             <TabPanels>
               <TabPanel>
-                
                 <Table className="mt-5">
                   <TableHead>
                     <TableRow>
@@ -156,33 +154,46 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                       <TableRow key={user.user_id}>
                         <TableCell>{user.user_id}</TableCell>
                         <TableCell>{user.user_email}</TableCell>
-                        
+
                         <TableCell>
                           {user.models && user.models.length > 0
                             ? user.models
                             : "All Models"}
                         </TableCell>
-                        <TableCell>{user.spend ? user.spend?.toFixed(2) : 0}</TableCell>
+                        <TableCell>
+                          {user.spend ? user.spend?.toFixed(2) : 0}
+                        </TableCell>
                         <TableCell>
                           {user.max_budget ? user.max_budget : "Unlimited"}
                         </TableCell>
                         <TableCell>
                           <Grid numItems={2}>
-                          {user && user.key_aliases
-                              ? user.key_aliases.filter((key: any) => key !== null).length > 0
-                                ? <Badge size={"xs"} color={"indigo"}>{user.key_aliases.filter((key: any) => key !== null).join(', ') }</Badge>
-                                : <Badge size={"xs"} color={"gray"}>No Keys</Badge>
-                              : <Badge size={"xs"} color={"gray"}>No Keys</Badge>}
-                          {/* <Text>{user.key_aliases.filter(key => key !== null).length} Keys</Text> */}
-                        {/* <Icon icon={InformationCircleIcon} onClick= {() => {
+                            {user && user.key_aliases ? (
+                              user.key_aliases.filter(
+                                (key: any) => key !== null
+                              ).length > 0 ? (
+                                <Badge size={"xs"} color={"indigo"}>
+                                  {user.key_aliases
+                                    .filter((key: any) => key !== null)
+                                    .join(", ")}
+                                </Badge>
+                              ) : (
+                                <Badge size={"xs"} color={"gray"}>
+                                  No Keys
+                                </Badge>
+                              )
+                            ) : (
+                              <Badge size={"xs"} color={"gray"}>
+                                No Keys
+                              </Badge>
+                            )}
+                            {/* <Text>{user.key_aliases.filter(key => key !== null).length} Keys</Text> */}
+                            {/* <Icon icon={InformationCircleIcon} onClick= {() => {
                           setOpenDialogId(user.user_id)
                           setSelectedItem(user)
                         }}>View Keys</Icon> */}
-
                           </Grid>
-
                         </TableCell>
-
                       </TableRow>
                     ))}
                   </TableBody>
@@ -191,9 +202,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
               <TabPanel>
                 <div className="flex items-center">
                   <div className="flex-1"></div>
-                  <div className="flex-1 flex justify-between items-center">
-   
-                  </div>
+                  <div className="flex-1 flex justify-between items-center"></div>
                 </div>
                 {/* <Table className="max-h-[70vh] min-h-[500px]">
                   <TableHead>
@@ -242,7 +251,6 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   </DialogPanel>
 </Dialog> */}
     </div>
-
   );
 };
 

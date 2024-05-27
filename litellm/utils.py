@@ -34,7 +34,7 @@ from dataclasses import (
 import litellm._service_logger  # for storing API inputs, outputs, and metadata
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.caching import DualCache
-from litellm.types.utils import CostPerToken
+from litellm.types.utils import CostPerToken, ProviderField, ModelInfo
 
 oidc_cache = DualCache()
 
@@ -568,7 +568,7 @@ class StreamingChoices(OpenAIObject):
         if delta is not None:
             if isinstance(delta, Delta):
                 self.delta = delta
-            if isinstance(delta, dict):
+            elif isinstance(delta, dict):
                 self.delta = Delta(**delta)
         else:
             self.delta = Delta()
@@ -676,7 +676,10 @@ class ModelResponse(OpenAIObject):
             created = created
         model = model
         if usage is not None:
-            usage = usage
+            if isinstance(usage, dict):
+                usage = Usage(**usage)
+            else:
+                usage = usage
         elif stream is None or stream == False:
             usage = Usage()
         elif (
@@ -763,7 +766,13 @@ class EmbeddingResponse(OpenAIObject):
     _hidden_params: dict = {}
 
     def __init__(
-        self, model=None, usage=None, stream=False, response_ms=None, data=None
+        self,
+        model=None,
+        usage=None,
+        stream=False,
+        response_ms=None,
+        data=None,
+        **params,
     ):
         object = "list"
         if response_ms:
@@ -4659,6 +4668,11 @@ def completion_cost(
             or call_type == CallTypes.aimage_generation.value
         ):
             ### IMAGE GENERATION COST CALCULATION ###
+            if custom_llm_provider == "vertex_ai":
+                # https://cloud.google.com/vertex-ai/generative-ai/pricing
+                # Vertex Charges Flat $0.20 per image
+                return 0.020
+
             # fix size to match naming convention
             if "x" in size and "-x-" not in size:
                 size = size.replace("x", "-x-")
@@ -5030,6 +5044,19 @@ def get_optional_params_embeddings(
 
     default_params = {"user": None, "encoding_format": None, "dimensions": None}
 
+    def _check_valid_arg(supported_params: Optional[list]):
+        if supported_params is None:
+            return
+        unsupported_params = {}
+        for k in non_default_params.keys():
+            if k not in supported_params:
+                unsupported_params[k] = non_default_params[k]
+        if unsupported_params and not litellm.drop_params:
+            raise UnsupportedParamsError(
+                status_code=500,
+                message=f"{custom_llm_provider} does not support parameters: {unsupported_params}, for model={model}. To drop these, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n",
+            )
+
     non_default_params = {
         k: v
         for k, v in passed_params.items()
@@ -5054,6 +5081,18 @@ def get_optional_params_embeddings(
         for k in keys:
             non_default_params.pop(k, None)
         final_params = {**non_default_params, **kwargs}
+        return final_params
+    if custom_llm_provider == "databricks":
+        supported_params = get_supported_openai_params(
+            model=model or "",
+            custom_llm_provider="databricks",
+            request_type="embeddings",
+        )
+        _check_valid_arg(supported_params=supported_params)
+        optional_params = litellm.DatabricksEmbeddingConfig().map_openai_params(
+            non_default_params=non_default_params, optional_params={}
+        )
+        final_params = {**optional_params, **kwargs}
         return final_params
     if custom_llm_provider == "vertex_ai":
         if len(non_default_params.keys()) > 0:
@@ -5841,6 +5880,14 @@ def get_optional_params(
         optional_params = litellm.MistralConfig().map_openai_params(
             non_default_params=non_default_params, optional_params=optional_params
         )
+    elif custom_llm_provider == "databricks":
+        supported_params = get_supported_openai_params(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+        _check_valid_arg(supported_params=supported_params)
+        optional_params = litellm.DatabricksConfig().map_openai_params(
+            non_default_params=non_default_params, optional_params=optional_params
+        )
     elif custom_llm_provider == "groq":
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider
@@ -6239,7 +6286,9 @@ def get_model_region(
     return None
 
 
-def get_api_base(model: str, optional_params: dict) -> Optional[str]:
+def get_api_base(
+    model: str, optional_params: Union[dict, LiteLLM_Params]
+) -> Optional[str]:
     """
     Returns the api base used for calling the model.
 
@@ -6259,7 +6308,9 @@ def get_api_base(model: str, optional_params: dict) -> Optional[str]:
     """
 
     try:
-        if "model" in optional_params:
+        if isinstance(optional_params, LiteLLM_Params):
+            _optional_params = optional_params
+        elif "model" in optional_params:
             _optional_params = LiteLLM_Params(**optional_params)
         else:  # prevent needing to copy and pop the dict
             _optional_params = LiteLLM_Params(
@@ -6328,7 +6379,11 @@ def get_first_chars_messages(kwargs: dict) -> str:
         return ""
 
 
-def get_supported_openai_params(model: str, custom_llm_provider: str) -> Optional[list]:
+def get_supported_openai_params(
+    model: str,
+    custom_llm_provider: str,
+    request_type: Literal["chat_completion", "embeddings"] = "chat_completion",
+) -> Optional[list]:
     """
     Returns the supported openai params for a given model + provider
 
@@ -6501,6 +6556,11 @@ def get_supported_openai_params(model: str, custom_llm_provider: str) -> Optiona
             "frequency_penalty",
             "presence_penalty",
         ]
+    elif custom_llm_provider == "databricks":
+        if request_type == "chat_completion":
+            return litellm.DatabricksConfig().get_supported_openai_params()
+        elif request_type == "embeddings":
+            return litellm.DatabricksEmbeddingConfig().get_supported_openai_params()
     elif custom_llm_provider == "palm" or custom_llm_provider == "gemini":
         return ["temperature", "top_p", "stream", "n", "stop", "max_tokens"]
     elif custom_llm_provider == "vertex_ai":
@@ -6643,6 +6703,8 @@ def get_llm_provider(
     Returns the provider for a given model name - e.g. 'azure/chatgpt-v-2' -> 'azure'
 
     For router -> Can also give the whole litellm param dict -> this function will extract the relevant details
+
+    Raises Error - if unable to map model to a provider
     """
     try:
         ## IF LITELLM PARAMS GIVEN ##
@@ -7030,7 +7092,7 @@ def get_max_tokens(model: str):
         )
 
 
-def get_model_info(model: str):
+def get_model_info(model: str) -> ModelInfo:
     """
     Get a dict for the maximum tokens (context window),
     input_cost_per_token, output_cost_per_token  for a given model.
@@ -7092,7 +7154,7 @@ def get_model_info(model: str):
         if custom_llm_provider == "huggingface":
             max_tokens = _get_max_position_embeddings(model_name=model)
             return {
-                "max_tokens": max_tokens,
+                "max_tokens": max_tokens,  # type: ignore
                 "input_cost_per_token": 0,
                 "output_cost_per_token": 0,
                 "litellm_provider": "huggingface",
@@ -7269,6 +7331,15 @@ def load_test_model(
             "status": "failed",
             "exception": e,
         }
+
+
+def get_provider_fields(custom_llm_provider: str) -> List[ProviderField]:
+    """Return the fields required for each provider"""
+
+    if custom_llm_provider == "databricks":
+        return litellm.DatabricksConfig().get_required_params()
+    else:
+        return []
 
 
 def validate_environment(model: Optional[str] = None) -> dict:
@@ -8490,7 +8561,7 @@ def exception_type(
                 if "This model's maximum context length is" in error_str:
                     exception_mapping_worked = True
                     raise ContextWindowExceededError(
-                        message=f"{exception_provider} - {message}",
+                        message=f"ContextWindowExceededError: {exception_provider} - {message}",
                         llm_provider=custom_llm_provider,
                         model=model,
                         response=original_exception.response,
@@ -8514,7 +8585,7 @@ def exception_type(
                 ):
                     exception_mapping_worked = True
                     raise ContentPolicyViolationError(
-                        message=f"{exception_provider} - {message}",
+                        message=f"ContentPolicyViolationError: {exception_provider} - {message}",
                         llm_provider=custom_llm_provider,
                         model=model,
                         response=original_exception.response,
@@ -8526,7 +8597,7 @@ def exception_type(
                 ):
                     exception_mapping_worked = True
                     raise BadRequestError(
-                        message=f"{exception_provider} - {message}",
+                        message=f"BadRequestError: {exception_provider} - {message}",
                         llm_provider=custom_llm_provider,
                         model=model,
                         response=original_exception.response,
@@ -8534,7 +8605,7 @@ def exception_type(
                     )
                 elif "Request too large" in error_str:
                     raise RateLimitError(
-                        message=f"{exception_provider} - {message}",
+                        message=f"RateLimitError: {exception_provider} - {message}",
                         model=model,
                         llm_provider=custom_llm_provider,
                         response=original_exception.response,
@@ -8546,7 +8617,7 @@ def exception_type(
                 ):
                     exception_mapping_worked = True
                     raise AuthenticationError(
-                        message=f"{exception_provider} - {message}",
+                        message=f"AuthenticationError: {exception_provider} - {message}",
                         llm_provider=custom_llm_provider,
                         model=model,
                         response=original_exception.response,
@@ -8567,10 +8638,19 @@ def exception_type(
                     )
                 elif hasattr(original_exception, "status_code"):
                     exception_mapping_worked = True
-                    if original_exception.status_code == 401:
+                    if original_exception.status_code == 400:
+                        exception_mapping_worked = True
+                        raise BadRequestError(
+                            message=f"{exception_provider} - {message}",
+                            llm_provider=custom_llm_provider,
+                            model=model,
+                            response=original_exception.response,
+                            litellm_debug_info=extra_information,
+                        )
+                    elif original_exception.status_code == 401:
                         exception_mapping_worked = True
                         raise AuthenticationError(
-                            message=f"{exception_provider} - {message}",
+                            message=f"AuthenticationError: {exception_provider} - {message}",
                             llm_provider=custom_llm_provider,
                             model=model,
                             response=original_exception.response,
@@ -8579,7 +8659,7 @@ def exception_type(
                     elif original_exception.status_code == 404:
                         exception_mapping_worked = True
                         raise NotFoundError(
-                            message=f"{exception_provider} - {message}",
+                            message=f"NotFoundError: {exception_provider} - {message}",
                             model=model,
                             llm_provider=custom_llm_provider,
                             response=original_exception.response,
@@ -8588,7 +8668,7 @@ def exception_type(
                     elif original_exception.status_code == 408:
                         exception_mapping_worked = True
                         raise Timeout(
-                            message=f"{exception_provider} - {message}",
+                            message=f"Timeout Error: {exception_provider} - {message}",
                             model=model,
                             llm_provider=custom_llm_provider,
                             litellm_debug_info=extra_information,
@@ -8596,7 +8676,7 @@ def exception_type(
                     elif original_exception.status_code == 422:
                         exception_mapping_worked = True
                         raise BadRequestError(
-                            message=f"{exception_provider} - {message}",
+                            message=f"BadRequestError: {exception_provider} - {message}",
                             model=model,
                             llm_provider=custom_llm_provider,
                             response=original_exception.response,
@@ -8605,7 +8685,7 @@ def exception_type(
                     elif original_exception.status_code == 429:
                         exception_mapping_worked = True
                         raise RateLimitError(
-                            message=f"{exception_provider} - {message}",
+                            message=f"RateLimitError: {exception_provider} - {message}",
                             model=model,
                             llm_provider=custom_llm_provider,
                             response=original_exception.response,
@@ -8614,7 +8694,7 @@ def exception_type(
                     elif original_exception.status_code == 503:
                         exception_mapping_worked = True
                         raise ServiceUnavailableError(
-                            message=f"{exception_provider} - {message}",
+                            message=f"ServiceUnavailableError: {exception_provider} - {message}",
                             model=model,
                             llm_provider=custom_llm_provider,
                             response=original_exception.response,
@@ -8623,7 +8703,7 @@ def exception_type(
                     elif original_exception.status_code == 504:  # gateway timeout error
                         exception_mapping_worked = True
                         raise Timeout(
-                            message=f"{exception_provider} - {message}",
+                            message=f"Timeout Error: {exception_provider} - {message}",
                             model=model,
                             llm_provider=custom_llm_provider,
                             litellm_debug_info=extra_information,
@@ -8632,7 +8712,7 @@ def exception_type(
                         exception_mapping_worked = True
                         raise APIError(
                             status_code=original_exception.status_code,
-                            message=f"{exception_provider} - {message}",
+                            message=f"APIError: {exception_provider} - {message}",
                             llm_provider=custom_llm_provider,
                             model=model,
                             request=original_exception.request,
@@ -8641,7 +8721,7 @@ def exception_type(
                 else:
                     # if no status code then it is an APIConnectionError: https://github.com/openai/openai-python#handling-errors
                     raise APIConnectionError(
-                        message=f"{exception_provider} - {message}",
+                        message=f"APIConnectionError: {exception_provider} - {message}",
                         llm_provider=custom_llm_provider,
                         model=model,
                         litellm_debug_info=extra_information,
@@ -9017,7 +9097,7 @@ def exception_type(
                 ):
                     exception_mapping_worked = True
                     raise BadRequestError(
-                        message=f"VertexAIException - {error_str}",
+                        message=f"VertexAIException BadRequestError - {error_str}",
                         model=model,
                         llm_provider="vertex_ai",
                         response=original_exception.response,
@@ -9029,7 +9109,7 @@ def exception_type(
                 ):
                     exception_mapping_worked = True
                     raise APIError(
-                        message=f"VertexAIException - {error_str}",
+                        message=f"VertexAIException APIError - {error_str}",
                         status_code=500,
                         model=model,
                         llm_provider="vertex_ai",
@@ -9039,7 +9119,7 @@ def exception_type(
                 elif "403" in error_str:
                     exception_mapping_worked = True
                     raise BadRequestError(
-                        message=f"VertexAIException - {error_str}",
+                        message=f"VertexAIException BadRequestError - {error_str}",
                         model=model,
                         llm_provider="vertex_ai",
                         response=original_exception.response,
@@ -9048,7 +9128,7 @@ def exception_type(
                 elif "The response was blocked." in error_str:
                     exception_mapping_worked = True
                     raise UnprocessableEntityError(
-                        message=f"VertexAIException - {error_str}",
+                        message=f"VertexAIException UnprocessableEntityError - {error_str}",
                         model=model,
                         llm_provider="vertex_ai",
                         litellm_debug_info=extra_information,
@@ -9068,7 +9148,7 @@ def exception_type(
                 ):
                     exception_mapping_worked = True
                     raise RateLimitError(
-                        message=f"VertexAIException - {error_str}",
+                        message=f"VertexAIException RateLimitError - {error_str}",
                         model=model,
                         llm_provider="vertex_ai",
                         litellm_debug_info=extra_information,
@@ -9080,11 +9160,12 @@ def exception_type(
                             ),
                         ),
                     )
+
                 if hasattr(original_exception, "status_code"):
                     if original_exception.status_code == 400:
                         exception_mapping_worked = True
                         raise BadRequestError(
-                            message=f"VertexAIException - {error_str}",
+                            message=f"VertexAIException BadRequestError - {error_str}",
                             model=model,
                             llm_provider="vertex_ai",
                             litellm_debug_info=extra_information,
@@ -9093,7 +9174,7 @@ def exception_type(
                     if original_exception.status_code == 500:
                         exception_mapping_worked = True
                         raise APIError(
-                            message=f"VertexAIException - {error_str}",
+                            message=f"VertexAIException APIError - {error_str}",
                             status_code=500,
                             model=model,
                             llm_provider="vertex_ai",
@@ -9698,7 +9779,7 @@ def exception_type(
                     exception_mapping_worked = True
                     raise APIError(
                         status_code=500,
-                        message=f"AzureException - {original_exception.message}",
+                        message=f"AzureException Internal server error - {original_exception.message}",
                         llm_provider="azure",
                         model=model,
                         litellm_debug_info=extra_information,
@@ -9707,7 +9788,7 @@ def exception_type(
                 elif "This model's maximum context length is" in error_str:
                     exception_mapping_worked = True
                     raise ContextWindowExceededError(
-                        message=f"AzureException - {original_exception.message}",
+                        message=f"AzureException ContextWindowExceededError - {original_exception.message}",
                         llm_provider="azure",
                         model=model,
                         litellm_debug_info=extra_information,
@@ -9716,7 +9797,7 @@ def exception_type(
                 elif "DeploymentNotFound" in error_str:
                     exception_mapping_worked = True
                     raise NotFoundError(
-                        message=f"AzureException - {original_exception.message}",
+                        message=f"AzureException NotFoundError - {original_exception.message}",
                         llm_provider="azure",
                         model=model,
                         litellm_debug_info=extra_information,
@@ -9731,7 +9812,7 @@ def exception_type(
                 ):
                     exception_mapping_worked = True
                     raise ContentPolicyViolationError(
-                        message=f"AzureException - {original_exception.message}",
+                        message=f"AzureException ContentPolicyViolationError - {original_exception.message}",
                         llm_provider="azure",
                         model=model,
                         litellm_debug_info=extra_information,
@@ -9740,7 +9821,7 @@ def exception_type(
                 elif "invalid_request_error" in error_str:
                     exception_mapping_worked = True
                     raise BadRequestError(
-                        message=f"AzureException - {original_exception.message}",
+                        message=f"AzureException BadRequestError - {original_exception.message}",
                         llm_provider="azure",
                         model=model,
                         litellm_debug_info=extra_information,
@@ -9752,7 +9833,7 @@ def exception_type(
                 ):
                     exception_mapping_worked = True
                     raise AuthenticationError(
-                        message=f"{exception_provider} - {original_exception.message}",
+                        message=f"{exception_provider} AuthenticationError - {original_exception.message}",
                         llm_provider=custom_llm_provider,
                         model=model,
                         litellm_debug_info=extra_information,
@@ -9760,10 +9841,19 @@ def exception_type(
                     )
                 elif hasattr(original_exception, "status_code"):
                     exception_mapping_worked = True
-                    if original_exception.status_code == 401:
+                    if original_exception.status_code == 400:
+                        exception_mapping_worked = True
+                        raise BadRequestError(
+                            message=f"AzureException - {original_exception.message}",
+                            llm_provider="azure",
+                            model=model,
+                            litellm_debug_info=extra_information,
+                            response=original_exception.response,
+                        )
+                    elif original_exception.status_code == 401:
                         exception_mapping_worked = True
                         raise AuthenticationError(
-                            message=f"AzureException - {original_exception.message}",
+                            message=f"AzureException AuthenticationError - {original_exception.message}",
                             llm_provider="azure",
                             model=model,
                             litellm_debug_info=extra_information,
@@ -9772,15 +9862,15 @@ def exception_type(
                     elif original_exception.status_code == 408:
                         exception_mapping_worked = True
                         raise Timeout(
-                            message=f"AzureException - {original_exception.message}",
+                            message=f"AzureException Timeout - {original_exception.message}",
                             model=model,
                             litellm_debug_info=extra_information,
                             llm_provider="azure",
                         )
-                    if original_exception.status_code == 422:
+                    elif original_exception.status_code == 422:
                         exception_mapping_worked = True
                         raise BadRequestError(
-                            message=f"AzureException - {original_exception.message}",
+                            message=f"AzureException BadRequestError - {original_exception.message}",
                             model=model,
                             llm_provider="azure",
                             litellm_debug_info=extra_information,
@@ -9789,7 +9879,7 @@ def exception_type(
                     elif original_exception.status_code == 429:
                         exception_mapping_worked = True
                         raise RateLimitError(
-                            message=f"AzureException - {original_exception.message}",
+                            message=f"AzureException RateLimitError - {original_exception.message}",
                             model=model,
                             llm_provider="azure",
                             litellm_debug_info=extra_information,
@@ -9798,7 +9888,7 @@ def exception_type(
                     elif original_exception.status_code == 503:
                         exception_mapping_worked = True
                         raise ServiceUnavailableError(
-                            message=f"AzureException - {original_exception.message}",
+                            message=f"AzureException ServiceUnavailableError - {original_exception.message}",
                             model=model,
                             llm_provider="azure",
                             litellm_debug_info=extra_information,
@@ -9807,7 +9897,7 @@ def exception_type(
                     elif original_exception.status_code == 504:  # gateway timeout error
                         exception_mapping_worked = True
                         raise Timeout(
-                            message=f"AzureException - {original_exception.message}",
+                            message=f"AzureException Timeout - {original_exception.message}",
                             model=model,
                             litellm_debug_info=extra_information,
                             llm_provider="azure",
@@ -9816,7 +9906,7 @@ def exception_type(
                         exception_mapping_worked = True
                         raise APIError(
                             status_code=original_exception.status_code,
-                            message=f"AzureException - {original_exception.message}",
+                            message=f"AzureException APIError - {original_exception.message}",
                             llm_provider="azure",
                             litellm_debug_info=extra_information,
                             model=model,
@@ -9827,7 +9917,7 @@ def exception_type(
                 else:
                     # if no status code then it is an APIConnectionError: https://github.com/openai/openai-python#handling-errors
                     raise APIConnectionError(
-                        message=f"{exception_provider} - {message}",
+                        message=f"{exception_provider} APIConnectionError - {message}",
                         llm_provider="azure",
                         model=model,
                         litellm_debug_info=extra_information,
@@ -9839,7 +9929,7 @@ def exception_type(
         ):  # deal with edge-case invalid request error bug in openai-python sdk
             exception_mapping_worked = True
             raise BadRequestError(
-                message=f"{exception_provider}: This can happen due to missing AZURE_API_VERSION: {str(original_exception)}",
+                message=f"{exception_provider} BadRequestError : This can happen due to missing AZURE_API_VERSION: {str(original_exception)}",
                 model=model,
                 llm_provider=custom_llm_provider,
                 response=original_exception.response,
@@ -10581,7 +10671,8 @@ class CustomStreamWrapper:
             data_json = json.loads(chunk[5:])  # chunk.startswith("data:"):
             try:
                 if len(data_json["choices"]) > 0:
-                    text = data_json["choices"][0]["delta"].get("content", "")
+                    delta = data_json["choices"][0]["delta"]
+                    text = "" if delta is None else delta.get("content", "")
                     if data_json["choices"][0].get("finish_reason", None):
                         is_finished = True
                         finish_reason = data_json["choices"][0]["finish_reason"]
@@ -11012,6 +11103,8 @@ class CustomStreamWrapper:
             elif self.custom_llm_provider and self.custom_llm_provider == "clarifai":
                 response_obj = self.handle_clarifai_completion_chunk(chunk)
                 completion_obj["content"] = response_obj["text"]
+                if response_obj["is_finished"]:
+                    self.received_finish_reason = response_obj["finish_reason"]
             elif self.model == "replicate" or self.custom_llm_provider == "replicate":
                 response_obj = self.handle_replicate_chunk(chunk)
                 completion_obj["content"] = response_obj["text"]
@@ -11263,6 +11356,17 @@ class CustomStreamWrapper:
                     and self.stream_options.get("include_usage", False) == True
                 ):
                     model_response.usage = response_obj["usage"]
+            elif self.custom_llm_provider == "databricks":
+                response_obj = litellm.DatabricksConfig()._chunk_parser(chunk)
+                completion_obj["content"] = response_obj["text"]
+                print_verbose(f"completion obj content: {completion_obj['content']}")
+                if response_obj["is_finished"]:
+                    self.received_finish_reason = response_obj["finish_reason"]
+                if (
+                    self.stream_options
+                    and self.stream_options.get("include_usage", False) == True
+                ):
+                    model_response.usage = response_obj["usage"]
             elif self.custom_llm_provider == "azure_text":
                 response_obj = self.handle_azure_text_completion_chunk(chunk)
                 completion_obj["content"] = response_obj["text"]
@@ -11336,12 +11440,11 @@ class CustomStreamWrapper:
                 model_response.id = original_chunk.id
                 self.response_id = original_chunk.id
                 if len(original_chunk.choices) > 0:
-                    if (
-                        original_chunk.choices[0].delta.function_call is not None
-                        or original_chunk.choices[0].delta.tool_calls is not None
+                    delta = original_chunk.choices[0].delta
+                    if delta is not None and (
+                        delta.function_call is not None or delta.tool_calls is not None
                     ):
                         try:
-                            delta = original_chunk.choices[0].delta
                             model_response.system_fingerprint = (
                                 original_chunk.system_fingerprint
                             )
@@ -11400,7 +11503,11 @@ class CustomStreamWrapper:
                             model_response.choices[0].delta = Delta()
                     else:
                         try:
-                            delta = dict(original_chunk.choices[0].delta)
+                            delta = (
+                                dict()
+                                if original_chunk.choices[0].delta is None
+                                else dict(original_chunk.choices[0].delta)
+                            )
                             print_verbose(f"original delta: {delta}")
                             model_response.choices[0].delta = Delta(**delta)
                             print_verbose(
@@ -11672,6 +11779,7 @@ class CustomStreamWrapper:
                 or self.custom_llm_provider == "replicate"
                 or self.custom_llm_provider == "cached_response"
                 or self.custom_llm_provider == "predibase"
+                or self.custom_llm_provider == "databricks"
                 or self.custom_llm_provider == "bedrock"
                 or self.custom_llm_provider in litellm.openai_compatible_endpoints
             ):
@@ -12149,7 +12257,7 @@ def trim_messages(
         return messages
 
 
-def get_valid_models():
+def get_valid_models() -> List[str]:
     """
     Returns a list of valid LLMs based on the set environment variables
 

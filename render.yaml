@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: openai-proxy
+    runtime: image
+    image:
+      url: ghcr.io/berriai/litellm:main-stable
+    envVars:
+      - key: PORT
+        value: 4000
+    numInstances: 1
+    healthCheckPath: /health/liveliness
+    autoDeploy: true

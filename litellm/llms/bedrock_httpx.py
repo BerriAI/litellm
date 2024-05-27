@@ -44,6 +44,7 @@ from .base import BaseLLM
 import httpx  # type: ignore
 from .bedrock import BedrockError, convert_messages_to_prompt, ModelResponseIterator
 from litellm.types.llms.bedrock import *
+import urllib.parse
 
 
 class AmazonCohereChatConfig:
@@ -524,6 +525,16 @@ class BedrockLLM(BaseLLM):
 
         return model_response
 
+    def encode_model_id(self, model_id: str) -> str:
+        """
+        Double encode the model ID to ensure it matches the expected double-encoded format.
+        Args:
+            model_id (str): The model ID to encode.
+        Returns:
+            str: The double-encoded model ID.
+        """
+        return urllib.parse.quote(model_id, safe="")
+
     def completion(
         self,
         model: str,
@@ -552,6 +563,12 @@ class BedrockLLM(BaseLLM):
 
         ## SETUP ##
         stream = optional_params.pop("stream", None)
+        modelId = optional_params.pop("model_id", None)
+        if modelId is not None:
+            modelId = self.encode_model_id(model_id=modelId)
+        else:
+            modelId = model
+
         provider = model.split(".")[0]
 
         ## CREDENTIALS ##
@@ -609,9 +626,9 @@ class BedrockLLM(BaseLLM):
             endpoint_url = f"https://bedrock-runtime.{aws_region_name}.amazonaws.com"
 
         if (stream is not None and stream == True) and provider != "ai21":
-            endpoint_url = f"{endpoint_url}/model/{model}/invoke-with-response-stream"
+            endpoint_url = f"{endpoint_url}/model/{modelId}/invoke-with-response-stream"
         else:
-            endpoint_url = f"{endpoint_url}/model/{model}/invoke"
+            endpoint_url = f"{endpoint_url}/model/{modelId}/invoke"
 
         sigv4 = SigV4Auth(credentials, "bedrock", aws_region_name)
 
