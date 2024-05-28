@@ -2,12 +2,6 @@ import Image from '@theme/IdealImage';
 
 # ✨ 📧 Email Notifications 
 
-:::info
-
-This is an Enterprise only feature [Get in touch with us for a Free Trial](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
-
-:::
-
 Send an Email to your users when:
 - A Proxy API Key is created for them 
 - Their API Key crosses it's Budget 
@@ -37,6 +31,12 @@ general_settings:
 That's it ! start your proxy
 
 ## Customizing Email Branding
+
+:::info
+
+Customizing Email Branding is an Enterprise Feature [Get in touch with us for a Free Trial](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+
+:::
 
 LiteLLM allows you to customize the:
 - Logo on the Email

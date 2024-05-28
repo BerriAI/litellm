@@ -60,17 +60,20 @@ def get_complete_model_list(
     - If team list is empty -> defer to proxy model list
     """
 
-    if len(key_models) > 0:
-        return key_models
+    unique_models = set()
 
-    if len(team_models) > 0:
-        return team_models
+    if key_models:
+        unique_models.update(key_models)
+    elif team_models:
+        unique_models.update(team_models)
+    else:
+        unique_models.update(proxy_model_list)
 
-    returned_models = proxy_model_list
-    if user_model is not None:  # set via `litellm --model ollama/llam3`
-        returned_models.append(user_model)
+        if user_model:
+            unique_models.add(user_model)
 
-    if infer_model_from_keys is not None and infer_model_from_keys == True:
-        valid_models = get_valid_models()
-        returned_models.extend(valid_models)
-    return returned_models
+        if infer_model_from_keys:
+            valid_models = get_valid_models()
+            unique_models.update(valid_models)
+
+    return list(unique_models)

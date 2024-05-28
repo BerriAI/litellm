@@ -1,9 +1,15 @@
+"""
+    litellm.Router Types - includes RouterConfig, UpdateRouterConfig, ModelInfo etc
+"""
+
 from typing import List, Optional, Union, Dict, Tuple, Literal, TypedDict
+import uuid
+import enum
 import httpx
-from pydantic import BaseModel, validator, Field
+from pydantic import BaseModel, Field
+import datetime
 from .completion import CompletionRequest
 from .embedding import EmbeddingRequest
-import uuid, enum
 
 
 class ModelConfig(BaseModel):
@@ -76,6 +82,12 @@ class ModelInfo(BaseModel):
     db_model: bool = (
         False  # used for proxy - to separate models which are stored in the db vs. config.
     )
+    updated_at: Optional[datetime.datetime] = None
+    updated_by: Optional[str] = None
+
+    created_at: Optional[datetime.datetime] = None
+    created_by: Optional[str] = None
+
     base_model: Optional[str] = (
         None  # specify if the base model is azure/gpt-3.5-turbo etc for accurate cost tracking
     )
@@ -411,3 +423,19 @@ class AlertingConfig(BaseModel):
 
     webhook_url: str
     alerting_threshold: Optional[float] = 300
+
+
+class ModelGroupInfo(BaseModel):
+    model_group: str
+    providers: List[str]
+    max_input_tokens: Optional[float] = None
+    max_output_tokens: Optional[float] = None
+    input_cost_per_token: Optional[float] = None
+    output_cost_per_token: Optional[float] = None
+    mode: Literal[
+        "chat", "embedding", "completion", "image_generation", "audio_transcription"
+    ]
+    supports_parallel_function_calling: bool = Field(default=False)
+    supports_vision: bool = Field(default=False)
+    supports_function_calling: bool = Field(default=False)
+    supported_openai_params: List[str] = Field(default=[])

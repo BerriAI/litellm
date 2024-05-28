@@ -294,6 +294,7 @@ async def acompletion(
         "api_version": api_version,
         "api_key": api_key,
         "model_list": model_list,
+        "extra_headers": extra_headers,
         "acompletion": True,  # assuming this is a required parameter
     }
     if custom_llm_provider is None:

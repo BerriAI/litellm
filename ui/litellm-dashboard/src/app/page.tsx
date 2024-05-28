@@ -10,12 +10,37 @@ import AdminPanel from "@/components/admins";
 import Settings from "@/components/settings";
 import GeneralSettings from "@/components/general_settings";
 import BudgetPanel from "@/components/budgets/budget_panel";
+import ModelHub from "@/components/model_hub";
 import APIRef from "@/components/api_ref";
 import ChatUI from "@/components/chat_ui";
 import Sidebar from "../components/leftnav";
 import Usage from "../components/usage";
 import { jwtDecode } from "jwt-decode";
 import { Typography } from "antd";
+
+export function formatUserRole(userRole: string) {
+  if (!userRole) {
+    return "Undefined Role";
+  }
+  console.log(`Received user role: ${userRole.toLowerCase()}`);
+  console.log(`Received user role length: ${userRole.toLowerCase().length}`);
+  switch (userRole.toLowerCase()) {
+    case "app_owner":
+      return "App Owner";
+    case "demo_app_owner":
+      return "App Owner";
+    case "app_admin":
+      return "Admin";
+    case "proxy_admin":
+      return "Admin";
+    case "proxy_admin_viewer":
+      return "Admin Viewer";
+    case "app_user":
+      return "App User";
+    default:
+      return "Unknown Role";
+  }
+}
 
 const CreateKeyPage = () => {
   const { Title, Paragraph } = Typography;
@@ -76,30 +101,6 @@ const CreateKeyPage = () => {
       }
     }
   }, [token]);
-
-  function formatUserRole(userRole: string) {
-    if (!userRole) {
-      return "Undefined Role";
-    }
-    console.log(`Received user role: ${userRole.toLowerCase()}`);
-    console.log(`Received user role length: ${userRole.toLowerCase().length}`);
-    switch (userRole.toLowerCase()) {
-      case "app_owner":
-        return "App Owner";
-      case "demo_app_owner":
-        return "App Owner";
-      case "app_admin":
-        return "Admin";
-      case "proxy_admin":
-        return "Admin";
-      case "proxy_admin_viewer":
-        return "Admin Viewer";
-      case "app_user":
-        return "App User";
-      default:
-        return "Unknown Role";
-    }
-  }
 
   return (
     <Suspense fallback={<div>Loading...</div>}>
@@ -192,6 +193,12 @@ const CreateKeyPage = () => {
               userRole={userRole}
               accessToken={accessToken}
               modelData={modelData}
+            />
+          ) : page == "model-hub" ? (
+            <ModelHub
+              accessToken={accessToken}
+              publicPage={false}
+              premiumUser={premiumUser}
             />
           ) : (
             <Usage

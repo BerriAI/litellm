@@ -38,6 +38,7 @@ from litellm.utils import (
 import copy
 from litellm._logging import verbose_router_logger
 import logging
+from litellm.types.utils import ModelInfo as ModelMapInfo
 from litellm.types.router import (
     Deployment,
     ModelInfo,
@@ -48,6 +49,7 @@ from litellm.types.router import (
     RetryPolicy,
     AlertingConfig,
     DeploymentTypedDict,
+    ModelGroupInfo,
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.azure import get_azure_ad_token_from_oidc
@@ -348,17 +350,13 @@ class Router:
     def validate_fallbacks(self, fallback_param: Optional[List]):
         if fallback_param is None:
             return
-        if len(fallback_param) > 0:  # if set
-            ## for dictionary in list, check if only 1 key in dict
-            for _dict in fallback_param:
-                assert isinstance(_dict, dict), "Item={}, not a dictionary".format(
-                    _dict
-                )
-                assert (
-                    len(_dict.keys()) == 1
-                ), "Only 1 key allows in dictionary. You set={} for dict={}".format(
-                    len(_dict.keys()), _dict
-                )
+
+        for fallback_dict in fallback_param:
+            if not isinstance(fallback_dict, dict):
+                raise ValueError(f"Item '{fallback_dict}' is not a dictionary.")
+            if len(fallback_dict) != 1:
+                raise ValueError(
+                    f"Dictionary '{fallback_dict}' must have exactly one key, but has {len(fallback_dict)} keys.")
 
     def routing_strategy_init(self, routing_strategy: str, routing_strategy_args: dict):
         if routing_strategy == "least-busy":
@@ -3044,6 +3042,130 @@ class Router:
                 if id == model["model_info"]["id"]:
                     return model
         return None
+
+    def get_model_group_info(self, model_group: str) -> Optional[ModelGroupInfo]:
+        """
+        For a given model group name, return the combined model info
+
+        Returns:
+        - ModelGroupInfo if able to construct a model group
+        - None if error constructing model group info
+        """
+
+        model_group_info: Optional[ModelGroupInfo] = None
+
+        for model in self.model_list:
+            if "model_name" in model and model["model_name"] == model_group:
+                # model in model group found #
+                litellm_params = LiteLLM_Params(**model["litellm_params"])
+                # get model info
+                try:
+                    model_info = litellm.get_model_info(model=litellm_params.model)
+                except Exception as e:
+                    model_info = None
+                # get llm provider
+                try:
+                    model, llm_provider, _, _ = litellm.get_llm_provider(
+                        model=litellm_params.model,
+                        custom_llm_provider=litellm_params.custom_llm_provider,
+                    )
+                except litellm.exceptions.BadRequestError as e:
+                    continue
+
+                if model_info is None:
+                    supported_openai_params = litellm.get_supported_openai_params(
+                        model=model, custom_llm_provider=llm_provider
+                    )
+                    model_info = ModelMapInfo(
+                        max_tokens=None,
+                        max_input_tokens=None,
+                        max_output_tokens=None,
+                        input_cost_per_token=0,
+                        output_cost_per_token=0,
+                        litellm_provider=llm_provider,
+                        mode="chat",
+                        supported_openai_params=supported_openai_params,
+                    )
+
+                if model_group_info is None:
+                    model_group_info = ModelGroupInfo(
+                        model_group=model_group, providers=[llm_provider], **model_info  # type: ignore
+                    )
+                else:
+                    # if max_input_tokens > curr
+                    # if max_output_tokens > curr
+                    # if input_cost_per_token > curr
+                    # if output_cost_per_token > curr
+                    # supports_parallel_function_calling == True
+                    # supports_vision == True
+                    # supports_function_calling == True
+                    if llm_provider not in model_group_info.providers:
+                        model_group_info.providers.append(llm_provider)
+                    if (
+                        model_info.get("max_input_tokens", None) is not None
+                        and model_info["max_input_tokens"] is not None
+                        and (
+                            model_group_info.max_input_tokens is None
+                            or model_info["max_input_tokens"]
+                            > model_group_info.max_input_tokens
+                        )
+                    ):
+                        model_group_info.max_input_tokens = model_info[
+                            "max_input_tokens"
+                        ]
+                    if (
+                        model_info.get("max_output_tokens", None) is not None
+                        and model_info["max_output_tokens"] is not None
+                        and (
+                            model_group_info.max_output_tokens is None
+                            or model_info["max_output_tokens"]
+                            > model_group_info.max_output_tokens
+                        )
+                    ):
+                        model_group_info.max_output_tokens = model_info[
+                            "max_output_tokens"
+                        ]
+                    if model_info.get("input_cost_per_token", None) is not None and (
+                        model_group_info.input_cost_per_token is None
+                        or model_info["input_cost_per_token"]
+                        > model_group_info.input_cost_per_token
+                    ):
+                        model_group_info.input_cost_per_token = model_info[
+                            "input_cost_per_token"
+                        ]
+                    if model_info.get("output_cost_per_token", None) is not None and (
+                        model_group_info.output_cost_per_token is None
+                        or model_info["output_cost_per_token"]
+                        > model_group_info.output_cost_per_token
+                    ):
+                        model_group_info.output_cost_per_token = model_info[
+                            "output_cost_per_token"
+                        ]
+                    if (
+                        model_info.get("supports_parallel_function_calling", None)
+                        is not None
+                        and model_info["supports_parallel_function_calling"] is True  # type: ignore
+                    ):
+                        model_group_info.supports_parallel_function_calling = True
+                    if (
+                        model_info.get("supports_vision", None) is not None
+                        and model_info["supports_vision"] is True  # type: ignore
+                    ):
+                        model_group_info.supports_vision = True
+                    if (
+                        model_info.get("supports_function_calling", None) is not None
+                        and model_info["supports_function_calling"] is True  # type: ignore
+                    ):
+                        model_group_info.supports_function_calling = True
+                    if (
+                        model_info.get("supported_openai_params", None) is not None
+                        and model_info["supported_openai_params"] is not None
+                    ):
+                        model_group_info.supported_openai_params = model_info[
+                            "supported_openai_params"
+                        ]
+
+        return model_group_info
 
     def get_model_ids(self) -> List[str]:
         """
