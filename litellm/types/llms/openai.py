@@ -6,7 +6,7 @@ from typing import (
     Literal,
     Iterable,
 )
-from typing_extensions import override, Required
+from typing_extensions import override, Required, Dict
 from pydantic import BaseModel
 
 from openai.types.beta.threads.message_content import MessageContent
@@ -146,3 +146,53 @@ class Thread(BaseModel):
 
     object: Literal["thread"]
     """The object type, which is always `thread`."""
+
+
+# OpenAI Batches Types
+class CreateBatchRequest(BaseModel):
+    """
+    CreateBatchRequest
+    """
+
+    completion_window: Literal["24h"]
+    endpoint: Literal["/v1/chat/completions", "/v1/embeddings", "/v1/completions"]
+    input_file_id: str
+    metadata: Optional[Dict[str, str]] = None
+    extra_headers: Optional[Dict[str, str]] = None
+    extra_body: Optional[Dict[str, str]] = None
+    timeout: Optional[float] = None
+
+
+class RetrieveBatchRequest(BaseModel):
+    """
+    RetrieveBatchRequest
+    """
+
+    batch_id: str
+    extra_headers: Optional[Dict[str, str]] = None
+    extra_body: Optional[Dict[str, str]] = None
+    timeout: Optional[float] = None
+
+
+class CancelBatchRequest(BaseModel):
+    """
+    CancelBatchRequest
+    """
+
+    batch_id: str
+    extra_headers: Optional[Dict[str, str]] = None
+    extra_body: Optional[Dict[str, str]] = None
+    timeout: Optional[float] = None
+
+
+class ListBatchRequest(BaseModel):
+    """
+    ListBatchRequest - List your organization's batches
+    Calls https://api.openai.com/v1/batches
+    """
+
+    after: Optional[str] = None
+    limit: Optional[int] = 20
+    extra_headers: Optional[Dict[str, str]] = None
+    extra_body: Optional[Dict[str, str]] = None
+    timeout: Optional[float] = None
