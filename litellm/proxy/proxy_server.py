@@ -7796,9 +7796,8 @@ async def new_end_user(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    [TODO] Needs to be implemented.
-
-    Allow creating a new end-user 
+    Allow creating a new Customer 
+    NOTE: This used to be called `/end_user/new`, we will still be maintaining compatibility for /end_user/XXX for these endpoints
 
     - Allow specifying allowed regions 
     - Allow specifying default model
