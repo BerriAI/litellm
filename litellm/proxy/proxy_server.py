@@ -7137,13 +7137,15 @@ async def global_predict_spend_logs(request: Request):
 #### INTERNAL USER MANAGEMENT ####
 @router.post(
     "/user/new",
-    tags=["user management"],
+    tags=["Internal User management"],
     dependencies=[Depends(user_api_key_auth)],
     response_model=NewUserResponse,
 )
 async def new_user(data: NewUserRequest):
     """
-    Use this to create a new user with a budget. This creates a new user and generates a new api key for the new user. The new api key is returned.
+    Use this to create a new INTERNAL user with a budget.
+    Internal Users can access LiteLLM Admin UI to make keys, request access to models.
+    This creates a new user and generates a new api key for the new user. The new api key is returned.
 
     Returns user id, budget + new key.
 
@@ -7214,7 +7216,9 @@ async def new_user(data: NewUserRequest):
 
 
 @router.post(
-    "/user/auth", tags=["user management"], dependencies=[Depends(user_api_key_auth)]
+    "/user/auth",
+    tags=["Internal User management"],
+    dependencies=[Depends(user_api_key_auth)],
 )
 async def user_auth(request: Request):
     """
@@ -7280,7 +7284,9 @@ async def user_auth(request: Request):
 
 
 @router.get(
-    "/user/info", tags=["user management"], dependencies=[Depends(user_api_key_auth)]
+    "/user/info",
+    tags=["Internal User management"],
+    dependencies=[Depends(user_api_key_auth)],
 )
 async def user_info(
     user_id: Optional[str] = fastapi.Query(
@@ -7452,7 +7458,9 @@ async def user_info(
 
 
 @router.post(
-    "/user/update", tags=["user management"], dependencies=[Depends(user_api_key_auth)]
+    "/user/update",
+    tags=["Internal User management"],
+    dependencies=[Depends(user_api_key_auth)],
 )
 async def user_update(data: UpdateUserRequest):
     """
@@ -7546,7 +7554,7 @@ async def user_update(data: UpdateUserRequest):
 
 @router.post(
     "/user/request_model",
-    tags=["user management"],
+    tags=["Internal User management"],
     dependencies=[Depends(user_api_key_auth)],
 )
 async def user_request_model(request: Request):
@@ -7599,7 +7607,7 @@ async def user_request_model(request: Request):
 
 @router.get(
     "/user/get_requests",
-    tags=["user management"],
+    tags=["Internal User management"],
     dependencies=[Depends(user_api_key_auth)],
 )
 async def user_get_requests():
@@ -7641,7 +7649,7 @@ async def user_get_requests():
 
 @router.get(
     "/user/get_users",
-    tags=["user management"],
+    tags=["Internal User management"],
     dependencies=[Depends(user_api_key_auth)],
 )
 async def get_users(
@@ -7678,7 +7686,13 @@ async def get_users(
 
 @router.post(
     "/end_user/block",
-    tags=["End User Management"],
+    tags=["Customer Management"],
+    dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
+)
+@router.post(
+    "/customer/block",
+    tags=["Customer Management"],
     dependencies=[Depends(user_api_key_auth)],
 )
 async def block_user(data: BlockUsers):
@@ -7721,8 +7735,14 @@ async def block_user(data: BlockUsers):
 
 @router.post(
     "/end_user/unblock",
-    tags=["End User Management"],
+    tags=["Customer Management"],
     dependencies=[Depends(user_api_key_auth)],
+)
+@router.post(
+    "/customer/unblock",
+    tags=["Customer Management"],
+    dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
 )
 async def unblock_user(data: BlockUsers):
     """
@@ -7768,35 +7788,36 @@ async def unblock_user(data: BlockUsers):
 
 @router.post(
     "/end_user/new",
-    tags=["End User Management"],
+    tags=["Customer Management"],
+    include_in_schema=False,
+    dependencies=[Depends(user_api_key_auth)],
+)
+@router.post(
+    "/customer/new",
+    tags=["Customer Management"],
     dependencies=[Depends(user_api_key_auth)],
 )
 async def new_end_user(
-    data: NewEndUserRequest,
+    data: NewCustomerRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    [TODO] Needs to be implemented.
-
-    Allow creating a new end-user 
+    Allow creating a new Customer 
+    NOTE: This used to be called `/end_user/new`, we will still be maintaining compatibility for /end_user/XXX for these endpoints
 
     - Allow specifying allowed regions 
     - Allow specifying default model
 
     Example curl:
     ```
-    curl --location 'http://0.0.0.0:4000/end_user/new' \
+    curl --location 'http://0.0.0.0:4000/customer/new' \
         --header 'Authorization: Bearer sk-1234' \
         --header 'Content-Type: application/json' \
         --data '{
-            "end_user_id" : "ishaan-jaff-3", <- specific customer
-            
-            "allowed_region": "eu" <- set region for models        
-
-                    + 
-
+            "user_id" : "ishaan-jaff-3",
+            "allowed_region": "eu",
+            "budget_id": "free_tier",
             "default_model": "azure/gpt-3.5-turbo-eu" <- all calls from this user, use this model? 
-
         }'
 
         # return end-user object
@@ -7819,56 +7840,88 @@ async def new_end_user(
             status_code=500,
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
+    try:
 
-    ## VALIDATION ##
-    if data.default_model is not None:
-        if llm_router is None:
-            raise HTTPException(
-                status_code=422, detail={"error": CommonProxyErrors.no_llm_router.value}
+        ## VALIDATION ##
+        if data.default_model is not None:
+            if llm_router is None:
+                raise HTTPException(
+                    status_code=422,
+                    detail={"error": CommonProxyErrors.no_llm_router.value},
+                )
+            elif data.default_model not in llm_router.get_model_names():
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "error": "Default Model not on proxy. Configure via `/model/new` or config.yaml. Default_model={}, proxy_model_names={}".format(
+                            data.default_model, set(llm_router.get_model_names())
+                        )
+                    },
+                )
+
+        new_end_user_obj: Dict = {}
+
+        ## CREATE BUDGET ## if set
+        if data.max_budget is not None:
+            budget_record = await prisma_client.db.litellm_budgettable.create(
+                data={
+                    "max_budget": data.max_budget,
+                    "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,  # type: ignore
+                    "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
+                }
             )
-        elif data.default_model not in llm_router.get_model_names():
-            raise HTTPException(
-                status_code=422,
-                detail={
-                    "error": "Default Model not on proxy. Configure via `/model/new` or config.yaml. Default_model={}, proxy_model_names={}".format(
-                        data.default_model, set(llm_router.get_model_names())
-                    )
-                },
-            )
 
-    new_end_user_obj: Dict = {}
+            new_end_user_obj["budget_id"] = budget_record.budget_id
+        elif data.budget_id is not None:
+            new_end_user_obj["budget_id"] = data.budget_id
 
-    ## CREATE BUDGET ## if set
-    if data.max_budget is not None:
-        budget_record = await prisma_client.db.litellm_budgettable.create(
-            data={
-                "max_budget": data.max_budget,
-                "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,  # type: ignore
-                "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
-            }
+        _user_data = data.dict(exclude_none=True)
+
+        for k, v in _user_data.items():
+            if k != "max_budget" and k != "budget_id":
+                new_end_user_obj[k] = v
+
+        ## WRITE TO DB ##
+        end_user_record = await prisma_client.db.litellm_endusertable.create(
+            data=new_end_user_obj  # type: ignore
         )
 
-        new_end_user_obj["budget_id"] = budget_record.budget_id
-    elif data.budget_id is not None:
-        new_end_user_obj["budget_id"] = data.budget_id
+        return end_user_record
+    except Exception as e:
+        if "Unique constraint failed on the fields: (`user_id`)" in str(e):
+            raise ProxyException(
+                message=f"Customer already exists, passed user_id={data.user_id}. Please pass a new user_id.",
+                type="bad_request",
+                code=400,
+                param="user_id",
+            )
 
-    _user_data = data.dict(exclude_none=True)
-
-    for k, v in _user_data.items():
-        if k != "max_budget" and k != "budget_id":
-            new_end_user_obj[k] = v
-
-    ## WRITE TO DB ##
-    end_user_record = await prisma_client.db.litellm_endusertable.create(
-        data=new_end_user_obj  # type: ignore
-    )
-
-    return end_user_record
+        if isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "detail", f"Internal Server Error({str(e)})"),
+                type="internal_error",
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
+            )
+        elif isinstance(e, ProxyException):
+            raise e
+        raise ProxyException(
+            message="Internal Server Error, " + str(e),
+            type="internal_error",
+            param=getattr(e, "param", "None"),
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
 
 
 @router.get(
+    "/customer/info",
+    tags=["Customer Management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+@router.get(
     "/end_user/info",
-    tags=["End User Management"],
+    tags=["Customer Management"],
+    include_in_schema=False,
     dependencies=[Depends(user_api_key_auth)],
 )
 async def end_user_info(
@@ -7892,26 +7945,174 @@ async def end_user_info(
 
 
 @router.post(
-    "/end_user/update",
-    tags=["End User Management"],
+    "/customer/update",
+    tags=["Customer Management"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def update_end_user():
+@router.post(
+    "/end_user/update",
+    tags=["Customer Management"],
+    include_in_schema=False,
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def update_end_user(
+    data: UpdateCustomerRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     """
-    [TODO] Needs to be implemented.
+    Example curl 
+
+    ```
+    curl --location 'http://0.0.0.0:4000/customer/update' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'Content-Type: application/json' \
+    --data '{
+        "user_id": "test-litellm-user-4",
+        "budget_id": "paid_tier"
+    }'
+
+    See below for all params 
+    ```
     """
+
+    global prisma_client
+    try:
+        data_json: dict = data.json()
+        # get the row from db
+        if prisma_client is None:
+            raise Exception("Not connected to DB!")
+
+        # get non default values for key
+        non_default_values = {}
+        for k, v in data_json.items():
+            if v is not None and v not in (
+                [],
+                {},
+                0,
+            ):  # models default to [], spend defaults to 0, we should not reset these values
+                non_default_values[k] = v
+
+        ## ADD USER, IF NEW ##
+        verbose_proxy_logger.debug("/customer/update: Received data = %s", data)
+        if data.user_id is not None and len(data.user_id) > 0:
+            non_default_values["user_id"] = data.user_id  # type: ignore
+            verbose_proxy_logger.debug("In update customer, user_id condition block.")
+            response = await prisma_client.db.litellm_endusertable.update(
+                where={"user_id": data.user_id}, data=non_default_values  # type: ignore
+            )
+            if response is None:
+                raise ValueError(
+                    f"Failed updating customer data. User ID does not exist passed user_id={data.user_id}"
+                )
+            verbose_proxy_logger.debug(
+                f"received response from updating prisma client. response={response}"
+            )
+            return response
+        else:
+            raise ValueError(f"user_id is required, passed user_id = {data.user_id}")
+
+        # update based on remaining passed in values
+    except Exception as e:
+        traceback.print_exc()
+        if isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "detail", f"Internal Server Error({str(e)})"),
+                type="internal_error",
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
+            )
+        elif isinstance(e, ProxyException):
+            raise e
+        raise ProxyException(
+            message="Internal Server Error, " + str(e),
+            type="internal_error",
+            param=getattr(e, "param", "None"),
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
     pass
 
 
 @router.post(
-    "/end_user/delete",
-    tags=["End User Management"],
+    "/customer/delete",
+    tags=["Customer Management"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def delete_end_user():
+@router.post(
+    "/end_user/delete",
+    tags=["Customer Management"],
+    include_in_schema=False,
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def delete_end_user(
+    data: DeleteCustomerRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     """
-    [TODO] Needs to be implemented.
+    Example curl 
+
+    ```
+    curl --location 'http://0.0.0.0:4000/customer/delete' \
+        --header 'Authorization: Bearer sk-1234' \
+        --header 'Content-Type: application/json' \
+        --data '{
+            "user_ids" :["ishaan-jaff-5"]
+    }'
+
+    See below for all params 
+    ```
     """
+    global prisma_client
+
+    try:
+        if prisma_client is None:
+            raise Exception("Not connected to DB!")
+
+        verbose_proxy_logger.debug("/customer/delete: Received data = %s", data)
+        if (
+            data.user_ids is not None
+            and isinstance(data.user_ids, list)
+            and len(data.user_ids) > 0
+        ):
+            response = await prisma_client.db.litellm_endusertable.delete_many(
+                where={"user_id": {"in": data.user_ids}}
+            )
+            if response is None:
+                raise ValueError(
+                    f"Failed deleting customer data. User ID does not exist passed user_id={data.user_ids}"
+                )
+            if response != len(data.user_ids):
+                raise ValueError(
+                    f"Failed deleting all customer data. User ID does not exist passed user_id={data.user_ids}. Deleted {response} customers, passed {len(data.user_ids)} customers"
+                )
+            verbose_proxy_logger.debug(
+                f"received response from updating prisma client. response={response}"
+            )
+            return {
+                "deleted_customers": response,
+                "message": "Successfully deleted customers with ids: "
+                + str(data.user_ids),
+            }
+        else:
+            raise ValueError(f"user_id is required, passed user_id = {data.user_ids}")
+
+        # update based on remaining passed in values
+    except Exception as e:
+        traceback.print_exc()
+        if isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "detail", f"Internal Server Error({str(e)})"),
+                type="internal_error",
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
+            )
+        elif isinstance(e, ProxyException):
+            raise e
+        raise ProxyException(
+            message="Internal Server Error, " + str(e),
+            type="internal_error",
+            param=getattr(e, "param", "None"),
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
     pass
 
 
