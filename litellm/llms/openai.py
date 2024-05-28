@@ -224,6 +224,7 @@ class DeepInfraConfig:
 
     def get_supported_openai_params(self):
         return [
+            "stream",
             "frequency_penalty",
             "function_call",
             "functions",
