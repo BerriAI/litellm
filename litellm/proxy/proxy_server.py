@@ -2930,48 +2930,54 @@ class ProxyConfig:
         global llm_router, llm_model_list, master_key, general_settings
         import base64
 
-        if llm_router is None and master_key is not None:
-            verbose_proxy_logger.debug(f"len new_models: {len(new_models)}")
+        try:
+            if llm_router is None and master_key is not None:
+                verbose_proxy_logger.debug(f"len new_models: {len(new_models)}")
 
-            _model_list: list = []
-            for m in new_models:
-                _litellm_params = m.litellm_params
-                if isinstance(_litellm_params, dict):
-                    # decrypt values
-                    for k, v in _litellm_params.items():
-                        if isinstance(v, str):
-                            # decode base64
-                            decoded_b64 = base64.b64decode(v)
-                            # decrypt value
-                            _litellm_params[k] = decrypt_value(
-                                value=decoded_b64, master_key=master_key  # type: ignore
-                            )
-                    _litellm_params = LiteLLM_Params(**_litellm_params)
-                else:
-                    verbose_proxy_logger.error(
-                        f"Invalid model added to proxy db. Invalid litellm params. litellm_params={_litellm_params}"
+                _model_list: list = []
+                for m in new_models:
+                    _litellm_params = m.litellm_params
+                    if isinstance(_litellm_params, dict):
+                        # decrypt values
+                        for k, v in _litellm_params.items():
+                            if isinstance(v, str):
+                                # decode base64
+                                decoded_b64 = base64.b64decode(v)
+                                # decrypt value
+                                _litellm_params[k] = decrypt_value(
+                                    value=decoded_b64, master_key=master_key  # type: ignore
+                                )
+                        _litellm_params = LiteLLM_Params(**_litellm_params)
+                    else:
+                        verbose_proxy_logger.error(
+                            f"Invalid model added to proxy db. Invalid litellm params. litellm_params={_litellm_params}"
+                        )
+                        continue  # skip to next model
+
+                    _model_info = self.get_model_info_with_id(model=m)
+                    _model_list.append(
+                        Deployment(
+                            model_name=m.model_name,
+                            litellm_params=_litellm_params,
+                            model_info=_model_info,
+                        ).to_json(exclude_none=True)
                     )
-                    continue  # skip to next model
+                if len(_model_list) > 0:
+                    verbose_proxy_logger.debug(f"_model_list: {_model_list}")
+                    llm_router = litellm.Router(model_list=_model_list)
+                    verbose_proxy_logger.debug(f"updated llm_router: {llm_router}")
+            else:
+                verbose_proxy_logger.debug(f"len new_models: {len(new_models)}")
+                ## DELETE MODEL LOGIC
+                await self._delete_deployment(db_models=new_models)
 
-                _model_info = self.get_model_info_with_id(model=m)
-                _model_list.append(
-                    Deployment(
-                        model_name=m.model_name,
-                        litellm_params=_litellm_params,
-                        model_info=_model_info,
-                    ).to_json(exclude_none=True)
-                )
-            if len(_model_list) > 0:
-                verbose_proxy_logger.debug(f"_model_list: {_model_list}")
-                llm_router = litellm.Router(model_list=_model_list)
-                verbose_proxy_logger.debug(f"updated llm_router: {llm_router}")
-        else:
-            verbose_proxy_logger.debug(f"len new_models: {len(new_models)}")
-            ## DELETE MODEL LOGIC
-            await self._delete_deployment(db_models=new_models)
+                ## ADD MODEL LOGIC
+                self._add_deployment(db_models=new_models)
 
-            ## ADD MODEL LOGIC
-            self._add_deployment(db_models=new_models)
+        except Exception as e:
+            verbose_proxy_logger.error(
+                f"Error adding/deleting model to llm_router: {str(e)}"
+            )
 
         if llm_router is not None:
             llm_model_list = llm_router.get_model_list()
@@ -3020,11 +3026,20 @@ class ProxyConfig:
         ## ALERTING ## [TODO] move this to the _update_general_settings() block
         _general_settings = config_data.get("general_settings", {})
         if "alerting" in _general_settings:
-            general_settings["alerting"] = _general_settings["alerting"]
-            proxy_logging_obj.alerting = general_settings["alerting"]
-            proxy_logging_obj.slack_alerting_instance.alerting = general_settings[
-                "alerting"
-            ]
+            if (
+                general_settings["alerting"] is not None
+                and isinstance(general_settings["alerting"], list)
+                and _general_settings["alerting"] is not None
+                and isinstance(_general_settings["alerting"], list)
+            ):
+                for alert in _general_settings["alerting"]:
+                    if alert not in general_settings["alerting"]:
+                        general_settings["alerting"].append(alert)
+
+                proxy_logging_obj.alerting = general_settings["alerting"]
+                proxy_logging_obj.slack_alerting_instance.alerting = general_settings[
+                    "alerting"
+                ]
 
         if "alert_types" in _general_settings:
             general_settings["alert_types"] = _general_settings["alert_types"]
@@ -10897,10 +10912,10 @@ async def update_config(config_info: ConfigYAML):
                 if k == "alert_to_webhook_url":
                     # check if slack is already enabled. if not, enable it
                     if "alerting" not in _existing_settings:
-                        _existing_settings["alerting"] = ["slack"]
+                        _existing_settings["alerting"].append("slack")
                     elif isinstance(_existing_settings["alerting"], list):
                         if "slack" not in _existing_settings["alerting"]:
-                            _existing_settings["alerting"] = ["slack"]
+                            _existing_settings["alerting"].append("slack")
                 _existing_settings[k] = v
             config["general_settings"] = _existing_settings
 
@@ -11386,6 +11401,36 @@ async def get_config():
                     "alerts_to_webhook": _alerts_to_webhook,
                 }
             )
+        # pass email alerting vars
+        _email_vars = [
+            "SMTP_HOST",
+            "SMTP_PORT",
+            "SMTP_USERNAME",
+            "SMTP_PASSWORD",
+            "SMTP_SENDER_EMAIL",
+            "TEST_EMAIL_ADDRESS",
+            "EMAIL_LOGO_URL",
+            "EMAIL_SUPPORT_CONTACT",
+        ]
+        _email_env_vars = {}
+        for _var in _email_vars:
+            env_variable = environment_variables.get(_var, None)
+            if env_variable is None:
+                _email_env_vars[_var] = None
+            else:
+                # decode + decrypt the value
+                decoded_b64 = base64.b64decode(env_variable)
+                _decrypted_value = decrypt_value(
+                    value=decoded_b64, master_key=master_key
+                )
+                _email_env_vars[_var] = _decrypted_value
+
+        alerting_data.append(
+            {
+                "name": "email",
+                "variables": _email_env_vars,
+            }
+        )
 
         if llm_router is None:
             _router_settings = {}
@@ -11472,7 +11517,7 @@ async def test_endpoint(request: Request):
 async def health_services_endpoint(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     service: Literal[
-        "slack_budget_alerts", "langfuse", "slack", "openmeter", "webhook"
+        "slack_budget_alerts", "langfuse", "slack", "openmeter", "webhook", "email"
     ] = fastapi.Query(description="Specify the service being hit."),
 ):
     """
@@ -11489,6 +11534,7 @@ async def health_services_endpoint(
             )
         if service not in [
             "slack_budget_alerts",
+            "email",
             "langfuse",
             "slack",
             "openmeter",
@@ -11621,6 +11667,32 @@ async def health_services_endpoint(
                         )
                     },
                 )
+        if service == "email":
+            webhook_event = WebhookEvent(
+                event="key_created",
+                event_group="key",
+                event_message="Test Email Alert",
+                token=user_api_key_dict.token or "",
+                key_alias="Email Test key (This is only a test alert key. DO NOT USE THIS IN PRODUCTION.)",
+                spend=0,
+                max_budget=0,
+                user_id=user_api_key_dict.user_id,
+                user_email=os.getenv("TEST_EMAIL_ADDRESS"),
+                team_id=user_api_key_dict.team_id,
+            )
+
+            # use create task - this can take 10 seconds. don't keep ui users waiting for notification to check their email
+            asyncio.create_task(
+                proxy_logging_obj.slack_alerting_instance.send_key_created_email(
+                    webhook_event=webhook_event
+                )
+            )
+
+            return {
+                "status": "success",
+                "message": "Mock Email Alert sent, verify Email Alert Received",
+            }
+
     except Exception as e:
         traceback.print_exc()
         if isinstance(e, HTTPException):
