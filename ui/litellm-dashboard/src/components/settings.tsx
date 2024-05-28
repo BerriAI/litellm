@@ -188,6 +188,43 @@ const Settings: React.FC<SettingsPageProps> = ({
     console.log("Selected values:", values);
   };
 
+  const handleSaveEmailSettings = () => {
+    if (!accessToken) {
+      return;
+    }
+
+
+    let updatedVariables: Record<string, string> = {};
+
+    alerts
+      .filter((alert) => alert.name === "email")
+      .forEach((alert) => {
+        Object.entries(alert.variables ?? {}).forEach(([key, value]) => {
+          const inputElement = document.querySelector(`input[name="${key}"]`) as HTMLInputElement;
+          if (inputElement && inputElement.value) {
+            updatedVariables[key] = inputElement?.value;
+          }
+        });
+      });
+
+    console.log("updatedVariables", updatedVariables);
+    //filter out null / undefined values for updatedVariables
+
+    const payload = {
+      general_settings: {
+        alerting: ["email"],
+      },
+      environment_variables: updatedVariables,
+    };
+    try {
+      setCallbacksCall(accessToken, payload);
+    } catch (error) {
+      message.error("Failed to update alerts: " + error, 20);
+    }
+
+    message.success("Email settings updated successfully");
+  }
+
   const handleSaveAlerts = () => {
     if (!accessToken) {
       return;
@@ -369,7 +406,8 @@ const Settings: React.FC<SettingsPageProps> = ({
           <TabList variant="line" defaultValue="1">
             <Tab value="1">Logging Callbacks</Tab>
             <Tab value="2">Alerting Types</Tab>
-            <Tab value="2">Alerting Settings</Tab>
+            <Tab value="3">Alerting Settings</Tab>
+            <Tab value="4">Email Alerts</Tab>
           </TabList>
           <TabPanels>
             <TabPanel>
@@ -526,6 +564,51 @@ const Settings: React.FC<SettingsPageProps> = ({
                 premiumUser={premiumUser}
               />
             </TabPanel>
+            <TabPanel>
+              <Card>
+            {/* <Text>
+              Email Alerts are sent to when <br />
+              - A key is created for a specific user_id <br />
+              - A key belonging to a user crosses its budget
+            </Text> */}
+            <Title>Setup</Title>
+            <div className="flex w-full">
+            {alerts
+              .filter((alert) => alert.name == "email")
+              .map((alert, index) => (
+                <TableCell key={index}>
+                  <ul>
+                    {Object.entries(alert.variables ?? {})
+                     
+                      .map(([key, value]) => (
+                        <li key={key}>
+                          <Text className="mt-2">{key}</Text>
+                          <TextInput name={key} defaultValue={value as string} type="password" />
+                        </li>
+                      ))}
+                  </ul>
+                </TableCell>
+              ))}
+
+            </div>
+
+            <Button
+              className="mt-2"
+              onClick={() => handleSaveEmailSettings()}
+            >
+              Save Changes
+            </Button>
+            <Button
+              onClick={() =>
+                serviceHealthCheck(accessToken, "email")
+              }
+              className="mx-2"
+            >
+              Test Email Alerts
+            </Button>
+            
+              </Card>
+          </TabPanel>
           </TabPanels>
         </TabGroup>
       </Grid>
