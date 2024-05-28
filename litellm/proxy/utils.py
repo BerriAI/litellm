@@ -1850,20 +1850,13 @@ async def send_email(receiver_email, subject, html):
     from litellm.proxy.proxy_server import premium_user
     from litellm.proxy.proxy_server import CommonProxyErrors
 
-    # Check if user is premium - This is an Enterprise only Feature
-    if premium_user != True:
-        raise Exception(
-            f"Trying to use Email Alerting\n {CommonProxyErrors.not_premium_user.value}"
-        )
-    # Done Checking
-
     smtp_host = os.getenv("SMTP_HOST")
-    smtp_port = os.getenv("SMTP_PORT", 587)  # default to port 587
+    smtp_port = int(os.getenv("SMTP_PORT", "587"))  # default to port 587
     smtp_username = os.getenv("SMTP_USERNAME")
     smtp_password = os.getenv("SMTP_PASSWORD")
     sender_email = os.getenv("SMTP_SENDER_EMAIL", None)
     if sender_email is None:
-        raise Exception("Trying to use SMTP, but SMTP_SENDER_EMAIL is not set")
+        raise ValueError("Trying to use SMTP, but SMTP_SENDER_EMAIL is not set")
 
     ## EMAIL SETUP ##
     email_message = MIMEMultipart()
