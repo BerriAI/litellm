@@ -1604,7 +1604,7 @@ class OpenAIBatchesAPI(BaseLLM):
         max_retries: Optional[int],
         organization: Optional[str],
         client: Optional[OpenAI] = None,
-    ):
+    ) -> Batch:
         openai_client: OpenAI = self.get_openai_client(
             api_key=api_key,
             api_base=api_base,

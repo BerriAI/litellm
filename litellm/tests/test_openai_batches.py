@@ -20,6 +20,7 @@ def test_create_batch():
     """
     1. Create File for Batch completion
     2. Create Batch Request
+    3. Retrieve the specific batch
     """
     file_obj = litellm.create_file(
         file=open("openai_batch_completions.jsonl", "rb"),
@@ -33,16 +34,25 @@ def test_create_batch():
         batch_input_file_id is not None
     ), "Failed to create file, expected a non null file_id but got {batch_input_file_id}"
 
-    print("response from creating file=", file_obj)
-    # response = create_batch(
-    #     completion_window="24h",
-    #     endpoint="/v1/chat/completions",
-    #     input_file_id="1",
-    #     custom_llm_provider="openai",
-    #     metadata={"key1": "value1", "key2": "value2"},
-    # )
+    response = litellm.create_batch(
+        completion_window="24h",
+        endpoint="/v1/chat/completions",
+        input_file_id=batch_input_file_id,
+        custom_llm_provider="openai",
+        metadata={"key1": "value1", "key2": "value2"},
+    )
 
-    print("response")
+    print("response from litellm.create_batch=", response)
+
+    assert (
+        response.id is not None
+    ), f"Failed to create batch, expected a non null batch_id but got {response.id}"
+    assert (
+        response.endpoint == "/v1/chat/completions"
+    ), f"Failed to create batch, expected endpoint to be /v1/chat/completions but got {response.endpoint}"
+    assert (
+        response.input_file_id == batch_input_file_id
+    ), f"Failed to create batch, expected input_file_id to be {batch_input_file_id} but got {response.input_file_id}"
     pass
 
 
