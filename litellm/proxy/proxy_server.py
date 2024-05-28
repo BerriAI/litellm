@@ -10841,6 +10841,236 @@ async def auth_callback(request: Request):
     return RedirectResponse(url=litellm_dashboard_ui)
 
 
+#### INVITATION MANAGEMENT ####
+
+
+@router.post(
+    "/invitation/new",
+    tags=["Invite Links"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=InvitationModel,
+)
+async def new_invitation(
+    data: InvitationNew, user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth)
+):
+    """
+    Allow admin to create invite links, to onboard new users to Admin UI.
+
+    ```
+    curl -X POST 'http://localhost:4000/invitation/new' \
+        -H 'Content-Type: application/json' \
+        -D '{
+            "user_id": "1234" // 👈 id of user in 'LiteLLM_UserTable'
+        }'
+    ```
+    """
+    global prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
+    if user_api_key_dict.user_role != "proxy_admin":
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "{}, your role={}".format(
+                    CommonProxyErrors.not_allowed_access.value,
+                    user_api_key_dict.user_role,
+                )
+            },
+        )
+
+    current_time = litellm.utils.get_utc_datetime()
+    expires_at = current_time + timedelta(days=7)
+
+    try:
+        response = await prisma_client.db.litellm_invitationlink.create(
+            data={
+                "user_id": data.user_id,
+                "created_at": current_time,
+                "expires_at": expires_at,
+                "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
+                "updated_at": current_time,
+                "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
+            }  # type: ignore
+        )
+    except Exception as e:
+        if "Foreign key constraint failed on the field" in str(e):
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "User id does not exist in 'LiteLLM_UserTable'. Fix this by creating user via `/user/new`."
+                },
+            )
+    return response
+
+
+@router.get(
+    "/invitation/info",
+    tags=["Invite Links"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=InvitationModel,
+)
+async def invitation_info(
+    invitation_id: str, user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth)
+):
+    """
+    Allow admin to create invite links, to onboard new users to Admin UI.
+
+    ```
+    curl -X POST 'http://localhost:4000/invitation/new' \
+        -H 'Content-Type: application/json' \
+        -D '{
+            "user_id": "1234" // 👈 id of user in 'LiteLLM_UserTable'
+        }'
+    ```
+    """
+    global prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
+    if user_api_key_dict.user_role != "proxy_admin":
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "{}, your role={}".format(
+                    CommonProxyErrors.not_allowed_access.value,
+                    user_api_key_dict.user_role,
+                )
+            },
+        )
+
+    response = await prisma_client.db.litellm_invitationlink.find_unique(
+        where={"id": invitation_id}
+    )
+
+    if response is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "Invitation id does not exist in the database."},
+        )
+    return response
+
+
+@router.post(
+    "/invitation/update",
+    tags=["Invite Links"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=InvitationModel,
+)
+async def invitation_update(
+    data: InvitationUpdate,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Update when invitation is accepted
+    
+    ```
+    curl -X POST 'http://localhost:4000/invitation/update' \
+        -H 'Content-Type: application/json' \
+        -D '{
+            "invitation_id": "1234" // 👈 id of invitation in 'LiteLLM_InvitationTable'
+            "is_accepted": True // when invitation is accepted
+        }'
+    ```
+    """
+    global prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
+    if user_api_key_dict.user_id is None:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "Unable to identify user id. Received={}".format(
+                    user_api_key_dict.user_id
+                )
+            },
+        )
+
+    current_time = litellm.utils.get_utc_datetime()
+    response = await prisma_client.db.litellm_invitationlink.update(
+        where={"id": data.invitation_id},
+        data={
+            "id": data.invitation_id,
+            "is_accepted": data.is_accepted,
+            "accepted_at": current_time,
+            "updated_at": current_time,
+            "updated_by": user_api_key_dict.user_id,  # type: ignore
+        },
+    )
+
+    if response is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "Invitation id does not exist in the database."},
+        )
+    return response
+
+
+@router.post(
+    "/invitation/delete",
+    tags=["Invite Links"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=InvitationModel,
+)
+async def invitation_delete(
+    data: InvitationDelete,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Delete invitation link
+    
+    ```
+    curl -X POST 'http://localhost:4000/invitation/delete' \
+        -H 'Content-Type: application/json' \
+        -D '{
+            "invitation_id": "1234" // 👈 id of invitation in 'LiteLLM_InvitationTable'
+        }'
+    ```
+    """
+    global prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
+    if user_api_key_dict.user_role != "proxy_admin":
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "{}, your role={}".format(
+                    CommonProxyErrors.not_allowed_access.value,
+                    user_api_key_dict.user_role,
+                )
+            },
+        )
+
+    response = await prisma_client.db.litellm_invitationlink.delete(
+        where={"id": data.invitation_id}
+    )
+
+    if response is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "Invitation id does not exist in the database."},
+        )
+    return response
+
+
 #### CONFIG MANAGEMENT ####
 @router.post(
     "/config/update",
