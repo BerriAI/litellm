@@ -14,6 +14,7 @@ from litellm import (
     create_batch,
     create_file,
 )
+import time
 
 
 def test_create_batch():
@@ -34,7 +35,7 @@ def test_create_batch():
         batch_input_file_id is not None
     ), "Failed to create file, expected a non null file_id but got {batch_input_file_id}"
 
-    response = litellm.create_batch(
+    create_batch_response = litellm.create_batch(
         completion_window="24h",
         endpoint="/v1/chat/completions",
         input_file_id=batch_input_file_id,
@@ -42,17 +43,28 @@ def test_create_batch():
         metadata={"key1": "value1", "key2": "value2"},
     )
 
-    print("response from litellm.create_batch=", response)
+    print("response from litellm.create_batch=", create_batch_response)
 
     assert (
-        response.id is not None
-    ), f"Failed to create batch, expected a non null batch_id but got {response.id}"
+        create_batch_response.id is not None
+    ), f"Failed to create batch, expected a non null batch_id but got {create_batch_response.id}"
     assert (
-        response.endpoint == "/v1/chat/completions"
-    ), f"Failed to create batch, expected endpoint to be /v1/chat/completions but got {response.endpoint}"
+        create_batch_response.endpoint == "/v1/chat/completions"
+    ), f"Failed to create batch, expected endpoint to be /v1/chat/completions but got {create_batch_response.endpoint}"
     assert (
-        response.input_file_id == batch_input_file_id
-    ), f"Failed to create batch, expected input_file_id to be {batch_input_file_id} but got {response.input_file_id}"
+        create_batch_response.input_file_id == batch_input_file_id
+    ), f"Failed to create batch, expected input_file_id to be {batch_input_file_id} but got {create_batch_response.input_file_id}"
+
+    time.sleep(30)
+
+    retrieved_batch = litellm.retrieve_batch(
+        batch_id=create_batch_response.id, custom_llm_provider="openai"
+    )
+    print("retrieved batch=", retrieved_batch)
+    # just assert that we retrieved a non None batch
+
+    assert retrieved_batch.id == create_batch_response.id
+
     pass
 
 
