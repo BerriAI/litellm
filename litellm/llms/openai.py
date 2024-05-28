@@ -1497,6 +1497,189 @@ class OpenAITextCompletion(BaseLLM):
             yield transformed_chunk
 
 
+class OpenAIFilesAPI(BaseLLM):
+    """
+    OpenAI methods to support for batches
+    - create_file()
+    - retrieve_file()
+    - list_files()
+    - delete_file()
+    - file_content()
+    - update_file()
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+
+    def get_openai_client(
+        self,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        organization: Optional[str],
+        client: Optional[OpenAI] = None,
+    ) -> OpenAI:
+        received_args = locals()
+        if client is None:
+            data = {}
+            for k, v in received_args.items():
+                if k == "self" or k == "client":
+                    pass
+                elif k == "api_base" and v is not None:
+                    data["base_url"] = v
+                elif v is not None:
+                    data[k] = v
+            openai_client = OpenAI(**data)  # type: ignore
+        else:
+            openai_client = client
+
+        return openai_client
+
+    def create_file(
+        self,
+        create_file_data: CreateFileRequest,
+        api_base: str,
+        api_key: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        organization: Optional[str],
+        client: Optional[OpenAI] = None,
+    ) -> FileObject:
+        openai_client: OpenAI = self.get_openai_client(
+            api_key=api_key,
+            api_base=api_base,
+            timeout=timeout,
+            max_retries=max_retries,
+            organization=organization,
+            client=client,
+        )
+        response = openai_client.files.create(**create_file_data)
+        return response
+
+
+class OpenAIBatchesAPI(BaseLLM):
+    """
+    OpenAI methods to support for batches
+    - create_batch()
+    - retrieve_batch()
+    - cancel_batch()
+    - list_batch()
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+
+    def get_openai_client(
+        self,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        organization: Optional[str],
+        client: Optional[OpenAI] = None,
+    ) -> OpenAI:
+        received_args = locals()
+        if client is None:
+            data = {}
+            for k, v in received_args.items():
+                if k == "self" or k == "client":
+                    pass
+                elif k == "api_base" and v is not None:
+                    data["base_url"] = v
+                elif v is not None:
+                    data[k] = v
+            openai_client = OpenAI(**data)  # type: ignore
+        else:
+            openai_client = client
+
+        return openai_client
+
+    def create_batch(
+        self,
+        create_batch_data: CreateBatchRequest,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        organization: Optional[str],
+        client: Optional[OpenAI] = None,
+    ):
+        openai_client: OpenAI = self.get_openai_client(
+            api_key=api_key,
+            api_base=api_base,
+            timeout=timeout,
+            max_retries=max_retries,
+            organization=organization,
+            client=client,
+        )
+        response = openai_client.batches.create(**create_batch_data)
+        return response
+
+    def retrieve_batch(
+        self,
+        retrieve_batch_data: RetrieveBatchRequest,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        organization: Optional[str],
+        client: Optional[OpenAI] = None,
+    ):
+        openai_client: OpenAI = self.get_openai_client(
+            api_key=api_key,
+            api_base=api_base,
+            timeout=timeout,
+            max_retries=max_retries,
+            organization=organization,
+            client=client,
+        )
+        response = openai_client.batches.retrieve(**retrieve_batch_data)
+        return response
+
+    def cancel_batch(
+        self,
+        cancel_batch_data: CancelBatchRequest,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        organization: Optional[str],
+        client: Optional[OpenAI] = None,
+    ):
+        openai_client: OpenAI = self.get_openai_client(
+            api_key=api_key,
+            api_base=api_base,
+            timeout=timeout,
+            max_retries=max_retries,
+            organization=organization,
+            client=client,
+        )
+        response = openai_client.batches.cancel(**cancel_batch_data)
+        return response
+
+    # def list_batch(
+    #     self,
+    #     list_batch_data: ListBatchRequest,
+    #     api_key: Optional[str],
+    #     api_base: Optional[str],
+    #     timeout: Union[float, httpx.Timeout],
+    #     max_retries: Optional[int],
+    #     organization: Optional[str],
+    #     client: Optional[OpenAI] = None,
+    # ):
+    #     openai_client: OpenAI = self.get_openai_client(
+    #         api_key=api_key,
+    #         api_base=api_base,
+    #         timeout=timeout,
+    #         max_retries=max_retries,
+    #         organization=organization,
+    #         client=client,
+    #     )
+    #     response = openai_client.batches.list(**list_batch_data)
+    #     return response
+
+
 class OpenAIAssistantsAPI(BaseLLM):
     def __init__(self) -> None:
         super().__init__()
