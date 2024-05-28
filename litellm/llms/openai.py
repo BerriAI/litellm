@@ -21,7 +21,7 @@ from litellm.utils import (
     TranscriptionResponse,
     TextCompletionResponse,
 )
-from typing import Callable, Optional
+from typing import Callable, Optional, Coroutine
 import litellm
 from .prompt_templates.factory import prompt_factory, custom_prompt
 from openai import OpenAI, AsyncOpenAI
@@ -1518,42 +1518,70 @@ class OpenAIFilesAPI(BaseLLM):
         timeout: Union[float, httpx.Timeout],
         max_retries: Optional[int],
         organization: Optional[str],
-        client: Optional[OpenAI] = None,
-    ) -> OpenAI:
+        client: Optional[Union[OpenAI, AsyncOpenAI]] = None,
+        _is_async: bool = False,
+    ) -> Optional[Union[OpenAI, AsyncOpenAI]]:
         received_args = locals()
+        openai_client: Optional[Union[OpenAI, AsyncOpenAI]] = None
         if client is None:
             data = {}
             for k, v in received_args.items():
-                if k == "self" or k == "client":
+                if k == "self" or k == "client" or k == "_is_async":
                     pass
                 elif k == "api_base" and v is not None:
                     data["base_url"] = v
                 elif v is not None:
                     data[k] = v
-            openai_client = OpenAI(**data)  # type: ignore
+            if _is_async is True:
+                openai_client = AsyncOpenAI(**data)
+            else:
+                openai_client = OpenAI(**data)  # type: ignore
         else:
             openai_client = client
 
         return openai_client
 
+    async def acreate_file(
+        self,
+        create_file_data: CreateFileRequest,
+        openai_client: AsyncOpenAI,
+    ) -> FileObject:
+        response = await openai_client.files.create(**create_file_data)
+        return response
+
     def create_file(
         self,
+        _is_async: bool,
         create_file_data: CreateFileRequest,
         api_base: str,
         api_key: Optional[str],
         timeout: Union[float, httpx.Timeout],
         max_retries: Optional[int],
         organization: Optional[str],
-        client: Optional[OpenAI] = None,
-    ) -> FileObject:
-        openai_client: OpenAI = self.get_openai_client(
+        client: Optional[Union[OpenAI, AsyncOpenAI]] = None,
+    ) -> Union[FileObject, Coroutine[Any, Any, FileObject]]:
+        openai_client: Optional[Union[OpenAI, AsyncOpenAI]] = self.get_openai_client(
             api_key=api_key,
             api_base=api_base,
             timeout=timeout,
             max_retries=max_retries,
             organization=organization,
             client=client,
+            _is_async=_is_async,
         )
+        if openai_client is None:
+            raise ValueError(
+                "OpenAI client is not initialized. Make sure api_key is passed or OPENAI_API_KEY is set in the environment."
+            )
+
+        if _is_async is True:
+            if not isinstance(openai_client, AsyncOpenAI):
+                raise ValueError(
+                    "OpenAI client is not an instance of AsyncOpenAI. Make sure you passed an AsyncOpenAI client."
+                )
+            return self.acreate_file(  # type: ignore
+                create_file_data=create_file_data, openai_client=openai_client
+            )
         response = openai_client.files.create(**create_file_data)
         return response
 
