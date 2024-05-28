@@ -7833,51 +7833,77 @@ async def new_end_user(
             status_code=500,
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
+    try:
 
-    ## VALIDATION ##
-    if data.default_model is not None:
-        if llm_router is None:
-            raise HTTPException(
-                status_code=422, detail={"error": CommonProxyErrors.no_llm_router.value}
+        ## VALIDATION ##
+        if data.default_model is not None:
+            if llm_router is None:
+                raise HTTPException(
+                    status_code=422,
+                    detail={"error": CommonProxyErrors.no_llm_router.value},
+                )
+            elif data.default_model not in llm_router.get_model_names():
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "error": "Default Model not on proxy. Configure via `/model/new` or config.yaml. Default_model={}, proxy_model_names={}".format(
+                            data.default_model, set(llm_router.get_model_names())
+                        )
+                    },
+                )
+
+        new_end_user_obj: Dict = {}
+
+        ## CREATE BUDGET ## if set
+        if data.max_budget is not None:
+            budget_record = await prisma_client.db.litellm_budgettable.create(
+                data={
+                    "max_budget": data.max_budget,
+                    "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,  # type: ignore
+                    "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
+                }
             )
-        elif data.default_model not in llm_router.get_model_names():
-            raise HTTPException(
-                status_code=422,
-                detail={
-                    "error": "Default Model not on proxy. Configure via `/model/new` or config.yaml. Default_model={}, proxy_model_names={}".format(
-                        data.default_model, set(llm_router.get_model_names())
-                    )
-                },
-            )
 
-    new_end_user_obj: Dict = {}
+            new_end_user_obj["budget_id"] = budget_record.budget_id
+        elif data.budget_id is not None:
+            new_end_user_obj["budget_id"] = data.budget_id
 
-    ## CREATE BUDGET ## if set
-    if data.max_budget is not None:
-        budget_record = await prisma_client.db.litellm_budgettable.create(
-            data={
-                "max_budget": data.max_budget,
-                "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,  # type: ignore
-                "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
-            }
+        _user_data = data.dict(exclude_none=True)
+
+        for k, v in _user_data.items():
+            if k != "max_budget" and k != "budget_id":
+                new_end_user_obj[k] = v
+
+        ## WRITE TO DB ##
+        end_user_record = await prisma_client.db.litellm_endusertable.create(
+            data=new_end_user_obj  # type: ignore
         )
 
-        new_end_user_obj["budget_id"] = budget_record.budget_id
-    elif data.budget_id is not None:
-        new_end_user_obj["budget_id"] = data.budget_id
+        return end_user_record
+    except Exception as e:
+        if "Unique constraint failed on the fields: (`user_id`)" in str(e):
+            raise ProxyException(
+                message=f"Customer already exists, passed user_id={data.user_id}. Please pass a new user_id.",
+                type="bad_request",
+                code=400,
+                param="user_id",
+            )
 
-    _user_data = data.dict(exclude_none=True)
-
-    for k, v in _user_data.items():
-        if k != "max_budget" and k != "budget_id":
-            new_end_user_obj[k] = v
-
-    ## WRITE TO DB ##
-    end_user_record = await prisma_client.db.litellm_endusertable.create(
-        data=new_end_user_obj  # type: ignore
-    )
-
-    return end_user_record
+        if isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "detail", f"Internal Server Error({str(e)})"),
+                type="internal_error",
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
+            )
+        elif isinstance(e, ProxyException):
+            raise e
+        raise ProxyException(
+            message="Internal Server Error, " + str(e),
+            type="internal_error",
+            param=getattr(e, "param", "None"),
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
 
 
 @router.get(
