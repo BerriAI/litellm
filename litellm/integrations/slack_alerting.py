@@ -41,10 +41,6 @@ class ProviderRegionOutageModel(BaseOutageModel):
 
 # we use this for the email header, please send a test email if you change this. verify it looks good on email
 LITELLM_LOGO_URL = "https://litellm-listing.s3.amazonaws.com/litellm_logo.png"
-EMAIL_LOGO_URL = os.getenv(
-    "SMTP_SENDER_LOGO", "https://litellm-listing.s3.amazonaws.com/litellm_logo.png"
-)
-EMAIL_SUPPORT_CONTACT = os.getenv("EMAIL_SUPPORT_CONTACT", "support@berri.ai")
 
 
 class LiteLLMBase(BaseModel):
@@ -1147,21 +1143,34 @@ Model Info:
 
         return False
 
+    async def _check_if_using_premium_email_feature(
+        self,
+        premium_user: bool,
+        email_logo_url: Optional[str] = None,
+        email_support_contact: Optional[str] = None,
+    ):
+        from litellm.proxy.proxy_server import premium_user
+        from litellm.proxy.proxy_server import CommonProxyErrors
+
+        if premium_user is not True:
+            if email_logo_url is not None or email_support_contact is not None:
+                raise ValueError(
+                    f"Trying to Customize Email Alerting\n {CommonProxyErrors.not_premium_user.value}"
+                )
+
     async def send_key_created_email(self, webhook_event: WebhookEvent) -> bool:
         from litellm.proxy.utils import send_email
 
         if self.alerting is None or "email" not in self.alerting:
             # do nothing if user does not want email alerts
             return False
+        from litellm.proxy.proxy_server import premium_user, prisma_client
 
-        # make sure this is a premium user
-        from litellm.proxy.proxy_server import premium_user
-        from litellm.proxy.proxy_server import CommonProxyErrors, prisma_client
-
-        if premium_user != True:
-            raise Exception(
-                f"Trying to use Email Alerting on key creation\n {CommonProxyErrors.not_premium_user.value}"
-            )
+        email_logo_url = os.getenv("SMTP_SENDER_LOGO", None)
+        email_support_contact = os.getenv("EMAIL_SUPPORT_CONTACT", None)
+        await self._check_if_using_premium_email_feature(
+            premium_user, email_logo_url, email_support_contact
+        )
 
         event_name = webhook_event.event_message
         recipient_email = webhook_event.user_email
@@ -1188,7 +1197,7 @@ Model Info:
                 "Trying to send email alert to no recipient", extra=webhook_event.dict()
             )
         email_html_content = f"""
-            <img src="{EMAIL_LOGO_URL}" alt="LiteLLM Logo" width="150" height="50" />
+            <img src="{email_logo_url}" alt="LiteLLM Logo" width="150" height="50" />
 
             <p> Hi {recipient_email}, <br/>
  
@@ -1223,7 +1232,7 @@ Model Info:
             </pre>
 
 
-            If you have any questions, please send an email to {EMAIL_SUPPORT_CONTACT} <br /> <br />
+            If you have any questions, please send an email to {email_support_contact} <br /> <br />
 
             Best, <br />
             The LiteLLM team <br />
@@ -1254,6 +1263,14 @@ Model Info:
         """
         from litellm.proxy.utils import send_email
 
+        from litellm.proxy.proxy_server import premium_user, prisma_client
+
+        email_logo_url = os.getenv("SMTP_SENDER_LOGO", None)
+        email_support_contact = os.getenv("EMAIL_SUPPORT_CONTACT", None)
+        await self._check_if_using_premium_email_feature(
+            premium_user, email_logo_url, email_support_contact
+        )
+
         event_name = webhook_event.event_message
         recipient_email = webhook_event.user_email
         user_name = webhook_event.user_id
@@ -1266,7 +1283,7 @@ Model Info:
 
         if webhook_event.event == "budget_crossed":
             email_html_content = f"""
-            <img src="{EMAIL_LOGO_URL}" alt="LiteLLM Logo" width="150" height="50" />
+            <img src="{email_logo_url}" alt="LiteLLM Logo" width="150" height="50" />
 
             <p> Hi {user_name}, <br/>
 
@@ -1274,7 +1291,7 @@ Model Info:
 
             API requests will be rejected until either (a) you increase your monthly budget or (b) your monthly usage resets at the beginning of the next calendar month. <br /> <br />
 
-            If you have any questions, please send an email to {EMAIL_SUPPORT_CONTACT} <br /> <br />
+            If you have any questions, please send an email to {email_support_contact} <br /> <br />
 
             Best, <br />
             The LiteLLM team <br />
