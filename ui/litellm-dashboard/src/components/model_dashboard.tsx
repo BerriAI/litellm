@@ -1196,9 +1196,15 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                               wordBreak: "break-word",
                             }}
                           >
-                            {model.input_cost ||
-                              model.litellm_params.input_cost_per_token ||
-                              null}
+                            {model.input_cost
+                              ? model.input_cost
+                              : model.litellm_params.input_cost_per_token
+                                ? (
+                                    Number(
+                                      model.litellm_params.input_cost_per_token
+                                    ) * 1000000
+                                  ).toFixed(2)
+                                : null}
                           </TableCell>
                           <TableCell
                             style={{
@@ -1207,9 +1213,15 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                               wordBreak: "break-word",
                             }}
                           >
-                            {model.output_cost ||
-                              model.litellm_params.output_cost_per_token ||
-                              null}
+                            {model.output_cost
+                              ? model.output_cost
+                              : model.litellm_params.output_cost_per_token
+                                ? (
+                                    Number(
+                                      model.litellm_params.output_cost_per_token
+                                    ) * 1000000
+                                  ).toFixed(2)
+                                : null}
                           </TableCell>
                           <TableCell
                             style={{
