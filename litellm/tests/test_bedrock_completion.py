@@ -13,7 +13,7 @@ import pytest
 import litellm
 from litellm import embedding, completion, completion_cost, Timeout, ModelResponse
 from litellm import RateLimitError
-from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
 from unittest.mock import patch, AsyncMock, Mock
 
 # litellm.num_retries = 3
@@ -519,20 +519,21 @@ def test_bedrock_ptu():
         mock_client_post.assert_called_once()
 
 
-def test_bedrock_extra_headers():
+@pytest.mark.asyncio
+async def test_bedrock_extra_headers():
     """
     Check if a url with 'modelId' passed in, is created correctly
 
     Reference: https://github.com/BerriAI/litellm/issues/3805
     """
-    client = HTTPHandler()
+    client = AsyncHTTPHandler()
 
-    with patch.object(client, "post", new=Mock()) as mock_client_post:
+    with patch.object(client, "post", new=AsyncMock()) as mock_client_post:
         litellm.set_verbose = True
         from openai.types.chat import ChatCompletion
 
         try:
-            response = litellm.completion(
+            response = await litellm.acompletion(
                 model="anthropic.claude-3-sonnet-20240229-v1:0",
                 messages=[{"role": "user", "content": "What's AWS?"}],
                 client=client,
