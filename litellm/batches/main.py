@@ -10,11 +10,14 @@ https://platform.openai.com/docs/api-reference/batch
 
 """
 
-from typing import Iterable
 import os
-import litellm
-from openai import OpenAI
+import asyncio
+from functools import partial
+import contextvars
+from typing import Literal, Optional, Dict, Coroutine, Any, Union
 import httpx
+
+import litellm
 from litellm import client
 from litellm.utils import supports_httpx_timeout
 from ..types.router import *
@@ -29,12 +32,49 @@ from ..types.llms.openai import (
     Batch,
 )
 
-from typing import Literal, Optional, Dict
-
 ####### ENVIRONMENT VARIABLES ###################
 openai_batches_instance = OpenAIBatchesAPI()
 openai_files_instance = OpenAIFilesAPI()
 #################################################
+
+
+async def acreate_file(
+    file: FileTypes,
+    purpose: Literal["assistants", "batch", "fine-tune"],
+    custom_llm_provider: Literal["openai"] = "openai",
+    extra_headers: Optional[Dict[str, str]] = None,
+    extra_body: Optional[Dict[str, str]] = None,
+    **kwargs,
+) -> Coroutine[Any, Any, FileObject]:
+    """
+    Files are used to upload documents that can be used with features like Assistants, Fine-tuning, and Batch API.
+
+    LiteLLM Equivalent of POST: POST https://api.openai.com/v1/files
+    """
+    loop = asyncio.get_event_loop()
+    kwargs["acreate_file"] = True
+
+    # Use a partial function to pass your keyword arguments
+    func = partial(
+        create_file,
+        file,
+        purpose,
+        custom_llm_provider,
+        extra_headers,
+        extra_body,
+        **kwargs,
+    )
+
+    # Add the context to the function
+    ctx = contextvars.copy_context()
+    func_with_context = partial(ctx.run, func)
+    init_response = await loop.run_in_executor(None, func_with_context)
+    if asyncio.iscoroutine(init_response):
+        response = await init_response
+    else:
+        response = init_response  # type: ignore
+
+    return response
 
 
 def create_file(
@@ -44,7 +84,7 @@ def create_file(
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
-) -> FileObject:
+) -> Union[FileObject | Coroutine[Any, Any, FileObject]]:
     """
     Files are used to upload documents that can be used with features like Assistants, Fine-tuning, and Batch API.
 
@@ -98,7 +138,10 @@ def create_file(
                 extra_body=extra_body,
             )
 
+            _is_async = kwargs.pop("acreate_file", False) is True
+
             response = openai_files_instance.create_file(
+                _is_async=_is_async,
                 api_base=api_base,
                 api_key=api_key,
                 timeout=timeout,
