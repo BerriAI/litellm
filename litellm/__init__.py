@@ -7,11 +7,6 @@ import threading, requests, os
 from typing import Callable, List, Optional, Dict, Union, Any, Literal
 from litellm.caching import Cache
 from litellm._logging import set_verbose, _turn_on_debug, verbose_logger, json_logs
-from litellm.proxy._types import (
-    KeyManagementSystem,
-    KeyManagementSettings,
-    LiteLLM_UpperboundKeyGenerateParams,
-)
 import httpx
 import dotenv
 
@@ -215,7 +210,7 @@ dynamodb_table_name: Optional[str] = None
 s3_callback_params: Optional[Dict] = None
 generic_logger_headers: Optional[Dict] = None
 default_key_generate_params: Optional[Dict] = None
-upperbound_key_generate_params: Optional[LiteLLM_UpperboundKeyGenerateParams] = None
+upperbound_key_generate_params = None
 default_user_params: Optional[Dict] = None
 default_team_settings: Optional[List] = None
 max_user_budget: Optional[float] = None
@@ -235,8 +230,8 @@ secret_manager_client: Optional[Any] = (
     None  # list of instantiated key management clients - e.g. azure kv, infisical, etc.
 )
 _google_kms_resource_name: Optional[str] = None
-_key_management_system: Optional[KeyManagementSystem] = None
-_key_management_settings: Optional[KeyManagementSettings] = None
+_key_management_system = None
+_key_management_settings = None
 #### PII MASKING ####
 output_parse_pii: bool = False
 #############################################
@@ -775,7 +770,6 @@ from .llms.openai import (
 from .llms.azure import AzureOpenAIConfig, AzureOpenAIError
 from .llms.watsonx import IBMWatsonXAIConfig
 from .main import *  # type: ignore
-from .integrations import *
 from .exceptions import (
     AuthenticationError,
     InvalidRequestError,
@@ -794,6 +788,4 @@ from .exceptions import (
     UnprocessableEntityError,
 )
 from .budget_manager import BudgetManager
-from .proxy.proxy_cli import run_server
-from .router import Router
 from .assistants.main import *

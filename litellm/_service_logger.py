@@ -1,13 +1,10 @@
 import litellm, traceback
-from litellm.proxy._types import UserAPIKeyAuth
 from .types.services import ServiceTypes, ServiceLoggerPayload
-from .integrations.prometheus_services import PrometheusServicesLogger
-from .integrations.custom_logger import CustomLogger
 from datetime import timedelta
-from typing import Union
+from typing import Union, Any
 
 
-class ServiceLogging(CustomLogger):
+class ServiceLogging:
     """
     Separate class used for monitoring health of litellm-adjacent services (redis/postgres).
     """
@@ -18,8 +15,6 @@ class ServiceLogging(CustomLogger):
         self.mock_testing_async_success_hook = 0
         self.mock_testing_sync_failure_hook = 0
         self.mock_testing_async_failure_hook = 0
-        if "prometheus_system" in litellm.service_callback:
-            self.prometheusServicesLogger = PrometheusServicesLogger()
 
     def service_success_hook(
         self, service: ServiceTypes, duration: float, call_type: str
@@ -96,7 +91,7 @@ class ServiceLogging(CustomLogger):
                 )
 
     async def async_post_call_failure_hook(
-        self, original_exception: Exception, user_api_key_dict: UserAPIKeyAuth
+        self, original_exception: Exception, user_api_key_dict: Any
     ):
         """
         Hook to track failed litellm-service calls
