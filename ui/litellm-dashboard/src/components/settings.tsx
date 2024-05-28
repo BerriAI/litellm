@@ -571,26 +571,119 @@ const Settings: React.FC<SettingsPageProps> = ({
               - A key is created for a specific user_id <br />
               - A key belonging to a user crosses its budget
             </Text> */}
-            <Title>Setup</Title>
-            <div className="flex w-full">
-            {alerts
-              .filter((alert) => alert.name == "email")
-              .map((alert, index) => (
-                <TableCell key={index}>
-                  <ul>
-                    {Object.entries(alert.variables ?? {})
-                     
-                      .map(([key, value]) => (
-                        <li key={key}>
-                          <Text className="mt-2">{key}</Text>
-                          <TextInput name={key} defaultValue={value as string} type="password" />
-                        </li>
-                      ))}
-                  </ul>
-                </TableCell>
-              ))}
+<Title>Email Settings</Title>
+<div className="flex w-full">
+  {alerts
+    .filter((alert) => alert.name === "email")
+    .map((alert, index) => (
+      <TableCell key={index}>
 
-            </div>
+        <ul>
+        <Grid numItems={2}>
+          {Object.entries(alert.variables ?? {}).map(([key, value]) => (
+            <li key={key} className="mx-2 my-2">
+              
+              { premiumUser!= true && (key === "EMAIL_LOGO_URL" || key === "EMAIL_SUPPORT_CONTACT") ? (
+                <div>
+                  <a
+                  href="https://forms.gle/W3U4PZpJGFHWtHyA9"
+                  target="_blank"
+                >
+                  <Text className="mt-2">
+                  {" "}
+                  ✨ {key}
+
+                  </Text>
+                 
+                </a>
+                <TextInput
+                name={key}
+                defaultValue={value as string}
+                type="password"
+                disabled={true}
+                style={{ width: "400px" }}
+              />
+                </div>
+                
+              ) : (
+                <div>
+                  <Text className="mt-2">{key}</Text>
+                  <TextInput
+                name={key}
+                defaultValue={value as string}
+                type="password"
+                style={{ width: "400px" }}
+              />
+                </div>
+                
+              )}
+              
+              {/* Added descriptions for input fields */}
+              <p style={{ fontSize: "small", fontStyle: "italic" }}>
+                {key === "SMTP_HOST" && (
+                  <div style={{ color: "gray" }}>
+                    Enter the SMTP host address, e.g. 'smtp.resend.com'
+                    <span style={{ color: "red" }}> Required * </span>
+                  </div>
+                  
+                )}
+
+                {key === "SMTP_PORT" && (
+                  <div style={{ color: "gray" }}>
+                    Enter the SMTP port number, e.g. '587'
+                     <span style={{ color: "red" }}> Required * </span>
+
+                  </div>
+                 
+                )}
+                
+                {key === "SMTP_USERNAME" && (
+                  <div style={{ color: "gray" }}>
+                    Enter the SMTP username, e.g. 'username'
+                    <span style={{ color: "red" }}> Required * </span>
+                  </div>
+                  
+                )}
+                
+                {key === "SMTP_PASSWORD" && (
+                  <span style={{ color: "red" }}> Required * </span>
+                )}
+
+                {key === "SMTP_SENDER_EMAIL" && (
+                  <div style={{ color: "gray" }}>
+                    Enter the sender email address, e.g. 'sender@berri.ai'
+                  <span style={{ color: "red" }}> Required * </span>
+
+                  </div>
+                )}
+
+                {key === "TEST_EMAIL_ADDRESS" && (
+                  <div style={{ color: "gray" }}>
+                  Email Address to send 'Test Email Alert' to. example: 'info@berri.ai'
+                  <span style={{ color: "red" }}> Required * </span>
+                  </div>
+                )
+                }
+                {key === "EMAIL_LOGO_URL" && (
+                  <div style={{ color: "gray" }}>
+                   (Optional) Customize the Logo that appears in the email, pass a url to your logo
+                  </div>
+                )
+                }
+                {key === "EMAIL_SUPPORT_CONTACT" && (
+                  <div style={{ color: "gray" }}>
+                   (Optional) Customize the support email address that appears in the email. Default is support@berri.ai
+                  </div>
+                )
+                   }
+              </p>
+            </li>
+          ))}
+                  </Grid>
+        </ul>
+      </TableCell>
+    ))}
+</div>
 
             <Button
               className="mt-2"
