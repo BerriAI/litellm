@@ -350,17 +350,13 @@ class Router:
     def validate_fallbacks(self, fallback_param: Optional[List]):
         if fallback_param is None:
             return
-        if len(fallback_param) > 0:  # if set
-            ## for dictionary in list, check if only 1 key in dict
-            for _dict in fallback_param:
-                assert isinstance(_dict, dict), "Item={}, not a dictionary".format(
-                    _dict
-                )
-                assert (
-                    len(_dict.keys()) == 1
-                ), "Only 1 key allows in dictionary. You set={} for dict={}".format(
-                    len(_dict.keys()), _dict
-                )
+
+        for fallback_dict in fallback_param:
+            if not isinstance(fallback_dict, dict):
+                raise ValueError(f"Item '{fallback_dict}' is not a dictionary.")
+            if len(fallback_dict) != 1:
+                raise ValueError(
+                    f"Dictionary '{fallback_dict}' must have exactly one key, but has {len(fallback_dict)} keys.")
 
     def routing_strategy_init(self, routing_strategy: str, routing_strategy_args: dict):
         if routing_strategy == "least-busy":
