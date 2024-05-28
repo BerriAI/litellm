@@ -7131,13 +7131,15 @@ async def global_predict_spend_logs(request: Request):
 #### INTERNAL USER MANAGEMENT ####
 @router.post(
     "/user/new",
-    tags=["user management"],
+    tags=["Internal User management"],
     dependencies=[Depends(user_api_key_auth)],
     response_model=NewUserResponse,
 )
 async def new_user(data: NewUserRequest):
     """
-    Use this to create a new user with a budget. This creates a new user and generates a new api key for the new user. The new api key is returned.
+    Use this to create a new INTERNAL user with a budget.
+    Internal Users can access LiteLLM Admin UI to make keys, request access to models.
+    This creates a new user and generates a new api key for the new user. The new api key is returned.
 
     Returns user id, budget + new key.
 
@@ -7208,7 +7210,9 @@ async def new_user(data: NewUserRequest):
 
 
 @router.post(
-    "/user/auth", tags=["user management"], dependencies=[Depends(user_api_key_auth)]
+    "/user/auth",
+    tags=["Internal User management"],
+    dependencies=[Depends(user_api_key_auth)],
 )
 async def user_auth(request: Request):
     """
@@ -7274,7 +7278,9 @@ async def user_auth(request: Request):
 
 
 @router.get(
-    "/user/info", tags=["user management"], dependencies=[Depends(user_api_key_auth)]
+    "/user/info",
+    tags=["Internal User management"],
+    dependencies=[Depends(user_api_key_auth)],
 )
 async def user_info(
     user_id: Optional[str] = fastapi.Query(
@@ -7446,7 +7452,9 @@ async def user_info(
 
 
 @router.post(
-    "/user/update", tags=["user management"], dependencies=[Depends(user_api_key_auth)]
+    "/user/update",
+    tags=["Internal User management"],
+    dependencies=[Depends(user_api_key_auth)],
 )
 async def user_update(data: UpdateUserRequest):
     """
@@ -7540,7 +7548,7 @@ async def user_update(data: UpdateUserRequest):
 
 @router.post(
     "/user/request_model",
-    tags=["user management"],
+    tags=["Internal User management"],
     dependencies=[Depends(user_api_key_auth)],
 )
 async def user_request_model(request: Request):
@@ -7593,7 +7601,7 @@ async def user_request_model(request: Request):
 
 @router.get(
     "/user/get_requests",
-    tags=["user management"],
+    tags=["Internal User management"],
     dependencies=[Depends(user_api_key_auth)],
 )
 async def user_get_requests():
@@ -7635,7 +7643,7 @@ async def user_get_requests():
 
 @router.get(
     "/user/get_users",
-    tags=["user management"],
+    tags=["Internal User management"],
     dependencies=[Depends(user_api_key_auth)],
 )
 async def get_users(
@@ -7672,7 +7680,13 @@ async def get_users(
 
 @router.post(
     "/end_user/block",
-    tags=["End User Management"],
+    tags=["Customer Management"],
+    dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
+)
+@router.post(
+    "/customer/block",
+    tags=["Customer Management"],
     dependencies=[Depends(user_api_key_auth)],
 )
 async def block_user(data: BlockUsers):
@@ -7715,8 +7729,14 @@ async def block_user(data: BlockUsers):
 
 @router.post(
     "/end_user/unblock",
-    tags=["End User Management"],
+    tags=["Customer Management"],
     dependencies=[Depends(user_api_key_auth)],
+)
+@router.post(
+    "/customer/unblock",
+    tags=["Customer Management"],
+    dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
 )
 async def unblock_user(data: BlockUsers):
     """
@@ -7762,7 +7782,13 @@ async def unblock_user(data: BlockUsers):
 
 @router.post(
     "/end_user/new",
-    tags=["End User Management"],
+    tags=["Customer Management"],
+    include_in_schema=False,
+    dependencies=[Depends(user_api_key_auth)],
+)
+@router.post(
+    "/customer/new",
+    tags=["Customer Management"],
     dependencies=[Depends(user_api_key_auth)],
 )
 async def new_end_user(
@@ -7779,18 +7805,13 @@ async def new_end_user(
 
     Example curl:
     ```
-    curl --location 'http://0.0.0.0:4000/end_user/new' \
+    curl --location 'http://0.0.0.0:4000/customer/new' \
         --header 'Authorization: Bearer sk-1234' \
         --header 'Content-Type: application/json' \
         --data '{
-            "end_user_id" : "ishaan-jaff-3", <- specific customer
-            
-            "allowed_region": "eu" <- set region for models        
-
-                    + 
-
+            "user_id" : "ishaan-jaff-3",
+            "allowed_region": "eu"   
             "default_model": "azure/gpt-3.5-turbo-eu" <- all calls from this user, use this model? 
-
         }'
 
         # return end-user object
@@ -7861,8 +7882,14 @@ async def new_end_user(
 
 
 @router.get(
+    "/customer/info",
+    tags=["Customer Management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+@router.get(
     "/end_user/info",
-    tags=["End User Management"],
+    tags=["Customer Management"],
+    include_in_schema=False,
     dependencies=[Depends(user_api_key_auth)],
 )
 async def end_user_info(
@@ -7886,8 +7913,14 @@ async def end_user_info(
 
 
 @router.post(
+    "/customer/update",
+    tags=["Customer Management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+@router.post(
     "/end_user/update",
-    tags=["End User Management"],
+    tags=["Customer Management"],
+    include_in_schema=False,
     dependencies=[Depends(user_api_key_auth)],
 )
 async def update_end_user():
@@ -7898,8 +7931,14 @@ async def update_end_user():
 
 
 @router.post(
+    "/customer/delete",
+    tags=["Customer Management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+@router.post(
     "/end_user/delete",
-    tags=["End User Management"],
+    tags=["Customer Management"],
+    include_in_schema=False,
     dependencies=[Depends(user_api_key_auth)],
 )
 async def delete_end_user():
