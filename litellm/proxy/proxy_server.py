@@ -7792,7 +7792,7 @@ async def unblock_user(data: BlockUsers):
     dependencies=[Depends(user_api_key_auth)],
 )
 async def new_end_user(
-    data: NewEndUserRequest,
+    data: NewCustomerRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -7950,7 +7950,7 @@ async def end_user_info(
     dependencies=[Depends(user_api_key_auth)],
 )
 async def update_end_user(
-    data: UpdateEndUserRequest,
+    data: UpdateCustomerRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -8037,10 +8037,76 @@ async def update_end_user(
     include_in_schema=False,
     dependencies=[Depends(user_api_key_auth)],
 )
-async def delete_end_user():
+async def delete_end_user(
+    data: DeleteCustomerRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     """
-    [TODO] Needs to be implemented.
+    Example curl 
+
+    ```
+    curl --location 'http://0.0.0.0:4000/customer/delete' \
+        --header 'Authorization: Bearer sk-1234' \
+        --header 'Content-Type: application/json' \
+        --data '{
+            "user_ids" :["ishaan-jaff-5"]
+    }'
+
+    See below for all params 
+    ```
     """
+    global prisma_client
+
+    try:
+        if prisma_client is None:
+            raise Exception("Not connected to DB!")
+
+        verbose_proxy_logger.debug("/customer/delete: Received data = %s", data)
+        if (
+            data.user_ids is not None
+            and isinstance(data.user_ids, list)
+            and len(data.user_ids) > 0
+        ):
+            response = await prisma_client.db.litellm_endusertable.delete_many(
+                where={"user_id": {"in": data.user_ids}}
+            )
+            if response is None:
+                raise ValueError(
+                    f"Failed deleting customer data. User ID does not exist passed user_id={data.user_ids}"
+                )
+            if response != len(data.user_ids):
+                raise ValueError(
+                    f"Failed deleting all customer data. User ID does not exist passed user_id={data.user_ids}. Deleted {response} customers, passed {len(data.user_ids)} customers"
+                )
+            verbose_proxy_logger.debug(
+                f"received response from updating prisma client. response={response}"
+            )
+            return {
+                "deleted_customers": response,
+                "message": "Successfully deleted customers with ids: "
+                + str(data.user_ids),
+            }
+        else:
+            raise ValueError(f"user_id is required, passed user_id = {data.user_ids}")
+
+        # update based on remaining passed in values
+    except Exception as e:
+        traceback.print_exc()
+        if isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "detail", f"Internal Server Error({str(e)})"),
+                type="internal_error",
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
+            )
+        elif isinstance(e, ProxyException):
+            raise e
+        raise ProxyException(
+            message="Internal Server Error, " + str(e),
+            type="internal_error",
+            param=getattr(e, "param", "None"),
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
     pass
 
 
