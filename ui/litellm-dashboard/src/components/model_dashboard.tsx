@@ -1200,9 +1200,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                               wordBreak: "break-word",
                             }}
                           >
-                            <p style={{ fontSize: "10px" }}>
-                              {model.model_name || "-"}
-                            </p>
+                            <p className="text-xs">{model.model_name || "-"}</p>
                           </TableCell>
                           <TableCell
                             style={{
@@ -1211,9 +1209,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                               wordBreak: "break-word",
                             }}
                           >
-                            <p style={{ fontSize: "10px" }}>
-                              {model.provider || "-"}
-                            </p>
+                            <p className="text-xs">{model.provider || "-"}</p>
                           </TableCell>
                           {userRole === "Admin" && (
                             <TableCell
@@ -1229,8 +1225,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                                     maxWidth: "150px",
                                     whiteSpace: "normal",
                                     wordBreak: "break-word",
-                                    fontSize: "10px",
                                   }}
+                                  className="text-xs"
                                   title={
                                     model && model.api_base
                                       ? model.api_base
@@ -1251,7 +1247,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                               wordBreak: "break-word",
                             }}
                           >
-                            <pre style={{ fontSize: "10px" }}>
+                            <pre className="text-xs">
                               {model.input_cost
                                 ? model.input_cost
                                 : model.litellm_params.input_cost_per_token
@@ -1271,7 +1267,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                               wordBreak: "break-word",
                             }}
                           >
-                            <pre style={{ fontSize: "10px" }}>
+                            <pre className="text-xs">
                               {model.output_cost
                                 ? model.output_cost
                                 : model.litellm_params.output_cost_per_token
@@ -1285,7 +1281,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                             </pre>
                           </TableCell>
                           <TableCell>
-                            <p style={{ fontSize: "10px" }}>
+                            <p className="text-xs">
                               {premiumUser
                                 ? formatCreatedAt(
                                     model.model_info.created_at
@@ -1294,7 +1290,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                             </p>
                           </TableCell>
                           <TableCell>
-                            <p style={{ fontSize: "10px" }}>
+                            <p className="text-xs">
                               {premiumUser
                                 ? model.model_info.created_by || "-"
                                 : "-"}
@@ -1309,11 +1305,11 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                           >
                             {model.model_info.db_model ? (
                               <Badge size="xs" className="text-white">
-                                <p style={{ fontSize: "10px" }}>DB Model</p>
+                                <p className="text-xs">DB Model</p>
                               </Badge>
                             ) : (
                               <Badge size="xs" className="text-black">
-                                <p style={{ fontSize: "10px" }}>Config Model</p>
+                                <p className="text-xs">Config Model</p>
                               </Badge>
                             )}
                           </TableCell>
