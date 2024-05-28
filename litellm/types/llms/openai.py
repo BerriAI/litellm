@@ -19,7 +19,7 @@ from openai.types.beta.threads.run import Run
 from openai.types.beta.assistant import Assistant
 from openai.pagination import SyncCursorPage
 from os import PathLike
-from openai.types import FileObject
+from openai.types import FileObject, Batch
 
 from typing import TypedDict, List, Optional, Tuple, Mapping, IO
 

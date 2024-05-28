@@ -26,6 +26,7 @@ from ..types.llms.openai import (
     CreateFileRequest,
     FileTypes,
     FileObject,
+    Batch,
 )
 
 from typing import Literal, Optional, Dict
@@ -44,6 +45,11 @@ def create_file(
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
 ) -> FileObject:
+    """
+    Files are used to upload documents that can be used with features like Assistants, Fine-tuning, and Batch API.
+
+    LiteLLM Equivalent of POST: POST https://api.openai.com/v1/files
+    """
     try:
         optional_params = GenericLiteLLMParams(**kwargs)
         if custom_llm_provider == "openai":
@@ -127,7 +133,7 @@ def create_batch(
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
-):
+) -> Batch:
     """
     Creates and executes a batch from an uploaded file of request
 
