@@ -196,11 +196,8 @@ const CreateKeyPage = () => {
             />
           ) : page == "model-hub" ? (
             <ModelHub
-              userID={userID}
-              userRole={userRole}
-              token={token}
               accessToken={accessToken}
-              keys={keys}
+              publicPage={false}
               premiumUser={premiumUser}
             />
           ) : (

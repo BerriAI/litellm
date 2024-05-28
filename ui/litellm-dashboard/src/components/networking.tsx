@@ -1865,6 +1865,38 @@ export const getGeneralSettingsCall = async (accessToken: String) => {
   }
 };
 
+export const getConfigFieldSetting = async (
+  accessToken: String,
+  fieldName: string
+) => {
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/config/field/info?field_name=${fieldName}`
+      : `/config/field/info?field_name=${fieldName}`;
+
+    //message.info("Requesting model data");
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    return data;
+    // Handle success - you might want to update some state or UI based on the created key
+  } catch (error) {
+    console.error("Failed to set callbacks:", error);
+    throw error;
+  }
+};
+
 export const updateConfigFieldSetting = async (
   accessToken: String,
   fieldName: string,

@@ -19,5 +19,7 @@ export default function PublicModelHub() {
    * populate navbar
    *
    */
-  return <ModelHub accessToken={accessToken} publicPage={true} />;
+  return (
+    <ModelHub accessToken={accessToken} publicPage={true} premiumUser={false} />
+  );
 }
