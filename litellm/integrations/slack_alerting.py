@@ -41,6 +41,7 @@ class ProviderRegionOutageModel(BaseOutageModel):
 
 # we use this for the email header, please send a test email if you change this. verify it looks good on email
 LITELLM_LOGO_URL = "https://litellm-listing.s3.amazonaws.com/litellm_logo.png"
+LITELLM_SUPPORT_CONTACT = "support@berri.ai"
 
 
 class LiteLLMBase(BaseModel):
@@ -1171,6 +1172,10 @@ Model Info:
         await self._check_if_using_premium_email_feature(
             premium_user, email_logo_url, email_support_contact
         )
+        if email_logo_url is None:
+            email_logo_url = LITELLM_LOGO_URL
+        if email_support_contact is None:
+            email_support_contact = LITELLM_SUPPORT_CONTACT
 
         event_name = webhook_event.event_message
         recipient_email = webhook_event.user_email
@@ -1270,6 +1275,11 @@ Model Info:
         await self._check_if_using_premium_email_feature(
             premium_user, email_logo_url, email_support_contact
         )
+
+        if email_logo_url is None:
+            email_logo_url = LITELLM_LOGO_URL
+        if email_support_contact is None:
+            email_support_contact = LITELLM_SUPPORT_CONTACT
 
         event_name = webhook_event.event_message
         recipient_email = webhook_event.user_email
