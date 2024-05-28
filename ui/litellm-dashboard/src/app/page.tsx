@@ -18,6 +18,30 @@ import Usage from "../components/usage";
 import { jwtDecode } from "jwt-decode";
 import { Typography } from "antd";
 
+export function formatUserRole(userRole: string) {
+  if (!userRole) {
+    return "Undefined Role";
+  }
+  console.log(`Received user role: ${userRole.toLowerCase()}`);
+  console.log(`Received user role length: ${userRole.toLowerCase().length}`);
+  switch (userRole.toLowerCase()) {
+    case "app_owner":
+      return "App Owner";
+    case "demo_app_owner":
+      return "App Owner";
+    case "app_admin":
+      return "Admin";
+    case "proxy_admin":
+      return "Admin";
+    case "proxy_admin_viewer":
+      return "Admin Viewer";
+    case "app_user":
+      return "App User";
+    default:
+      return "Unknown Role";
+  }
+}
+
 const CreateKeyPage = () => {
   const { Title, Paragraph } = Typography;
   const [userRole, setUserRole] = useState("");
@@ -77,30 +101,6 @@ const CreateKeyPage = () => {
       }
     }
   }, [token]);
-
-  function formatUserRole(userRole: string) {
-    if (!userRole) {
-      return "Undefined Role";
-    }
-    console.log(`Received user role: ${userRole.toLowerCase()}`);
-    console.log(`Received user role length: ${userRole.toLowerCase().length}`);
-    switch (userRole.toLowerCase()) {
-      case "app_owner":
-        return "App Owner";
-      case "demo_app_owner":
-        return "App Owner";
-      case "app_admin":
-        return "Admin";
-      case "proxy_admin":
-        return "Admin";
-      case "proxy_admin_viewer":
-        return "Admin Viewer";
-      case "app_user":
-        return "App User";
-      default:
-        return "Unknown Role";
-    }
-  }
 
   return (
     <Suspense fallback={<div>Loading...</div>}>
@@ -194,17 +194,13 @@ const CreateKeyPage = () => {
               accessToken={accessToken}
               modelData={modelData}
             />
-            ) : page == "model-hub" ? (
-              <ModelHub
-              userID={userID}
-              userRole={userRole}
-              token={token}
+          ) : page == "model-hub" ? (
+            <ModelHub
               accessToken={accessToken}
-              keys={keys}
+              publicPage={false}
               premiumUser={premiumUser}
             />
-            )
-            : (
+          ) : (
             <Usage
               userID={userID}
               userRole={userRole}

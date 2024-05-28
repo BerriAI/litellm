@@ -397,6 +397,7 @@ def _get_pydantic_json_dict(pydantic_obj: BaseModel) -> dict:
 
 def get_custom_headers(
     *,
+    user_api_key_dict: UserAPIKeyAuth,
     model_id: Optional[str] = None,
     cache_key: Optional[str] = None,
     api_base: Optional[str] = None,
@@ -410,6 +411,8 @@ def get_custom_headers(
         "x-litellm-model-api-base": api_base,
         "x-litellm-version": version,
         "x-litellm-model-region": model_region,
+        "x-litellm-key-tpm-limit": str(user_api_key_dict.tpm_limit),
+        "x-litellm-key-rpm-limit": str(user_api_key_dict.rpm_limit),
     }
     try:
         return {
@@ -2787,6 +2790,13 @@ class ProxyConfig:
             model.model_info["id"] = _id
             model.model_info["db_model"] = True
 
+        if premium_user is True:
+            # seeing "created_at", "updated_at", "created_by", "updated_by" is a LiteLLM Enterprise Feature
+            model.model_info["created_at"] = getattr(model, "created_at", None)
+            model.model_info["updated_at"] = getattr(model, "updated_at", None)
+            model.model_info["created_by"] = getattr(model, "created_by", None)
+            model.model_info["updated_by"] = getattr(model, "updated_by", None)
+
         if model.model_info is not None and isinstance(model.model_info, dict):
             if "id" not in model.model_info:
                 model.model_info["id"] = model.model_id
@@ -3072,10 +3082,9 @@ class ProxyConfig:
 
         try:
             if master_key is None or not isinstance(master_key, str):
-                raise Exception(
+                raise ValueError(
                     f"Master key is not initialized or formatted. master_key={master_key}"
                 )
-            verbose_proxy_logger.debug(f"llm_router: {llm_router}")
             new_models = await prisma_client.db.litellm_proxymodeltable.find_many()
             # update llm router
             await self._update_llm_router(
@@ -4059,6 +4068,7 @@ async def chat_completion(
             "stream" in data and data["stream"] == True
         ):  # use generate_responses to stream responses
             custom_headers = get_custom_headers(
+                user_api_key_dict=user_api_key_dict,
                 model_id=model_id,
                 cache_key=cache_key,
                 api_base=api_base,
@@ -4078,6 +4088,7 @@ async def chat_completion(
 
         fastapi_response.headers.update(
             get_custom_headers(
+                user_api_key_dict=user_api_key_dict,
                 model_id=model_id,
                 cache_key=cache_key,
                 api_base=api_base,
@@ -4298,6 +4309,7 @@ async def completion(
             "stream" in data and data["stream"] == True
         ):  # use generate_responses to stream responses
             custom_headers = get_custom_headers(
+                user_api_key_dict=user_api_key_dict,
                 model_id=model_id,
                 cache_key=cache_key,
                 api_base=api_base,
@@ -4316,6 +4328,7 @@ async def completion(
             )
         fastapi_response.headers.update(
             get_custom_headers(
+                user_api_key_dict=user_api_key_dict,
                 model_id=model_id,
                 cache_key=cache_key,
                 api_base=api_base,
@@ -4565,6 +4578,7 @@ async def embeddings(
 
         fastapi_response.headers.update(
             get_custom_headers(
+                user_api_key_dict=user_api_key_dict,
                 model_id=model_id,
                 cache_key=cache_key,
                 api_base=api_base,
@@ -4748,6 +4762,7 @@ async def image_generation(
 
         fastapi_response.headers.update(
             get_custom_headers(
+                user_api_key_dict=user_api_key_dict,
                 model_id=model_id,
                 cache_key=cache_key,
                 api_base=api_base,
@@ -4949,6 +4964,7 @@ async def audio_transcriptions(
 
         fastapi_response.headers.update(
             get_custom_headers(
+                user_api_key_dict=user_api_key_dict,
                 model_id=model_id,
                 cache_key=cache_key,
                 api_base=api_base,
@@ -5132,6 +5148,7 @@ async def moderations(
 
         fastapi_response.headers.update(
             get_custom_headers(
+                user_api_key_dict=user_api_key_dict,
                 model_id=model_id,
                 cache_key=cache_key,
                 api_base=api_base,
@@ -6083,7 +6100,7 @@ async def get_global_activity_model(
 
         sql_query = """
         SELECT
-            model,
+            model_group AS model,
             date_trunc('day', "startTime") AS date,
             COUNT(*) AS api_requests,
             SUM(total_tokens) AS total_tokens
@@ -7120,13 +7137,15 @@ async def global_predict_spend_logs(request: Request):
 #### INTERNAL USER MANAGEMENT ####
 @router.post(
     "/user/new",
-    tags=["user management"],
+    tags=["Internal User management"],
     dependencies=[Depends(user_api_key_auth)],
     response_model=NewUserResponse,
 )
 async def new_user(data: NewUserRequest):
     """
-    Use this to create a new user with a budget. This creates a new user and generates a new api key for the new user. The new api key is returned.
+    Use this to create a new INTERNAL user with a budget.
+    Internal Users can access LiteLLM Admin UI to make keys, request access to models.
+    This creates a new user and generates a new api key for the new user. The new api key is returned.
 
     Returns user id, budget + new key.
 
@@ -7197,7 +7216,9 @@ async def new_user(data: NewUserRequest):
 
 
 @router.post(
-    "/user/auth", tags=["user management"], dependencies=[Depends(user_api_key_auth)]
+    "/user/auth",
+    tags=["Internal User management"],
+    dependencies=[Depends(user_api_key_auth)],
 )
 async def user_auth(request: Request):
     """
@@ -7263,7 +7284,9 @@ async def user_auth(request: Request):
 
 
 @router.get(
-    "/user/info", tags=["user management"], dependencies=[Depends(user_api_key_auth)]
+    "/user/info",
+    tags=["Internal User management"],
+    dependencies=[Depends(user_api_key_auth)],
 )
 async def user_info(
     user_id: Optional[str] = fastapi.Query(
@@ -7435,7 +7458,9 @@ async def user_info(
 
 
 @router.post(
-    "/user/update", tags=["user management"], dependencies=[Depends(user_api_key_auth)]
+    "/user/update",
+    tags=["Internal User management"],
+    dependencies=[Depends(user_api_key_auth)],
 )
 async def user_update(data: UpdateUserRequest):
     """
@@ -7529,7 +7554,7 @@ async def user_update(data: UpdateUserRequest):
 
 @router.post(
     "/user/request_model",
-    tags=["user management"],
+    tags=["Internal User management"],
     dependencies=[Depends(user_api_key_auth)],
 )
 async def user_request_model(request: Request):
@@ -7582,7 +7607,7 @@ async def user_request_model(request: Request):
 
 @router.get(
     "/user/get_requests",
-    tags=["user management"],
+    tags=["Internal User management"],
     dependencies=[Depends(user_api_key_auth)],
 )
 async def user_get_requests():
@@ -7624,7 +7649,7 @@ async def user_get_requests():
 
 @router.get(
     "/user/get_users",
-    tags=["user management"],
+    tags=["Internal User management"],
     dependencies=[Depends(user_api_key_auth)],
 )
 async def get_users(
@@ -7661,7 +7686,13 @@ async def get_users(
 
 @router.post(
     "/end_user/block",
-    tags=["End User Management"],
+    tags=["Customer Management"],
+    dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
+)
+@router.post(
+    "/customer/block",
+    tags=["Customer Management"],
     dependencies=[Depends(user_api_key_auth)],
 )
 async def block_user(data: BlockUsers):
@@ -7704,8 +7735,14 @@ async def block_user(data: BlockUsers):
 
 @router.post(
     "/end_user/unblock",
-    tags=["End User Management"],
+    tags=["Customer Management"],
     dependencies=[Depends(user_api_key_auth)],
+)
+@router.post(
+    "/customer/unblock",
+    tags=["Customer Management"],
+    dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
 )
 async def unblock_user(data: BlockUsers):
     """
@@ -7751,35 +7788,36 @@ async def unblock_user(data: BlockUsers):
 
 @router.post(
     "/end_user/new",
-    tags=["End User Management"],
+    tags=["Customer Management"],
+    include_in_schema=False,
+    dependencies=[Depends(user_api_key_auth)],
+)
+@router.post(
+    "/customer/new",
+    tags=["Customer Management"],
     dependencies=[Depends(user_api_key_auth)],
 )
 async def new_end_user(
-    data: NewEndUserRequest,
+    data: NewCustomerRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    [TODO] Needs to be implemented.
-
-    Allow creating a new end-user 
+    Allow creating a new Customer 
+    NOTE: This used to be called `/end_user/new`, we will still be maintaining compatibility for /end_user/XXX for these endpoints
 
     - Allow specifying allowed regions 
     - Allow specifying default model
 
     Example curl:
     ```
-    curl --location 'http://0.0.0.0:4000/end_user/new' \
+    curl --location 'http://0.0.0.0:4000/customer/new' \
         --header 'Authorization: Bearer sk-1234' \
         --header 'Content-Type: application/json' \
         --data '{
-            "end_user_id" : "ishaan-jaff-3", <- specific customer
-            
-            "allowed_region": "eu" <- set region for models        
-
-                    + 
-
+            "user_id" : "ishaan-jaff-3",
+            "allowed_region": "eu",
+            "budget_id": "free_tier",
             "default_model": "azure/gpt-3.5-turbo-eu" <- all calls from this user, use this model? 
-
         }'
 
         # return end-user object
@@ -7802,56 +7840,88 @@ async def new_end_user(
             status_code=500,
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
+    try:
 
-    ## VALIDATION ##
-    if data.default_model is not None:
-        if llm_router is None:
-            raise HTTPException(
-                status_code=422, detail={"error": CommonProxyErrors.no_llm_router.value}
+        ## VALIDATION ##
+        if data.default_model is not None:
+            if llm_router is None:
+                raise HTTPException(
+                    status_code=422,
+                    detail={"error": CommonProxyErrors.no_llm_router.value},
+                )
+            elif data.default_model not in llm_router.get_model_names():
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "error": "Default Model not on proxy. Configure via `/model/new` or config.yaml. Default_model={}, proxy_model_names={}".format(
+                            data.default_model, set(llm_router.get_model_names())
+                        )
+                    },
+                )
+
+        new_end_user_obj: Dict = {}
+
+        ## CREATE BUDGET ## if set
+        if data.max_budget is not None:
+            budget_record = await prisma_client.db.litellm_budgettable.create(
+                data={
+                    "max_budget": data.max_budget,
+                    "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,  # type: ignore
+                    "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
+                }
             )
-        elif data.default_model not in llm_router.get_model_names():
-            raise HTTPException(
-                status_code=422,
-                detail={
-                    "error": "Default Model not on proxy. Configure via `/model/new` or config.yaml. Default_model={}, proxy_model_names={}".format(
-                        data.default_model, set(llm_router.get_model_names())
-                    )
-                },
-            )
 
-    new_end_user_obj: Dict = {}
+            new_end_user_obj["budget_id"] = budget_record.budget_id
+        elif data.budget_id is not None:
+            new_end_user_obj["budget_id"] = data.budget_id
 
-    ## CREATE BUDGET ## if set
-    if data.max_budget is not None:
-        budget_record = await prisma_client.db.litellm_budgettable.create(
-            data={
-                "max_budget": data.max_budget,
-                "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,  # type: ignore
-                "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
-            }
+        _user_data = data.dict(exclude_none=True)
+
+        for k, v in _user_data.items():
+            if k != "max_budget" and k != "budget_id":
+                new_end_user_obj[k] = v
+
+        ## WRITE TO DB ##
+        end_user_record = await prisma_client.db.litellm_endusertable.create(
+            data=new_end_user_obj  # type: ignore
         )
 
-        new_end_user_obj["budget_id"] = budget_record.budget_id
-    elif data.budget_id is not None:
-        new_end_user_obj["budget_id"] = data.budget_id
+        return end_user_record
+    except Exception as e:
+        if "Unique constraint failed on the fields: (`user_id`)" in str(e):
+            raise ProxyException(
+                message=f"Customer already exists, passed user_id={data.user_id}. Please pass a new user_id.",
+                type="bad_request",
+                code=400,
+                param="user_id",
+            )
 
-    _user_data = data.dict(exclude_none=True)
-
-    for k, v in _user_data.items():
-        if k != "max_budget" and k != "budget_id":
-            new_end_user_obj[k] = v
-
-    ## WRITE TO DB ##
-    end_user_record = await prisma_client.db.litellm_endusertable.create(
-        data=new_end_user_obj  # type: ignore
-    )
-
-    return end_user_record
+        if isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "detail", f"Internal Server Error({str(e)})"),
+                type="internal_error",
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
+            )
+        elif isinstance(e, ProxyException):
+            raise e
+        raise ProxyException(
+            message="Internal Server Error, " + str(e),
+            type="internal_error",
+            param=getattr(e, "param", "None"),
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
 
 
 @router.get(
+    "/customer/info",
+    tags=["Customer Management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+@router.get(
     "/end_user/info",
-    tags=["End User Management"],
+    tags=["Customer Management"],
+    include_in_schema=False,
     dependencies=[Depends(user_api_key_auth)],
 )
 async def end_user_info(
@@ -7875,26 +7945,174 @@ async def end_user_info(
 
 
 @router.post(
-    "/end_user/update",
-    tags=["End User Management"],
+    "/customer/update",
+    tags=["Customer Management"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def update_end_user():
+@router.post(
+    "/end_user/update",
+    tags=["Customer Management"],
+    include_in_schema=False,
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def update_end_user(
+    data: UpdateCustomerRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     """
-    [TODO] Needs to be implemented.
+    Example curl 
+
+    ```
+    curl --location 'http://0.0.0.0:4000/customer/update' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'Content-Type: application/json' \
+    --data '{
+        "user_id": "test-litellm-user-4",
+        "budget_id": "paid_tier"
+    }'
+
+    See below for all params 
+    ```
     """
+
+    global prisma_client
+    try:
+        data_json: dict = data.json()
+        # get the row from db
+        if prisma_client is None:
+            raise Exception("Not connected to DB!")
+
+        # get non default values for key
+        non_default_values = {}
+        for k, v in data_json.items():
+            if v is not None and v not in (
+                [],
+                {},
+                0,
+            ):  # models default to [], spend defaults to 0, we should not reset these values
+                non_default_values[k] = v
+
+        ## ADD USER, IF NEW ##
+        verbose_proxy_logger.debug("/customer/update: Received data = %s", data)
+        if data.user_id is not None and len(data.user_id) > 0:
+            non_default_values["user_id"] = data.user_id  # type: ignore
+            verbose_proxy_logger.debug("In update customer, user_id condition block.")
+            response = await prisma_client.db.litellm_endusertable.update(
+                where={"user_id": data.user_id}, data=non_default_values  # type: ignore
+            )
+            if response is None:
+                raise ValueError(
+                    f"Failed updating customer data. User ID does not exist passed user_id={data.user_id}"
+                )
+            verbose_proxy_logger.debug(
+                f"received response from updating prisma client. response={response}"
+            )
+            return response
+        else:
+            raise ValueError(f"user_id is required, passed user_id = {data.user_id}")
+
+        # update based on remaining passed in values
+    except Exception as e:
+        traceback.print_exc()
+        if isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "detail", f"Internal Server Error({str(e)})"),
+                type="internal_error",
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
+            )
+        elif isinstance(e, ProxyException):
+            raise e
+        raise ProxyException(
+            message="Internal Server Error, " + str(e),
+            type="internal_error",
+            param=getattr(e, "param", "None"),
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
     pass
 
 
 @router.post(
-    "/end_user/delete",
-    tags=["End User Management"],
+    "/customer/delete",
+    tags=["Customer Management"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def delete_end_user():
+@router.post(
+    "/end_user/delete",
+    tags=["Customer Management"],
+    include_in_schema=False,
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def delete_end_user(
+    data: DeleteCustomerRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     """
-    [TODO] Needs to be implemented.
+    Example curl 
+
+    ```
+    curl --location 'http://0.0.0.0:4000/customer/delete' \
+        --header 'Authorization: Bearer sk-1234' \
+        --header 'Content-Type: application/json' \
+        --data '{
+            "user_ids" :["ishaan-jaff-5"]
+    }'
+
+    See below for all params 
+    ```
     """
+    global prisma_client
+
+    try:
+        if prisma_client is None:
+            raise Exception("Not connected to DB!")
+
+        verbose_proxy_logger.debug("/customer/delete: Received data = %s", data)
+        if (
+            data.user_ids is not None
+            and isinstance(data.user_ids, list)
+            and len(data.user_ids) > 0
+        ):
+            response = await prisma_client.db.litellm_endusertable.delete_many(
+                where={"user_id": {"in": data.user_ids}}
+            )
+            if response is None:
+                raise ValueError(
+                    f"Failed deleting customer data. User ID does not exist passed user_id={data.user_ids}"
+                )
+            if response != len(data.user_ids):
+                raise ValueError(
+                    f"Failed deleting all customer data. User ID does not exist passed user_id={data.user_ids}. Deleted {response} customers, passed {len(data.user_ids)} customers"
+                )
+            verbose_proxy_logger.debug(
+                f"received response from updating prisma client. response={response}"
+            )
+            return {
+                "deleted_customers": response,
+                "message": "Successfully deleted customers with ids: "
+                + str(data.user_ids),
+            }
+        else:
+            raise ValueError(f"user_id is required, passed user_id = {data.user_ids}")
+
+        # update based on remaining passed in values
+    except Exception as e:
+        traceback.print_exc()
+        if isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "detail", f"Internal Server Error({str(e)})"),
+                type="internal_error",
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
+            )
+        elif isinstance(e, ProxyException):
+            raise e
+        raise ProxyException(
+            message="Internal Server Error, " + str(e),
+            type="internal_error",
+            param=getattr(e, "param", "None"),
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
     pass
 
 
@@ -10824,6 +11042,236 @@ async def auth_callback(request: Request):
     return RedirectResponse(url=litellm_dashboard_ui)
 
 
+#### INVITATION MANAGEMENT ####
+
+
+@router.post(
+    "/invitation/new",
+    tags=["Invite Links"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=InvitationModel,
+)
+async def new_invitation(
+    data: InvitationNew, user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth)
+):
+    """
+    Allow admin to create invite links, to onboard new users to Admin UI.
+
+    ```
+    curl -X POST 'http://localhost:4000/invitation/new' \
+        -H 'Content-Type: application/json' \
+        -D '{
+            "user_id": "1234" // 👈 id of user in 'LiteLLM_UserTable'
+        }'
+    ```
+    """
+    global prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
+    if user_api_key_dict.user_role != "proxy_admin":
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "{}, your role={}".format(
+                    CommonProxyErrors.not_allowed_access.value,
+                    user_api_key_dict.user_role,
+                )
+            },
+        )
+
+    current_time = litellm.utils.get_utc_datetime()
+    expires_at = current_time + timedelta(days=7)
+
+    try:
+        response = await prisma_client.db.litellm_invitationlink.create(
+            data={
+                "user_id": data.user_id,
+                "created_at": current_time,
+                "expires_at": expires_at,
+                "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
+                "updated_at": current_time,
+                "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
+            }  # type: ignore
+        )
+    except Exception as e:
+        if "Foreign key constraint failed on the field" in str(e):
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "User id does not exist in 'LiteLLM_UserTable'. Fix this by creating user via `/user/new`."
+                },
+            )
+    return response
+
+
+@router.get(
+    "/invitation/info",
+    tags=["Invite Links"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=InvitationModel,
+)
+async def invitation_info(
+    invitation_id: str, user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth)
+):
+    """
+    Allow admin to create invite links, to onboard new users to Admin UI.
+
+    ```
+    curl -X POST 'http://localhost:4000/invitation/new' \
+        -H 'Content-Type: application/json' \
+        -D '{
+            "user_id": "1234" // 👈 id of user in 'LiteLLM_UserTable'
+        }'
+    ```
+    """
+    global prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
+    if user_api_key_dict.user_role != "proxy_admin":
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "{}, your role={}".format(
+                    CommonProxyErrors.not_allowed_access.value,
+                    user_api_key_dict.user_role,
+                )
+            },
+        )
+
+    response = await prisma_client.db.litellm_invitationlink.find_unique(
+        where={"id": invitation_id}
+    )
+
+    if response is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "Invitation id does not exist in the database."},
+        )
+    return response
+
+
+@router.post(
+    "/invitation/update",
+    tags=["Invite Links"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=InvitationModel,
+)
+async def invitation_update(
+    data: InvitationUpdate,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Update when invitation is accepted
+    
+    ```
+    curl -X POST 'http://localhost:4000/invitation/update' \
+        -H 'Content-Type: application/json' \
+        -D '{
+            "invitation_id": "1234" // 👈 id of invitation in 'LiteLLM_InvitationTable'
+            "is_accepted": True // when invitation is accepted
+        }'
+    ```
+    """
+    global prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
+    if user_api_key_dict.user_id is None:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "Unable to identify user id. Received={}".format(
+                    user_api_key_dict.user_id
+                )
+            },
+        )
+
+    current_time = litellm.utils.get_utc_datetime()
+    response = await prisma_client.db.litellm_invitationlink.update(
+        where={"id": data.invitation_id},
+        data={
+            "id": data.invitation_id,
+            "is_accepted": data.is_accepted,
+            "accepted_at": current_time,
+            "updated_at": current_time,
+            "updated_by": user_api_key_dict.user_id,  # type: ignore
+        },
+    )
+
+    if response is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "Invitation id does not exist in the database."},
+        )
+    return response
+
+
+@router.post(
+    "/invitation/delete",
+    tags=["Invite Links"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=InvitationModel,
+)
+async def invitation_delete(
+    data: InvitationDelete,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Delete invitation link
+    
+    ```
+    curl -X POST 'http://localhost:4000/invitation/delete' \
+        -H 'Content-Type: application/json' \
+        -D '{
+            "invitation_id": "1234" // 👈 id of invitation in 'LiteLLM_InvitationTable'
+        }'
+    ```
+    """
+    global prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
+    if user_api_key_dict.user_role != "proxy_admin":
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "{}, your role={}".format(
+                    CommonProxyErrors.not_allowed_access.value,
+                    user_api_key_dict.user_role,
+                )
+            },
+        )
+
+    response = await prisma_client.db.litellm_invitationlink.delete(
+        where={"id": data.invitation_id}
+    )
+
+    if response is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "Invitation id does not exist in the database."},
+        )
+    return response
+
+
 #### CONFIG MANAGEMENT ####
 @router.post(
     "/config/update",
@@ -11050,6 +11498,7 @@ async def update_config_general_settings(
     "/config/field/info",
     tags=["config.yaml"],
     dependencies=[Depends(user_api_key_auth)],
+    response_model=ConfigFieldInfo,
 )
 async def get_config_general_settings(
     field_name: str,
@@ -11096,10 +11545,9 @@ async def get_config_general_settings(
         general_settings = dict(db_general_settings.param_value)
 
         if field_name in general_settings:
-            return {
-                "field_name": field_name,
-                "field_value": general_settings[field_name],
-            }
+            return ConfigFieldInfo(
+                field_name=field_name, field_value=general_settings[field_name]
+            )
         else:
             raise HTTPException(
                 status_code=400,
