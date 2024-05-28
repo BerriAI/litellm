@@ -7809,7 +7809,8 @@ async def new_end_user(
         --header 'Content-Type: application/json' \
         --data '{
             "user_id" : "ishaan-jaff-3",
-            "allowed_region": "eu"   
+            "allowed_region": "eu",
+            "budget_id": "free_tier",
             "default_model": "azure/gpt-3.5-turbo-eu" <- all calls from this user, use this model? 
         }'
 
@@ -7948,10 +7949,80 @@ async def end_user_info(
     include_in_schema=False,
     dependencies=[Depends(user_api_key_auth)],
 )
-async def update_end_user():
+async def update_end_user(
+    data: UpdateEndUserRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     """
-    [TODO] Needs to be implemented.
+    Example curl 
+
+    ```
+    curl --location 'http://0.0.0.0:4000/customer/update' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'Content-Type: application/json' \
+    --data '{
+        "user_id": "test-litellm-user-4",
+        "budget_id": "paid_tier"
+    }'
+
+    See below for all params 
+    ```
     """
+
+    global prisma_client
+    try:
+        data_json: dict = data.json()
+        # get the row from db
+        if prisma_client is None:
+            raise Exception("Not connected to DB!")
+
+        # get non default values for key
+        non_default_values = {}
+        for k, v in data_json.items():
+            if v is not None and v not in (
+                [],
+                {},
+                0,
+            ):  # models default to [], spend defaults to 0, we should not reset these values
+                non_default_values[k] = v
+
+        ## ADD USER, IF NEW ##
+        verbose_proxy_logger.debug("/customer/update: Received data = %s", data)
+        if data.user_id is not None and len(data.user_id) > 0:
+            non_default_values["user_id"] = data.user_id  # type: ignore
+            verbose_proxy_logger.debug("In update customer, user_id condition block.")
+            response = await prisma_client.db.litellm_endusertable.update(
+                where={"user_id": data.user_id}, data=non_default_values  # type: ignore
+            )
+            if response is None:
+                raise ValueError(
+                    f"Failed updating customer data. User ID does not exist passed user_id={data.user_id}"
+                )
+            verbose_proxy_logger.debug(
+                f"received response from updating prisma client. response={response}"
+            )
+            return response
+        else:
+            raise ValueError(f"user_id is required, passed user_id = {data.user_id}")
+
+        # update based on remaining passed in values
+    except Exception as e:
+        traceback.print_exc()
+        if isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "detail", f"Internal Server Error({str(e)})"),
+                type="internal_error",
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
+            )
+        elif isinstance(e, ProxyException):
+            raise e
+        raise ProxyException(
+            message="Internal Server Error, " + str(e),
+            type="internal_error",
+            param=getattr(e, "param", "None"),
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
     pass
 
 
