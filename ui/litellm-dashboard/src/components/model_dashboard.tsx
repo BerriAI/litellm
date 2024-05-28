@@ -304,8 +304,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   function formatCreatedAt(createdAt: string | null) {
     if (createdAt) {
       const date = new Date(createdAt);
-      const options = { month: 'long', day: 'numeric', year: 'numeric' };
-      return date.toLocaleDateString('en-US');
+      const options = { month: "long", day: "numeric", year: "numeric" };
+      return date.toLocaleDateString("en-US");
     }
     return null;
   }
@@ -1061,9 +1061,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                 </Select>
               </div>
               <Card>
-                <Table
-                  style={{ maxWidth: "1500px", width: "100%" }}
-                >
+                <Table style={{ maxWidth: "1500px", width: "100%" }}>
                   <TableHead>
                     <TableRow>
                       <TableHeaderCell
@@ -1071,7 +1069,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                           maxWidth: "150px",
                           whiteSpace: "normal",
                           wordBreak: "break-word",
-                          fontSize: "11px"
+                          fontSize: "11px",
                         }}
                       >
                         Public Model Name
@@ -1081,7 +1079,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                           maxWidth: "100px",
                           whiteSpace: "normal",
                           wordBreak: "break-word",
-                          fontSize: "11px"
+                          fontSize: "11px",
                         }}
                       >
                         Provider
@@ -1092,7 +1090,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                             maxWidth: "150px",
                             whiteSpace: "normal",
                             wordBreak: "break-word",
-                            fontSize: "11px"
+                            fontSize: "11px",
                           }}
                         >
                           API Base
@@ -1103,7 +1101,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                           maxWidth: "85px",
                           whiteSpace: "normal",
                           wordBreak: "break-word",
-                          fontSize: "11px"
+                          fontSize: "11px",
                         }}
                       >
                         Input Price{" "}
@@ -1116,7 +1114,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                           maxWidth: "85px",
                           whiteSpace: "normal",
                           wordBreak: "break-word",
-                          fontSize: "11px"
+                          fontSize: "11px",
                         }}
                       >
                         Output Price{" "}
@@ -1124,45 +1122,60 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                           /1M Tokens ($)
                         </p>
                       </TableHeaderCell>
-                      
-                      <TableHeaderCell
-                        style={{
-                          maxWidth: "100px",
-                          whiteSpace: "normal",
-                          wordBreak: "break-word",
-                          fontSize: "11px"
-                        }}
-                      >
-                        {
-                          premiumUser ? "Created At" : <a href="https://forms.gle/W3U4PZpJGFHWtHyA9" target="_blank" style={{color: "#72bcd4" }}> ✨ Created At</a>
-                        }
 
-                        </TableHeaderCell>
                       <TableHeaderCell
                         style={{
                           maxWidth: "100px",
                           whiteSpace: "normal",
                           wordBreak: "break-word",
-                          fontSize: "11px"
+                          fontSize: "11px",
                         }}
                       >
-                        {
-                          premiumUser ? "Created By" : <a href="https://forms.gle/W3U4PZpJGFHWtHyA9" target="_blank" style={{color: "#72bcd4" }}> ✨ Created By</a>
-                        }
+                        {premiumUser ? (
+                          "Created At"
+                        ) : (
+                          <a
+                            href="https://forms.gle/W3U4PZpJGFHWtHyA9"
+                            target="_blank"
+                            style={{ color: "#72bcd4" }}
+                          >
+                            {" "}
+                            ✨ Created At
+                          </a>
+                        )}
+                      </TableHeaderCell>
+                      <TableHeaderCell
+                        style={{
+                          maxWidth: "100px",
+                          whiteSpace: "normal",
+                          wordBreak: "break-word",
+                          fontSize: "11px",
+                        }}
+                      >
+                        {premiumUser ? (
+                          "Created By"
+                        ) : (
+                          <a
+                            href="https://forms.gle/W3U4PZpJGFHWtHyA9"
+                            target="_blank"
+                            style={{ color: "#72bcd4" }}
+                          >
+                            {" "}
+                            ✨ Created By
+                          </a>
+                        )}
                       </TableHeaderCell>
                       <TableHeaderCell
                         style={{
                           maxWidth: "50px",
                           whiteSpace: "normal",
                           wordBreak: "break-word",
-                          fontSize: "11px"
+                          fontSize: "11px",
                         }}
                       >
                         Status
                       </TableHeaderCell>
-                      <TableHeaderCell>
-
-                      </TableHeaderCell>
+                      <TableHeaderCell></TableHeaderCell>
                     </TableRow>
                   </TableHead>
                   <TableBody>
@@ -1176,7 +1189,10 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                           selectedModelGroup === ""
                       )
                       .map((model: any, index: number) => (
-                        <TableRow key={index} style={{ maxHeight: "1px", minHeight: "1px" }}>
+                        <TableRow
+                          key={index}
+                          style={{ maxHeight: "1px", minHeight: "1px" }}
+                        >
                           <TableCell
                             style={{
                               maxWidth: "100px",
@@ -1185,7 +1201,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                             }}
                           >
                             <p style={{ fontSize: "10px" }}>
-                            {model.model_name || "-"}
+                              {model.model_name || "-"}
                             </p>
                           </TableCell>
                           <TableCell
@@ -1196,32 +1212,37 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                             }}
                           >
                             <p style={{ fontSize: "10px" }}>
-                            {model.provider || "-"}
+                              {model.provider || "-"}
                             </p>
                           </TableCell>
                           {userRole === "Admin" && (
                             <TableCell
-                            style={{
-                              maxWidth: "150px",
-                              whiteSpace: "normal",
-                              wordBreak: "break-word",
-                            }}
-                          >
-                             <Tooltip title={model && model.api_base}>
-                            <pre
                               style={{
                                 maxWidth: "150px",
                                 whiteSpace: "normal",
                                 wordBreak: "break-word",
-                                fontSize: "10px",
                               }}
-                              title={model && model.api_base ? model.api_base : ""}
                             >
-                              {model && model.api_base ? model.api_base.slice(0, 20) : "-"}
-                            </pre>
-                            </Tooltip>
-                          </TableCell>
-                          
+                              <Tooltip title={model && model.api_base}>
+                                <pre
+                                  style={{
+                                    maxWidth: "150px",
+                                    whiteSpace: "normal",
+                                    wordBreak: "break-word",
+                                    fontSize: "10px",
+                                  }}
+                                  title={
+                                    model && model.api_base
+                                      ? model.api_base
+                                      : ""
+                                  }
+                                >
+                                  {model && model.api_base
+                                    ? model.api_base.slice(0, 20)
+                                    : "-"}
+                                </pre>
+                              </Tooltip>
+                            </TableCell>
                           )}
                           <TableCell
                             style={{
@@ -1231,15 +1252,16 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                             }}
                           >
                             <pre style={{ fontSize: "10px" }}>
-                            {model.input_cost
-                              ? model.input_cost
-                              : model.litellm_params.input_cost_per_token
-                                ? (
-                                    Number(
-                                      model.litellm_params.input_cost_per_token
-                                    ) * 1000000
-                                  ).toFixed(2)
-                                : null}
+                              {model.input_cost
+                                ? model.input_cost
+                                : model.litellm_params.input_cost_per_token
+                                  ? (
+                                      Number(
+                                        model.litellm_params
+                                          .input_cost_per_token
+                                      ) * 1000000
+                                    ).toFixed(2)
+                                  : null}
                             </pre>
                           </TableCell>
                           <TableCell
@@ -1250,30 +1272,32 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                             }}
                           >
                             <pre style={{ fontSize: "10px" }}>
-                            {model.output_cost
-                              ? model.output_cost
-                              : model.litellm_params.output_cost_per_token
-                                ? (
-                                    Number(
-                                      model.litellm_params.output_cost_per_token
-                                    ) * 1000000
-                                  ).toFixed(2)
-                                : null}
+                              {model.output_cost
+                                ? model.output_cost
+                                : model.litellm_params.output_cost_per_token
+                                  ? (
+                                      Number(
+                                        model.litellm_params
+                                          .output_cost_per_token
+                                      ) * 1000000
+                                    ).toFixed(2)
+                                  : null}
                             </pre>
                           </TableCell>
                           <TableCell>
-                          <p style={{ fontSize: "10px" }}>
-                            {
-                              premiumUser ? formatCreatedAt(model.model_info.created_at) || "-" : "-"
-                            }
+                            <p style={{ fontSize: "10px" }}>
+                              {premiumUser
+                                ? formatCreatedAt(
+                                    model.model_info.created_at
+                                  ) || "-"
+                                : "-"}
                             </p>
-                           
                           </TableCell>
                           <TableCell>
-                          <p style={{ fontSize: "10px" }}>
-                            {
-                              premiumUser ? model.model_info.created_by || "-" : "-"
-                            }
+                            <p style={{ fontSize: "10px" }}>
+                              {premiumUser
+                                ? model.model_info.created_by || "-"
+                                : "-"}
                             </p>
                           </TableCell>
                           <TableCell
@@ -1284,20 +1308,12 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                             }}
                           >
                             {model.model_info.db_model ? (
-                              <Badge
-                                icon={CheckCircleIcon}
-                                size="xs"
-                                className="text-white"
-                              >
-                                <p style={{ fontSize: "8px" }}>DB Model</p>
+                              <Badge size="xs" className="text-white">
+                                <p style={{ fontSize: "10px" }}>DB Model</p>
                               </Badge>
                             ) : (
-                              <Badge
-                                icon={XCircleIcon}
-                                size="xs"
-                                className="text-black"
-                              >
-                                <p style={{ fontSize: "8px" }}>Config Model</p>
+                              <Badge size="xs" className="text-black">
+                                <p style={{ fontSize: "10px" }}>Config Model</p>
                               </Badge>
                             )}
                           </TableCell>
@@ -1309,30 +1325,28 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                             }}
                           >
                             <Grid numItems={3}>
-                            <Col>
-                            <Icon
-                              icon={InformationCircleIcon}
-                              size="sm"
-                              onClick={() => handleInfoClick(model)}
-                            />
-                            </Col>
-                            <Col>
-                            <Icon
-                              icon={PencilAltIcon}
-                              size="sm"
-                              onClick={() => handleEditClick(model)}
-                            />
-                            </Col>
-                           
-                            <Col>
-                            <DeleteModelButton
-                              modelID={model.model_info.id}
-                              accessToken={accessToken}
-                            />
-                            </Col>
+                              <Col>
+                                <Icon
+                                  icon={InformationCircleIcon}
+                                  size="sm"
+                                  onClick={() => handleInfoClick(model)}
+                                />
+                              </Col>
+                              <Col>
+                                <Icon
+                                  icon={PencilAltIcon}
+                                  size="sm"
+                                  onClick={() => handleEditClick(model)}
+                                />
+                              </Col>
 
+                              <Col>
+                                <DeleteModelButton
+                                  modelID={model.model_info.id}
+                                  accessToken={accessToken}
+                                />
+                              </Col>
                             </Grid>
-                            
                           </TableCell>
                         </TableRow>
                       ))}
@@ -1353,12 +1367,10 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
               footer={null}
               onCancel={handleInfoCancel}
             >
-
               <Title>Model Info</Title>
-              <SyntaxHighlighter language="json" >
+              <SyntaxHighlighter language="json">
                 {selectedModel && JSON.stringify(selectedModel, null, 2)}
               </SyntaxHighlighter>
-              
             </Modal>
           </TabPanel>
           <TabPanel className="h-full">
