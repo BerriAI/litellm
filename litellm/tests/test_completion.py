@@ -1397,6 +1397,83 @@ def test_hf_classifier_task():
         pytest.fail(f"Error occurred: {str(e)}")
 
 
+def test_ollama_image():
+    """
+    Test that datauri prefixes are removed, JPEG/PNG images are passed
+    through, and other image formats are converted to JPEG.  Non-image
+    data is untouched.
+    """
+
+    import io, base64
+    from PIL import Image
+
+    def mock_post(url, **kwargs):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.headers = {"Content-Type": "application/json"}
+        mock_response.json.return_value = {
+            # return the image in the response so that it can be tested
+            # against the original
+            "response": kwargs["json"]["images"]
+        }
+        return mock_response
+
+    def make_b64image(format):
+        image = Image.new(mode='RGB', size=(1, 1))
+        image_buffer = io.BytesIO()
+        image.save(image_buffer, format)
+        return base64.b64encode(image_buffer.getvalue()).decode("utf-8")
+
+    jpeg_image = make_b64image("JPEG")
+    webp_image = make_b64image("WEBP")
+    png_image = make_b64image("PNG")
+
+    base64_data = base64.b64encode(b"some random data")
+    datauri_base64_data = f"data:text/plain;base64,{base64_data}"
+
+    tests = [
+        # input                                    expected
+        [ jpeg_image,                              jpeg_image          ],
+        [ webp_image,                              None                ],
+        [ png_image,                               png_image           ],
+        [ f"data:image/jpeg;base64,{jpeg_image}",  jpeg_image          ],
+        [ f"data:image/webpb;base64,{webp_image}", None                ],
+        [ f"data:image/png;base64,{png_image}",    png_image           ],
+        [ datauri_base64_data,                     datauri_base64_data ]
+    ]
+
+    for test in tests:
+        try:
+            with patch("requests.post", side_effect=mock_post):
+                response = completion(
+                    model="ollama/llava",
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": "Whats in this image?"},
+                                {
+                                    "type": "image_url",
+                                    "image_url": {
+                                        "url": test[0]
+                                    },
+                                },
+                            ],
+                        }
+                    ],
+                )
+                if not test[1]:
+                    # the conversion process may not always generate the same image,
+                    # so just check for a JPEG image when a conversion was done.
+                    image_data = response["choices"][0]["message"]["content"][0]
+                    image = Image.open(io.BytesIO(base64.b64decode(image_data)))
+                    assert image.format == "JPEG"
+                else:
+                    assert response["choices"][0]["message"]["content"][0] == test[1]
+        except Exception as e:
+            pytest.fail(f"Error occurred: {e}")
+
+
 ########################### End of Hugging Face Tests ##############################################
 # def test_completion_hf_api():
 # # failing on circle-ci commenting out
