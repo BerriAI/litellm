@@ -566,12 +566,10 @@ const Settings: React.FC<SettingsPageProps> = ({
             </TabPanel>
             <TabPanel>
               <Card>
-            {/* <Text>
-              Email Alerts are sent to when <br />
-              - A key is created for a specific user_id <br />
-              - A key belonging to a user crosses its budget
-            </Text> */}
-<Title>Email Settings</Title>
+      <Title>Email Settings</Title>
+      <Text>
+      <a href="https://docs.litellm.ai/docs/proxy/email" target="_blank" style={{ color: "blue" }}> LiteLLM Docs: email alerts</a> <br/>        
+      </Text>
 <div className="flex w-full">
   {alerts
     .filter((alert) => alert.name === "email")
