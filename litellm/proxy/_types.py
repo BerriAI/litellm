@@ -1191,6 +1191,30 @@ class SpecialModelNames(enum.Enum):
     all_proxy_models = "all-proxy-models"
 
 
+class InvitationNew(LiteLLMBase):
+    user_id: str
+
+
+class InvitationUpdate(LiteLLMBase):
+    invitation_id: str
+    is_accepted: bool
+
+
+class InvitationDelete(LiteLLMBase):
+    invitation_id: str
+
+
+class InvitationModel(LiteLLMBase):
+    id: str
+    user_id: str
+    is_accepted: bool
+    accepted_at: Optional[datetime]
+    expires_at: datetime
+    created_at: datetime
+    created_by: str
+    updated_at: datetime
+    updated_by: str
+
 class ConfigFieldInfo(LiteLLMBase):
     field_name: str
     field_value: Any
