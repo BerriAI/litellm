@@ -11067,6 +11067,7 @@ async def update_config_general_settings(
     "/config/field/info",
     tags=["config.yaml"],
     dependencies=[Depends(user_api_key_auth)],
+    response_model=ConfigFieldInfo,
 )
 async def get_config_general_settings(
     field_name: str,
@@ -11113,10 +11114,9 @@ async def get_config_general_settings(
         general_settings = dict(db_general_settings.param_value)
 
         if field_name in general_settings:
-            return {
-                "field_name": field_name,
-                "field_value": general_settings[field_name],
-            }
+            return ConfigFieldInfo(
+                field_name=field_name, field_value=general_settings[field_name]
+            )
         else:
             raise HTTPException(
                 status_code=400,
