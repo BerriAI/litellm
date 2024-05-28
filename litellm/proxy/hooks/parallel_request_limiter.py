@@ -164,8 +164,9 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         # check if REQUEST ALLOWED for user_id
         user_id = user_api_key_dict.user_id
         if user_id is not None:
-            _user_id_rate_limits = user_api_key_dict.user_id_rate_limits
-
+            _user_id_rate_limits = await self.user_api_key_cache.async_get_cache(
+                key=user_id
+            )
             # get user tpm/rpm limits
             if _user_id_rate_limits is not None and isinstance(
                 _user_id_rate_limits, dict
@@ -196,13 +197,8 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         ## get team tpm/rpm limits
         team_id = user_api_key_dict.team_id
         if team_id is not None:
-            team_tpm_limit = getattr(user_api_key_dict, "team_tpm_limit", sys.maxsize)
-
-            if team_tpm_limit is None:
-                team_tpm_limit = sys.maxsize
-            team_rpm_limit = getattr(user_api_key_dict, "team_rpm_limit", sys.maxsize)
-            if team_rpm_limit is None:
-                team_rpm_limit = sys.maxsize
+            team_tpm_limit = user_api_key_dict.team_tpm_limit
+            team_rpm_limit = user_api_key_dict.team_rpm_limit
 
             if team_tpm_limit is None:
                 team_tpm_limit = sys.maxsize

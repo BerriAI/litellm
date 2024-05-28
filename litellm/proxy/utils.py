@@ -35,7 +35,6 @@ from litellm import (
 )
 from litellm.utils import ModelResponseIterator
 from litellm.proxy.hooks.max_budget_limiter import _PROXY_MaxBudgetLimiter
-from litellm.proxy.hooks.tpm_rpm_limiter import _PROXY_MaxTPMRPMLimiter
 from litellm.proxy.hooks.cache_control_check import _PROXY_CacheControlCheck
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy.db.base_client import CustomDB
@@ -81,9 +80,6 @@ class ProxyLogging:
         self.call_details["user_api_key_cache"] = user_api_key_cache
         self.internal_usage_cache = DualCache()
         self.max_parallel_request_limiter = _PROXY_MaxParallelRequestsHandler()
-        self.max_tpm_rpm_limiter = _PROXY_MaxTPMRPMLimiter(
-            internal_cache=self.internal_usage_cache
-        )
         self.max_budget_limiter = _PROXY_MaxBudgetLimiter()
         self.cache_control_check = _PROXY_CacheControlCheck()
         self.alerting: Optional[List] = None
@@ -144,7 +140,6 @@ class ProxyLogging:
         print_verbose(f"INITIALIZING LITELLM CALLBACKS!")
         self.service_logging_obj = ServiceLogging()
         litellm.callbacks.append(self.max_parallel_request_limiter)
-        litellm.callbacks.append(self.max_tpm_rpm_limiter)
         litellm.callbacks.append(self.max_budget_limiter)
         litellm.callbacks.append(self.cache_control_check)
         litellm.callbacks.append(self.service_logging_obj)
