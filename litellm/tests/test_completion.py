@@ -1437,7 +1437,7 @@ def test_ollama_image():
         [ webp_image,                              None                ],
         [ png_image,                               png_image           ],
         [ f"data:image/jpeg;base64,{jpeg_image}",  jpeg_image          ],
-        [ f"data:image/webpb;base64,{webp_image}", None                ],
+        [ f"data:image/webp;base64,{webp_image}",  None                ],
         [ f"data:image/png;base64,{png_image}",    png_image           ],
         [ datauri_base64_data,                     datauri_base64_data ]
     ]
