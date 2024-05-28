@@ -620,7 +620,7 @@ const Settings: React.FC<SettingsPageProps> = ({
               <p style={{ fontSize: "small", fontStyle: "italic" }}>
                 {key === "SMTP_HOST" && (
                   <div style={{ color: "gray" }}>
-                    Enter the SMTP host address, e.g. 'smtp.resend.com'
+                    Enter the SMTP host address, e.g. `smtp.resend.com`
                     <span style={{ color: "red" }}> Required * </span>
                   </div>
                   
@@ -628,7 +628,7 @@ const Settings: React.FC<SettingsPageProps> = ({
 
                 {key === "SMTP_PORT" && (
                   <div style={{ color: "gray" }}>
-                    Enter the SMTP port number, e.g. '587'
+                    Enter the SMTP port number, e.g. `587`
                      <span style={{ color: "red" }}> Required * </span>
 
                   </div>
@@ -637,7 +637,7 @@ const Settings: React.FC<SettingsPageProps> = ({
                 
                 {key === "SMTP_USERNAME" && (
                   <div style={{ color: "gray" }}>
-                    Enter the SMTP username, e.g. 'username'
+                    Enter the SMTP username, e.g. `username`
                     <span style={{ color: "red" }}> Required * </span>
                   </div>
                   
@@ -649,7 +649,7 @@ const Settings: React.FC<SettingsPageProps> = ({
 
                 {key === "SMTP_SENDER_EMAIL" && (
                   <div style={{ color: "gray" }}>
-                    Enter the sender email address, e.g. 'sender@berri.ai'
+                    Enter the sender email address, e.g. `sender@berri.ai`
                   <span style={{ color: "red" }}> Required * </span>
 
                   </div>
@@ -657,7 +657,7 @@ const Settings: React.FC<SettingsPageProps> = ({
 
                 {key === "TEST_EMAIL_ADDRESS" && (
                   <div style={{ color: "gray" }}>
-                  Email Address to send 'Test Email Alert' to. example: 'info@berri.ai'
+                  Email Address to send `Test Email Alert` to. example: `info@berri.ai`
                   <span style={{ color: "red" }}> Required * </span>
                   </div>
                 )
