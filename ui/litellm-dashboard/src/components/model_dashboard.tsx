@@ -1231,9 +1231,15 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                             }}
                           >
                             <pre style={{ fontSize: "10px" }}>
-                            {model.input_cost ||
-                              model.litellm_params.input_cost_per_token ||
-                              "-"}
+                            {model.input_cost
+                              ? model.input_cost
+                              : model.litellm_params.input_cost_per_token
+                                ? (
+                                    Number(
+                                      model.litellm_params.input_cost_per_token
+                                    ) * 1000000
+                                  ).toFixed(2)
+                                : null}
                             </pre>
                           </TableCell>
                           <TableCell
@@ -1244,9 +1250,15 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                             }}
                           >
                             <pre style={{ fontSize: "10px" }}>
-                            {model.output_cost ||
-                              model.litellm_params.output_cost_per_token ||
-                              "-"}
+                            {model.output_cost
+                              ? model.output_cost
+                              : model.litellm_params.output_cost_per_token
+                                ? (
+                                    Number(
+                                      model.litellm_params.output_cost_per_token
+                                    ) * 1000000
+                                  ).toFixed(2)
+                                : null}
                             </pre>
                           </TableCell>
                           <TableCell>
