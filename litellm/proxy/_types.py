@@ -519,7 +519,11 @@ class UpdateUserRequest(GenerateRequestBase):
         return values
 
 
-class NewEndUserRequest(LiteLLMBase):
+class NewCustomerRequest(LiteLLMBase):
+    """
+    Create a new customer, allocate a budget to them
+    """
+
     user_id: str
     alias: Optional[str] = None  # human-friendly alias
     blocked: bool = False  # allow/disallow requests for this end-user
@@ -538,6 +542,33 @@ class NewEndUserRequest(LiteLLMBase):
             raise ValueError("Set either 'max_budget' or 'budget_id', not both.")
 
         return values
+
+
+class UpdateCustomerRequest(LiteLLMBase):
+    """
+    Update a Customer, use this to update customer budgets etc
+
+    """
+
+    user_id: str
+    alias: Optional[str] = None  # human-friendly alias
+    blocked: bool = False  # allow/disallow requests for this end-user
+    max_budget: Optional[float] = None
+    budget_id: Optional[str] = None  # give either a budget_id or max_budget
+    allowed_model_region: Optional[Literal["eu"]] = (
+        None  # require all user requests to use models in this specific region
+    )
+    default_model: Optional[str] = (
+        None  # if no equivalent model in allowed region - default all requests to this model
+    )
+
+
+class DeleteCustomerRequest(LiteLLMBase):
+    """
+    Delete multiple Customers
+    """
+
+    user_ids: List[str]
 
 
 class Member(LiteLLMBase):
@@ -928,6 +959,10 @@ class ConfigGeneralSettings(LiteLLMBase):
     allowed_routes: Optional[List] = Field(
         None, description="Proxy API Endpoints you want users to be able to access"
     )
+    enable_public_model_hub: bool = Field(
+        default=False,
+        description="Public model hub for users to see what models they have access to, supported openai params, etc.",
+    )
 
 
 class ConfigYAML(LiteLLMBase):
@@ -983,10 +1018,6 @@ class LiteLLM_VerificationToken(LiteLLMBase):
     litellm_budget_table: Optional[dict] = None
 
     org_id: Optional[str] = None  # org id for a given key
-
-    # hidden params used for parallel request limiting, not required to create a token
-    user_id_rate_limits: Optional[dict] = None
-    team_id_rate_limits: Optional[dict] = None
 
     class Config:
         protected_namespaces = ()
@@ -1158,3 +1189,32 @@ class WebhookEvent(CallInfo):
 class SpecialModelNames(enum.Enum):
     all_team_models = "all-team-models"
     all_proxy_models = "all-proxy-models"
+
+
+class InvitationNew(LiteLLMBase):
+    user_id: str
+
+
+class InvitationUpdate(LiteLLMBase):
+    invitation_id: str
+    is_accepted: bool
+
+
+class InvitationDelete(LiteLLMBase):
+    invitation_id: str
+
+
+class InvitationModel(LiteLLMBase):
+    id: str
+    user_id: str
+    is_accepted: bool
+    accepted_at: Optional[datetime]
+    expires_at: datetime
+    created_at: datetime
+    created_by: str
+    updated_at: datetime
+    updated_by: str
+
+class ConfigFieldInfo(LiteLLMBase):
+    field_name: str
+    field_value: Any
