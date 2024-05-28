@@ -928,6 +928,10 @@ class ConfigGeneralSettings(LiteLLMBase):
     allowed_routes: Optional[List] = Field(
         None, description="Proxy API Endpoints you want users to be able to access"
     )
+    enable_public_model_hub: bool = Field(
+        default=False,
+        description="Public model hub for users to see what models they have access to, supported openai params, etc.",
+    )
 
 
 class ConfigYAML(LiteLLMBase):
@@ -1154,3 +1158,8 @@ class WebhookEvent(CallInfo):
 class SpecialModelNames(enum.Enum):
     all_team_models = "all-team-models"
     all_proxy_models = "all-proxy-models"
+
+
+class ConfigFieldInfo(LiteLLMBase):
+    field_name: str
+    field_value: Any
