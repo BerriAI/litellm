@@ -102,6 +102,7 @@ model LiteLLM_UserTable {
     user_alias String? 
     team_id    String?
     organization_id String?
+    password  String?
     teams    String[] @default([])
     user_role  String?
 		max_budget Float?
@@ -117,6 +118,9 @@ model LiteLLM_UserTable {
     model_spend      Json @default("{}")
     model_max_budget Json @default("{}")
     litellm_organization_table LiteLLM_OrganizationTable?   @relation(fields: [organization_id], references: [organization_id])
+    invitations_created LiteLLM_InvitationLink[] @relation("CreatedBy")
+    invitations_updated LiteLLM_InvitationLink[] @relation("UpdatedBy")
+    invitations_user    LiteLLM_InvitationLink[] @relation("UserId")
 }
 
 // Generate Tokens for Proxy
@@ -221,4 +225,22 @@ model LiteLLM_TeamMembership {
   budget_id String?
   litellm_budget_table LiteLLM_BudgetTable?   @relation(fields: [budget_id], references: [budget_id])
   @@id([user_id, team_id])
+}
+
+model LiteLLM_InvitationLink {
+  // use this table to track invite links sent by admin for people to join the proxy
+  id String   @id @default(uuid())
+  user_id String
+  is_accepted Boolean @default(false)
+  accepted_at DateTime? // when link is claimed (user successfully onboards via link)
+  expires_at  DateTime // till when is link valid
+  created_at DateTime // when did admin create the link
+  created_by String // who created the link
+  updated_at DateTime // when was invite status updated
+  updated_by String // who updated the status (admin/user who accepted invite)
+
+  // Relations
+  liteLLM_user_table_user    LiteLLM_UserTable  @relation("UserId", fields: [user_id], references: [user_id])
+  liteLLM_user_table_created LiteLLM_UserTable  @relation("CreatedBy", fields: [created_by], references: [user_id])
+  liteLLM_user_table_updated LiteLLM_UserTable  @relation("UpdatedBy", fields: [updated_by], references: [user_id])
 }
