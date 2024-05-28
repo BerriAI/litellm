@@ -1,19 +1,25 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState } from "react";
 
 import { modelHubCall } from "./networking";
 
-import { Card, Text, Title, Grid, Button, Badge, Tab,
-    TabGroup,
-    TabList,
-    TabPanel,
-    TabPanels, } from "@tremor/react";
+import {
+  Card,
+  Text,
+  Title,
+  Grid,
+  Button,
+  Badge,
+  Tab,
+  TabGroup,
+  TabList,
+  TabPanel,
+  TabPanels,
+} from "@tremor/react";
 
-import { RightOutlined, CopyOutlined } from '@ant-design/icons';
+import { RightOutlined, CopyOutlined } from "@ant-design/icons";
 
-import { Modal, Tooltip } from 'antd';
+import { Modal, Tooltip } from "antd";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
-
-
 
 interface ModelHubProps {
   userID: string | null;
@@ -22,7 +28,6 @@ interface ModelHubProps {
   accessToken: string | null;
   keys: any; // Replace with the appropriate type for 'keys' prop
   premiumUser: boolean;
-
 }
 
 interface ModelInfo {
@@ -32,15 +37,13 @@ interface ModelInfo {
     supports_vision: boolean;
     max_input_tokens?: number;
     max_output_tokens?: number;
-
-    // Add other properties if needed
-
-  }
+    supported_openai_params?: string[];
 
 
+  // Add other properties if needed
+}
 
 const ModelHub: React.FC<ModelHubProps> = ({
-
   userID,
 
   userRole,
@@ -52,140 +55,80 @@ const ModelHub: React.FC<ModelHubProps> = ({
   keys,
 
   premiumUser,
-
 }) => {
-
-  const [modelHubData, setModelHubData] =  useState<ModelInfo[] | null>(null);
+  const [modelHubData, setModelHubData] = useState<ModelInfo[] | null>(null);
   const [isModalVisible, setIsModalVisible] = useState(false);
-  const [selectedModel, setSelectedModel] =  useState<null | ModelInfo>(null);
-
+  const [selectedModel, setSelectedModel] = useState<null | ModelInfo>(null);
 
   useEffect(() => {
-
     if (!accessToken || !token || !userRole || !userID) {
       return;
     }
 
-
-
     const fetchData = async () => {
-
       try {
-
         const _modelHubData = await modelHubCall(accessToken, userID, userRole);
 
         console.log("ModelHubData:", _modelHubData);
 
         setModelHubData(_modelHubData.data);
-
       } catch (error) {
-
         console.error("There was an error fetching the model data", error);
-
       }
-
     };
 
-
-
     fetchData();
-
   }, [accessToken, token, userRole, userID]);
 
-
-
   const showModal = (model: ModelInfo) => {
-
     setSelectedModel(model);
 
     setIsModalVisible(true);
-
   };
-
-
 
   const handleOk = () => {
-
     setIsModalVisible(false);
 
     setSelectedModel(null);
-
   };
-
-
 
   const handleCancel = () => {
-
     setIsModalVisible(false);
 
     setSelectedModel(null);
-
   };
-
-
 
   const copyToClipboard = (text: string) => {
-
     navigator.clipboard.writeText(text);
-
   };
 
-
-
   return (
-
     <div>
+      <div className="w-full m-2 mt-2 p-8">
+        <div className="relative w-full"></div>
 
-<div className="w-full m-2 mt-2 p-8">
-
-            <div className="relative w-full">
-
- 
-
-</div>
-
-
-        <div className='flex items-center'>
-
-        <Title className='ml-8 text-center '>Model Hub</Title>
-        <Button className='ml-4'>
-        <a href="https://forms.gle/W3U4PZpJGFHWtHyA9" target="_blank">
-        ✨ Share
-        </a>
-
-
-</Button>
-            
+        <div className="flex items-center">
+          <Title className="ml-8 text-center ">Model Hub</Title>
+          <Button className="ml-4">
+            <a href="https://forms.gle/W3U4PZpJGFHWtHyA9" target="_blank">
+              ✨ Make Public
+            </a>
+          </Button>
         </div>
-      
-              
+
         <div className="grid grid-cols-2 gap-6 sm:grid-cols-3 lg:grid-cols-4">
-
-        
-          {modelHubData && modelHubData.map((model: ModelInfo) => (
-
-            <Card
-
-              key={model.model_group}
-
-              className="mt-5 mx-8"
-
-            >
-
-
-
-              <pre className='flex justify-between'>
-                
-
-                <Title>{model.model_group}</Title>
-                <Tooltip title={model.model_group}>
-
-                    <CopyOutlined onClick={() => copyToClipboard(model.model_group)} style={{ cursor: 'pointer', marginRight: '10px' }} />
-
-                    </Tooltip>
-
-              </pre>
-
+          {modelHubData &&
+            modelHubData.map((model: ModelInfo) => (
+              <Card key={model.model_group} className="mt-5 mx-8">
+                <pre className="flex justify-between">
+                  <Title>{model.model_group}</Title>
+                  <Tooltip title={model.model_group}>
+                    <CopyOutlined
+                      onClick={() => copyToClipboard(model.model_group)}
+                      style={{ cursor: "pointer", marginRight: "10px" }}
+                    />
+                  </Tooltip>
+                </pre>
               <div className='my-5'>
 
               <Text>Mode: {model.mode}</Text>
@@ -193,52 +136,37 @@ const ModelHub: React.FC<ModelHubProps> = ({
               <Text>Supports Vision: {model?.supports_vision == true ? "Yes" : "No"}</Text>
               <Text>Max Input Tokens: {model?.max_input_tokens ? model?.max_input_tokens : "N/A"}</Text>
               <Text>Max Output Tokens: {model?.max_output_tokens ? model?.max_output_tokens : "N/A"}</Text>
-
               </div>
-
-              <div style={{ marginTop: 'auto', textAlign: 'right' }}>
-
-            
-
-                <a href="#" onClick={() => showModal(model)} style={{ color: '#1890ff', fontSize: 'smaller' }}>
-
-                  View more <RightOutlined />
-
-                </a>
-
-              </div>
-
-            </Card>
-
-          ))}
-
+                <div style={{ marginTop: "auto", textAlign: "right" }}>
+                  <a
+                    href="#"
+                    onClick={() => showModal(model)}
+                    style={{ color: "#1890ff", fontSize: "smaller" }}
+                  >
+                    View more <RightOutlined />
+                  </a>
+                </div>
+              </Card>
+            ))}
         </div>
-
       </div>
 
       <Modal
-
-        title="Model Usage"
+        title={selectedModel && selectedModel.model_group ? selectedModel.model_group : "Unknown Model"}
         width={800}
-
         visible={isModalVisible}
         footer={null}
-
         onOk={handleOk}
-
         onCancel={handleCancel}
-
       >
-
         {selectedModel && (
-
           <div>
-
-            <p><strong>Model Name:</strong> {selectedModel.model_group}</p>
+            <p className='mb-4'><strong>Model Information & Usage</strong></p>
            
             <TabGroup>
                   <TabList>
                     <Tab>OpenAI Python SDK</Tab>
+                    <Tab>Supported OpenAI Params</Tab>
                     <Tab>LlamaIndex</Tab>
                     <Tab>Langchain Py</Tab>
                   </TabList>
@@ -267,8 +195,13 @@ print(response)
                       </SyntaxHighlighter>
                     </TabPanel>
                     <TabPanel>
-                      <SyntaxHighlighter language="python">
-                        {`
+                    <SyntaxHighlighter language="python">
+                        {`${selectedModel.supported_openai_params?.map((param) => `${param}\n`).join('')}`}
+                        </SyntaxHighlighter>
+                        </TabPanel>
+                <TabPanel>
+                  <SyntaxHighlighter language="python">
+                    {`
 import os, dotenv
 
 from llama_index.llms import AzureOpenAI
@@ -300,11 +233,11 @@ response = query_engine.query("What did the author do growing up?")
 print(response)
 
             `}
-                      </SyntaxHighlighter>
-                    </TabPanel>
-                    <TabPanel>
-                      <SyntaxHighlighter language="python">
-                        {`
+                  </SyntaxHighlighter>
+                </TabPanel>
+                <TabPanel>
+                  <SyntaxHighlighter language="python">
+                    {`
 from langchain.chat_models import ChatOpenAI
 from langchain.prompts.chat import (
     ChatPromptTemplate,
@@ -332,27 +265,19 @@ response = chat(messages)
 print(response)
 
             `}
-                      </SyntaxHighlighter>
-                    </TabPanel>
-                  </TabPanels>
-                </TabGroup>
+                  </SyntaxHighlighter>
+                </TabPanel>
+              </TabPanels>
+            </TabGroup>
 
             {/* <p><strong>Additional Params:</strong> {JSON.stringify(selectedModel.litellm_params)}</p> */}
 
             {/* Add other model details here */}
-
           </div>
-
         )}
-
       </Modal>
-
     </div>
-
   );
-
 };
-
-
 
 export default ModelHub;

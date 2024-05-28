@@ -397,6 +397,7 @@ def _get_pydantic_json_dict(pydantic_obj: BaseModel) -> dict:
 
 def get_custom_headers(
     *,
+    user_api_key_dict: UserAPIKeyAuth,
     model_id: Optional[str] = None,
     cache_key: Optional[str] = None,
     api_base: Optional[str] = None,
@@ -410,6 +411,8 @@ def get_custom_headers(
         "x-litellm-model-api-base": api_base,
         "x-litellm-version": version,
         "x-litellm-model-region": model_region,
+        "x-litellm-key-tpm-limit": str(user_api_key_dict.tpm_limit),
+        "x-litellm-key-rpm-limit": str(user_api_key_dict.rpm_limit),
     }
     try:
         return {
@@ -2787,6 +2790,13 @@ class ProxyConfig:
             model.model_info["id"] = _id
             model.model_info["db_model"] = True
 
+        if premium_user is True:
+            # seeing "created_at", "updated_at", "created_by", "updated_by" is a LiteLLM Enterprise Feature
+            model.model_info["created_at"] = getattr(model, "created_at", None)
+            model.model_info["updated_at"] = getattr(model, "updated_at", None)
+            model.model_info["created_by"] = getattr(model, "created_by", None)
+            model.model_info["updated_by"] = getattr(model, "updated_by", None)
+
         if model.model_info is not None and isinstance(model.model_info, dict):
             if "id" not in model.model_info:
                 model.model_info["id"] = model.model_id
@@ -3072,10 +3082,9 @@ class ProxyConfig:
 
         try:
             if master_key is None or not isinstance(master_key, str):
-                raise Exception(
+                raise ValueError(
                     f"Master key is not initialized or formatted. master_key={master_key}"
                 )
-            verbose_proxy_logger.debug(f"llm_router: {llm_router}")
             new_models = await prisma_client.db.litellm_proxymodeltable.find_many()
             # update llm router
             await self._update_llm_router(
@@ -4059,6 +4068,7 @@ async def chat_completion(
             "stream" in data and data["stream"] == True
         ):  # use generate_responses to stream responses
             custom_headers = get_custom_headers(
+                user_api_key_dict=user_api_key_dict,
                 model_id=model_id,
                 cache_key=cache_key,
                 api_base=api_base,
@@ -4078,6 +4088,7 @@ async def chat_completion(
 
         fastapi_response.headers.update(
             get_custom_headers(
+                user_api_key_dict=user_api_key_dict,
                 model_id=model_id,
                 cache_key=cache_key,
                 api_base=api_base,
@@ -4298,6 +4309,7 @@ async def completion(
             "stream" in data and data["stream"] == True
         ):  # use generate_responses to stream responses
             custom_headers = get_custom_headers(
+                user_api_key_dict=user_api_key_dict,
                 model_id=model_id,
                 cache_key=cache_key,
                 api_base=api_base,
@@ -4316,6 +4328,7 @@ async def completion(
             )
         fastapi_response.headers.update(
             get_custom_headers(
+                user_api_key_dict=user_api_key_dict,
                 model_id=model_id,
                 cache_key=cache_key,
                 api_base=api_base,
@@ -4565,6 +4578,7 @@ async def embeddings(
 
         fastapi_response.headers.update(
             get_custom_headers(
+                user_api_key_dict=user_api_key_dict,
                 model_id=model_id,
                 cache_key=cache_key,
                 api_base=api_base,
@@ -4748,6 +4762,7 @@ async def image_generation(
 
         fastapi_response.headers.update(
             get_custom_headers(
+                user_api_key_dict=user_api_key_dict,
                 model_id=model_id,
                 cache_key=cache_key,
                 api_base=api_base,
@@ -4949,6 +4964,7 @@ async def audio_transcriptions(
 
         fastapi_response.headers.update(
             get_custom_headers(
+                user_api_key_dict=user_api_key_dict,
                 model_id=model_id,
                 cache_key=cache_key,
                 api_base=api_base,
@@ -5132,6 +5148,7 @@ async def moderations(
 
         fastapi_response.headers.update(
             get_custom_headers(
+                user_api_key_dict=user_api_key_dict,
                 model_id=model_id,
                 cache_key=cache_key,
                 api_base=api_base,
@@ -6083,7 +6100,7 @@ async def get_global_activity_model(
 
         sql_query = """
         SELECT
-            model,
+            model_group AS model,
             date_trunc('day', "startTime") AS date,
             COUNT(*) AS api_requests,
             SUM(total_tokens) AS total_tokens
