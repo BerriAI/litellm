@@ -304,6 +304,18 @@ try:
     current_dir = os.path.dirname(os.path.abspath(__file__))
     ui_path = os.path.join(current_dir, "_experimental", "out")
     app.mount("/ui", StaticFiles(directory=ui_path, html=True), name="ui")
+    # Iterate through files in the UI directory
+    for filename in os.listdir(ui_path):
+        if filename.endswith(".html") and filename != "index.html":
+            # Create a folder with the same name as the HTML file
+            folder_name = os.path.splitext(filename)[0]
+            folder_path = os.path.join(ui_path, folder_name)
+            os.makedirs(folder_path, exist_ok=True)
+
+            # Move the HTML file into the folder and rename it to 'index.html'
+            src = os.path.join(ui_path, filename)
+            dst = os.path.join(folder_path, "index.html")
+            os.rename(src, dst)
 except:
     pass
 app.add_middleware(
