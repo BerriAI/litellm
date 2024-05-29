@@ -2258,7 +2258,7 @@ class ProxyConfig:
                     cache_params = {}
                     if "cache_params" in litellm_settings:
                         cache_params_in_config = litellm_settings["cache_params"]
-                        # overwrie cache_params with cache_params_in_config
+                        # overwrite cache_params with cache_params_in_config
                         cache_params.update(cache_params_in_config)
 
                     cache_type = cache_params.get("type", "redis")
@@ -2266,7 +2266,7 @@ class ProxyConfig:
                     verbose_proxy_logger.debug("passed cache type=%s", cache_type)
 
                     if (
-                        cache_type == "redis" or cache_type == "redis-semantic"
+                        cache_type in ["redis", "redis-semantic", "dual-semantic"]
                     ) and len(cache_params.keys()) == 0:
                         cache_host = litellm.get_secret("REDIS_HOST", None)
                         cache_port = litellm.get_secret("REDIS_PORT", None)
@@ -2301,7 +2301,10 @@ class ProxyConfig:
                             f"{blue_color_code}Cache Password:{reset_color_code} {cache_password}"
                         )
                         print()  # noqa
-                    if cache_type == "redis-semantic":
+                    if (
+                        cache_type == "redis-semantic"
+                        or cache_type == "dual-semantic"
+                    ):
                         # by default this should always be async
                         cache_params.update({"redis_semantic_cache_use_async": True})
 
@@ -2316,7 +2319,7 @@ class ProxyConfig:
                         print(  # noqa
                             f"{blue_color_code}Set Cache on LiteLLM Proxy: {vars(litellm.cache.cache)}{reset_color_code}"
                         )
-                elif key == "cache" and value == False:
+                elif key == "cache" and not value:
                     pass
                 elif key == "callbacks":
                     if isinstance(value, list):
@@ -12823,11 +12826,13 @@ async def health_readiness():
         # check Cache
         cache_type = None
         if litellm.cache is not None:
-            from litellm.caching import RedisSemanticCache
+            from litellm.caching import RedisSemanticCache, DualSemanticCache
 
             cache_type = litellm.cache.type
 
-            if isinstance(litellm.cache.cache, RedisSemanticCache):
+            if isinstance(litellm.cache.cache, RedisSemanticCache) or isinstance(
+                litellm.cache.cache, DualSemanticCache
+            ):
                 # ping the cache
                 # TODO: @ishaan-jaff - we should probably not ping the cache on every /health/readiness check
                 try:

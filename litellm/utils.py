@@ -89,7 +89,7 @@ from .integrations.litedebugger import LiteDebugger
 from .proxy._types import KeyManagementSystem
 from openai import OpenAIError as OriginalError
 from openai._models import BaseModel as OpenAIObject
-from .caching import S3Cache, RedisSemanticCache, RedisCache
+from .caching import S3Cache, RedisSemanticCache, RedisCache, DualSemanticCache
 from .exceptions import (
     AuthenticationError,
     BadRequestError,
@@ -3509,9 +3509,11 @@ def client(original_function):
                         ):
                             if len(cached_result) == 1 and cached_result[0] is None:
                                 cached_result = None
-                    elif isinstance(
-                        litellm.cache.cache, RedisSemanticCache
-                    ) or isinstance(litellm.cache.cache, RedisCache):
+                    elif (
+                        isinstance(litellm.cache.cache, RedisSemanticCache)
+                        or isinstance(litellm.cache.cache, RedisCache)
+                        or isinstance(litellm.cache.cache, DualSemanticCache)
+                    ):
                         preset_cache_key = litellm.cache.get_cache_key(*args, **kwargs)
                         kwargs["preset_cache_key"] = (
                             preset_cache_key  # for streaming calls, we need to pass the preset_cache_key
