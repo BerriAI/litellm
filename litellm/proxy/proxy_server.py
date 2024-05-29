@@ -423,6 +423,7 @@ def get_custom_headers(
     api_base: Optional[str] = None,
     version: Optional[str] = None,
     model_region: Optional[str] = None,
+    fastest_response_batch_completion: Optional[bool] = None,
 ) -> dict:
     exclude_values = {"", None}
     headers = {
@@ -433,6 +434,11 @@ def get_custom_headers(
         "x-litellm-model-region": model_region,
         "x-litellm-key-tpm-limit": str(user_api_key_dict.tpm_limit),
         "x-litellm-key-rpm-limit": str(user_api_key_dict.rpm_limit),
+        "x-litellm-fastest_response_batch_completion": (
+            str(fastest_response_batch_completion)
+            if fastest_response_batch_completion is not None
+            else None
+        ),
     }
     try:
         return {
@@ -4043,9 +4049,15 @@ async def chat_completion(
         if "api_key" in data:
             tasks.append(litellm.acompletion(**data))
         elif "," in data["model"] and llm_router is not None:
-            _models_csv_string = data.pop("model")
-            _models = _models_csv_string.split(",")
-            tasks.append(llm_router.abatch_completion(models=_models, **data))
+            if (
+                data.get("fastest_response", None) is not None
+                and data["fastest_response"] == True
+            ):
+                tasks.append(llm_router.abatch_completion_fastest_response(**data))
+            else:
+                _models_csv_string = data.pop("model")
+                _models = [model.strip() for model in _models_csv_string.split(",")]
+                tasks.append(llm_router.abatch_completion(models=_models, **data))
         elif "user_config" in data:
             # initialize a new router instance. make request using this Router
             router_config = data.pop("user_config")
@@ -4095,6 +4107,9 @@ async def chat_completion(
         model_id = hidden_params.get("model_id", None) or ""
         cache_key = hidden_params.get("cache_key", None) or ""
         api_base = hidden_params.get("api_base", None) or ""
+        fastest_response_batch_completion = hidden_params.get(
+            "fastest_response_batch_completion", None
+        )
 
         # Post Call Processing
         if llm_router is not None:
@@ -4111,6 +4126,7 @@ async def chat_completion(
                 api_base=api_base,
                 version=version,
                 model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
+                fastest_response_batch_completion=fastest_response_batch_completion,
             )
             selected_data_generator = select_data_generator(
                 response=response,
@@ -4131,6 +4147,7 @@ async def chat_completion(
                 api_base=api_base,
                 version=version,
                 model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
+                fastest_response_batch_completion=fastest_response_batch_completion,
             )
         )
 
