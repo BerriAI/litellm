@@ -19,8 +19,9 @@ import os, httpx
 load_dotenv()
 
 
+@pytest.mark.parametrize("mode", ["all_responses", "fastest_response"])
 @pytest.mark.asyncio
-async def test_batch_completion_multiple_models():
+async def test_batch_completion_multiple_models(mode):
     litellm.set_verbose = True
 
     router = litellm.Router(
@@ -40,21 +41,34 @@ async def test_batch_completion_multiple_models():
         ]
     )
 
-    response = await router.abatch_completion(
-        models=["gpt-3.5-turbo", "groq-llama"],
-        messages=[
-            {"role": "user", "content": "is litellm becoming a better product ?"}
-        ],
-        max_tokens=15,
-    )
+    if mode == "all_responses":
+        response = await router.abatch_completion(
+            models=["gpt-3.5-turbo", "groq-llama"],
+            messages=[
+                {"role": "user", "content": "is litellm becoming a better product ?"}
+            ],
+            max_tokens=15,
+        )
 
-    print(response)
-    assert len(response) == 2
+        print(response)
+        assert len(response) == 2
 
-    models_in_responses = []
-    for individual_response in response:
-        _model = individual_response["model"]
-        models_in_responses.append(_model)
+        models_in_responses = []
+        for individual_response in response:
+            _model = individual_response["model"]
+            models_in_responses.append(_model)
 
-    # assert both models are different
-    assert models_in_responses[0] != models_in_responses[1]
+        # assert both models are different
+        assert models_in_responses[0] != models_in_responses[1]
+    elif mode == "fastest_response":
+        from openai.types.chat.chat_completion import ChatCompletion
+
+        response = await router.abatch_completion_fastest_response(
+            models=["gpt-3.5-turbo", "groq-llama"],
+            messages=[
+                {"role": "user", "content": "is litellm becoming a better product ?"}
+            ],
+            max_tokens=15,
+        )
+
+        ChatCompletion.model_validate(response.model_dump(), strict=True)
