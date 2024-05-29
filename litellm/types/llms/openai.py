@@ -23,7 +23,7 @@ from openai.types import FileObject, Batch
 
 from typing import TypedDict, List, Optional, Tuple, Mapping, IO
 
-FileContent = Union[IO[bytes], bytes, PathLike[str]]
+FileContent = Union[IO[bytes], bytes, PathLike]
 
 FileTypes = Union[
     # file (or bytes)
