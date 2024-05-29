@@ -1051,6 +1051,7 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     end_user_id: Optional[str] = None
     end_user_tpm_limit: Optional[int] = None
     end_user_rpm_limit: Optional[int] = None
+    end_user_max_budget: Optional[float] = None
 
 
 class UserAPIKeyAuth(
@@ -1178,6 +1179,7 @@ class CallInfo(LiteLLMBase):
     spend: float
     max_budget: Optional[float] = None
     token: str = Field(description="Hashed value of that key")
+    customer_id: Optional[str] = None
     user_id: Optional[str] = None
     team_id: Optional[str] = None
     user_email: Optional[str] = None
@@ -1188,9 +1190,13 @@ class CallInfo(LiteLLMBase):
 
 class WebhookEvent(CallInfo):
     event: Literal[
-        "budget_crossed", "threshold_crossed", "projected_limit_exceeded", "key_created"
+        "budget_crossed",
+        "threshold_crossed",
+        "projected_limit_exceeded",
+        "key_created",
+        "spend_tracked",
     ]
-    event_group: Literal["user", "key", "team", "proxy"]
+    event_group: Literal["internal_user", "key", "team", "proxy", "customer"]
     event_message: str  # human-readable description of event
 
 
