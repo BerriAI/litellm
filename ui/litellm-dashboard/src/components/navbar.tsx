@@ -39,7 +39,9 @@ const Navbar: React.FC<NavbarProps> = ({
 
   // const userColors = require('./ui_colors.json') || {};
   const isLocal = process.env.NODE_ENV === "development";
+  const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
   const imageUrl = isLocal ? "http://localhost:4000/get_image" : "/get_image";
+  const logoutUrl = proxyBaseUrl ? `${proxyBaseUrl}` : `/`;
 
   const items: MenuProps["items"] = [
     {
@@ -52,6 +54,14 @@ const Navbar: React.FC<NavbarProps> = ({
         </>
       ),
     },
+    {
+      key: "2",
+      label: (
+        <Link href={logoutUrl}>
+          <p>Logout</p>
+        </Link>
+      ),
+    }
   ];
 
   return (
