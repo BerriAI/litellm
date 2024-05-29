@@ -8,9 +8,10 @@ LiteLLM supports:
 - In Memory Cache
 - Redis Cache 
 - Redis Semantic Cache
+- Dual Semantic Cache
 - s3 Bucket Cache 
 
-## Quick Start - Redis, s3 Cache, Semantic Cache
+## Quick Start - Redis, s3 Cache, Semantic Cache, Dual Semantic Cache
 <Tabs>
 
 <TabItem value="redis" label="redis cache">
@@ -156,6 +157,59 @@ litellm_settings:
     type: "redis-semantic"  
     similarity_threshold: 0.8   # similarity threshold for semantic cache
     redis_semantic_cache_embedding_model: azure-embedding-model # set this to a model_name set in model_list
+```
+
+#### Step 2: Add Redis Credentials to .env
+Set either `REDIS_URL` or the `REDIS_HOST` in your os environment, to enable caching.
+
+  ```shell
+  REDIS_URL = ""        # REDIS_URL='redis://username:password@hostname:port/database'
+  ## OR ## 
+  REDIS_HOST = ""       # REDIS_HOST='redis-18841.c274.us-east-1-3.ec2.cloud.redislabs.com'
+  REDIS_PORT = ""       # REDIS_PORT='18841'
+  REDIS_PASSWORD = ""   # REDIS_PASSWORD='liteLlmIsAmazing'
+  ```
+
+**Additional kwargs**  
+You can pass in any additional redis.Redis arg, by storing the variable + value in your os environment, like this: 
+```shell
+REDIS_<redis-kwarg-name> = ""
+``` 
+
+#### Step 3: Run proxy with config
+```shell
+$ litellm --config /path/to/config.yaml
+```
+</TabItem>
+
+<TabItem value="dual-sem" label="dual semantic cache">
+
+Caching can be enabled by adding the `cache` key in the `config.yaml`
+
+#### Step 1: Add `cache` to the config.yaml
+```yaml
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+  - model_name: azure-embedding-model
+    litellm_params:
+      model: azure/azure-embedding-model
+      api_base: os.environ/AZURE_API_BASE
+      api_key: os.environ/AZURE_API_KEY
+      api_version: "2023-07-01-preview"
+
+litellm_settings:
+  set_verbose: True
+  cache: True          # set cache responses to True, litellm defaults to using a redis cache
+  cache_params:
+    type: "dual-semantic"
+    host: "localhost" # The host address for the Redis cache. Required if type is "dual-semantic".
+    port: "6379" # The port number for the Redis cache. Required if type is "dual-semantic".
+    password: "sk-4321" # The password for the Redis cache. Required if type is "dual-semantic".
+    similarity_threshold: 0.75 # Similarity threshold for semantic cache
+    redis_semantic_cache_embedding_model: local/multi-qa-MiniLM-L6-cos-v1 # A SentenceTransformer model name, prefixed with "local/". Optional.
+    semantic_cache_embedding_length: 384 # Length of the embedding vector produced by the embedding model. Optional.
 ```
 
 #### Step 2: Add Redis Credentials to .env
