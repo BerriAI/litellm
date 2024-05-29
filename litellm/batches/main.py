@@ -87,7 +87,7 @@ def create_file(
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
-) -> Union[FileObject | Coroutine[Any, Any, FileObject]]:
+) -> Union[FileObject, Coroutine[Any, Any, FileObject]]:
     """
     Files are used to upload documents that can be used with features like Assistants, Fine-tuning, and Batch API.
 
