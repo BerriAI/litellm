@@ -799,6 +799,101 @@ class Router:
         response = await asyncio.gather(*_tasks)
         return response
 
+    # fmt: off
+
+    @overload
+    async def abatch_completion_fastest_response(
+        self, model: str, messages: List[Dict[str, str]], stream: Literal[True], **kwargs
+    ) -> CustomStreamWrapper:
+        ...
+
+
+
+    @overload
+    async def abatch_completion_fastest_response(
+        self, model: str, messages: List[Dict[str, str]], stream: Literal[False] = False, **kwargs
+    ) -> ModelResponse:
+        ...
+
+    # fmt: on
+
+    async def abatch_completion_fastest_response(
+        self,
+        model: str,
+        messages: List[Dict[str, str]],
+        stream: bool = False,
+        **kwargs,
+    ):
+        """
+        model - List of comma-separated model names. E.g. model="gpt-4, gpt-3.5-turbo"
+
+        Returns fastest response from list of model names. OpenAI-compatible endpoint.
+        """
+        models = [m.strip() for m in model.split(",")]
+
+        async def _async_completion_no_exceptions(
+            model: str, messages: List[Dict[str, str]], stream: bool, **kwargs: Any
+        ) -> Union[ModelResponse, CustomStreamWrapper, Exception]:
+            """
+            Wrapper around self.acompletion that catches exceptions and returns them as a result
+            """
+            try:
+                return await self.acompletion(model=model, messages=messages, stream=stream, **kwargs)  # type: ignore
+            except asyncio.CancelledError:
+                verbose_router_logger.debug(
+                    "Received 'task.cancel'. Cancelling call w/ model={}.".format(model)
+                )
+                raise
+            except Exception as e:
+                return e
+
+        pending_tasks = []  # type: ignore
+
+        async def check_response(task: asyncio.Task):
+            nonlocal pending_tasks
+            try:
+                result = await task
+                if isinstance(result, (ModelResponse, CustomStreamWrapper)):
+                    verbose_router_logger.debug(
+                        "Received successful response. Cancelling other LLM API calls."
+                    )
+                    # If a desired response is received, cancel all other pending tasks
+                    for t in pending_tasks:
+                        t.cancel()
+                    return result
+            except Exception:
+                # Ignore exceptions, let the loop handle them
+                pass
+            finally:
+                # Remove the task from pending tasks if it finishes
+                try:
+                    pending_tasks.remove(task)
+                except KeyError:
+                    pass
+
+        for model in models:
+            task = asyncio.create_task(
+                _async_completion_no_exceptions(
+                    model=model, messages=messages, stream=stream, **kwargs
+                )
+            )
+            pending_tasks.append(task)
+
+        # Await the first task to complete successfully
+        while pending_tasks:
+            done, pending_tasks = await asyncio.wait(  # type: ignore
+                pending_tasks, return_when=asyncio.FIRST_COMPLETED
+            )
+            for completed_task in done:
+                result = await check_response(completed_task)
+                if result is not None:
+                    # Return the first successful result
+                    result._hidden_params["fastest_response_batch_completion"] = True
+                    return result
+
+        # If we exit the loop without returning, all tasks failed
+        raise Exception("All tasks failed")
+
     def image_generation(self, prompt: str, model: str, **kwargs):
         try:
             kwargs["model"] = model
@@ -3608,7 +3703,6 @@ class Router:
         ## get healthy deployments
         ### get all deployments
         healthy_deployments = [m for m in self.model_list if m["model_name"] == model]
-
         if len(healthy_deployments) == 0:
             # check if the user sent in a deployment name instead
             healthy_deployments = [
