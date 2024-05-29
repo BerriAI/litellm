@@ -34,6 +34,15 @@ const EditUserModal: React.FC<EditUserModalProps> = ({ visible, onCancel, user, 
     setEditedUser({ ...editedUser, [e.target.name]: e.target.value });
   };
 
+  const handleEditSubmit = async (formValues: Record<string, any>) => {
+    // Call API to update team with teamId and values
+
+    console.log("handleEditSubmit:", formValues);
+    onSubmit(formValues);
+    onCancel();
+  };
+
+
   const handleSubmit = () => {
     onSubmit(editedUser);
     onCancel();
@@ -45,15 +54,21 @@ const EditUserModal: React.FC<EditUserModalProps> = ({ visible, onCancel, user, 
 
   return (
 
-    <Modal visible={visible} onCancel={onCancel}>
+    <Modal 
+    visible={visible} 
+    onCancel={onCancel} 
+    footer={null}
+    width={1000}
+    title="Edit User"
+    >
 
-        <Text>
+        {/* <Text>
             {JSON.stringify(user)}
         </Text>
-        
+         */}
         <Form
           form={form}
-          onFinish={handleSubmit}
+          onFinish={handleEditSubmit}
           initialValues={user} // Pass initial values here
           labelCol={{ span: 8 }}
           wrapperCol={{ span: 16 }}
@@ -62,7 +77,8 @@ const EditUserModal: React.FC<EditUserModalProps> = ({ visible, onCancel, user, 
           <>
             <Form.Item 
             className="mt-8" 
-            label="user_email" 
+            label="User Email" 
+            tooltip="Email of the User"
             name="user_email">
               <TextInput />
             </Form.Item>
@@ -70,43 +86,38 @@ const EditUserModal: React.FC<EditUserModalProps> = ({ visible, onCancel, user, 
             <Form.Item
               label="user_id"
               name="user_id"
-              tooltip="int (optional) - Tokens limit for this deployment: in tokens per minute (tpm). Find this information on your model/providers website"
+              hidden={true}
             >
               <TextInput />
             </Form.Item>
 
             <Form.Item
-              label="user_role"
+              label="User Role"
               name="user_role"
-              tooltip="int (optional) - Tokens limit for this deployment: in tokens per minute (tpm). Find this information on your model/providers website"
             >
               <TextInput />
             </Form.Item>
 
             <Form.Item
-              label="spend"
+              label="Spend (USD)"
               name="spend"
-              tooltip="int (optional) - Tokens limit for this deployment: in tokens per minute (tpm). Find this information on your model/providers website"
+              tooltip="(float) - Spend of all LLM calls completed by this user"
             >
               <InputNumber min={0} step={1} />
             </Form.Item>
 
             <Form.Item
-              label="max_budget"
+              label="User Budget (USD)"
               name="max_budget"
-              tooltip="int (optional) - Tokens limit for this deployment: in tokens per minute (tpm). Find this information on your model/providers website"
+              tooltip="(float) - Maximum budget of this user"
             >
               <InputNumber min={0} step={1} />
             </Form.Item>
 
-            <Form.Item
-              label="rpm"
-              name="rpm"
-              tooltip="int (optional) - Rate limit for this deployment: in requests per minute (rpm). Find this information on your model/providers website"
-            >
-              <InputNumber min={0} step={1} />
-            </Form.Item>
-        <Button onClick={handleSubmit}>Save</Button>
+            <div style={{ textAlign: "right", marginTop: "10px" }}>
+                <Button2 htmlType="submit">Save</Button2>
+            </div>
+
         </>
 
       </Form>
