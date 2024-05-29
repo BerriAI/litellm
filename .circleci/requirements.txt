@@ -10,4 +10,3 @@ orjson
 pydantic==1.10.14
 google-cloud-aiplatform==1.43.0
 redisvl==0.0.7 # semantic caching
-sentence-transformers==2.7.0 # semantic caching
