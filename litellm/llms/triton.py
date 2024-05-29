@@ -1,7 +1,7 @@
 import os
 import json
 from enum import Enum
-import requests
+import requests # type: ignore
 import time
 from typing import Callable, Optional, List, Sequence, Any, Union, Dict
 from litellm.utils import ModelResponse, Choices, Usage, map_finish_reason, CustomStreamWrapper, Message, EmbeddingResponse
@@ -9,8 +9,8 @@ import litellm
 from .prompt_templates.factory import prompt_factory, custom_prompt
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from .base import BaseLLM
-import httpx
-from typing import Union,Collection
+import httpx # type: ignore
+
 
 
 class TritonError(Exception):
@@ -163,7 +163,7 @@ class TritonChatCompletion(BaseLLM):
             data_for_triton = {
                 "inputs": [{"name": "text_input", "shape": [1], "datatype": "BYTES", "data": [messages[0]["content"]]}] 
             }
-            
+
         if logging_obj:
             logging_obj.pre_call(
                     input=messages,
