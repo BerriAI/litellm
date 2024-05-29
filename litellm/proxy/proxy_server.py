@@ -717,6 +717,10 @@ async def user_api_key_auth(
                             end_user_params["end_user_rpm_limit"] = (
                                 budget_info.rpm_limit
                             )
+                        if budget_info.max_budget is not None:
+                            end_user_params["end_user_max_budget"] = (
+                                budget_info.max_budget
+                            )
             except Exception as e:
                 verbose_proxy_logger.debug(
                     "Unable to find user in db. Error - {}".format(str(e))
@@ -1568,6 +1572,10 @@ async def _PROXY_track_cost_callback(
         user_id = kwargs["litellm_params"]["metadata"].get("user_api_key_user_id", None)
         team_id = kwargs["litellm_params"]["metadata"].get("user_api_key_team_id", None)
         org_id = kwargs["litellm_params"]["metadata"].get("user_api_key_org_id", None)
+        key_alias = kwargs["litellm_params"]["metadata"].get("user_api_key_alias", None)
+        end_user_max_budget = kwargs["litellm_params"]["metadata"].get(
+            "user_api_end_user_max_budget", None
+        )
         if kwargs.get("response_cost", None) is not None:
             response_cost = kwargs["response_cost"]
             user_api_key = kwargs["litellm_params"]["metadata"].get(
@@ -1603,6 +1611,14 @@ async def _PROXY_track_cost_callback(
                     user_id=user_id,
                     end_user_id=end_user_id,
                     response_cost=response_cost,
+                )
+
+                await proxy_logging_obj.slack_alerting_instance.customer_spend_alert(
+                    token=user_api_key,
+                    key_alias=key_alias,
+                    end_user_id=end_user_id,
+                    response_cost=response_cost,
+                    max_budget=end_user_max_budget,
                 )
             else:
                 raise Exception(
@@ -3959,6 +3975,10 @@ async def chat_completion(
         data["metadata"]["user_api_key_alias"] = getattr(
             user_api_key_dict, "key_alias", None
         )
+        data["metadata"]["user_api_end_user_max_budget"] = getattr(
+            user_api_key_dict, "end_user_max_budget", None
+        )
+
         data["metadata"]["global_max_parallel_requests"] = general_settings.get(
             "global_max_parallel_requests", None
         )
@@ -13100,54 +13120,6 @@ async def token_generate():
     token = auth_jwt_sso.create_access_token()
 
     return {"token": token}
-
-
-# @router.post("/update_database", dependencies=[Depends(user_api_key_auth)])
-# async def update_database_endpoint(
-#     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-# ):
-#     """
-#     Test endpoint. DO NOT MERGE IN PROD.
-
-#     Used for isolating and testing our prisma db update logic in high-traffic.
-#     """
-#     try:
-#         request_id = f"chatcmpl-e41836bb-bb8b-4df2-8e70-8f3e160155ac{time.time()}"
-#         resp = litellm.ModelResponse(
-#             id=request_id,
-#             choices=[
-#                 litellm.Choices(
-#                     finish_reason=None,
-#                     index=0,
-#                     message=litellm.Message(
-#                         content=" Sure! Here is a short poem about the sky:\n\nA canvas of blue, a",
-#                         role="assistant",
-#                     ),
-#                 )
-#             ],
-#             model="gpt-35-turbo",  # azure always has model written like this
-#             usage=litellm.Usage(
-#                 prompt_tokens=210, completion_tokens=200, total_tokens=410
-#             ),
-#         )
-#         await _PROXY_track_cost_callback(
-#             kwargs={
-#                 "model": "chatgpt-v-2",
-#                 "stream": False,
-#                 "litellm_params": {
-#                     "metadata": {
-#                         "user_api_key": user_api_key_dict.token,
-#                         "user_api_key_user_id": user_api_key_dict.user_id,
-#                     }
-#                 },
-#                 "response_cost": 0.00002,
-#             },
-#             completion_response=resp,
-#             start_time=datetime.now(),
-#             end_time=datetime.now(),
-#         )
-#     except Exception as e:
-#         raise e
 
 
 def _has_user_setup_sso():
