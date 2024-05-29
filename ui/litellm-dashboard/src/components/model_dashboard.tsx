@@ -1479,7 +1479,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                     )}
                   {selectedProvider != Providers.Bedrock &&
                     selectedProvider != Providers.Vertex_AI &&
-                    dynamicProviderForm === undefined && (
+                    (dynamicProviderForm === undefined ||
+                      dynamicProviderForm.fields.length == 0) && (
                       <Form.Item
                         rules={[{ required: true, message: "Required" }]}
                         label="API Key"
