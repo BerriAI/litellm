@@ -28,8 +28,14 @@ import { userInfoCall } from "./networking";
 import { Badge, BadgeDelta, Button } from "@tremor/react";
 import RequestAccess from "./request_model_access";
 import CreateUser from "./create_user_button";
+import EditUserModal  from "./edit_user";
 import Paragraph from "antd/es/skeleton/Paragraph";
-import InformationCircleIcon from "@heroicons/react/outline/InformationCircleIcon";
+import {
+  PencilAltIcon,
+  InformationCircleIcon,
+  TrashIcon,
+} from "@heroicons/react/outline";
+
 
 interface ViewUserDashboardProps {
   accessToken: string | null;
@@ -55,7 +61,31 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   const [currentPage, setCurrentPage] = useState(0);
   const [openDialogId, setOpenDialogId] = React.useState<null | number>(null);
   const [selectedItem, setSelectedItem] = useState<null | any>(null);
+  const [editModalVisible, setEditModalVisible] = useState(false);
+  const [selectedUser, setSelectedUser] = useState(null);
   const defaultPageSize = 25;
+
+  const handleEditClick = (user) => {
+    console.log("handleEditClick:", user);
+    setSelectedUser(user);
+    setEditModalVisible(true);
+  };
+  
+  const handleEditCancel = () => {
+    setEditModalVisible(false);
+    setSelectedUser(null);
+  };
+  
+  const handleEditSubmit = async (editedUser) => {
+    // Call your API to update the user with editedUser data
+    // ...
+  
+    // Update the userData state with the updated user data
+    const updatedUserData = userData.map((user) =>
+      user.user_id === editedUser.user_id ? editedUser : user
+    );
+    setUserData(updatedUserData);
+  };
 
   useEffect(() => {
     if (!accessToken || !token || !userRole || !userID) {
@@ -146,7 +176,8 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                       <TableHeaderCell>User Models</TableHeaderCell>
                       <TableHeaderCell>User Spend ($ USD)</TableHeaderCell>
                       <TableHeaderCell>User Max Budget ($ USD)</TableHeaderCell>
-                      <TableHeaderCell>User API Key Aliases</TableHeaderCell>
+                      <TableHeaderCell>API Keys</TableHeaderCell>
+                      <TableHeaderCell></TableHeaderCell>
                     </TableRow>
                   </TableHead>
                   <TableBody>
@@ -173,9 +204,13 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                                 (key: any) => key !== null
                               ).length > 0 ? (
                                 <Badge size={"xs"} color={"indigo"}>
-                                  {user.key_aliases
-                                    .filter((key: any) => key !== null)
-                                    .join(", ")}
+                                  {
+                                    user.key_aliases.filter(
+                                      (key: any) => key !== null
+                                    ).length
+                                    
+                                  }
+                                   &nbsp;Keys
                                 </Badge>
                               ) : (
                                 <Badge size={"xs"} color={"gray"}>
@@ -188,12 +223,28 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                               </Badge>
                             )}
                             {/* <Text>{user.key_aliases.filter(key => key !== null).length} Keys</Text> */}
-                            {/* <Icon icon={InformationCircleIcon} onClick= {() => {
+                            </Grid>
+                          </TableCell>
+                        <TableCell>
+
+                        <Icon icon={InformationCircleIcon} onClick= {() => {
                           setOpenDialogId(user.user_id)
                           setSelectedItem(user)
-                        }}>View Keys</Icon> */}
-                          </Grid>
+                        }}>View Keys</Icon>
+                         
+                         
+                         <Icon icon={PencilAltIcon} onClick= {() => {
+                          handleEditClick(user)
+                        }}>View Keys</Icon>
+
+                        <Icon icon={TrashIcon} onClick= {() => {
+                          setOpenDialogId(user.user_id)
+                          setSelectedItem(user)
+                        }}>View Keys</Icon>
+
                         </TableCell>
+                     
+                 
                       </TableRow>
                     ))}
                   </TableBody>
@@ -226,30 +277,15 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
               </TabPanel>
             </TabPanels>
           </TabGroup>
+          <EditUserModal
+          visible={editModalVisible}
+          onCancel={handleEditCancel}
+          user={selectedUser}
+          onSubmit={handleEditSubmit}
+        />
         </Card>
         {renderPagination()}
       </Grid>
-      {/* <Dialog
-  open={openDialogId !== null}
-  onClose={() => {
-    setOpenDialogId(null);
-  }}
-
->
-  <DialogPanel>
-  <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
-    <Title>Key Aliases</Title>
-
-    <Text>
-    {selectedItem && selectedItem.key_aliases
- ? selectedItem.key_aliases.filter(key => key !== null).length > 0
-   ? selectedItem.key_aliases.filter(key => key !== null).join(', ')
-   : 'No Keys'
- : "No Keys"}
-    </Text>
-    </div>
-  </DialogPanel>
-</Dialog> */}
     </div>
   );
 };
