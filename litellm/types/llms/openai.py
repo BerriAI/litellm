@@ -6,7 +6,7 @@ from typing import (
     Literal,
     Iterable,
 )
-from typing_extensions import override, Required
+from typing_extensions import override, Required, Dict
 from pydantic import BaseModel
 
 from openai.types.beta.threads.message_content import MessageContent
@@ -18,8 +18,24 @@ from openai.types.beta.assistant_tool_param import AssistantToolParam
 from openai.types.beta.threads.run import Run
 from openai.types.beta.assistant import Assistant
 from openai.pagination import SyncCursorPage
+from os import PathLike
+from openai.types import FileObject, Batch
+from openai._legacy_response import HttpxBinaryResponseContent
 
-from typing import TypedDict, List, Optional
+from typing import TypedDict, List, Optional, Tuple, Mapping, IO
+
+FileContent = Union[IO[bytes], bytes, PathLike]
+
+FileTypes = Union[
+    # file (or bytes)
+    FileContent,
+    # (filename, file (or bytes))
+    Tuple[Optional[str], FileContent],
+    # (filename, file (or bytes), content_type)
+    Tuple[Optional[str], FileContent, Optional[str]],
+    # (filename, file (or bytes), content_type, headers)
+    Tuple[Optional[str], FileContent, Optional[str], Mapping[str, str]],
+]
 
 
 class NotGiven:
@@ -146,3 +162,96 @@ class Thread(BaseModel):
 
     object: Literal["thread"]
     """The object type, which is always `thread`."""
+
+
+# OpenAI Files Types
+class CreateFileRequest(TypedDict, total=False):
+    """
+    CreateFileRequest
+    Used by Assistants API, Batches API, and Fine-Tunes API
+
+    Required Params:
+        file: FileTypes
+        purpose: Literal['assistants', 'batch', 'fine-tune']
+
+    Optional Params:
+        extra_headers: Optional[Dict[str, str]]
+        extra_body: Optional[Dict[str, str]] = None
+        timeout: Optional[float] = None
+    """
+
+    file: FileTypes
+    purpose: Literal["assistants", "batch", "fine-tune"]
+    extra_headers: Optional[Dict[str, str]]
+    extra_body: Optional[Dict[str, str]]
+    timeout: Optional[float]
+
+
+class FileContentRequest(TypedDict, total=False):
+    """
+    FileContentRequest
+    Used by Assistants API, Batches API, and Fine-Tunes API
+
+    Required Params:
+        file_id: str
+
+    Optional Params:
+        extra_headers: Optional[Dict[str, str]]
+        extra_body: Optional[Dict[str, str]] = None
+        timeout: Optional[float] = None
+    """
+
+    file_id: str
+    extra_headers: Optional[Dict[str, str]]
+    extra_body: Optional[Dict[str, str]]
+    timeout: Optional[float]
+
+
+# OpenAI Batches Types
+class CreateBatchRequest(TypedDict, total=False):
+    """
+    CreateBatchRequest
+    """
+
+    completion_window: Literal["24h"]
+    endpoint: Literal["/v1/chat/completions", "/v1/embeddings", "/v1/completions"]
+    input_file_id: str
+    metadata: Optional[Dict[str, str]]
+    extra_headers: Optional[Dict[str, str]]
+    extra_body: Optional[Dict[str, str]]
+    timeout: Optional[float]
+
+
+class RetrieveBatchRequest(TypedDict, total=False):
+    """
+    RetrieveBatchRequest
+    """
+
+    batch_id: str
+    extra_headers: Optional[Dict[str, str]]
+    extra_body: Optional[Dict[str, str]]
+    timeout: Optional[float]
+
+
+class CancelBatchRequest(TypedDict, total=False):
+    """
+    CancelBatchRequest
+    """
+
+    batch_id: str
+    extra_headers: Optional[Dict[str, str]]
+    extra_body: Optional[Dict[str, str]]
+    timeout: Optional[float]
+
+
+class ListBatchRequest(TypedDict, total=False):
+    """
+    ListBatchRequest - List your organization's batches
+    Calls https://api.openai.com/v1/batches
+    """
+
+    after: Union[str, NotGiven]
+    limit: Union[int, NotGiven]
+    extra_headers: Optional[Dict[str, str]]
+    extra_body: Optional[Dict[str, str]]
+    timeout: Optional[float]
