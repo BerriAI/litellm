@@ -797,3 +797,4 @@ from .budget_manager import BudgetManager
 from .proxy.proxy_cli import run_server
 from .router import Router
 from .assistants.main import *
+from .batches.main import *
