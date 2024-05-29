@@ -3,7 +3,7 @@
 
 import sys, os, asyncio
 import traceback
-import time, pytest
+import time, pytest, uuid
 from pydantic import BaseModel
 from typing import Tuple
 
@@ -241,203 +241,138 @@ def test_completion_azure_stream_content_filter_no_delta():
     """
     try:
         chunks = [
-                {
+            {
                 "id": "chatcmpl-9SQxdH5hODqkWyJopWlaVOOUnFwlj",
                 "choices": [
                     {
-                    "delta": {
-                        "content": "",
-                        "role": "assistant"
-                    },
-                    "finish_reason": None,
-                    "index": 0
+                        "delta": {"content": "", "role": "assistant"},
+                        "finish_reason": None,
+                        "index": 0,
                     }
                 ],
                 "created": 1716563849,
                 "model": "gpt-4o-2024-05-13",
                 "object": "chat.completion.chunk",
-                "system_fingerprint": "fp_5f4bad809a"
-                },
-                {
+                "system_fingerprint": "fp_5f4bad809a",
+            },
+            {
+                "id": "chatcmpl-9SQxdH5hODqkWyJopWlaVOOUnFwlj",
+                "choices": [
+                    {"delta": {"content": "This"}, "finish_reason": None, "index": 0}
+                ],
+                "created": 1716563849,
+                "model": "gpt-4o-2024-05-13",
+                "object": "chat.completion.chunk",
+                "system_fingerprint": "fp_5f4bad809a",
+            },
+            {
+                "id": "chatcmpl-9SQxdH5hODqkWyJopWlaVOOUnFwlj",
+                "choices": [
+                    {"delta": {"content": " is"}, "finish_reason": None, "index": 0}
+                ],
+                "created": 1716563849,
+                "model": "gpt-4o-2024-05-13",
+                "object": "chat.completion.chunk",
+                "system_fingerprint": "fp_5f4bad809a",
+            },
+            {
+                "id": "chatcmpl-9SQxdH5hODqkWyJopWlaVOOUnFwlj",
+                "choices": [
+                    {"delta": {"content": " a"}, "finish_reason": None, "index": 0}
+                ],
+                "created": 1716563849,
+                "model": "gpt-4o-2024-05-13",
+                "object": "chat.completion.chunk",
+                "system_fingerprint": "fp_5f4bad809a",
+            },
+            {
+                "id": "chatcmpl-9SQxdH5hODqkWyJopWlaVOOUnFwlj",
+                "choices": [
+                    {"delta": {"content": " dummy"}, "finish_reason": None, "index": 0}
+                ],
+                "created": 1716563849,
+                "model": "gpt-4o-2024-05-13",
+                "object": "chat.completion.chunk",
+                "system_fingerprint": "fp_5f4bad809a",
+            },
+            {
                 "id": "chatcmpl-9SQxdH5hODqkWyJopWlaVOOUnFwlj",
                 "choices": [
                     {
-                    "delta": {
-                        "content": "This"
-                    },
-                    "finish_reason": None,
-                    "index": 0
+                        "delta": {"content": " response"},
+                        "finish_reason": None,
+                        "index": 0,
                     }
                 ],
                 "created": 1716563849,
                 "model": "gpt-4o-2024-05-13",
                 "object": "chat.completion.chunk",
-                "system_fingerprint": "fp_5f4bad809a"
-                },
-                {
-                "id": "chatcmpl-9SQxdH5hODqkWyJopWlaVOOUnFwlj",
-                "choices": [
-                    {
-                    "delta": {
-                        "content": " is"
-                    },
-                    "finish_reason": None,
-                    "index": 0
-                    }
-                ],
-                "created": 1716563849,
-                "model": "gpt-4o-2024-05-13",
-                "object": "chat.completion.chunk",
-                "system_fingerprint": "fp_5f4bad809a"
-                },
-                {
-                "id": "chatcmpl-9SQxdH5hODqkWyJopWlaVOOUnFwlj",
-                "choices": [
-                    {
-                    "delta": {
-                        "content": " a"
-                    },
-                    "finish_reason": None,
-                    "index": 0
-                    }
-                ],
-                "created": 1716563849,
-                "model": "gpt-4o-2024-05-13",
-                "object": "chat.completion.chunk",
-                "system_fingerprint": "fp_5f4bad809a"
-                },
-                {
-                "id": "chatcmpl-9SQxdH5hODqkWyJopWlaVOOUnFwlj",
-                "choices": [
-                    {
-                    "delta": {
-                        "content": " dummy"
-                    },
-                    "finish_reason": None,
-                    "index": 0
-                    }
-                ],
-                "created": 1716563849,
-                "model": "gpt-4o-2024-05-13",
-                "object": "chat.completion.chunk",
-                "system_fingerprint": "fp_5f4bad809a"
-                },
-                {
-                "id": "chatcmpl-9SQxdH5hODqkWyJopWlaVOOUnFwlj",
-                "choices": [
-                    {
-                    "delta": {
-                        "content": " response"
-                    },
-                    "finish_reason": None,
-                    "index": 0
-                    }
-                ],
-                "created": 1716563849,
-                "model": "gpt-4o-2024-05-13",
-                "object": "chat.completion.chunk",
-                "system_fingerprint": "fp_5f4bad809a"
-                },
-                {
+                "system_fingerprint": "fp_5f4bad809a",
+            },
+            {
                 "id": "",
                 "choices": [
                     {
-                    "finish_reason": None,
-                    "index": 0,
-                    "content_filter_offsets": {
-                        "check_offset": 35159,
-                        "start_offset": 35159,
-                        "end_offset": 36150
-                    },
-                    "content_filter_results": {
-                        "hate": {
-                        "filtered": False,
-                        "severity": "safe"
+                        "finish_reason": None,
+                        "index": 0,
+                        "content_filter_offsets": {
+                            "check_offset": 35159,
+                            "start_offset": 35159,
+                            "end_offset": 36150,
                         },
-                        "self_harm": {
-                        "filtered": False,
-                        "severity": "safe"
+                        "content_filter_results": {
+                            "hate": {"filtered": False, "severity": "safe"},
+                            "self_harm": {"filtered": False, "severity": "safe"},
+                            "sexual": {"filtered": False, "severity": "safe"},
+                            "violence": {"filtered": False, "severity": "safe"},
                         },
-                        "sexual": {
-                        "filtered": False,
-                        "severity": "safe"
-                        },
-                        "violence": {
-                        "filtered": False,
-                        "severity": "safe"
-                        }
-                    }
                     }
                 ],
                 "created": 0,
                 "model": "",
-                "object": ""
-                },
-                {
+                "object": "",
+            },
+            {
                 "id": "chatcmpl-9SQxdH5hODqkWyJopWlaVOOUnFwlj",
                 "choices": [
-                    {
-                    "delta": {
-                        "content": "."
-                    },
-                    "finish_reason": None,
-                    "index": 0
-                    }
+                    {"delta": {"content": "."}, "finish_reason": None, "index": 0}
                 ],
                 "created": 1716563849,
                 "model": "gpt-4o-2024-05-13",
                 "object": "chat.completion.chunk",
-                "system_fingerprint": "fp_5f4bad809a"
-                },
-                {
+                "system_fingerprint": "fp_5f4bad809a",
+            },
+            {
                 "id": "chatcmpl-9SQxdH5hODqkWyJopWlaVOOUnFwlj",
-                "choices": [
-                    {
-                    "delta": {},
-                    "finish_reason": "stop",
-                    "index": 0
-                    }
-                ],
+                "choices": [{"delta": {}, "finish_reason": "stop", "index": 0}],
                 "created": 1716563849,
                 "model": "gpt-4o-2024-05-13",
                 "object": "chat.completion.chunk",
-                "system_fingerprint": "fp_5f4bad809a"
-                },
-                {
+                "system_fingerprint": "fp_5f4bad809a",
+            },
+            {
                 "id": "",
                 "choices": [
                     {
-                    "finish_reason": None,
-                    "index": 0,
-                    "content_filter_offsets": {
-                        "check_offset": 36150,
-                        "start_offset": 36060,
-                        "end_offset": 37029
-                    },
-                    "content_filter_results": {
-                        "hate": {
-                        "filtered": False,
-                        "severity": "safe"
+                        "finish_reason": None,
+                        "index": 0,
+                        "content_filter_offsets": {
+                            "check_offset": 36150,
+                            "start_offset": 36060,
+                            "end_offset": 37029,
                         },
-                        "self_harm": {
-                        "filtered": False,
-                        "severity": "safe"
+                        "content_filter_results": {
+                            "hate": {"filtered": False, "severity": "safe"},
+                            "self_harm": {"filtered": False, "severity": "safe"},
+                            "sexual": {"filtered": False, "severity": "safe"},
+                            "violence": {"filtered": False, "severity": "safe"},
                         },
-                        "sexual": {
-                        "filtered": False,
-                        "severity": "safe"
-                        },
-                        "violence": {
-                        "filtered": False,
-                        "severity": "safe"
-                        }
-                    }
                     }
                 ],
                 "created": 0,
                 "model": "",
-                "object": ""
-                }            
+                "object": "",
+            },
         ]
 
         chunk_list = []
@@ -1449,29 +1384,68 @@ def test_bedrock_claude_3_streaming():
         pytest.fail(f"Error occurred: {e}")
 
 
+@pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
-async def test_claude_3_streaming_finish_reason():
+async def test_claude_3_streaming_finish_reason(sync_mode):
     try:
+        import threading
+
         litellm.set_verbose = True
         messages = [
             {"role": "system", "content": "Be helpful"},
             {"role": "user", "content": "What do you know?"},
         ]
-        response: ModelResponse = await litellm.acompletion(  # type: ignore
-            model="claude-3-opus-20240229",
-            messages=messages,
-            stream=True,
-            max_tokens=10,
-        )
-        complete_response = ""
-        # Add any assertions here to-check the response
-        num_finish_reason = 0
-        async for chunk in response:
-            print(f"chunk: {chunk}")
-            if isinstance(chunk, ModelResponse):
-                if chunk.choices[0].finish_reason is not None:
-                    num_finish_reason += 1
-        assert num_finish_reason == 1
+
+        def sync_test_streaming():
+            response: litellm.CustomStreamWrapper = litellm.acompletion(  # type: ignore
+                model="claude-3-opus-20240229",
+                messages=messages,
+                stream=True,
+                max_tokens=10,
+            )
+            complete_response = ""
+            # Add any assertions here to-check the response
+            num_finish_reason = 0
+            for chunk in response:
+                print(f"chunk: {chunk}")
+                if isinstance(chunk, ModelResponse):
+                    if chunk.choices[0].finish_reason is not None:
+                        num_finish_reason += 1
+            assert num_finish_reason == 1
+
+        async def test_streaming():
+            response: litellm.CustomStreamWrapper = await litellm.acompletion(  # type: ignore
+                model="claude-3-opus-20240229",
+                messages=messages,
+                stream=True,
+                max_tokens=10,
+            )
+            complete_response = ""
+            # Add any assertions here to-check the response
+            num_finish_reason = 0
+            async for chunk in response:
+                print(f"chunk: {chunk}")
+                if isinstance(chunk, ModelResponse):
+                    if chunk.choices[0].finish_reason is not None:
+                        num_finish_reason += 1
+            assert num_finish_reason == 1
+
+        tasks = []
+        for _ in range(2):
+            if sync_mode == False:
+                tasks.append(test_streaming())
+            else:
+                thread = threading.Thread(target=sync_test_streaming)
+                thread.start()
+                tasks.append(thread)
+
+        if sync_mode == False:
+            await asyncio.gather(*tasks)
+        else:
+            # Wait for all threads to complete
+            for thread in tasks:
+                thread.join()
+
     except RateLimitError:
         pass
     except Exception as e:
