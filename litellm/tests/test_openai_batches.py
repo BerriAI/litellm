@@ -89,25 +89,25 @@ async def test_async_create_batch():
         batch_input_file_id is not None
     ), "Failed to create file, expected a non null file_id but got {batch_input_file_id}"
 
-    # create_batch_response = litellm.create_batch(
-    #     completion_window="24h",
-    #     endpoint="/v1/chat/completions",
-    #     input_file_id=batch_input_file_id,
-    #     custom_llm_provider="openai",
-    #     metadata={"key1": "value1", "key2": "value2"},
-    # )
+    create_batch_response = await litellm.acreate_batch(
+        completion_window="24h",
+        endpoint="/v1/chat/completions",
+        input_file_id=batch_input_file_id,
+        custom_llm_provider="openai",
+        metadata={"key1": "value1", "key2": "value2"},
+    )
 
-    # print("response from litellm.create_batch=", create_batch_response)
+    print("response from litellm.create_batch=", create_batch_response)
 
-    # assert (
-    #     create_batch_response.id is not None
-    # ), f"Failed to create batch, expected a non null batch_id but got {create_batch_response.id}"
-    # assert (
-    #     create_batch_response.endpoint == "/v1/chat/completions"
-    # ), f"Failed to create batch, expected endpoint to be /v1/chat/completions but got {create_batch_response.endpoint}"
-    # assert (
-    #     create_batch_response.input_file_id == batch_input_file_id
-    # ), f"Failed to create batch, expected input_file_id to be {batch_input_file_id} but got {create_batch_response.input_file_id}"
+    assert (
+        create_batch_response.id is not None
+    ), f"Failed to create batch, expected a non null batch_id but got {create_batch_response.id}"
+    assert (
+        create_batch_response.endpoint == "/v1/chat/completions"
+    ), f"Failed to create batch, expected endpoint to be /v1/chat/completions but got {create_batch_response.endpoint}"
+    assert (
+        create_batch_response.input_file_id == batch_input_file_id
+    ), f"Failed to create batch, expected input_file_id to be {batch_input_file_id} but got {create_batch_response.input_file_id}"
 
     # time.sleep(30)
 
