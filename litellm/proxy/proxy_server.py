@@ -6595,14 +6595,13 @@ async def get_global_activity_model(
 
         sql_query = """
         SELECT
-            model_group AS model,
+            model_group,
             date_trunc('day', "startTime") AS date,
             COUNT(*) AS api_requests,
             SUM(total_tokens) AS total_tokens
         FROM "LiteLLM_SpendLogs"
         WHERE "startTime" BETWEEN $1::date AND $2::date + interval '1 day'
-        GROUP BY model, date_trunc('day', "startTime")
-
+        GROUP BY model_group, date_trunc('day', "startTime")
         """
         db_response = await prisma_client.db.query_raw(
             sql_query, start_date_obj, end_date_obj
@@ -6615,7 +6614,7 @@ async def get_global_activity_model(
         )  # {"gpt-4": {"daily_data": [], "sum_api_requests": 0, "sum_total_tokens": 0}}
 
         for row in db_response:
-            _model = row["model"]
+            _model = row["model_group"]
             if _model not in model_ui_data:
                 model_ui_data[_model] = {
                     "daily_data": [],
@@ -6655,7 +6654,7 @@ async def get_global_activity_model(
 
     except Exception as e:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"error": str(e)},
         )
 
