@@ -99,6 +99,14 @@ class LiteLLMRoutes(enum.Enum):
         # moderations
         "/moderations",
         "/v1/moderations",
+        # batches
+        "/v1/batches",
+        "/batches",
+        "/v1/batches{batch_id}",
+        "/batches{batch_id}",
+        # files
+        "/v1/files",
+        "/files",
         # models
         "/models",
         "/v1/models",
@@ -1214,6 +1222,7 @@ class InvitationModel(LiteLLMBase):
     created_by: str
     updated_at: datetime
     updated_by: str
+
 
 class ConfigFieldInfo(LiteLLMBase):
     field_name: str
