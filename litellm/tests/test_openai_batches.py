@@ -24,8 +24,12 @@ def test_create_batch():
     2. Create Batch Request
     3. Retrieve the specific batch
     """
+    file_name = "openai_batch_completions.jsonl"
+    _current_dir = os.path.dirname(os.path.abspath(__file__))
+    file_path = os.path.join(_current_dir, file_name)
+
     file_obj = litellm.create_file(
-        file=open("openai_batch_completions.jsonl", "rb"),
+        file=open(file_path, "rb"),
         purpose="batch",
         custom_llm_provider="openai",
     )
@@ -77,8 +81,12 @@ async def test_async_create_batch():
     3. Retrieve the specific batch
     """
     print("Testing async create batch")
+
+    file_name = "openai_batch_completions.jsonl"
+    _current_dir = os.path.dirname(os.path.abspath(__file__))
+    file_path = os.path.join(_current_dir, file_name)
     file_obj = await litellm.acreate_file(
-        file=open("openai_batch_completions.jsonl", "rb"),
+        file=open(file_path, "rb"),
         purpose="batch",
         custom_llm_provider="openai",
     )
