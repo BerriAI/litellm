@@ -804,9 +804,16 @@ class Router:
             pending_tasks.append(task)
 
         responses = await asyncio.gather(*_tasks, return_exceptions=True)
-        if isinstance(responses[0], Exception):
+        if isinstance(responses[0], Exception) or isinstance(
+            responses[0], BaseException
+        ):
             raise responses[0]
-        return responses[0]  # return first value from list
+        _response: Union[ModelResponse, CustomStreamWrapper] = responses[
+            0
+        ]  # return first value from list
+
+        _response._hidden_params["fastest_response_batch_completion"] = True
+        return _response
 
     def image_generation(self, prompt: str, model: str, **kwargs):
         try:
