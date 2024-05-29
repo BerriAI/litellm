@@ -64,7 +64,7 @@ async def test_batch_completion_multiple_models(mode):
         from openai.types.chat.chat_completion import ChatCompletion
 
         response = await router.abatch_completion_fastest_response(
-            models=["gpt-3.5-turbo", "groq-llama"],
+            model="gpt-3.5-turbo, groq-llama",
             messages=[
                 {"role": "user", "content": "is litellm becoming a better product ?"}
             ],
@@ -72,3 +72,45 @@ async def test_batch_completion_multiple_models(mode):
         )
 
         ChatCompletion.model_validate(response.model_dump(), strict=True)
+
+
+@pytest.mark.asyncio
+async def test_batch_completion_fastest_response_unit_test():
+    """
+    Unit test to confirm fastest response will always return the response which arrives earliest.
+
+    2 models -> 1 is cached, the other is a real llm api call => assert cached response always returned
+    """
+    litellm.set_verbose = True
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4",
+                },
+                "model_info": {"id": "1"},
+            },
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "mock_response": "This is a fake response",
+                },
+                "model_info": {"id": "2"},
+            },
+        ]
+    )
+
+    response = await router.abatch_completion_fastest_response(
+        model="gpt-4, gpt-3.5-turbo",
+        messages=[
+            {"role": "user", "content": "is litellm becoming a better product ?"}
+        ],
+        max_tokens=500,
+    )
+
+    assert response._hidden_params["model_id"] == "2"
+    assert response.choices[0].message.content == "This is a fake response"
+    print(f"response: {response}")

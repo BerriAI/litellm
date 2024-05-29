@@ -742,7 +742,7 @@ class Router:
 
     @overload
     async def abatch_completion_fastest_response(
-        self, models: List[str], messages: List[Dict[str, str]], stream: Literal[True], **kwargs
+        self, model: str, messages: List[Dict[str, str]], stream: Literal[True], **kwargs
     ) -> CustomStreamWrapper:
         ...
 
@@ -750,7 +750,7 @@ class Router:
 
     @overload
     async def abatch_completion_fastest_response(
-        self, models: List[str], messages: List[Dict[str, str]], stream: Literal[False] = False, **kwargs
+        self, model: str, messages: List[Dict[str, str]], stream: Literal[False] = False, **kwargs
     ) -> ModelResponse:
         ...
 
@@ -758,39 +758,56 @@ class Router:
 
     async def abatch_completion_fastest_response(
         self,
-        models: List[str],
+        model: str,
         messages: List[Dict[str, str]],
         stream: bool = False,
         **kwargs,
     ):
-        """Send 1 completion call to many models: Return Fastest Response."""
+        """
+        model - List of comma-separated model names. E.g. model="gpt-4, gpt-3.5-turbo"
+
+        Returns fastest response from list of model names. OpenAI-compatible endpoint.
+        """
+        models = [m.strip() for m in model.split(",")]
 
         async def _async_completion_no_exceptions(
-            model: str, messages: List[Dict[str, str]], **kwargs
-        ):
+            model: str, messages: List[Dict[str, str]], **kwargs: Any
+        ) -> Union[ModelResponse, CustomStreamWrapper, Exception]:
             """
-            Wrapper around self.async_completion that catches exceptions and returns them as a result
+            Wrapper around self.acompletion that catches exceptions and returns them as a result
             """
             try:
                 return await self.acompletion(model=model, messages=messages, **kwargs)
+            except asyncio.CancelledError:
+                verbose_router_logger.debug(
+                    "Received 'task.cancel'. Cancelling call w/ model={}.".format(model)
+                )
+                raise
             except Exception as e:
                 return e
 
-        _tasks = []
         pending_tasks = []  # type: ignore
 
-        async def check_response(task):
+        async def check_response(task: asyncio.Task):
             nonlocal pending_tasks
-            result = await task
-            if isinstance(result, (ModelResponse, CustomStreamWrapper)):
-                # If a desired response is received, cancel all other pending tasks
-                for t in pending_tasks:
-                    t.cancel()
-                return result
-            else:
+            try:
+                result = await task
+                if isinstance(result, (ModelResponse, CustomStreamWrapper)):
+                    verbose_router_logger.debug(
+                        "Received successful response. Cancelling other LLM API calls."
+                    )
+                    # If a desired response is received, cancel all other pending tasks
+                    for t in pending_tasks:
+                        t.cancel()
+                    return result
+            except Exception:
+                # Ignore exceptions, let the loop handle them
+                pass
+            finally:
+                # Remove the task from pending tasks if it finishes
                 try:
                     pending_tasks.remove(task)
-                except Exception as e:
+                except KeyError:
                     pass
 
         for model in models:
@@ -799,21 +816,22 @@ class Router:
                     model=model, messages=messages, **kwargs
                 )
             )
-            task.add_done_callback(check_response)
-            _tasks.append(task)
             pending_tasks.append(task)
 
-        responses = await asyncio.gather(*_tasks, return_exceptions=True)
-        if isinstance(responses[0], Exception) or isinstance(
-            responses[0], BaseException
-        ):
-            raise responses[0]
-        _response: Union[ModelResponse, CustomStreamWrapper] = responses[
-            0
-        ]  # return first value from list
+        # Await the first task to complete successfully
+        while pending_tasks:
+            done, pending_tasks = await asyncio.wait(  # type: ignore
+                pending_tasks, return_when=asyncio.FIRST_COMPLETED
+            )
+            for completed_task in done:
+                result = await check_response(completed_task)
+                if result is not None:
+                    # Return the first successful result
+                    result._hidden_params["fastest_response_batch_completion"] = True
+                    return result
 
-        _response._hidden_params["fastest_response_batch_completion"] = True
-        return _response
+        # If we exit the loop without returning, all tasks failed
+        raise Exception("All tasks failed")
 
     def image_generation(self, prompt: str, model: str, **kwargs):
         try:
@@ -3624,7 +3642,6 @@ class Router:
         ## get healthy deployments
         ### get all deployments
         healthy_deployments = [m for m in self.model_list if m["model_name"] == model]
-
         if len(healthy_deployments) == 0:
             # check if the user sent in a deployment name instead
             healthy_deployments = [
