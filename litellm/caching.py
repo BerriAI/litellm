@@ -1598,14 +1598,10 @@ class DualSemanticCache(BaseCache):
         # make the embedding a numpy array, convert to bytes
         embedding_bytes = np.array(embedding, dtype=np.float32).tobytes()
 
-        response = value["response"]["choices"][0]["message"]["content"]
-        r_hash = self._get_hash(response)
-
         if self.in_memory_cache is not None:
             if "ttl" not in kwargs and self.in_memory_default_ttl is not None:
                 kwargs["ttl"] = self.in_memory_default_ttl
 
-            self.in_memory_present_hashes.add(r_hash)
             self.in_memory_cache.set_cache(key, value, **kwargs)
         else:
             print_verbose(
