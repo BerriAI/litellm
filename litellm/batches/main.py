@@ -348,7 +348,7 @@ async def acreate_batch(
 
 def create_batch(
     completion_window: Literal["24h"],
-    endpoint: Literal["/v1/chat/completions", "/v1/embeddings", "/v1/completions"],
+    endpoint: Literal["/v1/chat/completions", "/v1/embeddings"],
     input_file_id: str,
     custom_llm_provider: Literal["openai"] = "openai",
     metadata: Optional[Dict[str, str]] = None,
