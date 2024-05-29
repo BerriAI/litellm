@@ -4039,18 +4039,14 @@ async def chat_completion(
         if "api_key" in data:
             tasks.append(litellm.acompletion(**data))
         elif "," in data["model"] and llm_router is not None:
-            _models_csv_string = data.pop("model")
-            _models = _models_csv_string.split(",")
             if (
                 data.get("fastest_response", None) is not None
                 and data["fastest_response"] == True
             ):
-                tasks.append(
-                    llm_router.abatch_completion_fastest_response(
-                        models=_models, **data
-                    )
-                )
+                tasks.append(llm_router.abatch_completion_fastest_response(**data))
             else:
+                _models_csv_string = data.pop("model")
+                _models = [model.strip() for model in _models_csv_string.split(",")]
                 tasks.append(llm_router.abatch_completion(models=_models, **data))
         elif "user_config" in data:
             # initialize a new router instance. make request using this Router
