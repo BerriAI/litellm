@@ -24,7 +24,7 @@ import {
   Icon,
   TextInput,
 } from "@tremor/react";
-import { userInfoCall } from "./networking";
+import { userInfoCall, userUpdateUserCall } from "./networking";
 import { Badge, BadgeDelta, Button } from "@tremor/react";
 import RequestAccess from "./request_model_access";
 import CreateUser from "./create_user_button";
@@ -65,26 +65,29 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   const [selectedUser, setSelectedUser] = useState(null);
   const defaultPageSize = 25;
 
-  const handleEditClick = (user) => {
-    console.log("handleEditClick:", user);
-    setSelectedUser(user);
-    setEditModalVisible(true);
-  };
-  
   const handleEditCancel = () => {
     setEditModalVisible(false);
     setSelectedUser(null);
   };
   
-  const handleEditSubmit = async (editedUser) => {
-    // Call your API to update the user with editedUser data
-    // ...
-  
-    // Update the userData state with the updated user data
-    const updatedUserData = userData.map((user) =>
-      user.user_id === editedUser.user_id ? editedUser : user
-    );
-    setUserData(updatedUserData);
+  const handleEditSubmit = async (editedUser: any) => {
+    console.log("inside handleEditSubmit:", editedUser);
+
+    if (!accessToken || !token || !userRole || !userID) {
+      return;
+    }
+
+    userUpdateUserCall(accessToken, editedUser, userRole);
+
+    if (userData) {
+      const updatedUserData = userData.map((user) =>
+        user.user_id === editedUser.user_id ? editedUser : user
+      );
+      setUserData(updatedUserData);
+    }
+    setSelectedUser(null);
+    setEditModalVisible(false);
+    // Close the modal
   };
 
   useEffect(() => {
@@ -234,7 +237,8 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                          
                          
                          <Icon icon={PencilAltIcon} onClick= {() => {
-                          handleEditClick(user)
+                          setSelectedUser(user)
+                          setEditModalVisible(true)
                         }}>View Keys</Icon>
 
                         <Icon icon={TrashIcon} onClick= {() => {
