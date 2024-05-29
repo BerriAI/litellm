@@ -14,7 +14,6 @@ from functools import partial
 import dotenv, traceback, random, asyncio, time, contextvars
 from copy import deepcopy
 import httpx
-
 import litellm
 from ._logging import verbose_logger
 from litellm import (  # type: ignore
@@ -680,6 +679,7 @@ def completion(
         "region_name",
         "allowed_model_region",
         "model_config",
+        "fastest_response",
     ]
 
     default_params = openai_params + litellm_params
