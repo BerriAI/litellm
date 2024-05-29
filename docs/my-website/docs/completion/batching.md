@@ -79,7 +79,7 @@ print(result)
 </TabItem>
 <TabItem value="proxy" label="PROXY">
 
-[how to setup proxy config](../proxy/configs.md)
+[how to setup proxy config](#example-setup)
 
 Just pass a comma-separated string of model names and the flag `fastest_response=True`.
 
@@ -92,11 +92,11 @@ curl -X POST 'http://localhost:4000/chat/completions' \
 -H 'Content-Type: application/json' \
 -H 'Authorization: Bearer sk-1234' \ 
 -D '{
-    "model": "gpt-3.5-turbo, bedrock-anthropic-claude-3", # 👈 Comma-separated models
+    "model": "gpt-4o, groq-llama", # 👈 Comma-separated models
     "messages": [
       {
         "role": "user",
-        "content": "What'\''s the weather like in Boston today?"
+        "content": "What's the weather like in Boston today?"
       }
     ],
     "stream": true,
@@ -118,7 +118,7 @@ client = openai.OpenAI(
 
 # request sent to model set on litellm proxy, `litellm --model`
 response = client.chat.completions.create(
-    model="gpt-3.5-turbo, bedrock-anthropic-claude-3", # 👈 Comma-separated models
+    model="gpt-4o, groq-llama", # 👈 Comma-separated models
     messages = [
         {
             "role": "user",
@@ -133,6 +133,29 @@ print(response)
 
 </TabItem>
 </Tabs>
+
+---
+
+### Example Setup: 
+
+```yaml 
+model_list: 
+- model_name: groq-llama
+  litellm_params:
+    model: groq/llama3-8b-8192
+    api_key: os.environ/GROQ_API_KEY
+- model_name: gpt-4o
+  litellm_params:
+    model: gpt-4o
+    api_key: os.environ/OPENAI_API_KEY
+```
+
+```bash
+litellm --config /path/to/config.yaml
+
+# RUNNING on http://0.0.0.0:4000
+```
+
 </TabItem>
 </Tabs>
 
