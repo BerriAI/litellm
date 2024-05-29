@@ -20,6 +20,7 @@ from openai.types.beta.assistant import Assistant
 from openai.pagination import SyncCursorPage
 from os import PathLike
 from openai.types import FileObject, Batch
+from openai._legacy_response import HttpxBinaryResponseContent
 
 from typing import TypedDict, List, Optional, Tuple, Mapping, IO
 
@@ -181,6 +182,26 @@ class CreateFileRequest(TypedDict, total=False):
 
     file: FileTypes
     purpose: Literal["assistants", "batch", "fine-tune"]
+    extra_headers: Optional[Dict[str, str]]
+    extra_body: Optional[Dict[str, str]]
+    timeout: Optional[float]
+
+
+class FileContentRequest(TypedDict, total=False):
+    """
+    FileContentRequest
+    Used by Assistants API, Batches API, and Fine-Tunes API
+
+    Required Params:
+        file_id: str
+
+    Optional Params:
+        extra_headers: Optional[Dict[str, str]]
+        extra_body: Optional[Dict[str, str]] = None
+        timeout: Optional[float] = None
+    """
+
+    file_id: str
     extra_headers: Optional[Dict[str, str]]
     extra_body: Optional[Dict[str, str]]
     timeout: Optional[float]
