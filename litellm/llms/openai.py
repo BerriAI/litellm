@@ -349,7 +349,6 @@ class OpenAIConfig:
             "top_p",
             "tools",
             "tool_choice",
-            "user",
             "function_call",
             "functions",
             "max_retries",
@@ -362,6 +361,12 @@ class OpenAIConfig:
         ):  # gpt-4 does not support 'response_format'
             model_specific_params.append("response_format")
 
+        if (
+            model in litellm.open_ai_chat_completion_models
+        ) or model in litellm.open_ai_text_completion_models:
+            model_specific_params.append(
+                "user"
+            )  # user is not a param supported by all openai-compatible endpoints - e.g. azure ai
         return base_params + model_specific_params
 
     def map_openai_params(
