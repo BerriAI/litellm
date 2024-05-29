@@ -2610,8 +2610,17 @@ class Router:
 
             if "azure" in model_name:
                 if api_base is None or not isinstance(api_base, str):
+                    filtered_litellm_params = {
+                        k: v
+                        for k, v in model["litellm_params"].items()
+                        if k != "api_key"
+                    }
+                    _filtered_model = {
+                        "model_name": model["model_name"],
+                        "litellm_params": filtered_litellm_params,
+                    }
                     raise ValueError(
-                        f"api_base is required for Azure OpenAI. Set it on your config. Model - {model}"
+                        f"api_base is required for Azure OpenAI. Set it on your config. Model - {_filtered_model}"
                     )
                 azure_ad_token = litellm_params.get("azure_ad_token")
                 if azure_ad_token is not None:
