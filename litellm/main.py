@@ -2261,7 +2261,7 @@ def completion(
             )
             model_response = triton_chat_completions.completion(
             api_base=api_base,
-            timeout=timeout,
+            timeout=timeout, # type: ignore
             model=model,
             messages=messages,
             model_response=model_response,
