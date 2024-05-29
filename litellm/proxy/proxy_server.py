@@ -493,7 +493,7 @@ async def user_api_key_auth(
 
         if route in LiteLLMRoutes.public_routes.value:
             # check if public endpoint
-            return UserAPIKeyAuth()
+            return UserAPIKeyAuth(user_role="app_owner")
 
         if general_settings.get("enable_jwt_auth", False) == True:
             is_jwt = jwt_handler.is_jwt(token=api_key)
@@ -1385,7 +1385,9 @@ async def user_api_key_auth(
                     api_key=api_key, user_role="app_owner", **valid_token_dict
                 )
             else:
-                return UserAPIKeyAuth(api_key=api_key, **valid_token_dict)
+                return UserAPIKeyAuth(
+                    api_key=api_key, user_role="app_owner", **valid_token_dict
+                )
         else:
             raise Exception()
     except Exception as e:
@@ -9579,28 +9581,54 @@ async def model_streaming_metrics(
     startTime = startTime or datetime.now() - timedelta(days=7)  # show over past week
     endTime = endTime or datetime.now()
 
-    sql_query = """
-        SELECT
-            api_base,
-            model_group,
-            model,
-            DATE_TRUNC('day', "startTime")::DATE AS day,
-            AVG(EXTRACT(epoch FROM ("completionStartTime" - "startTime")))  AS time_to_first_token
-        FROM
-            "LiteLLM_SpendLogs"
-        WHERE
-            "startTime" BETWEEN $2::timestamp AND $3::timestamp
-            AND "model_group" = $1 AND "cache_hit" != 'True'
-            AND "completionStartTime" IS NOT NULL
-            AND "completionStartTime" != "endTime"
-        GROUP BY
-            api_base,
-            model_group,
-            model,
-            day
-        ORDER BY
-            time_to_first_token DESC;
-    """
+    is_same_day = startTime.date() == endTime.date()
+    if is_same_day:
+        sql_query = """
+            SELECT
+                api_base,
+                model_group,
+                model,
+                "startTime",
+                request_id,
+                EXTRACT(epoch FROM ("completionStartTime" - "startTime")) AS time_to_first_token
+            FROM
+                "LiteLLM_SpendLogs"
+            WHERE
+                "model_group" = $1 AND "cache_hit" != 'True'
+                AND "completionStartTime" IS NOT NULL
+                AND "completionStartTime" != "endTime"
+                AND DATE("startTime") = DATE($2::timestamp)
+            GROUP BY
+                api_base,
+                model_group,
+                model,
+                request_id
+            ORDER BY
+                time_to_first_token DESC;
+        """
+    else:
+        sql_query = """
+            SELECT
+                api_base,
+                model_group,
+                model,
+                DATE_TRUNC('day', "startTime")::DATE AS day,
+                AVG(EXTRACT(epoch FROM ("completionStartTime" - "startTime"))) AS time_to_first_token
+            FROM
+                "LiteLLM_SpendLogs"
+            WHERE
+                "startTime" BETWEEN $2::timestamp AND $3::timestamp
+                AND "model_group" = $1 AND "cache_hit" != 'True'
+                AND "completionStartTime" IS NOT NULL
+                AND "completionStartTime" != "endTime"
+            GROUP BY
+                api_base,
+                model_group,
+                model,
+                day
+            ORDER BY
+                time_to_first_token DESC;
+        """
 
     _all_api_bases = set()
     db_response = await prisma_client.db.query_raw(
@@ -9611,10 +9639,19 @@ async def model_streaming_metrics(
         for model_data in db_response:
             _api_base = model_data["api_base"]
             _model = model_data["model"]
-            _day = model_data["day"]
             time_to_first_token = model_data["time_to_first_token"]
-            if _day not in _daily_entries:
-                _daily_entries[_day] = {}
+            unique_key = ""
+            if is_same_day:
+                _request_id = model_data["request_id"]
+                unique_key = _request_id
+                if _request_id not in _daily_entries:
+                    _daily_entries[_request_id] = {}
+            else:
+                _day = model_data["day"]
+                unique_key = _day
+                time_to_first_token = model_data["time_to_first_token"]
+                if _day not in _daily_entries:
+                    _daily_entries[_day] = {}
             _combined_model_name = str(_model)
             if "https://" in _api_base:
                 _combined_model_name = str(_api_base)
@@ -9622,7 +9659,8 @@ async def model_streaming_metrics(
                 _combined_model_name = _combined_model_name.split("/openai/")[0]
 
             _all_api_bases.add(_combined_model_name)
-            _daily_entries[_day][_combined_model_name] = time_to_first_token
+
+            _daily_entries[unique_key][_combined_model_name] = time_to_first_token
 
         """
         each entry needs to be like this:
