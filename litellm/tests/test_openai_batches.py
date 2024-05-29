@@ -60,8 +60,6 @@ def test_create_batch():
         create_batch_response.input_file_id == batch_input_file_id
     ), f"Failed to create batch, expected input_file_id to be {batch_input_file_id} but got {create_batch_response.input_file_id}"
 
-    time.sleep(30)
-
     retrieved_batch = litellm.retrieve_batch(
         batch_id=create_batch_response.id, custom_llm_provider="openai"
     )
@@ -69,6 +67,17 @@ def test_create_batch():
     # just assert that we retrieved a non None batch
 
     assert retrieved_batch.id == create_batch_response.id
+
+    file_content = litellm.file_content(
+        file_id=batch_input_file_id, custom_llm_provider="openai"
+    )
+
+    result = file_content.content
+
+    result_file_name = "batch_job_results_furniture.jsonl"
+
+    with open(result_file_name, "wb") as file:
+        file.write(result)
 
     pass
 
@@ -126,6 +135,18 @@ async def test_async_create_batch():
     # just assert that we retrieved a non None batch
 
     assert retrieved_batch.id == create_batch_response.id
+
+    # try to get file content for our original file
+
+    file_content = await litellm.afile_content(
+        file_id=batch_input_file_id, custom_llm_provider="openai"
+    )
+
+    print("file content = ", file_content)
+
+    # # write this file content to a file
+    # with open("file_content.json", "w") as f:
+    #     json.dump(file_content, f)
 
 
 def test_retrieve_batch():
