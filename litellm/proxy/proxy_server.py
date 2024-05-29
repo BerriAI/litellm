@@ -8412,6 +8412,7 @@ async def new_end_user(
     "/customer/info",
     tags=["Customer Management"],
     dependencies=[Depends(user_api_key_auth)],
+    response_model=LiteLLM_EndUserTable,
 )
 @router.get(
     "/end_user/info",
@@ -8436,7 +8437,12 @@ async def end_user_info(
         where={"user_id": end_user_id}
     )
 
-    return user_info
+    if user_info is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "End User Id={} does not exist in db".format(end_user_id)},
+        )
+    return user_info.model_dump(exclude_none=True)
 
 
 @router.post(
