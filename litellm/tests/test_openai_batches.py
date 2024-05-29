@@ -109,17 +109,15 @@ async def test_async_create_batch():
         create_batch_response.input_file_id == batch_input_file_id
     ), f"Failed to create batch, expected input_file_id to be {batch_input_file_id} but got {create_batch_response.input_file_id}"
 
-    # time.sleep(30)
+    await asyncio.sleep(1)
 
-    # retrieved_batch = litellm.retrieve_batch(
-    #     batch_id=create_batch_response.id, custom_llm_provider="openai"
-    # )
-    # print("retrieved batch=", retrieved_batch)
-    # # just assert that we retrieved a non None batch
+    retrieved_batch = await litellm.aretrieve_batch(
+        batch_id=create_batch_response.id, custom_llm_provider="openai"
+    )
+    print("retrieved batch=", retrieved_batch)
+    # just assert that we retrieved a non None batch
 
-    # assert retrieved_batch.id == create_batch_response.id
-
-    pass
+    assert retrieved_batch.id == create_batch_response.id
 
 
 def test_retrieve_batch():
