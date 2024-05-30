@@ -24,7 +24,7 @@ import {
   Icon,
   TextInput,
 } from "@tremor/react";
-import { userInfoCall, userUpdateUserCall } from "./networking";
+import { userInfoCall, userUpdateUserCall, getPossibleUserRoles } from "./networking";
 import { Badge, BadgeDelta, Button } from "@tremor/react";
 import RequestAccess from "./request_model_access";
 import CreateUser from "./create_user_button";
@@ -63,6 +63,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   const [selectedItem, setSelectedItem] = useState<null | any>(null);
   const [editModalVisible, setEditModalVisible] = useState(false);
   const [selectedUser, setSelectedUser] = useState(null);
+  const [possibleUIRoles, setPossibleUIRoles] = useState<Record<string, Record<string, string>>>({});
   const defaultPageSize = 25;
 
   const handleEditCancel = async () => {
@@ -107,10 +108,15 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
         );
         console.log("user data response:", userDataResponse);
         setUserData(userDataResponse);
+
+        const availableUserRoles = await getPossibleUserRoles(accessToken);
+        setPossibleUIRoles(availableUserRoles);
+
       } catch (error) {
         console.error("There was an error fetching the model data", error);
       }
     };
+
 
     if (accessToken && token && userRole && userID) {
       fetchData();
@@ -283,6 +289,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
           </TabGroup>
           <EditUserModal
           visible={editModalVisible}
+          possibleUIRoles={possibleUIRoles}
           onCancel={handleEditCancel}
           user={selectedUser}
           onSubmit={handleEditSubmit}
