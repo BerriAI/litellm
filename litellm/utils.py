@@ -1136,6 +1136,8 @@ class CallTypes(Enum):
     amoderation = "amoderation"
     atranscription = "atranscription"
     transcription = "transcription"
+    aspeech = "aspeech"
+    speech = "speech"
 
 
 # Logging function -> log the exact model details + what's being sent | Non-BlockingP
@@ -3005,6 +3007,10 @@ def function_setup(
         ):
             _file_name: BinaryIO = args[1] if len(args) > 1 else kwargs["file"]
             messages = "audio_file"
+        elif (
+            call_type == CallTypes.aspeech.value or call_type == CallTypes.speech.value
+        ):
+            messages = kwargs.get("input", "speech")
         stream = True if "stream" in kwargs and kwargs["stream"] == True else False
         logging_obj = Logging(
             model=model,
@@ -3345,6 +3351,8 @@ def client(original_function):
             elif "aimg_generation" in kwargs and kwargs["aimg_generation"] == True:
                 return result
             elif "atranscription" in kwargs and kwargs["atranscription"] == True:
+                return result
+            elif "aspeech" in kwargs and kwargs["aspeech"] == True:
                 return result
 
             ### POST-CALL RULES ###
