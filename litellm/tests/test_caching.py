@@ -1571,7 +1571,6 @@ async def test_redis_semantic_cache_acompletion():
     assert response1.id == response2.id
 
 
-@pytest.mark.skip(reason="beta test - new dual semantic cache")
 def test_dual_semantic_cache_completion():
     litellm.set_verbose = True
     import logging
@@ -1620,7 +1619,6 @@ def test_dual_semantic_cache_completion():
     assert response1.id == response2.id
 
 
-@pytest.mark.skip(reason="beta test - new dual semantic cache")
 @pytest.mark.asyncio
 async def test_dual_semantic_cache_acompletion():
     litellm.set_verbose = True
