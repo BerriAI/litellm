@@ -6,7 +6,13 @@ warnings.filterwarnings("ignore", message=".*conflict with protected namespace.*
 import threading, requests, os
 from typing import Callable, List, Optional, Dict, Union, Any, Literal
 from litellm.caching import Cache
-from litellm._logging import set_verbose, _turn_on_debug, verbose_logger, json_logs
+from litellm._logging import (
+    set_verbose,
+    _turn_on_debug,
+    verbose_logger,
+    json_logs,
+    _turn_on_json,
+)
 from litellm.proxy._types import (
     KeyManagementSystem,
     KeyManagementSettings,

@@ -684,14 +684,16 @@ class SlackAlerting(CustomLogger):
         event: Optional[
             Literal["budget_crossed", "threshold_crossed", "projected_limit_exceeded"]
         ] = None
-        event_group: Optional[Literal["user", "team", "key", "proxy"]] = None
+        event_group: Optional[
+            Literal["internal_user", "team", "key", "proxy", "customer"]
+        ] = None
         event_message: str = ""
         webhook_event: Optional[WebhookEvent] = None
         if type == "proxy_budget":
             event_group = "proxy"
             event_message += "Proxy Budget: "
         elif type == "user_budget":
-            event_group = "user"
+            event_group = "internal_user"
             event_message += "User Budget: "
             _id = user_info.user_id or _id
         elif type == "team_budget":
@@ -754,6 +756,36 @@ class SlackAlerting(CustomLogger):
 
             return
         return
+
+    async def customer_spend_alert(
+        self,
+        token: Optional[str],
+        key_alias: Optional[str],
+        end_user_id: Optional[str],
+        response_cost: Optional[float],
+        max_budget: Optional[float],
+    ):
+        if end_user_id is not None and token is not None and response_cost is not None:
+            # log customer spend
+            event = WebhookEvent(
+                spend=response_cost,
+                max_budget=max_budget,
+                token=token,
+                customer_id=end_user_id,
+                user_id=None,
+                team_id=None,
+                user_email=None,
+                key_alias=key_alias,
+                projected_exceeded_date=None,
+                projected_spend=None,
+                event="spend_tracked",
+                event_group="customer",
+                event_message="Customer spend tracked. Customer={}, spend={}".format(
+                    end_user_id, response_cost
+                ),
+            )
+
+            await self.send_webhook_alert(webhook_event=event)
 
     def _count_outage_alerts(self, alerts: List[int]) -> str:
         """
@@ -1411,7 +1443,9 @@ Model Info:
         if response.status_code == 200:
             pass
         else:
-            print("Error sending slack alert. Error=", response.text)  # noqa
+            verbose_proxy_logger.debug(
+                "Error sending slack alert. Error=", response.text
+            )
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         """Log deployment latency"""
@@ -1431,6 +1465,8 @@ Model Info:
                         final_value = float(
                             response_s.total_seconds() / completion_tokens
                         )
+                if isinstance(final_value, timedelta):
+                    final_value = final_value.total_seconds()
 
                 await self.async_update_daily_reports(
                     DeploymentMetrics(

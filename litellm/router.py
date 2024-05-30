@@ -103,7 +103,9 @@ class Router:
         allowed_fails: Optional[
             int
         ] = None,  # Number of times a deployment can failbefore being added to cooldown
-        cooldown_time: float = 1,  # (seconds) time to cooldown a deployment after failure
+        cooldown_time: Optional[
+            float
+        ] = None,  # (seconds) time to cooldown a deployment after failure
         routing_strategy: Literal[
             "simple-shuffle",
             "least-busy",
@@ -248,7 +250,7 @@ class Router:
             )  # initialize an empty list - to allow _add_deployment and delete_deployment to work
 
         self.allowed_fails = allowed_fails or litellm.allowed_fails
-        self.cooldown_time = cooldown_time or 1
+        self.cooldown_time = cooldown_time or 60
         self.failed_calls = (
             InMemoryCache()
         )  # cache to track failed call per deployment, if num failed calls within 1 minute > allowed fails, then add it to cooldown
@@ -1850,7 +1852,8 @@ class Router:
                     )
                     await asyncio.sleep(_timeout)
             try:
-                original_exception.message += f"\nNumber Retries = {current_attempt}"
+                cooldown_deployments = await self._async_get_cooldown_deployments()
+                original_exception.message += f"\nNumber Retries = {current_attempt + 1}, Max Retries={num_retries}\nCooldown Deployments={cooldown_deployments}"
             except:
                 pass
             raise original_exception
@@ -2143,7 +2146,7 @@ class Router:
                     )
                 )
 
-                if _time_to_cooldown < 0:
+                if _time_to_cooldown is None or _time_to_cooldown < 0:
                     # if the response headers did not read it -> set to default cooldown time
                     _time_to_cooldown = self.cooldown_time
 
@@ -2239,6 +2242,9 @@ class Router:
                 elif exception_status == 408:
                     return True
 
+                elif exception_status == 404:
+                    return True
+
                 else:
                     # Do NOT cool down all other 4XX Errors
                     return False
@@ -2264,6 +2270,7 @@ class Router:
 
         the exception is not one that should be immediately retried (e.g. 401)
         """
+        args = locals()
         if deployment is None:
             return
 
@@ -2296,7 +2303,6 @@ class Router:
                 )
                 exception_status = 500
         _should_retry = litellm._should_retry(status_code=exception_status)
-
         if updated_fails > self.allowed_fails or _should_retry == False:
             # get the current cooldown list for that minute
             cooldown_key = f"{current_minute}:cooldown_models"  # group cooldown models by minute to reduce number of redis calls
@@ -2610,8 +2616,17 @@ class Router:
 
             if "azure" in model_name:
                 if api_base is None or not isinstance(api_base, str):
+                    filtered_litellm_params = {
+                        k: v
+                        for k, v in model["litellm_params"].items()
+                        if k != "api_key"
+                    }
+                    _filtered_model = {
+                        "model_name": model["model_name"],
+                        "litellm_params": filtered_litellm_params,
+                    }
                     raise ValueError(
-                        f"api_base is required for Azure OpenAI. Set it on your config. Model - {model}"
+                        f"api_base is required for Azure OpenAI. Set it on your config. Model - {_filtered_model}"
                     )
                 azure_ad_token = litellm_params.get("azure_ad_token")
                 if azure_ad_token is not None:

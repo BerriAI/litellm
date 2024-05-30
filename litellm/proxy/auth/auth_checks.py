@@ -193,13 +193,27 @@ async def get_end_user_object(
     if end_user_id is None:
         return None
     _key = "end_user_id:{}".format(end_user_id)
+
+    def check_in_budget(end_user_obj: LiteLLM_EndUserTable):
+        if end_user_obj.litellm_budget_table is None:
+            return
+        end_user_budget = end_user_obj.litellm_budget_table.max_budget
+        if end_user_budget is not None and end_user_obj.spend > end_user_budget:
+            raise litellm.BudgetExceededError(
+                current_cost=end_user_obj.spend, max_budget=end_user_budget
+            )
+
     # check if in cache
     cached_user_obj = await user_api_key_cache.async_get_cache(key=_key)
     if cached_user_obj is not None:
         if isinstance(cached_user_obj, dict):
-            return LiteLLM_EndUserTable(**cached_user_obj)
+            return_obj = LiteLLM_EndUserTable(**cached_user_obj)
+            check_in_budget(end_user_obj=return_obj)
+            return return_obj
         elif isinstance(cached_user_obj, LiteLLM_EndUserTable):
-            return cached_user_obj
+            return_obj = cached_user_obj
+            check_in_budget(end_user_obj=return_obj)
+            return return_obj
     # else, check db
     try:
         response = await prisma_client.db.litellm_endusertable.find_unique(
@@ -217,8 +231,12 @@ async def get_end_user_object(
 
         _response = LiteLLM_EndUserTable(**response.dict())
 
+        check_in_budget(end_user_obj=_response)
+
         return _response
     except Exception as e:  # if end-user not in db
+        if isinstance(e, litellm.BudgetExceededError):
+            raise e
         return None
 
 

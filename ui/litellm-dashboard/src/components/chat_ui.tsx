@@ -149,6 +149,12 @@ const ChatUI: React.FC<ChatUIProps> = ({
     });
   };
 
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Enter') {
+      handleSendMessage();
+    }
+  };
+
   const handleSendMessage = async () => {
     if (inputMessage.trim() === "") return;
 
@@ -260,6 +266,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                       type="text"
                       value={inputMessage}
                       onChange={(e) => setInputMessage(e.target.value)}
+                      onKeyDown={handleKeyDown} // Add this line
                       placeholder="Type your message..."
                     />
                     <Button

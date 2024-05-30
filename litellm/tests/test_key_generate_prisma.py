@@ -559,7 +559,7 @@ def test_call_with_end_user_over_budget(prisma_client):
         asyncio.run(test())
     except Exception as e:
         error_detail = e.message
-        assert "Authentication Error, ExceededBudget:" in error_detail
+        assert "Budget has been exceeded! Current" in error_detail
         print(vars(e))
 
 
