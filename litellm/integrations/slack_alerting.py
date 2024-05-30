@@ -1443,7 +1443,9 @@ Model Info:
         if response.status_code == 200:
             pass
         else:
-            print("Error sending slack alert. Error=", response.text)  # noqa
+            verbose_proxy_logger.debug(
+                "Error sending slack alert. Error=", response.text
+            )
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         """Log deployment latency"""
