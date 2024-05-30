@@ -10,9 +10,21 @@ from litellm.types.utils import ProviderField
 
 class LitellmUserRoles(str, enum.Enum):
     """
-    proxy_admin: admin over the platform
-    proxy_admin_viewer: can login, view their own keys, view their spend
-    internal_user: can login, view/create/delete their own keys, view their spend
+    Admin Roles:
+    PROXY_ADMIN: admin over the platform
+    PROXY_ADMIN_VIEW_ONLY: can login, view all own keys, view all spend
+
+    Internal User Roles:
+    INTERNAL_USER: can login, view/create/delete their own keys, view their spend
+    INTERNAL_USER_VIEW_ONLY: can login, view their own keys, view their own spend
+
+
+    Team Roles:
+    TEAM: used for JWT auth
+
+
+    Customer Roles:
+    CUSTOMER: External users -> these are customers
 
     """
 
