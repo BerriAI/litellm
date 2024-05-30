@@ -209,7 +209,7 @@ def test_generate_and_call_with_valid_key(prisma_client, api_route):
             await litellm.proxy.proxy_server.prisma_client.connect()
             from litellm.proxy.proxy_server import user_api_key_cache
 
-            request = NewUserRequest(user_role="app_owner")
+            request = NewUserRequest(user_role=LitellmUserRoles.INTERNAL_USER)
             key = await new_user(request)
             print(key)
             user_id = key.user_id
@@ -218,7 +218,7 @@ def test_generate_and_call_with_valid_key(prisma_client, api_route):
             new_user_info = await user_info(user_id=user_id)
             new_user_info = new_user_info["user_info"]
             print("new_user_info=", new_user_info)
-            assert new_user_info.user_role == "app_owner"
+            assert new_user_info.user_role == LitellmUserRoles.INTERNAL_USER
             assert new_user_info.user_id == user_id
 
             generated_key = key.key
