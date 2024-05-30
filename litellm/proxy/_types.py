@@ -7,6 +7,30 @@ import uuid, json, sys, os
 from litellm.types.router import UpdateRouterConfig
 from litellm.types.utils import ProviderField
 
+
+class LitellmUserRoles(enum.Enum):
+    """
+    proxy_admin: admin over the platform
+    proxy_admin_viewer: can login, view their own keys, view their spend
+    internal_user: can login, view/create/delete their own keys, view their spend
+
+    """
+
+    # Admin Roles
+    PROXY_ADMIN = "proxy_admin"
+    PROXY_ADMIN_VIEW_ONLY = "proxy_admin_view_only"
+
+    # Internal User Roles
+    INTERNAL_USER = "internal_user"
+    INTERNAL_USER_VIEW_ONLY = "internal_user_view_only"
+
+    # Team Roles
+    TEAM = "team"
+
+    # Customer Roles - External users of proxy
+    CUSTOMER = "customer"
+
+
 AlertType = Literal[
     "llm_exceptions",
     "llm_too_slow",
