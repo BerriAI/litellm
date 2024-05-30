@@ -4164,6 +4164,7 @@ def transcription(
     return response
 
 
+@client
 async def aspeech(*args, **kwargs) -> HttpxBinaryResponseContent:
     """
     Calls openai tts endpoints.
@@ -4204,6 +4205,7 @@ async def aspeech(*args, **kwargs) -> HttpxBinaryResponseContent:
         )
 
 
+@client
 def speech(
     model: str,
     input: str,
