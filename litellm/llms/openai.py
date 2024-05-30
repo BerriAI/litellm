@@ -26,6 +26,7 @@ import litellm
 from .prompt_templates.factory import prompt_factory, custom_prompt
 from openai import OpenAI, AsyncOpenAI
 from ..types.llms.openai import *
+import openai
 
 
 class OpenAIError(Exception):
@@ -1179,6 +1180,94 @@ class OpenAIChatCompletion(BaseLLM):
                 original_response=str(e),
             )
             raise e
+
+    def audio_speech(
+        self,
+        model: str,
+        input: str,
+        voice: str,
+        optional_params: dict,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        organization: Optional[str],
+        project: Optional[str],
+        max_retries: int,
+        timeout: Union[float, httpx.Timeout],
+        aspeech: Optional[bool] = None,
+        client=None,
+    ) -> ResponseContextManager[StreamedBinaryAPIResponse]:
+
+        if aspeech is not None and aspeech == True:
+            return self.async_audio_speech(
+                model=model,
+                input=input,
+                voice=voice,
+                optional_params=optional_params,
+                api_key=api_key,
+                api_base=api_base,
+                organization=organization,
+                project=project,
+                max_retries=max_retries,
+                timeout=timeout,
+                client=client,
+            )  # type: ignore
+
+        if client is None:
+            openai_client = OpenAI(
+                api_key=api_key,
+                base_url=api_base,
+                organization=organization,
+                project=project,
+                http_client=litellm.client_session,
+                timeout=timeout,
+                max_retries=max_retries,
+            )
+        else:
+            openai_client = client
+
+        response = openai_client.audio.speech.with_streaming_response.create(
+            model="tts-1",
+            voice="alloy",
+            input="the quick brown fox jumped over the lazy dogs",
+            **optional_params,
+        )
+        return response
+
+    def async_audio_speech(
+        self,
+        model: str,
+        input: str,
+        voice: str,
+        optional_params: dict,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        organization: Optional[str],
+        project: Optional[str],
+        max_retries: int,
+        timeout: Union[float, httpx.Timeout],
+        client=None,
+    ) -> AsyncResponseContextManager[AsyncStreamedBinaryAPIResponse]:
+
+        if client is None:
+            openai_client = AsyncOpenAI(
+                api_key=api_key,
+                base_url=api_base,
+                organization=organization,
+                project=project,
+                http_client=litellm.aclient_session,
+                timeout=timeout,
+                max_retries=max_retries,
+            )
+        else:
+            openai_client = client
+
+        response = openai_client.audio.speech.with_streaming_response.create(
+            model="tts-1",
+            voice="alloy",
+            input="the quick brown fox jumped over the lazy dogs",
+            **optional_params,
+        )
+        return response
 
     async def ahealth_check(
         self,
