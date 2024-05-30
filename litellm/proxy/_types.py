@@ -47,11 +47,14 @@ class LitellmUserRoles(str, enum.Enum):
 
     @property
     def description(self):
+        """
+        Descriptions for the enum values
+        """
         descriptions = {
-            "proxy_admin": "admin over the platform",
-            "proxy_admin_view_only": "can login, view all own keys, view all spend",
-            "internal_user": "internal user can login, view/create/delete their own keys, view their spend",
-            "internal_user_view_only": "internal user can login, view their own keys, view their own spend",
+            "proxy_admin": "admin over litellm proxy, has all permissions",
+            "proxy_admin_view_only": "view all keys, view all spend",
+            "internal_user": "view/create/delete their own keys, view their own spend",
+            "internal_user_view_only": "view their own keys, view their own spend",
             "team": "team scope used for JWT auth",
             "customer": "customer",
         }
@@ -59,6 +62,9 @@ class LitellmUserRoles(str, enum.Enum):
 
     @property
     def ui_label(self):
+        """
+        UI labels for the enum values
+        """
         ui_labels = {
             "proxy_admin": "Admin",
             "proxy_admin_view_only": "Admin - View Only",
