@@ -45,7 +45,6 @@ const EditUserModal: React.FC<EditUserModalProps> = ({ visible, possibleUIRoles,
   const handleEditSubmit = async (formValues: Record<string, any>) => {
     // Call API to update team with teamId and values
     onSubmit(formValues);
-
     form.resetFields();
     onCancel();
   };

@@ -24,6 +24,11 @@ import {
   Icon,
   TextInput,
 } from "@tremor/react";
+
+import {
+  message,
+} from "antd";
+
 import { userInfoCall, userUpdateUserCall, getPossibleUserRoles } from "./networking";
 import { Badge, BadgeDelta, Button } from "@tremor/react";
 import RequestAccess from "./request_model_access";
@@ -77,8 +82,12 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
       return;
     }
 
-    userUpdateUserCall(accessToken, editedUser, null);
-
+    try {
+      await userUpdateUserCall(accessToken, editedUser, null);
+      message.success(`User ${editedUser.user_id} updated successfully`);
+    } catch (error) {
+      console.error("There was an error updating the user", error);
+    }    
     if (userData) {
       const updatedUserData = userData.map((user) =>
         user.user_id === editedUser.user_id ? editedUser : user
