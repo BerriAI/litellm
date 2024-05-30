@@ -5002,13 +5002,39 @@ async def audio_speech(
                 },
             )
 
+        ### ALERTING ###
+        data["litellm_status"] = "success"  # used for alerting
+
+        ### RESPONSE HEADERS ###
+        hidden_params = getattr(response, "_hidden_params", {}) or {}
+        model_id = hidden_params.get("model_id", None) or ""
+        cache_key = hidden_params.get("cache_key", None) or ""
+        api_base = hidden_params.get("api_base", None) or ""
+
         # Printing each chunk size
         async def generate(_response: HttpxBinaryResponseContent):
             _generator = await _response.aiter_bytes(chunk_size=1024)
             async for chunk in _generator:
                 yield chunk
 
-        return StreamingResponse(generate(response), media_type="audio/mpeg")
+        custom_headers = get_custom_headers(
+            user_api_key_dict=user_api_key_dict,
+            model_id=model_id,
+            cache_key=cache_key,
+            api_base=api_base,
+            version=version,
+            model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
+            fastest_response_batch_completion=None,
+        )
+
+        selected_data_generator = select_data_generator(
+            response=response,
+            user_api_key_dict=user_api_key_dict,
+            request_data=data,
+        )
+        return StreamingResponse(
+            generate(response), media_type="audio/mpeg", headers=custom_headers
+        )
 
     except Exception as e:
         traceback.print_exc()
