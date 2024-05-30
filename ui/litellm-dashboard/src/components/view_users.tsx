@@ -198,7 +198,9 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                       <TableRow key={user.user_id}>
                         <TableCell>{user.user_id || "-"}</TableCell>
                         <TableCell>{user.user_email || "-"}</TableCell>
-                        <TableCell>{user.user_role || "-"}</TableCell>
+                        <TableCell>
+                          {possibleUIRoles?.[user?.user_role]?.ui_label || "-"}
+                        </TableCell>
                         <TableCell>
                           {user.spend ? user.spend?.toFixed(2) : "-"}
                         </TableCell>

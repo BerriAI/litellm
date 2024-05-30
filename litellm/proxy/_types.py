@@ -66,10 +66,10 @@ class LitellmUserRoles(str, enum.Enum):
         UI labels for the enum values
         """
         ui_labels = {
-            "proxy_admin": "Admin",
-            "proxy_admin_viewer": "Admin - View Only",
-            "internal_user": "Internal User",
-            "internal_user_viewer": "Internal User -  View Only",
+            "proxy_admin": "Admin (All Permissions)",
+            "proxy_admin_viewer": "Admin (View Only)",
+            "internal_user": "Internal User (Create/Delete/View)",
+            "internal_user_viewer": "Internal User (View Only)",
             "team": "Team",
             "customer": "Customer",
         }
