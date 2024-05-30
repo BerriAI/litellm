@@ -722,6 +722,8 @@ async def user_api_key_auth(
                                 budget_info.max_budget
                             )
             except Exception as e:
+                if isinstance(e, litellm.BudgetExceededError):
+                    raise e
                 verbose_proxy_logger.debug(
                     "Unable to find user in db. Error - {}".format(str(e))
                 )
@@ -1410,6 +1412,10 @@ async def user_api_key_auth(
             raise Exception()
     except Exception as e:
         traceback.print_exc()
+        if isinstance(e, litellm.BudgetExceededError):
+            raise ProxyException(
+                message=e.message, type="auth_error", param=None, code=400
+            )
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"Authentication Error({str(e)})"),
