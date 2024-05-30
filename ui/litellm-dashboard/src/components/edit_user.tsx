@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Dialog,
   DialogPanel,
@@ -7,6 +7,8 @@ import {
   Select,
   SelectItem,
   Text,
+  Title,
+  Subtitle,
 } from '@tremor/react';
 
 import {
@@ -30,23 +32,28 @@ const EditUserModal: React.FC<EditUserModalProps> = ({ visible, onCancel, user, 
   const [editedUser, setEditedUser] = useState(user);
   const [form] = Form.useForm();
 
+  useEffect(() => {
+    form.resetFields();
+  }, [user]);
+
   const handleChange = (e) => {
     setEditedUser({ ...editedUser, [e.target.name]: e.target.value });
   };
 
+  const handleCancel = async () => {
+    form.resetFields();
+    onCancel();
+  };
+
   const handleEditSubmit = async (formValues: Record<string, any>) => {
     // Call API to update team with teamId and values
+    form.resetFields();
 
-    console.log("handleEditSubmit:", formValues);
     onSubmit(formValues);
     onCancel();
   };
 
 
-  const handleSubmit = () => {
-    onSubmit(editedUser);
-    onCancel();
-  };
 
   if (!user) {
     return null;
@@ -56,16 +63,19 @@ const EditUserModal: React.FC<EditUserModalProps> = ({ visible, onCancel, user, 
 
     <Modal 
     visible={visible} 
-    onCancel={onCancel} 
+    onCancel={handleCancel} 
     footer={null}
     width={1000}
-    title="Edit User"
     >
 
         {/* <Text>
             {JSON.stringify(user)}
         </Text>
          */}
+
+         <Subtitle>
+            Edit User {user.user_id}
+         </Subtitle>
         <Form
           form={form}
           onFinish={handleEditSubmit}
