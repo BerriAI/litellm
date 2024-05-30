@@ -10209,7 +10209,7 @@ async def model_metrics(
             model_group,
             model,
             DATE_TRUNC('day', "startTime")::DATE AS day,
-            AVG(EXTRACT(epoch FROM ("endTime" - "startTime"))) / SUM(total_tokens) AS avg_latency_per_token
+            AVG(EXTRACT(epoch FROM ("endTime" - "startTime")) / "completion_tokens") AS avg_latency_per_token
         FROM
             "LiteLLM_SpendLogs"
         WHERE
@@ -10221,7 +10221,7 @@ async def model_metrics(
             model,
             day
         HAVING
-            SUM(total_tokens) > 0
+            SUM(completion_tokens) > 0
         ORDER BY
             avg_latency_per_token DESC;
     """
