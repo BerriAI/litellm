@@ -7791,7 +7791,6 @@ async def user_auth(request: Request):
 
     params = {
         "sender_name": "LiteLLM Proxy",
-        "sender_email": os.getenv("SMTP_SENDER_EMAIL"),
         "receiver_email": user_email,
         "subject": "Your Magic Link",
         "html": f"<strong> Follow this  link, to login:\n\n{base_url}user/?token={response['token']}&user_id={response['user_id']}&page={page_params}</strong>",
@@ -7799,6 +7798,42 @@ async def user_auth(request: Request):
 
     await send_email(**params)
     return "Email sent!"
+
+
+@router.get(
+    "/user/available_roles",
+    tags=["Internal User management"],
+    include_in_schema=False,
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def ui_get_available_role(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Endpoint used by Admin UI to show all available roles to assign a user
+    return {
+        "proxy_admin": {
+            "description": "Proxy Admin role",
+            "ui_label": "Admin"
+        }
+    }
+    """
+
+    _data_to_return = {}
+    for role in LitellmUserRoles:
+
+        # We only show a subset of roles on UI
+        if role in [
+            LitellmUserRoles.PROXY_ADMIN,
+            LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+            LitellmUserRoles.INTERNAL_USER,
+            LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+        ]:
+            _data_to_return[role.value] = {
+                "description": role.description,
+                "ui_label": role.ui_label,
+            }
+    return _data_to_return
 
 
 @router.get(
