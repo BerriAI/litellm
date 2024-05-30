@@ -805,14 +805,24 @@ class RedisSemanticCache(BaseCache):
             cached_response = ast.literal_eval(cached_response)
         return cached_response
 
+    def _get_prompt(self, messages):
+        prompt = ""
+        for message in messages:
+            if "content" in message and isinstance(message["content"], str):
+                prompt += message["content"]
+        
+        return prompt
+
     def set_cache(self, key, value, **kwargs):
         import numpy as np
 
         print_verbose(f"redis semantic-cache set_cache, kwargs: {kwargs}")
 
-        # get the prompt
+        if "messages" not in kwargs:
+            return None
+
         messages = kwargs["messages"]
-        prompt = "".join(message["content"] for message in messages)
+        prompt = self._get_prompt(messages)
 
         # create an embedding for prompt
         embedding_response = litellm.embedding(
@@ -842,11 +852,11 @@ class RedisSemanticCache(BaseCache):
         print_verbose(f"sync redis semantic-cache get_cache, kwargs: {kwargs}")
         from redisvl.query import VectorQuery
 
-        # query
+        if "messages" not in kwargs:
+            return None
 
-        # get the messages
         messages = kwargs["messages"]
-        prompt = "".join(message["content"] for message in messages)
+        prompt = self._get_prompt(messages)
 
         # convert to embedding
         embedding_response = litellm.embedding(
@@ -902,9 +912,12 @@ class RedisSemanticCache(BaseCache):
             print_verbose(f"Got exception creating semantic cache index: {str(e)}")
         print_verbose(f"async redis semantic-cache set_cache, kwargs: {kwargs}")
 
-        # get the prompt
+        if "messages" not in kwargs:
+            return None
+
         messages = kwargs["messages"]
-        prompt = "".join(message["content"] for message in messages)
+        prompt = self._get_prompt(messages)
+
         # create an embedding for prompt
         router_model_names = (
             [m["model_name"] for m in llm_model_list]
@@ -957,11 +970,11 @@ class RedisSemanticCache(BaseCache):
         from redisvl.query import VectorQuery
         from litellm.proxy.proxy_server import llm_router, llm_model_list
 
-        # query
+        if "messages" not in kwargs:
+            return None
 
-        # get the messages
         messages = kwargs["messages"]
-        prompt = "".join(message["content"] for message in messages)
+        prompt = self._get_prompt(messages)
 
         router_model_names = (
             [m["model_name"] for m in llm_model_list]
@@ -1553,13 +1566,24 @@ class DualSemanticCache(BaseCache):
             cached_response = ast.literal_eval(cached_response)
         return cached_response
 
+    def _get_prompt(self, messages):
+        prompt = ""
+        for message in messages:
+            if "content" in message and isinstance(message["content"], str):
+                prompt += message["content"]
+
+        return prompt
+
     def set_cache(self, key, value, **kwargs):
         import numpy as np
 
         print_verbose(f"dual-semantic-cache (sync) set_cache, kwargs: {kwargs}")
 
+        if "messages" not in kwargs:
+            return None
+
         messages = kwargs["messages"]
-        prompt = "".join(message["content"] for message in messages)
+        prompt = self._get_prompt(messages)
 
         embedding_response = litellm.embedding(
             model=self.embedding_model_name,
@@ -1617,8 +1641,11 @@ class DualSemanticCache(BaseCache):
 
         from redisvl.query import VectorQuery
 
+        if "messages" not in kwargs:
+            return None
+
         messages = kwargs["messages"]
-        prompt = "".join(message["content"] for message in messages)
+        prompt = self._get_prompt(messages)
 
         embedding_response = litellm.embedding(
             model=self.embedding_model_name,
@@ -1676,8 +1703,11 @@ class DualSemanticCache(BaseCache):
 
         print_verbose(f"dual-semantic-cache (async) set_cache, kwargs: {kwargs}")
 
+        if "messages" not in kwargs:
+            return None
+
         messages = kwargs["messages"]
-        prompt = "".join(message["content"] for message in messages)
+        prompt = self._get_prompt(messages)
 
         router_model_names = (
             [m["model_name"] for m in llm_model_list]
@@ -1751,8 +1781,11 @@ class DualSemanticCache(BaseCache):
 
         from redisvl.query import VectorQuery
 
+        if "messages" not in kwargs:
+            return None
+
         messages = kwargs["messages"]
-        prompt = "".join(message["content"] for message in messages)
+        prompt = self._get_prompt(messages)
 
         router_model_names = (
             [m["model_name"] for m in llm_model_list]
