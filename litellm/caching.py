@@ -15,7 +15,6 @@ from openai._models import BaseModel as OpenAIObject
 from litellm._logging import verbose_logger
 from litellm.types.services import ServiceLoggerPayload, ServiceTypes
 import traceback
-from sentence_transformers import SentenceTransformer
 
 
 def print_verbose(print_statement):
@@ -1478,14 +1477,6 @@ class DualSemanticCache(BaseCache):
 
         self.similarity_threshold = similarity_threshold
         self.embedding_model_name = embedding_model_name
-
-        if self.embedding_model_name.startswith("local/"):
-            self.embedding_model = SentenceTransformer(
-                self.embedding_model_name.strip("local/")
-            )
-        else:
-            self.embedding_model = None
-
         self.embedding_vector_length = embedding_vector_length
 
         schema = {
@@ -1543,29 +1534,6 @@ class DualSemanticCache(BaseCache):
             self.index = SearchIndex.from_dict(schema)
             self.index.connect(redis_url=redis_url, use_async=True)
 
-    def _get_hash(self, s):
-        import hashlib
-
-        return hashlib.md5(s.encode()).hexdigest()
-
-    def _get_embedding_local(self, text):
-        import numpy as np
-
-        if self.embedding_model is None:
-            raise Exception(
-                "dual-semantic-cache: _get_embedding_local called without embedding_model set"
-            )
-
-        embedding = self.embedding_model.encode([text])
-
-        vector = np.squeeze(embedding)
-        if len(vector) != self.embedding_vector_length:
-            print_verbose(
-                f"dual-semantic-cache embedding length does not match: {len(vector)} vs {self.embedding_vector_length} in config"
-            )
-
-        return vector
-
     def _get_cache_logic(self, cached_response: Any):
         """
         Common 'get_cache_logic' across sync + async redis client implementations
@@ -1593,7 +1561,14 @@ class DualSemanticCache(BaseCache):
         messages = kwargs["messages"]
         prompt = "".join(message["content"] for message in messages)
 
-        embedding = self._get_embedding_local(prompt)
+        embedding_response = litellm.embedding(
+            model=self.embedding_model_name,
+            input=prompt,
+            cache={"no-store": True, "no-cache": True},
+        )
+
+        # get the embedding
+        embedding = embedding_response["data"][0]["embedding"]
 
         # make the embedding a numpy array, convert to bytes
         embedding_bytes = np.array(embedding, dtype=np.float32).tobytes()
@@ -1645,7 +1620,14 @@ class DualSemanticCache(BaseCache):
         messages = kwargs["messages"]
         prompt = "".join(message["content"] for message in messages)
 
-        embedding = self._get_embedding_local(prompt)
+        embedding_response = litellm.embedding(
+            model=self.embedding_model_name,
+            input=prompt,
+            cache={"no-store": True, "no-cache": True},
+        )
+
+        # get the embedding
+        embedding = embedding_response["data"][0]["embedding"]
 
         query = VectorQuery(
             vector=embedding,
@@ -1681,6 +1663,7 @@ class DualSemanticCache(BaseCache):
 
     async def async_set_cache(self, key, value: dict, **kwargs):
         import numpy as np
+        from litellm.proxy.proxy_server import llm_router, llm_model_list
 
         try:
             await self.index.acreate(overwrite=False)
@@ -1696,7 +1679,33 @@ class DualSemanticCache(BaseCache):
         messages = kwargs["messages"]
         prompt = "".join(message["content"] for message in messages)
 
-        embedding = self._get_embedding_local(prompt)
+        router_model_names = (
+            [m["model_name"] for m in llm_model_list]
+            if llm_model_list is not None
+            else []
+        )
+        if llm_router is not None and self.embedding_model_name in router_model_names:
+            user_api_key = kwargs.get("metadata", {}).get("user_api_key", "")
+            embedding_response = await llm_router.aembedding(
+                model=self.embedding_model_name,
+                input=prompt,
+                cache={"no-store": True, "no-cache": True},
+                metadata={
+                    "user_api_key": user_api_key,
+                    "semantic-cache-embedding": True,
+                    "trace_id": kwargs.get("metadata", {}).get("trace_id", None),
+                },
+            )
+        else:
+            # convert to embedding
+            embedding_response = await litellm.aembedding(
+                model=self.embedding_model_name,
+                input=prompt,
+                cache={"no-store": True, "no-cache": True},
+            )
+
+        # get the embedding
+        embedding = embedding_response["data"][0]["embedding"]
         embedding_bytes = np.array(embedding, dtype=np.float32).tobytes()
 
         if self.in_memory_cache is not None:
@@ -1720,6 +1729,8 @@ class DualSemanticCache(BaseCache):
         )
 
     async def async_get_cache(self, key, **kwargs):
+        from litellm.proxy.proxy_server import llm_router, llm_model_list
+
         print_verbose(f"dual-semantic-cache (async) get_cache, kwargs: {kwargs}")
 
         if self.in_memory_cache is not None:
@@ -1743,7 +1754,33 @@ class DualSemanticCache(BaseCache):
         messages = kwargs["messages"]
         prompt = "".join(message["content"] for message in messages)
 
-        embedding = self._get_embedding_local(prompt)
+        router_model_names = (
+            [m["model_name"] for m in llm_model_list]
+            if llm_model_list is not None
+            else []
+        )
+        if llm_router is not None and self.embedding_model_name in router_model_names:
+            user_api_key = kwargs.get("metadata", {}).get("user_api_key", "")
+            embedding_response = await llm_router.aembedding(
+                model=self.embedding_model_name,
+                input=prompt,
+                cache={"no-store": True, "no-cache": True},
+                metadata={
+                    "user_api_key": user_api_key,
+                    "semantic-cache-embedding": True,
+                    "trace_id": kwargs.get("metadata", {}).get("trace_id", None),
+                },
+            )
+        else:
+            # convert to embedding
+            embedding_response = await litellm.aembedding(
+                model=self.embedding_model_name,
+                input=prompt,
+                cache={"no-store": True, "no-cache": True},
+            )
+
+        # get the embedding
+        embedding = embedding_response["data"][0]["embedding"]
 
         query = VectorQuery(
             vector=embedding,

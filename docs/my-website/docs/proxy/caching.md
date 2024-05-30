@@ -208,7 +208,7 @@ litellm_settings:
     port: "6379" # The port number for the Redis cache. Required if type is "dual-semantic".
     password: "sk-4321" # The password for the Redis cache. Required if type is "dual-semantic".
     similarity_threshold: 0.75 # Similarity threshold for semantic cache
-    redis_semantic_cache_embedding_model: local/multi-qa-MiniLM-L6-cos-v1 # A SentenceTransformer model name, prefixed with "local/". Optional.
+    redis_semantic_cache_embedding_model: gpt-3.5-turbo # this model is passed to litellm.embedding(), any litellm.embedding() model is supported here. Optional.
     semantic_cache_embedding_length: 384 # Length of the embedding vector produced by the embedding model. Optional.
 ```
 
