@@ -1390,6 +1390,34 @@ export const userGetAllUsersCall = async (
   }
 };
 
+export const getPossibleUserRoles = async (
+  accessToken: String,
+) => {
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/user/available_roles`
+      : `/user/available_roles`;
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      throw new Error("Network response was not ok");
+    }
+    const data = await response.json();
+    console.log("response from user/available_role", data);
+    return data;
+    // Handle success - you might want to update some state or UI based on the created key
+  } catch (error) {
+    throw error;
+  }
+};
+
 export const teamCreateCall = async (
   accessToken: string,
   formValues: Record<string, any> // Assuming formValues is an object
