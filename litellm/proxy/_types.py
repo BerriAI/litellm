@@ -522,7 +522,16 @@ class LiteLLM_ModelTable(LiteLLMBase):
 class NewUserRequest(GenerateKeyRequest):
     max_budget: Optional[float] = None
     user_email: Optional[str] = None
-    user_role: Optional[str] = None
+    user_role: Optional[
+        Literal[
+            LitellmUserRoles.PROXY_ADMIN,
+            LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+            LitellmUserRoles.INTERNAL_USER,
+            LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+            LitellmUserRoles.TEAM,
+            LitellmUserRoles.CUSTOMER,
+        ]
+    ] = None
     teams: Optional[list] = None
     organization_id: Optional[str] = None
     auto_create_key: bool = (
@@ -541,7 +550,16 @@ class UpdateUserRequest(GenerateRequestBase):
     user_email: Optional[str] = None
     spend: Optional[float] = None
     metadata: Optional[dict] = None
-    user_role: Optional[str] = None
+    user_role: Optional[
+        Literal[
+            LitellmUserRoles.PROXY_ADMIN,
+            LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+            LitellmUserRoles.INTERNAL_USER,
+            LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+            LitellmUserRoles.TEAM,
+            LitellmUserRoles.CUSTOMER,
+        ]
+    ] = None
     max_budget: Optional[float] = None
 
     @root_validator(pre=True)
@@ -1088,12 +1106,12 @@ class UserAPIKeyAuth(
     api_key: Optional[str] = None
     user_role: Optional[
         Literal[
-            "proxy_admin",
-            "proxy_admin_view_only",
-            "internal_user",
-            "internal_user_view_only",
-            "team",
-            "customer",
+            LitellmUserRoles.PROXY_ADMIN,
+            LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+            LitellmUserRoles.INTERNAL_USER,
+            LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+            LitellmUserRoles.TEAM,
+            LitellmUserRoles.CUSTOMER,
         ]
     ] = None
     allowed_model_region: Optional[Literal["eu"]] = None
