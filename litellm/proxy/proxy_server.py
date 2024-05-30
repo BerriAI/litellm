@@ -5222,12 +5222,12 @@ async def create_batch(
 @router.get(
     "/v1/batches{batch_id}",
     dependencies=[Depends(user_api_key_auth)],
-    tags=["Batch"],
+    tags=["batch"],
 )
 @router.get(
     "/batches{batch_id}",
     dependencies=[Depends(user_api_key_auth)],
-    tags=["Batch"],
+    tags=["batch"],
 )
 async def retrieve_batch(
     request: Request,
