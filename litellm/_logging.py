@@ -39,6 +39,16 @@ verbose_proxy_logger.addHandler(handler)
 verbose_logger.addHandler(handler)
 
 
+def _turn_on_json():
+    handler = logging.StreamHandler()
+    handler.setLevel(logging.DEBUG)
+    handler.setFormatter(JsonFormatter())
+
+    verbose_router_logger.addHandler(handler)
+    verbose_proxy_logger.addHandler(handler)
+    verbose_logger.addHandler(handler)
+
+
 def _turn_on_debug():
     verbose_logger.setLevel(level=logging.DEBUG)  # set package log to debug
     verbose_router_logger.setLevel(level=logging.DEBUG)  # set router logs to debug
