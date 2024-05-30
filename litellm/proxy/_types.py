@@ -1086,7 +1086,16 @@ class UserAPIKeyAuth(
     """
 
     api_key: Optional[str] = None
-    user_role: Optional[Literal["proxy_admin", "app_owner", "app_user"]] = None
+    user_role: Optional[
+        Literal[
+            "proxy_admin",
+            "proxy_admin_view_only",
+            "internal_user",
+            "internal_user_view_only",
+            "team",
+            "customer",
+        ]
+    ] = None
     allowed_model_region: Optional[Literal["eu"]] = None
 
     @root_validator(pre=True)
