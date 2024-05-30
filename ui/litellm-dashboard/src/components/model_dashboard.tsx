@@ -1790,7 +1790,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                 index="model"
                 categories={allExceptions}
                 stack={true}
-                colors={["indigo-300", "rose-200", "#ffcc33"]}
                 yAxisWidth={30}
               />
             </Card>
