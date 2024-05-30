@@ -65,17 +65,11 @@ const EditUserModal: React.FC<EditUserModalProps> = ({ visible, onCancel, user, 
     visible={visible} 
     onCancel={handleCancel} 
     footer={null}
+    title={"Edit User " + user.user_id}
     width={1000}
     >
 
-        {/* <Text>
-            {JSON.stringify(user)}
-        </Text>
-         */}
 
-         <Subtitle>
-            Edit User {user.user_id}
-         </Subtitle>
         <Form
           form={form}
           onFinish={handleEditSubmit}
