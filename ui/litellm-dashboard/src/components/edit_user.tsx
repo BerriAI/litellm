@@ -36,10 +36,6 @@ const EditUserModal: React.FC<EditUserModalProps> = ({ visible, onCancel, user, 
     form.resetFields();
   }, [user]);
 
-  const handleChange = (e) => {
-    setEditedUser({ ...editedUser, [e.target.name]: e.target.value });
-  };
-
   const handleCancel = async () => {
     form.resetFields();
     onCancel();
