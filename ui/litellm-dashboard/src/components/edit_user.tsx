@@ -68,8 +68,6 @@ const EditUserModal: React.FC<EditUserModalProps> = ({ visible, onCancel, user, 
     title={"Edit User " + user.user_id}
     width={1000}
     >
-
-
         <Form
           form={form}
           onFinish={handleEditSubmit}
@@ -99,7 +97,11 @@ const EditUserModal: React.FC<EditUserModalProps> = ({ visible, onCancel, user, 
               label="User Role"
               name="user_role"
             >
-              <TextInput />
+            <Select2>
+                <Select2.Option value="proxy_admin">Proxy Admin (Can create, edit, delete keys, teams)</Select2.Option>
+                <Select2.Option value="proxy_admin_viewer">Proxy Viewer (Can just view spend, cannot created keys, teams)</Select2.Option>
+            </Select2>
+
             </Form.Item>
 
             <Form.Item
