@@ -5752,6 +5752,8 @@ def get_optional_params(
             optional_params["stream"] = stream
         if temperature is not None:
             optional_params["temperature"] = temperature
+        if seed is not None:
+            optional_params["seed"] = seed
         if top_p is not None:
             optional_params["top_p"] = top_p
         if frequency_penalty is not None:
@@ -6404,6 +6406,8 @@ def get_supported_openai_params(
             return ["stream", "temperature", "max_tokens"]
         elif model.startswith("mistral"):
             return ["max_tokens", "temperature", "stop", "top_p", "stream"]
+    elif custom_llm_provider == "ollama":
+        return litellm.OllamaConfig().get_supported_openai_params()
     elif custom_llm_provider == "ollama_chat":
         return litellm.OllamaChatConfig().get_supported_openai_params()
     elif custom_llm_provider == "anthropic":
@@ -6573,16 +6577,6 @@ def get_supported_openai_params(
         ]
     elif custom_llm_provider == "cloudflare":
         return ["max_tokens", "stream"]
-    elif custom_llm_provider == "ollama":
-        return [
-            "max_tokens",
-            "stream",
-            "top_p",
-            "temperature",
-            "frequency_penalty",
-            "stop",
-            "response_format",
-        ]
     elif custom_llm_provider == "nlp_cloud":
         return [
             "max_tokens",
