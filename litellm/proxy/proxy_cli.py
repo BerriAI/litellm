@@ -429,6 +429,19 @@ def run_server(
 
             proxy_config = ProxyConfig()
             _config = asyncio.run(proxy_config.get_config(config_file_path=config))
+            ### LITELLM SETTINGS ###
+            litellm_settings = _config.get("litellm_settings", None)
+            if (
+                litellm_settings is not None
+                and "json_logs" in litellm_settings
+                and litellm_settings["json_logs"] == True
+            ):
+                import litellm
+
+                litellm.json_logs = True
+
+                litellm._turn_on_json()
+            ### GENERAL SETTINGS ###
             general_settings = _config.get("general_settings", {})
             if general_settings is None:
                 general_settings = {}
