@@ -23,12 +23,13 @@ import {
 
 interface EditUserModalProps {
   visible: boolean;
+  possibleUIRoles: null | Record<string, Record<string, string>>;
   onCancel: () => void;
   user: any;
   onSubmit: (data: any) => void;
 }
 
-const EditUserModal: React.FC<EditUserModalProps> = ({ visible, onCancel, user, onSubmit }) => {
+const EditUserModal: React.FC<EditUserModalProps> = ({ visible, possibleUIRoles, onCancel, user, onSubmit }) => {
   const [editedUser, setEditedUser] = useState(user);
   const [form] = Form.useForm();
 
@@ -94,9 +95,15 @@ const EditUserModal: React.FC<EditUserModalProps> = ({ visible, onCancel, user, 
               name="user_role"
             >
             <Select2>
-                <Select2.Option value="proxy_admin">Proxy Admin (Can create, edit, delete keys, teams)</Select2.Option>
-                <Select2.Option value="proxy_admin_viewer">Proxy Viewer (Can just view spend, cannot created keys, teams)</Select2.Option>
-            </Select2>
+    {possibleUIRoles &&
+        Object.entries(possibleUIRoles).map(([role, { ui_label, description }]) => (
+            <SelectItem key={role} value={role} title={ui_label}>
+                <div className='flex'>
+                {ui_label} <p className="ml-2" style={{ color: "gray", fontSize: "12px" }}>{description}</p>
+                </div>
+            </SelectItem>
+        ))}
+</Select2>
 
             </Form.Item>
 
