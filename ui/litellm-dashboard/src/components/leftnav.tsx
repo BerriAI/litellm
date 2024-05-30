@@ -91,7 +91,7 @@ const Sidebar: React.FC<SidebarProps> = ({
 
           {userRole == "Admin" ? (
             <Menu.Item key="9" onClick={() => setPage("budgets")}>
-              <Text>Rate Limits</Text>
+              <Text>Budgets</Text>
             </Menu.Item>
           ) : null}
 
