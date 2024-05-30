@@ -42,6 +42,33 @@ class LitellmUserRoles(str, enum.Enum):
     # Customer Roles - External users of proxy
     CUSTOMER = "customer"
 
+    def __str__(self):
+        return str(self.value)
+
+    @property
+    def description(self):
+        descriptions = {
+            "proxy_admin": "admin over the platform",
+            "proxy_admin_view_only": "can login, view all own keys, view all spend",
+            "internal_user": "internal user can login, view/create/delete their own keys, view their spend",
+            "internal_user_view_only": "internal user can login, view their own keys, view their own spend",
+            "team": "team scope used for JWT auth",
+            "customer": "customer",
+        }
+        return descriptions.get(self.value, "")
+
+    @property
+    def ui_label(self):
+        ui_labels = {
+            "proxy_admin": "Admin",
+            "proxy_admin_view_only": "Admin - View Only",
+            "internal_user": "Internal User",
+            "internal_user_view_only": "Internal User -  View Only",
+            "team": "Team",
+            "customer": "Customer",
+        }
+        return ui_labels.get(self.value, "")
+
 
 AlertType = Literal[
     "llm_exceptions",
