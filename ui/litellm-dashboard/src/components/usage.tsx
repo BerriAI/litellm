@@ -162,7 +162,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
   console.log("keys in usage", keys);
   console.log("premium user in usage", premiumUser);
 
-  function valueFormatterNumbers(number) {
+  function valueFormatterNumbers(number: number) {
     const formatter = new Intl.NumberFormat('en-US', {
       maximumFractionDigits: 0,
       notation: 'compact',
