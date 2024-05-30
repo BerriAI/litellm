@@ -14,7 +14,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import pytest, logging, asyncio
 import litellm, asyncio
-from litellm.proxy.proxy_server import add_new_model, update_model
+from litellm.proxy.proxy_server import add_new_model, update_model, LitellmUserRoles
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 
@@ -90,7 +90,9 @@ async def test_add_new_model(prisma_client):
             ),
         ),
         user_api_key_dict=UserAPIKeyAuth(
-            user_role="proxy_admin", api_key="sk-1234", user_id="1234"
+            user_role=LitellmUserRoles.PROXY_ADMIN.value,
+            api_key="sk-1234",
+            user_id="1234",
         ),
     )
 
@@ -137,7 +139,9 @@ async def test_add_update_model(prisma_client):
             ),
         ),
         user_api_key_dict=UserAPIKeyAuth(
-            user_role="proxy_admin", api_key="sk-1234", user_id="1234"
+            user_role=LitellmUserRoles.PROXY_ADMIN.value,
+            api_key="sk-1234",
+            user_id="1234",
         ),
     )
 
@@ -166,7 +170,9 @@ async def test_add_update_model(prisma_client):
             ),
         ),
         user_api_key_dict=UserAPIKeyAuth(
-            user_role="proxy_admin", api_key="sk-1234", user_id="1234"
+            user_role=LitellmUserRoles.PROXY_ADMIN.value,
+            api_key="sk-1234",
+            user_id="1234",
         ),
     )
 

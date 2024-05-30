@@ -61,6 +61,7 @@ from litellm.proxy.proxy_server import (
     audio_transcriptions,
     moderations,
     model_list,
+    LitellmUserRoles,
 )
 from litellm.proxy.utils import PrismaClient, ProxyLogging, hash_token, update_spend
 from litellm._logging import verbose_proxy_logger
@@ -137,7 +138,9 @@ async def test_new_user_response(prisma_client):
                 team_id=_team_id,
             ),
             user_api_key_dict=UserAPIKeyAuth(
-                user_role="proxy_admin", api_key="sk-1234", user_id="1234"
+                user_role=LitellmUserRoles.PROXY_ADMIN.value,
+                api_key="sk-1234",
+                user_id="1234",
             ),
         )
 
@@ -363,7 +366,10 @@ async def test_call_with_valid_model_using_all_models(prisma_client):
         )
 
         new_team_response = await new_team(
-            data=team_request, user_api_key_dict=UserAPIKeyAuth(user_role="proxy_admin")
+            data=team_request,
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN.value
+            ),
         )
         print("new_team_response", new_team_response)
         created_team_id = new_team_response["team_id"]
@@ -922,7 +928,7 @@ def test_delete_key(prisma_client):
             # use generated key to auth in
             result = await user_api_key_auth(request=request, api_key=bearer_token)
             print(f"result: {result}")
-            result.user_role = "proxy_admin"
+            result.user_role = LitellmUserRoles.PROXY_ADMIN.value
             # delete the key
             result_delete_key = await delete_key_fn(
                 data=delete_key_request, user_api_key_dict=result
@@ -972,7 +978,7 @@ def test_delete_key_auth(prisma_client):
             # use generated key to auth in
             result = await user_api_key_auth(request=request, api_key=bearer_token)
             print(f"result: {result}")
-            result.user_role = "proxy_admin"
+            result.user_role = LitellmUserRoles.PROXY_ADMIN.value
 
             result_delete_key = await delete_key_fn(
                 data=delete_key_request, user_api_key_dict=result
@@ -1044,7 +1050,7 @@ def test_generate_and_call_key_info(prisma_client):
             # use generated key to auth in
             result = await user_api_key_auth(request=request, api_key=bearer_token)
             print(f"result: {result}")
-            result.user_role = "proxy_admin"
+            result.user_role = LitellmUserRoles.PROXY_ADMIN.value
 
             result_delete_key = await delete_key_fn(
                 data=delete_key_request, user_api_key_dict=result
@@ -1078,7 +1084,9 @@ def test_generate_and_update_key(prisma_client):
                     team_id=_team_1,
                 ),
                 user_api_key_dict=UserAPIKeyAuth(
-                    user_role="proxy_admin", api_key="sk-1234", user_id="1234"
+                    user_role=LitellmUserRoles.PROXY_ADMIN.value,
+                    api_key="sk-1234",
+                    user_id="1234",
                 ),
             )
 
@@ -1088,7 +1096,9 @@ def test_generate_and_update_key(prisma_client):
                     team_id=_team_2,
                 ),
                 user_api_key_dict=UserAPIKeyAuth(
-                    user_role="proxy_admin", api_key="sk-1234", user_id="1234"
+                    user_role=LitellmUserRoles.PROXY_ADMIN.value,
+                    api_key="sk-1234",
+                    user_id="1234",
                 ),
             )
 
@@ -1158,7 +1168,7 @@ def test_generate_and_update_key(prisma_client):
             # use generated key to auth in
             result = await user_api_key_auth(request=request, api_key=bearer_token)
             print(f"result: {result}")
-            result.user_role = "proxy_admin"
+            result.user_role = LitellmUserRoles.PROXY_ADMIN.value
 
             result_delete_key = await delete_key_fn(
                 data=delete_key_request, user_api_key_dict=result
@@ -2038,7 +2048,9 @@ async def test_master_key_hashing(prisma_client):
         await new_team(
             NewTeamRequest(team_id=_team_id),
             user_api_key_dict=UserAPIKeyAuth(
-                user_role="proxy_admin", api_key="sk-1234", user_id="1234"
+                user_role=LitellmUserRoles.PROXY_ADMIN.value,
+                api_key="sk-1234",
+                user_id="1234",
             ),
         )
 
@@ -2076,7 +2088,7 @@ async def test_reset_spend_authentication(prisma_client):
     """
     1. Test master key can access this route  -> ONLY MASTER KEY SHOULD BE ABLE TO RESET SPEND
     2. Test that non-master key gets rejected
-    3. Test that non-master key with role == "proxy_admin" or admin gets rejected
+    3. Test that non-master key with role == LitellmUserRoles.PROXY_ADMIN.value or admin gets rejected
     """
 
     print("prisma client=", prisma_client)
@@ -2121,10 +2133,10 @@ async def test_reset_spend_authentication(prisma_client):
             in e.message
         )
 
-    # Test 3 - Non-Master Key with role == "proxy_admin" or admin
+    # Test 3 - Non-Master Key with role == LitellmUserRoles.PROXY_ADMIN.value or admin
     _response = await new_user(
         data=NewUserRequest(
-            user_role="proxy_admin",
+            user_role=LitellmUserRoles.PROXY_ADMIN.value,
             tpm_limit=20,
         )
     )
@@ -2174,7 +2186,9 @@ async def test_create_update_team(prisma_client):
             rpm_limit=20,
         ),
         user_api_key_dict=UserAPIKeyAuth(
-            user_role="proxy_admin", api_key="sk-1234", user_id="1234"
+            user_role=LitellmUserRoles.PROXY_ADMIN.value,
+            api_key="sk-1234",
+            user_id="1234",
         ),
     )
 
@@ -2200,7 +2214,9 @@ async def test_create_update_team(prisma_client):
             rpm_limit=30,
         ),
         user_api_key_dict=UserAPIKeyAuth(
-            user_role="proxy_admin", api_key="sk-1234", user_id="1234"
+            user_role=LitellmUserRoles.PROXY_ADMIN.value,
+            api_key="sk-1234",
+            user_id="1234",
         ),
     )
 
