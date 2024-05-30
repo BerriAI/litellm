@@ -1195,7 +1195,7 @@ class OpenAIChatCompletion(BaseLLM):
         timeout: Union[float, httpx.Timeout],
         aspeech: Optional[bool] = None,
         client=None,
-    ) -> ResponseContextManager[StreamedBinaryAPIResponse]:
+    ) -> HttpxBinaryResponseContent:
 
         if aspeech is not None and aspeech == True:
             return self.async_audio_speech(
@@ -1225,15 +1225,15 @@ class OpenAIChatCompletion(BaseLLM):
         else:
             openai_client = client
 
-        response = openai_client.audio.speech.with_streaming_response.create(
-            model="tts-1",
-            voice="alloy",
-            input="the quick brown fox jumped over the lazy dogs",
+        response = openai_client.audio.speech.create(
+            model=model,
+            voice=voice,  # type: ignore
+            input=input,
             **optional_params,
         )
         return response
 
-    def async_audio_speech(
+    async def async_audio_speech(
         self,
         model: str,
         input: str,
@@ -1246,7 +1246,7 @@ class OpenAIChatCompletion(BaseLLM):
         max_retries: int,
         timeout: Union[float, httpx.Timeout],
         client=None,
-    ) -> AsyncResponseContextManager[AsyncStreamedBinaryAPIResponse]:
+    ) -> HttpxBinaryResponseContent:
 
         if client is None:
             openai_client = AsyncOpenAI(
@@ -1261,12 +1261,13 @@ class OpenAIChatCompletion(BaseLLM):
         else:
             openai_client = client
 
-        response = openai_client.audio.speech.with_streaming_response.create(
-            model="tts-1",
-            voice="alloy",
-            input="the quick brown fox jumped over the lazy dogs",
+        response = await openai_client.audio.speech.create(
+            model=model,
+            voice=voice,  # type: ignore
+            input=input,
             **optional_params,
         )
+
         return response
 
     async def ahealth_check(
