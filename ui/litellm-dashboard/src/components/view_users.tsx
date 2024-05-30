@@ -65,9 +65,9 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   const [selectedUser, setSelectedUser] = useState(null);
   const defaultPageSize = 25;
 
-  const handleEditCancel = () => {
-    setEditModalVisible(false);
+  const handleEditCancel = async () => {
     setSelectedUser(null);
+    setEditModalVisible(false);
   };
   
   const handleEditSubmit = async (editedUser: any) => {
