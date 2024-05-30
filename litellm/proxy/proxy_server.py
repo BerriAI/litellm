@@ -507,7 +507,7 @@ async def user_api_key_auth(
 
         if route in LiteLLMRoutes.public_routes.value:
             # check if public endpoint
-            return UserAPIKeyAuth(user_role="app_owner")
+            return UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY)
 
         if general_settings.get("enable_jwt_auth", False) == True:
             is_jwt = jwt_handler.is_jwt(token=api_key)
@@ -524,12 +524,12 @@ async def user_api_key_auth(
                 if is_admin:
                     # check allowed admin routes
                     is_allowed = allowed_routes_check(
-                        user_role="proxy_admin",
+                        user_role=LitellmUserRoles.PROXY_ADMIN,
                         user_route=route,
                         litellm_proxy_roles=jwt_handler.litellm_jwtauth,
                     )
                     if is_allowed:
-                        return UserAPIKeyAuth(user_role="proxy_admin")
+                        return UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
                     else:
                         allowed_routes = (
                             jwt_handler.litellm_jwtauth.admin_allowed_routes
@@ -552,7 +552,7 @@ async def user_api_key_auth(
                 if team_id is not None:
                     # check allowed team routes
                     is_allowed = allowed_routes_check(
-                        user_role="team",
+                        user_role=LitellmUserRoles.TEAM,
                         user_route=route,
                         litellm_proxy_roles=jwt_handler.litellm_jwtauth,
                     )
@@ -664,16 +664,18 @@ async def user_api_key_auth(
                         team_object.rpm_limit if team_object is not None else None
                     ),
                     team_models=team_object.models if team_object is not None else [],
-                    user_role="app_owner",
+                    user_role=LitellmUserRoles.INTERNAL_USER,
                     user_id=user_id,
                     org_id=org_id,
                 )
         #### ELSE ####
         if master_key is None:
             if isinstance(api_key, str):
-                return UserAPIKeyAuth(api_key=api_key, user_role="proxy_admin")
+                return UserAPIKeyAuth(
+                    api_key=api_key, user_role=LitellmUserRoles.PROXY_ADMIN
+                )
             else:
-                return UserAPIKeyAuth(user_role="proxy_admin")
+                return UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
         elif api_key is None:  # only require api key if master key is set
             raise Exception("No api key passed in.")
         elif api_key == "":
@@ -740,7 +742,7 @@ async def user_api_key_auth(
         if (
             valid_token is not None
             and isinstance(valid_token, UserAPIKeyAuth)
-            and valid_token.user_role == "proxy_admin"
+            and valid_token.user_role == LitellmUserRoles.PROXY_ADMIN
         ):
             # update end-user params on valid token
             valid_token.end_user_id = end_user_params.get("end_user_id")
@@ -773,7 +775,7 @@ async def user_api_key_auth(
         if is_master_key_valid:
             _user_api_key_obj = UserAPIKeyAuth(
                 api_key=master_key,
-                user_role="proxy_admin",
+                user_role=LitellmUserRoles.PROXY_ADMIN,
                 user_id=litellm_proxy_admin_name,
                 **end_user_params,
             )
@@ -1377,7 +1379,9 @@ async def user_api_key_auth(
                     user_id_information
                 ):
                     return UserAPIKeyAuth(
-                        api_key=api_key, user_role="proxy_admin", **valid_token_dict
+                        api_key=api_key,
+                        user_role=LitellmUserRoles.PROXY_ADMIN,
+                        **valid_token_dict,
                     )
                 elif (
                     _has_user_setup_sso()
@@ -1398,15 +1402,21 @@ async def user_api_key_auth(
                 user_id_information
             ):
                 return UserAPIKeyAuth(
-                    api_key=api_key, user_role="proxy_admin", **valid_token_dict
+                    api_key=api_key,
+                    user_role=LitellmUserRoles.PROXY_ADMIN,
+                    **valid_token_dict,
                 )
             elif _has_user_setup_sso() and route in LiteLLMRoutes.sso_only_routes.value:
                 return UserAPIKeyAuth(
-                    api_key=api_key, user_role="app_owner", **valid_token_dict
+                    api_key=api_key,
+                    user_role=LitellmUserRoles.INTERNAL_USER,
+                    **valid_token_dict,
                 )
             else:
                 return UserAPIKeyAuth(
-                    api_key=api_key, user_role="app_owner", **valid_token_dict
+                    api_key=api_key,
+                    user_role=LitellmUserRoles.INTERNAL_USER,
+                    **valid_token_dict,
                 )
         else:
             raise Exception()
@@ -3738,11 +3748,9 @@ async def startup_event():
                 spend=0,
                 token=master_key,
                 user_id=litellm_proxy_admin_name,
-                user_role="proxy_admin",
+                user_role=LitellmUserRoles.PROXY_ADMIN,
                 query_type="update_data",
-                update_key_values={
-                    "user_role": "proxy_admin",
-                },
+                update_key_values={"user_role": LitellmUserRoles.PROXY_ADMIN},
             )
         )
 
@@ -6093,7 +6101,7 @@ async def delete_key_fn(
         )
         if (
             user_api_key_dict.user_role is not None
-            and user_api_key_dict.user_role == "proxy_admin"
+            and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
         ):
             user_id = None  # unless they're admin
 
@@ -7689,16 +7697,6 @@ async def new_user(data: NewUserRequest):
     - max_budget: (float|None) Max budget for given user.
     """
     data_json = data.json()  # type: ignore
-    if "user_role" in data_json:
-        user_role = data_json["user_role"]
-        if user_role is not None:
-            if user_role not in ["proxy_admin", "app_owner", "app_user"]:
-                raise ProxyException(
-                    message=f"Invalid user role, passed in {user_role}. Must be one of 'admin', 'app_owner', 'app_user'",
-                    type="invalid_user_role",
-                    param="user_role",
-                    code=status.HTTP_400_BAD_REQUEST,
-                )
     if "user_id" in data_json and data_json["user_id"] is None:
         data_json["user_id"] = str(uuid.uuid4())
     auto_create_key = data_json.pop("auto_create_key", True)
@@ -7888,7 +7886,10 @@ async def user_info(
                 user_id=user_api_key_dict.user_id
             )
             # *NEW* get all teams in user 'teams' field
-            if getattr(caller_user_info, "user_role", None) == "proxy_admin":
+            if (
+                getattr(caller_user_info, "user_role", None)
+                == LitellmUserRoles.PROXY_ADMIN
+            ):
                 teams_2 = await prisma_client.get_data(
                     table_name="team",
                     query_type="find_all",
@@ -8716,7 +8717,7 @@ async def new_team(
 
     if (
         user_api_key_dict.user_role is None
-        or user_api_key_dict.user_role != "proxy_admin"
+        or user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
     ):  # don't restrict proxy admin
         if (
             data.tpm_limit is not None
@@ -9322,7 +9323,7 @@ async def list_team(
     """
     global prisma_client
 
-    if user_api_key_dict.user_role != "proxy_admin":
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
         raise HTTPException(
             status_code=401,
             detail={
@@ -9416,7 +9417,7 @@ async def new_organization(
 
     if (
         user_api_key_dict.user_role is None
-        or user_api_key_dict.user_role != "proxy_admin"
+        or user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
     ):
         raise HTTPException(
             status_code=401,
@@ -9619,7 +9620,7 @@ async def budget_settings(
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    if user_api_key_dict.user_role != "proxy_admin":
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
         raise HTTPException(
             status_code=400,
             detail={
@@ -9684,7 +9685,7 @@ async def list_budget(
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    if user_api_key_dict.user_role != "proxy_admin":
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
         raise HTTPException(
             status_code=400,
             detail={
@@ -9718,7 +9719,7 @@ async def delete_budget(
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    if user_api_key_dict.user_role != "proxy_admin":
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
         raise HTTPException(
             status_code=400,
             detail={
@@ -10696,7 +10697,7 @@ async def alerting_settings(
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    if user_api_key_dict.user_role != "proxy_admin":
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
         raise HTTPException(
             status_code=400,
             detail={
@@ -10777,7 +10778,7 @@ async def alerting_settings(
 #             detail={"error": CommonProxyErrors.db_not_connected_error.value},
 #         )
 
-#     if user_api_key_dict.user_role != "proxy_admin":
+#     if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
 #         raise HTTPException(
 #             status_code=400,
 #             detail={"error": CommonProxyErrors.not_allowed_access.value},
@@ -11235,12 +11236,12 @@ async def login(request: Request):
         await user_update(
             data=UpdateUserRequest(
                 user_id=key_user_id,
-                user_role="proxy_admin",
+                user_role=LitellmUserRoles.PROXY_ADMIN,
             )
         )
         if os.getenv("DATABASE_URL") is not None:
             response = await generate_key_helper_fn(
-                **{"user_role": "proxy_admin", "duration": "2hr", "key_max_budget": 5, "models": [], "aliases": {}, "config": {}, "spend": 0, "user_id": key_user_id, "team_id": "litellm-dashboard"}  # type: ignore
+                **{"user_role": LitellmUserRoles.PROXY_ADMIN, "duration": "2hr", "key_max_budget": 5, "models": [], "aliases": {}, "config": {}, "spend": 0, "user_id": key_user_id, "team_id": "litellm-dashboard"}  # type: ignore
             )
         else:
             raise ProxyException(
@@ -11635,7 +11636,7 @@ async def new_invitation(
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    if user_api_key_dict.user_role != "proxy_admin":
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
         raise HTTPException(
             status_code=400,
             detail={
@@ -11699,7 +11700,7 @@ async def invitation_info(
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    if user_api_key_dict.user_role != "proxy_admin":
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
         raise HTTPException(
             status_code=400,
             detail={
@@ -11811,7 +11812,7 @@ async def invitation_delete(
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    if user_api_key_dict.user_role != "proxy_admin":
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
         raise HTTPException(
             status_code=400,
             detail={
@@ -12006,7 +12007,7 @@ async def update_config_general_settings(
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    if user_api_key_dict.user_role != "proxy_admin":
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
         raise HTTPException(
             status_code=400,
             detail={"error": CommonProxyErrors.not_allowed_access.value},
@@ -12080,7 +12081,7 @@ async def get_config_general_settings(
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    if user_api_key_dict.user_role != "proxy_admin":
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
         raise HTTPException(
             status_code=400,
             detail={"error": CommonProxyErrors.not_allowed_access.value},
@@ -12143,7 +12144,7 @@ async def get_config_list(
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    if user_api_key_dict.user_role != "proxy_admin":
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
         raise HTTPException(
             status_code=400,
             detail={
@@ -12218,7 +12219,7 @@ async def delete_config_general_settings(
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    if user_api_key_dict.user_role != "proxy_admin":
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
         raise HTTPException(
             status_code=400,
             detail={
