@@ -20,12 +20,6 @@ from openai.pagination import SyncCursorPage
 from os import PathLike
 from openai.types import FileObject, Batch
 from openai._legacy_response import HttpxBinaryResponseContent
-from openai._response import (
-    StreamedBinaryAPIResponse,
-    ResponseContextManager,
-    AsyncStreamedBinaryAPIResponse,
-    AsyncResponseContextManager,
-)
 from typing import TypedDict, List, Optional, Tuple, Mapping, IO
 
 FileContent = Union[IO[bytes], bytes, PathLike]
