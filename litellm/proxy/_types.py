@@ -8,7 +8,7 @@ from litellm.types.router import UpdateRouterConfig
 from litellm.types.utils import ProviderField
 
 
-class LitellmUserRoles(enum.Enum):
+class LitellmUserRoles(str, enum.Enum):
     """
     proxy_admin: admin over the platform
     proxy_admin_viewer: can login, view their own keys, view their spend
