@@ -78,7 +78,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
       return;
     }
 
-    userUpdateUserCall(accessToken, editedUser, userRole);
+    userUpdateUserCall(accessToken, editedUser, null);
 
     if (userData) {
       const updatedUserData = userData.map((user) =>

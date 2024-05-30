@@ -44,9 +44,9 @@ const EditUserModal: React.FC<EditUserModalProps> = ({ visible, possibleUIRoles,
 
   const handleEditSubmit = async (formValues: Record<string, any>) => {
     // Call API to update team with teamId and values
-    form.resetFields();
-
     onSubmit(formValues);
+
+    form.resetFields();
     onCancel();
   };
 
@@ -95,15 +95,15 @@ const EditUserModal: React.FC<EditUserModalProps> = ({ visible, possibleUIRoles,
               name="user_role"
             >
             <Select2>
-    {possibleUIRoles &&
-        Object.entries(possibleUIRoles).map(([role, { ui_label, description }]) => (
-            <SelectItem key={role} value={role} title={ui_label}>
-                <div className='flex'>
-                {ui_label} <p className="ml-2" style={{ color: "gray", fontSize: "12px" }}>{description}</p>
-                </div>
-            </SelectItem>
-        ))}
-</Select2>
+                {possibleUIRoles &&
+                    Object.entries(possibleUIRoles).map(([role, { ui_label, description }]) => (
+                        <SelectItem key={role} value={role} title={ui_label}>
+                            <div className='flex'>
+                            {ui_label} <p className="ml-2" style={{ color: "gray", fontSize: "12px" }}>{description}</p>
+                            </div>
+                        </SelectItem>
+                    ))}
+            </Select2>
 
             </Form.Item>
 
