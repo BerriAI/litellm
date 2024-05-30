@@ -467,7 +467,7 @@ def test_call_with_user_over_budget(prisma_client):
         asyncio.run(test())
     except Exception as e:
         error_detail = e.message
-        assert "Authentication Error, ExceededBudget:" in error_detail
+        assert "Budget has been exceeded" in error_detail
         print(vars(e))
 
 
@@ -559,7 +559,7 @@ def test_call_with_end_user_over_budget(prisma_client):
         asyncio.run(test())
     except Exception as e:
         error_detail = e.message
-        assert "Authentication Error, ExceededBudget:" in error_detail
+        assert "Budget has been exceeded" in error_detail
         print(vars(e))
 
 
@@ -648,7 +648,7 @@ def test_call_with_proxy_over_budget(prisma_client):
             error_detail = e.message
         else:
             error_detail = traceback.format_exc()
-        assert "Authentication Error, ExceededBudget:" in error_detail
+        assert "Budget has been exceeded" in error_detail
         print(vars(e))
 
 
@@ -726,7 +726,7 @@ def test_call_with_user_over_budget_stream(prisma_client):
         asyncio.run(test())
     except Exception as e:
         error_detail = e.message
-        assert "Authentication Error, ExceededBudget:" in error_detail
+        assert "Budget has been exceeded" in error_detail
         print(vars(e))
 
 
@@ -823,7 +823,7 @@ def test_call_with_proxy_over_budget_stream(prisma_client):
         asyncio.run(test())
     except Exception as e:
         error_detail = e.message
-        assert "Authentication Error, ExceededBudget:" in error_detail
+        assert "Budget has been exceeded" in error_detail
         print(vars(e))
 
 
