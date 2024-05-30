@@ -36,7 +36,6 @@ import {
   TrashIcon,
 } from "@heroicons/react/outline";
 
-
 interface ViewUserDashboardProps {
   accessToken: string | null;
   token: string | null;
@@ -159,14 +158,10 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
 
   return (
     <div style={{ width: "100%" }}>
-      <Grid className="gap-2 p-2 h-[80vh] w-full mt-8">
+      <Grid className="gap-2 p-2 h-[90vh] w-full mt-8">
         <CreateUser userID={userID} accessToken={accessToken} teams={teams} />
-        <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[80vh] mb-4">
+        <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[90vh] mb-4">
           <div className="mb-4 mt-1">
-            <Text>
-              These are Users on LiteLLM that created API Keys. Automatically
-              tracked by LiteLLM
-            </Text>
           </div>
           <TabGroup>
             <TabPanels>
@@ -176,7 +171,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                     <TableRow>
                       <TableHeaderCell>User ID</TableHeaderCell>
                       <TableHeaderCell>User Email</TableHeaderCell>
-                      <TableHeaderCell>User Models</TableHeaderCell>
+                      <TableHeaderCell>Role</TableHeaderCell>
                       <TableHeaderCell>User Spend ($ USD)</TableHeaderCell>
                       <TableHeaderCell>User Max Budget ($ USD)</TableHeaderCell>
                       <TableHeaderCell>API Keys</TableHeaderCell>
@@ -186,16 +181,11 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                   <TableBody>
                     {userData.map((user: any) => (
                       <TableRow key={user.user_id}>
-                        <TableCell>{user.user_id}</TableCell>
-                        <TableCell>{user.user_email}</TableCell>
-
+                        <TableCell>{user.user_id || "-"}</TableCell>
+                        <TableCell>{user.user_email || "-"}</TableCell>
+                        <TableCell>{user.user_role || "-"}</TableCell>
                         <TableCell>
-                          {user.models && user.models.length > 0
-                            ? user.models
-                            : "All Models"}
-                        </TableCell>
-                        <TableCell>
-                          {user.spend ? user.spend?.toFixed(2) : 0}
+                          {user.spend ? user.spend?.toFixed(2) : "-"}
                         </TableCell>
                         <TableCell>
                           {user.max_budget ? user.max_budget : "Unlimited"}
