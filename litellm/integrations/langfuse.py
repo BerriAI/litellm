@@ -455,8 +455,13 @@ class LangFuseLogger:
                 }
             generation_name = clean_metadata.pop("generation_name", None)
             if generation_name is None:
-                # just log `litellm-{call_type}` as the generation name
+                # if `generation_name` is None, use sensible default values
+                # If using litellm proxy user `key_alias` if not None
+                # If `key_alias` is None, just log `litellm-{call_type}` as the generation name
+                _user_api_key_alias = clean_metadata.get("user_api_key_alias", None)
                 generation_name = f"litellm-{kwargs.get('call_type', 'completion')}"
+                if _user_api_key_alias is not None:
+                    generation_name = f"litellm:{_user_api_key_alias}"
 
             if response_obj is not None and "system_fingerprint" in response_obj:
                 system_fingerprint = response_obj.get("system_fingerprint", None)
