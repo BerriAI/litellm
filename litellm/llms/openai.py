@@ -1090,8 +1090,8 @@ class OpenAIChatCompletion(BaseLLM):
         model_response: TranscriptionResponse,
         timeout: float,
         max_retries: int,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: Optional[str],
+        api_base: Optional[str],
         client=None,
         logging_obj=None,
         atranscription: bool = False,
@@ -1147,7 +1147,6 @@ class OpenAIChatCompletion(BaseLLM):
         max_retries=None,
         logging_obj=None,
     ):
-        response = None
         try:
             if client is None:
                 openai_aclient = AsyncOpenAI(
