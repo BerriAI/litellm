@@ -455,7 +455,7 @@ class LangFuseLogger:
                 }
             generation_name = clean_metadata.pop("generation_name", None)
             if generation_name is None:
-                # if `generation_name` is None, use sensible default values for generation_name
+                # if `generation_name` is None, use sensible default values
                 # If using litellm proxy user `key_alias` if not None
                 # If `key_alias` is None, just log `litellm-{call_type}` as the generation name
                 _user_api_key_alias = clean_metadata.get("user_api_key_alias", None)
