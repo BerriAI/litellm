@@ -507,7 +507,9 @@ async def user_api_key_auth(
 
         if route in LiteLLMRoutes.public_routes.value:
             # check if public endpoint
-            return UserAPIKeyAuth(user_role="app_owner")
+            return UserAPIKeyAuth(
+                user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value
+            )
 
         if general_settings.get("enable_jwt_auth", False) == True:
             is_jwt = jwt_handler.is_jwt(token=api_key)
@@ -666,7 +668,7 @@ async def user_api_key_auth(
                         team_object.rpm_limit if team_object is not None else None
                     ),
                     team_models=team_object.models if team_object is not None else [],
-                    user_role="app_owner",
+                    user_role=LitellmUserRoles.INTERNAL_USER.value,
                     user_id=user_id,
                     org_id=org_id,
                 )
