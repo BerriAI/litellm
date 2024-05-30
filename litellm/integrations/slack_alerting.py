@@ -1465,6 +1465,8 @@ Model Info:
                         final_value = float(
                             response_s.total_seconds() / completion_tokens
                         )
+                if isinstance(final_value, timedelta):
+                    final_value = final_value.total_seconds()
 
                 await self.async_update_daily_reports(
                     DeploymentMetrics(
