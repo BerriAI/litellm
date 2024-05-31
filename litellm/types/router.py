@@ -1,12 +1,12 @@
 """
-    litellm.Router Types - includes RouterConfig, UpdateRouterConfig, ModelInfo etc
+litellm.Router Types - includes RouterConfig, UpdateRouterConfig, ModelInfo etc
 """
 
 from typing import List, Optional, Union, Dict, Tuple, Literal, TypedDict
 import uuid
 import enum
 import httpx
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 import datetime
 from .completion import CompletionRequest
 from .embedding import EmbeddingRequest
@@ -18,8 +18,7 @@ class ModelConfig(BaseModel):
     tpm: int
     rpm: int
 
-    class Config:
-        protected_namespaces = ()
+    model_config = ConfigDict(protected_namespaces=())
 
 
 class RouterConfig(BaseModel):
@@ -50,8 +49,7 @@ class RouterConfig(BaseModel):
         "latency-based-routing",
     ] = "simple-shuffle"
 
-    class Config:
-        protected_namespaces = ()
+    model_config = ConfigDict(protected_namespaces=())
 
 
 class UpdateRouterConfig(BaseModel):
@@ -71,17 +69,14 @@ class UpdateRouterConfig(BaseModel):
     fallbacks: Optional[List[dict]] = None
     context_window_fallbacks: Optional[List[dict]] = None
 
-    class Config:
-        protected_namespaces = ()
+    model_config = ConfigDict(protected_namespaces=())
 
 
 class ModelInfo(BaseModel):
     id: Optional[
         str
     ]  # Allow id to be optional on input, but it will always be present as a str in the model instance
-    db_model: bool = (
-        False  # used for proxy - to separate models which are stored in the db vs. config.
-    )
+    db_model: bool = False  # used for proxy - to separate models which are stored in the db vs. config.
     updated_at: Optional[datetime.datetime] = None
     updated_by: Optional[str] = None
 
@@ -99,8 +94,7 @@ class ModelInfo(BaseModel):
             id = str(id)
         super().__init__(id=id, **params)
 
-    class Config:
-        extra = "allow"
+    model_config = ConfigDict(extra="allow")
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -155,6 +149,8 @@ class GenericLiteLLMParams(BaseModel):
     input_cost_per_second: Optional[float] = None
     output_cost_per_second: Optional[float] = None
 
+    model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
+
     def __init__(
         self,
         custom_llm_provider: Optional[str] = None,
@@ -184,7 +180,7 @@ class GenericLiteLLMParams(BaseModel):
         output_cost_per_token: Optional[float] = None,
         input_cost_per_second: Optional[float] = None,
         output_cost_per_second: Optional[float] = None,
-        **params
+        **params,
     ):
         args = locals()
         args.pop("max_retries", None)
@@ -194,10 +190,6 @@ class GenericLiteLLMParams(BaseModel):
         if max_retries is not None and isinstance(max_retries, str):
             max_retries = int(max_retries)  # cast to int
         super().__init__(max_retries=max_retries, **args, **params)
-
-    class Config:
-        extra = "allow"
-        arbitrary_types_allowed = True
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -222,6 +214,7 @@ class LiteLLM_Params(GenericLiteLLMParams):
     """
 
     model: str
+    model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
 
     def __init__(
         self,
@@ -245,7 +238,7 @@ class LiteLLM_Params(GenericLiteLLMParams):
         aws_access_key_id: Optional[str] = None,
         aws_secret_access_key: Optional[str] = None,
         aws_region_name: Optional[str] = None,
-        **params
+        **params,
     ):
         args = locals()
         args.pop("max_retries", None)
@@ -255,10 +248,6 @@ class LiteLLM_Params(GenericLiteLLMParams):
         if max_retries is not None and isinstance(max_retries, str):
             max_retries = int(max_retries)  # cast to int
         super().__init__(max_retries=max_retries, **args, **params)
-
-    class Config:
-        extra = "allow"
-        arbitrary_types_allowed = True
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -288,8 +277,7 @@ class updateDeployment(BaseModel):
     litellm_params: Optional[updateLiteLLMParams] = None
     model_info: Optional[ModelInfo] = None
 
-    class Config:
-        protected_namespaces = ()
+    model_config = ConfigDict(protected_namespaces=())
 
 
 class LiteLLMParamsTypedDict(TypedDict, total=False):
@@ -338,12 +326,14 @@ class Deployment(BaseModel):
     litellm_params: LiteLLM_Params
     model_info: ModelInfo
 
+    model_config = ConfigDict(extra="allow", protected_namespaces=())
+
     def __init__(
         self,
         model_name: str,
         litellm_params: LiteLLM_Params,
         model_info: Optional[Union[ModelInfo, dict]] = None,
-        **params
+        **params,
     ):
         if model_info is None:
             model_info = ModelInfo()
@@ -353,7 +343,7 @@ class Deployment(BaseModel):
             model_info=model_info,
             model_name=model_name,
             litellm_params=litellm_params,
-            **params
+            **params,
         )
 
     def to_json(self, **kwargs):
@@ -362,10 +352,6 @@ class Deployment(BaseModel):
         except Exception as e:
             # if using pydantic v1
             return self.dict(**kwargs)
-
-    class Config:
-        extra = "allow"
-        protected_namespaces = ()
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
