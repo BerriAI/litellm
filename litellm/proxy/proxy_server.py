@@ -3090,7 +3090,8 @@ class ProxyConfig:
         _general_settings = config_data.get("general_settings", {})
         if "alerting" in _general_settings:
             if (
-                general_settings["alerting"] is not None
+                general_settings is not None
+                and general_settings["alerting"] is not None
                 and isinstance(general_settings["alerting"], list)
                 and _general_settings["alerting"] is not None
                 and isinstance(_general_settings["alerting"], list)
@@ -3099,6 +3100,13 @@ class ProxyConfig:
                     if alert not in general_settings["alerting"]:
                         general_settings["alerting"].append(alert)
 
+                proxy_logging_obj.alerting = general_settings["alerting"]
+                proxy_logging_obj.slack_alerting_instance.alerting = general_settings[
+                    "alerting"
+                ]
+            elif general_settings is None:
+                general_settings = {}
+                general_settings["alerting"] = _general_settings["alerting"]
                 proxy_logging_obj.alerting = general_settings["alerting"]
                 proxy_logging_obj.slack_alerting_instance.alerting = general_settings[
                     "alerting"
