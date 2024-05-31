@@ -8108,6 +8108,7 @@ async def new_user(data: NewUserRequest):
     - teams: Optional[list] - specify a list of team id's a user belongs to.
     - organization_id: Optional[str] - specify the org a user belongs to.
     - user_email: Optional[str] - Specify a user email.
+    - send_invite_email: Optional[bool] - Specify if an invite email should be sent.
     - user_role: Optional[str] - Specify a user role - "admin", "app_owner", "app_user"
     - max_budget: Optional[float] - Specify max budget for a given user.
     - models: Optional[list] - Model_name's a user is allowed to call. (if empty, key is allowed to call all models)
@@ -8144,6 +8145,27 @@ async def new_user(data: NewUserRequest):
                 ),
             )
         )
+
+    if data.send_invite_email is True:
+        event = WebhookEvent(
+            event="key_created",
+            event_group="key",
+            event_message=f"API Key Created",
+            token=response.get("token", ""),
+            spend=response.get("spend", 0.0),
+            max_budget=response.get("max_budget", 0.0),
+            user_id=response.get("user_id", None),
+            team_id=response.get("team_id", "Default Team"),
+            key_alias=response.get("key_alias", None),
+        )
+
+        # If user configured email alerting - send an Email letting their end-user know the key was created
+        asyncio.create_task(
+            proxy_logging_obj.slack_alerting_instance.send_key_created_email(
+                webhook_event=event,
+            )
+        )
+
     return NewUserResponse(
         key=response.get("token", ""),
         expires=response.get("expires", None),
