@@ -236,22 +236,16 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                             </Grid>
                           </TableCell>
                         <TableCell>
-
-                        <Icon icon={InformationCircleIcon} onClick= {() => {
-                          setOpenDialogId(user.user_id)
-                          setSelectedItem(user)
-                        }}>View Keys</Icon>
-                         
                          
                          <Icon icon={PencilAltIcon} onClick= {() => {
                           setSelectedUser(user)
                           setEditModalVisible(true)
                         }}>View Keys</Icon>
-
+{/* 
                         <Icon icon={TrashIcon} onClick= {() => {
                           setOpenDialogId(user.user_id)
                           setSelectedItem(user)
-                        }}>View Keys</Icon>
+                        }}>View Keys</Icon> */}
 
                         </TableCell>
                      
