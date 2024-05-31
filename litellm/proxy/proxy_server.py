@@ -3209,6 +3209,9 @@ def _duration_in_seconds(duration: str):
 
 
 async def generate_key_helper_fn(
+    request_type: Literal[
+        "user", "key"
+    ],  # identifies if this request is from /user/new or /key/generate
     duration: Optional[str],
     models: list,
     aliases: dict,
@@ -3240,6 +3243,7 @@ async def generate_key_helper_fn(
     teams: Optional[list] = None,
     organization_id: Optional[str] = None,
     table_name: Optional[Literal["key", "user"]] = None,
+    send_invite_email: Optional[bool] = None,
 ):
     global prisma_client, custom_db_client, user_api_key_cache, litellm_proxy_admin_name, premium_user
 
@@ -3340,7 +3344,7 @@ async def generate_key_helper_fn(
                 "get_spend_routes" in saved_token["permissions"]
                 and premium_user != True
             ):
-                raise Exception(
+                raise ValueError(
                     "get_spend_routes permission is only available for LiteLLM Enterprise users"
                 )
 
@@ -3397,6 +3401,10 @@ async def generate_key_helper_fn(
 
     # Add budget related info in key_data - this ensures it's returned
     key_data["budget_id"] = budget_id
+
+    if request_type == "user":
+        # if this is a /user/new request update the key_date with user_data fields
+        key_data.update(user_data)
     return key_data
 
 
@@ -3744,6 +3752,7 @@ async def startup_event():
             )
         asyncio.create_task(
             generate_key_helper_fn(
+                request_type="user",
                 duration=None,
                 models=[],
                 aliases={},
@@ -3766,6 +3775,7 @@ async def startup_event():
         # add proxy budget to db in the user table
         asyncio.create_task(
             generate_key_helper_fn(
+                request_type="user",
                 user_id=litellm_proxy_budget_name,
                 duration=None,
                 models=[],
@@ -3788,7 +3798,13 @@ async def startup_event():
     if custom_db_client is not None and master_key is not None:
         # add master key to db
         await generate_key_helper_fn(
-            duration=None, models=[], aliases={}, config={}, spend=0, token=master_key
+            request_type="key",
+            duration=None,
+            models=[],
+            aliases={},
+            config={},
+            spend=0,
+            token=master_key,
         )
 
     ### CHECK IF VIEW EXISTS ###
@@ -6125,13 +6141,19 @@ async def generate_key_fn(
         if "budget_duration" in data_json:
             data_json["key_budget_duration"] = data_json.pop("budget_duration", None)
 
-        response = await generate_key_helper_fn(**data_json, table_name="key")
+        response = await generate_key_helper_fn(
+            request_type="key", **data_json, table_name="key"
+        )
 
         response["soft_budget"] = (
             data.soft_budget
         )  # include the user-input soft budget in the response
 
         if data.send_invite_email is True:
+            if "email" not in general_settings.get("alerting", []):
+                raise ValueError(
+                    "Email alerting not setup on config.yaml. Please set `alerting=['email']. \nDocs: https://docs.litellm.ai/docs/proxy/email`"
+                )
             event = WebhookEvent(
                 event="key_created",
                 event_group="key",
@@ -6146,7 +6168,7 @@ async def generate_key_fn(
 
             # If user configured email alerting - send an Email letting their end-user know the key was created
             asyncio.create_task(
-                proxy_logging_obj.slack_alerting_instance.send_key_created_email(
+                proxy_logging_obj.slack_alerting_instance.send_key_created_or_user_invited_email(
                     webhook_event=event,
                 )
             )
@@ -8133,7 +8155,7 @@ async def new_user(data: NewUserRequest):
         data_json["table_name"] = (
             "user"  # only create a user, don't create key if 'auto_create_key' set to False
         )
-    response = await generate_key_helper_fn(**data_json)
+    response = await generate_key_helper_fn(request_type="user", **data_json)
 
     # Admin UI Logic
     # if team_id passed add this user to the team
@@ -8150,21 +8172,28 @@ async def new_user(data: NewUserRequest):
         )
 
     if data.send_invite_email is True:
+        # check if user has setup email alerting
+        if "email" not in general_settings.get("alerting", []):
+            raise ValueError(
+                "Email alerting not setup on config.yaml. Please set `alerting=['email']. \nDocs: https://docs.litellm.ai/docs/proxy/email`"
+            )
+
         event = WebhookEvent(
-            event="key_created",
-            event_group="key",
-            event_message=f"API Key Created",
+            event="internal_user_created",
+            event_group="internal_user",
+            event_message=f"Welcome to LiteLLM Proxy",
             token=response.get("token", ""),
             spend=response.get("spend", 0.0),
             max_budget=response.get("max_budget", 0.0),
             user_id=response.get("user_id", None),
+            user_email=response.get("user_email", None),
             team_id=response.get("team_id", "Default Team"),
             key_alias=response.get("key_alias", None),
         )
 
         # If user configured email alerting - send an Email letting their end-user know the key was created
         asyncio.create_task(
-            proxy_logging_obj.slack_alerting_instance.send_key_created_email(
+            proxy_logging_obj.slack_alerting_instance.send_key_created_or_user_invited_email(
                 webhook_event=event,
             )
         )
@@ -8174,6 +8203,9 @@ async def new_user(data: NewUserRequest):
         expires=response.get("expires", None),
         max_budget=response["max_budget"],
         user_id=response["user_id"],
+        user_role=response.get("user_role", None),
+        user_email=response.get("user_email", None),
+        teams=response.get("teams", None),
         team_id=response.get("team_id", None),
         metadata=response.get("metadata", None),
         models=response.get("models", None),
@@ -8230,11 +8262,13 @@ async def user_auth(request: Request):
     if response is not None:
         user_id = response.user_id
         response = await generate_key_helper_fn(
-            **{"duration": "24hr", "models": [], "aliases": {}, "config": {}, "spend": 0, "user_id": user_id}  # type: ignore
+            request_type="key",
+            **{"duration": "24hr", "models": [], "aliases": {}, "config": {}, "spend": 0, "user_id": user_id},  # type: ignore
         )
     else:  ### else - create new user
         response = await generate_key_helper_fn(
-            **{"duration": "24hr", "models": [], "aliases": {}, "config": {}, "spend": 0, "user_email": user_email}  # type: ignore
+            request_type="key",
+            **{"duration": "24hr", "models": [], "aliases": {}, "config": {}, "spend": 0, "user_email": user_email},  # type: ignore
         )
 
     base_url = os.getenv("LITELLM_HOSTED_UI", "https://dashboard.litellm.ai/")
@@ -11726,7 +11760,8 @@ async def login(request: Request):
         )
         if os.getenv("DATABASE_URL") is not None:
             response = await generate_key_helper_fn(
-                **{"user_role": LitellmUserRoles.PROXY_ADMIN, "duration": "2hr", "key_max_budget": 5, "models": [], "aliases": {}, "config": {}, "spend": 0, "user_id": key_user_id, "team_id": "litellm-dashboard"}  # type: ignore
+                request_type="key",
+                **{"user_role": LitellmUserRoles.PROXY_ADMIN, "duration": "2hr", "key_max_budget": 5, "models": [], "aliases": {}, "config": {}, "spend": 0, "user_id": key_user_id, "team_id": "litellm-dashboard"},  # type: ignore
             )
         else:
             raise ProxyException(
@@ -11822,7 +11857,8 @@ async def onboarding(invite_link: str):
     user_email = user_obj.user_email
 
     response = await generate_key_helper_fn(
-        **{"user_role": user_obj.user_role or "app_owner", "duration": "2hr", "key_max_budget": 5, "models": [], "aliases": {}, "config": {}, "spend": 0, "user_id": user_obj.user_id, "team_id": "litellm-dashboard"}  # type: ignore
+        request_type="key",
+        **{"user_role": user_obj.user_role or "app_owner", "duration": "2hr", "key_max_budget": 5, "models": [], "aliases": {}, "config": {}, "spend": 0, "user_id": user_obj.user_id, "team_id": "litellm-dashboard"},  # type: ignore
     )
     key = response["token"]  # type: ignore
 
@@ -12125,8 +12161,11 @@ async def auth_callback(request: Request):
     verbose_proxy_logger.info(
         f"user_defined_values for creating ui key: {user_defined_values}"
     )
+
+    default_ui_key_values.update(user_defined_values)
+    default_ui_key_values["request_type"] = "key"
     response = await generate_key_helper_fn(
-        **default_ui_key_values, **user_defined_values  # type: ignore
+        **default_ui_key_values,  # type: ignore
     )
     key = response["token"]  # type: ignore
     user_id = response["user_id"]  # type: ignore
@@ -13231,7 +13270,7 @@ async def health_services_endpoint(
 
             # use create task - this can take 10 seconds. don't keep ui users waiting for notification to check their email
             asyncio.create_task(
-                proxy_logging_obj.slack_alerting_instance.send_key_created_email(
+                proxy_logging_obj.slack_alerting_instance.send_key_created_or_user_invited_email(
                     webhook_event=webhook_event
                 )
             )
