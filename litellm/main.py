@@ -14,7 +14,6 @@ from functools import partial
 import dotenv, traceback, random, asyncio, time, contextvars
 from copy import deepcopy
 import httpx
-
 import litellm
 from ._logging import verbose_logger
 from litellm import (  # type: ignore
@@ -92,6 +91,7 @@ import tiktoken
 from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, List, Optional, Dict, Union, Mapping
 from .caching import enable_cache, disable_cache, update_cache
+from .types.llms.openai import HttpxBinaryResponseContent
 
 encoding = tiktoken.get_encoding("cl100k_base")
 from litellm.utils import (
@@ -680,6 +680,7 @@ def completion(
         "region_name",
         "allowed_model_region",
         "model_config",
+        "fastest_response",
     ]
 
     default_params = openai_params + litellm_params
@@ -4130,6 +4131,24 @@ def transcription(
             max_retries=max_retries,
         )
     elif custom_llm_provider == "openai":
+        api_base = (
+            api_base
+            or litellm.api_base
+            or get_secret("OPENAI_API_BASE")
+            or "https://api.openai.com/v1"
+        )  # type: ignore
+        openai.organization = (
+            litellm.organization
+            or get_secret("OPENAI_ORGANIZATION")
+            or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
+        )
+        # set API KEY
+        api_key = (
+            api_key
+            or litellm.api_key
+            or litellm.openai_key
+            or get_secret("OPENAI_API_KEY")
+        )  # type: ignore
         response = openai_chat_completions.audio_transcriptions(
             model=model,
             audio_file=file,
@@ -4139,6 +4158,139 @@ def transcription(
             timeout=timeout,
             logging_obj=litellm_logging_obj,
             max_retries=max_retries,
+            api_base=api_base,
+            api_key=api_key,
+        )
+    return response
+
+
+@client
+async def aspeech(*args, **kwargs) -> HttpxBinaryResponseContent:
+    """
+    Calls openai tts endpoints.
+    """
+    loop = asyncio.get_event_loop()
+    model = args[0] if len(args) > 0 else kwargs["model"]
+    ### PASS ARGS TO Image Generation ###
+    kwargs["aspeech"] = True
+    custom_llm_provider = kwargs.get("custom_llm_provider", None)
+    try:
+        # Use a partial function to pass your keyword arguments
+        func = partial(speech, *args, **kwargs)
+
+        # Add the context to the function
+        ctx = contextvars.copy_context()
+        func_with_context = partial(ctx.run, func)
+
+        _, custom_llm_provider, _, _ = get_llm_provider(
+            model=model, api_base=kwargs.get("api_base", None)
+        )
+
+        # Await normally
+        init_response = await loop.run_in_executor(None, func_with_context)
+        if asyncio.iscoroutine(init_response):
+            response = await init_response
+        else:
+            # Call the synchronous function using run_in_executor
+            response = await loop.run_in_executor(None, func_with_context)
+        return response  # type: ignore
+    except Exception as e:
+        custom_llm_provider = custom_llm_provider or "openai"
+        raise exception_type(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            original_exception=e,
+            completion_kwargs=args,
+            extra_kwargs=kwargs,
+        )
+
+
+@client
+def speech(
+    model: str,
+    input: str,
+    voice: str,
+    api_key: Optional[str] = None,
+    api_base: Optional[str] = None,
+    organization: Optional[str] = None,
+    project: Optional[str] = None,
+    max_retries: Optional[int] = None,
+    metadata: Optional[dict] = None,
+    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    response_format: Optional[str] = None,
+    speed: Optional[int] = None,
+    client=None,
+    headers: Optional[dict] = None,
+    custom_llm_provider: Optional[str] = None,
+    aspeech: Optional[bool] = None,
+    **kwargs,
+) -> HttpxBinaryResponseContent:
+
+    model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider, api_base=api_base)  # type: ignore
+
+    optional_params = {}
+    if response_format is not None:
+        optional_params["response_format"] = response_format
+    if speed is not None:
+        optional_params["speed"] = speed  # type: ignore
+
+    if timeout is None:
+        timeout = litellm.request_timeout
+
+    if max_retries is None:
+        max_retries = litellm.num_retries or openai.DEFAULT_MAX_RETRIES
+    response: Optional[HttpxBinaryResponseContent] = None
+    if custom_llm_provider == "openai":
+        api_base = (
+            api_base  # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
+            or litellm.api_base
+            or get_secret("OPENAI_API_BASE")
+            or "https://api.openai.com/v1"
+        )  # type: ignore
+        # set API KEY
+        api_key = (
+            api_key
+            or litellm.api_key  # for deepinfra/perplexity/anyscale we check in get_llm_provider and pass in the api key from there
+            or litellm.openai_key
+            or get_secret("OPENAI_API_KEY")
+        )  # type: ignore
+
+        organization = (
+            organization
+            or litellm.organization
+            or get_secret("OPENAI_ORGANIZATION")
+            or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
+        )  # type: ignore
+
+        project = (
+            project
+            or litellm.project
+            or get_secret("OPENAI_PROJECT")
+            or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
+        )  # type: ignore
+
+        headers = headers or litellm.headers
+
+        response = openai_chat_completions.audio_speech(
+            model=model,
+            input=input,
+            voice=voice,
+            optional_params=optional_params,
+            api_key=api_key,
+            api_base=api_base,
+            organization=organization,
+            project=project,
+            max_retries=max_retries,
+            timeout=timeout,
+            client=client,  # pass AsyncOpenAI, OpenAI client
+            aspeech=aspeech,
+        )
+
+    if response is None:
+        raise Exception(
+            "Unable to map the custom llm provider={} to a known provider={}.".format(
+                custom_llm_provider, litellm.provider_list
+            )
         )
     return response
 

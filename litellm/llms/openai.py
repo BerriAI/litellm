@@ -21,11 +21,12 @@ from litellm.utils import (
     TranscriptionResponse,
     TextCompletionResponse,
 )
-from typing import Callable, Optional
+from typing import Callable, Optional, Coroutine
 import litellm
 from .prompt_templates.factory import prompt_factory, custom_prompt
 from openai import OpenAI, AsyncOpenAI
 from ..types.llms.openai import *
+import openai
 
 
 class OpenAIError(Exception):
@@ -349,7 +350,6 @@ class OpenAIConfig:
             "top_p",
             "tools",
             "tool_choice",
-            "user",
             "function_call",
             "functions",
             "max_retries",
@@ -362,6 +362,12 @@ class OpenAIConfig:
         ):  # gpt-4 does not support 'response_format'
             model_specific_params.append("response_format")
 
+        if (
+            model in litellm.open_ai_chat_completion_models
+        ) or model in litellm.open_ai_text_completion_models:
+            model_specific_params.append(
+                "user"
+            )  # user is not a param supported by all openai-compatible endpoints - e.g. azure ai
         return base_params + model_specific_params
 
     def map_openai_params(
@@ -1085,8 +1091,8 @@ class OpenAIChatCompletion(BaseLLM):
         model_response: TranscriptionResponse,
         timeout: float,
         max_retries: int,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: Optional[str],
+        api_base: Optional[str],
         client=None,
         logging_obj=None,
         atranscription: bool = False,
@@ -1142,7 +1148,6 @@ class OpenAIChatCompletion(BaseLLM):
         max_retries=None,
         logging_obj=None,
     ):
-        response = None
         try:
             if client is None:
                 openai_aclient = AsyncOpenAI(
@@ -1175,6 +1180,95 @@ class OpenAIChatCompletion(BaseLLM):
                 original_response=str(e),
             )
             raise e
+
+    def audio_speech(
+        self,
+        model: str,
+        input: str,
+        voice: str,
+        optional_params: dict,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        organization: Optional[str],
+        project: Optional[str],
+        max_retries: int,
+        timeout: Union[float, httpx.Timeout],
+        aspeech: Optional[bool] = None,
+        client=None,
+    ) -> HttpxBinaryResponseContent:
+
+        if aspeech is not None and aspeech == True:
+            return self.async_audio_speech(
+                model=model,
+                input=input,
+                voice=voice,
+                optional_params=optional_params,
+                api_key=api_key,
+                api_base=api_base,
+                organization=organization,
+                project=project,
+                max_retries=max_retries,
+                timeout=timeout,
+                client=client,
+            )  # type: ignore
+
+        if client is None:
+            openai_client = OpenAI(
+                api_key=api_key,
+                base_url=api_base,
+                organization=organization,
+                project=project,
+                http_client=litellm.client_session,
+                timeout=timeout,
+                max_retries=max_retries,
+            )
+        else:
+            openai_client = client
+
+        response = openai_client.audio.speech.create(
+            model=model,
+            voice=voice,  # type: ignore
+            input=input,
+            **optional_params,
+        )
+        return response
+
+    async def async_audio_speech(
+        self,
+        model: str,
+        input: str,
+        voice: str,
+        optional_params: dict,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        organization: Optional[str],
+        project: Optional[str],
+        max_retries: int,
+        timeout: Union[float, httpx.Timeout],
+        client=None,
+    ) -> HttpxBinaryResponseContent:
+
+        if client is None:
+            openai_client = AsyncOpenAI(
+                api_key=api_key,
+                base_url=api_base,
+                organization=organization,
+                project=project,
+                http_client=litellm.aclient_session,
+                timeout=timeout,
+                max_retries=max_retries,
+            )
+        else:
+            openai_client = client
+
+        response = await openai_client.audio.speech.create(
+            model=model,
+            voice=voice,  # type: ignore
+            input=input,
+            **optional_params,
+        )
+
+        return response
 
     async def ahealth_check(
         self,
@@ -1495,6 +1589,322 @@ class OpenAITextCompletion(BaseLLM):
 
         async for transformed_chunk in streamwrapper:
             yield transformed_chunk
+
+
+class OpenAIFilesAPI(BaseLLM):
+    """
+    OpenAI methods to support for batches
+    - create_file()
+    - retrieve_file()
+    - list_files()
+    - delete_file()
+    - file_content()
+    - update_file()
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+
+    def get_openai_client(
+        self,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        organization: Optional[str],
+        client: Optional[Union[OpenAI, AsyncOpenAI]] = None,
+        _is_async: bool = False,
+    ) -> Optional[Union[OpenAI, AsyncOpenAI]]:
+        received_args = locals()
+        openai_client: Optional[Union[OpenAI, AsyncOpenAI]] = None
+        if client is None:
+            data = {}
+            for k, v in received_args.items():
+                if k == "self" or k == "client" or k == "_is_async":
+                    pass
+                elif k == "api_base" and v is not None:
+                    data["base_url"] = v
+                elif v is not None:
+                    data[k] = v
+            if _is_async is True:
+                openai_client = AsyncOpenAI(**data)
+            else:
+                openai_client = OpenAI(**data)  # type: ignore
+        else:
+            openai_client = client
+
+        return openai_client
+
+    async def acreate_file(
+        self,
+        create_file_data: CreateFileRequest,
+        openai_client: AsyncOpenAI,
+    ) -> FileObject:
+        response = await openai_client.files.create(**create_file_data)
+        return response
+
+    def create_file(
+        self,
+        _is_async: bool,
+        create_file_data: CreateFileRequest,
+        api_base: str,
+        api_key: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        organization: Optional[str],
+        client: Optional[Union[OpenAI, AsyncOpenAI]] = None,
+    ) -> Union[FileObject, Coroutine[Any, Any, FileObject]]:
+        openai_client: Optional[Union[OpenAI, AsyncOpenAI]] = self.get_openai_client(
+            api_key=api_key,
+            api_base=api_base,
+            timeout=timeout,
+            max_retries=max_retries,
+            organization=organization,
+            client=client,
+            _is_async=_is_async,
+        )
+        if openai_client is None:
+            raise ValueError(
+                "OpenAI client is not initialized. Make sure api_key is passed or OPENAI_API_KEY is set in the environment."
+            )
+
+        if _is_async is True:
+            if not isinstance(openai_client, AsyncOpenAI):
+                raise ValueError(
+                    "OpenAI client is not an instance of AsyncOpenAI. Make sure you passed an AsyncOpenAI client."
+                )
+            return self.acreate_file(  # type: ignore
+                create_file_data=create_file_data, openai_client=openai_client
+            )
+        response = openai_client.files.create(**create_file_data)
+        return response
+
+    async def afile_content(
+        self,
+        file_content_request: FileContentRequest,
+        openai_client: AsyncOpenAI,
+    ) -> HttpxBinaryResponseContent:
+        response = await openai_client.files.content(**file_content_request)
+        return response
+
+    def file_content(
+        self,
+        _is_async: bool,
+        file_content_request: FileContentRequest,
+        api_base: str,
+        api_key: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        organization: Optional[str],
+        client: Optional[Union[OpenAI, AsyncOpenAI]] = None,
+    ) -> Union[
+        HttpxBinaryResponseContent, Coroutine[Any, Any, HttpxBinaryResponseContent]
+    ]:
+        openai_client: Optional[Union[OpenAI, AsyncOpenAI]] = self.get_openai_client(
+            api_key=api_key,
+            api_base=api_base,
+            timeout=timeout,
+            max_retries=max_retries,
+            organization=organization,
+            client=client,
+            _is_async=_is_async,
+        )
+        if openai_client is None:
+            raise ValueError(
+                "OpenAI client is not initialized. Make sure api_key is passed or OPENAI_API_KEY is set in the environment."
+            )
+
+        if _is_async is True:
+            if not isinstance(openai_client, AsyncOpenAI):
+                raise ValueError(
+                    "OpenAI client is not an instance of AsyncOpenAI. Make sure you passed an AsyncOpenAI client."
+                )
+            return self.afile_content(  # type: ignore
+                file_content_request=file_content_request,
+                openai_client=openai_client,
+            )
+        response = openai_client.files.content(**file_content_request)
+
+        return response
+
+
+class OpenAIBatchesAPI(BaseLLM):
+    """
+    OpenAI methods to support for batches
+    - create_batch()
+    - retrieve_batch()
+    - cancel_batch()
+    - list_batch()
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+
+    def get_openai_client(
+        self,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        organization: Optional[str],
+        client: Optional[Union[OpenAI, AsyncOpenAI]] = None,
+        _is_async: bool = False,
+    ) -> Optional[Union[OpenAI, AsyncOpenAI]]:
+        received_args = locals()
+        openai_client: Optional[Union[OpenAI, AsyncOpenAI]] = None
+        if client is None:
+            data = {}
+            for k, v in received_args.items():
+                if k == "self" or k == "client" or k == "_is_async":
+                    pass
+                elif k == "api_base" and v is not None:
+                    data["base_url"] = v
+                elif v is not None:
+                    data[k] = v
+            if _is_async is True:
+                openai_client = AsyncOpenAI(**data)
+            else:
+                openai_client = OpenAI(**data)  # type: ignore
+        else:
+            openai_client = client
+
+        return openai_client
+
+    async def acreate_batch(
+        self,
+        create_batch_data: CreateBatchRequest,
+        openai_client: AsyncOpenAI,
+    ) -> Batch:
+        response = await openai_client.batches.create(**create_batch_data)
+        return response
+
+    def create_batch(
+        self,
+        _is_async: bool,
+        create_batch_data: CreateBatchRequest,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        organization: Optional[str],
+        client: Optional[Union[OpenAI, AsyncOpenAI]] = None,
+    ) -> Union[Batch, Coroutine[Any, Any, Batch]]:
+        openai_client: Optional[Union[OpenAI, AsyncOpenAI]] = self.get_openai_client(
+            api_key=api_key,
+            api_base=api_base,
+            timeout=timeout,
+            max_retries=max_retries,
+            organization=organization,
+            client=client,
+            _is_async=_is_async,
+        )
+        if openai_client is None:
+            raise ValueError(
+                "OpenAI client is not initialized. Make sure api_key is passed or OPENAI_API_KEY is set in the environment."
+            )
+
+        if _is_async is True:
+            if not isinstance(openai_client, AsyncOpenAI):
+                raise ValueError(
+                    "OpenAI client is not an instance of AsyncOpenAI. Make sure you passed an AsyncOpenAI client."
+                )
+            return self.acreate_batch(  # type: ignore
+                create_batch_data=create_batch_data, openai_client=openai_client
+            )
+        response = openai_client.batches.create(**create_batch_data)
+        return response
+
+    async def aretrieve_batch(
+        self,
+        retrieve_batch_data: RetrieveBatchRequest,
+        openai_client: AsyncOpenAI,
+    ) -> Batch:
+        response = await openai_client.batches.retrieve(**retrieve_batch_data)
+        return response
+
+    def retrieve_batch(
+        self,
+        _is_async: bool,
+        retrieve_batch_data: RetrieveBatchRequest,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        organization: Optional[str],
+        client: Optional[OpenAI] = None,
+    ):
+        openai_client: Optional[Union[OpenAI, AsyncOpenAI]] = self.get_openai_client(
+            api_key=api_key,
+            api_base=api_base,
+            timeout=timeout,
+            max_retries=max_retries,
+            organization=organization,
+            client=client,
+            _is_async=_is_async,
+        )
+        if openai_client is None:
+            raise ValueError(
+                "OpenAI client is not initialized. Make sure api_key is passed or OPENAI_API_KEY is set in the environment."
+            )
+
+        if _is_async is True:
+            if not isinstance(openai_client, AsyncOpenAI):
+                raise ValueError(
+                    "OpenAI client is not an instance of AsyncOpenAI. Make sure you passed an AsyncOpenAI client."
+                )
+            return self.aretrieve_batch(  # type: ignore
+                retrieve_batch_data=retrieve_batch_data, openai_client=openai_client
+            )
+        response = openai_client.batches.retrieve(**retrieve_batch_data)
+        return response
+
+    def cancel_batch(
+        self,
+        _is_async: bool,
+        cancel_batch_data: CancelBatchRequest,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        organization: Optional[str],
+        client: Optional[OpenAI] = None,
+    ):
+        openai_client: Optional[Union[OpenAI, AsyncOpenAI]] = self.get_openai_client(
+            api_key=api_key,
+            api_base=api_base,
+            timeout=timeout,
+            max_retries=max_retries,
+            organization=organization,
+            client=client,
+            _is_async=_is_async,
+        )
+        if openai_client is None:
+            raise ValueError(
+                "OpenAI client is not initialized. Make sure api_key is passed or OPENAI_API_KEY is set in the environment."
+            )
+        response = openai_client.batches.cancel(**cancel_batch_data)
+        return response
+
+    # def list_batch(
+    #     self,
+    #     list_batch_data: ListBatchRequest,
+    #     api_key: Optional[str],
+    #     api_base: Optional[str],
+    #     timeout: Union[float, httpx.Timeout],
+    #     max_retries: Optional[int],
+    #     organization: Optional[str],
+    #     client: Optional[OpenAI] = None,
+    # ):
+    #     openai_client: OpenAI = self.get_openai_client(
+    #         api_key=api_key,
+    #         api_base=api_base,
+    #         timeout=timeout,
+    #         max_retries=max_retries,
+    #         organization=organization,
+    #         client=client,
+    #     )
+    #     response = openai_client.batches.list(**list_batch_data)
+    #     return response
 
 
 class OpenAIAssistantsAPI(BaseLLM):

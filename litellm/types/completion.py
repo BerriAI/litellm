@@ -1,6 +1,6 @@
 from typing import List, Optional, Union, Iterable
 
-from pydantic import BaseModel, validator
+from pydantic import BaseModel, ConfigDict, validator
 
 from typing_extensions import Literal, Required, TypedDict
 
@@ -191,6 +191,4 @@ class CompletionRequest(BaseModel):
     api_key: Optional[str] = None
     model_list: Optional[List[str]] = None
 
-    class Config:
-        extra = "allow"
-        protected_namespaces = ()
+    model_config = ConfigDict(protected_namespaces=(), extra="allow")

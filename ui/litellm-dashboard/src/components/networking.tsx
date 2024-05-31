@@ -1270,6 +1270,100 @@ export const adminGlobalActivityPerModel = async (
   }
 };
 
+
+
+export const adminGlobalActivityExceptions = async (
+  accessToken: String,
+  startTime: String | undefined,
+  endTime: String | undefined,
+  modelGroup: String,
+) => {
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/global/activity/exceptions`
+      : `/global/activity/exceptions`;
+
+    if (startTime && endTime) {
+      url += `?start_date=${startTime}&end_date=${endTime}`;
+    }
+
+    if (modelGroup) {
+      url += `&model_group=${modelGroup}`;
+    }
+
+    const requestOptions: {
+      method: string;
+      headers: {
+        Authorization: string;
+      };
+    } = {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+    };
+
+    const response = await fetch(url, requestOptions);
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      throw new Error("Network response was not ok");
+    }
+    const data = await response.json();
+    console.log(data);
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch spend data:", error);
+    throw error;
+  }
+};
+
+export const adminGlobalActivityExceptionsPerDeployment = async (
+  accessToken: String,
+  startTime: String | undefined,
+  endTime: String | undefined,
+  modelGroup: String,
+) => {
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/global/activity/exceptions/deployment`
+      : `/global/activity/exceptions/deployment`;
+
+    if (startTime && endTime) {
+      url += `?start_date=${startTime}&end_date=${endTime}`;
+    }
+
+    if (modelGroup) {
+      url += `&model_group=${modelGroup}`;
+    }
+
+    const requestOptions: {
+      method: string;
+      headers: {
+        Authorization: string;
+      };
+    } = {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+    };
+
+    const response = await fetch(url, requestOptions);
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      throw new Error("Network response was not ok");
+    }
+    const data = await response.json();
+    console.log(data);
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch spend data:", error);
+    throw error;
+  }
+};
+
 export const adminTopModelsCall = async (accessToken: String) => {
   try {
     let url = proxyBaseUrl
@@ -1461,6 +1555,34 @@ export const userGetAllUsersCall = async (
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
     console.error("Failed to get requested models:", error);
+    throw error;
+  }
+};
+
+export const getPossibleUserRoles = async (
+  accessToken: String,
+) => {
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/user/available_roles`
+      : `/user/available_roles`;
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      throw new Error("Network response was not ok");
+    }
+    const data = await response.json();
+    console.log("response from user/available_role", data);
+    return data;
+    // Handle success - you might want to update some state or UI based on the created key
+  } catch (error) {
     throw error;
   }
 };
