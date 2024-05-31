@@ -26,7 +26,7 @@ class DBModel(BaseModel):
     model_info: dict
     litellm_params: dict
 
-    config_dict: ConfigDict = ConfigDict(protected_namespaces=())
+    model_config = ConfigDict(protected_namespaces=())
 
 
 @pytest.mark.asyncio
