@@ -1204,6 +1204,84 @@ class Router:
                 self.fail_calls[model_name] += 1
             raise e
 
+    async def aspeech(self, model: str, input: str, voice: str, **kwargs):
+        """
+        Example Usage:
+
+        ```
+        from litellm import Router
+        client = Router(model_list = [
+            {
+                "model_name": "tts",
+                "litellm_params": {
+                    "model": "tts-1",
+                },
+            },
+        ])
+
+        async with client.aspeech(
+            model="tts",
+            voice="alloy",
+            input="the quick brown fox jumped over the lazy dogs",
+            api_base=None,
+            api_key=None,
+            organization=None,
+            project=None,
+            max_retries=1,
+            timeout=600,
+            client=None,
+            optional_params={},
+        ) as response:
+            response.stream_to_file(speech_file_path)
+
+        ```
+        """
+        try:
+            kwargs["input"] = input
+            kwargs["voice"] = voice
+
+            deployment = await self.async_get_available_deployment(
+                model=model,
+                messages=[{"role": "user", "content": "prompt"}],
+                specific_deployment=kwargs.pop("specific_deployment", None),
+            )
+            kwargs.setdefault("metadata", {}).update(
+                {
+                    "deployment": deployment["litellm_params"]["model"],
+                    "model_info": deployment.get("model_info", {}),
+                }
+            )
+            kwargs["model_info"] = deployment.get("model_info", {})
+            data = deployment["litellm_params"].copy()
+            model_name = data["model"]
+            for k, v in self.default_litellm_params.items():
+                if (
+                    k not in kwargs
+                ):  # prioritize model-specific params > default router params
+                    kwargs[k] = v
+                elif k == "metadata":
+                    kwargs[k].update(v)
+
+            potential_model_client = self._get_client(
+                deployment=deployment, kwargs=kwargs, client_type="async"
+            )
+            # check if provided keys == client keys #
+            dynamic_api_key = kwargs.get("api_key", None)
+            if (
+                dynamic_api_key is not None
+                and potential_model_client is not None
+                and dynamic_api_key != potential_model_client.api_key
+            ):
+                model_client = None
+            else:
+                model_client = potential_model_client
+
+            response = await litellm.aspeech(**data, **kwargs)
+
+            return response
+        except Exception as e:
+            raise e
+
     async def amoderation(self, model: str, input: str, **kwargs):
         try:
             kwargs["model"] = model
@@ -3248,6 +3326,8 @@ class Router:
                     supported_openai_params = litellm.get_supported_openai_params(
                         model=model, custom_llm_provider=llm_provider
                     )
+                    if supported_openai_params is None:
+                        supported_openai_params = []
                     model_info = ModelMapInfo(
                         max_tokens=None,
                         max_input_tokens=None,

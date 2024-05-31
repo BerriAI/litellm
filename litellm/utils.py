@@ -18,7 +18,7 @@ from functools import wraps, lru_cache
 import datetime, time
 import tiktoken
 import uuid
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 import aiohttp
 import textwrap
 import logging
@@ -337,9 +337,7 @@ class HiddenParams(OpenAIObject):
     model_id: Optional[str] = None  # used in Router for individual deployments
     api_base: Optional[str] = None  # returns api base used for making completion call
 
-    class Config:
-        extra = "allow"
-        protected_namespaces = ()
+    model_config = ConfigDict(extra="allow", protected_namespaces=())
 
     def get(self, key, default=None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
@@ -1136,6 +1134,8 @@ class CallTypes(Enum):
     amoderation = "amoderation"
     atranscription = "atranscription"
     transcription = "transcription"
+    aspeech = "aspeech"
+    speech = "speech"
 
 
 # Logging function -> log the exact model details + what's being sent | Non-BlockingP
@@ -3005,6 +3005,10 @@ def function_setup(
         ):
             _file_name: BinaryIO = args[1] if len(args) > 1 else kwargs["file"]
             messages = "audio_file"
+        elif (
+            call_type == CallTypes.aspeech.value or call_type == CallTypes.speech.value
+        ):
+            messages = kwargs.get("input", "speech")
         stream = True if "stream" in kwargs and kwargs["stream"] == True else False
         logging_obj = Logging(
             model=model,
@@ -3345,6 +3349,8 @@ def client(original_function):
             elif "aimg_generation" in kwargs and kwargs["aimg_generation"] == True:
                 return result
             elif "atranscription" in kwargs and kwargs["atranscription"] == True:
+                return result
+            elif "aspeech" in kwargs and kwargs["aspeech"] == True:
                 return result
 
             ### POST-CALL RULES ###
@@ -5754,6 +5760,8 @@ def get_optional_params(
             optional_params["stream"] = stream
         if temperature is not None:
             optional_params["temperature"] = temperature
+        if seed is not None:
+            optional_params["seed"] = seed
         if top_p is not None:
             optional_params["top_p"] = top_p
         if frequency_penalty is not None:
@@ -6406,6 +6414,8 @@ def get_supported_openai_params(
             return ["stream", "temperature", "max_tokens"]
         elif model.startswith("mistral"):
             return ["max_tokens", "temperature", "stop", "top_p", "stream"]
+    elif custom_llm_provider == "ollama":
+        return litellm.OllamaConfig().get_supported_openai_params()
     elif custom_llm_provider == "ollama_chat":
         return litellm.OllamaChatConfig().get_supported_openai_params()
     elif custom_llm_provider == "anthropic":
@@ -6575,16 +6585,6 @@ def get_supported_openai_params(
         ]
     elif custom_llm_provider == "cloudflare":
         return ["max_tokens", "stream"]
-    elif custom_llm_provider == "ollama":
-        return [
-            "max_tokens",
-            "stream",
-            "top_p",
-            "temperature",
-            "frequency_penalty",
-            "stop",
-            "response_format",
-        ]
     elif custom_llm_provider == "nlp_cloud":
         return [
             "max_tokens",

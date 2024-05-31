@@ -49,6 +49,8 @@ import {
   getCallbacksCall,
   setCallbacksCall,
   modelSettingsCall,
+  adminGlobalActivityExceptions,
+  adminGlobalActivityExceptionsPerDeployment,
 } from "./networking";
 import { BarChart, AreaChart } from "@tremor/react";
 import {
@@ -108,6 +110,13 @@ interface EditModelModalProps {
 interface RetryPolicyObject {
   [key: string]: { [retryPolicyKey: string]: number } | undefined;
 }
+
+
+interface GlobalExceptionActivityData {
+  sum_num_rate_limit_exceptions: number;
+  daily_data: { date: string; num_rate_limit_exceptions: number; }[];
+}
+
 
 //["OpenAI", "Azure OpenAI", "Anthropic", "Gemini (Google AI Studio)", "Amazon Bedrock", "OpenAI-Compatible Endpoints (Groq, Together AI, Mistral AI, etc.)"]
 
@@ -300,6 +309,9 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const [modelGroupRetryPolicy, setModelGroupRetryPolicy] =
     useState<RetryPolicyObject | null>(null);
   const [defaultRetry, setDefaultRetry] = useState<number>(0);
+
+  const [globalExceptionData, setGlobalExceptionData] =  useState<GlobalExceptionActivityData>({} as GlobalExceptionActivityData);
+  const [globalExceptionPerDeployment, setGlobalExceptionPerDeployment] = useState<any[]>([]);
 
   function formatCreatedAt(createdAt: string | null) {
     if (createdAt) {
@@ -643,6 +655,29 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
           dateValue.to?.toISOString()
         );
 
+        const dailyExceptions = await adminGlobalActivityExceptions(
+          accessToken,
+          dateValue.from?.toISOString().split('T')[0],
+          dateValue.to?.toISOString().split('T')[0],
+          _initial_model_group,
+        );
+
+        setGlobalExceptionData(dailyExceptions);
+
+        const dailyExceptionsPerDeplyment = await adminGlobalActivityExceptionsPerDeployment(
+          accessToken,
+          dateValue.from?.toISOString().split('T')[0],
+          dateValue.to?.toISOString().split('T')[0],
+          _initial_model_group,
+        )
+
+        setGlobalExceptionPerDeployment(dailyExceptionsPerDeplyment);
+
+        console.log("dailyExceptions:", dailyExceptions);
+
+        console.log("dailyExceptionsPerDeplyment:", dailyExceptionsPerDeplyment);
+
+      
         console.log("slowResponses:", slowResponses);
 
         setSlowResponsesData(slowResponses);
@@ -905,6 +940,30 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
       console.log("slowResponses:", slowResponses);
 
       setSlowResponsesData(slowResponses);
+
+
+      if (modelGroup) {
+        const dailyExceptions = await adminGlobalActivityExceptions(
+          accessToken,
+          startTime?.toISOString().split('T')[0],
+          endTime?.toISOString().split('T')[0],
+          modelGroup,
+        );
+  
+        setGlobalExceptionData(dailyExceptions);
+  
+        const dailyExceptionsPerDeplyment = await adminGlobalActivityExceptionsPerDeployment(
+          accessToken,
+          startTime?.toISOString().split('T')[0],
+          endTime?.toISOString().split('T')[0],
+          modelGroup,
+        )
+  
+        setGlobalExceptionPerDeployment(dailyExceptionsPerDeplyment);
+
+      }
+
+      
     } catch (error) {
       console.error("Failed to fetch model metrics", error);
     }
@@ -1200,9 +1259,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                               wordBreak: "break-word",
                             }}
                           >
-                            <p style={{ fontSize: "10px" }}>
-                              {model.model_name || "-"}
-                            </p>
+                            <p className="text-xs">{model.model_name || "-"}</p>
                           </TableCell>
                           <TableCell
                             style={{
@@ -1211,9 +1268,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                               wordBreak: "break-word",
                             }}
                           >
-                            <p style={{ fontSize: "10px" }}>
-                              {model.provider || "-"}
-                            </p>
+                            <p className="text-xs">{model.provider || "-"}</p>
                           </TableCell>
                           {userRole === "Admin" && (
                             <TableCell
@@ -1229,8 +1284,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                                     maxWidth: "150px",
                                     whiteSpace: "normal",
                                     wordBreak: "break-word",
-                                    fontSize: "10px",
                                   }}
+                                  className="text-xs"
                                   title={
                                     model && model.api_base
                                       ? model.api_base
@@ -1251,7 +1306,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                               wordBreak: "break-word",
                             }}
                           >
-                            <pre style={{ fontSize: "10px" }}>
+                            <pre className="text-xs">
                               {model.input_cost
                                 ? model.input_cost
                                 : model.litellm_params.input_cost_per_token
@@ -1271,7 +1326,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                               wordBreak: "break-word",
                             }}
                           >
-                            <pre style={{ fontSize: "10px" }}>
+                            <pre className="text-xs">
                               {model.output_cost
                                 ? model.output_cost
                                 : model.litellm_params.output_cost_per_token
@@ -1285,7 +1340,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                             </pre>
                           </TableCell>
                           <TableCell>
-                            <p style={{ fontSize: "10px" }}>
+                            <p className="text-xs">
                               {premiumUser
                                 ? formatCreatedAt(
                                     model.model_info.created_at
@@ -1294,7 +1349,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                             </p>
                           </TableCell>
                           <TableCell>
-                            <p style={{ fontSize: "10px" }}>
+                            <p className="text-xs">
                               {premiumUser
                                 ? model.model_info.created_by || "-"
                                 : "-"}
@@ -1309,11 +1364,11 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                           >
                             {model.model_info.db_model ? (
                               <Badge size="xs" className="text-white">
-                                <p style={{ fontSize: "10px" }}>DB Model</p>
+                                <p className="text-xs">DB Model</p>
                               </Badge>
                             ) : (
                               <Badge size="xs" className="text-black">
-                                <p style={{ fontSize: "10px" }}>Config Model</p>
+                                <p className="text-xs">Config Model</p>
                               </Badge>
                             )}
                           </TableCell>
@@ -1782,17 +1837,110 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                 </Card>
               </Col>
             </Grid>
-            <Card className="mt-4">
-              <Title>Exceptions per Model</Title>
-              <BarChart
-                className="h-72"
-                data={modelExceptions}
-                index="model"
-                categories={allExceptions}
-                stack={true}
-                yAxisWidth={30}
-              />
-            </Card>
+
+            <Grid numItems={1} className="gap-2 w-full mt-2">
+                <Card>
+                <Title>All Up Rate Limit Errors (429) for {selectedModelGroup}</Title>
+                <Grid numItems={1}>
+                <Col>
+                <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>Num Rate Limit Errors { (globalExceptionData.sum_num_rate_limit_exceptions)}</Subtitle>
+                <BarChart
+                    className="h-40"
+                    data={globalExceptionData.daily_data}
+                    index="date"
+                    colors={['rose']}
+                    categories={['num_rate_limit_exceptions']}
+                    onValueChange={(v) => console.log(v)}
+                  />
+                  </Col>
+                  <Col>
+
+                {/* <BarChart
+                    className="h-40"
+                    data={modelExceptions}
+                    index="model"
+                    categories={allExceptions}
+                    stack={true}
+                    yAxisWidth={30}
+              /> */}
+      
+
+                </Col>
+
+                </Grid>
+                
+
+                </Card>
+
+                {
+                  premiumUser ? ( 
+                    <>
+                    {globalExceptionPerDeployment.map((globalActivity, index) => (
+                <Card key={index}>
+                  <Title>{globalActivity.api_base ? globalActivity.api_base : "Unknown API Base"}</Title>
+                  <Grid numItems={1}>
+                    <Col>
+                      <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>Num Rate Limit Errors (429) {(globalActivity.sum_num_rate_limit_exceptions)}</Subtitle>
+                      <BarChart
+                        className="h-40"
+                        data={globalActivity.daily_data}
+                        index="date"
+                        colors={['rose']}
+                        categories={['num_rate_limit_exceptions']}
+          
+                        onValueChange={(v) => console.log(v)}
+                      />
+                      
+                    </Col>
+                  </Grid>
+                </Card>
+              ))}
+                    </>
+                  ) : 
+                  <>
+                  {globalExceptionPerDeployment && globalExceptionPerDeployment.length > 0 &&
+                    globalExceptionPerDeployment.slice(0, 1).map((globalActivity, index) => (
+                      <Card key={index}>
+                        <Title>✨ Rate Limit Errors by Deployment</Title>
+                        <p className="mb-2 text-gray-500 italic text-[12px]">Upgrade to see exceptions for all deployments</p>
+                        <Button variant="primary" className="mb-2">
+                          <a href="https://forms.gle/W3U4PZpJGFHWtHyA9" target="_blank">
+                            Get Free Trial
+                          </a>
+                        </Button>
+                        <Card>
+                        <Title>{globalActivity.api_base}</Title>
+                        <Grid numItems={1}>
+                          <Col>
+                            <Subtitle
+                              style={{
+                                fontSize: "15px",
+                                fontWeight: "normal",
+                                color: "#535452",
+                              }}
+                            >
+                              Num Rate Limit Errors {(globalActivity.sum_num_rate_limit_exceptions)}
+                            </Subtitle>
+                            <BarChart
+                                className="h-40"
+                                data={globalActivity.daily_data}
+                                index="date"
+                                colors={['rose']}
+                                categories={['num_rate_limit_exceptions']}
+                  
+                                onValueChange={(v) => console.log(v)}
+                              />
+                          </Col>
+                          
+                          
+                        </Grid>
+                        </Card>
+                      </Card>
+                    ))}
+                </>
+                }              
+              </Grid>
+              
           </TabPanel>
           <TabPanel>
             <div className="flex items-center">

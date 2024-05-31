@@ -45,6 +45,8 @@ class OllamaChatConfig:
 
     - `temperature` (float): The temperature of the model. Increasing the temperature will make the model answer more creatively. Default: 0.8. Example usage: temperature 0.7
 
+    - `seed` (int): Sets the random number seed to use for generation. Setting this to a specific number will make the model generate the same text for the same prompt. Example usage: seed 42
+
     - `stop` (string[]): Sets the stop sequences to use. Example usage: stop "AI assistant:"
 
     - `tfs_z` (float): Tail free sampling is used to reduce the impact of less probable tokens from the output. A higher value (e.g., 2.0) will reduce the impact more, while a value of 1.0 disables this setting. Default: 1. Example usage: tfs_z 1
@@ -69,6 +71,7 @@ class OllamaChatConfig:
     repeat_last_n: Optional[int] = None
     repeat_penalty: Optional[float] = None
     temperature: Optional[float] = None
+    seed: Optional[int] = None
     stop: Optional[list] = (
         None  # stop is a list based on this - https://github.com/ollama/ollama/pull/442
     )
@@ -90,6 +93,7 @@ class OllamaChatConfig:
         repeat_last_n: Optional[int] = None,
         repeat_penalty: Optional[float] = None,
         temperature: Optional[float] = None,
+        seed: Optional[int] = None,
         stop: Optional[list] = None,
         tfs_z: Optional[float] = None,
         num_predict: Optional[int] = None,
@@ -130,6 +134,7 @@ class OllamaChatConfig:
             "stream",
             "top_p",
             "temperature",
+            "seed",
             "frequency_penalty",
             "stop",
             "tools",
@@ -146,6 +151,8 @@ class OllamaChatConfig:
                 optional_params["stream"] = value
             if param == "temperature":
                 optional_params["temperature"] = value
+            if param == "seed":
+                optional_params["seed"] = value
             if param == "top_p":
                 optional_params["top_p"] = value
             if param == "frequency_penalty":

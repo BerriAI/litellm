@@ -7,7 +7,7 @@ import os, io
 
 sys.path.insert(
     0, os.path.abspath("../..")
-)  # Adds the parent-directory to the system path
+)  # Adds the parent directory to the system path
 import pytest
 import litellm
 from litellm import embedding, completion, completion_cost, Timeout
@@ -38,7 +38,7 @@ def reset_callbacks():
 @pytest.mark.skip(reason="Local test")
 def test_response_model_none():
     """
-    Addresses: https://github.com/BerriAI/litellm/issues/2972
+    Addresses:https://github.com/BerriAI/litellm/issues/2972
     """
     x = completion(
         model="mymodel",
@@ -1419,7 +1419,7 @@ def test_ollama_image():
         return mock_response
 
     def make_b64image(format):
-        image = Image.new(mode='RGB', size=(1, 1))
+        image = Image.new(mode="RGB", size=(1, 1))
         image_buffer = io.BytesIO()
         image.save(image_buffer, format)
         return base64.b64encode(image_buffer.getvalue()).decode("utf-8")
@@ -1433,13 +1433,13 @@ def test_ollama_image():
 
     tests = [
         # input                                    expected
-        [ jpeg_image,                              jpeg_image          ],
-        [ webp_image,                              None                ],
-        [ png_image,                               png_image           ],
-        [ f"data:image/jpeg;base64,{jpeg_image}",  jpeg_image          ],
-        [ f"data:image/webp;base64,{webp_image}",  None                ],
-        [ f"data:image/png;base64,{png_image}",    png_image           ],
-        [ datauri_base64_data,                     datauri_base64_data ]
+        [jpeg_image, jpeg_image],
+        [webp_image, None],
+        [png_image, png_image],
+        [f"data:image/jpeg;base64,{jpeg_image}", jpeg_image],
+        [f"data:image/webp;base64,{webp_image}", None],
+        [f"data:image/png;base64,{png_image}", png_image],
+        [datauri_base64_data, datauri_base64_data],
     ]
 
     for test in tests:
@@ -1454,9 +1454,7 @@ def test_ollama_image():
                                 {"type": "text", "text": "Whats in this image?"},
                                 {
                                     "type": "image_url",
-                                    "image_url": {
-                                        "url": test[0]
-                                    },
+                                    "image_url": {"url": test[0]},
                                 },
                             ],
                         }
