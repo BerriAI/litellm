@@ -5996,6 +5996,7 @@ async def generate_key_fn(
     - aliases: Optional[dict] - Any alias mappings, on top of anything in the config.yaml model list. - https://docs.litellm.ai/docs/proxy/virtual_keys#managing-auth---upgradedowngrade-models
     - config: Optional[dict] - any key-specific configs, overrides config in config.yaml
     - spend: Optional[int] - Amount spent by key. Default is 0. Will be updated by proxy whenever key is used. https://docs.litellm.ai/docs/proxy/virtual_keys#managing-auth---tracking-spend
+    - send_invite_email: Optional[bool] - Whether to send an invite email to the user_id, with the generate key
     - max_budget: Optional[float] - Specify max budget for a given key.
     - max_parallel_requests: Optional[int] - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x.
     - metadata: Optional[dict] - Metadata for key, store information for key. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
@@ -6129,24 +6130,26 @@ async def generate_key_fn(
         response["soft_budget"] = (
             data.soft_budget
         )  # include the user-input soft budget in the response
-        event = WebhookEvent(
-            event="key_created",
-            event_group="key",
-            event_message=f"API Key Created",
-            token=response.get("token", ""),
-            spend=response.get("spend", 0.0),
-            max_budget=response.get("max_budget", 0.0),
-            user_id=response.get("user_id", None),
-            team_id=response.get("team_id", "Default Team"),
-            key_alias=response.get("key_alias", None),
-        )
 
-        # If user configured email alerting - send an Email letting their end-user know the key was created
-        asyncio.create_task(
-            proxy_logging_obj.slack_alerting_instance.send_key_created_email(
-                webhook_event=event,
+        if data.send_invite_email is True:
+            event = WebhookEvent(
+                event="key_created",
+                event_group="key",
+                event_message=f"API Key Created",
+                token=response.get("token", ""),
+                spend=response.get("spend", 0.0),
+                max_budget=response.get("max_budget", 0.0),
+                user_id=response.get("user_id", None),
+                team_id=response.get("team_id", "Default Team"),
+                key_alias=response.get("key_alias", None),
             )
-        )
+
+            # If user configured email alerting - send an Email letting their end-user know the key was created
+            asyncio.create_task(
+                proxy_logging_obj.slack_alerting_instance.send_key_created_email(
+                    webhook_event=event,
+                )
+            )
 
         return GenerateKeyResponse(**response)
     except Exception as e:
