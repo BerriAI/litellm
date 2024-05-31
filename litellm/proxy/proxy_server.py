@@ -6860,6 +6860,259 @@ async def get_global_activity_model(
 
 
 @router.get(
+    "/global/activity/exceptions/deployment",
+    tags=["Budget & Spend Tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+    responses={
+        200: {"model": List[LiteLLM_SpendLogs]},
+    },
+)
+async def get_global_activity_exceptions_per_deployment(
+    model_group: str = fastapi.Query(
+        description="Filter by model group",
+    ),
+    start_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="Time from which to start viewing spend",
+    ),
+    end_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="Time till which to view spend",
+    ),
+):
+    """
+    Get number of 429 errors - Grouped by deployment
+
+    [
+        {
+            "deployment": "https://azure-us-east-1.openai.azure.com/",
+            "daily_data": [
+                    const chartdata = [
+                    {
+                    date: 'Jan 22',
+                    num_exceptions: 10
+                    },
+                    {
+                    date: 'Jan 23',
+                    num_exceptions: 12
+                    },
+            ],
+            "sum_num_exceptions": 20,
+
+        },
+        {
+            "deployment": "https://azure-us-east-1.openai.azure.com/",
+            "daily_data": [
+                    const chartdata = [
+                    {
+                    date: 'Jan 22',
+                    num_exceptions: 10,
+                    },
+                    {
+                    date: 'Jan 23',
+                    num_exceptions: 12
+                    },
+            ],
+            "sum_num_exceptions": 20,
+
+        },
+    ]
+    """
+    from collections import defaultdict
+
+    if start_date is None or end_date is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "Please provide start_date and end_date"},
+        )
+
+    start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
+    end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
+
+    global prisma_client, llm_router, premium_user
+    try:
+        if prisma_client is None:
+            raise Exception(
+                f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
+            )
+
+        sql_query = """
+        SELECT
+            api_base,
+            date_trunc('day', "startTime")::date AS date,
+            COUNT(*) AS num_exceptions
+        FROM
+            "LiteLLM_ErrorLogs"
+        WHERE
+            "startTime" >= $1::date
+            AND "startTime" < ($2::date + INTERVAL '1 day')
+            AND model_group = $3
+        GROUP BY
+            api_base,
+            date_trunc('day', "startTime")
+        ORDER BY
+            date;
+        """
+        db_response = await prisma_client.db.query_raw(
+            sql_query, start_date_obj, end_date_obj, model_group
+        )
+        if db_response is None:
+            return []
+
+        model_ui_data: dict = (
+            {}
+        )  # {"gpt-4": {"daily_data": [], "sum_api_requests": 0, "sum_total_tokens": 0}}
+
+        for row in db_response:
+            _model = row["api_base"]
+            if _model not in model_ui_data:
+                model_ui_data[_model] = {
+                    "daily_data": [],
+                    "sum_num_exceptions": 0,
+                }
+            _date_obj = datetime.fromisoformat(row["date"])
+            row["date"] = _date_obj.strftime("%b %d")
+
+            model_ui_data[_model]["daily_data"].append(row)
+            model_ui_data[_model]["sum_num_exceptions"] += row.get("num_exceptions", 0)
+
+        # sort mode ui data by sum_api_requests -> get top 10 models
+        model_ui_data = dict(
+            sorted(
+                model_ui_data.items(),
+                key=lambda x: x[1]["sum_num_exceptions"],
+                reverse=True,
+            )[:10]
+        )
+
+        response = []
+        for model, data in model_ui_data.items():
+            _sort_daily_data = sorted(data["daily_data"], key=lambda x: x["date"])
+
+            response.append(
+                {
+                    "api_base": model,
+                    "daily_data": _sort_daily_data,
+                    "sum_num_exceptions": data["sum_num_exceptions"],
+                }
+            )
+
+        return response
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": str(e)},
+        )
+
+
+@router.get(
+    "/global/activity/exceptions",
+    tags=["Budget & Spend Tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+    responses={
+        200: {"model": List[LiteLLM_SpendLogs]},
+    },
+)
+async def get_global_activity_exceptions(
+    model_group: str = fastapi.Query(
+        description="Filter by model group",
+    ),
+    start_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="Time from which to start viewing spend",
+    ),
+    end_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="Time till which to view spend",
+    ),
+):
+    """
+    Get number of API Requests, total tokens through proxy
+
+    {
+        "daily_data": [
+                const chartdata = [
+                {
+                date: 'Jan 22',
+                num_exceptions: 10,
+                },
+                {
+                date: 'Jan 23',
+                num_exceptions: 10,
+                },
+        ],
+        "sum_api_exceptions": 20,
+    }
+    """
+    from collections import defaultdict
+
+    if start_date is None or end_date is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "Please provide start_date and end_date"},
+        )
+
+    start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
+    end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
+
+    global prisma_client, llm_router
+    try:
+        if prisma_client is None:
+            raise Exception(
+                f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
+            )
+
+        sql_query = """
+        SELECT
+            date_trunc('day', "startTime")::date AS date,
+            COUNT(*) AS num_exceptions
+        FROM
+            "LiteLLM_ErrorLogs"
+        WHERE
+            "startTime" >= $1::date
+            AND "startTime" < ($2::date + INTERVAL '1 day')
+            AND model_group = $3
+        GROUP BY
+            date_trunc('day', "startTime")
+        ORDER BY
+            date;
+        """
+        db_response = await prisma_client.db.query_raw(
+            sql_query, start_date_obj, end_date_obj, model_group
+        )
+
+        if db_response is None:
+            return []
+
+        sum_num_exceptions = 0
+        daily_data = []
+        for row in db_response:
+            # cast date to datetime
+            _date_obj = datetime.fromisoformat(row["date"])
+            row["date"] = _date_obj.strftime("%b %d")
+
+            daily_data.append(row)
+            sum_num_exceptions += row.get("num_exceptions", 0)
+
+        # sort daily_data by date
+        daily_data = sorted(daily_data, key=lambda x: x["date"])
+
+        data_to_return = {
+            "daily_data": daily_data,
+            "sum_num_exceptions": sum_num_exceptions,
+        }
+
+        return data_to_return
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": str(e)},
+        )
+
+
+@router.get(
     "/global/spend/provider",
     tags=["Budget & Spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
