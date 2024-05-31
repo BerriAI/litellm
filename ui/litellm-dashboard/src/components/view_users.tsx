@@ -24,6 +24,11 @@ import {
   Icon,
   TextInput,
 } from "@tremor/react";
+
+import {
+  message,
+} from "antd";
+
 import { userInfoCall, userUpdateUserCall, getPossibleUserRoles } from "./networking";
 import { Badge, BadgeDelta, Button } from "@tremor/react";
 import RequestAccess from "./request_model_access";
@@ -77,8 +82,12 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
       return;
     }
 
-    userUpdateUserCall(accessToken, editedUser, null);
-
+    try {
+      await userUpdateUserCall(accessToken, editedUser, null);
+      message.success(`User ${editedUser.user_id} updated successfully`);
+    } catch (error) {
+      console.error("There was an error updating the user", error);
+    }    
     if (userData) {
       const updatedUserData = userData.map((user) =>
         user.user_id === editedUser.user_id ? editedUser : user
@@ -189,7 +198,9 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                       <TableRow key={user.user_id}>
                         <TableCell>{user.user_id || "-"}</TableCell>
                         <TableCell>{user.user_email || "-"}</TableCell>
-                        <TableCell>{user.user_role || "-"}</TableCell>
+                        <TableCell>
+                          {possibleUIRoles?.[user?.user_role]?.ui_label || "-"}
+                        </TableCell>
                         <TableCell>
                           {user.spend ? user.spend?.toFixed(2) : "-"}
                         </TableCell>
@@ -225,22 +236,16 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                             </Grid>
                           </TableCell>
                         <TableCell>
-
-                        <Icon icon={InformationCircleIcon} onClick= {() => {
-                          setOpenDialogId(user.user_id)
-                          setSelectedItem(user)
-                        }}>View Keys</Icon>
-                         
                          
                          <Icon icon={PencilAltIcon} onClick= {() => {
                           setSelectedUser(user)
                           setEditModalVisible(true)
                         }}>View Keys</Icon>
-
+{/* 
                         <Icon icon={TrashIcon} onClick= {() => {
                           setOpenDialogId(user.user_id)
                           setSelectedItem(user)
-                        }}>View Keys</Icon>
+                        }}>View Keys</Icon> */}
 
                         </TableCell>
                      
