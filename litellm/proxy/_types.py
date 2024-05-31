@@ -587,6 +587,19 @@ class NewUserRequest(GenerateKeyRequest):
 
 class NewUserResponse(GenerateKeyResponse):
     max_budget: Optional[float] = None
+    user_email: Optional[str] = None
+    user_role: Optional[
+        Literal[
+            LitellmUserRoles.PROXY_ADMIN,
+            LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+            LitellmUserRoles.INTERNAL_USER,
+            LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+            LitellmUserRoles.TEAM,
+            LitellmUserRoles.CUSTOMER,
+        ]
+    ] = None
+    teams: Optional[list] = None
+    organization_id: Optional[str] = None
 
 
 class UpdateUserRequest(GenerateRequestBase):
@@ -1292,6 +1305,7 @@ class WebhookEvent(CallInfo):
         "threshold_crossed",
         "projected_limit_exceeded",
         "key_created",
+        "internal_user_created",
         "spend_tracked",
     ]
     event_group: Literal["internal_user", "key", "team", "proxy", "customer"]
