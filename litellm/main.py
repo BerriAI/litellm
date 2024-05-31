@@ -14,7 +14,6 @@ from functools import partial
 import dotenv, traceback, random, asyncio, time, contextvars
 from copy import deepcopy
 import httpx
-
 import litellm
 from ._logging import verbose_logger
 from litellm import (  # type: ignore
@@ -73,12 +72,14 @@ from .llms import (
 )
 from .llms.openai import OpenAIChatCompletion, OpenAITextCompletion
 from .llms.azure import AzureChatCompletion
+from .llms.databricks import DatabricksChatCompletion
 from .llms.azure_text import AzureTextCompletion
 from .llms.anthropic import AnthropicChatCompletion
 from .llms.anthropic_text import AnthropicTextCompletion
 from .llms.huggingface_restapi import Huggingface
 from .llms.predibase import PredibaseChatCompletion
 from .llms.bedrock_httpx import BedrockLLM
+from .llms.vertex_httpx import VertexLLM
 from .llms.triton import TritonChatCompletion
 from .llms.prompt_templates.factory import (
     prompt_factory,
@@ -90,6 +91,7 @@ import tiktoken
 from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, List, Optional, Dict, Union, Mapping
 from .caching import enable_cache, disable_cache, update_cache
+from .types.llms.openai import HttpxBinaryResponseContent
 
 encoding = tiktoken.get_encoding("cl100k_base")
 from litellm.utils import (
@@ -110,6 +112,7 @@ from litellm.utils import (
 ####### ENVIRONMENT VARIABLES ###################
 openai_chat_completions = OpenAIChatCompletion()
 openai_text_completions = OpenAITextCompletion()
+databricks_chat_completions = DatabricksChatCompletion()
 anthropic_chat_completions = AnthropicChatCompletion()
 anthropic_text_completions = AnthropicTextCompletion()
 azure_chat_completions = AzureChatCompletion()
@@ -118,6 +121,7 @@ huggingface = Huggingface()
 predibase_chat_completions = PredibaseChatCompletion()
 triton_chat_completions = TritonChatCompletion()
 bedrock_chat_completion = BedrockLLM()
+vertex_chat_completion = VertexLLM()
 ####### COMPLETION ENDPOINTS ################
 
 
@@ -290,6 +294,7 @@ async def acompletion(
         "api_version": api_version,
         "api_key": api_key,
         "model_list": model_list,
+        "extra_headers": extra_headers,
         "acompletion": True,  # assuming this is a required parameter
     }
     if custom_llm_provider is None:
@@ -320,12 +325,14 @@ async def acompletion(
             or custom_llm_provider == "huggingface"
             or custom_llm_provider == "ollama"
             or custom_llm_provider == "ollama_chat"
+            or custom_llm_provider == "replicate"
             or custom_llm_provider == "vertex_ai"
             or custom_llm_provider == "gemini"
             or custom_llm_provider == "sagemaker"
             or custom_llm_provider == "anthropic"
             or custom_llm_provider == "predibase"
-            or (custom_llm_provider == "bedrock" and "cohere" in model)
+            or custom_llm_provider == "bedrock"
+            or custom_llm_provider == "databricks"
             or custom_llm_provider in litellm.openai_compatible_providers
         ):  # currently implemented aiohttp calls for just azure, openai, hf, ollama, vertex ai soon all.
             init_response = await loop.run_in_executor(None, func_with_context)
@@ -367,6 +374,8 @@ async def acompletion(
 async def _async_streaming(response, model, custom_llm_provider, args):
     try:
         print_verbose(f"received response in _async_streaming: {response}")
+        if asyncio.iscoroutine(response):
+            response = await response
         async for line in response:
             print_verbose(f"line in async streaming: {line}")
             yield line
@@ -412,6 +421,8 @@ def mock_completion(
                 api_key="mock-key",
             )
         if isinstance(mock_response, Exception):
+            if isinstance(mock_response, openai.APIError):
+                raise mock_response
             raise litellm.APIError(
                 status_code=500,  # type: ignore
                 message=str(mock_response),
@@ -455,7 +466,9 @@ def mock_completion(
 
         return model_response
 
-    except:
+    except Exception as e:
+        if isinstance(e, openai.APIError):
+            raise e
         traceback.print_exc()
         raise Exception("Mock completion response failed")
 
@@ -481,7 +494,7 @@ def completion(
     response_format: Optional[dict] = None,
     seed: Optional[int] = None,
     tools: Optional[List] = None,
-    tool_choice: Optional[str] = None,
+    tool_choice: Optional[Union[str, dict]] = None,
     logprobs: Optional[bool] = None,
     top_logprobs: Optional[int] = None,
     deployment_id=None,
@@ -552,7 +565,7 @@ def completion(
     model_info = kwargs.get("model_info", None)
     proxy_server_request = kwargs.get("proxy_server_request", None)
     fallbacks = kwargs.get("fallbacks", None)
-    headers = kwargs.get("headers", None)
+    headers = kwargs.get("headers", None) or extra_headers
     num_retries = kwargs.get("num_retries", None)  ## deprecated
     max_retries = kwargs.get("max_retries", None)
     context_window_fallback_dict = kwargs.get("context_window_fallback_dict", None)
@@ -667,26 +680,13 @@ def completion(
         "region_name",
         "allowed_model_region",
         "model_config",
+        "fastest_response",
     ]
 
     default_params = openai_params + litellm_params
     non_default_params = {
         k: v for k, v in kwargs.items() if k not in default_params
     }  # model-specific params - pass them straight to the model/provider
-
-    ### TIMEOUT LOGIC ###
-    timeout = timeout or kwargs.get("request_timeout", 600) or 600
-    # set timeout for 10 minutes by default
-
-    if (
-        timeout is not None
-        and isinstance(timeout, httpx.Timeout)
-        and supports_httpx_timeout(custom_llm_provider) == False
-    ):
-        read_timeout = timeout.read or 600
-        timeout = read_timeout  # default 10 min timeout
-    elif timeout is not None and not isinstance(timeout, httpx.Timeout):
-        timeout = float(timeout)  # type: ignore
 
     try:
         if base_url is not None:
@@ -726,6 +726,16 @@ def completion(
             model_response._hidden_params["region_name"] = kwargs.get(
                 "aws_region_name", None
             )  # support region-based pricing for bedrock
+
+        ### TIMEOUT LOGIC ###
+        timeout = timeout or kwargs.get("request_timeout", 600) or 600
+        # set timeout for 10 minutes by default
+        if isinstance(timeout, httpx.Timeout) and not supports_httpx_timeout(
+            custom_llm_provider
+        ):
+            timeout = timeout.read or 600  # default 10 min timeout
+        elif not isinstance(timeout, httpx.Timeout):
+            timeout = float(timeout)  # type: ignore
 
         ### REGISTER CUSTOM MODEL PRICING -- IF GIVEN ###
         if input_cost_per_token is not None and output_cost_per_token is not None:
@@ -860,6 +870,7 @@ def completion(
             user=user,
             optional_params=optional_params,
             litellm_params=litellm_params,
+            custom_llm_provider=custom_llm_provider,
         )
         if mock_response:
             return mock_completion(
@@ -1192,7 +1203,7 @@ def completion(
 
             custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
 
-            model_response = replicate.completion(
+            model_response = replicate.completion(  # type: ignore
                 model=model,
                 messages=messages,
                 api_base=api_base,
@@ -1205,12 +1216,10 @@ def completion(
                 api_key=replicate_key,
                 logging_obj=logging,
                 custom_prompt_dict=custom_prompt_dict,
+                acompletion=acompletion,
             )
-            if "stream" in optional_params and optional_params["stream"] == True:
-                # don't try to access stream object,
-                model_response = CustomStreamWrapper(model_response, model, logging_obj=logging, custom_llm_provider="replicate")  # type: ignore
 
-            if optional_params.get("stream", False) or acompletion == True:
+            if optional_params.get("stream", False) == True:
                 ## LOGGING
                 logging.post_call(
                     input=messages,
@@ -1616,6 +1625,61 @@ def completion(
                 )
                 return response
             response = model_response
+        elif custom_llm_provider == "databricks":
+            api_base = (
+                api_base  # for databricks we check in get_llm_provider and pass in the api base from there
+                or litellm.api_base
+                or os.getenv("DATABRICKS_API_BASE")
+            )
+
+            # set API KEY
+            api_key = (
+                api_key
+                or litellm.api_key  # for databricks we check in get_llm_provider and pass in the api key from there
+                or litellm.databricks_key
+                or get_secret("DATABRICKS_API_KEY")
+            )
+
+            headers = headers or litellm.headers
+
+            ## COMPLETION CALL
+            try:
+                response = databricks_chat_completions.completion(
+                    model=model,
+                    messages=messages,
+                    headers=headers,
+                    model_response=model_response,
+                    print_verbose=print_verbose,
+                    api_key=api_key,
+                    api_base=api_base,
+                    acompletion=acompletion,
+                    logging_obj=logging,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    logger_fn=logger_fn,
+                    timeout=timeout,  # type: ignore
+                    custom_prompt_dict=custom_prompt_dict,
+                    client=client,  # pass AsyncOpenAI, OpenAI client
+                    encoding=encoding,
+                )
+            except Exception as e:
+                ## LOGGING - log the original exception returned
+                logging.post_call(
+                    input=messages,
+                    api_key=api_key,
+                    original_response=str(e),
+                    additional_args={"headers": headers},
+                )
+                raise e
+
+            if optional_params.get("stream", False):
+                ## LOGGING
+                logging.post_call(
+                    input=messages,
+                    api_key=api_key,
+                    original_response=response,
+                    additional_args={"headers": headers},
+                )
         elif custom_llm_provider == "openrouter":
             api_base = api_base or litellm.api_base or "https://openrouter.ai/api/v1"
 
@@ -1984,23 +2048,9 @@ def completion(
             # boto3 reads keys from .env
             custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
 
-            if "cohere" in model:
-                response = bedrock_chat_completion.completion(
-                    model=model,
-                    messages=messages,
-                    custom_prompt_dict=litellm.custom_prompt_dict,
-                    model_response=model_response,
-                    print_verbose=print_verbose,
-                    optional_params=optional_params,
-                    litellm_params=litellm_params,
-                    logger_fn=logger_fn,
-                    encoding=encoding,
-                    logging_obj=logging,
-                    extra_headers=extra_headers,
-                    timeout=timeout,
-                    acompletion=acompletion,
-                )
-            else:
+            if (
+                "aws_bedrock_client" in optional_params
+            ):  # use old bedrock flow for aws_bedrock_client users.
                 response = bedrock.completion(
                     model=model,
                     messages=messages,
@@ -2036,7 +2086,23 @@ def completion(
                             custom_llm_provider="bedrock",
                             logging_obj=logging,
                         )
-
+            else:
+                response = bedrock_chat_completion.completion(
+                    model=model,
+                    messages=messages,
+                    custom_prompt_dict=custom_prompt_dict,
+                    model_response=model_response,
+                    print_verbose=print_verbose,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    logger_fn=logger_fn,
+                    encoding=encoding,
+                    logging_obj=logging,
+                    extra_headers=extra_headers,
+                    timeout=timeout,
+                    acompletion=acompletion,
+                    client=client,
+                )
             if optional_params.get("stream", False):
                 ## LOGGING
                 logging.post_call(
@@ -2477,6 +2543,7 @@ def batch_completion(
         list: A list of completion results.
     """
     args = locals()
+
     batch_messages = messages
     completions = []
     model = model
@@ -2530,7 +2597,15 @@ def batch_completion(
                     completions.append(future)
 
         # Retrieve the results from the futures
-        results = [future.result() for future in completions]
+        # results = [future.result() for future in completions]
+        # return exceptions if any
+        results = []
+        for future in completions:
+            try:
+                results.append(future.result())
+            except Exception as exc:
+                results.append(exc)
+
     return results
 
 
@@ -2669,7 +2744,7 @@ def batch_completion_models_all_responses(*args, **kwargs):
 
 ### EMBEDDING ENDPOINTS ####################
 @client
-async def aembedding(*args, **kwargs):
+async def aembedding(*args, **kwargs) -> EmbeddingResponse:
     """
     Asynchronously calls the `embedding` function with the given arguments and keyword arguments.
 
@@ -2714,12 +2789,13 @@ async def aembedding(*args, **kwargs):
             or custom_llm_provider == "fireworks_ai"
             or custom_llm_provider == "ollama"
             or custom_llm_provider == "vertex_ai"
+            or custom_llm_provider == "databricks"
         ):  # currently implemented aiohttp calls for just azure and openai, soon all.
             # Await normally
             init_response = await loop.run_in_executor(None, func_with_context)
-            if isinstance(init_response, dict) or isinstance(
-                init_response, ModelResponse
-            ):  ## CACHING SCENARIO
+            if isinstance(init_response, dict):
+                response = EmbeddingResponse(**init_response)
+            elif isinstance(init_response, EmbeddingResponse):  ## CACHING SCENARIO
                 response = init_response
             elif asyncio.iscoroutine(init_response):
                 response = await init_response
@@ -2759,7 +2835,7 @@ def embedding(
     litellm_logging_obj=None,
     logger_fn=None,
     **kwargs,
-):
+) -> EmbeddingResponse:
     """
     Embedding function that calls an API to generate embeddings for the given input.
 
@@ -2907,7 +2983,7 @@ def embedding(
         )
     try:
         response = None
-        logging = litellm_logging_obj
+        logging: Logging = litellm_logging_obj  # type: ignore
         logging.update_environment_variables(
             model=model,
             user=user,
@@ -2986,6 +3062,32 @@ def embedding(
 
             ## EMBEDDING CALL
             response = openai_chat_completions.embedding(
+                model=model,
+                input=input,
+                api_base=api_base,
+                api_key=api_key,
+                logging_obj=logging,
+                timeout=timeout,
+                model_response=EmbeddingResponse(),
+                optional_params=optional_params,
+                client=client,
+                aembedding=aembedding,
+            )
+        elif custom_llm_provider == "databricks":
+            api_base = (
+                api_base or litellm.api_base or get_secret("DATABRICKS_API_BASE")
+            )  # type: ignore
+
+            # set API KEY
+            api_key = (
+                api_key
+                or litellm.api_key
+                or litellm.databricks_key
+                or get_secret("DATABRICKS_API_KEY")
+            )  # type: ignore
+
+            ## EMBEDDING CALL
+            response = databricks_chat_completions.embedding(
                 model=model,
                 input=input,
                 api_base=api_base,
@@ -3856,6 +3958,36 @@ def image_generation(
                 model_response=model_response,
                 aimg_generation=aimg_generation,
             )
+        elif custom_llm_provider == "vertex_ai":
+            vertex_ai_project = (
+                optional_params.pop("vertex_project", None)
+                or optional_params.pop("vertex_ai_project", None)
+                or litellm.vertex_project
+                or get_secret("VERTEXAI_PROJECT")
+            )
+            vertex_ai_location = (
+                optional_params.pop("vertex_location", None)
+                or optional_params.pop("vertex_ai_location", None)
+                or litellm.vertex_location
+                or get_secret("VERTEXAI_LOCATION")
+            )
+            vertex_credentials = (
+                optional_params.pop("vertex_credentials", None)
+                or optional_params.pop("vertex_ai_credentials", None)
+                or get_secret("VERTEXAI_CREDENTIALS")
+            )
+            model_response = vertex_chat_completion.image_generation(
+                model=model,
+                prompt=prompt,
+                timeout=timeout,
+                logging_obj=litellm_logging_obj,
+                optional_params=optional_params,
+                model_response=model_response,
+                vertex_project=vertex_ai_project,
+                vertex_location=vertex_ai_location,
+                aimg_generation=aimg_generation,
+            )
+
         return model_response
     except Exception as e:
         ## Map to OpenAI Exception
@@ -3999,6 +4131,24 @@ def transcription(
             max_retries=max_retries,
         )
     elif custom_llm_provider == "openai":
+        api_base = (
+            api_base
+            or litellm.api_base
+            or get_secret("OPENAI_API_BASE")
+            or "https://api.openai.com/v1"
+        )  # type: ignore
+        openai.organization = (
+            litellm.organization
+            or get_secret("OPENAI_ORGANIZATION")
+            or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
+        )
+        # set API KEY
+        api_key = (
+            api_key
+            or litellm.api_key
+            or litellm.openai_key
+            or get_secret("OPENAI_API_KEY")
+        )  # type: ignore
         response = openai_chat_completions.audio_transcriptions(
             model=model,
             audio_file=file,
@@ -4008,6 +4158,139 @@ def transcription(
             timeout=timeout,
             logging_obj=litellm_logging_obj,
             max_retries=max_retries,
+            api_base=api_base,
+            api_key=api_key,
+        )
+    return response
+
+
+@client
+async def aspeech(*args, **kwargs) -> HttpxBinaryResponseContent:
+    """
+    Calls openai tts endpoints.
+    """
+    loop = asyncio.get_event_loop()
+    model = args[0] if len(args) > 0 else kwargs["model"]
+    ### PASS ARGS TO Image Generation ###
+    kwargs["aspeech"] = True
+    custom_llm_provider = kwargs.get("custom_llm_provider", None)
+    try:
+        # Use a partial function to pass your keyword arguments
+        func = partial(speech, *args, **kwargs)
+
+        # Add the context to the function
+        ctx = contextvars.copy_context()
+        func_with_context = partial(ctx.run, func)
+
+        _, custom_llm_provider, _, _ = get_llm_provider(
+            model=model, api_base=kwargs.get("api_base", None)
+        )
+
+        # Await normally
+        init_response = await loop.run_in_executor(None, func_with_context)
+        if asyncio.iscoroutine(init_response):
+            response = await init_response
+        else:
+            # Call the synchronous function using run_in_executor
+            response = await loop.run_in_executor(None, func_with_context)
+        return response  # type: ignore
+    except Exception as e:
+        custom_llm_provider = custom_llm_provider or "openai"
+        raise exception_type(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            original_exception=e,
+            completion_kwargs=args,
+            extra_kwargs=kwargs,
+        )
+
+
+@client
+def speech(
+    model: str,
+    input: str,
+    voice: str,
+    api_key: Optional[str] = None,
+    api_base: Optional[str] = None,
+    organization: Optional[str] = None,
+    project: Optional[str] = None,
+    max_retries: Optional[int] = None,
+    metadata: Optional[dict] = None,
+    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    response_format: Optional[str] = None,
+    speed: Optional[int] = None,
+    client=None,
+    headers: Optional[dict] = None,
+    custom_llm_provider: Optional[str] = None,
+    aspeech: Optional[bool] = None,
+    **kwargs,
+) -> HttpxBinaryResponseContent:
+
+    model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider, api_base=api_base)  # type: ignore
+
+    optional_params = {}
+    if response_format is not None:
+        optional_params["response_format"] = response_format
+    if speed is not None:
+        optional_params["speed"] = speed  # type: ignore
+
+    if timeout is None:
+        timeout = litellm.request_timeout
+
+    if max_retries is None:
+        max_retries = litellm.num_retries or openai.DEFAULT_MAX_RETRIES
+    response: Optional[HttpxBinaryResponseContent] = None
+    if custom_llm_provider == "openai":
+        api_base = (
+            api_base  # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
+            or litellm.api_base
+            or get_secret("OPENAI_API_BASE")
+            or "https://api.openai.com/v1"
+        )  # type: ignore
+        # set API KEY
+        api_key = (
+            api_key
+            or litellm.api_key  # for deepinfra/perplexity/anyscale we check in get_llm_provider and pass in the api key from there
+            or litellm.openai_key
+            or get_secret("OPENAI_API_KEY")
+        )  # type: ignore
+
+        organization = (
+            organization
+            or litellm.organization
+            or get_secret("OPENAI_ORGANIZATION")
+            or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
+        )  # type: ignore
+
+        project = (
+            project
+            or litellm.project
+            or get_secret("OPENAI_PROJECT")
+            or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
+        )  # type: ignore
+
+        headers = headers or litellm.headers
+
+        response = openai_chat_completions.audio_speech(
+            model=model,
+            input=input,
+            voice=voice,
+            optional_params=optional_params,
+            api_key=api_key,
+            api_base=api_base,
+            organization=organization,
+            project=project,
+            max_retries=max_retries,
+            timeout=timeout,
+            client=client,  # pass AsyncOpenAI, OpenAI client
+            aspeech=aspeech,
+        )
+
+    if response is None:
+        raise Exception(
+            "Unable to map the custom llm provider={} to a known provider={}.".format(
+                custom_llm_provider, litellm.provider_list
+            )
         )
     return response
 

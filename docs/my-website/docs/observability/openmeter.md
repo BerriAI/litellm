@@ -20,7 +20,7 @@ Use just 2 lines of code, to instantly log your responses **across all providers
 Get your OpenMeter API Key from https://openmeter.cloud/meters
 
 ```python
-litellm.success_callback = ["openmeter"] # logs cost + usage of successful calls to openmeter
+litellm.callbacks = ["openmeter"] # logs cost + usage of successful calls to openmeter
 ```
 
 
@@ -28,7 +28,7 @@ litellm.success_callback = ["openmeter"] # logs cost + usage of successful calls
 <TabItem value="sdk" label="SDK">
 
 ```python
-# pip install langfuse 
+# pip install openmeter 
 import litellm
 import os
 
@@ -39,8 +39,8 @@ os.environ["OPENMETER_API_KEY"] = ""
 # LLM API Keys
 os.environ['OPENAI_API_KEY']=""
 
-# set langfuse as a callback, litellm will send the data to langfuse
-litellm.success_callback = ["openmeter"] 
+# set openmeter as a callback, litellm will send the data to openmeter
+litellm.callbacks = ["openmeter"] 
  
 # openai call
 response = litellm.completion(
@@ -64,7 +64,7 @@ model_list:
   model_name: fake-openai-endpoint
 
 litellm_settings:
-  success_callback: ["openmeter"] # 👈 KEY CHANGE
+  callbacks: ["openmeter"] # 👈 KEY CHANGE
 ```
 
 2. Start Proxy

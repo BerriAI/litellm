@@ -13,6 +13,8 @@ import pytest
 import litellm
 from litellm import embedding, completion, completion_cost, Timeout, ModelResponse
 from litellm import RateLimitError
+from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
+from unittest.mock import patch, AsyncMock, Mock
 
 # litellm.num_retries = 3
 litellm.cache = None
@@ -206,6 +208,7 @@ def test_completion_bedrock_claude_sts_client_auth():
 
 # test_completion_bedrock_claude_sts_client_auth()
 
+
 @pytest.mark.skip(reason="We don't have Circle CI OIDC credentials as yet")
 def test_completion_bedrock_claude_sts_oidc_auth():
     print("\ncalling bedrock claude with oidc auth")
@@ -236,30 +239,11 @@ def test_completion_bedrock_claude_sts_oidc_auth():
         pytest.fail(f"Error occurred: {e}")
 
 
-def test_bedrock_extra_headers():
-    try:
-        litellm.set_verbose = True
-        response: ModelResponse = completion(
-            model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
-            messages=messages,
-            max_tokens=10,
-            temperature=0.78,
-            extra_headers={"x-key": "x_key_value"}
-        )
-        # Add any assertions here to check the response
-        assert len(response.choices) > 0
-        assert len(response.choices[0].message.content) > 0
-    except RateLimitError:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
 def test_bedrock_claude_3():
     try:
         litellm.set_verbose = True
         data = {
-            "max_tokens": 2000,
+            "max_tokens": 100,
             "stream": False,
             "temperature": 0.3,
             "messages": [
@@ -282,6 +266,7 @@ def test_bedrock_claude_3():
         }
         response: ModelResponse = completion(
             model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+            num_retries=3,
             # messages=messages,
             # max_tokens=10,
             # temperature=0.78,
@@ -484,7 +469,7 @@ def test_completion_bedrock_mistral_completion_auth():
             messages=messages,
             max_tokens=10,
             temperature=0.1,
-        )
+        )  # type: ignore
         # Add any assertions here to check the response
         assert len(response.choices) > 0
         assert len(response.choices[0].message.content) > 0
@@ -499,3 +484,65 @@ def test_completion_bedrock_mistral_completion_auth():
 
 
 # test_completion_bedrock_mistral_completion_auth()
+
+
+def test_bedrock_ptu():
+    """
+    Check if a url with 'modelId' passed in, is created correctly
+
+    Reference: https://github.com/BerriAI/litellm/issues/3805
+    """
+    client = HTTPHandler()
+
+    with patch.object(client, "post", new=Mock()) as mock_client_post:
+        litellm.set_verbose = True
+        from openai.types.chat import ChatCompletion
+
+        model_id = (
+            "arn:aws:bedrock:us-west-2:888602223428:provisioned-model/8fxff74qyhs3"
+        )
+        try:
+            response = litellm.completion(
+                model="bedrock/anthropic.claude-instant-v1",
+                messages=[{"role": "user", "content": "What's AWS?"}],
+                model_id=model_id,
+                client=client,
+            )
+        except Exception as e:
+            pass
+
+        assert "url" in mock_client_post.call_args.kwargs
+        assert (
+            mock_client_post.call_args.kwargs["url"]
+            == "https://bedrock-runtime.us-west-2.amazonaws.com/model/arn%3Aaws%3Abedrock%3Aus-west-2%3A888602223428%3Aprovisioned-model%2F8fxff74qyhs3/invoke"
+        )
+        mock_client_post.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_bedrock_extra_headers():
+    """
+    Check if a url with 'modelId' passed in, is created correctly
+
+    Reference: https://github.com/BerriAI/litellm/issues/3805
+    """
+    client = AsyncHTTPHandler()
+
+    with patch.object(client, "post", new=AsyncMock()) as mock_client_post:
+        litellm.set_verbose = True
+        from openai.types.chat import ChatCompletion
+
+        try:
+            response = await litellm.acompletion(
+                model="anthropic.claude-3-sonnet-20240229-v1:0",
+                messages=[{"role": "user", "content": "What's AWS?"}],
+                client=client,
+                extra_headers={"test": "hello world"},
+            )
+        except Exception as e:
+            pass
+
+        print(f"mock_client_post.call_args: {mock_client_post.call_args}")
+        assert "test" in mock_client_post.call_args.kwargs["headers"]
+        assert mock_client_post.call_args.kwargs["headers"]["test"] == "hello world"
+        mock_client_post.assert_called_once()

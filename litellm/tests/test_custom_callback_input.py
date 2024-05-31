@@ -38,19 +38,17 @@ class CompletionCustomHandler(
     # Class variables or attributes
     def __init__(self):
         self.errors = []
-        self.states: Optional[
-            List[
-                Literal[
-                    "sync_pre_api_call",
-                    "async_pre_api_call",
-                    "post_api_call",
-                    "sync_stream",
-                    "async_stream",
-                    "sync_success",
-                    "async_success",
-                    "sync_failure",
-                    "async_failure",
-                ]
+        self.states: List[
+            Literal[
+                "sync_pre_api_call",
+                "async_pre_api_call",
+                "post_api_call",
+                "sync_stream",
+                "async_stream",
+                "sync_success",
+                "async_success",
+                "sync_failure",
+                "async_failure",
             ]
         ] = []
 
@@ -269,6 +267,7 @@ class CompletionCustomHandler(
             assert isinstance(kwargs["litellm_params"]["api_base"], str)
             assert isinstance(kwargs["start_time"], (datetime, type(None)))
             assert isinstance(kwargs["stream"], bool)
+            assert isinstance(kwargs["completion_start_time"], datetime)
             assert kwargs["cache_hit"] is None or isinstance(kwargs["cache_hit"], bool)
             assert isinstance(kwargs["user"], (str, type(None)))
             assert isinstance(kwargs["input"], (list, dict, str))
@@ -558,7 +557,7 @@ async def test_async_chat_bedrock_stream():
                 continue
         except:
             pass
-        time.sleep(1)
+        await asyncio.sleep(1)
         print(f"customHandler.errors: {customHandler.errors}")
         assert len(customHandler.errors) == 0
         litellm.callbacks = []
