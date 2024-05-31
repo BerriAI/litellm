@@ -65,6 +65,42 @@ async def test_custom_pricing(sync_mode):
     assert new_handler.response_cost == 0
 
 
+def test_custom_pricing_as_completion_cost_param():
+    from litellm import ModelResponse, Choices, Message
+    from litellm.utils import Usage
+
+    resp = ModelResponse(
+        id="chatcmpl-e41836bb-bb8b-4df2-8e70-8f3e160155ac",
+        choices=[
+            Choices(
+                finish_reason=None,
+                index=0,
+                message=Message(
+                    content=" Sure! Here is a short poem about the sky:\n\nA canvas of blue, a",
+                    role="assistant",
+                ),
+            )
+        ],
+        created=1700775391,
+        model="ft:gpt-3.5-turbo:my-org:custom_suffix:id",
+        object="chat.completion",
+        system_fingerprint=None,
+        usage=Usage(prompt_tokens=21, completion_tokens=17, total_tokens=38),
+    )
+
+    cost = litellm.completion_cost(
+        completion_response=resp,
+        custom_cost_per_token={
+            "input_cost_per_token": 1000,
+            "output_cost_per_token": 20,
+        },
+    )
+
+    expected_cost = 1000 * 21 + 17 * 20
+
+    assert round(cost, 5) == round(expected_cost, 5)
+
+
 def test_get_gpt3_tokens():
     max_tokens = get_max_tokens("gpt-3.5-turbo")
     print(max_tokens)

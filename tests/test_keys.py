@@ -2,7 +2,7 @@
 ## Tests /key endpoints.
 
 import pytest
-import asyncio, time
+import asyncio, time, uuid
 import aiohttp
 from openai import AsyncOpenAI
 import sys, os
@@ -12,14 +12,17 @@ sys.path.insert(
     0, os.path.abspath("../")
 )  # Adds the parent directory to the system path
 import litellm
+from litellm.proxy._types import LitellmUserRoles
 
 
-async def generate_team(session):
+async def generate_team(
+    session, models: Optional[list] = None, team_id: Optional[str] = None
+):
     url = "http://0.0.0.0:4000/team/new"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
-    data = {
-        "team_id": "litellm-dashboard",
-    }
+    if team_id is None:
+        team_id = "litellm-dashboard"
+    data = {"team_id": team_id, "models": models}
 
     async with session.post(url, headers=headers, json=data) as response:
         status = response.status
@@ -357,11 +360,11 @@ async def get_key_info(session, call_key, get_key=None):
         return await response.json()
 
 
-async def get_model_list(session, call_key):
+async def get_model_list(session, call_key, endpoint: str = "/v1/models"):
     """
     Make sure only models user has access to are returned
     """
-    url = "http://0.0.0.0:4000/v1/models"
+    url = "http://0.0.0.0:4000" + endpoint
     headers = {
         "Authorization": f"Bearer {call_key}",
         "Content-Type": "application/json",
@@ -729,8 +732,9 @@ async def test_key_delete_ui():
 
         # generate a admin UI key
         team = await generate_team(session=session)
-        print("generated team: ", team)
-        admin_ui_key = await generate_user(session=session, user_role="proxy_admin")
+        admin_ui_key = await generate_user(
+            session=session, user_role=LitellmUserRoles.PROXY_ADMIN.value
+        )
         print(
             "trying to delete key=",
             key,
@@ -747,29 +751,50 @@ async def test_key_delete_ui():
 
 
 @pytest.mark.parametrize("model_access", ["all-team-models", "gpt-3.5-turbo"])
+@pytest.mark.parametrize("model_access_level", ["key", "team"])
+@pytest.mark.parametrize("model_endpoint", ["/v1/models", "/model/info"])
 @pytest.mark.asyncio
-async def test_key_model_list(model_access):
+async def test_key_model_list(model_access, model_access_level, model_endpoint):
     """
     Test if `/v1/models` works as expected.
     """
     async with aiohttp.ClientSession() as session:
-        new_team = await generate_team(session=session)
-        team_id = new_team["team_id"]
+        _models = [] if model_access == "all-team-models" else [model_access]
+        team_id = "litellm_dashboard_{}".format(uuid.uuid4())
+        new_team = await generate_team(
+            session=session,
+            models=_models if model_access_level == "team" else None,
+            team_id=team_id,
+        )
         key_gen = await generate_key(
             session=session,
             i=0,
             team_id=team_id,
-            models=[] if model_access == "all-team-models" else [model_access],
+            models=_models if model_access_level == "key" else [],
         )
         key = key_gen["key"]
         print(f"key: {key}")
 
-        model_list = await get_model_list(session=session, call_key=key)
+        model_list = await get_model_list(
+            session=session, call_key=key, endpoint=model_endpoint
+        )
         print(f"model_list: {model_list}")
 
         if model_access == "all-team-models":
-            assert not isinstance(model_list["data"][0]["id"], list)
-            assert isinstance(model_list["data"][0]["id"], str)
+            if model_endpoint == "/v1/models":
+                assert not isinstance(model_list["data"][0]["id"], list)
+                assert isinstance(model_list["data"][0]["id"], str)
+            elif model_endpoint == "/model/info":
+                assert isinstance(model_list["data"], list)
+                assert len(model_list["data"]) > 0
         if model_access == "gpt-3.5-turbo":
-            assert len(model_list["data"]) == 1
-            assert model_list["data"][0]["id"] == model_access
+            if model_endpoint == "/v1/models":
+                assert (
+                    len(model_list["data"]) == 1
+                ), "model_access={}, model_access_level={}".format(
+                    model_access, model_access_level
+                )
+                assert model_list["data"][0]["id"] == model_access
+            elif model_endpoint == "/model/info":
+                assert isinstance(model_list["data"], list)
+                assert len(model_list["data"]) == 1

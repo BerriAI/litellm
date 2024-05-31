@@ -20,9 +20,10 @@
 # function to validate a request - async def user_auth(request: Request):
 
 import sys, os
-import traceback
+import traceback, uuid
 from dotenv import load_dotenv
 from fastapi import Request
+from fastapi.routing import APIRoute
 from datetime import datetime
 
 load_dotenv()
@@ -49,8 +50,18 @@ from litellm.proxy.proxy_server import (
     spend_key_fn,
     view_spend_logs,
     user_info,
+    team_info,
     info_key_fn,
     new_team,
+    update_team,
+    chat_completion,
+    completion,
+    embeddings,
+    image_generation,
+    audio_transcriptions,
+    moderations,
+    model_list,
+    LitellmUserRoles,
 )
 from litellm.proxy.utils import PrismaClient, ProxyLogging, hash_token, update_spend
 from litellm._logging import verbose_proxy_logger
@@ -65,6 +76,7 @@ from litellm.proxy._types import (
     UpdateKeyRequest,
     GenerateKeyRequest,
     NewTeamRequest,
+    UpdateTeamRequest,
     UserAPIKeyAuth,
     LiteLLM_UpperboundKeyGenerateParams,
 )
@@ -120,25 +132,28 @@ async def test_new_user_response(prisma_client):
         await litellm.proxy.proxy_server.prisma_client.connect()
         from litellm.proxy.proxy_server import user_api_key_cache
 
+        _team_id = "ishaan-special-team_{}".format(uuid.uuid4())
         await new_team(
             NewTeamRequest(
-                team_id="ishaan-special-team",
+                team_id=_team_id,
             ),
             user_api_key_dict=UserAPIKeyAuth(
-                user_role="proxy_admin", api_key="sk-1234", user_id="1234"
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key="sk-1234",
+                user_id="1234",
             ),
         )
 
         _response = await new_user(
             data=NewUserRequest(
                 models=["azure-gpt-3.5"],
-                team_id="ishaans-special-team",
+                team_id=_team_id,
                 tpm_limit=20,
             )
         )
         print(_response)
         assert _response.models == ["azure-gpt-3.5"]
-        assert _response.team_id == "ishaans-special-team"
+        assert _response.team_id == _team_id
         assert _response.tpm_limit == 20
 
     except Exception as e:
@@ -146,7 +161,42 @@ async def test_new_user_response(prisma_client):
         pytest.fail(f"Got exception {e}")
 
 
-def test_generate_and_call_with_valid_key(prisma_client):
+@pytest.mark.parametrize(
+    "api_route",
+    [
+        # chat_completion
+        APIRoute(path="/engines/{model}/chat/completions", endpoint=chat_completion),
+        APIRoute(
+            path="/openai/deployments/{model}/chat/completions",
+            endpoint=chat_completion,
+        ),
+        APIRoute(path="/chat/completions", endpoint=chat_completion),
+        APIRoute(path="/v1/chat/completions", endpoint=chat_completion),
+        # completion
+        APIRoute(path="/completions", endpoint=completion),
+        APIRoute(path="/v1/completions", endpoint=completion),
+        APIRoute(path="/engines/{model}/completions", endpoint=completion),
+        APIRoute(path="/openai/deployments/{model}/completions", endpoint=completion),
+        # embeddings
+        APIRoute(path="/v1/embeddings", endpoint=embeddings),
+        APIRoute(path="/embeddings", endpoint=embeddings),
+        APIRoute(path="/openai/deployments/{model}/embeddings", endpoint=embeddings),
+        # image generation
+        APIRoute(path="/v1/images/generations", endpoint=image_generation),
+        APIRoute(path="/images/generations", endpoint=image_generation),
+        # audio transcriptions
+        APIRoute(path="/v1/audio/transcriptions", endpoint=audio_transcriptions),
+        APIRoute(path="/audio/transcriptions", endpoint=audio_transcriptions),
+        # moderations
+        APIRoute(path="/v1/moderations", endpoint=moderations),
+        APIRoute(path="/moderations", endpoint=moderations),
+        # model_list
+        APIRoute(path="/v1/models", endpoint=model_list),
+        APIRoute(path="/models", endpoint=model_list),
+    ],
+    ids=lambda route: str(dict(route=route.endpoint.__name__, path=route.path)),
+)
+def test_generate_and_call_with_valid_key(prisma_client, api_route):
     # 1. Generate a Key, and use it to make a call
 
     print("prisma client=", prisma_client)
@@ -159,7 +209,7 @@ def test_generate_and_call_with_valid_key(prisma_client):
             await litellm.proxy.proxy_server.prisma_client.connect()
             from litellm.proxy.proxy_server import user_api_key_cache
 
-            request = NewUserRequest(user_role="app_owner")
+            request = NewUserRequest(user_role=LitellmUserRoles.INTERNAL_USER)
             key = await new_user(request)
             print(key)
             user_id = key.user_id
@@ -168,7 +218,7 @@ def test_generate_and_call_with_valid_key(prisma_client):
             new_user_info = await user_info(user_id=user_id)
             new_user_info = new_user_info["user_info"]
             print("new_user_info=", new_user_info)
-            assert new_user_info.user_role == "app_owner"
+            assert new_user_info.user_role == LitellmUserRoles.INTERNAL_USER
             assert new_user_info.user_id == user_id
 
             generated_key = key.key
@@ -181,8 +231,14 @@ def test_generate_and_call_with_valid_key(prisma_client):
             )
             print("token from prisma", value_from_prisma)
 
-            request = Request(scope={"type": "http"})
-            request._url = URL(url="/chat/completions")
+            request = Request(
+                {
+                    "type": "http",
+                    "route": api_route,
+                    "path": api_route.path,
+                    "headers": [("Authorization", bearer_token)],
+                }
+            )
 
             # use generated key to auth in
             result = await user_api_key_auth(request=request, api_key=bearer_token)
@@ -310,7 +366,8 @@ async def test_call_with_valid_model_using_all_models(prisma_client):
         )
 
         new_team_response = await new_team(
-            data=team_request, user_api_key_dict=UserAPIKeyAuth(user_role="proxy_admin")
+            data=team_request,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
         )
         print("new_team_response", new_team_response)
         created_team_id = new_team_response["team_id"]
@@ -506,7 +563,7 @@ def test_call_with_end_user_over_budget(prisma_client):
         asyncio.run(test())
     except Exception as e:
         error_detail = e.message
-        assert "Authentication Error, ExceededBudget:" in error_detail
+        assert "Budget has been exceeded! Current" in error_detail
         print(vars(e))
 
 
@@ -869,7 +926,7 @@ def test_delete_key(prisma_client):
             # use generated key to auth in
             result = await user_api_key_auth(request=request, api_key=bearer_token)
             print(f"result: {result}")
-            result.user_role = "proxy_admin"
+            result.user_role = LitellmUserRoles.PROXY_ADMIN
             # delete the key
             result_delete_key = await delete_key_fn(
                 data=delete_key_request, user_api_key_dict=result
@@ -919,7 +976,7 @@ def test_delete_key_auth(prisma_client):
             # use generated key to auth in
             result = await user_api_key_auth(request=request, api_key=bearer_token)
             print(f"result: {result}")
-            result.user_role = "proxy_admin"
+            result.user_role = LitellmUserRoles.PROXY_ADMIN
 
             result_delete_key = await delete_key_fn(
                 data=delete_key_request, user_api_key_dict=result
@@ -991,7 +1048,7 @@ def test_generate_and_call_key_info(prisma_client):
             # use generated key to auth in
             result = await user_api_key_auth(request=request, api_key=bearer_token)
             print(f"result: {result}")
-            result.user_role = "proxy_admin"
+            result.user_role = LitellmUserRoles.PROXY_ADMIN
 
             result_delete_key = await delete_key_fn(
                 data=delete_key_request, user_api_key_dict=result
@@ -1006,6 +1063,7 @@ def test_generate_and_update_key(prisma_client):
     # 11. Generate a Key, cal key/info, call key/update, call key/info
     # Check if data gets updated
     # Check if untouched data does not get updated
+    import uuid
 
     print("prisma client=", prisma_client)
 
@@ -1018,27 +1076,33 @@ def test_generate_and_update_key(prisma_client):
 
             # create team "litellm-core-infra@gmail.com""
             print("creating team litellm-core-infra@gmail.com")
+            _team_1 = "litellm-core-infra@gmail.com_{}".format(uuid.uuid4())
             await new_team(
                 NewTeamRequest(
-                    team_id="litellm-core-infra@gmail.com",
+                    team_id=_team_1,
                 ),
                 user_api_key_dict=UserAPIKeyAuth(
-                    user_role="proxy_admin", api_key="sk-1234", user_id="1234"
+                    user_role=LitellmUserRoles.PROXY_ADMIN,
+                    api_key="sk-1234",
+                    user_id="1234",
                 ),
             )
 
+            _team_2 = "ishaan-special-team_{}".format(uuid.uuid4())
             await new_team(
                 NewTeamRequest(
-                    team_id="ishaan-special-team",
+                    team_id=_team_2,
                 ),
                 user_api_key_dict=UserAPIKeyAuth(
-                    user_role="proxy_admin", api_key="sk-1234", user_id="1234"
+                    user_role=LitellmUserRoles.PROXY_ADMIN,
+                    api_key="sk-1234",
+                    user_id="1234",
                 ),
             )
 
             request = NewUserRequest(
                 metadata={"project": "litellm-project3"},
-                team_id="litellm-core-infra@gmail.com",
+                team_id=_team_1,
             )
 
             key = await new_user(request)
@@ -1055,7 +1119,7 @@ def test_generate_and_update_key(prisma_client):
             assert result["info"]["metadata"] == {
                 "project": "litellm-project3",
             }
-            assert result["info"]["team_id"] == "litellm-core-infra@gmail.com"
+            assert result["info"]["team_id"] == _team_1
 
             request = Request(scope={"type": "http"})
             request._url = URL(url="/update/key")
@@ -1074,7 +1138,7 @@ def test_generate_and_update_key(prisma_client):
             # update the team id
             response2 = await update_key_fn(
                 request=Request,
-                data=UpdateKeyRequest(key=generated_key, team_id="ishaan-special-team"),
+                data=UpdateKeyRequest(key=generated_key, team_id=_team_2),
             )
             print("response2=", response2)
 
@@ -1088,7 +1152,7 @@ def test_generate_and_update_key(prisma_client):
                 "project": "litellm-project3",
             }
             assert result["info"]["models"] == ["ada", "babbage", "curie", "davinci"]
-            assert result["info"]["team_id"] == "ishaan-special-team"
+            assert result["info"]["team_id"] == _team_2
 
             # cleanup - delete key
             delete_key_request = KeyRequest(keys=[generated_key])
@@ -1102,7 +1166,7 @@ def test_generate_and_update_key(prisma_client):
             # use generated key to auth in
             result = await user_api_key_auth(request=request, api_key=bearer_token)
             print(f"result: {result}")
-            result.user_role = "proxy_admin"
+            result.user_role = LitellmUserRoles.PROXY_ADMIN
 
             result_delete_key = await delete_key_fn(
                 data=delete_key_request, user_api_key_dict=result
@@ -1966,6 +2030,7 @@ async def test_proxy_load_test_db(prisma_client):
 @pytest.mark.asyncio()
 async def test_master_key_hashing(prisma_client):
     try:
+        import uuid
 
         print("prisma client=", prisma_client)
 
@@ -1977,25 +2042,26 @@ async def test_master_key_hashing(prisma_client):
         await litellm.proxy.proxy_server.prisma_client.connect()
         from litellm.proxy.proxy_server import user_api_key_cache
 
+        _team_id = "ishaans-special-team_{}".format(uuid.uuid4())
         await new_team(
-            NewTeamRequest(
-                team_id="ishaans-special-team",
-            ),
+            NewTeamRequest(team_id=_team_id),
             user_api_key_dict=UserAPIKeyAuth(
-                user_role="proxy_admin", api_key="sk-1234", user_id="1234"
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key="sk-1234",
+                user_id="1234",
             ),
         )
 
         _response = await new_user(
             data=NewUserRequest(
                 models=["azure-gpt-3.5"],
-                team_id="ishaans-special-team",
+                team_id=_team_id,
                 tpm_limit=20,
             )
         )
         print(_response)
         assert _response.models == ["azure-gpt-3.5"]
-        assert _response.team_id == "ishaans-special-team"
+        assert _response.team_id == _team_id
         assert _response.tpm_limit == 20
 
         bearer_token = "Bearer " + master_key
@@ -2020,7 +2086,7 @@ async def test_reset_spend_authentication(prisma_client):
     """
     1. Test master key can access this route  -> ONLY MASTER KEY SHOULD BE ABLE TO RESET SPEND
     2. Test that non-master key gets rejected
-    3. Test that non-master key with role == "proxy_admin" or admin gets rejected
+    3. Test that non-master key with role == LitellmUserRoles.PROXY_ADMIN or admin gets rejected
     """
 
     print("prisma client=", prisma_client)
@@ -2065,10 +2131,10 @@ async def test_reset_spend_authentication(prisma_client):
             in e.message
         )
 
-    # Test 3 - Non-Master Key with role == "proxy_admin" or admin
+    # Test 3 - Non-Master Key with role == LitellmUserRoles.PROXY_ADMIN or admin
     _response = await new_user(
         data=NewUserRequest(
-            user_role="proxy_admin",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
             tpm_limit=20,
         )
     )
@@ -2084,3 +2150,100 @@ async def test_reset_spend_authentication(prisma_client):
             "Tried to access route=/global/spend/reset, which is only for MASTER KEY"
             in e.message
         )
+
+
+@pytest.mark.asyncio()
+async def test_create_update_team(prisma_client):
+    """
+    - Set max_budget, budget_duration, max_budget, tpm_limit, rpm_limit
+    - Assert response has correct values
+
+    - Update max_budget, budget_duration, max_budget, tpm_limit, rpm_limit
+    - Assert response has correct values
+
+    - Call team_info and assert response has correct values
+    """
+    print("prisma client=", prisma_client)
+
+    master_key = "sk-1234"
+
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", master_key)
+    import datetime
+
+    await litellm.proxy.proxy_server.prisma_client.connect()
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    _team_id = "test-team_{}".format(uuid.uuid4())
+    response = await new_team(
+        NewTeamRequest(
+            team_id=_team_id,
+            max_budget=20,
+            budget_duration="30d",
+            tpm_limit=20,
+            rpm_limit=20,
+        ),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-1234",
+            user_id="1234",
+        ),
+    )
+
+    print("RESPONSE from new_team", response)
+
+    assert response["team_id"] == _team_id
+    assert response["max_budget"] == 20
+    assert response["tpm_limit"] == 20
+    assert response["rpm_limit"] == 20
+    assert response["budget_duration"] == "30d"
+    assert response["budget_reset_at"] is not None and isinstance(
+        response["budget_reset_at"], datetime.datetime
+    )
+
+    # updating team budget duration and reset at
+
+    response = await update_team(
+        UpdateTeamRequest(
+            team_id=_team_id,
+            max_budget=30,
+            budget_duration="2d",
+            tpm_limit=30,
+            rpm_limit=30,
+        ),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-1234",
+            user_id="1234",
+        ),
+    )
+
+    print("RESPONSE from update_team", response)
+    _updated_info = response["data"]
+    _updated_info = dict(_updated_info)
+
+    assert _updated_info["team_id"] == _team_id
+    assert _updated_info["max_budget"] == 30
+    assert _updated_info["tpm_limit"] == 30
+    assert _updated_info["rpm_limit"] == 30
+    assert _updated_info["budget_duration"] == "2d"
+    assert _updated_info["budget_reset_at"] is not None and isinstance(
+        _updated_info["budget_reset_at"], datetime.datetime
+    )
+
+    # now hit team_info
+    response = await team_info(team_id=_team_id)
+
+    print("RESPONSE from team_info", response)
+
+    _team_info = response["team_info"]
+    _team_info = dict(_team_info)
+
+    assert _team_info["team_id"] == _team_id
+    assert _team_info["max_budget"] == 30
+    assert _team_info["tpm_limit"] == 30
+    assert _team_info["rpm_limit"] == 30
+    assert _team_info["budget_duration"] == "2d"
+    assert _team_info["budget_reset_at"] is not None and isinstance(
+        _team_info["budget_reset_at"], datetime.datetime
+    )

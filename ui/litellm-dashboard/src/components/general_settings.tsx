@@ -63,7 +63,6 @@ import StaticGenerationSearchParamsBailoutProvider from "next/dist/client/compon
 import AddFallbacks from "./add_fallbacks";
 import openai from "openai";
 import Paragraph from "antd/es/skeleton/Paragraph";
-
 interface GeneralSettingsPageProps {
   accessToken: string | null;
   userRole: string | null;

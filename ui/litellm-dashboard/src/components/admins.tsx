@@ -42,6 +42,7 @@ import {
   userGetAllUsersCall,
   User,
   setCallbacksCall,
+  getPossibleUserRoles,
 } from "./networking";
 
 const AdminPanel: React.FC<AdminPanelProps> = ({
@@ -60,6 +61,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
   const [isUpdateMemberModalVisible, setIsUpdateModalModalVisible] = useState(false);
   const [isAddSSOModalVisible, setIsAddSSOModalVisible] = useState(false);
   const [isInstructionsModalVisible, setIsInstructionsModalVisible] = useState(false);
+  const [possibleUIRoles, setPossibleUIRoles] = useState<null | Record<string, Record<string, string>>>(null);
 
   let nonSssoUrl;
   try {
@@ -133,6 +135,9 @@ const handleInstructionsCancel = () => {
         console.log(`proxy admins: ${proxyAdmins}`);
         console.log(`combinedList: ${combinedList}`);
         setAdmins(combinedList);
+
+        const availableUserRoles = await getPossibleUserRoles(accessToken);
+        setPossibleUIRoles(availableUserRoles);
       }
     };
 
@@ -373,7 +378,7 @@ const handleInstructionsCancel = () => {
                             ? member["user_id"]
                             : null}
                         </TableCell>
-                        <TableCell>{member["user_role"]}</TableCell>
+                        <TableCell> {possibleUIRoles?.[member?.user_role]?.ui_label || "-"}</TableCell>
                         <TableCell>
                           <Icon icon={PencilAltIcon} size="sm" onClick={() => setIsUpdateModalModalVisible(true)}/>
                           <Modal
