@@ -45,7 +45,6 @@ import httpx  # type: ignore
 from .bedrock import BedrockError, convert_messages_to_prompt, ModelResponseIterator
 from litellm.types.llms.bedrock import *
 import urllib.parse
-import botocore
 
 
 class AmazonCohereChatConfig:
@@ -264,7 +263,9 @@ class BedrockLLM(BaseLLM):
 
             # Extract the credentials from the response and convert to Session Credentials
             sts_credentials = sts_response["Credentials"]
-            credentials = botocore.credentials.Credentials(
+            from botocore.credentials import Credentials
+
+            credentials = Credentials(
                 access_key=sts_credentials["AccessKeyId"],
                 secret_key=sts_credentials["SecretAccessKey"],
                 token=sts_credentials["SessionToken"],
