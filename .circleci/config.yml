@@ -2,7 +2,7 @@ version: 4.3.4
 jobs:
   local_testing:
     docker:
-      - image: circleci/python:3.11.8
+      - image: circleci/python:3.11
     working_directory: ~/project
 
     steps:
