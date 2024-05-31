@@ -1,11 +1,12 @@
 # What is this?
 ## Main file for assistants API logic
 from typing import Iterable
-import os
+from functools import partial
+import os, asyncio, contextvars
 import litellm
-from openai import OpenAI
+from openai import OpenAI, AsyncOpenAI
 from litellm import client
-from litellm.utils import supports_httpx_timeout
+from litellm.utils import supports_httpx_timeout, exception_type, get_llm_provider
 from ..llms.openai import OpenAIAssistantsAPI
 from ..types.llms.openai import *
 from ..types.router import *
@@ -16,11 +17,49 @@ openai_assistants_api = OpenAIAssistantsAPI()
 ### ASSISTANTS ###
 
 
+async def aget_assistants(
+    custom_llm_provider: Literal["openai"],
+    client: Optional[AsyncOpenAI] = None,
+    **kwargs,
+) -> AsyncCursorPage[Assistant]:
+    loop = asyncio.get_event_loop()
+    ### PASS ARGS TO GET ASSISTANTS ###
+    kwargs["aget_assistants"] = True
+    try:
+        # Use a partial function to pass your keyword arguments
+        func = partial(get_assistants, custom_llm_provider, client, **kwargs)
+
+        # Add the context to the function
+        ctx = contextvars.copy_context()
+        func_with_context = partial(ctx.run, func)
+
+        _, custom_llm_provider, _, _ = get_llm_provider(  # type: ignore
+            model="", custom_llm_provider=custom_llm_provider
+        )  # type: ignore
+
+        # Await normally
+        init_response = await loop.run_in_executor(None, func_with_context)
+        if asyncio.iscoroutine(init_response):
+            response = await init_response
+        else:
+            response = init_response
+        return response  # type: ignore
+    except Exception as e:
+        raise exception_type(
+            model="",
+            custom_llm_provider=custom_llm_provider,
+            original_exception=e,
+            completion_kwargs={},
+            extra_kwargs=kwargs,
+        )
+
+
 def get_assistants(
     custom_llm_provider: Literal["openai"],
     client: Optional[OpenAI] = None,
     **kwargs,
 ) -> SyncCursorPage[Assistant]:
+    aget_assistants = kwargs.pop("aget_assistants", None)
     optional_params = GenericLiteLLMParams(**kwargs)
 
     ### TIMEOUT LOGIC ###
@@ -67,6 +106,7 @@ def get_assistants(
             max_retries=optional_params.max_retries,
             organization=organization,
             client=client,
+            aget_assistants=aget_assistants,
         )
     else:
         raise litellm.exceptions.BadRequestError(
@@ -85,6 +125,39 @@ def get_assistants(
 
 
 ### THREADS ###
+
+
+async def acreate_thread(custom_llm_provider: Literal["openai"], **kwargs) -> Thread:
+    loop = asyncio.get_event_loop()
+    ### PASS ARGS TO GET ASSISTANTS ###
+    kwargs["acreate_thread"] = True
+    try:
+        # Use a partial function to pass your keyword arguments
+        func = partial(create_thread, custom_llm_provider, **kwargs)
+
+        # Add the context to the function
+        ctx = contextvars.copy_context()
+        func_with_context = partial(ctx.run, func)
+
+        _, custom_llm_provider, _, _ = get_llm_provider(  # type: ignore
+            model="", custom_llm_provider=custom_llm_provider
+        )  # type: ignore
+
+        # Await normally
+        init_response = await loop.run_in_executor(None, func_with_context)
+        if asyncio.iscoroutine(init_response):
+            response = await init_response
+        else:
+            response = init_response
+        return response  # type: ignore
+    except Exception as e:
+        raise exception_type(
+            model="",
+            custom_llm_provider=custom_llm_provider,
+            original_exception=e,
+            completion_kwargs={},
+            extra_kwargs=kwargs,
+        )
 
 
 def create_thread(
@@ -117,6 +190,7 @@ def create_thread(
     )
     ```
     """
+    acreate_thread = kwargs.get("acreate_thread", None)
     optional_params = GenericLiteLLMParams(**kwargs)
 
     ### TIMEOUT LOGIC ###
@@ -165,6 +239,7 @@ def create_thread(
             max_retries=optional_params.max_retries,
             organization=organization,
             client=client,
+            acreate_thread=acreate_thread,
         )
     else:
         raise litellm.exceptions.BadRequestError(
@@ -182,6 +257,44 @@ def create_thread(
     return response
 
 
+async def aget_thread(
+    custom_llm_provider: Literal["openai"],
+    thread_id: str,
+    client: Optional[AsyncOpenAI] = None,
+    **kwargs,
+) -> Thread:
+    loop = asyncio.get_event_loop()
+    ### PASS ARGS TO GET ASSISTANTS ###
+    kwargs["aget_thread"] = True
+    try:
+        # Use a partial function to pass your keyword arguments
+        func = partial(get_thread, custom_llm_provider, thread_id, client, **kwargs)
+
+        # Add the context to the function
+        ctx = contextvars.copy_context()
+        func_with_context = partial(ctx.run, func)
+
+        _, custom_llm_provider, _, _ = get_llm_provider(  # type: ignore
+            model="", custom_llm_provider=custom_llm_provider
+        )  # type: ignore
+
+        # Await normally
+        init_response = await loop.run_in_executor(None, func_with_context)
+        if asyncio.iscoroutine(init_response):
+            response = await init_response
+        else:
+            response = init_response
+        return response  # type: ignore
+    except Exception as e:
+        raise exception_type(
+            model="",
+            custom_llm_provider=custom_llm_provider,
+            original_exception=e,
+            completion_kwargs={},
+            extra_kwargs=kwargs,
+        )
+
+
 def get_thread(
     custom_llm_provider: Literal["openai"],
     thread_id: str,
@@ -189,6 +302,7 @@ def get_thread(
     **kwargs,
 ) -> Thread:
     """Get the thread object, given a thread_id"""
+    aget_thread = kwargs.pop("aget_thread", None)
     optional_params = GenericLiteLLMParams(**kwargs)
 
     ### TIMEOUT LOGIC ###
@@ -236,6 +350,7 @@ def get_thread(
             max_retries=optional_params.max_retries,
             organization=organization,
             client=client,
+            aget_thread=aget_thread,
         )
     else:
         raise litellm.exceptions.BadRequestError(
@@ -256,6 +371,59 @@ def get_thread(
 ### MESSAGES ###
 
 
+async def a_add_message(
+    custom_llm_provider: Literal["openai"],
+    thread_id: str,
+    role: Literal["user", "assistant"],
+    content: str,
+    attachments: Optional[List[Attachment]] = None,
+    metadata: Optional[dict] = None,
+    client: Optional[AsyncOpenAI] = None,
+    **kwargs,
+) -> OpenAIMessage:
+    loop = asyncio.get_event_loop()
+    ### PASS ARGS TO GET ASSISTANTS ###
+    kwargs["a_add_message"] = True
+    try:
+        # Use a partial function to pass your keyword arguments
+        func = partial(
+            add_message,
+            custom_llm_provider,
+            thread_id,
+            role,
+            content,
+            attachments,
+            metadata,
+            client,
+            **kwargs,
+        )
+
+        # Add the context to the function
+        ctx = contextvars.copy_context()
+        func_with_context = partial(ctx.run, func)
+
+        _, custom_llm_provider, _, _ = get_llm_provider(  # type: ignore
+            model="", custom_llm_provider=custom_llm_provider
+        )  # type: ignore
+
+        # Await normally
+        init_response = await loop.run_in_executor(None, func_with_context)
+        if asyncio.iscoroutine(init_response):
+            response = await init_response
+        else:
+            # Call the synchronous function using run_in_executor
+            response = init_response
+        return response  # type: ignore
+    except Exception as e:
+        raise exception_type(
+            model="",
+            custom_llm_provider=custom_llm_provider,
+            original_exception=e,
+            completion_kwargs={},
+            extra_kwargs=kwargs,
+        )
+
+
 def add_message(
     custom_llm_provider: Literal["openai"],
     thread_id: str,
@@ -267,6 +435,7 @@ def add_message(
     **kwargs,
 ) -> OpenAIMessage:
     ### COMMON OBJECTS ###
+    a_add_message = kwargs.pop("a_add_message", None)
     message_data = MessageData(
         role=role, content=content, attachments=attachments, metadata=metadata
     )
@@ -318,6 +487,7 @@ def add_message(
             max_retries=optional_params.max_retries,
             organization=organization,
             client=client,
+            a_add_message=a_add_message,
         )
     else:
         raise litellm.exceptions.BadRequestError(
@@ -336,12 +506,58 @@ def add_message(
     return response
 
 
+async def aget_messages(
+    custom_llm_provider: Literal["openai"],
+    thread_id: str,
+    client: Optional[AsyncOpenAI] = None,
+    **kwargs,
+) -> AsyncCursorPage[OpenAIMessage]:
+    loop = asyncio.get_event_loop()
+    ### PASS ARGS TO GET ASSISTANTS ###
+    kwargs["aget_messages"] = True
+    try:
+        # Use a partial function to pass your keyword arguments
+        func = partial(
+            get_messages,
+            custom_llm_provider,
+            thread_id,
+            client,
+            **kwargs,
+        )
+
+        # Add the context to the function
+        ctx = contextvars.copy_context()
+        func_with_context = partial(ctx.run, func)
+
+        _, custom_llm_provider, _, _ = get_llm_provider(  # type: ignore
+            model="", custom_llm_provider=custom_llm_provider
+        )  # type: ignore
+
+        # Await normally
+        init_response = await loop.run_in_executor(None, func_with_context)
+        if asyncio.iscoroutine(init_response):
+            response = await init_response
+        else:
+            # Call the synchronous function using run_in_executor
+            response = init_response
+        return response  # type: ignore
+    except Exception as e:
+        raise exception_type(
+            model="",
+            custom_llm_provider=custom_llm_provider,
+            original_exception=e,
+            completion_kwargs={},
+            extra_kwargs=kwargs,
+        )
+
+
 def get_messages(
     custom_llm_provider: Literal["openai"],
     thread_id: str,
     client: Optional[OpenAI] = None,
     **kwargs,
 ) -> SyncCursorPage[OpenAIMessage]:
+    aget_messages = kwargs.pop("aget_messages", None)
     optional_params = GenericLiteLLMParams(**kwargs)
 
     ### TIMEOUT LOGIC ###
@@ -389,6 +605,7 @@ def get_messages(
             max_retries=optional_params.max_retries,
             organization=organization,
             client=client,
+            aget_messages=aget_messages,
         )
     else:
         raise litellm.exceptions.BadRequestError(
@@ -408,6 +625,63 @@ def get_messages(
 
 
 ### RUNS ###
+async def arun_thread(
+    custom_llm_provider: Literal["openai"],
+    thread_id: str,
+    assistant_id: str,
+    additional_instructions: Optional[str] = None,
+    instructions: Optional[str] = None,
+    metadata: Optional[dict] = None,
+    model: Optional[str] = None,
+    stream: Optional[bool] = None,
+    tools: Optional[Iterable[AssistantToolParam]] = None,
+    client: Optional[AsyncOpenAI] = None,
+    **kwargs,
+) -> Run:
+    loop = asyncio.get_event_loop()
+    ### PASS ARGS TO GET ASSISTANTS ###
+    kwargs["arun_thread"] = True
+    try:
+        # Use a partial function to pass your keyword arguments
+        func = partial(
+            run_thread,
+            custom_llm_provider,
+            thread_id,
+            assistant_id,
+            additional_instructions,
+            instructions,
+            metadata,
+            model,
+            stream,
+            tools,
+            client,
+            **kwargs,
+        )
+
+        # Add the context to the function
+        ctx = contextvars.copy_context()
+        func_with_context = partial(ctx.run, func)
+
+        _, custom_llm_provider, _, _ = get_llm_provider(  # type: ignore
+            model="", custom_llm_provider=custom_llm_provider
+        )  # type: ignore
+
+        # Await normally
+        init_response = await loop.run_in_executor(None, func_with_context)
+        if asyncio.iscoroutine(init_response):
+            response = await init_response
+        else:
+            # Call the synchronous function using run_in_executor
+            response = init_response
+        return response  # type: ignore
+    except Exception as e:
+        raise exception_type(
+            model="",
+            custom_llm_provider=custom_llm_provider,
+            original_exception=e,
+            completion_kwargs={},
+            extra_kwargs=kwargs,
+        )
 
 
 def run_thread(
@@ -424,6 +698,7 @@ def run_thread(
     **kwargs,
 ) -> Run:
     """Run a given thread + assistant."""
+    arun_thread = kwargs.pop("arun_thread", None)
     optional_params = GenericLiteLLMParams(**kwargs)
 
     ### TIMEOUT LOGIC ###
@@ -478,6 +753,7 @@ def run_thread(
             max_retries=optional_params.max_retries,
             organization=organization,
             client=client,
+            arun_thread=arun_thread,
         )
     else:
         raise litellm.exceptions.BadRequestError(
