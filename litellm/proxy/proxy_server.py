@@ -8718,12 +8718,12 @@ async def block_user(data: BlockUsers):
     "/end_user/unblock",
     tags=["Customer Management"],
     dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
 )
 @router.post(
     "/customer/unblock",
     tags=["Customer Management"],
     dependencies=[Depends(user_api_key_auth)],
-    include_in_schema=False,
 )
 async def unblock_user(data: BlockUsers):
     """
@@ -11739,6 +11739,90 @@ async def login(request: Request):
             param="invalid_credentials",
             code=status.HTTP_401_UNAUTHORIZED,
         )
+
+
+@app.get("/onboarding/{invite_link}", include_in_schema=False)
+async def onboarding(invite_link: str):
+    """
+    - Get the invite link
+    - Validate it's still 'valid'
+    - Invalidate the link (prevents abuse)
+    - Get user from db
+    - Pass in user_email if set
+    """
+    global prisma_client
+    ### VALIDATE INVITE LINK ###
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
+    invite_obj = await prisma_client.db.litellm_invitationlink.find_unique(
+        where={"id": invite_link}
+    )
+    if invite_obj is None:
+        raise HTTPException(
+            status_code=401, detail={"error": "Invitation link does not exist in db."}
+        )
+    #### CHECK IF EXPIRED
+    if invite_obj.expires_at < litellm.utils.get_utc_datetime():
+        raise HTTPException(
+            status_code=401, detail={"error": "Invitation link has expired."}
+        )
+
+    #### INVALIDATE LINK
+    current_time = litellm.utils.get_utc_datetime()
+
+    _ = await prisma_client.db.litellm_invitationlink.update(
+        where={"id": invite_link},
+        data={
+            "accepted_at": current_time,
+            "updated_at": current_time,
+            "is_accepted": True,
+            "updated_by": invite_obj.user_id,  # type: ignore
+        },
+    )
+
+    ### GET USER OBJECT ###
+    user_obj = await prisma_client.db.litellm_usertable.find_unique(
+        where={"user_id": invite_obj.user_id}
+    )
+
+    if user_obj is None:
+        raise HTTPException(
+            status_code=401, detail={"error": "User does not exist in db."}
+        )
+
+    user_email = user_obj.user_email
+
+    response = await generate_key_helper_fn(
+        **{"user_role": user_obj.user_role or "app_owner", "duration": "2hr", "key_max_budget": 5, "models": [], "aliases": {}, "config": {}, "spend": 0, "user_id": user_obj.user_id, "team_id": "litellm-dashboard"}  # type: ignore
+    )
+    key = response["token"]  # type: ignore
+
+    litellm_dashboard_ui = os.getenv("PROXY_BASE_URL", "")
+    if litellm_dashboard_ui.endswith("/"):
+        litellm_dashboard_ui += "ui/onboarding"
+    else:
+        litellm_dashboard_ui += "/ui/onboarding"
+    import jwt
+
+    jwt_token = jwt.encode(
+        {
+            "user_id": user_obj.user_id,
+            "key": key,
+            "user_email": user_obj.user_email,
+            "user_role": "app_owner",
+            "login_method": "username_password",
+            "premium_user": premium_user,
+        },
+        "secret",
+        algorithm="HS256",
+    )
+
+    litellm_dashboard_ui += "?token={}&user_email={}".format(jwt_token, user_email)
+    return RedirectResponse(url=litellm_dashboard_ui, status_code=303)
 
 
 @app.get("/get_image", include_in_schema=False)
