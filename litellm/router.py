@@ -3326,6 +3326,8 @@ class Router:
                     supported_openai_params = litellm.get_supported_openai_params(
                         model=model, custom_llm_provider=llm_provider
                     )
+                    if supported_openai_params is None:
+                        supported_openai_params = []
                     model_info = ModelMapInfo(
                         max_tokens=None,
                         max_input_tokens=None,
