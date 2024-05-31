@@ -42,7 +42,7 @@ for chunk in response:
 
 
 ## Supported Models
-All models listed here https://docs.mistral.ai/platform/endpoints are supported. We actively maintain the list of models, pricing, token window, etc. [here](https://github.com/BerriAI/litellm/blob/c1b25538277206b9f00de5254d80d6a83bb19a29/model_prices_and_context_window.json).
+All models listed here https://docs.mistral.ai/platform/endpoints are supported. We actively maintain the list of models, pricing, token window, etc. [here](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json).
 
 | Model Name     | Function Call                                                |
 |----------------|--------------------------------------------------------------|
@@ -52,6 +52,7 @@ All models listed here https://docs.mistral.ai/platform/endpoints are supported.
 | Mistral 7B     | `completion(model="mistral/open-mistral-7b", messages)`      |
 | Mixtral 8x7B   | `completion(model="mistral/open-mixtral-8x7b", messages)`    |
 | Mixtral 8x22B  | `completion(model="mistral/open-mixtral-8x22b", messages)`   |
+| Codestral      | `completion(model="mistral/codestral-latest", messages)`     |
 
 ## Function Calling 
 
