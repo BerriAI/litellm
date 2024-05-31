@@ -18,7 +18,7 @@ from functools import wraps, lru_cache
 import datetime, time
 import tiktoken
 import uuid
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 import aiohttp
 import textwrap
 import logging
@@ -337,9 +337,7 @@ class HiddenParams(OpenAIObject):
     model_id: Optional[str] = None  # used in Router for individual deployments
     api_base: Optional[str] = None  # returns api base used for making completion call
 
-    class Config:
-        extra = "allow"
-        protected_namespaces = ()
+    model_config = ConfigDict(extra="allow", protected_namespaces=())
 
     def get(self, key, default=None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
