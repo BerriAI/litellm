@@ -18,7 +18,7 @@ import Usage from "../components/usage";
 import { jwtDecode } from "jwt-decode";
 import { Typography } from "antd";
 
-export function formatUserRole(userRole: string) {
+function formatUserRole(userRole: string) {
   if (!userRole) {
     return "Undefined Role";
   }

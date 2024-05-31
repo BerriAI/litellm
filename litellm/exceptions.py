@@ -314,6 +314,7 @@ class BudgetExceededError(Exception):
         self.current_cost = current_cost
         self.max_budget = max_budget
         message = f"Budget has been exceeded! Current cost: {current_cost}, Max budget: {max_budget}"
+        self.message = message
         super().__init__(message)
 
 

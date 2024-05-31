@@ -97,6 +97,18 @@ def test_databricks_optional_params():
     assert "user" not in optional_params
 
 
+def test_azure_ai_mistral_optional_params():
+    litellm.drop_params = True
+    optional_params = get_optional_params(
+        model="mistral-large-latest",
+        user="John",
+        custom_llm_provider="openai",
+        max_tokens=10,
+        temperature=0.2,
+    )
+    assert "user" not in optional_params
+
+
 def test_azure_gpt_optional_params_gpt_vision():
     # for OpenAI, Azure all extra params need to get passed as extra_body to OpenAI python. We assert we actually set extra_body here
     optional_params = litellm.utils.get_optional_params(

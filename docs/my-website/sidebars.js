@@ -41,6 +41,7 @@ const sidebars = {
         "proxy/reliability",
         "proxy/cost_tracking",
         "proxy/users",
+        "proxy/customers",
         "proxy/billing",
         "proxy/user_keys",
         "proxy/enterprise",

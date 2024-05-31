@@ -19,6 +19,25 @@ import os, httpx
 load_dotenv()
 
 
+def test_router_sensitive_keys():
+    try:
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "gpt-3.5-turbo",  # openai model name
+                    "litellm_params": {  # params for litellm completion/embedding call
+                        "model": "azure/chatgpt-v-2",
+                        "api_key": "special-key",
+                    },
+                    "model_info": {"id": 12345},
+                },
+            ],
+        )
+    except Exception as e:
+        print(f"error msg - {str(e)}")
+        assert "special-key" not in str(e)
+
+
 @pytest.mark.parametrize("num_retries", [None, 2])
 @pytest.mark.parametrize("max_retries", [None, 4])
 def test_router_num_retries_init(num_retries, max_retries):

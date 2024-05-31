@@ -499,6 +499,36 @@ async def test_webhook_alerting(alerting_type):
         mock_send_alert.assert_awaited_once()
 
 
+# @pytest.mark.asyncio
+# async def test_webhook_customer_spend_event():
+#     """
+#     Test if customer spend is working as expected
+#     """
+#     slack_alerting = SlackAlerting(alerting=["webhook"])
+
+#     with patch.object(
+#         slack_alerting, "send_webhook_alert", new=AsyncMock()
+#     ) as mock_send_alert:
+#         user_info = {
+#             "token": "50e55ca5bfbd0759697538e8d23c0cd5031f52d9e19e176d7233b20c7c4d3403",
+#             "spend": 1,
+#             "max_budget": 0,
+#             "user_id": "ishaan@berri.ai",
+#             "user_email": "ishaan@berri.ai",
+#             "key_alias": "my-test-key",
+#             "projected_exceeded_date": "10/20/2024",
+#             "projected_spend": 200,
+#         }
+
+#         user_info = CallInfo(**user_info)
+#         for _ in range(50):
+#             await slack_alerting.budget_alerts(
+#                 type=alerting_type,
+#                 user_info=user_info,
+#             )
+#         mock_send_alert.assert_awaited_once()
+
+
 @pytest.mark.parametrize(
     "model, api_base, llm_provider, vertex_project, vertex_location",
     [

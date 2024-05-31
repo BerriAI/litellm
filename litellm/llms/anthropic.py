@@ -379,13 +379,12 @@ class AnthropicChatCompletion(BaseLLM):
         logger_fn=None,
         headers={},
     ):
-        self.async_handler = AsyncHTTPHandler(
-            timeout=httpx.Timeout(timeout=600.0, connect=5.0)
+
+        async_handler = AsyncHTTPHandler(
+            timeout=httpx.Timeout(timeout=600.0, connect=20.0)
         )
         data["stream"] = True
-        response = await self.async_handler.post(
-            api_base, headers=headers, data=json.dumps(data), stream=True
-        )
+        response = await async_handler.post(api_base, headers=headers, json=data)
 
         if response.status_code != 200:
             raise AnthropicError(
@@ -421,12 +420,10 @@ class AnthropicChatCompletion(BaseLLM):
         logger_fn=None,
         headers={},
     ) -> Union[ModelResponse, CustomStreamWrapper]:
-        self.async_handler = AsyncHTTPHandler(
+        async_handler = AsyncHTTPHandler(
             timeout=httpx.Timeout(timeout=600.0, connect=5.0)
         )
-        response = await self.async_handler.post(
-            api_base, headers=headers, data=json.dumps(data)
-        )
+        response = await async_handler.post(api_base, headers=headers, json=data)
         if stream and _is_function_call:
             return self.process_streaming_response(
                 model=model,
