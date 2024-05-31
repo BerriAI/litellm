@@ -6,7 +6,13 @@ warnings.filterwarnings("ignore", message=".*conflict with protected namespace.*
 import threading, requests, os
 from typing import Callable, List, Optional, Dict, Union, Any, Literal
 from litellm.caching import Cache
-from litellm._logging import set_verbose, _turn_on_debug, verbose_logger, json_logs
+from litellm._logging import (
+    set_verbose,
+    _turn_on_debug,
+    verbose_logger,
+    json_logs,
+    _turn_on_json,
+)
 from litellm.proxy._types import (
     KeyManagementSystem,
     KeyManagementSettings,
@@ -221,7 +227,7 @@ default_team_settings: Optional[List] = None
 max_user_budget: Optional[float] = None
 max_end_user_budget: Optional[float] = None
 #### RELIABILITY ####
-request_timeout: Optional[float] = 6000
+request_timeout: float = 6000
 num_retries: Optional[int] = None  # per model endpoint
 default_fallbacks: Optional[List] = None
 fallbacks: Optional[List] = None
@@ -298,6 +304,7 @@ api_base = None
 headers = None
 api_version = None
 organization = None
+project = None
 config_path = None
 ####### COMPLETION MODELS ###################
 open_ai_chat_completion_models: List = []
@@ -797,3 +804,4 @@ from .budget_manager import BudgetManager
 from .proxy.proxy_cli import run_server
 from .router import Router
 from .assistants.main import *
+from .batches.main import *

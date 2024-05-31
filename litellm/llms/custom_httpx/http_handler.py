@@ -43,12 +43,13 @@ class AsyncHTTPHandler:
         self,
         url: str,
         data: Optional[Union[dict, str]] = None,  # type: ignore
+        json: Optional[dict] = None,
         params: Optional[dict] = None,
         headers: Optional[dict] = None,
         stream: bool = False,
     ):
         req = self.client.build_request(
-            "POST", url, data=data, params=params, headers=headers  # type: ignore
+            "POST", url, data=data, json=json, params=params, headers=headers  # type: ignore
         )
         response = await self.client.send(req, stream=stream)
         return response

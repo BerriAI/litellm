@@ -162,6 +162,17 @@ const UsagePage: React.FC<UsagePageProps> = ({
   console.log("keys in usage", keys);
   console.log("premium user in usage", premiumUser);
 
+  function valueFormatterNumbers(number: number) {
+    const formatter = new Intl.NumberFormat('en-US', {
+      maximumFractionDigits: 0,
+      notation: 'compact',
+      compactDisplay: 'short',
+    });
+  
+    return formatter.format(number);
+  }
+  
+
   const updateEndUserData = async (startTime:  Date | undefined, endTime:  Date | undefined, uiSelectedKey: string | null) => {
     if (!startTime || !endTime || !accessToken) {
       return;
@@ -482,10 +493,11 @@ const UsagePage: React.FC<UsagePageProps> = ({
                 <Title>All Up</Title>
                 <Grid numItems={2}>
                 <Col>
-                <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>API Requests {globalActivity.sum_api_requests}</Subtitle>
+                <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>API Requests { valueFormatterNumbers(globalActivity.sum_api_requests)}</Subtitle>
                 <AreaChart
                     className="h-40"
                     data={globalActivity.daily_data}
+                    valueFormatter={valueFormatterNumbers}
                     index="date"
                     colors={['cyan']}
                     categories={['api_requests']}
@@ -494,10 +506,11 @@ const UsagePage: React.FC<UsagePageProps> = ({
 
                 </Col>
                 <Col>
-                <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>Tokens {globalActivity.sum_total_tokens}</Subtitle>
+                <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>Tokens { valueFormatterNumbers(globalActivity.sum_total_tokens)}</Subtitle>
                 <BarChart
                     className="h-40"
                     data={globalActivity.daily_data}
+                    valueFormatter={valueFormatterNumbers}
                     index="date"
                     colors={['cyan']}
                     categories={['total_tokens']}
@@ -517,24 +530,26 @@ const UsagePage: React.FC<UsagePageProps> = ({
                   <Title>{globalActivity.model}</Title>
                   <Grid numItems={2}>
                     <Col>
-                      <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>API Requests {globalActivity.sum_api_requests}</Subtitle>
+                      <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>API Requests {valueFormatterNumbers(globalActivity.sum_api_requests)}</Subtitle>
                       <AreaChart
                         className="h-40"
                         data={globalActivity.daily_data}
                         index="date"
                         colors={['cyan']}
                         categories={['api_requests']}
+                        valueFormatter={valueFormatterNumbers}
                         onValueChange={(v) => console.log(v)}
                       />
                     </Col>
                     <Col>
-                      <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>Tokens {globalActivity.sum_total_tokens}</Subtitle>
+                      <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>Tokens {valueFormatterNumbers(globalActivity.sum_total_tokens)}</Subtitle>
                       <BarChart
                         className="h-40"
                         data={globalActivity.daily_data}
                         index="date"
                         colors={['cyan']}
                         categories={['total_tokens']}
+                        valueFormatter={valueFormatterNumbers}
                         onValueChange={(v) => console.log(v)}
                       />
                     </Col>
@@ -565,7 +580,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
                                 color: "#535452",
                               }}
                             >
-                              API Requests {globalActivity.sum_api_requests}
+                              API Requests {valueFormatterNumbers(globalActivity.sum_api_requests)}
                             </Subtitle>
                             <AreaChart
                               className="h-40"
@@ -573,6 +588,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
                               index="date"
                               colors={['cyan']}
                               categories={['api_requests']}
+                              valueFormatter={valueFormatterNumbers}
                               onValueChange={(v) => console.log(v)}
                             />
                           </Col>
@@ -584,13 +600,14 @@ const UsagePage: React.FC<UsagePageProps> = ({
                                 color: "#535452",
                               }}
                             >
-                              Tokens {globalActivity.sum_total_tokens}
+                              Tokens {valueFormatterNumbers(globalActivity.sum_total_tokens)}
                             </Subtitle>
                             <BarChart
                               className="h-40"
                               data={globalActivity.daily_data}
                               index="date"
                               colors={['cyan']}
+                              valueFormatter={valueFormatterNumbers}
                               categories={['total_tokens']}
                               onValueChange={(v) => console.log(v)}
                             />
