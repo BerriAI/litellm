@@ -84,7 +84,6 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
     useState(false);
   const router = useRouter();
   const [baseUrl, setBaseUrl] = useState("");
-  const [isInstructionsModalVisible, setIsInstructionsModalVisible] = useState(false);
   const [possibleUIRoles, setPossibleUIRoles] = useState<null | Record<string, Record<string, string>>>(null);
 
 
