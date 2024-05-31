@@ -181,32 +181,38 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
   const handleMemberUpdateOk = () => {
     setIsUpdateModalModalVisible(false);
     memberForm.resetFields();
+    form.resetFields();
   };
 
   const handleMemberOk = () => {
     setIsAddMemberModalVisible(false);
     memberForm.resetFields();
+    form.resetFields();
   };
 
   const handleAdminOk = () => {
     setIsAddAdminModalVisible(false);
     memberForm.resetFields();
+    form.resetFields();
   };
 
   const handleMemberCancel = () => {
     setIsAddMemberModalVisible(false);
     memberForm.resetFields();
+    form.resetFields();
   };
 
   const handleAdminCancel = () => {
     setIsAddAdminModalVisible(false);
     setIsInvitationLinkModalVisible(false);
     memberForm.resetFields();
+    form.resetFields();
   };
 
   const handleMemberUpdateCancel = () => {
     setIsUpdateModalModalVisible(false);
     memberForm.resetFields();
+    form.resetFields();
   };
   // Define the type for the handleMemberCreate function
   type HandleMemberCreate = (formValues: Record<string, any>) => Promise<void>;
@@ -221,21 +227,21 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
         labelAlign="left"
       >
         <>
-          <Form.Item label="Email" name="user_email" className="mb-4">
+          <Form.Item label="Email" name="user_email" className="mb-8 mt-4">
             <Input
               name="user_email"
               className="px-3 py-2 border rounded-md w-full"
             />
           </Form.Item>
-          <div className="text-center mb-4">OR</div>
+          {/* <div className="text-center mb-4">OR</div>
           <Form.Item label="User ID" name="user_id" className="mb-4">
             <Input
               name="user_id"
               className="px-3 py-2 border rounded-md w-full"
             />
-          </Form.Item>
+          </Form.Item> */}
         </>
-        <div style={{ textAlign: "right", marginTop: "10px" }}>
+        <div style={{ textAlign: "right", marginTop: "10px" }} className="mt-4">
           <Button2 htmlType="submit">Add member</Button2>
         </div>
       </Form>
@@ -345,6 +351,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
           // If new user is found, update it
           setAdmins(admins); // Set the new state
         }
+        form.resetFields();
         setIsAddMemberModalVisible(false);
       }
     } catch (error) {
@@ -387,6 +394,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
           // If new user is found, update it
           setAdmins(admins); // Set the new state
         }
+        form.resetFields();
         setIsAddAdminModalVisible(false);
       }
     } catch (error) {
@@ -495,7 +503,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
             <Modal
               title="Invitation Link"
               visible={isInvitationLinkModalVisible}
-              width={600}
+              width={800}
               footer={null}
               onOk={handleAdminOk}
               onCancel={handleAdminCancel}
@@ -518,7 +526,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
               <div className="flex justify-end mt-5">
                 <div></div>
                 <CopyToClipboard
-                  text={`${baseUrl}/onboarding?id=${invitationLinkData?.id}`}
+                  text={`${baseUrl}/ui/onboarding?id=${invitationLinkData?.id}`}
                   onCopy={() => message.success("Copied!")}
                 >
                   <Button variant="primary">Copy invitation link</Button>
