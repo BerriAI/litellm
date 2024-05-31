@@ -8,7 +8,6 @@ from typing import (
 )
 from typing_extensions import override, Required, Dict
 from pydantic import BaseModel
-
 from openai.types.beta.threads.message_content import MessageContent
 from openai.types.beta.threads.message import Message as OpenAIMessage
 from openai.types.beta.thread_create_params import (
@@ -21,7 +20,6 @@ from openai.pagination import SyncCursorPage
 from os import PathLike
 from openai.types import FileObject, Batch
 from openai._legacy_response import HttpxBinaryResponseContent
-
 from typing import TypedDict, List, Optional, Tuple, Mapping, IO
 
 FileContent = Union[IO[bytes], bytes, PathLike]
