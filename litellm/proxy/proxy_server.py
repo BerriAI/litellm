@@ -6890,14 +6890,14 @@ async def get_global_activity_exceptions_per_deployment(
                     const chartdata = [
                     {
                     date: 'Jan 22',
-                    num_exceptions: 10
+                    num_rate_limit_exceptions: 10
                     },
                     {
                     date: 'Jan 23',
-                    num_exceptions: 12
+                    num_rate_limit_exceptions: 12
                     },
             ],
-            "sum_num_exceptions": 20,
+            "sum_num_rate_limit_exceptions": 20,
 
         },
         {
@@ -6906,14 +6906,14 @@ async def get_global_activity_exceptions_per_deployment(
                     const chartdata = [
                     {
                     date: 'Jan 22',
-                    num_exceptions: 10,
+                    num_rate_limit_exceptions: 10,
                     },
                     {
                     date: 'Jan 23',
-                    num_exceptions: 12
+                    num_rate_limit_exceptions: 12
                     },
             ],
-            "sum_num_exceptions": 20,
+            "sum_num_rate_limit_exceptions": 20,
 
         },
     ]
@@ -6940,13 +6940,14 @@ async def get_global_activity_exceptions_per_deployment(
         SELECT
             api_base,
             date_trunc('day', "startTime")::date AS date,
-            COUNT(*) AS num_exceptions
+            COUNT(*) AS num_rate_limit_exceptions
         FROM
             "LiteLLM_ErrorLogs"
         WHERE
             "startTime" >= $1::date
             AND "startTime" < ($2::date + INTERVAL '1 day')
             AND model_group = $3
+            AND status_code = '429'
         GROUP BY
             api_base,
             date_trunc('day', "startTime")
@@ -6968,19 +6969,21 @@ async def get_global_activity_exceptions_per_deployment(
             if _model not in model_ui_data:
                 model_ui_data[_model] = {
                     "daily_data": [],
-                    "sum_num_exceptions": 0,
+                    "sum_num_rate_limit_exceptions": 0,
                 }
             _date_obj = datetime.fromisoformat(row["date"])
             row["date"] = _date_obj.strftime("%b %d")
 
             model_ui_data[_model]["daily_data"].append(row)
-            model_ui_data[_model]["sum_num_exceptions"] += row.get("num_exceptions", 0)
+            model_ui_data[_model]["sum_num_rate_limit_exceptions"] += row.get(
+                "num_rate_limit_exceptions", 0
+            )
 
         # sort mode ui data by sum_api_requests -> get top 10 models
         model_ui_data = dict(
             sorted(
                 model_ui_data.items(),
-                key=lambda x: x[1]["sum_num_exceptions"],
+                key=lambda x: x[1]["sum_num_rate_limit_exceptions"],
                 reverse=True,
             )[:10]
         )
@@ -6993,7 +6996,9 @@ async def get_global_activity_exceptions_per_deployment(
                 {
                     "api_base": model,
                     "daily_data": _sort_daily_data,
-                    "sum_num_exceptions": data["sum_num_exceptions"],
+                    "sum_num_rate_limit_exceptions": data[
+                        "sum_num_rate_limit_exceptions"
+                    ],
                 }
             )
 
@@ -7035,11 +7040,11 @@ async def get_global_activity_exceptions(
                 const chartdata = [
                 {
                 date: 'Jan 22',
-                num_exceptions: 10,
+                num_rate_limit_exceptions: 10,
                 },
                 {
                 date: 'Jan 23',
-                num_exceptions: 10,
+                num_rate_limit_exceptions: 10,
                 },
         ],
         "sum_api_exceptions": 20,
@@ -7066,13 +7071,14 @@ async def get_global_activity_exceptions(
         sql_query = """
         SELECT
             date_trunc('day', "startTime")::date AS date,
-            COUNT(*) AS num_exceptions
+            COUNT(*) AS num_rate_limit_exceptions
         FROM
             "LiteLLM_ErrorLogs"
         WHERE
             "startTime" >= $1::date
             AND "startTime" < ($2::date + INTERVAL '1 day')
             AND model_group = $3
+            AND status_code = '429'
         GROUP BY
             date_trunc('day', "startTime")
         ORDER BY
@@ -7085,7 +7091,7 @@ async def get_global_activity_exceptions(
         if db_response is None:
             return []
 
-        sum_num_exceptions = 0
+        sum_num_rate_limit_exceptions = 0
         daily_data = []
         for row in db_response:
             # cast date to datetime
@@ -7093,14 +7099,14 @@ async def get_global_activity_exceptions(
             row["date"] = _date_obj.strftime("%b %d")
 
             daily_data.append(row)
-            sum_num_exceptions += row.get("num_exceptions", 0)
+            sum_num_rate_limit_exceptions += row.get("num_rate_limit_exceptions", 0)
 
         # sort daily_data by date
         daily_data = sorted(daily_data, key=lambda x: x["date"])
 
         data_to_return = {
             "daily_data": daily_data,
-            "sum_num_exceptions": sum_num_exceptions,
+            "sum_num_rate_limit_exceptions": sum_num_rate_limit_exceptions,
         }
 
         return data_to_return
@@ -10830,7 +10836,7 @@ async def model_metrics_exceptions(
             SELECT 
                 CASE WHEN api_base = '' THEN litellm_model_name ELSE CONCAT(litellm_model_name, '-', api_base) END AS combined_model_api_base,
                 exception_type,
-                COUNT(*) AS num_exceptions
+                COUNT(*) AS num_rate_limit_exceptions
             FROM "LiteLLM_ErrorLogs"
             WHERE "startTime" >= $1::timestamp AND "endTime" <= $2::timestamp AND model_group = $3
             GROUP BY combined_model_api_base, exception_type
@@ -10838,7 +10844,7 @@ async def model_metrics_exceptions(
         SELECT 
             combined_model_api_base,
             COUNT(*) AS total_exceptions,
-            json_object_agg(exception_type, num_exceptions) AS exception_counts
+            json_object_agg(exception_type, num_rate_limit_exceptions) AS exception_counts
         FROM cte
         GROUP BY combined_model_api_base
         ORDER BY total_exceptions DESC
