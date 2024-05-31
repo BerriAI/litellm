@@ -83,8 +83,11 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
   const [isInstructionsModalVisible, setIsInstructionsModalVisible] =
     useState(false);
   const router = useRouter();
-  const [baseUrl, setBaseUrl] = useState("");
+
   const [possibleUIRoles, setPossibleUIRoles] = useState<null | Record<string, Record<string, string>>>(null);
+
+  const isLocal = process.env.NODE_ENV === "development";
+  const [baseUrl, setBaseUrl] = useState(isLocal ? "http://localhost:4000" : "");
 
 
   let nonSssoUrl;
@@ -509,13 +512,13 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
               <div className="flex justify-between pt-5 pb-2">
                 <Text>Invitation Link</Text>
                 <Text>
-                  {baseUrl}/onboarding/{invitationLinkData?.id}
+                  {baseUrl}/ui/onboarding?id={invitationLinkData?.id}
                 </Text>
               </div>
               <div className="flex justify-end mt-5">
                 <div></div>
                 <CopyToClipboard
-                  text={`${baseUrl}/onboarding/${invitationLinkData?.id}`}
+                  text={`${baseUrl}/onboarding?id=${invitationLinkData?.id}`}
                   onCopy={() => message.success("Copied!")}
                 >
                   <Button variant="primary">Copy invitation link</Button>
