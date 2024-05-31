@@ -14,9 +14,9 @@ export default function Onboarding() {
   const searchParams = useSearchParams();
   const token = searchParams.get("token");
   const inviteID = searchParams.get("id");
-  const user_email = searchParams.get("user_email");
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [defaultUserEmail, setDefaultUserEmail] = useState<string>("");
+  const [userEmail, setUserEmail] = useState<string>("");
   const [loginUrl, setLoginUrl] = useState<string>("");
   const [jwtToken, setJwtToken] = useState<string>("");
 
@@ -36,24 +36,23 @@ export default function Onboarding() {
 
       console.log("decoded:", decoded);
       setAccessToken(decoded.key);
-      
+
+      console.log("decoded user email:", decoded.user_email);
+      const user_email = decoded.user_email;
+      setUserEmail(user_email);
 
     });
     
   }, [inviteID]);
 
-  useEffect(() => {
-    if (!user_email) {
-      return;
-    }
-    setDefaultUserEmail(user_email);
-  }, [user_email]);
 
   const handleSubmit = (formValues: Record<string, any>) => {
     console.log("in handle submit. accessToken:", accessToken, "token:", jwtToken, "formValues:", formValues);
     if (!accessToken || !jwtToken) {
       return;
     }
+
+    formValues.user_email = userEmail;
 
     userUpdateUserCall(accessToken, formValues, null).then((data) => {
       let litellm_dashboard_ui = "/ui/";
@@ -83,12 +82,12 @@ export default function Onboarding() {
             <Form.Item
               label="Email Address"
               name="user_email"
-              rules={[{ required: true, message: "Set the user email" }]}
-              help="required"
             >
               <TextInput
-                placeholder={defaultUserEmail}
                 type="email"
+                disabled={true}
+                value={userEmail}
+                defaultValue={userEmail}
                 className="max-w-md"
               />
             </Form.Item>
@@ -96,8 +95,8 @@ export default function Onboarding() {
             <Form.Item
               label="Password"
               name="password"
-              rules={[{ required: true, message: "Set the user password" }]}
-              help="required"
+              rules={[{ required: true, message: "password required to sign up" }]}
+              help="Create a password for your account"
             >
               <TextInput placeholder="" type="password" className="max-w-md" />
             </Form.Item>
