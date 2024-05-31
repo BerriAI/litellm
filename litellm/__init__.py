@@ -102,6 +102,7 @@ common_cloud_provider_auth_params: dict = {
 use_client: bool = False
 ssl_verify: bool = True
 disable_streaming_logging: bool = False
+in_memory_llm_clients_cache: dict = {}
 ### GUARDRAILS ###
 llamaguard_model_name: Optional[str] = None
 openai_moderations_model_name: Optional[str] = None
