@@ -839,8 +839,7 @@ class LiteLLM_TeamMemberTable(LiteLLM_BudgetTable):
     team_id: Optional[str] = None
     budget_id: Optional[str] = None
 
-    class Config:
-        protected_namespaces = ()
+    model_config = ConfigDict(protected_namespaces=())
 
 
 class NewOrganizationRequest(LiteLLM_BudgetTable):
