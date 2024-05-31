@@ -1246,7 +1246,8 @@ export const adminGlobalActivityExceptions = async (
 export const adminGlobalActivityExceptionsPerDeployment = async (
   accessToken: String,
   startTime: String | undefined,
-  endTime: String | undefined
+  endTime: String | undefined,
+  modelGroup: String,
 ) => {
   try {
     let url = proxyBaseUrl
@@ -1255,6 +1256,10 @@ export const adminGlobalActivityExceptionsPerDeployment = async (
 
     if (startTime && endTime) {
       url += `?start_date=${startTime}&end_date=${endTime}`;
+    }
+
+    if (modelGroup) {
+      url += `&model_group=${modelGroup}`;
     }
 
     const requestOptions: {
