@@ -227,7 +227,7 @@ default_team_settings: Optional[List] = None
 max_user_budget: Optional[float] = None
 max_end_user_budget: Optional[float] = None
 #### RELIABILITY ####
-request_timeout: Optional[float] = 6000
+request_timeout: float = 6000
 num_retries: Optional[int] = None  # per model endpoint
 default_fallbacks: Optional[List] = None
 fallbacks: Optional[List] = None
@@ -304,6 +304,7 @@ api_base = None
 headers = None
 api_version = None
 organization = None
+project = None
 config_path = None
 ####### COMPLETION MODELS ###################
 open_ai_chat_completion_models: List = []
