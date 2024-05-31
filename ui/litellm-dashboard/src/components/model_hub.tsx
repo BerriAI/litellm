@@ -147,7 +147,7 @@ const ModelHub: React.FC<ModelHubProps> = ({
             )}
           </div>
 
-          <div className="grid grid-cols-2 gap-6 sm:grid-cols-3 lg:grid-cols-4">
+          <div className="grid grid-cols-2 gap-6 sm:grid-cols-3 lg:grid-cols-4 pr-8">
             {modelHubData &&
               modelHubData.map((model: ModelInfo) => (
                 <Card key={model.model_group} className="mt-5 mx-8">
