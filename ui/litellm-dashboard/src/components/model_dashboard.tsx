@@ -656,6 +656,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
 
         const dailExceptions = await adminGlobalActivityExceptions(
           accessToken,
+          _initial_model_group,
           dateValue.from?.toISOString(),
           dateValue.to?.toISOString()
         );
