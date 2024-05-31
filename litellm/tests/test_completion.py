@@ -593,7 +593,7 @@ def test_completion_claude_3_base64():
         litellm.set_verbose = True
         litellm.num_retries = 3
         image_path = "../proxy/cached_logo.jpg"
-        # Getting the base64 string
+        # Getting the base64-string
         base64_image = encode_image(image_path)
         resp = litellm.completion(
             model="anthropic/claude-3-opus-20240229",
@@ -1419,7 +1419,7 @@ def test_ollama_image():
         return mock_response
 
     def make_b64image(format):
-        image = Image.new(mode='RGB', size=(1, 1))
+        image = Image.new(mode="RGB", size=(1, 1))
         image_buffer = io.BytesIO()
         image.save(image_buffer, format)
         return base64.b64encode(image_buffer.getvalue()).decode("utf-8")
@@ -1433,13 +1433,13 @@ def test_ollama_image():
 
     tests = [
         # input                                    expected
-        [ jpeg_image,                              jpeg_image          ],
-        [ webp_image,                              None                ],
-        [ png_image,                               png_image           ],
-        [ f"data:image/jpeg;base64,{jpeg_image}",  jpeg_image          ],
-        [ f"data:image/webp;base64,{webp_image}",  None                ],
-        [ f"data:image/png;base64,{png_image}",    png_image           ],
-        [ datauri_base64_data,                     datauri_base64_data ]
+        [jpeg_image, jpeg_image],
+        [webp_image, None],
+        [png_image, png_image],
+        [f"data:image/jpeg;base64,{jpeg_image}", jpeg_image],
+        [f"data:image/webp;base64,{webp_image}", None],
+        [f"data:image/png;base64,{png_image}", png_image],
+        [datauri_base64_data, datauri_base64_data],
     ]
 
     for test in tests:
@@ -1454,9 +1454,7 @@ def test_ollama_image():
                                 {"type": "text", "text": "Whats in this image?"},
                                 {
                                     "type": "image_url",
-                                    "image_url": {
-                                        "url": test[0]
-                                    },
+                                    "image_url": {"url": test[0]},
                                 },
                             ],
                         }
