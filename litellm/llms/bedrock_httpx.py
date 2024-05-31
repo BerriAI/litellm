@@ -1,7 +1,7 @@
 # What is this?
 ## Initial implementation of calling bedrock via httpx client (allows for async calls).
 ## V1 - covers cohere + anthropic claude-3 support
-
+from functools import partial
 import os, types
 import json
 from enum import Enum
@@ -143,6 +143,37 @@ class AmazonCohereChatConfig:
             if "seed":
                 optional_params["seed"] = value
         return optional_params
+
+
+async def make_call(
+    client: Optional[AsyncHTTPHandler],
+    api_base: str,
+    headers: dict,
+    data: str,
+    model: str,
+    messages: list,
+    logging_obj,
+):
+    if client is None:
+        client = AsyncHTTPHandler()  # Create a new client if none provided
+
+    response = await client.post(api_base, headers=headers, data=data, stream=True)
+
+    if response.status_code != 200:
+        raise BedrockError(status_code=response.status_code, message=response.text)
+
+    decoder = AWSEventStreamDecoder(model=model)
+    completion_stream = decoder.aiter_bytes(response.aiter_bytes(chunk_size=1024))
+
+    # LOGGING
+    logging_obj.post_call(
+        input=messages,
+        api_key="",
+        original_response=completion_stream,  # Pass the completion stream for logging
+        additional_args={"complete_input_dict": data},
+    )
+
+    return completion_stream
 
 
 class BedrockLLM(BaseLLM):
@@ -968,39 +999,24 @@ class BedrockLLM(BaseLLM):
         headers={},
         client: Optional[AsyncHTTPHandler] = None,
     ) -> CustomStreamWrapper:
-        if client is None:
-            _params = {}
-            if timeout is not None:
-                if isinstance(timeout, float) or isinstance(timeout, int):
-                    timeout = httpx.Timeout(timeout)
-                _params["timeout"] = timeout
-            self.client = AsyncHTTPHandler(**_params)  # type: ignore
-        else:
-            self.client = client  # type: ignore
+        # The call is not made here; instead, we prepare the necessary objects for the stream.
 
-        response = await self.client.post(api_base, headers=headers, data=data, stream=True)  # type: ignore
-
-        if response.status_code != 200:
-            raise BedrockError(status_code=response.status_code, message=response.text)
-
-        decoder = AWSEventStreamDecoder(model=model)
-
-        completion_stream = decoder.aiter_bytes(response.aiter_bytes(chunk_size=1024))
         streaming_response = CustomStreamWrapper(
-            completion_stream=completion_stream,
+            completion_stream=None,
+            make_call=partial(
+                make_call,
+                client=client,
+                api_base=api_base,
+                headers=headers,
+                data=data,
+                model=model,
+                messages=messages,
+                logging_obj=logging_obj,
+            ),
             model=model,
             custom_llm_provider="bedrock",
             logging_obj=logging_obj,
         )
-
-        ## LOGGING
-        logging_obj.post_call(
-            input=messages,
-            api_key="",
-            original_response=streaming_response,
-            additional_args={"complete_input_dict": data},
-        )
-
         return streaming_response
 
     def embedding(self, *args, **kwargs):
