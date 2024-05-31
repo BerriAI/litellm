@@ -73,7 +73,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
   const [admins, setAdmins] = useState<null | any[]>(null);
   const [invitationLinkData, setInvitationLinkData] =
     useState<InvitationLink | null>(null);
-  const [isInvitationLinkModalVisible, setInvitationLinkModalVisible] =
+  const [isInvitationLinkModalVisible, setIsInvitationLinkModalVisible] =
     useState(false);
   const [isAddMemberModalVisible, setIsAddMemberModalVisible] = useState(false);
   const [isAddAdminModalVisible, setIsAddAdminModalVisible] = useState(false);
@@ -197,6 +197,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
 
   const handleAdminCancel = () => {
     setIsAddAdminModalVisible(false);
+    setIsInvitationLinkModalVisible(false);
     memberForm.resetFields();
   };
 
@@ -366,7 +367,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
         const user_id = response.data?.user_id || response.user_id;
         invitationCreateCall(accessToken, user_id).then((data) => {
           setInvitationLinkData(data);
-          setInvitationLinkModalVisible(true);
+          setIsInvitationLinkModalVisible(true);
         });
         console.log(`response for team create call: ${response}`);
         // Checking if the team exists in the list and updating or adding accordingly
