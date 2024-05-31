@@ -209,20 +209,25 @@ def test_completion_bedrock_claude_sts_client_auth():
 # test_completion_bedrock_claude_sts_client_auth()
 
 
-@pytest.mark.skip(reason="We don't have Circle CI OIDC credentials as yet")
+@pytest.mark.skipif(
+    os.environ.get("CIRCLE_OIDC_TOKEN_V2") is None,
+    reason="Cannot run without being in CircleCI Runner",
+)
 def test_completion_bedrock_claude_sts_oidc_auth():
     print("\ncalling bedrock claude with oidc auth")
     import os
 
     aws_web_identity_token = "oidc/circleci_v2/"
     aws_region_name = os.environ["AWS_REGION_NAME"]
-    aws_role_name = os.environ["AWS_TEMP_ROLE_NAME"]
+    # aws_role_name = os.environ["AWS_TEMP_ROLE_NAME"]
+    # TODO: This is using David's IAM role, we should use Litellm's IAM role eventually
+    aws_role_name = "arn:aws:iam::335785316107:role/litellm-github-unit-tests-circleci"
 
     try:
         litellm.set_verbose = True
 
         response = completion(
-            model="bedrock/anthropic.claude-instant-v1",
+            model="bedrock/anthropic.claude-3-haiku-20240307-v1:0",
             messages=messages,
             max_tokens=10,
             temperature=0.1,
@@ -238,6 +243,39 @@ def test_completion_bedrock_claude_sts_oidc_auth():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+@pytest.mark.skipif(
+    os.environ.get("CIRCLE_OIDC_TOKEN_V2") is None,
+    reason="Cannot run without being in CircleCI Runner",
+)
+def test_completion_bedrock_httpx_command_r_sts_oidc_auth():
+    print("\ncalling bedrock httpx command r with oidc auth")
+    import os
+
+    aws_web_identity_token = "oidc/circleci_v2/"
+    aws_region_name = os.environ["AWS_REGION_NAME"]
+    # aws_role_name = os.environ["AWS_TEMP_ROLE_NAME"]
+    # TODO: This is using David's IAM role, we should use Litellm's IAM role eventually
+    aws_role_name = "arn:aws:iam::335785316107:role/litellm-github-unit-tests-circleci"
+
+    try:
+        litellm.set_verbose = True
+
+        response = completion(
+            model="bedrock/cohere.command-r-v1:0",
+            messages=messages,
+            max_tokens=10,
+            temperature=0.1,
+            aws_region_name=aws_region_name,
+            aws_web_identity_token=aws_web_identity_token,
+            aws_role_name=aws_role_name,
+            aws_session_name="my-test-session",
+        )
+        # Add any assertions here to check the response
+        print(response)
+    except RateLimitError:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
 def test_bedrock_claude_3():
     try:
