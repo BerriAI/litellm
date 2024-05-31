@@ -49,6 +49,8 @@ import {
   getCallbacksCall,
   setCallbacksCall,
   modelSettingsCall,
+  adminGlobalActivityExceptions,
+  adminGlobalActivityExceptionsPerDeployment,
 } from "./networking";
 import { BarChart, AreaChart } from "@tremor/react";
 import {
@@ -108,6 +110,13 @@ interface EditModelModalProps {
 interface RetryPolicyObject {
   [key: string]: { [retryPolicyKey: string]: number } | undefined;
 }
+
+
+interface GlobalExceptionActivityData {
+  sum_num_exceptions: number;
+  daily_data: { date: string; num_exceptions: number; }[];
+}
+
 
 //["OpenAI", "Azure OpenAI", "Anthropic", "Gemini (Google AI Studio)", "Amazon Bedrock", "OpenAI-Compatible Endpoints (Groq, Together AI, Mistral AI, etc.)"]
 
@@ -300,6 +309,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const [modelGroupRetryPolicy, setModelGroupRetryPolicy] =
     useState<RetryPolicyObject | null>(null);
   const [defaultRetry, setDefaultRetry] = useState<number>(0);
+
+  const [globalExceptionData, setGlobalExceptionData] = useState<GlobalExceptionActivityData[]>([]);
 
   function formatCreatedAt(createdAt: string | null) {
     if (createdAt) {
@@ -642,6 +653,13 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
           dateValue.from?.toISOString(),
           dateValue.to?.toISOString()
         );
+
+        const dailExceptions = await adminGlobalActivityExceptions(
+          accessToken,
+          dateValue.from?.toISOString(),
+          dateValue.to?.toISOString()
+        );
+
 
         console.log("slowResponses:", slowResponses);
 
