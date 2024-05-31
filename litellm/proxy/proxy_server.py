@@ -11749,7 +11749,7 @@ async def login(request: Request):
         )
 
 
-@app.get("/onboarding/{invite_link}", include_in_schema=False)
+@app.get("/onboarding/get_token", include_in_schema=False)
 async def onboarding(invite_link: str):
     """
     - Get the invite link
@@ -11774,7 +11774,10 @@ async def onboarding(invite_link: str):
             status_code=401, detail={"error": "Invitation link does not exist in db."}
         )
     #### CHECK IF EXPIRED
-    if invite_obj.expires_at < litellm.utils.get_utc_datetime():
+    # Extract the date part from both datetime objects
+    utc_now_date = litellm.utils.get_utc_datetime().date()
+    expires_at_date = invite_obj.expires_at.date()
+    if expires_at_date < utc_now_date:
         raise HTTPException(
             status_code=401, detail={"error": "Invitation link has expired."}
         )
@@ -11805,7 +11808,17 @@ async def onboarding(invite_link: str):
     user_email = user_obj.user_email
 
     response = await generate_key_helper_fn(
-        **{"user_role": user_obj.user_role or "app_owner", "duration": "2hr", "key_max_budget": 5, "models": [], "aliases": {}, "config": {}, "spend": 0, "user_id": user_obj.user_id, "team_id": "litellm-dashboard"}  # type: ignore
+        **{
+            "user_role": LitellmUserRoles.PROXY_ADMIN,
+            "duration": "2hr",
+            "key_max_budget": 5,
+            "models": [],
+            "aliases": {},
+            "config": {},
+            "spend": 0,
+            "user_id": user_obj.user_id,
+            "team_id": "litellm-dashboard",
+        }  # type: ignore
     )
     key = response["token"]  # type: ignore
 
@@ -11830,7 +11843,11 @@ async def onboarding(invite_link: str):
     )
 
     litellm_dashboard_ui += "?token={}&user_email={}".format(jwt_token, user_email)
-    return RedirectResponse(url=litellm_dashboard_ui, status_code=303)
+    return {
+        "login_url": litellm_dashboard_ui,
+        "token": jwt_token,
+        "user_email": user_email,
+    }
 
 
 @app.get("/get_image", include_in_schema=False)
