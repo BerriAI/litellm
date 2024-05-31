@@ -510,6 +510,7 @@ class GenerateKeyRequest(GenerateRequestBase):
     )  # {"gpt-4": 5.0, "gpt-3.5-turbo": 5.0}, defaults to {}
 
     model_config = ConfigDict(protected_namespaces=())
+    send_invite_email: Optional[bool] = None
 
 
 class GenerateKeyResponse(GenerateKeyRequest):
