@@ -6,7 +6,13 @@ warnings.filterwarnings("ignore", message=".*conflict with protected namespace.*
 import threading, requests, os
 from typing import Callable, List, Optional, Dict, Union, Any, Literal
 from litellm.caching import Cache
-from litellm._logging import set_verbose, _turn_on_debug, verbose_logger, json_logs
+from litellm._logging import (
+    set_verbose,
+    _turn_on_debug,
+    verbose_logger,
+    json_logs,
+    _turn_on_json,
+)
 from litellm.proxy._types import (
     KeyManagementSystem,
     KeyManagementSettings,
@@ -27,8 +33,8 @@ input_callback: List[Union[str, Callable]] = []
 success_callback: List[Union[str, Callable]] = []
 failure_callback: List[Union[str, Callable]] = []
 service_callback: List[Union[str, Callable]] = []
-callbacks: List[Callable] = []
-_custom_logger_compatible_callbacks: list = ["openmeter"]
+_custom_logger_compatible_callbacks_literal = Literal["lago", "openmeter"]
+callbacks: List[Union[Callable, _custom_logger_compatible_callbacks_literal]] = []
 _langfuse_default_tags: Optional[
     List[
         Literal[
@@ -69,6 +75,7 @@ retry = True
 ### AUTH ###
 api_key: Optional[str] = None
 openai_key: Optional[str] = None
+databricks_key: Optional[str] = None
 azure_key: Optional[str] = None
 anthropic_key: Optional[str] = None
 replicate_key: Optional[str] = None
@@ -97,6 +104,7 @@ ssl_verify: bool = True
 disable_streaming_logging: bool = False
 ### GUARDRAILS ###
 llamaguard_model_name: Optional[str] = None
+openai_moderations_model_name: Optional[str] = None
 presidio_ad_hoc_recognizers: Optional[str] = None
 google_moderation_confidence_threshold: Optional[float] = None
 llamaguard_unsafe_content_categories: Optional[str] = None
@@ -219,7 +227,7 @@ default_team_settings: Optional[List] = None
 max_user_budget: Optional[float] = None
 max_end_user_budget: Optional[float] = None
 #### RELIABILITY ####
-request_timeout: Optional[float] = 6000
+request_timeout: float = 6000
 num_retries: Optional[int] = None  # per model endpoint
 default_fallbacks: Optional[List] = None
 fallbacks: Optional[List] = None
@@ -296,6 +304,7 @@ api_base = None
 headers = None
 api_version = None
 organization = None
+project = None
 config_path = None
 ####### COMPLETION MODELS ###################
 open_ai_chat_completion_models: List = []
@@ -615,6 +624,7 @@ provider_list: List = [
     "watsonx",
     "triton",
     "predibase",
+    "databricks",
     "custom",  # custom apis
 ]
 
@@ -724,9 +734,14 @@ from .utils import (
     get_supported_openai_params,
     get_api_base,
     get_first_chars_messages,
+    ModelResponse,
+    ImageResponse,
+    ImageObject,
+    get_provider_fields,
 )
 from .llms.huggingface_restapi import HuggingfaceConfig
 from .llms.anthropic import AnthropicConfig
+from .llms.databricks import DatabricksConfig, DatabricksEmbeddingConfig
 from .llms.predibase import PredibaseConfig
 from .llms.anthropic_text import AnthropicTextConfig
 from .llms.replicate import ReplicateConfig
@@ -758,7 +773,12 @@ from .llms.bedrock import (
     AmazonMistralConfig,
     AmazonBedrockGlobalConfig,
 )
-from .llms.openai import OpenAIConfig, OpenAITextCompletionConfig, MistralConfig
+from .llms.openai import (
+    OpenAIConfig,
+    OpenAITextCompletionConfig,
+    MistralConfig,
+    DeepInfraConfig,
+)
 from .llms.azure import AzureOpenAIConfig, AzureOpenAIError
 from .llms.watsonx import IBMWatsonXAIConfig
 from .main import *  # type: ignore
@@ -784,3 +804,4 @@ from .budget_manager import BudgetManager
 from .proxy.proxy_cli import run_server
 from .router import Router
 from .assistants.main import *
+from .batches.main import *

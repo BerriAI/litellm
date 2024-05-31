@@ -17,6 +17,7 @@ if litellm_mode == "DEV":
 from importlib import resources
 import shutil
 
+
 telemetry = None
 
 
@@ -428,6 +429,19 @@ def run_server(
 
             proxy_config = ProxyConfig()
             _config = asyncio.run(proxy_config.get_config(config_file_path=config))
+            ### LITELLM SETTINGS ###
+            litellm_settings = _config.get("litellm_settings", None)
+            if (
+                litellm_settings is not None
+                and "json_logs" in litellm_settings
+                and litellm_settings["json_logs"] == True
+            ):
+                import litellm
+
+                litellm.json_logs = True
+
+                litellm._turn_on_json()
+            ### GENERAL SETTINGS ###
             general_settings = _config.get("general_settings", {})
             if general_settings is None:
                 general_settings = {}
@@ -505,6 +519,7 @@ def run_server(
             port = random.randint(1024, 49152)
 
         from litellm.proxy.proxy_server import app
+        import litellm
 
         if run_gunicorn == False:
             if ssl_certfile_path is not None and ssl_keyfile_path is not None:
@@ -519,7 +534,15 @@ def run_server(
                     ssl_certfile=ssl_certfile_path,
                 )  # run uvicorn
             else:
-                uvicorn.run(app, host=host, port=port)  # run uvicorn
+                print(f"litellm.json_logs: {litellm.json_logs}")
+                if litellm.json_logs:
+                    from litellm.proxy._logging import logger
+
+                    uvicorn.run(
+                        app, host=host, port=port, log_config=None
+                    )  # run uvicorn w/ json
+                else:
+                    uvicorn.run(app, host=host, port=port)  # run uvicorn
         elif run_gunicorn == True:
             import gunicorn.app.base
 

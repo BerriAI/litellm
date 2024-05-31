@@ -1190,6 +1190,15 @@ class DualCache(BaseCache):
         )
         self.default_redis_ttl = default_redis_ttl or litellm.default_redis_ttl
 
+    def update_cache_ttl(
+        self, default_in_memory_ttl: Optional[float], default_redis_ttl: Optional[float]
+    ):
+        if default_in_memory_ttl is not None:
+            self.default_in_memory_ttl = default_in_memory_ttl
+
+        if default_redis_ttl is not None:
+            self.default_redis_ttl = default_redis_ttl
+
     def set_cache(self, key, value, local_only: bool = False, **kwargs):
         # Update both Redis and in-memory cache
         try:
@@ -1441,7 +1450,9 @@ class DualCache(BaseCache):
 class Cache:
     def __init__(
         self,
-        type: Optional[Literal["local", "redis", "redis-semantic", "s3", "disk"]] = "local",
+        type: Optional[
+            Literal["local", "redis", "redis-semantic", "s3", "disk"]
+        ] = "local",
         host: Optional[str] = None,
         port: Optional[str] = None,
         password: Optional[str] = None,

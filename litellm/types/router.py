@@ -1,9 +1,15 @@
+"""
+litellm.Router Types - includes RouterConfig, UpdateRouterConfig, ModelInfo etc
+"""
+
 from typing import List, Optional, Union, Dict, Tuple, Literal, TypedDict
+import uuid
+import enum
 import httpx
-from pydantic import BaseModel, ConfigDict, validator, Field
+from pydantic import BaseModel, ConfigDict, Field
+import datetime
 from .completion import CompletionRequest
 from .embedding import EmbeddingRequest
-import uuid, enum
 
 
 class ModelConfig(BaseModel):
@@ -70,8 +76,15 @@ class ModelInfo(BaseModel):
     id: Optional[
         str
     ]  # Allow id to be optional on input, but it will always be present as a str in the model instance
-    db_model: bool = (
-        False  # used for proxy - to separate models which are stored in the db vs. config.
+    db_model: bool = False  # used for proxy - to separate models which are stored in the db vs. config.
+    updated_at: Optional[datetime.datetime] = None
+    updated_by: Optional[str] = None
+
+    created_at: Optional[datetime.datetime] = None
+    created_by: Optional[str] = None
+
+    base_model: Optional[str] = (
+        None  # specify if the base model is azure/gpt-3.5-turbo etc for accurate cost tracking
     )
 
     def __init__(self, id: Optional[Union[str, int]] = None, **params):
@@ -135,7 +148,7 @@ class GenericLiteLLMParams(BaseModel):
     output_cost_per_token: Optional[float] = None
     input_cost_per_second: Optional[float] = None
     output_cost_per_second: Optional[float] = None
-    
+
     model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
 
     def __init__(
@@ -167,7 +180,7 @@ class GenericLiteLLMParams(BaseModel):
         output_cost_per_token: Optional[float] = None,
         input_cost_per_second: Optional[float] = None,
         output_cost_per_second: Optional[float] = None,
-        **params
+        **params,
     ):
         args = locals()
         args.pop("max_retries", None)
@@ -225,7 +238,7 @@ class LiteLLM_Params(GenericLiteLLMParams):
         aws_access_key_id: Optional[str] = None,
         aws_secret_access_key: Optional[str] = None,
         aws_region_name: Optional[str] = None,
-        **params
+        **params,
     ):
         args = locals()
         args.pop("max_retries", None)
@@ -235,7 +248,6 @@ class LiteLLM_Params(GenericLiteLLMParams):
         if max_retries is not None and isinstance(max_retries, str):
             max_retries = int(max_retries)  # cast to int
         super().__init__(max_retries=max_retries, **args, **params)
-
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -313,7 +325,7 @@ class Deployment(BaseModel):
     model_name: str
     litellm_params: LiteLLM_Params
     model_info: ModelInfo
-    
+
     model_config = ConfigDict(extra="allow", protected_namespaces=())
 
     def __init__(
@@ -321,7 +333,7 @@ class Deployment(BaseModel):
         model_name: str,
         litellm_params: LiteLLM_Params,
         model_info: Optional[Union[ModelInfo, dict]] = None,
-        **params
+        **params,
     ):
         if model_info is None:
             model_info = ModelInfo()
@@ -331,7 +343,7 @@ class Deployment(BaseModel):
             model_info=model_info,
             model_name=model_name,
             litellm_params=litellm_params,
-            **params
+            **params,
         )
 
     def to_json(self, **kwargs):
@@ -340,7 +352,6 @@ class Deployment(BaseModel):
         except Exception as e:
             # if using pydantic v1
             return self.dict(**kwargs)
-
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -398,3 +409,19 @@ class AlertingConfig(BaseModel):
 
     webhook_url: str
     alerting_threshold: Optional[float] = 300
+
+
+class ModelGroupInfo(BaseModel):
+    model_group: str
+    providers: List[str]
+    max_input_tokens: Optional[float] = None
+    max_output_tokens: Optional[float] = None
+    input_cost_per_token: Optional[float] = None
+    output_cost_per_token: Optional[float] = None
+    mode: Literal[
+        "chat", "embedding", "completion", "image_generation", "audio_transcription"
+    ]
+    supports_parallel_function_calling: bool = Field(default=False)
+    supports_vision: bool = Field(default=False)
+    supports_function_calling: bool = Field(default=False)
+    supported_openai_params: List[str] = Field(default=[])

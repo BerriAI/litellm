@@ -112,6 +112,7 @@ class CohereChatConfig:
 
 def validate_environment(api_key):
     headers = {
+        "Request-Source":"unspecified:litellm",
         "accept": "application/json",
         "content-type": "application/json",
     }

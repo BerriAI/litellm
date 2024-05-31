@@ -1,7 +1,7 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# 🆕 Predibase
+# Predibase
 
 LiteLLM supports all models on Predibase
 

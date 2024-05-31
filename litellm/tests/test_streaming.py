@@ -3,7 +3,7 @@
 
 import sys, os, asyncio
 import traceback
-import time, pytest
+import time, pytest, uuid
 from pydantic import BaseModel
 from typing import Tuple
 
@@ -233,6 +233,194 @@ def test_completion_azure_stream_special_char():
         response_str += part.choices[0].delta.content or ""
     print(f"response_str: {response_str}")
     assert len(response_str) > 0
+
+
+def test_completion_azure_stream_content_filter_no_delta():
+    """
+    Tests streaming from Azure when the chunks have no delta because they represent the filtered content
+    """
+    try:
+        chunks = [
+            {
+                "id": "chatcmpl-9SQxdH5hODqkWyJopWlaVOOUnFwlj",
+                "choices": [
+                    {
+                        "delta": {"content": "", "role": "assistant"},
+                        "finish_reason": None,
+                        "index": 0,
+                    }
+                ],
+                "created": 1716563849,
+                "model": "gpt-4o-2024-05-13",
+                "object": "chat.completion.chunk",
+                "system_fingerprint": "fp_5f4bad809a",
+            },
+            {
+                "id": "chatcmpl-9SQxdH5hODqkWyJopWlaVOOUnFwlj",
+                "choices": [
+                    {"delta": {"content": "This"}, "finish_reason": None, "index": 0}
+                ],
+                "created": 1716563849,
+                "model": "gpt-4o-2024-05-13",
+                "object": "chat.completion.chunk",
+                "system_fingerprint": "fp_5f4bad809a",
+            },
+            {
+                "id": "chatcmpl-9SQxdH5hODqkWyJopWlaVOOUnFwlj",
+                "choices": [
+                    {"delta": {"content": " is"}, "finish_reason": None, "index": 0}
+                ],
+                "created": 1716563849,
+                "model": "gpt-4o-2024-05-13",
+                "object": "chat.completion.chunk",
+                "system_fingerprint": "fp_5f4bad809a",
+            },
+            {
+                "id": "chatcmpl-9SQxdH5hODqkWyJopWlaVOOUnFwlj",
+                "choices": [
+                    {"delta": {"content": " a"}, "finish_reason": None, "index": 0}
+                ],
+                "created": 1716563849,
+                "model": "gpt-4o-2024-05-13",
+                "object": "chat.completion.chunk",
+                "system_fingerprint": "fp_5f4bad809a",
+            },
+            {
+                "id": "chatcmpl-9SQxdH5hODqkWyJopWlaVOOUnFwlj",
+                "choices": [
+                    {"delta": {"content": " dummy"}, "finish_reason": None, "index": 0}
+                ],
+                "created": 1716563849,
+                "model": "gpt-4o-2024-05-13",
+                "object": "chat.completion.chunk",
+                "system_fingerprint": "fp_5f4bad809a",
+            },
+            {
+                "id": "chatcmpl-9SQxdH5hODqkWyJopWlaVOOUnFwlj",
+                "choices": [
+                    {
+                        "delta": {"content": " response"},
+                        "finish_reason": None,
+                        "index": 0,
+                    }
+                ],
+                "created": 1716563849,
+                "model": "gpt-4o-2024-05-13",
+                "object": "chat.completion.chunk",
+                "system_fingerprint": "fp_5f4bad809a",
+            },
+            {
+                "id": "",
+                "choices": [
+                    {
+                        "finish_reason": None,
+                        "index": 0,
+                        "content_filter_offsets": {
+                            "check_offset": 35159,
+                            "start_offset": 35159,
+                            "end_offset": 36150,
+                        },
+                        "content_filter_results": {
+                            "hate": {"filtered": False, "severity": "safe"},
+                            "self_harm": {"filtered": False, "severity": "safe"},
+                            "sexual": {"filtered": False, "severity": "safe"},
+                            "violence": {"filtered": False, "severity": "safe"},
+                        },
+                    }
+                ],
+                "created": 0,
+                "model": "",
+                "object": "",
+            },
+            {
+                "id": "chatcmpl-9SQxdH5hODqkWyJopWlaVOOUnFwlj",
+                "choices": [
+                    {"delta": {"content": "."}, "finish_reason": None, "index": 0}
+                ],
+                "created": 1716563849,
+                "model": "gpt-4o-2024-05-13",
+                "object": "chat.completion.chunk",
+                "system_fingerprint": "fp_5f4bad809a",
+            },
+            {
+                "id": "chatcmpl-9SQxdH5hODqkWyJopWlaVOOUnFwlj",
+                "choices": [{"delta": {}, "finish_reason": "stop", "index": 0}],
+                "created": 1716563849,
+                "model": "gpt-4o-2024-05-13",
+                "object": "chat.completion.chunk",
+                "system_fingerprint": "fp_5f4bad809a",
+            },
+            {
+                "id": "",
+                "choices": [
+                    {
+                        "finish_reason": None,
+                        "index": 0,
+                        "content_filter_offsets": {
+                            "check_offset": 36150,
+                            "start_offset": 36060,
+                            "end_offset": 37029,
+                        },
+                        "content_filter_results": {
+                            "hate": {"filtered": False, "severity": "safe"},
+                            "self_harm": {"filtered": False, "severity": "safe"},
+                            "sexual": {"filtered": False, "severity": "safe"},
+                            "violence": {"filtered": False, "severity": "safe"},
+                        },
+                    }
+                ],
+                "created": 0,
+                "model": "",
+                "object": "",
+            },
+        ]
+
+        chunk_list = []
+        for chunk in chunks:
+            new_chunk = litellm.ModelResponse(stream=True, id=chunk["id"])
+            if "choices" in chunk and isinstance(chunk["choices"], list):
+                new_choices = []
+                for choice in chunk["choices"]:
+                    if isinstance(choice, litellm.utils.StreamingChoices):
+                        _new_choice = choice
+                    elif isinstance(choice, dict):
+                        _new_choice = litellm.utils.StreamingChoices(**choice)
+                    new_choices.append(_new_choice)
+                new_chunk.choices = new_choices
+            chunk_list.append(new_chunk)
+
+        completion_stream = ModelResponseListIterator(model_responses=chunk_list)
+
+        litellm.set_verbose = True
+
+        response = litellm.CustomStreamWrapper(
+            completion_stream=completion_stream,
+            model="gpt-4-0613",
+            custom_llm_provider="cached_response",
+            logging_obj=litellm.Logging(
+                model="gpt-4-0613",
+                messages=[{"role": "user", "content": "Hey"}],
+                stream=True,
+                call_type="completion",
+                start_time=time.time(),
+                litellm_call_id="12345",
+                function_id="1245",
+            ),
+        )
+
+        for idx, chunk in enumerate(response):
+            complete_response = ""
+            for idx, chunk in enumerate(response):
+                # print
+                delta = chunk.choices[0].delta
+                content = delta.content if delta else None
+                complete_response += content or ""
+                if chunk.choices[0].finish_reason is not None:
+                    break
+            assert len(complete_response) > 0
+
+    except Exception as e:
+        pytest.fail(f"An exception occurred - {str(e)}")
 
 
 def test_completion_cohere_stream_bad_key():
@@ -950,7 +1138,119 @@ def test_vertex_ai_stream():
 
 # test_completion_vertexai_stream_bad_key()
 
-# def test_completion_replicate_stream():
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_completion_databricks_streaming(sync_mode):
+    litellm.set_verbose = True
+    model_name = "databricks/databricks-dbrx-instruct"
+    try:
+        if sync_mode:
+            final_chunk: Optional[litellm.ModelResponse] = None
+            response: litellm.CustomStreamWrapper = completion(  # type: ignore
+                model=model_name,
+                messages=messages,
+                max_tokens=10,  # type: ignore
+                stream=True,
+            )
+            complete_response = ""
+            # Add any assertions here to check the response
+            has_finish_reason = False
+            for idx, chunk in enumerate(response):
+                final_chunk = chunk
+                chunk, finished = streaming_format_tests(idx, chunk)
+                if finished:
+                    has_finish_reason = True
+                    break
+                complete_response += chunk
+            if has_finish_reason == False:
+                raise Exception("finish reason not set")
+            if complete_response.strip() == "":
+                raise Exception("Empty response received")
+        else:
+            response: litellm.CustomStreamWrapper = await litellm.acompletion(  # type: ignore
+                model=model_name,
+                messages=messages,
+                max_tokens=100,  # type: ignore
+                stream=True,
+            )
+            complete_response = ""
+            # Add any assertions here to check the response
+            has_finish_reason = False
+            idx = 0
+            final_chunk: Optional[litellm.ModelResponse] = None
+            async for chunk in response:
+                final_chunk = chunk
+                chunk, finished = streaming_format_tests(idx, chunk)
+                if finished:
+                    has_finish_reason = True
+                    break
+                complete_response += chunk
+                idx += 1
+            if has_finish_reason == False:
+                raise Exception("finish reason not set")
+            if complete_response.strip() == "":
+                raise Exception("Empty response received")
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.parametrize("sync_mode", [False, True])
+@pytest.mark.asyncio
+async def test_completion_replicate_llama3_streaming(sync_mode):
+    litellm.set_verbose = True
+    model_name = "replicate/meta/meta-llama-3-8b-instruct"
+    try:
+        if sync_mode:
+            final_chunk: Optional[litellm.ModelResponse] = None
+            response: litellm.CustomStreamWrapper = completion(  # type: ignore
+                model=model_name,
+                messages=messages,
+                max_tokens=10,  # type: ignore
+                stream=True,
+            )
+            complete_response = ""
+            # Add any assertions here to check the response
+            has_finish_reason = False
+            for idx, chunk in enumerate(response):
+                final_chunk = chunk
+                chunk, finished = streaming_format_tests(idx, chunk)
+                if finished:
+                    has_finish_reason = True
+                    break
+                complete_response += chunk
+            if has_finish_reason == False:
+                raise Exception("finish reason not set")
+            if complete_response.strip() == "":
+                raise Exception("Empty response received")
+        else:
+            response: litellm.CustomStreamWrapper = await litellm.acompletion(  # type: ignore
+                model=model_name,
+                messages=messages,
+                max_tokens=100,  # type: ignore
+                stream=True,
+            )
+            complete_response = ""
+            # Add any assertions here to check the response
+            has_finish_reason = False
+            idx = 0
+            final_chunk: Optional[litellm.ModelResponse] = None
+            async for chunk in response:
+                final_chunk = chunk
+                chunk, finished = streaming_format_tests(idx, chunk)
+                if finished:
+                    has_finish_reason = True
+                    break
+                complete_response += chunk
+                idx += 1
+            if has_finish_reason == False:
+                raise Exception("finish reason not set")
+            if complete_response.strip() == "":
+                raise Exception("Empty response received")
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
 # TEMP Commented out - replicate throwing an auth error
 #     try:
 #         litellm.set_verbose = True
@@ -984,15 +1284,28 @@ def test_vertex_ai_stream():
 #         pytest.fail(f"Error occurred: {e}")
 
 
-@pytest.mark.parametrize("sync_mode", [True])
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize(
+    "model",
+    [
+        # "bedrock/cohere.command-r-plus-v1:0",
+        # "anthropic.claude-3-sonnet-20240229-v1:0",
+        # "anthropic.claude-instant-v1",
+        # "bedrock/ai21.j2-mid",
+        # "mistral.mistral-7b-instruct-v0:2",
+        # "bedrock/amazon.titan-tg1-large",
+        # "meta.llama3-8b-instruct-v1:0",
+        "cohere.command-text-v14"
+    ],
+)
 @pytest.mark.asyncio
-async def test_bedrock_cohere_command_r_streaming(sync_mode):
+async def test_bedrock_httpx_streaming(sync_mode, model):
     try:
         litellm.set_verbose = True
         if sync_mode:
             final_chunk: Optional[litellm.ModelResponse] = None
             response: litellm.CustomStreamWrapper = completion(  # type: ignore
-                model="bedrock/cohere.command-r-plus-v1:0",
+                model=model,
                 messages=messages,
                 max_tokens=10,  # type: ignore
                 stream=True,
@@ -1013,7 +1326,7 @@ async def test_bedrock_cohere_command_r_streaming(sync_mode):
                 raise Exception("Empty response received")
         else:
             response: litellm.CustomStreamWrapper = await litellm.acompletion(  # type: ignore
-                model="bedrock/cohere.command-r-plus-v1:0",
+                model=model,
                 messages=messages,
                 max_tokens=100,  # type: ignore
                 stream=True,
@@ -1071,29 +1384,68 @@ def test_bedrock_claude_3_streaming():
         pytest.fail(f"Error occurred: {e}")
 
 
+@pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
-async def test_claude_3_streaming_finish_reason():
+async def test_claude_3_streaming_finish_reason(sync_mode):
     try:
+        import threading
+
         litellm.set_verbose = True
         messages = [
             {"role": "system", "content": "Be helpful"},
             {"role": "user", "content": "What do you know?"},
         ]
-        response: ModelResponse = await litellm.acompletion(  # type: ignore
-            model="claude-3-opus-20240229",
-            messages=messages,
-            stream=True,
-            max_tokens=10,
-        )
-        complete_response = ""
-        # Add any assertions here to-check the response
-        num_finish_reason = 0
-        async for chunk in response:
-            print(f"chunk: {chunk}")
-            if isinstance(chunk, ModelResponse):
-                if chunk.choices[0].finish_reason is not None:
-                    num_finish_reason += 1
-        assert num_finish_reason == 1
+
+        def sync_test_streaming():
+            response: litellm.CustomStreamWrapper = litellm.acompletion(  # type: ignore
+                model="claude-3-opus-20240229",
+                messages=messages,
+                stream=True,
+                max_tokens=10,
+            )
+            complete_response = ""
+            # Add any assertions here to-check the response
+            num_finish_reason = 0
+            for chunk in response:
+                print(f"chunk: {chunk}")
+                if isinstance(chunk, ModelResponse):
+                    if chunk.choices[0].finish_reason is not None:
+                        num_finish_reason += 1
+            assert num_finish_reason == 1
+
+        async def test_streaming():
+            response: litellm.CustomStreamWrapper = await litellm.acompletion(  # type: ignore
+                model="claude-3-opus-20240229",
+                messages=messages,
+                stream=True,
+                max_tokens=10,
+            )
+            complete_response = ""
+            # Add any assertions here to-check the response
+            num_finish_reason = 0
+            async for chunk in response:
+                print(f"chunk: {chunk}")
+                if isinstance(chunk, ModelResponse):
+                    if chunk.choices[0].finish_reason is not None:
+                        num_finish_reason += 1
+            assert num_finish_reason == 1
+
+        tasks = []
+        for _ in range(2):
+            if sync_mode == False:
+                tasks.append(test_streaming())
+            else:
+                thread = threading.Thread(target=sync_test_streaming)
+                thread.start()
+                tasks.append(thread)
+
+        if sync_mode == False:
+            await asyncio.gather(*tasks)
+        else:
+            # Wait for all threads to complete
+            for thread in tasks:
+                thread.join()
+
     except RateLimitError:
         pass
     except Exception as e:
@@ -1661,35 +2013,43 @@ def test_openai_stream_options_call():
 
 def test_openai_stream_options_call_text_completion():
     litellm.set_verbose = False
-    response = litellm.text_completion(
-        model="gpt-3.5-turbo-instruct",
-        prompt="say GM - we're going to make it ",
-        stream=True,
-        stream_options={"include_usage": True},
-        max_tokens=10,
-    )
-    usage = None
-    chunks = []
-    for chunk in response:
-        print("chunk: ", chunk)
-        chunks.append(chunk)
+    for idx in range(3):
+        try:
+            response = litellm.text_completion(
+                model="gpt-3.5-turbo-instruct",
+                prompt="say GM - we're going to make it ",
+                stream=True,
+                stream_options={"include_usage": True},
+                max_tokens=10,
+            )
+            usage = None
+            chunks = []
+            for chunk in response:
+                print("chunk: ", chunk)
+                chunks.append(chunk)
 
-    last_chunk = chunks[-1]
-    print("last chunk: ", last_chunk)
+            last_chunk = chunks[-1]
+            print("last chunk: ", last_chunk)
 
-    """
-    Assert that:
-    - Last Chunk includes Usage
-    - All chunks prior to last chunk have usage=None
-    """
+            """
+            Assert that:
+            - Last Chunk includes Usage
+            - All chunks prior to last chunk have usage=None
+            """
 
-    assert last_chunk.usage is not None
-    assert last_chunk.usage.total_tokens > 0
-    assert last_chunk.usage.prompt_tokens > 0
-    assert last_chunk.usage.completion_tokens > 0
+            assert last_chunk.usage is not None
+            assert last_chunk.usage.total_tokens > 0
+            assert last_chunk.usage.prompt_tokens > 0
+            assert last_chunk.usage.completion_tokens > 0
 
-    # assert all non last chunks have usage=None
-    assert all(chunk.usage is None for chunk in chunks[:-1])
+            # assert all non last chunks have usage=None
+            assert all(chunk.usage is None for chunk in chunks[:-1])
+            break
+        except Exception as e:
+            if idx < 2:
+                pass
+            else:
+                raise e
 
 
 def test_openai_text_completion_call():

@@ -9,12 +9,14 @@ For companies that need SSO, user management and professional support for LiteLL
 
 This covers: 
 - ✅ **Features under the [LiteLLM Commercial License (Content Mod, Custom Tags, etc.)](https://docs.litellm.ai/docs/proxy/enterprise)**
+- ✅ [**Secure UI access with Single Sign-On**](../docs/proxy/ui.md#setup-ssoauth-for-ui)
+- ✅ [**JWT-Auth**](../docs/proxy/token_auth.md)
+- ✅ [**Prompt Injection Detection**](#prompt-injection-detection-lakeraai)
+- ✅ [**Invite Team Members to access `/spend` Routes**](../docs/proxy/cost_tracking#allowing-non-proxy-admins-to-access-spend-endpoints)
 - ✅ **Feature Prioritization**
 - ✅ **Custom Integrations**
 - ✅ **Professional Support - Dedicated discord + slack**
 - ✅ **Custom SLAs**
-- ✅ [**Secure UI access with Single Sign-On**](../docs/proxy/ui.md#setup-ssoauth-for-ui)
-- ✅ [**JWT-Auth**](../docs/proxy/token_auth.md)
 
 
 ## [COMING SOON] AWS Marketplace Support
