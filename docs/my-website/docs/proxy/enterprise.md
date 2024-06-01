@@ -587,3 +587,9 @@ DOCS_FILTERED="True" # only shows openai routes to user
 ```
 
 <Image img={require('../../img/custom_swagger.png')}  style={{ width: '900px', height: 'auto' }} />
+
+## Public Model Hub 
+
+Share a public page of available models for users
+
+<Image img={require('../../img/model_hub.png')} style={{ width: '900px', height: 'auto' }}/>

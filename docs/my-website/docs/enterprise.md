@@ -16,7 +16,10 @@ This covers:
 - ✅ **Feature Prioritization**
 - ✅ **Custom Integrations**
 - ✅ **Professional Support - Dedicated discord + slack**
-- ✅ **Custom SLAs**
+- ✅ [**Custom Swagger**](../docs/proxy/enterprise.md#swagger-docs---custom-routes--branding)
+- ✅ [**Public Model Hub**](../docs/proxy/enterprise.md#public-model-hub)
+- ✅ [**Custom Email Branding**](../docs/proxy/email.md#customizing-email-branding)
+
 
 
 ## [COMING SOON] AWS Marketplace Support
