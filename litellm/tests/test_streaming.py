@@ -1410,7 +1410,7 @@ async def test_parallel_streaming_requests(sync_mode, model):
         ]
 
         def sync_test_streaming():
-            response: litellm.CustomStreamWrapper = litellm.acompletion(  # type: ignore
+            response: litellm.CustomStreamWrapper = litellm.completion(  # type: ignore
                 model=model,
                 messages=messages,
                 stream=True,
