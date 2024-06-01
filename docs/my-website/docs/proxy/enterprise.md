@@ -557,7 +557,7 @@ curl -X GET "http://0.0.0.0:4000/spend/tags" \
 
 :::info 
 
-Requires a LiteLLM Enterprise key to use. Request one [here](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+Requires a LiteLLM Enterprise key to use. Get a free 2-week license [here](https://forms.gle/sTDVprBs18M4V8Le8)
 
 :::
 
