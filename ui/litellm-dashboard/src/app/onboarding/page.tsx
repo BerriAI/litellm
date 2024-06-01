@@ -1,10 +1,11 @@
 "use client";
 import React, { Suspense, useEffect, useState } from "react";
-import { useSearchParams, useRouter } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { Card, Title, Text, TextInput } from "@tremor/react";
 import {
   invitationClaimCall,
   userUpdateUserCall,
+  getOnboardingCredentials,
 } from "@/components/networking";
 import { jwtDecode } from "jwt-decode";
 import { Form, Button as Button2, message } from "antd";
@@ -12,40 +13,59 @@ export default function Onboarding() {
   const [form] = Form.useForm();
   const searchParams = useSearchParams();
   const token = searchParams.get("token");
-  const user_email = searchParams.get("user_email");
+  const inviteID = searchParams.get("id");
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [defaultUserEmail, setDefaultUserEmail] = useState<string>("");
-  const router = useRouter();
+  const [userEmail, setUserEmail] = useState<string>("");
+  const [loginUrl, setLoginUrl] = useState<string>("");
+  const [jwtToken, setJwtToken] = useState<string>("");
 
   useEffect(() => {
-    if (!token) {
+    if (!inviteID) {
       return;
     }
-    const decoded = jwtDecode(token) as { [key: string]: any };
+    getOnboardingCredentials(inviteID).then((data) => {
+      const login_url = data.login_url; 
+      console.log("login_url:", login_url);
+      setLoginUrl(login_url);
 
-    setAccessToken(decoded.key);
-  }, [token]);
 
-  useEffect(() => {
-    if (!user_email) {
-      return;
-    }
-    setDefaultUserEmail(user_email);
-  }, [user_email]);
+      const token = data.token;
+      const decoded = jwtDecode(token) as { [key: string]: any };
+      setJwtToken(token);
+
+      console.log("decoded:", decoded);
+      setAccessToken(decoded.key);
+
+      console.log("decoded user email:", decoded.user_email);
+      const user_email = decoded.user_email;
+      setUserEmail(user_email);
+
+    });
+    
+  }, [inviteID]);
+
 
   const handleSubmit = (formValues: Record<string, any>) => {
-    if (!accessToken || !token) {
+    console.log("in handle submit. accessToken:", accessToken, "token:", jwtToken, "formValues:", formValues);
+    if (!accessToken || !jwtToken) {
       return;
     }
 
+    formValues.user_email = userEmail;
+
     userUpdateUserCall(accessToken, formValues, null).then((data) => {
-      let litellm_dashboard_ui = "";
+      let litellm_dashboard_ui = "/ui/";
       const user_id = data.data?.user_id || data.user_id;
+      litellm_dashboard_ui += "?userID=" + user_id + "&token=" + jwtToken;
+      console.log("redirecting to:", litellm_dashboard_ui);
 
-      litellm_dashboard_ui += "?userID=" + user_id + "&token=" + token;
+      window.location.href = litellm_dashboard_ui;
 
-      router.replace(litellm_dashboard_ui);
     });
+
+    // redirect to login page
+
   };
   return (
     <div className="mx-auto max-w-md mt-10">
@@ -62,12 +82,12 @@ export default function Onboarding() {
             <Form.Item
               label="Email Address"
               name="user_email"
-              rules={[{ required: true, message: "Set the user email" }]}
-              help="required"
             >
               <TextInput
-                placeholder={defaultUserEmail}
                 type="email"
+                disabled={true}
+                value={userEmail}
+                defaultValue={userEmail}
                 className="max-w-md"
               />
             </Form.Item>
@@ -75,8 +95,8 @@ export default function Onboarding() {
             <Form.Item
               label="Password"
               name="password"
-              rules={[{ required: true, message: "Set the user password" }]}
-              help="required"
+              rules={[{ required: true, message: "password required to sign up" }]}
+              help="Create a password for your account"
             >
               <TextInput placeholder="" type="password" className="max-w-md" />
             </Form.Item>
