@@ -407,7 +407,9 @@ class ProxyChatCompletionRequest(LiteLLMBase):
     deployment_id: Optional[str] = None
     request_timeout: Optional[int] = None
 
-    model_config = ConfigDict(extra="allow")  # allow params not defined here, these fall in litellm.completion(**kwargs)
+    model_config = ConfigDict(
+        extra="allow"
+    )  # allow params not defined here, these fall in litellm.completion(**kwargs)
 
 
 class ModelInfoDelete(LiteLLMBase):
@@ -589,6 +591,7 @@ class UpdateUserRequest(GenerateRequestBase):
     # Note: the defaults of all Params here MUST BE NONE
     # else they will get overwritten
     user_id: Optional[str] = None
+    password: Optional[str] = None
     user_email: Optional[str] = None
     spend: Optional[float] = None
     metadata: Optional[dict] = None
@@ -918,7 +921,9 @@ class KeyManagementSettings(LiteLLMBase):
 class TeamDefaultSettings(LiteLLMBase):
     team_id: str
 
-    model_config = ConfigDict(extra="allow")  # allow params not defined here, these fall in litellm.completion(**kwargs)
+    model_config = ConfigDict(
+        extra="allow"
+    )  # allow params not defined here, these fall in litellm.completion(**kwargs)
 
 
 class DynamoDBArgs(LiteLLMBase):
@@ -1111,6 +1116,7 @@ class LiteLLM_VerificationToken(LiteLLMBase):
     org_id: Optional[str] = None  # org id for a given key
 
     model_config = ConfigDict(protected_namespaces=())
+
 
 class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     """
