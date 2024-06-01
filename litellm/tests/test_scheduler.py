@@ -77,9 +77,9 @@ async def test_scheduler_prioritized_requests(p0, p1):
         assert await scheduler.peek(id="10", model_name="gpt-3.5-turbo") == False
 
 
-@pytest.mark.parametrize("p0, p1", [(0, 1)])  # (0, 0), (1, 0)
+@pytest.mark.parametrize("p0, p1", [(0, 1), (0, 0), (1, 0)])  #
 @pytest.mark.asyncio
-async def test_scheduler_prioritized_requests_mock_response(p0, p1):
+async def test_aascheduler_prioritized_requests_mock_response(p0, p1):
     """
     2 requests for same model group
 
@@ -94,7 +94,7 @@ async def test_scheduler_prioritized_requests_mock_response(p0, p1):
                 "litellm_params": {
                     "model": "gpt-3.5-turbo",
                     "mock_response": "Hello world this is Macintosh!",
-                    "rpm": 1,
+                    "rpm": 0,
                 },
             },
         ],
@@ -105,11 +105,6 @@ async def test_scheduler_prioritized_requests_mock_response(p0, p1):
     )
 
     scheduler.update_variables(llm_router=router)
-
-    await router.acompletion(
-        model="gpt-3.5-turbo",
-        messages=[{"role": "user", "content": "Hey!"}],
-    )
 
     async def _make_prioritized_call(flow_item: FlowItem):
         ## POLL QUEUE
