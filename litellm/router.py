@@ -631,7 +631,6 @@ class Router:
                 kwargs=kwargs,
                 client_type="max_parallel_requests",
             )
-
             if rpm_semaphore is not None and isinstance(
                 rpm_semaphore, asyncio.Semaphore
             ):
@@ -1875,6 +1874,7 @@ class Router:
                 error=e,
                 healthy_deployments=_healthy_deployments,
                 context_window_fallbacks=context_window_fallbacks,
+                regular_fallbacks=fallbacks,
             )
 
             # decides how long to sleep before retry
@@ -1884,7 +1884,6 @@ class Router:
                 num_retries=num_retries,
                 healthy_deployments=_healthy_deployments,
             )
-
             # sleeps for the length of the timeout
             await asyncio.sleep(_timeout)
 
@@ -1929,6 +1928,7 @@ class Router:
                         healthy_deployments=_healthy_deployments,
                     )
                     await asyncio.sleep(_timeout)
+
             try:
                 cooldown_deployments = await self._async_get_cooldown_deployments()
                 original_exception.message += f"\nNumber Retries = {current_attempt + 1}, Max Retries={num_retries}\nCooldown Deployments={cooldown_deployments}"
@@ -1941,6 +1941,7 @@ class Router:
         error: Exception,
         healthy_deployments: Optional[List] = None,
         context_window_fallbacks: Optional[List] = None,
+        regular_fallbacks: Optional[List] = None,
     ):
         """
         1. raise an exception for ContextWindowExceededError if context_window_fallbacks is not None
@@ -1957,7 +1958,7 @@ class Router:
         ### CHECK IF RATE LIMIT / CONTEXT WINDOW ERROR w/ fallbacks available / Bad Request Error
         if (
             isinstance(error, litellm.ContextWindowExceededError)
-            and context_window_fallbacks is None
+            and context_window_fallbacks is not None
         ):
             raise error
 
@@ -1965,7 +1966,11 @@ class Router:
         if isinstance(error, openai.RateLimitError) or isinstance(
             error, openai.AuthenticationError
         ):
-            if _num_healthy_deployments <= 0:
+            if (
+                _num_healthy_deployments <= 0
+                and regular_fallbacks is not None
+                and len(regular_fallbacks) > 0
+            ):
                 raise error
 
         return True
@@ -2140,6 +2145,7 @@ class Router:
                 error=e,
                 healthy_deployments=_healthy_deployments,
                 context_window_fallbacks=context_window_fallbacks,
+                fallbacks=fallbacks,
             )
 
             # decides how long to sleep before retry
@@ -2348,7 +2354,7 @@ class Router:
 
         the exception is not one that should be immediately retried (e.g. 401)
         """
-        args = locals()
+
         if deployment is None:
             return
 
@@ -2519,7 +2525,17 @@ class Router:
         """
         for _callback in litellm.callbacks:
             if isinstance(_callback, CustomLogger):
-                response = await _callback.async_pre_call_check(deployment)
+                try:
+                    response = await _callback.async_pre_call_check(deployment)
+                except litellm.RateLimitError as e:
+                    self._set_cooldown_deployments(
+                        exception_status=e.status_code,
+                        deployment=deployment["model_info"]["id"],
+                        time_to_cooldown=self.cooldown_time,
+                    )
+                    raise e
+                except Exception as e:
+                    raise e
 
     def set_client(self, model: dict):
         """
