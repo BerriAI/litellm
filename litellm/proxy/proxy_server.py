@@ -8693,17 +8693,13 @@ async def global_spend_logs(
 
         return response
     else:
-        sql_query = (
-            """
+        sql_query = """
             SELECT * FROM "MonthlyGlobalSpendPerKey"
-            WHERE "api_key" = '"""
-            + api_key
-            + """'
+            WHERE "api_key" = $1
             ORDER BY "date";
-        """
-        )
+            """
 
-        response = await prisma_client.db.query_raw(query=sql_query)
+        response = await prisma_client.db.query_raw(sql_query, api_key)
 
         return response
     return
