@@ -505,7 +505,6 @@ class OpenAIChatCompletion(BaseLLM):
     def __init__(self) -> None:
         super().__init__()
 
-    @lru_cache(maxsize=10)
     def _get_openai_client(
         self,
         is_async: bool,
@@ -524,8 +523,14 @@ class OpenAIChatCompletion(BaseLLM):
                         max_retries
                     ),
                 )
+            # Creating a new OpenAI Client
+            # check in memory cache before doing so
+            _cache_key = f"api_key={api_key},api_base={api_base},timeout={timeout},max_retries={max_retries},organization={organization}"
+
+            if _cache_key in litellm.in_memory_llm_clients_cache:
+                return litellm.in_memory_llm_clients_cache[_cache_key]
             if is_async:
-                return AsyncOpenAI(
+                _new_client: Union[OpenAI, AsyncOpenAI] = AsyncOpenAI(
                     api_key=api_key,
                     base_url=api_base,
                     http_client=litellm.aclient_session,
@@ -534,7 +539,7 @@ class OpenAIChatCompletion(BaseLLM):
                     organization=organization,
                 )
             else:
-                return OpenAI(
+                _new_client = OpenAI(
                     api_key=api_key,
                     base_url=api_base,
                     http_client=litellm.client_session,
@@ -542,6 +547,10 @@ class OpenAIChatCompletion(BaseLLM):
                     max_retries=max_retries,
                     organization=organization,
                 )
+
+            litellm.in_memory_llm_clients_cache[_cache_key] = _new_client
+            return _new_client
+
         else:
             return client
 
