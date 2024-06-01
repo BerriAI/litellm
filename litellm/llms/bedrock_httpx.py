@@ -348,6 +348,7 @@ class BedrockLLM(BaseLLM):
                 sts_client = boto3.client(
                     "sts",
                     region_name=aws_region_name,
+                    endpoint_url=f"https://sts.{aws_region_name}.amazonaws.com"
                 )
 
                 # https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRoleWithWebIdentity.html
