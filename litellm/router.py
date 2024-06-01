@@ -2145,7 +2145,7 @@ class Router:
                 error=e,
                 healthy_deployments=_healthy_deployments,
                 context_window_fallbacks=context_window_fallbacks,
-                fallbacks=fallbacks,
+                regular_fallbacks=fallbacks,
             )
 
             # decides how long to sleep before retry
