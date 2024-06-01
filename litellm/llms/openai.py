@@ -845,7 +845,6 @@ class OpenAIChatCompletion(BaseLLM):
                 max_retries=max_retries,
                 organization=organization,
                 client=client,
-                is_async=True,
             )
             ## LOGGING
             logging_obj.pre_call(
