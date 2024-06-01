@@ -431,6 +431,10 @@ def mock_completion(
                 model=model,  # type: ignore
                 request=httpx.Request(method="POST", url="https://api.openai.com/v1/"),
             )
+        time_delay = kwargs.get("mock_delay", None)
+        if time_delay is not None:
+            time.sleep(time_delay)
+
         model_response = ModelResponse(stream=stream)
         if stream is True:
             # don't try to access stream object,
@@ -881,6 +885,7 @@ def completion(
                 mock_response=mock_response,
                 logging=logging,
                 acompletion=acompletion,
+                mock_delay=kwargs.get("mock_delay", None),
             )
         if custom_llm_provider == "azure":
             # azure configs

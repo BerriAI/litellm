@@ -134,7 +134,7 @@ async def test_router_retry_policy(error_type):
         ContentPolicyViolationErrorRetries=3, AuthenticationErrorRetries=0
     )
 
-    router = litellm.Router(
+    router = Router(
         model_list=[
             {
                 "model_name": "gpt-3.5-turbo",  # openai model name
@@ -334,13 +334,13 @@ def test_retry_rate_limit_error_with_healthy_deployments():
         )
 
 
-def test_do_not_retry_rate_limit_error_with_no_fallbacks_and_no_healthy_deployments():
+def test_do_retry_rate_limit_error_with_no_fallbacks_and_no_healthy_deployments():
     """
-    Test 2. It SHOULD NOT Retry, when healthy_deployments is [] and fallbacks is None
+    Test 2. It SHOULD Retry, when healthy_deployments is [] and fallbacks is None
     """
     healthy_deployments = []
 
-    router = litellm.Router(
+    router = Router(
         model_list=[
             {
                 "model_name": "gpt-3.5-turbo",
@@ -359,14 +359,14 @@ def test_do_not_retry_rate_limit_error_with_no_fallbacks_and_no_healthy_deployme
         response = router.should_retry_this_error(
             error=rate_limit_error, healthy_deployments=healthy_deployments
         )
-        assert response != True, "Should have raised RateLimitError"
-    except openai.RateLimitError:
-        pass
+        assert response == True
+    except Exception as e:
+        pytest.fail("Should not have failed this error - {}".format(str(e)))
 
 
 def test_raise_context_window_exceeded_error():
     """
-    Retry Context Window Exceeded Error, when context_window_fallbacks is not None
+    Trigger Context Window fallback, when context_window_fallbacks is not None
     """
     context_window_error = litellm.ContextWindowExceededError(
         message="Context window exceeded",
@@ -379,7 +379,7 @@ def test_raise_context_window_exceeded_error():
     )
     context_window_fallbacks = [{"gpt-3.5-turbo": ["azure/chatgpt-v-2"]}]
 
-    router = litellm.Router(
+    router = Router(
         model_list=[
             {
                 "model_name": "gpt-3.5-turbo",
@@ -393,14 +393,17 @@ def test_raise_context_window_exceeded_error():
         ]
     )
 
-    response = router.should_retry_this_error(
-        error=context_window_error,
-        healthy_deployments=None,
-        context_window_fallbacks=context_window_fallbacks,
-    )
-    assert (
-        response == True
-    ), "Should not have raised exception since we have context window fallbacks"
+    try:
+        response = router.should_retry_this_error(
+            error=context_window_error,
+            healthy_deployments=None,
+            context_window_fallbacks=context_window_fallbacks,
+        )
+        pytest.fail(
+            "Expected to raise context window exceeded error -> trigger fallback"
+        )
+    except Exception as e:
+        pass
 
 
 def test_raise_context_window_exceeded_error_no_retry():
@@ -418,7 +421,7 @@ def test_raise_context_window_exceeded_error_no_retry():
     )
     context_window_fallbacks = None
 
-    router = litellm.Router(
+    router = Router(
         model_list=[
             {
                 "model_name": "gpt-3.5-turbo",
@@ -439,8 +442,8 @@ def test_raise_context_window_exceeded_error_no_retry():
             context_window_fallbacks=context_window_fallbacks,
         )
         assert (
-            response != True
-        ), "Should have raised exception since we do not have context window fallbacks"
+            response == True
+        ), "Should not have raised exception since we do not have context window fallbacks"
     except litellm.ContextWindowExceededError:
         pass
 
