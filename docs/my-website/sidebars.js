@@ -164,6 +164,7 @@ const sidebars = {
     },
     "proxy/custom_pricing",
     "routing",
+    "scheduler",
     "rules",
     "set_keys",
     "budget_manager",
