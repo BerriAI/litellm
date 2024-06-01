@@ -97,6 +97,7 @@ from litellm.proxy.utils import (
     _read_request_body,
     _is_valid_team_configs,
     _is_user_proxy_admin,
+    _get_user_role,
     _is_projected_spend_over_limit,
     _get_projected_spend_over_limit,
     update_spend,
@@ -1273,6 +1274,8 @@ async def user_api_key_auth(
             if _end_user_object is not None:
                 valid_token_dict.update(end_user_params)
 
+            _user_role = _get_user_role(user_id_information=user_id_information)
+
             if not _is_user_proxy_admin(user_id_information):  # if non-admin
                 if route in LiteLLMRoutes.openai_routes.value:
                     pass
@@ -1326,6 +1329,32 @@ async def user_api_key_auth(
                 ):
 
                     pass
+                elif _user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY:
+                    if route in LiteLLMRoutes.openai_routes.value:
+                        raise HTTPException(
+                            status_code=status.HTTP_403_FORBIDDEN,
+                            detail=f"user not allowed to access this OpenAI routes, role= {_user_role}",
+                        )
+                    if route in LiteLLMRoutes.management_routes.value:
+                        # the Admin Viewer is only allowed to call /user/update for their own user_id and can only update
+                        if route == "/user/update":
+
+                            # Check the Request params are valid for PROXY_ADMIN_VIEW_ONLY
+                            if request_data is not None and isinstance(
+                                request_data, dict
+                            ):
+                                _params_updated = request_data.keys()
+                                for param in _params_updated:
+                                    if param not in ["user_email", "password"]:
+                                        raise HTTPException(
+                                            status_code=status.HTTP_403_FORBIDDEN,
+                                            detail=f"user not allowed to access this route, role= {_user_role}. Trying to access: {route} and updating invalid param: {param}. only user_email and password can be updated",
+                                        )
+                        else:
+                            raise HTTPException(
+                                status_code=status.HTTP_403_FORBIDDEN,
+                                detail=f"user not allowed to access this route, role= {_user_role}. Trying to access: {route}",
+                            )
                 else:
                     user_role = "unknown"
                     user_id = "unknown"
