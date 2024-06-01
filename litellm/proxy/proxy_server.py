@@ -5337,6 +5337,11 @@ async def get_assistants(
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
+    """
+    Returns a list of assistants.
+
+    API Reference docs - https://platform.openai.com/docs/api-reference/assistants/listAssistants
+    """
     global proxy_logging_obj
     data: Dict = {}
     try:
@@ -5463,6 +5468,11 @@ async def create_threads(
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
+    """
+    Create a thread.
+
+    API Reference - https://platform.openai.com/docs/api-reference/threads/createThread
+    """
     global proxy_logging_obj
     data: Dict = {}
     try:
@@ -5590,6 +5600,11 @@ async def get_thread(
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
+    """
+    Retrieves a thread.
+
+    API Reference - https://platform.openai.com/docs/api-reference/threads/getThread
+    """
     global proxy_logging_obj
     data: Dict = {}
     try:
@@ -5714,6 +5729,11 @@ async def add_messages(
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
+    """
+    Create a message.
+
+    API Reference - https://platform.openai.com/docs/api-reference/messages/createMessage
+    """
     global proxy_logging_obj
     data: Dict = {}
     try:
@@ -5841,6 +5861,11 @@ async def get_messages(
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
+    """
+    Returns a list of messages for a given thread.
+
+    API Reference - https://platform.openai.com/docs/api-reference/messages/listMessages
+    """
     global proxy_logging_obj
     data: Dict = {}
     try:
@@ -5964,6 +5989,11 @@ async def run_thread(
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
+    """
+    Create a run.
+
+    API Reference: https://platform.openai.com/docs/api-reference/runs/createRun
+    """
     global proxy_logging_obj
     data: Dict = {}
     try:
