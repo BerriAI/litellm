@@ -4873,6 +4873,7 @@ def register_model(model_cost: Union[str, dict]):
         litellm.model_cost.setdefault(key, {}).update(value)
         verbose_logger.debug(f"{key} added to model cost map")
         # add new model names to provider lists
+        print(f"provider: {value.get('litellm_provider')}")
         if value.get("litellm_provider") == "openai":
             if key not in litellm.open_ai_chat_completion_models:
                 litellm.open_ai_chat_completion_models.append(key)
@@ -6732,6 +6733,9 @@ def get_llm_provider(
                 # deepinfra is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.endpoints.anyscale.com/v1
                 api_base = "https://api.deepinfra.com/v1/openai"
                 dynamic_api_key = get_secret("DEEPINFRA_API_KEY")
+            elif custom_llm_provider == "empower":
+                api_base = "https://app.empower.dev/api/v1"
+                dynamic_api_key = get_secret("EMPOWER_API_KEY")
             elif custom_llm_provider == "groq":
                 # groq is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.groq.com/openai/v1
                 api_base = "https://api.groq.com/openai/v1"
@@ -6824,7 +6828,10 @@ def get_llm_provider(
                         dynamic_api_key = get_secret("MISTRAL_API_KEY")
                     elif endpoint == "api.groq.com/openai/v1":
                         custom_llm_provider = "groq"
-                        dynamic_api_key = get_secret("GROQ_API_KEY")
+                        dynamic_api_key = get_secret("GROQ_API_KEY")                    
+                    elif endpoint == "app.empower.dev/api/v1":
+                        custom_llm_provider = "empower"
+                        dynamic_api_key = get_secret("EMPOWER_API_KEY")
                     elif endpoint == "api.deepseek.com/v1":
                         custom_llm_provider = "deepseek"
                         dynamic_api_key = get_secret("DEEPSEEK_API_KEY")
@@ -6915,6 +6922,8 @@ def get_llm_provider(
         # openai embeddings
         elif model in litellm.open_ai_embedding_models:
             custom_llm_provider = "openai"
+        elif model in litellm.empower_models:
+            custom_llm_provider = "empower"
         if custom_llm_provider is None or custom_llm_provider == "":
             if litellm.suppress_debug_info == False:
                 print()  # noqa
