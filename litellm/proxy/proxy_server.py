@@ -11838,7 +11838,7 @@ async def onboarding(invite_link: str):
 
     response = await generate_key_helper_fn(
         **{
-            "user_role": LitellmUserRoles.PROXY_ADMIN,
+            "user_role": user_obj.user_role,
             "duration": "2hr",
             "key_max_budget": 5,
             "models": [],
@@ -11863,7 +11863,7 @@ async def onboarding(invite_link: str):
             "user_id": user_obj.user_id,
             "key": key,
             "user_email": user_obj.user_email,
-            "user_role": "app_owner",
+            "user_role": user_obj.user_role,
             "login_method": "username_password",
             "premium_user": premium_user,
         },
