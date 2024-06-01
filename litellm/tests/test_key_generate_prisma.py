@@ -1912,7 +1912,8 @@ async def test_key_with_no_permissions(prisma_client):
     await litellm.proxy.proxy_server.prisma_client.connect()
     try:
         response = await generate_key_helper_fn(
-            **{"duration": "1hr", "key_max_budget": 0, "models": [], "aliases": {}, "config": {}, "spend": 0, "user_id": "ishaan", "team_id": "litellm-dashboard"}  # type: ignore
+            request_type="key",
+            **{"duration": "1hr", "key_max_budget": 0, "models": [], "aliases": {}, "config": {}, "spend": 0, "user_id": "ishaan", "team_id": "litellm-dashboard"},  # type: ignore
         )
 
         print(response)
