@@ -606,6 +606,7 @@ class UpdateUserRequest(GenerateRequestBase):
     # Note: the defaults of all Params here MUST BE NONE
     # else they will get overwritten
     user_id: Optional[str] = None
+    password: Optional[str] = None
     user_email: Optional[str] = None
     spend: Optional[float] = None
     metadata: Optional[dict] = None

@@ -11773,6 +11773,18 @@ async def login(request: Request):
             param="UI_PASSWORD",
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
+
+    # check if we can find the `username` in the db. on the ui, users can enter username=their email
+    _user_row = None
+    if prisma_client is not None:
+        _user_row = await prisma_client.db.litellm_usertable.find_first(
+            where={"user_email": {"equals": username}}
+        )
+    """
+    To login to Admin UI, we support the following 
+    - Login with UI_USERNAME and UI_PASSWORD
+    - Login with Invite Link `user_email` and `password` combination
+    """
     if secrets.compare_digest(username, ui_username) and secrets.compare_digest(
         password, ui_password
     ):
@@ -11830,6 +11842,64 @@ async def login(request: Request):
         )
         litellm_dashboard_ui += "?userID=" + user_id + "&token=" + jwt_token
         return RedirectResponse(url=litellm_dashboard_ui, status_code=303)
+    elif _user_row is not None:
+        user_id = getattr(_user_row, "user_id", "unknown")
+        user_role = getattr(_user_row, "user_role", "unknown")
+        user_email = getattr(_user_row, "user_email", "unknown")
+        _password = getattr(_user_row, "password", "unknown")
+
+        # check if password == _user_row.password
+        if secrets.compare_digest(password, _password):
+            if os.getenv("DATABASE_URL") is not None:
+                response = await generate_key_helper_fn(
+                    **{  # type: ignore
+                        "user_role": user_role,
+                        "duration": "2hr",
+                        "key_max_budget": 5,
+                        "models": [],
+                        "aliases": {},
+                        "config": {},
+                        "spend": 0,
+                        "user_id": user_id,
+                        "team_id": "litellm-dashboard",
+                    }
+                )
+            else:
+                raise ProxyException(
+                    message="No Database connected. Set DATABASE_URL in .env. If set, use `--detailed_debug` to debug issue.",
+                    type="auth_error",
+                    param="DATABASE_URL",
+                    code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+            key = response["token"]  # type: ignore
+            litellm_dashboard_ui = os.getenv("PROXY_BASE_URL", "")
+            if litellm_dashboard_ui.endswith("/"):
+                litellm_dashboard_ui += "ui/"
+            else:
+                litellm_dashboard_ui += "/ui/"
+            import jwt
+
+            jwt_token = jwt.encode(
+                {
+                    "user_id": user_id,
+                    "key": key,
+                    "user_email": user_email,
+                    "user_role": user_role,
+                    "login_method": "username_password",
+                    "premium_user": premium_user,
+                },
+                "secret",
+                algorithm="HS256",
+            )
+            litellm_dashboard_ui += "?userID=" + user_id + "&token=" + jwt_token
+            return RedirectResponse(url=litellm_dashboard_ui, status_code=303)
+        else:
+            raise ProxyException(
+                message=f"Invalid credentials used to access UI. Passed in username: {username}, passed in password: {password}.\nNot valid credentials for {username}",
+                type="auth_error",
+                param="invalid_credentials",
+                code=status.HTTP_401_UNAUTHORIZED,
+            )
     else:
         raise ProxyException(
             message=f"Invalid credentials used to access UI. Passed in username: {username}, passed in password: {password}.\nCheck 'UI_USERNAME', 'UI_PASSWORD' in .env file",
