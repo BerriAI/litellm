@@ -899,16 +899,14 @@ class OpenAIChatCompletion(BaseLLM):
     ):
         response = None
         try:
-            if client is None:
-                openai_aclient = AsyncOpenAI(
-                    api_key=api_key,
-                    base_url=api_base,
-                    http_client=litellm.aclient_session,
-                    timeout=timeout,
-                    max_retries=max_retries,
-                )
-            else:
-                openai_aclient = client
+            openai_aclient = self._get_openai_client(
+                is_async=True,
+                api_key=api_key,
+                api_base=api_base,
+                timeout=timeout,
+                max_retries=max_retries,
+                client=client,
+            )
             response = await openai_aclient.embeddings.create(**data, timeout=timeout)  # type: ignore
             stringified_response = response.model_dump()
             ## LOGGING
@@ -956,19 +954,18 @@ class OpenAIChatCompletion(BaseLLM):
                 additional_args={"complete_input_dict": data, "api_base": api_base},
             )
 
-            if aembedding == True:
+            if aembedding is True:
                 response = self.aembedding(data=data, input=input, logging_obj=logging_obj, model_response=model_response, api_base=api_base, api_key=api_key, timeout=timeout, client=client, max_retries=max_retries)  # type: ignore
                 return response
-            if client is None:
-                openai_client = OpenAI(
-                    api_key=api_key,
-                    base_url=api_base,
-                    http_client=litellm.client_session,
-                    timeout=timeout,
-                    max_retries=max_retries,
-                )
-            else:
-                openai_client = client
+
+            openai_client = self._get_openai_client(
+                is_async=False,
+                api_key=api_key,
+                api_base=api_base,
+                timeout=timeout,
+                max_retries=max_retries,
+                client=client,
+            )
 
             ## COMPLETION CALL
             response = openai_client.embeddings.create(**data, timeout=timeout)  # type: ignore
@@ -1004,16 +1001,16 @@ class OpenAIChatCompletion(BaseLLM):
     ):
         response = None
         try:
-            if client is None:
-                openai_aclient = AsyncOpenAI(
-                    api_key=api_key,
-                    base_url=api_base,
-                    http_client=litellm.aclient_session,
-                    timeout=timeout,
-                    max_retries=max_retries,
-                )
-            else:
-                openai_aclient = client
+
+            openai_aclient = self._get_openai_client(
+                is_async=True,
+                api_key=api_key,
+                api_base=api_base,
+                timeout=timeout,
+                max_retries=max_retries,
+                client=client,
+            )
+
             response = await openai_aclient.images.generate(**data, timeout=timeout)  # type: ignore
             stringified_response = response.model_dump()
             ## LOGGING
@@ -1058,16 +1055,14 @@ class OpenAIChatCompletion(BaseLLM):
                 response = self.aimage_generation(data=data, prompt=prompt, logging_obj=logging_obj, model_response=model_response, api_base=api_base, api_key=api_key, timeout=timeout, client=client, max_retries=max_retries)  # type: ignore
                 return response
 
-            if client is None:
-                openai_client = OpenAI(
-                    api_key=api_key,
-                    base_url=api_base,
-                    http_client=litellm.client_session,
-                    timeout=timeout,
-                    max_retries=max_retries,
-                )
-            else:
-                openai_client = client
+            openai_client = self._get_openai_client(
+                is_async=False,
+                api_key=api_key,
+                api_base=api_base,
+                timeout=timeout,
+                max_retries=max_retries,
+                client=client,
+            )
 
             ## LOGGING
             logging_obj.pre_call(
@@ -1132,7 +1127,7 @@ class OpenAIChatCompletion(BaseLLM):
         atranscription: bool = False,
     ):
         data = {"model": model, "file": audio_file, **optional_params}
-        if atranscription == True:
+        if atranscription is True:
             return self.async_audio_transcriptions(
                 audio_file=audio_file,
                 data=data,
@@ -1144,16 +1139,14 @@ class OpenAIChatCompletion(BaseLLM):
                 max_retries=max_retries,
                 logging_obj=logging_obj,
             )
-        if client is None:
-            openai_client = OpenAI(
-                api_key=api_key,
-                base_url=api_base,
-                http_client=litellm.client_session,
-                timeout=timeout,
-                max_retries=max_retries,
-            )
-        else:
-            openai_client = client
+
+        openai_client = self._get_openai_client(
+            is_async=False,
+            api_key=api_key,
+            api_base=api_base,
+            timeout=timeout,
+            max_retries=max_retries,
+        )
         response = openai_client.audio.transcriptions.create(
             **data, timeout=timeout  # type: ignore
         )
@@ -1183,16 +1176,15 @@ class OpenAIChatCompletion(BaseLLM):
         logging_obj=None,
     ):
         try:
-            if client is None:
-                openai_aclient = AsyncOpenAI(
-                    api_key=api_key,
-                    base_url=api_base,
-                    http_client=litellm.aclient_session,
-                    timeout=timeout,
-                    max_retries=max_retries,
-                )
-            else:
-                openai_aclient = client
+            openai_aclient = self._get_openai_client(
+                is_async=True,
+                api_key=api_key,
+                api_base=api_base,
+                timeout=timeout,
+                max_retries=max_retries,
+                client=client,
+            )
+
             response = await openai_aclient.audio.transcriptions.create(
                 **data, timeout=timeout
             )  # type: ignore
@@ -1231,7 +1223,7 @@ class OpenAIChatCompletion(BaseLLM):
         client=None,
     ) -> HttpxBinaryResponseContent:
 
-        if aspeech is not None and aspeech == True:
+        if aspeech is not None and aspeech is True:
             return self.async_audio_speech(
                 model=model,
                 input=input,
@@ -1246,18 +1238,14 @@ class OpenAIChatCompletion(BaseLLM):
                 client=client,
             )  # type: ignore
 
-        if client is None:
-            openai_client = OpenAI(
-                api_key=api_key,
-                base_url=api_base,
-                organization=organization,
-                project=project,
-                http_client=litellm.client_session,
-                timeout=timeout,
-                max_retries=max_retries,
-            )
-        else:
-            openai_client = client
+        openai_client = self._get_openai_client(
+            is_async=False,
+            api_key=api_key,
+            api_base=api_base,
+            timeout=timeout,
+            max_retries=max_retries,
+            client=client,
+        )
 
         response = openai_client.audio.speech.create(
             model=model,
@@ -1282,18 +1270,14 @@ class OpenAIChatCompletion(BaseLLM):
         client=None,
     ) -> HttpxBinaryResponseContent:
 
-        if client is None:
-            openai_client = AsyncOpenAI(
-                api_key=api_key,
-                base_url=api_base,
-                organization=organization,
-                project=project,
-                http_client=litellm.aclient_session,
-                timeout=timeout,
-                max_retries=max_retries,
-            )
-        else:
-            openai_client = client
+        openai_client = self._get_openai_client(
+            is_async=True,
+            api_key=api_key,
+            api_base=api_base,
+            timeout=timeout,
+            max_retries=max_retries,
+            client=client,
+        )
 
         response = await openai_client.audio.speech.create(
             model=model,
