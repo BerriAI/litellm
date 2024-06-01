@@ -9,11 +9,11 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 from litellm import Router
-from litellm.proxy.queue.scheduler import FlowItem, Scheduler
+from litellm.scheduler import FlowItem, Scheduler
 
 
 @pytest.mark.asyncio
-async def test_scheduler_diff_model_groups():
+async def test_scheduler_diff_model_names():
     """
     Assert 2 requests to 2 diff model groups are top of their respective queue's
     """
@@ -33,13 +33,13 @@ async def test_scheduler_diff_model_groups():
 
     scheduler.update_variables(llm_router=router)
 
-    item1 = FlowItem(priority=0, request_id="10", model_group="gpt-3.5-turbo")
-    item2 = FlowItem(priority=0, request_id="11", model_group="gpt-4")
+    item1 = FlowItem(priority=0, request_id="10", model_name="gpt-3.5-turbo")
+    item2 = FlowItem(priority=0, request_id="11", model_name="gpt-4")
     await scheduler.add_request(item1)
     await scheduler.add_request(item2)
 
-    assert await scheduler.poll(id="10", model_group="gpt-3.5-turbo") == True
-    assert await scheduler.poll(id="11", model_group="gpt-4") == True
+    assert await scheduler.poll(id="10", model_name="gpt-3.5-turbo") == True
+    assert await scheduler.poll(id="11", model_name="gpt-4") == True
 
 
 @pytest.mark.parametrize("p0, p1", [(0, 0), (0, 1), (1, 0)])
@@ -64,17 +64,17 @@ async def test_scheduler_prioritized_requests(p0, p1):
 
     scheduler.update_variables(llm_router=router)
 
-    item1 = FlowItem(priority=p0, request_id="10", model_group="gpt-3.5-turbo")
-    item2 = FlowItem(priority=p1, request_id="11", model_group="gpt-3.5-turbo")
+    item1 = FlowItem(priority=p0, request_id="10", model_name="gpt-3.5-turbo")
+    item2 = FlowItem(priority=p1, request_id="11", model_name="gpt-3.5-turbo")
     await scheduler.add_request(item1)
     await scheduler.add_request(item2)
 
     if p0 == 0:
-        assert await scheduler.peek(id="10", model_group="gpt-3.5-turbo") == True
-        assert await scheduler.peek(id="11", model_group="gpt-3.5-turbo") == False
+        assert await scheduler.peek(id="10", model_name="gpt-3.5-turbo") == True
+        assert await scheduler.peek(id="11", model_name="gpt-3.5-turbo") == False
     else:
-        assert await scheduler.peek(id="11", model_group="gpt-3.5-turbo") == True
-        assert await scheduler.peek(id="10", model_group="gpt-3.5-turbo") == False
+        assert await scheduler.peek(id="11", model_name="gpt-3.5-turbo") == True
+        assert await scheduler.peek(id="10", model_name="gpt-3.5-turbo") == False
 
 
 @pytest.mark.parametrize("p0, p1", [(0, 0), (0, 1), (1, 0)])
@@ -92,10 +92,12 @@ async def test_scheduler_prioritized_requests_mock_response(p0, p1):
                 "litellm_params": {
                     "model": "gpt-3.5-turbo",
                     "mock_response": "Hello world this is Macintosh!",
+                    "rpm": 1,
                 },
             },
         ],
         timeout=2,
+        routing_strategy="usage-based-routing-v2",
     )
 
     scheduler.update_variables(llm_router=router)
@@ -114,7 +116,7 @@ async def test_scheduler_prioritized_requests_mock_response(p0, p1):
 
         while curr_time < end_time:
             make_request = await scheduler.poll(
-                id=flow_item.request_id, model_group=flow_item.model_group
+                id=flow_item.request_id, model_name=flow_item.model_name
             )
             if make_request:  ## IF TRUE -> MAKE REQUEST
                 break
@@ -123,10 +125,13 @@ async def test_scheduler_prioritized_requests_mock_response(p0, p1):
                 curr_time = time.time()
 
         if make_request:
-            _response = await router.acompletion(
-                model=flow_item.model_group,
-                messages=[{"role": "user", "content": "Hey!"}],
-            )
+            try:
+                _response = await router.acompletion(
+                    model=flow_item.model_name,
+                    messages=[{"role": "user", "content": "Hey!"}],
+                )
+            except Exception as e:
+                return flow_item.priority, flow_item.request_id, "Error occurred"
 
             return flow_item.priority, flow_item.request_id, time.time()
 
@@ -135,13 +140,13 @@ async def test_scheduler_prioritized_requests_mock_response(p0, p1):
     tasks = []
 
     item = FlowItem(
-        priority=p0, request_id=str(uuid.uuid4()), model_group="gpt-3.5-turbo"
+        priority=p0, request_id=str(uuid.uuid4()), model_name="gpt-3.5-turbo"
     )
     await scheduler.add_request(request=item)
     tasks.append(_make_prioritized_call(flow_item=item))
 
     item = FlowItem(
-        priority=p1, request_id=str(uuid.uuid4()), model_group="gpt-3.5-turbo"
+        priority=p1, request_id=str(uuid.uuid4()), model_name="gpt-3.5-turbo"
     )
     await scheduler.add_request(request=item)
     tasks.append(_make_prioritized_call(flow_item=item))
@@ -157,8 +162,4 @@ async def test_scheduler_prioritized_requests_mock_response(p0, p1):
     assert (
         completed_responses[0][0] == 0
     )  # assert higher priority request got done first
-    assert (
-        completed_responses[0][2] < completed_responses[1][2]
-    ), "1st response time={}, 2nd response time={}".format(
-        completed_responses[0][1], completed_responses[1][1]
-    )  # assert higher priority request got done first
+    assert isinstance(completed_responses[1][2], str)  # 2nd request errored out
