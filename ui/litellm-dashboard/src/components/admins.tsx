@@ -338,6 +338,15 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
         );
         console.log(`response for team create call: ${response}`);
         // Checking if the team exists in the list and updating or adding accordingly
+
+        // Give admin an invite link for inviting user to proxy
+        const user_id = response.data?.user_id || response.user_id;
+        invitationCreateCall(accessToken, user_id).then((data) => {
+          setInvitationLinkData(data);
+          setIsInvitationLinkModalVisible(true);
+        });
+
+  
         const foundIndex = admins.findIndex((user) => {
           console.log(
             `user.user_id=${user.user_id}; response.user_id=${response.user_id}`

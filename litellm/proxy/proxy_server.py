@@ -97,6 +97,7 @@ from litellm.proxy.utils import (
     _read_request_body,
     _is_valid_team_configs,
     _is_user_proxy_admin,
+    _get_user_role,
     _is_projected_spend_over_limit,
     _get_projected_spend_over_limit,
     update_spend,
@@ -1108,7 +1109,7 @@ async def user_api_key_auth(
 
                 user_email: Optional[str] = None
                 # Check if the token has any user id information
-                if user_id_information is not None:
+                if user_id_information is not None and len(user_id_information) > 0:
                     specific_user_id_information = user_id_information[0]
                     _user_email = specific_user_id_information.get("user_email", None)
                     if _user_email is not None:
@@ -1273,6 +1274,8 @@ async def user_api_key_auth(
             if _end_user_object is not None:
                 valid_token_dict.update(end_user_params)
 
+            _user_role = _get_user_role(user_id_information=user_id_information)
+
             if not _is_user_proxy_admin(user_id_information):  # if non-admin
                 if route in LiteLLMRoutes.openai_routes.value:
                     pass
@@ -1326,11 +1329,37 @@ async def user_api_key_auth(
                 ):
 
                     pass
+                elif _user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY:
+                    if route in LiteLLMRoutes.openai_routes.value:
+                        raise HTTPException(
+                            status_code=status.HTTP_403_FORBIDDEN,
+                            detail=f"user not allowed to access this OpenAI routes, role= {_user_role}",
+                        )
+                    if route in LiteLLMRoutes.management_routes.value:
+                        # the Admin Viewer is only allowed to call /user/update for their own user_id and can only update
+                        if route == "/user/update":
+
+                            # Check the Request params are valid for PROXY_ADMIN_VIEW_ONLY
+                            if request_data is not None and isinstance(
+                                request_data, dict
+                            ):
+                                _params_updated = request_data.keys()
+                                for param in _params_updated:
+                                    if param not in ["user_email", "password"]:
+                                        raise HTTPException(
+                                            status_code=status.HTTP_403_FORBIDDEN,
+                                            detail=f"user not allowed to access this route, role= {_user_role}. Trying to access: {route} and updating invalid param: {param}. only user_email and password can be updated",
+                                        )
+                        else:
+                            raise HTTPException(
+                                status_code=status.HTTP_403_FORBIDDEN,
+                                detail=f"user not allowed to access this route, role= {_user_role}. Trying to access: {route}",
+                            )
                 else:
                     user_role = "unknown"
                     user_id = "unknown"
                     if user_id_information is not None and isinstance(
-                        user_id_information, list
+                        user_id_information, list and len(user_id_information) > 0
                     ):
                         _user = user_id_information[0]
                         user_role = _user.get("user_role", "unknown")
@@ -1365,6 +1394,7 @@ async def user_api_key_auth(
                 "/global/spend/keys",
                 "/global/spend/models",
                 "/global/predict/spend/logs",
+                "/global/activity",
                 "/health/services",
             ]
             # check if the current route startswith any of the allowed routes
@@ -11869,8 +11899,7 @@ async def onboarding(invite_link: str):
 
     response = await generate_key_helper_fn(
         **{
-            "user_role": LitellmUserRoles.PROXY_ADMIN,
-            request_type="key",
+            "user_role": user_obj.user_role,
             "duration": "2hr",
             "key_max_budget": 5,
             "models": [],
@@ -11895,7 +11924,7 @@ async def onboarding(invite_link: str):
             "user_id": user_obj.user_id,
             "key": key,
             "user_email": user_obj.user_email,
-            "user_role": "app_owner",
+            "user_role": user_obj.user_role,
             "login_method": "username_password",
             "premium_user": premium_user,
         },
