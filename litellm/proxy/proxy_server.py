@@ -196,6 +196,7 @@ ui_link = f"/ui/"
 ui_message = (
     f"👉 [```LiteLLM Admin Panel on /ui```]({ui_link}). Create, Edit Keys with SSO"
 )
+custom_swagger_message = f"[**Customize Swagger Docs**](https://docs.litellm.ai/docs/proxy/enterprise#swagger-docs---custom-routes--branding)"
 
 ### CUSTOM BRANDING [ENTERPRISE FEATURE] ###
 _docs_url = None if os.getenv("NO_DOCS", "False") == "True" else "/"
@@ -203,10 +204,10 @@ _title = os.getenv("DOCS_TITLE", "LiteLLM API") if premium_user else "LiteLLM AP
 _description = (
     os.getenv(
         "DOCS_DESCRIPTION",
-        f"Proxy Server to call 100+ LLMs in the OpenAI format\n\n{ui_message}",
+        f"Proxy Server to call 100+ LLMs in the OpenAI format. {custom_swagger_message}\n\n{ui_message}",
     )
     if premium_user
-    else f"Proxy Server to call 100+ LLMs in the OpenAI format\n\n{ui_message}"
+    else f"Proxy Server to call 100+ LLMs in the OpenAI format. {custom_swagger_message}\n\n{ui_message}"
 )
 
 app = FastAPI(
