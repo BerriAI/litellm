@@ -12611,6 +12611,7 @@ async def login(request: Request):
         if secrets.compare_digest(password, _password):
             if os.getenv("DATABASE_URL") is not None:
                 response = await generate_key_helper_fn(
+                    request_type="key",
                     **{  # type: ignore
                         "user_role": user_role,
                         "duration": "2hr",
@@ -12621,7 +12622,7 @@ async def login(request: Request):
                         "spend": 0,
                         "user_id": user_id,
                         "team_id": "litellm-dashboard",
-                    }
+                    },
                 )
             else:
                 raise ProxyException(
@@ -12727,6 +12728,7 @@ async def onboarding(invite_link: str):
     user_email = user_obj.user_email
 
     response = await generate_key_helper_fn(
+        request_type="key",
         **{
             "user_role": user_obj.user_role,
             "duration": "2hr",
@@ -12737,7 +12739,7 @@ async def onboarding(invite_link: str):
             "spend": 0,
             "user_id": user_obj.user_id,
             "team_id": "litellm-dashboard",
-        }  # type: ignore
+        },  # type: ignore
     )
     key = response["token"]  # type: ignore
 
