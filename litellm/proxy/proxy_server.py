@@ -397,7 +397,7 @@ async_result = None
 celery_app_conn = None
 celery_fn = None  # Redis Queue for handling requests
 ### SIMPLE QUEUE ###
-scheduler = Scheduler()
+simple_scheduler = Scheduler()
 ### DB WRITER ###
 db_writer_client: Optional[HTTPHandler] = None
 ### logger ###
@@ -3658,7 +3658,7 @@ def on_backoff(details):
 
 @router.on_event("startup")
 async def startup_event():
-    global prisma_client, master_key, use_background_health_checks, llm_router, llm_model_list, general_settings, proxy_budget_rescheduler_min_time, proxy_budget_rescheduler_max_time, litellm_proxy_admin_name, db_writer_client, store_model_in_db, scheduler
+    global prisma_client, master_key, use_background_health_checks, llm_router, llm_model_list, general_settings, proxy_budget_rescheduler_min_time, proxy_budget_rescheduler_max_time, litellm_proxy_admin_name, db_writer_client, store_model_in_db, simple_scheduler
     import json
 
     ### LOAD MASTER KEY ###
@@ -3696,7 +3696,7 @@ async def startup_event():
 
     ## Priority Workload Scheduler ##
     if llm_router is not None:
-        scheduler.update_variables(llm_router=llm_router)
+        simple_scheduler.update_variables(llm_router=llm_router)
 
     ## UPDATE SLACK ALERTING ##
     proxy_logging_obj.slack_alerting_instance.update_values(llm_router=llm_router)
@@ -11310,7 +11310,7 @@ async def async_queue_request(
         # [TODO] only allow premium users to set non default priorities
 
         ## ADD REQUEST TO QUEUE
-        response = await scheduler.add_request(request=flow_item)
+        response = await simple_scheduler.add_request(request=flow_item)
 
         if llm_router is None:
             raise HTTPException(
@@ -11330,7 +11330,9 @@ async def async_queue_request(
             )
 
         while curr_time < end_time:
-            make_request = await scheduler.poll(id=request_id, model_name=data["model"])
+            make_request = await simple_scheduler.poll(
+                id=request_id, model_name=data["model"]
+            )
             if make_request:  ## IF TRUE -> MAKE REQUEST
                 break
             else:  ## ELSE -> loop till default_timeout
@@ -11385,7 +11387,7 @@ async def queue_info(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ) -> List:
     """Help user know the status of an item in the queue"""
-    return scheduler.get_queue_status()
+    return simple_scheduler.get_queue_status()
 
 
 @router.get(
