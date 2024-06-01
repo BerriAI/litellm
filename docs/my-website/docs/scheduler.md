@@ -22,9 +22,7 @@ Prioritize LLM API requests in high-traffic.
 ## Quick Start 
 
 ```python
-from litellm import Scheduler, FlowItem, Router
-
-scheduler = Scheduler()
+from litellm import Router
 
 router = Router(
     model_list=[
@@ -39,53 +37,17 @@ router = Router(
     ],
     timeout=2, # timeout request if takes > 2s
     routing_strategy="usage-based-routing-v2",
+    polling_interval=0.03 # poll queue every 3ms if no healthy deployments
 )
 
-scheduler.update_variables(llm_router=router)
-
-### 🚨 IMPORTANT ###
-
-item = FlowItem(
-    priority=0, # 👈 SET PRIORITY FOR REQUEST
-    request_id=str(uuid.uuid4()), # 👈 SET REQUEST ID
-    model_name="gpt-3.5-turbo" # 👈 SAME as 'Router'
-) 
-
-### [fin] IMPORTANT ###
-
-## ADDS REQUEST TO QUEUE ##
-await scheduler.add_request(request=item)
-
-## POLL QUEUE
-default_timeout = router.timeout
-end_time = time.time() + default_timeout
-poll_interval = 0.03  # poll every 3ms
-curr_time = time.time()
-
-make_request = False
-
-while curr_time < end_time:
-    make_request = await scheduler.poll( ## POLL QUEUE ## - returns 'True' if there's healthy deployments OR if request is at top of queue
-        id=item.request_id, model_name=item.model_name
+try:
+    _response = await router.schedule_acompletion( # 👈 ADDS TO QUEUE + POLLS + MAKES CALL
+        model=item.model_name,
+        messages=[{"role": "user", "content": "Hey!"}],
+        priority=0, # 👈 LOWER IS BETTER
     )
-    if make_request:  ## IF TRUE -> MAKE REQUEST
-        break
-    else:  ## ELSE -> loop till default_timeout
-        await asyncio.sleep(poll_interval)
-        curr_time = time.time()
-
-if make_request:
-    try:
-        _response = await router.acompletion(
-            model=item.model_name,
-            messages=[{"role": "user", "content": "Hey!"}],
-        )
-    except Exception as e:
-        print("{}, {}, {}".format(item.priority, item.request_id, "Error occurred"))
-
-    print("{}, {}, {}".format(item.priority, item.request_id, time.time()))
-
-print("didn't make request")
+except Exception as e:
+    print("didn't make request")
 ```
 
 ## LiteLLM Proxy
