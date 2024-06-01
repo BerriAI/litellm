@@ -107,7 +107,7 @@ class HTTPHandler:
         http_proxy = os.getenv("HTTP_PROXY", None)
         https_proxy = os.getenv("HTTPS_PROXY", None)
         no_proxy = os.getenv("NO_PROXY", None)
-        ssl_verify = os.getenv("SSL_VERIFY", litellm.ssl_verify)
+        ssl_verify = bool(os.getenv("SSL_VERIFY", litellm.ssl_verify))
 
         sync_proxy_mounts = None
         if http_proxy is not None and https_proxy is not None:
