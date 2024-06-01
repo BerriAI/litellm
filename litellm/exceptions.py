@@ -582,6 +582,25 @@ class OpenAIError(openai.OpenAIError):  # type: ignore
         self.llm_provider = "openai"
 
 
+LITELLM_EXCEPTION_TYPES = [
+    AuthenticationError,
+    NotFoundError,
+    BadRequestError,
+    UnprocessableEntityError,
+    Timeout,
+    PermissionDeniedError,
+    RateLimitError,
+    ContextWindowExceededError,
+    RejectedRequestError,
+    ContentPolicyViolationError,
+    ServiceUnavailableError,
+    APIError,
+    APIConnectionError,
+    APIResponseValidationError,
+    OpenAIError,
+]
+
+
 class BudgetExceededError(Exception):
     def __init__(self, current_cost, max_budget):
         self.current_cost = current_cost
