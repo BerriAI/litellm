@@ -294,7 +294,16 @@ class BedrockLLM(BaseLLM):
                 RoleArn=aws_role_name, RoleSessionName=aws_session_name
             )
 
-            return sts_response["Credentials"]
+            # Extract the credentials from the response and convert to Session Credentials
+            sts_credentials = sts_response["Credentials"]
+            from botocore.credentials import Credentials
+
+            credentials = Credentials(
+                access_key=sts_credentials["AccessKeyId"],
+                secret_key=sts_credentials["SecretAccessKey"],
+                token=sts_credentials["SessionToken"],
+            )
+            return credentials
         elif aws_profile_name is not None:  ### CHECK SESSION ###
             # uses auth values from AWS profile usually stored in ~/.aws/credentials
             client = boto3.Session(profile_name=aws_profile_name)
