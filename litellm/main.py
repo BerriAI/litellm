@@ -223,7 +223,7 @@ async def acompletion(
     extra_headers: Optional[dict] = None,
     # Optional liteLLM function params
     **kwargs,
-):
+) -> Union[ModelResponse, CustomStreamWrapper]:
     """
     Asynchronously executes a litellm.completion() call for any of litellm supported llms (example gpt-4, gpt-3.5-turbo, claude-2, command-nightly)
 
@@ -339,6 +339,8 @@ async def acompletion(
             if isinstance(init_response, dict) or isinstance(
                 init_response, ModelResponse
             ):  ## CACHING SCENARIO
+                if isinstance(init_response, dict):
+                    response = ModelResponse(**init_response)
                 response = init_response
             elif asyncio.iscoroutine(init_response):
                 response = await init_response
