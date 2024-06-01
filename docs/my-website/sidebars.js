@@ -100,13 +100,15 @@ const sidebars = {
     },
     {
       type: "category",
-      label: "Embedding(), Moderation(), Image Generation(), Audio Transcriptions()",
+      label: "Embedding(), Image Generation(), Assistants(), Moderation(), Audio Transcriptions(), TTS()",
       items: [
         "embedding/supported_embedding",
         "embedding/async_embedding",
         "embedding/moderation",
         "image_generation",
-        "audio_transcription"
+        "audio_transcription",
+        "text_to_speech",
+        "assistants"
       ],
     },
     {
