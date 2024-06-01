@@ -53,6 +53,16 @@ from litellm.types.router import (
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.azure import get_azure_ad_token_from_oidc
+from litellm.types.llms.openai import (
+    AsyncCursorPage,
+    Assistant,
+    Thread,
+    Attachment,
+    OpenAIMessage,
+    Run,
+    AssistantToolParam,
+)
+from typing import Iterable
 
 
 class Router:
@@ -1725,6 +1735,108 @@ class Router:
             if model_name is not None:
                 self.fail_calls[model_name] += 1
             raise e
+
+    #### ASSISTANTS API ####
+
+    async def aget_assistants(
+        self,
+        custom_llm_provider: Literal["openai"],
+        client: Optional[AsyncOpenAI] = None,
+        **kwargs,
+    ) -> AsyncCursorPage[Assistant]:
+        return await litellm.aget_assistants(
+            custom_llm_provider=custom_llm_provider, client=client, **kwargs
+        )
+
+    async def acreate_thread(
+        self,
+        custom_llm_provider: Literal["openai"],
+        client: Optional[AsyncOpenAI] = None,
+        **kwargs,
+    ) -> Thread:
+        return await litellm.acreate_thread(
+            custom_llm_provider=custom_llm_provider, client=client, **kwargs
+        )
+
+    async def aget_thread(
+        self,
+        custom_llm_provider: Literal["openai"],
+        thread_id: str,
+        client: Optional[AsyncOpenAI] = None,
+        **kwargs,
+    ) -> Thread:
+        return await litellm.aget_thread(
+            custom_llm_provider=custom_llm_provider,
+            thread_id=thread_id,
+            client=client,
+            **kwargs,
+        )
+
+    async def a_add_message(
+        self,
+        custom_llm_provider: Literal["openai"],
+        thread_id: str,
+        role: Literal["user", "assistant"],
+        content: str,
+        attachments: Optional[List[Attachment]] = None,
+        metadata: Optional[dict] = None,
+        client: Optional[AsyncOpenAI] = None,
+        **kwargs,
+    ) -> OpenAIMessage:
+        return await litellm.a_add_message(
+            custom_llm_provider=custom_llm_provider,
+            thread_id=thread_id,
+            role=role,
+            content=content,
+            attachments=attachments,
+            metadata=metadata,
+            client=client,
+            **kwargs,
+        )
+
+    async def aget_messages(
+        self,
+        custom_llm_provider: Literal["openai"],
+        thread_id: str,
+        client: Optional[AsyncOpenAI] = None,
+        **kwargs,
+    ) -> AsyncCursorPage[OpenAIMessage]:
+        return await litellm.aget_messages(
+            custom_llm_provider=custom_llm_provider,
+            thread_id=thread_id,
+            client=client,
+            **kwargs,
+        )
+
+    async def arun_thread(
+        self,
+        custom_llm_provider: Literal["openai"],
+        thread_id: str,
+        assistant_id: str,
+        additional_instructions: Optional[str] = None,
+        instructions: Optional[str] = None,
+        metadata: Optional[dict] = None,
+        model: Optional[str] = None,
+        stream: Optional[bool] = None,
+        tools: Optional[Iterable[AssistantToolParam]] = None,
+        client: Optional[AsyncOpenAI] = None,
+        **kwargs,
+    ) -> Run:
+        return await litellm.arun_thread(
+            custom_llm_provider=custom_llm_provider,
+            thread_id=thread_id,
+            assistant_id=assistant_id,
+            additional_instructions=additional_instructions,
+            instructions=instructions,
+            metadata=metadata,
+            model=model,
+            stream=stream,
+            tools=tools,
+            client=client,
+            **kwargs,
+        )
+
+    #### [END] ASSISTANTS API ####
 
     async def async_function_with_fallbacks(self, *args, **kwargs):
         """
