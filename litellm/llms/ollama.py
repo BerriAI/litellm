@@ -341,7 +341,7 @@ def ollama_completion_stream(url, data, logging_obj):
 
 async def ollama_async_streaming(url, data, model_response, encoding, logging_obj):
     try:
-        client = httpx.AsyncClient()
+        client = httpx.AsyncClient(http2=True)
         async with client.stream(
             url=f"{url}", json=data, method="POST", timeout=litellm.request_timeout
         ) as response:

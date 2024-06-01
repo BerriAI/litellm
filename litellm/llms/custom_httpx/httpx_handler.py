@@ -9,7 +9,8 @@ class HTTPHandler:
             limits=httpx.Limits(
                 max_connections=concurrent_limit,
                 max_keepalive_connections=concurrent_limit,
-            )
+            ),
+            http2=True,
         )
 
     async def close(self):

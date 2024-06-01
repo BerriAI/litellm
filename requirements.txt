@@ -41,4 +41,5 @@ aiohttp==3.9.0 # for network calls
 aioboto3==12.3.0 # for async sagemaker calls
 tenacity==8.2.3  # for retrying requests, when litellm.num_retries set
 pydantic==2.7.1 # openai req. 
+httpx[http2]==0.27.0
 ####

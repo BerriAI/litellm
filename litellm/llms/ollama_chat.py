@@ -381,7 +381,7 @@ async def ollama_async_streaming(
     url, api_key, data, model_response, encoding, logging_obj
 ):
     try:
-        client = httpx.AsyncClient()
+        client = httpx.AsyncClient(http2=True)
         _request = {
             "url": f"{url}",
             "json": data,

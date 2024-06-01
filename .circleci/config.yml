@@ -46,7 +46,7 @@ jobs:
             pip install traceloop-sdk==0.21.1
             pip install openai
             pip install prisma            
-            pip install "httpx==0.24.1"
+            pip install "httpx[http2]==0.27.0"
             pip install fastapi
             pip install "gunicorn==21.2.0"
             pip install "anyio==3.7.1"
@@ -177,7 +177,7 @@ jobs:
             pip install numpydoc
             pip install prisma            
             pip install fastapi            
-            pip install "httpx==0.24.1"
+            pip install "httpx[http2]==0.27.0"
             pip install "gunicorn==21.2.0"
             pip install "anyio==3.7.1"
             pip install "aiodynamo==23.10.1"

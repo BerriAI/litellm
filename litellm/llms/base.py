@@ -31,7 +31,7 @@ class BaseLLM:
         if litellm.client_session:
             _client_session = litellm.client_session
         else:
-            _client_session = httpx.Client()
+            _client_session = httpx.Client(http2=True)
 
         return _client_session
 
@@ -39,7 +39,7 @@ class BaseLLM:
         if litellm.aclient_session:
             _aclient_session = litellm.aclient_session
         else:
-            _aclient_session = httpx.AsyncClient()
+            _aclient_session = httpx.AsyncClient(http2=True)
 
         return _aclient_session
 

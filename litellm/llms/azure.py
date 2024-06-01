@@ -730,6 +730,7 @@ class AzureChatCompletion(BaseLLM):
             if client is None:
                 client_session = litellm.aclient_session or httpx.AsyncClient(
                     transport=AsyncCustomHTTPTransport(),
+                    http2=True,
                 )
                 azure_client = AsyncAzureOpenAI(
                     http_client=client_session, **azure_client_params
@@ -834,6 +835,7 @@ class AzureChatCompletion(BaseLLM):
             if client is None:
                 client_session = litellm.client_session or httpx.Client(
                     transport=CustomHTTPTransport(),
+                    http2=True,
                 )
                 azure_client = AzureOpenAI(http_client=client_session, **azure_client_params)  # type: ignore
             else:
@@ -1038,6 +1040,7 @@ class AzureChatCompletion(BaseLLM):
     ) -> dict:
         client_session = litellm.client_session or httpx.Client(
             transport=CustomHTTPTransport(),  # handle dall-e-2 calls
+            http2=True,
         )
         if "gateway.ai.cloudflare.com" in api_base:
             ## build base url - assume api base includes resource name
@@ -1113,6 +1116,7 @@ class AzureChatCompletion(BaseLLM):
     ) -> dict:
         client_session = litellm.aclient_session or httpx.AsyncClient(
             transport=AsyncCustomHTTPTransport(),  # handle dall-e-2 calls
+            http2=True,
         )
         if "gateway.ai.cloudflare.com" in api_base:
             ## build base url - assume api base includes resource name

@@ -20,6 +20,7 @@ class AsyncHTTPHandler:
                 max_connections=concurrent_limit,
                 max_keepalive_connections=concurrent_limit,
             ),
+            http2=True,
         )
 
     async def close(self):
@@ -85,6 +86,7 @@ class HTTPHandler:
                     max_connections=concurrent_limit,
                     max_keepalive_connections=concurrent_limit,
                 ),
+                http2=True,
             )
         else:
             self.client = client

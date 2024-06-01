@@ -2862,6 +2862,7 @@ class Router:
                                 verify=litellm.ssl_verify,
                             ),
                             mounts=async_proxy_mounts,
+                            http2=True,
                         ),  # type: ignore
                     )
                     self.cache.set_cache(
@@ -2887,6 +2888,7 @@ class Router:
                                 verify=litellm.ssl_verify,
                             ),
                             mounts=sync_proxy_mounts,
+                            http2=True,
                         ),  # type: ignore
                     )
                     self.cache.set_cache(
@@ -2912,6 +2914,7 @@ class Router:
                                 verify=litellm.ssl_verify,
                             ),
                             mounts=async_proxy_mounts,
+                            http2=True,
                         ),  # type: ignore
                     )
                     self.cache.set_cache(
@@ -2937,6 +2940,7 @@ class Router:
                                 verify=litellm.ssl_verify,
                             ),
                             mounts=sync_proxy_mounts,
+                            http2=True,
                         ),  # type: ignore
                     )
                     self.cache.set_cache(
@@ -2980,6 +2984,7 @@ class Router:
                                 verify=litellm.ssl_verify,
                             ),
                             mounts=async_proxy_mounts,
+                            http2=True,
                         ),  # type: ignore
                     )
                     self.cache.set_cache(
@@ -3002,6 +3007,7 @@ class Router:
                                 ),
                             ),
                             mounts=sync_proxy_mounts,
+                            http2=True,
                         ),  # type: ignore
                     )
                     self.cache.set_cache(
@@ -3025,6 +3031,7 @@ class Router:
                                 verify=litellm.ssl_verify,
                             ),
                             mounts=async_proxy_mounts,
+                            http2=True,
                         ),
                     )
                     self.cache.set_cache(
@@ -3047,6 +3054,7 @@ class Router:
                                 verify=litellm.ssl_verify,
                             ),
                             mounts=sync_proxy_mounts,
+                            http2=True,
                         ),
                     )
                     self.cache.set_cache(
@@ -3079,6 +3087,7 @@ class Router:
                             verify=litellm.ssl_verify,
                         ),
                         mounts=async_proxy_mounts,
+                        http2=True,
                     ),  # type: ignore
                 )
                 self.cache.set_cache(
@@ -3103,6 +3112,7 @@ class Router:
                             verify=litellm.ssl_verify,
                         ),
                         mounts=sync_proxy_mounts,
+                        http2=True,
                     ),  # type: ignore
                 )
                 self.cache.set_cache(
@@ -3128,6 +3138,7 @@ class Router:
                             verify=litellm.ssl_verify,
                         ),
                         mounts=async_proxy_mounts,
+                        http2=True,
                     ),  # type: ignore
                 )
                 self.cache.set_cache(
@@ -3153,6 +3164,7 @@ class Router:
                             verify=litellm.ssl_verify,
                         ),
                         mounts=sync_proxy_mounts,
+                        http2=True,
                     ),  # type: ignore
                 )
                 self.cache.set_cache(

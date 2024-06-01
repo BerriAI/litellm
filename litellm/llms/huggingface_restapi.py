@@ -651,7 +651,7 @@ class Huggingface(BaseLLM):
     ):
         response = None
         try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
+            async with httpx.AsyncClient(timeout=timeout, http2=True) as client:
                 response = await client.post(url=api_base, json=data, headers=headers)
                 response_json = response.json()
                 if response.status_code != 200:
@@ -703,7 +703,7 @@ class Huggingface(BaseLLM):
         model: str,
         timeout: float,
     ):
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        async with httpx.AsyncClient(timeout=timeout, http2=True) as client:
             response = client.stream(
                 "POST", url=f"{api_base}", json=data, headers=headers
             )
