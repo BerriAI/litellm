@@ -1109,7 +1109,7 @@ async def user_api_key_auth(
 
                 user_email: Optional[str] = None
                 # Check if the token has any user id information
-                if user_id_information is not None:
+                if user_id_information is not None and len(user_id_information) > 0:
                     specific_user_id_information = user_id_information[0]
                     _user_email = specific_user_id_information.get("user_email", None)
                     if _user_email is not None:
@@ -1359,7 +1359,7 @@ async def user_api_key_auth(
                     user_role = "unknown"
                     user_id = "unknown"
                     if user_id_information is not None and isinstance(
-                        user_id_information, list
+                        user_id_information, list and len(user_id_information) > 0
                     ):
                         _user = user_id_information[0]
                         user_role = _user.get("user_role", "unknown")
