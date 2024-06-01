@@ -141,7 +141,7 @@ from litellm.proxy.auth.auth_checks import (
 from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
 from litellm.exceptions import RejectedRequestError
 from litellm.integrations.slack_alerting import SlackAlertingArgs, SlackAlerting
-from litellm.proxy.queue.scheduler import Scheduler, FlowItem, DefaultPriorities
+from litellm.scheduler import Scheduler, FlowItem, DefaultPriorities
 
 try:
     from litellm._version import version
@@ -11305,7 +11305,7 @@ async def async_queue_request(
         flow_item = FlowItem(
             priority=data.pop("priority", DefaultPriorities.Medium.value),
             request_id=request_id,
-            model_group=data["model"],
+            model_name=data["model"],
         )
         # [TODO] only allow premium users to set non default priorities
 
@@ -11330,9 +11330,7 @@ async def async_queue_request(
             )
 
         while curr_time < end_time:
-            make_request = await scheduler.poll(
-                id=request_id, model_group=data["model"]
-            )
+            make_request = await scheduler.poll(id=request_id, model_name=data["model"])
             if make_request:  ## IF TRUE -> MAKE REQUEST
                 break
             else:  ## ELSE -> loop till default_timeout
