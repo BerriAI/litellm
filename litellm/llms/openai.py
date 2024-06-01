@@ -6,6 +6,7 @@ from typing import (
     Literal,
     Iterable,
 )
+import hashlib
 from typing_extensions import override, overload
 from pydantic import BaseModel
 import types, time, json, traceback
@@ -27,7 +28,6 @@ from .prompt_templates.factory import prompt_factory, custom_prompt
 from openai import OpenAI, AsyncOpenAI
 from ..types.llms.openai import *
 import openai
-from functools import lru_cache
 
 
 class OpenAIError(Exception):
@@ -524,8 +524,15 @@ class OpenAIChatCompletion(BaseLLM):
                     ),
                 )
             # Creating a new OpenAI Client
-            # check in memory cache before doing so
-            _cache_key = f"api_key={api_key},api_base={api_base},timeout={timeout},max_retries={max_retries},organization={organization}"
+            # check in memory cache before creating a new one
+            # Convert the API key to bytes
+            hashed_api_key = None
+            if api_key is not None:
+                hash_object = hashlib.sha256(api_key.encode())
+                # Hexadecimal representation of the hash
+                hashed_api_key = hash_object.hexdigest()
+
+            _cache_key = f"hashed_api_key={hashed_api_key},api_base={api_base},timeout={timeout},max_retries={max_retries},organization={organization}"
 
             if _cache_key in litellm.in_memory_llm_clients_cache:
                 return litellm.in_memory_llm_clients_cache[_cache_key]
