@@ -1,7 +1,8 @@
 "use client";
 import React, { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { Card, Title, Text, TextInput } from "@tremor/react";
+import { Card, Title, Text, TextInput, Callout, Button, Grid, Col } from "@tremor/react";
+import { RiAlarmWarningLine, RiCheckboxCircleLine } from '@remixicon/react';
 import {
   invitationClaimCall,
   userUpdateUserCall,
@@ -73,6 +74,30 @@ export default function Onboarding() {
         <Title className="text-sm mb-5 text-center">🚅 LiteLLM</Title>
         <Title className="text-xl">Sign up</Title>
         <Text>Claim your user account to login to Admin UI.</Text>
+
+        <Callout
+          className="mt-4"
+          title="SSO"
+          icon={RiCheckboxCircleLine}
+          color="sky"
+        >
+            <Grid numItems={2} className="flex justify-between items-center">
+                <Col>
+                SSO is under the Enterprise Tirer.
+                </Col>
+
+                <Col>
+                    <Button variant="primary" className="mb-2">
+                        <a href="https://forms.gle/W3U4PZpJGFHWtHyA9" target="_blank">
+                        Get Free Trial
+                        </a>
+
+                    </Button>
+                </Col>
+
+            </Grid>
+        </Callout>
+    
         <Form
           className="mt-10 mb-5 mx-auto"
           layout="vertical"
