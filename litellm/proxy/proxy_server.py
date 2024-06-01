@@ -398,8 +398,6 @@ proxy_logging_obj = ProxyLogging(user_api_key_cache=user_api_key_cache)
 async_result = None
 celery_app_conn = None
 celery_fn = None  # Redis Queue for handling requests
-### SIMPLE QUEUE ###
-simple_scheduler = Scheduler()
 ### DB WRITER ###
 db_writer_client: Optional[HTTPHandler] = None
 ### logger ###
@@ -3705,7 +3703,7 @@ def on_backoff(details):
 
 @router.on_event("startup")
 async def startup_event():
-    global prisma_client, master_key, use_background_health_checks, llm_router, llm_model_list, general_settings, proxy_budget_rescheduler_min_time, proxy_budget_rescheduler_max_time, litellm_proxy_admin_name, db_writer_client, store_model_in_db, simple_scheduler
+    global prisma_client, master_key, use_background_health_checks, llm_router, llm_model_list, general_settings, proxy_budget_rescheduler_min_time, proxy_budget_rescheduler_max_time, litellm_proxy_admin_name, db_writer_client, store_model_in_db
     import json
 
     ### LOAD MASTER KEY ###
@@ -3740,10 +3738,6 @@ async def startup_event():
 
     ## Error Tracking ##
     error_tracking()
-
-    ## Priority Workload Scheduler ##
-    if llm_router is not None:
-        simple_scheduler.update_variables(llm_router=llm_router)
 
     ## UPDATE SLACK ALERTING ##
     proxy_logging_obj.slack_alerting_instance.update_values(llm_router=llm_router)
@@ -12183,47 +12177,12 @@ async def async_queue_request(
         if user_api_base:
             data["api_base"] = user_api_base
 
-        ## FLOW ITEM ##
-        request_id = str(uuid.uuid4())
-        flow_item = FlowItem(
-            priority=data.pop("priority", DefaultPriorities.Medium.value),
-            request_id=request_id,
-            model_name=data["model"],
-        )
-        # [TODO] only allow premium users to set non default priorities
-
-        ## ADD REQUEST TO QUEUE
-        response = await simple_scheduler.add_request(request=flow_item)
-
-        if llm_router is None:
-            raise HTTPException(
-                status_code=500, detail={"error": CommonProxyErrors.no_llm_router.value}
-            )
-        ## POLL QUEUE
-        default_timeout = llm_router.timeout
-        end_time = time.time() + default_timeout
-        poll_interval = 0.03  # poll every 3ms
-        curr_time = time.time()
-
-        make_request = False
-
         if llm_router is None:
             raise HTTPException(
                 status_code=500, detail={"error": CommonProxyErrors.no_llm_router.value}
             )
 
-        while curr_time < end_time:
-            make_request = await simple_scheduler.poll(
-                id=request_id, model_name=data["model"]
-            )
-            if make_request:  ## IF TRUE -> MAKE REQUEST
-                break
-            else:  ## ELSE -> loop till default_timeout
-                await asyncio.sleep(poll_interval)
-                curr_time = time.time()
-
-        if make_request:
-            response = await llm_router.acompletion(**data)
+        response = await llm_router.schedule_acompletion(**data)
 
         if (
             "stream" in data and data["stream"] == True
@@ -12237,7 +12196,7 @@ async def async_queue_request(
                 media_type="text/event-stream",
             )
 
-        fastapi_response.headers.update({"x-litellm-priority": str(flow_item.priority)})
+        fastapi_response.headers.update({"x-litellm-priority": str(data["priority"])})
         return response
     except Exception as e:
         await proxy_logging_obj.post_call_failure_hook(
@@ -12258,19 +12217,6 @@ async def async_queue_request(
             param=getattr(e, "param", "None"),
             code=status.HTTP_400_BAD_REQUEST,
         )
-
-
-@router.get(
-    "/queue/info",
-    tags=["experimental"],
-    dependencies=[Depends(user_api_key_auth)],
-)
-async def queue_info(
-    request: Request,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-) -> List:
-    """Help user know the status of an item in the queue"""
-    return simple_scheduler.get_queue_status()
 
 
 @router.get(
