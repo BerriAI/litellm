@@ -11,6 +11,9 @@ services:
     environment:
         DATABASE_URL: "postgresql://postgres:example@db:5432/postgres"
         STORE_MODEL_IN_DB: "True" # allows adding models to proxy via UI
+    env_file:
+      - .env # Load local .env file
+
  
   db:
     image: postgres
