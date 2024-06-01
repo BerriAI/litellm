@@ -515,6 +515,7 @@ class OpenAIChatCompletion(BaseLLM):
         organization: Optional[str] = None,
         client: Optional[Union[OpenAI, AsyncOpenAI]] = None,
     ):
+        args = locals()
         if client is None:
             if not isinstance(max_retries, int):
                 raise OpenAIError(
@@ -532,7 +533,7 @@ class OpenAIChatCompletion(BaseLLM):
                 # Hexadecimal representation of the hash
                 hashed_api_key = hash_object.hexdigest()
 
-            _cache_key = f"hashed_api_key={hashed_api_key},api_base={api_base},timeout={timeout},max_retries={max_retries},organization={organization}"
+            _cache_key = f"hashed_api_key={hashed_api_key},api_base={api_base},timeout={timeout},max_retries={max_retries},organization={organization},is_async={is_async}"
 
             if _cache_key in litellm.in_memory_llm_clients_cache:
                 return litellm.in_memory_llm_clients_cache[_cache_key]
@@ -555,6 +556,7 @@ class OpenAIChatCompletion(BaseLLM):
                     organization=organization,
                 )
 
+            ## SAVE CACHE KEY
             litellm.in_memory_llm_clients_cache[_cache_key] = _new_client
             return _new_client
 
