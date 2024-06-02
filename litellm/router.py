@@ -2064,7 +2064,6 @@ class Router:
             response = await original_function(*args, **kwargs)
             return response
         except Exception as e:
-            num_retries = None
             current_attempt = None
             original_exception = e
             """
