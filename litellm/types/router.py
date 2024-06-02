@@ -385,8 +385,8 @@ class RouterErrors(enum.Enum):
 
 class AllowedFailsPolicy(BaseModel):
     """
-    Use this to set a custom number of allowed_fails for each exception type before cooling down a deployment
-    If RateLimitErrorRetries = 3, then 3 retries will be made for RateLimitError
+    Use this to set a custom number of allowed fails/minute before cooling down a deployment
+    If `AuthenticationErrorAllowedFails = 1000`, then 1000 AuthenticationError will be allowed before cooling down a deployment
 
     Mapping of Exception type to allowed_fails for each exception
     https://docs.litellm.ai/docs/exception_mapping

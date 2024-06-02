@@ -128,10 +128,15 @@ async def test_router_retries_errors(sync_mode, error_type):
     ["AuthenticationErrorRetries", "ContentPolicyViolationErrorRetries"],  #
 )
 async def test_router_retry_policy(error_type):
-    from litellm.router import RetryPolicy
+    from litellm.router import RetryPolicy, AllowedFailsPolicy
 
     retry_policy = RetryPolicy(
         ContentPolicyViolationErrorRetries=3, AuthenticationErrorRetries=0
+    )
+
+    allowed_fails_policy = AllowedFailsPolicy(
+        ContentPolicyViolationErrorAllowedFails=1000,
+        RateLimitErrorAllowedFails=100,
     )
 
     router = Router(
@@ -156,6 +161,7 @@ async def test_router_retry_policy(error_type):
             },
         ],
         retry_policy=retry_policy,
+        allowed_fails_policy=allowed_fails_policy,
     )
 
     customHandler = MyCustomHandler()
