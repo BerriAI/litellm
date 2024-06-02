@@ -2338,7 +2338,6 @@ class Router:
             response = original_function(*args, **kwargs)
             return response
         except Exception as e:
-            num_retries = None
             current_attempt = None
             original_exception = e
             ### CHECK IF RATE LIMIT / CONTEXT WINDOW ERROR
