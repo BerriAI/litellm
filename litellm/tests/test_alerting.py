@@ -299,6 +299,12 @@ async def test_daily_reports_redis_cache_scheduler():
     slack_alerting = SlackAlerting(
         internal_usage_cache=DualCache(redis_cache=redis_cache)
     )
+
+    # we need this to be 0 so it actualy sends the report
+    slack_alerting.alerting_args.daily_report_frequency = 0
+
+    from litellm.router import AlertingConfig
+
     router = litellm.Router(
         model_list=[
             {
