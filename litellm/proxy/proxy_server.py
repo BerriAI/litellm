@@ -4051,6 +4051,7 @@ async def chat_completion(
         data["metadata"]["user_api_end_user_max_budget"] = getattr(
             user_api_key_dict, "end_user_max_budget", None
         )
+        data["metadata"]["litellm_api_version"] = version
 
         data["metadata"]["global_max_parallel_requests"] = general_settings.get(
             "global_max_parallel_requests", None
@@ -4364,6 +4365,7 @@ async def completion(
         data["metadata"]["user_api_key_alias"] = getattr(
             user_api_key_dict, "key_alias", None
         )
+        data["metadata"]["litellm_api_version"] = version
         data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
         data["metadata"]["user_api_key_team_id"] = getattr(
             user_api_key_dict, "team_id", None
@@ -4606,6 +4608,7 @@ async def embeddings(
             "authorization", None
         )  # do not store the original `sk-..` api key in the db
         data["metadata"]["headers"] = _headers
+        data["metadata"]["litellm_api_version"] = version
         data["metadata"]["user_api_key_alias"] = getattr(
             user_api_key_dict, "key_alias", None
         )
@@ -4810,6 +4813,7 @@ async def image_generation(
         if "metadata" not in data:
             data["metadata"] = {}
         data["metadata"]["user_api_key"] = user_api_key_dict.api_key
+        data["metadata"]["litellm_api_version"] = version
         data["metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
         _headers = dict(request.headers)
         _headers.pop(
@@ -4986,6 +4990,7 @@ async def audio_speech(
         if "metadata" not in data:
             data["metadata"] = {}
         data["metadata"]["user_api_key"] = user_api_key_dict.api_key
+        data["metadata"]["litellm_api_version"] = version
         data["metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
         _headers = dict(request.headers)
         _headers.pop(
@@ -5155,6 +5160,7 @@ async def audio_transcriptions(
         if "metadata" not in data:
             data["metadata"] = {}
         data["metadata"]["user_api_key"] = user_api_key_dict.api_key
+        data["metadata"]["litellm_api_version"] = version
         data["metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
         _headers = dict(request.headers)
         _headers.pop(
@@ -5358,6 +5364,7 @@ async def get_assistants(
             data["metadata"] = {}
         data["metadata"]["user_api_key"] = user_api_key_dict.api_key
         data["metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
+        data["metadata"]["litellm_api_version"] = version
         _headers = dict(request.headers)
         _headers.pop(
             "authorization", None
@@ -5488,6 +5495,7 @@ async def create_threads(
         if "litellm_metadata" not in data:
             data["litellm_metadata"] = {}
         data["litellm_metadata"]["user_api_key"] = user_api_key_dict.api_key
+        data["metadata"]["litellm_api_version"] = version
         data["litellm_metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
         _headers = dict(request.headers)
         _headers.pop(
@@ -5623,6 +5631,7 @@ async def get_thread(
             "authorization", None
         )  # do not store the original `sk-..` api key in the db
         data["metadata"]["headers"] = _headers
+        data["metadata"]["litellm_api_version"] = version
         data["metadata"]["user_api_key_alias"] = getattr(
             user_api_key_dict, "key_alias", None
         )
@@ -5749,6 +5758,7 @@ async def add_messages(
         if "litellm_metadata" not in data:
             data["litellm_metadata"] = {}
         data["litellm_metadata"]["user_api_key"] = user_api_key_dict.api_key
+        data["litellm_metadata"]["litellm_api_version"] = version
         data["litellm_metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
         _headers = dict(request.headers)
         _headers.pop(
@@ -5883,6 +5893,7 @@ async def get_messages(
             "authorization", None
         )  # do not store the original `sk-..` api key in the db
         data["metadata"]["headers"] = _headers
+        data["metadata"]["litellm_api_version"] = version
         data["metadata"]["user_api_key_alias"] = getattr(
             user_api_key_dict, "key_alias", None
         )
@@ -6007,6 +6018,7 @@ async def run_thread(
         if "litellm_metadata" not in data:
             data["litellm_metadata"] = {}
         data["litellm_metadata"]["user_api_key"] = user_api_key_dict.api_key
+        data["litellm_metadata"]["litellm_api_version"] = version
         data["litellm_metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
         _headers = dict(request.headers)
         _headers.pop(
@@ -6156,6 +6168,7 @@ async def create_batch(
         if "metadata" not in data:
             data["metadata"] = {}
         data["metadata"]["user_api_key"] = user_api_key_dict.api_key
+        data["metadata"]["litellm_api_version"] = version
         data["metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
         _headers = dict(request.headers)
         _headers.pop(
@@ -6296,6 +6309,7 @@ async def retrieve_batch(
         if "metadata" not in data:
             data["metadata"] = {}
         data["metadata"]["user_api_key"] = user_api_key_dict.api_key
+        data["metadata"]["litellm_api_version"] = version
         data["metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
         _headers = dict(request.headers)
         _headers.pop(
@@ -6450,6 +6464,7 @@ async def create_file(
         if "metadata" not in data:
             data["metadata"] = {}
         data["metadata"]["user_api_key"] = user_api_key_dict.api_key
+        data["metadata"]["litellm_api_version"] = version
         data["metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
         _headers = dict(request.headers)
         _headers.pop(
@@ -6595,6 +6610,7 @@ async def moderations(
         if "metadata" not in data:
             data["metadata"] = {}
         data["metadata"]["user_api_key"] = user_api_key_dict.api_key
+        data["metadata"]["litellm_api_version"] = version
         data["metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
         _headers = dict(request.headers)
         _headers.pop(
