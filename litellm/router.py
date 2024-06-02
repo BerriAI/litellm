@@ -2295,6 +2295,10 @@ class Router:
                         healthy_deployments=_healthy_deployments,
                     )
                     time.sleep(_timeout)
+
+            if type(original_exception) in litellm.LITELLM_EXCEPTION_TYPES:
+                original_exception.max_retries = num_retries
+                original_exception.num_retries = current_attempt
             raise original_exception
 
     ### HELPER FUNCTIONS
