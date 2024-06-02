@@ -15,7 +15,7 @@ Log Proxy Input, Output, Exceptions using Custom Callbacks, Langfuse, OpenTeleme
 - [Logging to DataDog](#logging-proxy-inputoutput---datadog)
 - [Logging to DynamoDB](#logging-proxy-inputoutput---dynamodb)
 - [Logging to Sentry](#logging-proxy-inputoutput---sentry)
-- [Logging to Traceloop (OpenTelemetry)](#logging-proxy-inputoutput-traceloop-opentelemetry)
+- [Logging with OpenTelemetry (OpenTelemetry)](#logging-proxy-inputoutput-in-opentelemetry-format)
 - [Logging to Athina](#logging-proxy-inputoutput-athina)
 - [(BETA) Moderation with Azure Content-Safety](#moderation-with-azure-content-safety)
 
@@ -915,73 +915,48 @@ Test Request
 litellm --test
 ```
 
-## Logging Proxy Input/Output in OpenTelemetry format using Traceloop's OpenLLMetry
+## Logging Proxy Input/Output in OpenTelemetry format
+<Tabs>
 
-[OpenLLMetry](https://github.com/traceloop/openllmetry) _(built and maintained by Traceloop)_ is a set of extensions
-built on top of [OpenTelemetry](https://opentelemetry.io/) that gives you complete observability over your LLM
-application. Because it uses OpenTelemetry under the
-hood, [it can be connected to various observability solutions](https://www.traceloop.com/docs/openllmetry/integrations/introduction)
-like:
+<TabItem value="Honeycomb" label="Log to Honeycomb">
 
-* [Traceloop](https://www.traceloop.com/docs/openllmetry/integrations/traceloop)
-* [Axiom](https://www.traceloop.com/docs/openllmetry/integrations/axiom)
-* [Azure Application Insights](https://www.traceloop.com/docs/openllmetry/integrations/azure)
-* [Datadog](https://www.traceloop.com/docs/openllmetry/integrations/datadog)
-* [Dynatrace](https://www.traceloop.com/docs/openllmetry/integrations/dynatrace)
-* [Grafana Tempo](https://www.traceloop.com/docs/openllmetry/integrations/grafana)
-* [Honeycomb](https://www.traceloop.com/docs/openllmetry/integrations/honeycomb)
-* [HyperDX](https://www.traceloop.com/docs/openllmetry/integrations/hyperdx)
-* [Instana](https://www.traceloop.com/docs/openllmetry/integrations/instana)
-* [New Relic](https://www.traceloop.com/docs/openllmetry/integrations/newrelic)
-* [OpenTelemetry Collector](https://www.traceloop.com/docs/openllmetry/integrations/otel-collector)
-* [Service Now Cloud Observability](https://www.traceloop.com/docs/openllmetry/integrations/service-now)
-* [Sentry](https://www.traceloop.com/docs/openllmetry/integrations/sentry)
-* [SigNoz](https://www.traceloop.com/docs/openllmetry/integrations/signoz)
-* [Splunk](https://www.traceloop.com/docs/openllmetry/integrations/splunk)
-
-We will use the `--config` to set `litellm.success_callback = ["traceloop"]` to achieve this, steps are listed below.
+#### Quick Start - Log to Honeycomb
 
 **Step 1:** Install the SDK
 
 ```shell
-pip install traceloop-sdk
+pip install traceloop-sdk==0.21.2
 ```
 
-**Step 2:** Configure Environment Variable for trace exporting
+**Step 2:** Add `traceloop` as a success_callback
 
-You will need to configure where to export your traces. Environment variables will control this, example: For Traceloop
-you should use `TRACELOOP_API_KEY`, whereas for Datadog you use `TRACELOOP_BASE_URL`. For more
-visit [the Integrations Catalog](https://www.traceloop.com/docs/openllmetry/integrations/introduction).
+:::info
 
-If you are using Datadog as the observability solutions then you can set `TRACELOOP_BASE_URL` as:
+Ensure you DO NOT have `TRACELOOP_API_KEY` in your env
+
+:::
 
 ```shell
-TRACELOOP_BASE_URL=http://<datadog-agent-hostname>:4318
-```
-
-**Step 3**: Create a `config.yaml` file and set `litellm_settings`: `success_callback`
-
-```yaml
-model_list:
-  - model_name: gpt-3.5-turbo
-    litellm_params:
-      model: gpt-3.5-turbo
-      api_key: my-fake-key # replace api_key with actual key
 litellm_settings:
-  success_callback: [ "traceloop" ]
+  success_callback: ["traceloop"]
+
+environment_variables:
+  TRACELOOP_BASE_URL: "https://api.honeycomb.io"
+  TRACELOOP_HEADERS: "x-honeycomb-team=B85YgLm96*****"
 ```
 
-**Step 4**: Start the proxy, make a test request
+
+**Step 3**: Start the proxy, make a test request
 
 Start proxy
 
 ```shell
-litellm --config config.yaml --debug
+litellm --config config.yaml --detailed_debug
 ```
 
 Test Request
 
-```
+```shell
 curl --location 'http://0.0.0.0:4000/chat/completions' \
     --header 'Content-Type: application/json' \
     --data ' {
@@ -994,6 +969,115 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
     ]
     }'
 ```
+
+</TabItem>
+
+
+<TabItem value="otel-col" label="Log to OTEL Collector">
+
+#### Quick Start - Log to OTEL Collector
+
+**Step 1:** Install the SDK
+
+```shell
+pip install traceloop-sdk==0.21.2
+```
+
+**Step 2:** Add `traceloop` as a success_callback
+
+Since Traceloop is emitting standard OTLP HTTP (standard OpenTelemetry protocol), you can use any OpenTelemetry Collector
+
+:::info
+
+Ensure you DO NOT have `TRACELOOP_API_KEY` in your env
+
+:::
+
+```shell
+litellm_settings:
+  success_callback: ["traceloop"]
+
+environment_variables:
+  TRACELOOP_BASE_URL: "https://<opentelemetry-collector-hostname>:4318"
+```
+
+
+**Step 3**: Start the proxy, make a test request
+
+Start proxy
+
+```shell
+litellm --config config.yaml --detailed_debug
+```
+
+Test Request
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --data ' {
+    "model": "gpt-3.5-turbo",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what llm are you"
+        }
+    ]
+    }'
+```
+
+</TabItem>
+
+<TabItem value="traceloop" label="Log to Traceloop Cloud">
+
+#### Quick Start - Log to Traceloop
+
+**Step 1:** Install the `traceloop-sdk` SDK
+
+```shell
+pip install traceloop-sdk==0.21.2
+```
+
+**Step 2:** Add `traceloop` as a success_callback
+
+```shell
+litellm_settings:
+  success_callback: ["traceloop"]
+
+environment_variables:
+  TRACELOOP_API_KEY: "XXXXX"
+```
+
+
+**Step 3**: Start the proxy, make a test request
+
+Start proxy
+
+```shell
+litellm --config config.yaml --detailed_debug
+```
+
+Test Request
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --data ' {
+    "model": "gpt-3.5-turbo",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what llm are you"
+        }
+    ]
+    }'
+```
+
+</TabItem>
+
+</Tabs>
+
+** 🎉 Expect to see this trace logged in your OTEL collector**
 
 ## Logging Proxy Input/Output Athina
 
