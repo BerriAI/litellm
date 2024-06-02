@@ -1,6 +1,7 @@
+from dataclasses import dataclass, field
+from typing import Optional
 import os
 
-import litellm
 from litellm.integrations.custom_logger import CustomLogger
 
 from opentelemetry import trace
@@ -16,19 +17,31 @@ from opentelemetry.sdk.trace.export import (
     ConsoleSpanExporter,
 )
 
-
 LITELLM_TRACER_NAME = "litellm"
 LITELLM_RESOURCE = {"service.name": "litellm"}
 
-MOCK_TRACE_PARENT = {"traceparent": "SOMETHING_FROM_PROXY_REQUEST"}
-MOCK_SPAN_NAME = "TODO"
+
+@dataclass
+class OpenTelemetryConfig:
+    exporter: str = field(default="console")
+    endpoint: Optional[str] = None
+    bearer_token: Optional[str] = None
+
+    @classmethod
+    def from_env(cls):
+        return cls(
+            exporter=os.getenv("OTEL_EXPORTER", "console"),
+            endpoint=os.getenv("OTEL_ENDPOINT"),
+            bearer_token=os.getenv("OTEL_BEARER_TOKEN"),
+        )
 
 
 class OpenTelemetry(CustomLogger):
-    def __init__(self):
+    def __init__(self, config=OpenTelemetryConfig.from_env()):
+        self.config = config
         provider = TracerProvider(resource=Resource(attributes=LITELLM_RESOURCE))
-        provider.add_span_processor(self.get_span_processor())
-
+        provider.add_span_processor(self._get_span_processor())
+        
         trace.set_tracer_provider(provider)
         self.tracer = trace.get_tracer(LITELLM_TRACER_NAME)
 
@@ -46,42 +59,56 @@ class OpenTelemetry(CustomLogger):
 
     def _handle_sucess(self, kwargs, response_obj, start_time, end_time):
         span = self.tracer.start_span(
-            MOCK_SPAN_NAME,
+            name=self._get_span_name(kwargs),
             start_time=self._to_ns(start_time),
-            context=TraceContextTextMapPropagator().extract(carrier=MOCK_TRACE_PARENT),
+            context=self._get_span_context(kwargs),
         )
         span.set_status(Status(StatusCode.OK))
-        self._set_attributes(span, kwargs, response_obj)
+        self.set_attributes(span, kwargs, response_obj)
         span.end(end_time=self._to_ns(end_time))
 
     def _handle_failure(self, kwargs, response_obj, start_time, end_time):
         span = self.tracer.start_span(
-            MOCK_SPAN_NAME,
+            name=self._get_span_name(kwargs),
             start_time=self._to_ns(start_time),
-            context=TraceContextTextMapPropagator().extract(carrier=MOCK_TRACE_PARENT),
+            context=self._get_span_context(kwargs),
         )
         span.set_status(Status(StatusCode.ERROR))
-        self._set_attributes(span, kwargs, response_obj)
+        self.set_attributes(span, kwargs, response_obj)
         span.end(end_time=self._to_ns(end_time))
+
+    def set_attributes(self, span, kwargs, response_obj):
+        for key in ["model", "api_base", "api_version"]:
+            if key in kwargs:
+                span.set_attribute(key, kwargs[key])
 
     def _to_ns(self, dt):
         return int(dt.timestamp() * 1e9)
 
-    def _set_attributes(self, span, kwargs, response_obj):
-        keys = ["model", "api_base", "api_version"]
-        for key in keys:
-            if key in kwargs:
-                span.set_attribute("model", kwargs[key])
+    def _get_span_name(self, kwargs):
+        f"litellm-{kwargs.get('call_type', 'completion')}"
 
-    def get_span_processor(self):
-        if litellm.set_verbose:
-            BatchSpanProcessor(ConsoleSpanExporter())
+    def _get_span_context(self, kwargs):
+        litellm_params = kwargs.get("litellm_params", {}) or {}
+        proxy_server_request = litellm_params.get("proxy_server_request", {}) or {}
+        headers = proxy_server_request.get("headers", {}) or {}
+        traceparent = headers.get("traceparent", None)
+
+        if traceparent is None:
+            return None
         else:
-            BatchSpanProcessor(
+            carrier = {"traceparent": traceparent}
+            return TraceContextTextMapPropagator().extract(carrier=carrier)
+
+    def _get_span_processor(self):
+        if self.config.exporter == "console":
+            return BatchSpanProcessor(ConsoleSpanExporter())
+        elif self.config.exporter == "otlp_http":
+            return BatchSpanProcessor(
                 OTLPSpanExporter(
-                    endpoint=os.getenv("OTEL_ENDPOINT"),
-                    headers={
-                        "Authorization": f"Bearer {os.getenv('OTEL_BEARER_TOKEN')}"
-                    },
+                    endpoint=self.OTEL_ENDPOINT,
+                    headers={"Authorization": f"Bearer {self.OTEL_BEARER_TOKEN}"},
                 )
             )
+        else:
+            return BatchSpanProcessor(ConsoleSpanExporter())
