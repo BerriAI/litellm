@@ -147,7 +147,6 @@ class AzureOpenAIConfig:
         api_version_year = api_version_times[0]
         api_version_month = api_version_times[1]
         api_version_day = api_version_times[2]
-        args = locals()
         for param, value in non_default_params.items():
             if param == "tool_choice":
                 """
