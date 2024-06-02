@@ -42,7 +42,7 @@ router = Router(
 
 try:
     _response = await router.schedule_acompletion( # 👈 ADDS TO QUEUE + POLLS + MAKES CALL
-        model=item.model_name,
+        model="gpt-3.5-turbo",
         messages=[{"role": "user", "content": "Hey!"}],
         priority=0, # 👈 LOWER IS BETTER
     )
