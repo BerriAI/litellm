@@ -207,3 +207,39 @@ def test_openai_extra_headers():
     assert optional_params["max_tokens"] == 10
     assert optional_params["temperature"] == 0.2
     assert optional_params["extra_headers"] == {"AI-Resource Group": "ishaan-resource"}
+
+
+@pytest.mark.parametrize(
+    "api_version",
+    [
+        "2024-02-01",
+        "2024-07-01",  # potential future version with tool_choice="required" supported
+        "2023-07-01-preview",
+        "2024-03-01-preview",
+    ],
+)
+def test_azure_tool_choice(api_version):
+    """
+    Test azure tool choice on older + new version
+    """
+    litellm.drop_params = True
+    optional_params = litellm.utils.get_optional_params(
+        model="chatgpt-v-2",
+        user="John",
+        custom_llm_provider="azure",
+        max_tokens=10,
+        temperature=0.2,
+        extra_headers={"AI-Resource Group": "ishaan-resource"},
+        tool_choice="required",
+        api_version=api_version,
+    )
+
+    print(f"{optional_params}")
+    if api_version == "2024-07-01":
+        assert optional_params["tool_choice"] == "required"
+    else:
+        assert (
+            "tool_choice" not in optional_params
+        ), "tool_choice={} for api version={}".format(
+            optional_params["tool_choice"], api_version
+        )
