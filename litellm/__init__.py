@@ -803,6 +803,7 @@ from .exceptions import (
     APIConnectionError,
     APIResponseValidationError,
     UnprocessableEntityError,
+    LITELLM_EXCEPTION_TYPES,
 )
 from .budget_manager import BudgetManager
 from .proxy.proxy_cli import run_server

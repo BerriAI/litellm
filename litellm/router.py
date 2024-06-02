@@ -2059,6 +2059,8 @@ class Router:
             response = await original_function(*args, **kwargs)
             return response
         except Exception as e:
+            num_retries = None
+            current_attempt = None
             original_exception = e
             """
             Retry Logic
@@ -2128,11 +2130,10 @@ class Router:
                     )
                     await asyncio.sleep(_timeout)
 
-            try:
-                cooldown_deployments = await self._async_get_cooldown_deployments()
-                original_exception.message += f"\nNumber Retries = {current_attempt + 1}, Max Retries={num_retries}\nCooldown Deployments={cooldown_deployments}"
-            except:
-                pass
+            if type(original_exception) in litellm.LITELLM_EXCEPTION_TYPES:
+                original_exception.max_retries = num_retries
+                original_exception.num_retries = current_attempt
+
             raise original_exception
 
     def should_retry_this_error(
@@ -2333,6 +2334,8 @@ class Router:
             response = original_function(*args, **kwargs)
             return response
         except Exception as e:
+            num_retries = None
+            current_attempt = None
             original_exception = e
             ### CHECK IF RATE LIMIT / CONTEXT WINDOW ERROR
             _healthy_deployments = self._get_healthy_deployments(
@@ -2383,6 +2386,11 @@ class Router:
                         healthy_deployments=_healthy_deployments,
                     )
                     time.sleep(_timeout)
+
+            if type(original_exception) in litellm.LITELLM_EXCEPTION_TYPES:
+                original_exception.max_retries = num_retries
+                original_exception.num_retries = current_attempt
+
             raise original_exception
 
     ### HELPER FUNCTIONS
