@@ -95,9 +95,6 @@ class Scheduler:
         # Setup values
         # ------------
 
-        if len(health_deployments) == 0:
-            return False
-
         # Check if the id is at the top of the heap
         if queue[0][1] == id:
             return True

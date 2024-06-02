@@ -41,8 +41,9 @@ async def test_scheduler_diff_model_names():
 
 
 @pytest.mark.parametrize("p0, p1", [(0, 0), (0, 1), (1, 0)])
+@pytest.mark.parametrize("healthy_deployments", [[{"key": "value"}], []])
 @pytest.mark.asyncio
-async def test_scheduler_prioritized_requests(p0, p1):
+async def test_scheduler_prioritized_requests(p0, p1, healthy_deployments):
     """
     2 requests for same model group
     """
@@ -58,15 +59,15 @@ async def test_scheduler_prioritized_requests(p0, p1):
             await scheduler.peek(
                 id="10",
                 model_name="gpt-3.5-turbo",
-                health_deployments=[{"key": "value"}],
+                health_deployments=healthy_deployments,
             )
             == True
-        )
+        ), "queue={}".format(await scheduler.get_queue(model_name="gpt-3.5-turbo"))
         assert (
             await scheduler.peek(
                 id="11",
                 model_name="gpt-3.5-turbo",
-                health_deployments=[{"key": "value"}],
+                health_deployments=healthy_deployments,
             )
             == False
         )
@@ -75,7 +76,7 @@ async def test_scheduler_prioritized_requests(p0, p1):
             await scheduler.peek(
                 id="11",
                 model_name="gpt-3.5-turbo",
-                health_deployments=[{"key": "value"}],
+                health_deployments=healthy_deployments,
             )
             == True
         )
@@ -83,64 +84,7 @@ async def test_scheduler_prioritized_requests(p0, p1):
             await scheduler.peek(
                 id="10",
                 model_name="gpt-3.5-turbo",
-                health_deployments=[{"key": "value"}],
+                health_deployments=healthy_deployments,
             )
             == False
         )
-
-
-@pytest.mark.parametrize("p0, p1", [(0, 1), (0, 0)])  #
-@pytest.mark.asyncio
-async def test_aascheduler_prioritized_requests_mock_response_simplified(p0, p1):
-    """
-    2 requests for same model group
-
-    if model is at rate limit, ensure the higher priority request gets done first
-    """
-
-    router = Router(
-        model_list=[
-            {
-                "model_name": "gpt-3.5-turbo",
-                "litellm_params": {
-                    "model": "gpt-3.5-turbo",
-                    "mock_response": "Hello world this is Macintosh!",
-                    "rpm": 0,
-                },
-            },
-        ],
-        timeout=10,
-        num_retries=3,
-        cooldown_time=5,
-        routing_strategy="usage-based-routing-v2",
-    )
-
-    tasks = []
-
-    data = {
-        "model": "gpt-3.5-turbo",
-        "messages": [{"role": "user", "content": "Hey, how's it going?"}],
-    }
-
-    tasks.append(router.schedule_acompletion(**data, priority=p0))
-    tasks.append(router.schedule_acompletion(**data, priority=p1))
-
-    # Running the tasks and getting responses in order of completion
-    completed_responses: List[dict] = []
-    for task in asyncio.as_completed(tasks):
-        try:
-            result = await task
-        except Exception as e:
-            result = {"priority": e.priority, "response_completed_at": time.time()}
-            completed_responses.append(result)
-            print(f"Received response: {result}")
-
-    print(f"responses: {completed_responses}")
-
-    assert (
-        completed_responses[0]["priority"] == 0
-    )  # assert higher priority request got done first
-    assert (
-        completed_responses[0]["response_completed_at"]
-        < completed_responses[1]["response_completed_at"]
-    )  # higher priority request tried first
