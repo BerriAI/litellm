@@ -5192,6 +5192,7 @@ def get_optional_params(
     logprobs=None,
     top_logprobs=None,
     extra_headers=None,
+    api_version=None,
     **kwargs,
 ):
     # retrieve all parameters passed to the function
@@ -5262,6 +5263,7 @@ def get_optional_params(
         "logprobs": None,
         "top_logprobs": None,
         "extra_headers": None,
+        "api_version": None,
     }
     # filter out those parameters that were passed with non-default values
     non_default_params = {
@@ -5270,6 +5272,7 @@ def get_optional_params(
         if (
             k != "model"
             and k != "custom_llm_provider"
+            and k != "api_version"
             and k in default_params
             and v != default_params[k]
         )
@@ -6051,9 +6054,7 @@ def get_optional_params(
         )
         _check_valid_arg(supported_params=supported_params)
         api_version = (
-            passed_params.get("api_version", None)
-            or litellm.api_version
-            or get_secret("AZURE_API_VERSION")
+            api_version or litellm.api_version or get_secret("AZURE_API_VERSION")
         )
         optional_params = litellm.AzureOpenAIConfig().map_openai_params(
             non_default_params=non_default_params,
