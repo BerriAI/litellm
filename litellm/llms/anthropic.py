@@ -3,6 +3,7 @@ import json
 from enum import Enum
 import requests, copy  # type: ignore
 import time
+from functools import partial
 from typing import Callable, Optional, List, Union
 from litellm.utils import ModelResponse, Usage, map_finish_reason, CustomStreamWrapper
 import litellm
@@ -158,6 +159,36 @@ def validate_environment(api_key, user_headers):
     if user_headers is not None and isinstance(user_headers, dict):
         headers = {**headers, **user_headers}
     return headers
+
+
+async def make_call(
+    client: Optional[AsyncHTTPHandler],
+    api_base: str,
+    headers: dict,
+    data: str,
+    model: str,
+    messages: list,
+    logging_obj,
+):
+    if client is None:
+        client = AsyncHTTPHandler()  # Create a new client if none provided
+
+    response = await client.post(api_base, headers=headers, data=data, stream=True)
+
+    if response.status_code != 200:
+        raise AnthropicError(status_code=response.status_code, message=response.text)
+
+    completion_stream = response.aiter_lines()
+
+    # LOGGING
+    logging_obj.post_call(
+        input=messages,
+        api_key="",
+        original_response=completion_stream,  # Pass the completion stream for logging
+        additional_args={"complete_input_dict": data},
+    )
+
+    return completion_stream
 
 
 class AnthropicChatCompletion(BaseLLM):
@@ -379,22 +410,34 @@ class AnthropicChatCompletion(BaseLLM):
         logger_fn=None,
         headers={},
     ):
-
-        async_handler = AsyncHTTPHandler(
-            timeout=httpx.Timeout(timeout=600.0, connect=20.0)
-        )
         data["stream"] = True
-        response = await async_handler.post(api_base, headers=headers, json=data)
+        # async_handler = AsyncHTTPHandler(
+        #     timeout=httpx.Timeout(timeout=600.0, connect=20.0)
+        # )
 
-        if response.status_code != 200:
-            raise AnthropicError(
-                status_code=response.status_code, message=response.text
-            )
+        # response = await async_handler.post(
+        #     api_base, headers=headers, json=data, stream=True
+        # )
 
-        completion_stream = response.aiter_lines()
+        # if response.status_code != 200:
+        #     raise AnthropicError(
+        #         status_code=response.status_code, message=response.text
+        #     )
+
+        # completion_stream = response.aiter_lines()
 
         streamwrapper = CustomStreamWrapper(
-            completion_stream=completion_stream,
+            completion_stream=None,
+            make_call=partial(
+                make_call,
+                client=None,
+                api_base=api_base,
+                headers=headers,
+                data=json.dumps(data),
+                model=model,
+                messages=messages,
+                logging_obj=logging_obj,
+            ),
             model=model,
             custom_llm_provider="anthropic",
             logging_obj=logging_obj,
