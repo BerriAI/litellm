@@ -2321,7 +2321,7 @@ class Router:
 
     def function_with_retries(self, *args, **kwargs):
         """
-        Try calling the model 3 times. Shuffle between available deployments.
+        Try calling the model 3 times. Shuffle-between available deployments.
         """
         verbose_router_logger.debug(
             f"Inside function with retries: args - {args}; kwargs - {kwargs}"
