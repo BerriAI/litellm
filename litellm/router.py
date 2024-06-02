@@ -47,6 +47,7 @@ from litellm.types.router import (
     updateDeployment,
     updateLiteLLMParams,
     RetryPolicy,
+    AllowedFailsPolicy,
     AlertingConfig,
     DeploymentTypedDict,
     ModelGroupInfo,
@@ -62,6 +63,7 @@ from litellm.types.llms.openai import (
     Run,
     AssistantToolParam,
 )
+from litellm.scheduler import Scheduler, FlowItem
 from typing import Iterable
 
 
@@ -87,6 +89,8 @@ class Router:
             List[tuple]
         ] = None,  # if you want to cache across model groups
         client_ttl: int = 3600,  # ttl for cached clients - will re-initialize after this time in seconds
+        ## SCHEDULER ##
+        polling_interval: Optional[float] = None,
         ## RELIABILITY ##
         num_retries: Optional[int] = None,
         timeout: Optional[float] = None,
@@ -113,6 +117,9 @@ class Router:
         allowed_fails: Optional[
             int
         ] = None,  # Number of times a deployment can failbefore being added to cooldown
+        allowed_fails_policy: Optional[
+            AllowedFailsPolicy
+        ] = None,  # set custom allowed fails policy
         cooldown_time: Optional[
             float
         ] = None,  # (seconds) time to cooldown a deployment after failure
@@ -141,7 +148,8 @@ class Router:
             cache_kwargs (dict): Additional kwargs to pass to RedisCache. Defaults to {}.
             caching_groups (Optional[List[tuple]]): List of model groups for caching across model groups. Defaults to None.
             client_ttl (int): Time-to-live for cached clients in seconds. Defaults to 3600.
-            num_retries (int): Number of retries for failed requests. Defaults to 0.
+            polling_interval: (Optional[float]): frequency of polling queue. Only for '.scheduler_acompletion()'. Default is 3ms.
+            num_retries (Optional[int]): Number of retries for failed requests. Defaults to 2.
             timeout (Optional[float]): Timeout for requests. Defaults to None.
             default_litellm_params (dict): Default parameters for Router.chat.completion.create. Defaults to {}.
             set_verbose (bool): Flag to set verbose mode. Defaults to False.
@@ -208,6 +216,8 @@ class Router:
             []
         )  # names of models under litellm_params. ex. azure/chatgpt-v-2
         self.deployment_latency_map = {}
+        ### SCHEDULER ###
+        self.scheduler = Scheduler(polling_interval=polling_interval)
         ### CACHING ###
         cache_type: Literal["local", "redis"] = "local"  # default to an in-memory cache
         redis_cache = None
@@ -355,6 +365,7 @@ class Router:
         self.model_group_retry_policy: Optional[Dict[str, RetryPolicy]] = (
             model_group_retry_policy
         )
+        self.allowed_fails_policy: Optional[AllowedFailsPolicy] = allowed_fails_policy
         self.alerting_config: Optional[AlertingConfig] = alerting_config
         if self.alerting_config is not None:
             self._initialize_alerting()
@@ -533,11 +544,17 @@ class Router:
     ) -> ModelResponse: 
         ...
 
+    @overload
+    async def acompletion(
+        self, model: str, messages: List[Dict[str, str]], stream: Union[Literal[True], Literal[False]] = False, **kwargs
+    ) -> Union[CustomStreamWrapper, ModelResponse]: 
+        ...
+
     # fmt: on
 
     # The actual implementation of the function
     async def acompletion(
-        self, model: str, messages: List[Dict[str, str]], stream=False, **kwargs
+        self, model: str, messages: List[Dict[str, str]], stream: bool = False, **kwargs
     ):
         try:
             kwargs["model"] = model
@@ -904,6 +921,81 @@ class Router:
 
         # If we exit the loop without returning, all tasks failed
         raise Exception("All tasks failed")
+
+    ### SCHEDULER ###
+
+    # fmt: off
+
+    @overload
+    async def schedule_acompletion(
+        self, model: str, messages: List[Dict[str, str]], priority: int, stream: Literal[False] = False, **kwargs
+    ) -> ModelResponse: 
+        ...
+    
+    @overload
+    async def schedule_acompletion(
+        self, model: str, messages: List[Dict[str, str]], priority: int, stream: Literal[True], **kwargs
+    ) -> CustomStreamWrapper: 
+        ...
+
+    # fmt: on
+
+    async def schedule_acompletion(
+        self,
+        model: str,
+        messages: List[Dict[str, str]],
+        priority: int,
+        stream=False,
+        **kwargs,
+    ):
+        ### FLOW ITEM ###
+        _request_id = str(uuid.uuid4())
+        item = FlowItem(
+            priority=priority,  # 👈 SET PRIORITY FOR REQUEST
+            request_id=_request_id,  # 👈 SET REQUEST ID
+            model_name="gpt-3.5-turbo",  # 👈 SAME as 'Router'
+        )
+        ### [fin] ###
+
+        ## ADDS REQUEST TO QUEUE ##
+        await self.scheduler.add_request(request=item)
+
+        ## POLL QUEUE
+        end_time = time.time() + self.timeout
+        curr_time = time.time()
+        poll_interval = self.scheduler.polling_interval  # poll every 3ms
+        make_request = False
+
+        while curr_time < end_time:
+            _healthy_deployments = await self._async_get_healthy_deployments(
+                model=model
+            )
+            make_request = await self.scheduler.poll(  ## POLL QUEUE ## - returns 'True' if there's healthy deployments OR if request is at top of queue
+                id=item.request_id,
+                model_name=item.model_name,
+                health_deployments=_healthy_deployments,
+            )
+            if make_request:  ## IF TRUE -> MAKE REQUEST
+                break
+            else:  ## ELSE -> loop till default_timeout
+                await asyncio.sleep(poll_interval)
+                curr_time = time.time()
+
+        if make_request:
+            try:
+                _response = await self.acompletion(
+                    model=model, messages=messages, stream=stream, **kwargs
+                )
+                return _response
+            except Exception as e:
+                setattr(e, "priority", priority)
+                raise e
+        else:
+            raise litellm.Timeout(
+                message="Request timed out while polling queue",
+                model=model,
+                llm_provider="openai",
+            )
 
     def image_generation(self, prompt: str, model: str, **kwargs):
         try:
@@ -1972,6 +2064,7 @@ class Router:
             response = await original_function(*args, **kwargs)
             return response
         except Exception as e:
+            current_attempt = None
             original_exception = e
             """
             Retry Logic
@@ -2041,11 +2134,10 @@ class Router:
                     )
                     await asyncio.sleep(_timeout)
 
-            try:
-                cooldown_deployments = await self._async_get_cooldown_deployments()
-                original_exception.message += f"\nNumber Retries = {current_attempt + 1}, Max Retries={num_retries}\nCooldown Deployments={cooldown_deployments}"
-            except:
-                pass
+            if type(original_exception) in litellm.LITELLM_EXCEPTION_TYPES:
+                original_exception.max_retries = num_retries
+                original_exception.num_retries = current_attempt
+
             raise original_exception
 
     def should_retry_this_error(
@@ -2246,6 +2338,8 @@ class Router:
             response = original_function(*args, **kwargs)
             return response
         except Exception as e:
+            num_retries = None
+            current_attempt = None
             original_exception = e
             ### CHECK IF RATE LIMIT / CONTEXT WINDOW ERROR
             _healthy_deployments = self._get_healthy_deployments(
@@ -2296,6 +2390,11 @@ class Router:
                         healthy_deployments=_healthy_deployments,
                     )
                     time.sleep(_timeout)
+
+            if type(original_exception) in litellm.LITELLM_EXCEPTION_TYPES:
+                original_exception.max_retries = num_retries
+                original_exception.num_retries = current_attempt
+
             raise original_exception
 
     ### HELPER FUNCTIONS
@@ -2350,6 +2449,7 @@ class Router:
                 deployment_id = _model_info.get("id", None)
                 self._set_cooldown_deployments(
                     exception_status=exception_status,
+                    original_exception=exception,
                     deployment=deployment_id,
                     time_to_cooldown=_time_to_cooldown,
                 )  # setting deployment_id in cooldown deployments
@@ -2455,6 +2555,7 @@ class Router:
 
     def _set_cooldown_deployments(
         self,
+        original_exception: Any,
         exception_status: Union[str, int],
         deployment: Optional[str] = None,
         time_to_cooldown: Optional[float] = None,
@@ -2473,6 +2574,12 @@ class Router:
         if self._is_cooldown_required(exception_status=exception_status) == False:
             return
 
+        _allowed_fails = self.get_allowed_fails_from_policy(
+            exception=original_exception,
+        )
+
+        allowed_fails = _allowed_fails or self.allowed_fails
+
         dt = get_utc_datetime()
         current_minute = dt.strftime("%H-%M")
         # get current fails for deployment
@@ -2482,7 +2589,7 @@ class Router:
         current_fails = self.failed_calls.get_cache(key=deployment) or 0
         updated_fails = current_fails + 1
         verbose_router_logger.debug(
-            f"Attempting to add {deployment} to cooldown list. updated_fails: {updated_fails}; self.allowed_fails: {self.allowed_fails}"
+            f"Attempting to add {deployment} to cooldown list. updated_fails: {updated_fails}; self.allowed_fails: {allowed_fails}"
         )
         cooldown_time = self.cooldown_time or 1
         if time_to_cooldown is not None:
@@ -2499,7 +2606,8 @@ class Router:
                 )
                 exception_status = 500
         _should_retry = litellm._should_retry(status_code=exception_status)
-        if updated_fails > self.allowed_fails or _should_retry == False:
+
+        if updated_fails > allowed_fails or _should_retry == False:
             # get the current cooldown list for that minute
             cooldown_key = f"{current_minute}:cooldown_models"  # group cooldown models by minute to reduce number of redis calls
             cached_value = self.cache.get_cache(key=cooldown_key)
@@ -2642,6 +2750,7 @@ class Router:
                 except litellm.RateLimitError as e:
                     self._set_cooldown_deployments(
                         exception_status=e.status_code,
+                        original_exception=e,
                         deployment=deployment["model_info"]["id"],
                         time_to_cooldown=self.cooldown_time,
                     )
@@ -4345,6 +4454,46 @@ class Router:
             and retry_policy.ContentPolicyViolationErrorRetries is not None
         ):
             return retry_policy.ContentPolicyViolationErrorRetries
+
+    def get_allowed_fails_from_policy(self, exception: Exception):
+        """
+        BadRequestErrorRetries: Optional[int] = None
+        AuthenticationErrorRetries: Optional[int] = None
+        TimeoutErrorRetries: Optional[int] = None
+        RateLimitErrorRetries: Optional[int] = None
+        ContentPolicyViolationErrorRetries: Optional[int] = None
+        """
+        # if we can find the exception then in the retry policy -> return the number of retries
+        allowed_fails_policy: Optional[AllowedFailsPolicy] = self.allowed_fails_policy
+
+        if allowed_fails_policy is None:
+            return None
+
+        if (
+            isinstance(exception, litellm.BadRequestError)
+            and allowed_fails_policy.BadRequestErrorAllowedFails is not None
+        ):
+            return allowed_fails_policy.BadRequestErrorAllowedFails
+        if (
+            isinstance(exception, litellm.AuthenticationError)
+            and allowed_fails_policy.AuthenticationErrorAllowedFails is not None
+        ):
+            return allowed_fails_policy.AuthenticationErrorAllowedFails
+        if (
+            isinstance(exception, litellm.Timeout)
+            and allowed_fails_policy.TimeoutErrorAllowedFails is not None
+        ):
+            return allowed_fails_policy.TimeoutErrorAllowedFails
+        if (
+            isinstance(exception, litellm.RateLimitError)
+            and allowed_fails_policy.RateLimitErrorAllowedFails is not None
+        ):
+            return allowed_fails_policy.RateLimitErrorAllowedFails
+        if (
+            isinstance(exception, litellm.ContentPolicyViolationError)
+            and allowed_fails_policy.ContentPolicyViolationErrorAllowedFails is not None
+        ):
+            return allowed_fails_policy.ContentPolicyViolationErrorAllowedFails
 
     def _initialize_alerting(self):
         from litellm.integrations.slack_alerting import SlackAlerting

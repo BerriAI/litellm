@@ -9,6 +9,7 @@ from litellm.utils import (
     convert_to_model_response_object,
     TranscriptionResponse,
     get_secret,
+    UnsupportedParamsError,
 )
 from typing import Callable, Optional, BinaryIO, List
 from litellm import OpenAIConfig
@@ -45,9 +46,9 @@ class AzureOpenAIError(Exception):
         )  # Call the base class constructor with the parameters it needs
 
 
-class AzureOpenAIConfig(OpenAIConfig):
+class AzureOpenAIConfig:
     """
-    Reference: https://platform.openai.com/docs/api-reference/chat/create
+    Reference: https://learn.microsoft.com/en-us/azure/ai-services/openai/reference#chat-completions
 
     The class `AzureOpenAIConfig` provides configuration for the OpenAI's Chat API interface, for use with Azure. It inherits from `OpenAIConfig`. Below are the parameters::
 
@@ -85,18 +86,102 @@ class AzureOpenAIConfig(OpenAIConfig):
         temperature: Optional[int] = None,
         top_p: Optional[int] = None,
     ) -> None:
-        super().__init__(
-            frequency_penalty,
-            function_call,
-            functions,
-            logit_bias,
-            max_tokens,
-            n,
-            presence_penalty,
-            stop,
-            temperature,
-            top_p,
-        )
+        locals_ = locals().copy()
+        for key, value in locals_.items():
+            if key != "self" and value is not None:
+                setattr(self.__class__, key, value)
+
+    @classmethod
+    def get_config(cls):
+        return {
+            k: v
+            for k, v in cls.__dict__.items()
+            if not k.startswith("__")
+            and not isinstance(
+                v,
+                (
+                    types.FunctionType,
+                    types.BuiltinFunctionType,
+                    classmethod,
+                    staticmethod,
+                ),
+            )
+            and v is not None
+        }
+
+    def get_supported_openai_params(self):
+        return [
+            "temperature",
+            "n",
+            "stream",
+            "stop",
+            "max_tokens",
+            "tools",
+            "tool_choice",
+            "presence_penalty",
+            "frequency_penalty",
+            "logit_bias",
+            "user",
+            "function_call",
+            "functions",
+            "tools",
+            "tool_choice",
+            "top_p",
+            "log_probs",
+            "top_logprobs",
+            "response_format",
+            "seed",
+            "extra_headers",
+        ]
+
+    def map_openai_params(
+        self,
+        non_default_params: dict,
+        optional_params: dict,
+        model: str,
+        api_version: str,  # Y-M-D-{optional}
+    ) -> dict:
+        supported_openai_params = self.get_supported_openai_params()
+
+        api_version_times = api_version.split("-")
+        api_version_year = api_version_times[0]
+        api_version_month = api_version_times[1]
+        api_version_day = api_version_times[2]
+        for param, value in non_default_params.items():
+            if param == "tool_choice":
+                """
+                This parameter requires API version 2023-12-01-preview or later
+
+                tool_choice='required' is not supported as of 2024-05-01-preview
+                """
+                ## check if api version supports this param ##
+                if (
+                    api_version_year < "2023"
+                    or (api_version_year == "2023" and api_version_month < "12")
+                    or (
+                        api_version_year == "2023"
+                        and api_version_month == "12"
+                        and api_version_day < "01"
+                    )
+                ):
+                    if litellm.drop_params == False:
+                        raise UnsupportedParamsError(
+                            status_code=400,
+                            message=f"""Azure does not support 'tool_choice', for api_version={api_version}. Bump your API version to '2023-12-01-preview' or later. This parameter requires 'api_version="2023-12-01-preview"' or later. Azure API Reference: https://learn.microsoft.com/en-us/azure/ai-services/openai/reference#chat-completions""",
+                        )
+                elif value == "required" and (
+                    api_version_year == "2024" and api_version_month <= "05"
+                ):  ## check if tool_choice value is supported ##
+                    if litellm.drop_params == False:
+                        raise UnsupportedParamsError(
+                            status_code=400,
+                            message=f"Azure does not support '{value}' as a {param} param, for api_version={api_version}. To drop 'tool_choice=required' for calls with this Azure API version, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\nAzure API Reference: https://learn.microsoft.com/en-us/azure/ai-services/openai/reference#chat-completions",
+                        )
+                else:
+                    optional_params["tool_choice"] = value
+            elif param in supported_openai_params:
+                optional_params[param] = value
+        return optional_params
 
     def get_mapped_special_auth_params(self) -> dict:
         return {"token": "azure_ad_token"}
@@ -172,9 +257,7 @@ def get_azure_ad_token_from_oidc(azure_ad_token: str):
     possible_azure_ad_token = req_token.json().get("access_token", None)
 
     if possible_azure_ad_token is None:
-        raise AzureOpenAIError(
-            status_code=422, message="Azure AD Token not returned"
-        )
+        raise AzureOpenAIError(status_code=422, message="Azure AD Token not returned")
 
     return possible_azure_ad_token
 
@@ -245,7 +328,9 @@ class AzureChatCompletion(BaseLLM):
                         azure_client_params["api_key"] = api_key
                     elif azure_ad_token is not None:
                         if azure_ad_token.startswith("oidc/"):
-                            azure_ad_token = get_azure_ad_token_from_oidc(azure_ad_token)
+                            azure_ad_token = get_azure_ad_token_from_oidc(
+                                azure_ad_token
+                            )
 
                         azure_client_params["azure_ad_token"] = azure_ad_token
 

@@ -5192,6 +5192,7 @@ def get_optional_params(
     logprobs=None,
     top_logprobs=None,
     extra_headers=None,
+    api_version=None,
     **kwargs,
 ):
     # retrieve all parameters passed to the function
@@ -5262,6 +5263,7 @@ def get_optional_params(
         "logprobs": None,
         "top_logprobs": None,
         "extra_headers": None,
+        "api_version": None,
     }
     # filter out those parameters that were passed with non-default values
     non_default_params = {
@@ -5270,6 +5272,7 @@ def get_optional_params(
         if (
             k != "model"
             and k != "custom_llm_provider"
+            and k != "api_version"
             and k in default_params
             and v != default_params[k]
         )
@@ -6045,6 +6048,20 @@ def get_optional_params(
             optional_params=optional_params,
             model=model,
         )
+    elif custom_llm_provider == "azure":
+        supported_params = get_supported_openai_params(
+            model=model, custom_llm_provider="azure"
+        )
+        _check_valid_arg(supported_params=supported_params)
+        api_version = (
+            api_version or litellm.api_version or get_secret("AZURE_API_VERSION")
+        )
+        optional_params = litellm.AzureOpenAIConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            api_version=api_version,  # type: ignore
+        )
     else:  # assume passing in params for azure openai
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider="azure"
@@ -6481,29 +6498,7 @@ def get_supported_openai_params(
     elif custom_llm_provider == "openai":
         return litellm.OpenAIConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "azure":
-        return [
-            "functions",
-            "function_call",
-            "temperature",
-            "top_p",
-            "n",
-            "stream",
-            "stream_options",
-            "stop",
-            "max_tokens",
-            "presence_penalty",
-            "frequency_penalty",
-            "logit_bias",
-            "user",
-            "response_format",
-            "seed",
-            "tools",
-            "tool_choice",
-            "max_retries",
-            "logprobs",
-            "top_logprobs",
-            "extra_headers",
-        ]
+        return litellm.AzureOpenAIConfig().get_supported_openai_params()
     elif custom_llm_provider == "openrouter":
         return [
             "functions",

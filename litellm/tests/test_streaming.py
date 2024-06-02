@@ -1410,7 +1410,7 @@ async def test_parallel_streaming_requests(sync_mode, model):
         ]
 
         def sync_test_streaming():
-            response: litellm.CustomStreamWrapper = litellm.acompletion(  # type: ignore
+            response: litellm.CustomStreamWrapper = litellm.completion(  # type: ignore
                 model=model,
                 messages=messages,
                 stream=True,
@@ -2828,6 +2828,7 @@ async def test_azure_astreaming_and_function_calling():
         password=os.environ["REDIS_PASSWORD"],
     )
     try:
+        litellm.set_verbose = True
         response = await litellm.acompletion(
             model="azure/gpt-4-nov-release",
             tools=tools,

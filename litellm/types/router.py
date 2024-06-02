@@ -76,7 +76,9 @@ class ModelInfo(BaseModel):
     id: Optional[
         str
     ]  # Allow id to be optional on input, but it will always be present as a str in the model instance
-    db_model: bool = False  # used for proxy - to separate models which are stored in the db vs. config.
+    db_model: bool = (
+        False  # used for proxy - to separate models which are stored in the db vs. config.
+    )
     updated_at: Optional[datetime.datetime] = None
     updated_by: Optional[str] = None
 
@@ -379,6 +381,23 @@ class RouterErrors(enum.Enum):
 
     user_defined_ratelimit_error = "Deployment over user-defined ratelimit."
     no_deployments_available = "No deployments available for selected model"
+
+
+class AllowedFailsPolicy(BaseModel):
+    """
+    Use this to set a custom number of allowed fails/minute before cooling down a deployment
+    If `AuthenticationErrorAllowedFails = 1000`, then 1000 AuthenticationError will be allowed before cooling down a deployment
+
+    Mapping of Exception type to allowed_fails for each exception
+    https://docs.litellm.ai/docs/exception_mapping
+    """
+
+    BadRequestErrorAllowedFails: Optional[int] = None
+    AuthenticationErrorAllowedFails: Optional[int] = None
+    TimeoutErrorAllowedFails: Optional[int] = None
+    RateLimitErrorAllowedFails: Optional[int] = None
+    ContentPolicyViolationErrorAllowedFails: Optional[int] = None
+    InternalServerErrorAllowedFails: Optional[int] = None
 
 
 class RetryPolicy(BaseModel):

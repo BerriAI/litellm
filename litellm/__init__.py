@@ -102,6 +102,7 @@ common_cloud_provider_auth_params: dict = {
 }
 use_client: bool = False
 ssl_verify: bool = True
+ssl_certificate: Optional[str] = None
 disable_streaming_logging: bool = False
 in_memory_llm_clients_cache: dict = {}
 ### GUARDRAILS ###
@@ -802,6 +803,7 @@ from .exceptions import (
     APIConnectionError,
     APIResponseValidationError,
     UnprocessableEntityError,
+    LITELLM_EXCEPTION_TYPES,
 )
 from .budget_manager import BudgetManager
 from .proxy.proxy_cli import run_server

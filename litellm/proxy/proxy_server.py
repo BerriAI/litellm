@@ -398,8 +398,6 @@ proxy_logging_obj = ProxyLogging(user_api_key_cache=user_api_key_cache)
 async_result = None
 celery_app_conn = None
 celery_fn = None  # Redis Queue for handling requests
-### SIMPLE QUEUE ###
-simple_scheduler = Scheduler()
 ### DB WRITER ###
 db_writer_client: Optional[HTTPHandler] = None
 ### logger ###
@@ -3705,7 +3703,7 @@ def on_backoff(details):
 
 @router.on_event("startup")
 async def startup_event():
-    global prisma_client, master_key, use_background_health_checks, llm_router, llm_model_list, general_settings, proxy_budget_rescheduler_min_time, proxy_budget_rescheduler_max_time, litellm_proxy_admin_name, db_writer_client, store_model_in_db, simple_scheduler
+    global prisma_client, master_key, use_background_health_checks, llm_router, llm_model_list, general_settings, proxy_budget_rescheduler_min_time, proxy_budget_rescheduler_max_time, litellm_proxy_admin_name, db_writer_client, store_model_in_db
     import json
 
     ### LOAD MASTER KEY ###
@@ -3740,10 +3738,6 @@ async def startup_event():
 
     ## Error Tracking ##
     error_tracking()
-
-    ## Priority Workload Scheduler ##
-    if llm_router is not None:
-        simple_scheduler.update_variables(llm_router=llm_router)
 
     ## UPDATE SLACK ALERTING ##
     proxy_logging_obj.slack_alerting_instance.update_values(llm_router=llm_router)
@@ -4057,6 +4051,7 @@ async def chat_completion(
         data["metadata"]["user_api_end_user_max_budget"] = getattr(
             user_api_key_dict, "end_user_max_budget", None
         )
+        data["metadata"]["litellm_api_version"] = version
 
         data["metadata"]["global_max_parallel_requests"] = general_settings.get(
             "global_max_parallel_requests", None
@@ -4370,6 +4365,7 @@ async def completion(
         data["metadata"]["user_api_key_alias"] = getattr(
             user_api_key_dict, "key_alias", None
         )
+        data["metadata"]["litellm_api_version"] = version
         data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
         data["metadata"]["user_api_key_team_id"] = getattr(
             user_api_key_dict, "team_id", None
@@ -4612,6 +4608,7 @@ async def embeddings(
             "authorization", None
         )  # do not store the original `sk-..` api key in the db
         data["metadata"]["headers"] = _headers
+        data["metadata"]["litellm_api_version"] = version
         data["metadata"]["user_api_key_alias"] = getattr(
             user_api_key_dict, "key_alias", None
         )
@@ -4816,6 +4813,7 @@ async def image_generation(
         if "metadata" not in data:
             data["metadata"] = {}
         data["metadata"]["user_api_key"] = user_api_key_dict.api_key
+        data["metadata"]["litellm_api_version"] = version
         data["metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
         _headers = dict(request.headers)
         _headers.pop(
@@ -4992,6 +4990,7 @@ async def audio_speech(
         if "metadata" not in data:
             data["metadata"] = {}
         data["metadata"]["user_api_key"] = user_api_key_dict.api_key
+        data["metadata"]["litellm_api_version"] = version
         data["metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
         _headers = dict(request.headers)
         _headers.pop(
@@ -5161,6 +5160,7 @@ async def audio_transcriptions(
         if "metadata" not in data:
             data["metadata"] = {}
         data["metadata"]["user_api_key"] = user_api_key_dict.api_key
+        data["metadata"]["litellm_api_version"] = version
         data["metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
         _headers = dict(request.headers)
         _headers.pop(
@@ -5337,6 +5337,11 @@ async def get_assistants(
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
+    """
+    Returns a list of assistants.
+
+    API Reference docs - https://platform.openai.com/docs/api-reference/assistants/listAssistants
+    """
     global proxy_logging_obj
     data: Dict = {}
     try:
@@ -5359,6 +5364,7 @@ async def get_assistants(
             data["metadata"] = {}
         data["metadata"]["user_api_key"] = user_api_key_dict.api_key
         data["metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
+        data["metadata"]["litellm_api_version"] = version
         _headers = dict(request.headers)
         _headers.pop(
             "authorization", None
@@ -5463,6 +5469,11 @@ async def create_threads(
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
+    """
+    Create a thread.
+
+    API Reference - https://platform.openai.com/docs/api-reference/threads/createThread
+    """
     global proxy_logging_obj
     data: Dict = {}
     try:
@@ -5484,6 +5495,7 @@ async def create_threads(
         if "litellm_metadata" not in data:
             data["litellm_metadata"] = {}
         data["litellm_metadata"]["user_api_key"] = user_api_key_dict.api_key
+        data["metadata"]["litellm_api_version"] = version
         data["litellm_metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
         _headers = dict(request.headers)
         _headers.pop(
@@ -5590,6 +5602,11 @@ async def get_thread(
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
+    """
+    Retrieves a thread.
+
+    API Reference - https://platform.openai.com/docs/api-reference/threads/getThread
+    """
     global proxy_logging_obj
     data: Dict = {}
     try:
@@ -5614,6 +5631,7 @@ async def get_thread(
             "authorization", None
         )  # do not store the original `sk-..` api key in the db
         data["metadata"]["headers"] = _headers
+        data["metadata"]["litellm_api_version"] = version
         data["metadata"]["user_api_key_alias"] = getattr(
             user_api_key_dict, "key_alias", None
         )
@@ -5714,6 +5732,11 @@ async def add_messages(
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
+    """
+    Create a message.
+
+    API Reference - https://platform.openai.com/docs/api-reference/messages/createMessage
+    """
     global proxy_logging_obj
     data: Dict = {}
     try:
@@ -5735,6 +5758,7 @@ async def add_messages(
         if "litellm_metadata" not in data:
             data["litellm_metadata"] = {}
         data["litellm_metadata"]["user_api_key"] = user_api_key_dict.api_key
+        data["litellm_metadata"]["litellm_api_version"] = version
         data["litellm_metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
         _headers = dict(request.headers)
         _headers.pop(
@@ -5841,6 +5865,11 @@ async def get_messages(
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
+    """
+    Returns a list of messages for a given thread.
+
+    API Reference - https://platform.openai.com/docs/api-reference/messages/listMessages
+    """
     global proxy_logging_obj
     data: Dict = {}
     try:
@@ -5864,6 +5893,7 @@ async def get_messages(
             "authorization", None
         )  # do not store the original `sk-..` api key in the db
         data["metadata"]["headers"] = _headers
+        data["metadata"]["litellm_api_version"] = version
         data["metadata"]["user_api_key_alias"] = getattr(
             user_api_key_dict, "key_alias", None
         )
@@ -5964,6 +5994,11 @@ async def run_thread(
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
+    """
+    Create a run.
+
+    API Reference: https://platform.openai.com/docs/api-reference/runs/createRun
+    """
     global proxy_logging_obj
     data: Dict = {}
     try:
@@ -5983,6 +6018,7 @@ async def run_thread(
         if "litellm_metadata" not in data:
             data["litellm_metadata"] = {}
         data["litellm_metadata"]["user_api_key"] = user_api_key_dict.api_key
+        data["litellm_metadata"]["litellm_api_version"] = version
         data["litellm_metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
         _headers = dict(request.headers)
         _headers.pop(
@@ -6132,6 +6168,7 @@ async def create_batch(
         if "metadata" not in data:
             data["metadata"] = {}
         data["metadata"]["user_api_key"] = user_api_key_dict.api_key
+        data["metadata"]["litellm_api_version"] = version
         data["metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
         _headers = dict(request.headers)
         _headers.pop(
@@ -6272,6 +6309,7 @@ async def retrieve_batch(
         if "metadata" not in data:
             data["metadata"] = {}
         data["metadata"]["user_api_key"] = user_api_key_dict.api_key
+        data["metadata"]["litellm_api_version"] = version
         data["metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
         _headers = dict(request.headers)
         _headers.pop(
@@ -6426,6 +6464,7 @@ async def create_file(
         if "metadata" not in data:
             data["metadata"] = {}
         data["metadata"]["user_api_key"] = user_api_key_dict.api_key
+        data["metadata"]["litellm_api_version"] = version
         data["metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
         _headers = dict(request.headers)
         _headers.pop(
@@ -6571,6 +6610,7 @@ async def moderations(
         if "metadata" not in data:
             data["metadata"] = {}
         data["metadata"]["user_api_key"] = user_api_key_dict.api_key
+        data["metadata"]["litellm_api_version"] = version
         data["metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
         _headers = dict(request.headers)
         _headers.pop(
@@ -8663,17 +8703,13 @@ async def global_spend_logs(
 
         return response
     else:
-        sql_query = (
-            """
+        sql_query = """
             SELECT * FROM "MonthlyGlobalSpendPerKey"
-            WHERE "api_key" = '"""
-            + api_key
-            + """'
+            WHERE "api_key" = $1
             ORDER BY "date";
-        """
-        )
+            """
 
-        response = await prisma_client.db.query_raw(query=sql_query)
+        response = await prisma_client.db.query_raw(sql_query, api_key)
 
         return response
     return
@@ -12157,47 +12193,12 @@ async def async_queue_request(
         if user_api_base:
             data["api_base"] = user_api_base
 
-        ## FLOW ITEM ##
-        request_id = str(uuid.uuid4())
-        flow_item = FlowItem(
-            priority=data.pop("priority", DefaultPriorities.Medium.value),
-            request_id=request_id,
-            model_name=data["model"],
-        )
-        # [TODO] only allow premium users to set non default priorities
-
-        ## ADD REQUEST TO QUEUE
-        response = await simple_scheduler.add_request(request=flow_item)
-
-        if llm_router is None:
-            raise HTTPException(
-                status_code=500, detail={"error": CommonProxyErrors.no_llm_router.value}
-            )
-        ## POLL QUEUE
-        default_timeout = llm_router.timeout
-        end_time = time.time() + default_timeout
-        poll_interval = 0.03  # poll every 3ms
-        curr_time = time.time()
-
-        make_request = False
-
         if llm_router is None:
             raise HTTPException(
                 status_code=500, detail={"error": CommonProxyErrors.no_llm_router.value}
             )
 
-        while curr_time < end_time:
-            make_request = await simple_scheduler.poll(
-                id=request_id, model_name=data["model"]
-            )
-            if make_request:  ## IF TRUE -> MAKE REQUEST
-                break
-            else:  ## ELSE -> loop till default_timeout
-                await asyncio.sleep(poll_interval)
-                curr_time = time.time()
-
-        if make_request:
-            response = await llm_router.acompletion(**data)
+        response = await llm_router.schedule_acompletion(**data)
 
         if (
             "stream" in data and data["stream"] == True
@@ -12211,7 +12212,7 @@ async def async_queue_request(
                 media_type="text/event-stream",
             )
 
-        fastapi_response.headers.update({"x-litellm-priority": str(flow_item.priority)})
+        fastapi_response.headers.update({"x-litellm-priority": str(data["priority"])})
         return response
     except Exception as e:
         await proxy_logging_obj.post_call_failure_hook(
@@ -12232,19 +12233,6 @@ async def async_queue_request(
             param=getattr(e, "param", "None"),
             code=status.HTTP_400_BAD_REQUEST,
         )
-
-
-@router.get(
-    "/queue/info",
-    tags=["experimental"],
-    dependencies=[Depends(user_api_key_auth)],
-)
-async def queue_info(
-    request: Request,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-) -> List:
-    """Help user know the status of an item in the queue"""
-    return simple_scheduler.get_queue_status()
 
 
 @router.get(

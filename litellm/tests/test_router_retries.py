@@ -128,10 +128,15 @@ async def test_router_retries_errors(sync_mode, error_type):
     ["AuthenticationErrorRetries", "ContentPolicyViolationErrorRetries"],  #
 )
 async def test_router_retry_policy(error_type):
-    from litellm.router import RetryPolicy
+    from litellm.router import RetryPolicy, AllowedFailsPolicy
 
     retry_policy = RetryPolicy(
         ContentPolicyViolationErrorRetries=3, AuthenticationErrorRetries=0
+    )
+
+    allowed_fails_policy = AllowedFailsPolicy(
+        ContentPolicyViolationErrorAllowedFails=1000,
+        RateLimitErrorAllowedFails=100,
     )
 
     router = Router(
@@ -156,6 +161,7 @@ async def test_router_retry_policy(error_type):
             },
         ],
         retry_policy=retry_policy,
+        allowed_fails_policy=allowed_fails_policy,
     )
 
     customHandler = MyCustomHandler()
@@ -184,6 +190,51 @@ async def test_router_retry_policy(error_type):
         assert customHandler.previous_models == 0
     elif error_type == "ContentPolicyViolationErrorRetries":
         assert customHandler.previous_models == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.skip(
+    reason="This is a local only test, use this to confirm if retry policy works"
+)
+async def test_router_retry_policy_on_429_errprs():
+    from litellm.router import RetryPolicy
+
+    retry_policy = RetryPolicy(
+        RateLimitErrorRetries=2,
+    )
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",  # openai model name
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-1.5-pro-001",
+                },
+            },
+        ],
+        retry_policy=retry_policy,
+        # set_verbose=True,
+        # debug_level="DEBUG",
+        allowed_fails=10,
+    )
+
+    customHandler = MyCustomHandler()
+    litellm.callbacks = [customHandler]
+    try:
+        # litellm.set_verbose = True
+        _one_message = [{"role": "user", "content": "Hello good morning"}]
+
+        messages = [_one_message] * 5
+        print("messages: ", messages)
+        responses = await router.abatch_completion(
+            models=["gpt-3.5-turbo"],
+            messages=messages,
+        )
+        print("responses: ", responses)
+    except Exception as e:
+        print("got an exception", e)
+        pass
+    asyncio.sleep(0.05)
+    print("customHandler.previous_models: ", customHandler.previous_models)
 
 
 @pytest.mark.parametrize("model_group", ["gpt-3.5-turbo", "bad-model"])
