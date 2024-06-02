@@ -2828,6 +2828,7 @@ async def test_azure_astreaming_and_function_calling():
         password=os.environ["REDIS_PASSWORD"],
     )
     try:
+        litellm.set_verbose = True
         response = await litellm.acompletion(
             model="azure/gpt-4-nov-release",
             tools=tools,

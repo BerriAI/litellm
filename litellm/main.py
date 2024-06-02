@@ -838,6 +838,7 @@ def completion(
             logprobs=logprobs,
             top_logprobs=top_logprobs,
             extra_headers=extra_headers,
+            api_version=api_version,
             **non_default_params,
         )
 
