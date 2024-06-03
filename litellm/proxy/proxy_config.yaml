@@ -24,4 +24,4 @@ general_settings:
   alerting: ["slack", "email"]
 
 litellm_settings:
-  callbacks: custom_callbacks1.proxy_handler_instance
+  success_callback: ["langfuse"]
