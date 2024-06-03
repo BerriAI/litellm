@@ -12,6 +12,8 @@ import {
   AreaChart,
   Callout,
   Button,
+  MultiSelect,
+  MultiSelectItem
 } from "@tremor/react";
 import {
   userSpendLogsCall,
@@ -22,6 +24,7 @@ import {
   adminTopEndUsersCall,
   teamSpendLogsCall,
   tagsSpendLogsCall,
+  allTagNamesCall,
   modelMetricsCall,
   modelAvailableCall,
   modelInfoCall,
@@ -134,6 +137,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
   const [topUsers, setTopUsers] = useState<any[]>([]);
   const [teamSpendData, setTeamSpendData] = useState<any[]>([]);
   const [topTagsData, setTopTagsData] = useState<any[]>([]);
+  const [allTagNames, setAllTagNames] = useState<string[]>([]);
   const [uniqueTeamIds, setUniqueTeamIds] = useState<any[]>([]);
   const [totalSpendPerTeam, setTotalSpendPerTeam] = useState<any[]>([]);
   const [spendByProvider, setSpendByProvider] = useState<any[]>([]);
@@ -293,6 +297,10 @@ const UsagePage: React.FC<UsagePageProps> = ({
             const top_tags = await tagsSpendLogsCall(accessToken, dateValue.from?.toISOString(), dateValue.to?.toISOString());
             setTopTagsData(top_tags.spend_per_tag);
 
+            // all_tag_names
+            const all_tag_names = await allTagNamesCall(accessToken);
+            setAllTagNames(all_tag_names);
+
             // get spend per end-user
             let spend_user_call = await adminTopEndUsersCall(accessToken, null, undefined, undefined);
             setTopUsers(spend_user_call);
@@ -365,7 +373,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
         <TabList className="mt-2">
           <Tab>All Up</Tab>
           <Tab>Team Based Usage</Tab>
-          <Tab>End User Usage</Tab>
+          <Tab>Customer Usage</Tab>
            <Tab>Tag Based Usage</Tab>
         </TabList>
         <TabPanels>
@@ -656,7 +664,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
             </Grid>
             </TabPanel>
             <TabPanel>
-            <p className="mb-2 text-gray-500 italic text-[12px]">End-Users of your LLM API calls. Tracked when a `user` param is passed in your LLM calls <a className="text-blue-500" href="https://docs.litellm.ai/docs/proxy/users" target="_blank">docs here</a></p>
+            <p className="mb-2 text-gray-500 italic text-[12px]">Customers of your LLM API calls. Tracked when a `user` param is passed in your LLM calls <a className="text-blue-500" href="https://docs.litellm.ai/docs/proxy/users" target="_blank">docs here</a></p>
               <Grid numItems={2}>
                 <Col>
                 <Text>Select Time Range</Text>
@@ -717,7 +725,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
               <Table className="max-h-[70vh] min-h-[500px]">
                   <TableHead>
                     <TableRow>
-                      <TableHeaderCell>End User</TableHeaderCell>
+                      <TableHeaderCell>Customer</TableHeaderCell>
                       <TableHeaderCell>Spend</TableHeaderCell>
                       <TableHeaderCell>Total Events</TableHeaderCell>
                     </TableRow>
@@ -738,8 +746,8 @@ const UsagePage: React.FC<UsagePageProps> = ({
 
             </TabPanel>
             <TabPanel>
-            <Grid numItems={2} className="gap-2 h-[75vh] w-full mb-4">
-            <Col numColSpan={2}>
+              <Grid numItems={2}>
+              <Col numColSpan={1}>
             <DateRangePicker 
                   className="mb-4"
                   enableSelect={true} 
@@ -749,6 +757,35 @@ const UsagePage: React.FC<UsagePageProps> = ({
                     updateTagSpendData(value.from, value.to); // Call updateModelMetrics with the new date range
                   }}
               />
+
+              </Col>
+
+              <Col>
+
+              <MultiSelect>
+                {
+                  allTagNames?.map((tag: any, index: number) => {
+                    return (
+                      <MultiSelectItem
+                        key={index}
+                        value={String(index)}
+                        onClick={() => {
+                          updateTagSpendData(dateValue.from, dateValue.to);
+                        }}
+                      >
+                        {tag}
+                      </MultiSelectItem>
+                    );
+                  })
+                }
+              </MultiSelect>
+              </Col>
+
+              </Grid>
+            <Grid numItems={2} className="gap-2 h-[75vh] w-full mb-4">
+            
+
+              <Col numColSpan={2}>
 
               <Card>
               <Title>Spend Per Tag</Title>
