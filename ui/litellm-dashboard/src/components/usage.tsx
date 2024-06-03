@@ -299,7 +299,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
 
             // all_tag_names
             const all_tag_names = await allTagNamesCall(accessToken);
-            setAllTagNames(all_tag_names);
+            setAllTagNames(all_tag_names.tag_names);
 
             // get spend per end-user
             let spend_user_call = await adminTopEndUsersCall(accessToken, null, undefined, undefined);
@@ -762,16 +762,20 @@ const UsagePage: React.FC<UsagePageProps> = ({
 
               <Col>
 
-              <MultiSelect>
+              <MultiSelect
+                defaultValue={["all-tags"]}>
+              <MultiSelectItem
+                  key={"all-tags"}
+                  value={"All Tags"}
+                >
+                  All Tags
+                </MultiSelectItem>
                 {
-                  allTagNames?.map((tag: any, index: number) => {
+                  allTagNames && allTagNames?.map((tag: any, index: number) => {
                     return (
                       <MultiSelectItem
                         key={index}
                         value={String(index)}
-                        onClick={() => {
-                          updateTagSpendData(dateValue.from, dateValue.to);
-                        }}
                       >
                         {tag}
                       </MultiSelectItem>

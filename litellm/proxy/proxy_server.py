@@ -8246,10 +8246,9 @@ async def global_get_all_tag_names():
             )
 
         sql_query = """
-        SELECT
-        jsonb_array_elements_text(request_tags) AS individual_request_tag
-        FROM "LiteLLM_SpendLogs"
-        GROUP BY individual_request_tag
+        SELECT DISTINCT
+            jsonb_array_elements_text(request_tags) AS individual_request_tag
+        FROM "LiteLLM_SpendLogs";
         """
 
         db_response = await prisma_client.db.query_raw(sql_query)
