@@ -8230,6 +8230,56 @@ async def get_global_spend_report(
 
 
 @router.get(
+    "/global/spend/all_tag_names",
+    tags=["Budget & Spend Tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
+    responses={
+        200: {"model": List[LiteLLM_SpendLogs]},
+    },
+)
+async def global_get_all_tag_names():
+    try:
+        if prisma_client is None:
+            raise Exception(
+                f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
+            )
+
+        sql_query = """
+        SELECT DISTINCT
+            jsonb_array_elements_text(request_tags) AS individual_request_tag
+        FROM "LiteLLM_SpendLogs";
+        """
+
+        db_response = await prisma_client.db.query_raw(sql_query)
+        if db_response is None:
+            return []
+
+        _tag_names = []
+        for row in db_response:
+            _tag_names.append(row.get("individual_request_tag"))
+
+        return {"tag_names": _tag_names}
+
+    except Exception as e:
+        if isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "detail", f"/spend/all_tag_names Error({str(e)})"),
+                type="internal_error",
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
+            )
+        elif isinstance(e, ProxyException):
+            raise e
+        raise ProxyException(
+            message="/spend/all_tag_names Error" + str(e),
+            type="internal_error",
+            param=getattr(e, "param", "None"),
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@router.get(
     "/global/spend/tags",
     tags=["Budget & Spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
@@ -8247,19 +8297,23 @@ async def global_view_spend_tags(
         default=None,
         description="Time till which to view key spend",
     ),
+    tags: Optional[str] = fastapi.Query(
+        default=None,
+        description="comman separated tags to filter on",
+    ),
 ):
     """
     LiteLLM Enterprise - View Spend Per Request Tag. Used by LiteLLM UI
 
     Example Request:
     ```
-    curl -X GET "http://0.0.0.0:8000/spend/tags" \
+    curl -X GET "http://0.0.0.0:4000/spend/tags" \
 -H "Authorization: Bearer sk-1234"
     ```
 
     Spend with Start Date and End Date
     ```
-    curl -X GET "http://0.0.0.0:8000/spend/tags?start_date=2022-01-01&end_date=2022-02-01" \
+    curl -X GET "http://0.0.0.0:4000/spend/tags?start_date=2022-01-01&end_date=2022-02-01" \
 -H "Authorization: Bearer sk-1234"
     ```
     """
@@ -8281,7 +8335,10 @@ async def global_view_spend_tags(
                 code=status.HTTP_400_BAD_REQUEST,
             )
         response = await ui_get_spend_by_tags(
-            start_date=start_date, end_date=end_date, prisma_client=prisma_client
+            start_date=start_date,
+            end_date=end_date,
+            tags_str=tags,
+            prisma_client=prisma_client,
         )
 
         return response
