@@ -97,6 +97,8 @@ def test_null_role_response():
     """
     import openai
 
+    litellm.success_callback = ["lunary"]
+
     openai_client = openai.OpenAI()
     with patch.object(
         openai_client.chat.completions, "create", side_effect=_openai_mock_response
@@ -111,6 +113,8 @@ def test_null_role_response():
         assert response.id == "chatcmpl-123"
 
         assert response.choices[0].message.role == "assistant"
+
+    assert False
 
 
 def test_completion_azure_command_r():
