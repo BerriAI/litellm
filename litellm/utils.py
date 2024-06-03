@@ -1305,6 +1305,13 @@ class Logging:
                 )
             else:
                 verbose_logger.info(f"\033[92m{curl_command}\033[0m\n")
+
+            # check if user wants the raw request logged to their logging provider (like LangFuse)
+            _litellm_params = self.model_call_details.get("litellm_params", {})
+            _metadata = _litellm_params.get("metadata", {}) or {}
+            if _metadata.get("log_raw_request", False) is True:
+                _metadata["raw_request"] = curl_command
+
             if self.logger_fn and callable(self.logger_fn):
                 try:
                     self.logger_fn(
