@@ -1,9 +1,19 @@
 import litellm
 import httpx, asyncio, traceback, os
 from typing import Optional, Union, Mapping, Any
+from litellm._logging import verbose_logger
+
+# from litellm import print_verbose
 
 # https://www.python-httpx.org/advanced/timeouts
 _DEFAULT_TIMEOUT = httpx.Timeout(timeout=5.0, connect=5.0)
+
+
+def str_to_bool(s: Union[str, bool]) -> bool:
+    if isinstance(s, str):
+        return s.lower() == "true"
+    else:
+        return s
 
 
 class AsyncHTTPHandler:
@@ -17,7 +27,7 @@ class AsyncHTTPHandler:
         http_proxy = os.getenv("HTTP_PROXY", None)
         https_proxy = os.getenv("HTTPS_PROXY", None)
         no_proxy = os.getenv("NO_PROXY", None)
-        ssl_verify = bool(os.getenv("SSL_VERIFY", litellm.ssl_verify))
+        ssl_verify = str_to_bool(os.getenv("SSL_VERIFY", True))
         cert = os.getenv(
             "SSL_CERTIFICATE", litellm.ssl_certificate
         )  # /path/to/client.pem
@@ -36,6 +46,9 @@ class AsyncHTTPHandler:
                 for url in no_proxy_urls:  # set no-proxy support for specific urls
                     async_proxy_mounts[url] = None  # type: ignore
 
+        verbose_logger.info(
+            f"\nSSL VERIFY VALUE!! ={ssl_verify}, os.getenv('SSL_VERIFY')={os.getenv('SSL_VERIFY')}\n"
+        )
         if timeout is None:
             timeout = _DEFAULT_TIMEOUT
         # Create a client with a connection pool
