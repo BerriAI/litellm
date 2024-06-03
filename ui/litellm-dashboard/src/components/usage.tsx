@@ -144,6 +144,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
   const [globalActivity, setGlobalActivity] = useState<GlobalActivityData>({} as GlobalActivityData);
   const [globalActivityPerModel, setGlobalActivityPerModel] = useState<any[]>([]);
   const [selectedKeyID, setSelectedKeyID] = useState<string | null>("");
+  const [selectedTags, setSelectedTags] = useState<string[]>(["all-tags"]);
   const [dateValue, setDateValue] = useState<DateRangePickerValue>({
     from: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000), 
     to: new Date(),
@@ -175,6 +176,10 @@ const UsagePage: React.FC<UsagePageProps> = ({
   
     return formatter.format(number);
   }
+
+  useEffect(() => {
+    updateTagSpendData(dateValue.from, dateValue.to);
+  }, [dateValue, selectedTags]);
   
 
   const updateEndUserData = async (startTime:  Date | undefined, endTime:  Date | undefined, uiSelectedKey: string | null) => {
@@ -212,11 +217,14 @@ const UsagePage: React.FC<UsagePageProps> = ({
     // startTime put it to the first hour of the selected date
     startTime.setHours(0, 0, 0, 0);
 
-    let top_tags = await tagsSpendLogsCall(accessToken, startTime.toISOString(), endTime.toISOString());
+    let top_tags = await tagsSpendLogsCall(
+      accessToken, 
+      startTime.toISOString(), 
+      endTime.toISOString(),
+      selectedTags.length === 0 ? undefined : selectedTags
+    );
     setTopTagsData(top_tags.spend_per_tag);
     console.log("Tag spend data updated successfully");
-
-
 
   }
 
@@ -293,13 +301,14 @@ const UsagePage: React.FC<UsagePageProps> = ({
 
             setTotalSpendPerTeam(total_spend_per_team);
 
-            //get top tags
-            const top_tags = await tagsSpendLogsCall(accessToken, dateValue.from?.toISOString(), dateValue.to?.toISOString());
-            setTopTagsData(top_tags.spend_per_tag);
-
-            // all_tag_names
+            // all_tag_names -> used for dropdown
             const all_tag_names = await allTagNamesCall(accessToken);
             setAllTagNames(all_tag_names.tag_names);
+
+            //get top tags
+            const top_tags = await tagsSpendLogsCall(accessToken, dateValue.from?.toISOString(), dateValue.to?.toISOString(), undefined);
+            setTopTagsData(top_tags.spend_per_tag);
+
 
             // get spend per end-user
             let spend_user_call = await adminTopEndUsersCall(accessToken, null, undefined, undefined);
@@ -362,13 +371,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
 
   return (
     <div style={{ width: "100%" }} className="p-8">
-      <ViewUserSpend
-            userID={userID}
-            userRole={userRole}
-            accessToken={accessToken}
-            userSpend={null}
-            selectedTeam={null}
-          />
+      
       <TabGroup>
         <TabList className="mt-2">
           <Tab>All Up</Tab>
@@ -387,6 +390,13 @@ const UsagePage: React.FC<UsagePageProps> = ({
         <TabPanels>
           <TabPanel>
             <Grid numItems={2} className="gap-2 h-[100vh] w-full">
+            <ViewUserSpend
+            userID={userID}
+            userRole={userRole}
+            accessToken={accessToken}
+            userSpend={null}
+            selectedTeam={null}
+          />
               <Col numColSpan={2}>
                 <Card>
                   <Title>Monthly Spend</Title>
@@ -763,26 +773,30 @@ const UsagePage: React.FC<UsagePageProps> = ({
               <Col>
 
               <MultiSelect
-                defaultValue={["all-tags"]}>
-              <MultiSelectItem
-                  key={"all-tags"}
-                  value={"All Tags"}
+                  value={selectedTags}
+                  onValueChange={(value) => setSelectedTags(value as string[])}
                 >
-                  All Tags
-                </MultiSelectItem>
-                {
-                  allTagNames && allTagNames?.map((tag: any, index: number) => {
-                    return (
-                      <MultiSelectItem
-                        key={index}
-                        value={String(index)}
-                      >
-                        {tag}
-                      </MultiSelectItem>
-                    );
-                  })
-                }
-              </MultiSelect>
+  <MultiSelectItem
+    key={"all-tags"}
+    value={"all-tags"}
+    onClick={() => setSelectedTags(["all-tags"])}
+  >
+    All Tags
+  </MultiSelectItem>
+  {allTagNames &&
+    allTagNames
+      .filter((tag) => tag !== "all-tags")
+      .map((tag: any, index: number) => {
+        return (
+          <MultiSelectItem
+            key={tag}
+            value={String(tag)}
+          >
+            {tag}
+          </MultiSelectItem>
+        );
+      })}
+</MultiSelect>
               </Col>
 
               </Grid>
