@@ -1,22 +1,140 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
+import Image from '@theme/IdealImage';
 
 # 💸 Spend Tracking
 
 Track spend for keys, users, and teams across 100+ LLMs.
 
-## Getting Spend Reports - To Charge Other Teams, API Keys
+### How to Track Spend with LiteLLM
+
+👉 [Setup LiteLLM with a Database](https://docs.litellm.ai/docs/proxy/deploy)
+
+That's it, that's all you need to do for basic LLM spend tracking
+
+### What spend gets tracked 
+
+For the Request below LiteLLM will **automatically** track spend for
+- Virtual Key = `sk-1234`
+- Customer = `palantir`
+- Tags = `jobID:214590dsff09fds`, `taskName:run_page_classification`
+
+<Tabs>
+
+
+<TabItem value="openai" label="OpenAI Python v1.0.0+">
+
+```python
+import openai
+client = openai.OpenAI(
+    api_key="sk-1234",
+    base_url="http://0.0.0.0:4000"
+)
+
+# request sent to model set on litellm proxy, `litellm --model`
+response = client.chat.completions.create(
+    model="gpt-3.5-turbo",
+    messages = [
+        {
+            "role": "user",
+            "content": "this is a test request, write a short poem"
+        }
+    ],
+    user="palantir",
+    extra_body={
+        "metadata": {
+            "tags": ["jobID:214590dsff09fds", "taskName:run_page_classification"]
+        }
+    }
+)
+
+print(response)
+```
+</TabItem>
+
+<TabItem value="Curl" label="Curl Request">
+
+Pass `metadata` as part of the request body
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --header 'Authorization: Bearer sk-1234' \
+    --data '{
+    "model": "gpt-3.5-turbo",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what llm are you"
+        }
+    ],
+    "user": "palantir",
+    "metadata": {
+        "tags": ["jobID:214590dsff09fds", "taskName:run_page_classification"]
+    }
+}'
+```
+</TabItem>
+<TabItem value="langchain" label="Langchain">
+
+```python
+from langchain.chat_models import ChatOpenAI
+from langchain.prompts.chat import (
+    ChatPromptTemplate,
+    HumanMessagePromptTemplate,
+    SystemMessagePromptTemplate,
+)
+from langchain.schema import HumanMessage, SystemMessage
+import os
+
+os.environ["OPENAI_API_KEY"] = "sk-1234"
+
+chat = ChatOpenAI(
+    openai_api_base="http://0.0.0.0:4000",
+    model = "gpt-3.5-turbo",
+    user="palantir",
+    extra_body={
+        "metadata": {
+            "tags": ["jobID:214590dsff09fds", "taskName:run_page_classification"]
+        }
+    }
+)
+
+messages = [
+    SystemMessage(
+        content="You are a helpful assistant that im using to make a test request to."
+    ),
+    HumanMessage(
+        content="test from litellm. tell me why it's amazing in 1 sentence"
+    ),
+]
+response = chat(messages)
+
+print(response)
+```
+
+</TabItem>
+</Tabs>
+
+## View Spend on LiteLLM Admin UI
+
+Navigate to the `Usage` Tab on the LiteLLM UI (found on `https://your-proxy-endpoint/ui`)
+
+<Image img={require('../../img/admin_ui_spend.png')} />
+
+## API Endpoints to get Spend
+### Getting Spend Reports - To Charge Other Teams, API Keys
 
 Use the `/global/spend/report` endpoint to get daily spend per team, with a breakdown of spend per API Key, Model
 
-### Example Request
+#### Example Request
 
 ```shell
 curl -X GET 'http://localhost:4000/global/spend/report?start_date=2024-04-01&end_date=2024-06-30' \
   -H 'Authorization: Bearer sk-1234'
 ```
 
-### Example Response
+#### Example Response
 <Tabs>
 
 <TabItem value="response" label="Expected Response">
@@ -125,7 +243,7 @@ Output from script
 
 </Tabs>
 
-## Allowing Non-Proxy Admins to access `/spend` endpoints 
+### Allowing Non-Proxy Admins to access `/spend` endpoints 
 
 Use this when you want non-proxy admins to access `/spend` endpoints
 
@@ -135,7 +253,7 @@ Schedule a [meeting with us to get your Enterprise License](https://calendly.com
 
 :::
 
-### Create Key 
+#### Create Key 
 Create Key with with `permissions={"get_spend_routes": true}` 
 ```shell
 curl --location 'http://0.0.0.0:4000/key/generate' \
@@ -146,7 +264,7 @@ curl --location 'http://0.0.0.0:4000/key/generate' \
     }'
 ```
 
-### Use generated key on `/spend` endpoints
+#### Use generated key on `/spend` endpoints
 
 Access spend Routes with newly generate keys
 ```shell
@@ -156,14 +274,14 @@ curl -X GET 'http://localhost:4000/global/spend/report?start_date=2024-04-01&end
 
 
 
-## Reset Team, API Key Spend - MASTER KEY ONLY
+### Reset Team, API Key Spend - MASTER KEY ONLY
 
 Use `/global/spend/reset` if you want to:
 - Reset the Spend for all API Keys, Teams. The `spend` for ALL Teams and Keys in `LiteLLM_TeamTable` and `LiteLLM_VerificationToken` will be set to `spend=0`
 
 - LiteLLM will maintain all the logs in `LiteLLMSpendLogs` for Auditing Purposes
 
-### Request 
+#### Request 
 Only the `LITELLM_MASTER_KEY` you set can access this route
 ```shell
 curl -X POST \
@@ -172,7 +290,7 @@ curl -X POST \
   -H 'Content-Type: application/json'
 ```
 
-### Expected Responses
+#### Expected Responses
 
 ```shell
 {"message":"Spend for all API Keys and Teams reset successfully","status":"success"}
@@ -181,7 +299,7 @@ curl -X POST \
 
 
 
-## Spend Tracking for Azure
+## Spend Tracking for Azure OpenAI Models
 
 Set base model for cost tracking azure image-gen call
 
@@ -220,3 +338,7 @@ model_list:
     model_info:
       base_model: azure/gpt-4-1106-preview
 ```
+
+## Custom Input/Output Pricing
+
+👉 Head to [Custom Input/Output Pricing](https://docs.litellm.ai/docs/proxy/custom_pricing) to setup custom pricing or your models
