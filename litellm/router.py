@@ -2869,7 +2869,7 @@ class Router:
                 api_version = litellm.get_secret(api_version_env_name)
                 litellm_params["api_version"] = api_version
 
-            timeout = litellm_params.pop("timeout", None)
+            timeout = litellm_params.pop("timeout", None) or litellm.request_timeout
             if isinstance(timeout, str) and timeout.startswith("os.environ/"):
                 timeout_env_name = timeout.replace("os.environ/", "")
                 timeout = litellm.get_secret(timeout_env_name)

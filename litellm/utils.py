@@ -11941,11 +11941,23 @@ class CustomStreamWrapper:
                     )
                 )
                 return processed_chunk
+        except httpx.TimeoutException as e:  # if httpx read timeout error occues
+            traceback_exception = traceback.format_exc()
+            ## ADD DEBUG INFORMATION - E.G. LITELLM REQUEST TIMEOUT
+            traceback_exception += "\nLiteLLM Default Request Timeout - {}".format(
+                litellm.request_timeout
+            )
+            if self.logging_obj is not None:
+                # Handle any exceptions that might occur during streaming
+                asyncio.create_task(
+                    self.logging_obj.async_failure_handler(e, traceback_exception)
+                )
+            raise e
         except Exception as e:
             traceback_exception = traceback.format_exc()
             # Handle any exceptions that might occur during streaming
             asyncio.create_task(
-                self.logging_obj.async_failure_handler(e, traceback_exception)
+                self.logging_obj.async_failure_handler(e, traceback_exception)  # type: ignore
             )
             raise e
 
