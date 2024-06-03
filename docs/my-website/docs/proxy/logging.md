@@ -210,6 +210,8 @@ litellm_settings:
 
 ### 🔧 Debugging - Viewing RAW CURL sent from LiteLLM to provider
 
+Use this when you want to view the RAW curl request sent from LiteLLM to the LLM API 
+
 <Tabs>
 
 <TabItem value="Curl" label="Curl Request">
@@ -301,6 +303,11 @@ print(response)
 </TabItem>
 </Tabs>
 
+**Expected Output on Langfuse**
+
+You will see `raw_request` in your Langfuse Metadata. This is the RAW CURL command sent from LiteLLM to your LLM API provider
+
+<Image img={require('../../img/debug_langfuse.png')} />
 
 
 
