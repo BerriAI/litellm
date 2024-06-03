@@ -14,6 +14,7 @@ from functools import partial
 import dotenv, traceback, random, asyncio, time, contextvars
 from copy import deepcopy
 import httpx
+
 import litellm
 from ._logging import verbose_logger
 from litellm import (  # type: ignore
@@ -223,7 +224,7 @@ async def acompletion(
     extra_headers: Optional[dict] = None,
     # Optional liteLLM function params
     **kwargs,
-):
+) -> Union[ModelResponse, CustomStreamWrapper]:
     """
     Asynchronously executes a litellm.completion() call for any of litellm supported llms (example gpt-4, gpt-3.5-turbo, claude-2, command-nightly)
 
@@ -339,6 +340,8 @@ async def acompletion(
             if isinstance(init_response, dict) or isinstance(
                 init_response, ModelResponse
             ):  ## CACHING SCENARIO
+                if isinstance(init_response, dict):
+                    response = ModelResponse(**init_response)
                 response = init_response
             elif asyncio.iscoroutine(init_response):
                 response = await init_response
@@ -361,6 +364,7 @@ async def acompletion(
             )  # sets the logging event loop if the user does sync streaming (e.g. on proxy for sagemaker calls)
         return response
     except Exception as e:
+        traceback.print_exc()
         custom_llm_provider = custom_llm_provider or "openai"
         raise exception_type(
             model=model,
@@ -430,6 +434,10 @@ def mock_completion(
                 model=model,  # type: ignore
                 request=httpx.Request(method="POST", url="https://api.openai.com/v1/"),
             )
+        time_delay = kwargs.get("mock_delay", None)
+        if time_delay is not None:
+            time.sleep(time_delay)
+
         model_response = ModelResponse(stream=stream)
         if stream is True:
             # don't try to access stream object,
@@ -830,6 +838,7 @@ def completion(
             logprobs=logprobs,
             top_logprobs=top_logprobs,
             extra_headers=extra_headers,
+            api_version=api_version,
             **non_default_params,
         )
 
@@ -880,6 +889,7 @@ def completion(
                 mock_response=mock_response,
                 logging=logging,
                 acompletion=acompletion,
+                mock_delay=kwargs.get("mock_delay", None),
             )
         if custom_llm_provider == "azure":
             # azure configs
@@ -4114,7 +4124,7 @@ def transcription(
             or litellm.api_key
             or litellm.azure_key
             or get_secret("AZURE_API_KEY")
-        )
+        )  # type: ignore
 
         response = azure_chat_completions.audio_transcriptions(
             model=model,

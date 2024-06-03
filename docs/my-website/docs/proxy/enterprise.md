@@ -557,7 +557,7 @@ curl -X GET "http://0.0.0.0:4000/spend/tags" \
 
 :::info 
 
-Requires a LiteLLM Enterprise key to use. Request one [here](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+Requires a LiteLLM Enterprise key to use. Get a free 2-week license [here](https://forms.gle/sTDVprBs18M4V8Le8)
 
 :::
 
@@ -587,3 +587,9 @@ DOCS_FILTERED="True" # only shows openai routes to user
 ```
 
 <Image img={require('../../img/custom_swagger.png')}  style={{ width: '900px', height: 'auto' }} />
+
+## Public Model Hub 
+
+Share a public page of available models for users
+
+<Image img={require('../../img/model_hub.png')} style={{ width: '900px', height: 'auto' }}/>

@@ -16,7 +16,7 @@ from openai.types.beta.thread_create_params import (
 from openai.types.beta.assistant_tool_param import AssistantToolParam
 from openai.types.beta.threads.run import Run
 from openai.types.beta.assistant import Assistant
-from openai.pagination import SyncCursorPage
+from openai.pagination import SyncCursorPage, AsyncCursorPage
 from os import PathLike
 from openai.types import FileObject, Batch
 from openai._legacy_response import HttpxBinaryResponseContent

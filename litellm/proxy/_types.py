@@ -407,7 +407,9 @@ class ProxyChatCompletionRequest(LiteLLMBase):
     deployment_id: Optional[str] = None
     request_timeout: Optional[int] = None
 
-    model_config = ConfigDict(extra="allow")  # allow params not defined here, these fall in litellm.completion(**kwargs)
+    model_config = ConfigDict(
+        extra="allow"
+    )  # allow params not defined here, these fall in litellm.completion(**kwargs)
 
 
 class ModelInfoDelete(LiteLLMBase):
@@ -508,6 +510,7 @@ class GenerateKeyRequest(GenerateRequestBase):
     )  # {"gpt-4": 5.0, "gpt-3.5-turbo": 5.0}, defaults to {}
 
     model_config = ConfigDict(protected_namespaces=())
+    send_invite_email: Optional[bool] = None
 
 
 class GenerateKeyResponse(GenerateKeyRequest):
@@ -579,16 +582,31 @@ class NewUserRequest(GenerateKeyRequest):
     auto_create_key: bool = (
         True  # flag used for returning a key as part of the /user/new response
     )
+    send_invite_email: Optional[bool] = None
 
 
 class NewUserResponse(GenerateKeyResponse):
     max_budget: Optional[float] = None
+    user_email: Optional[str] = None
+    user_role: Optional[
+        Literal[
+            LitellmUserRoles.PROXY_ADMIN,
+            LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+            LitellmUserRoles.INTERNAL_USER,
+            LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+            LitellmUserRoles.TEAM,
+            LitellmUserRoles.CUSTOMER,
+        ]
+    ] = None
+    teams: Optional[list] = None
+    organization_id: Optional[str] = None
 
 
 class UpdateUserRequest(GenerateRequestBase):
     # Note: the defaults of all Params here MUST BE NONE
     # else they will get overwritten
     user_id: Optional[str] = None
+    password: Optional[str] = None
     user_email: Optional[str] = None
     spend: Optional[float] = None
     metadata: Optional[dict] = None
@@ -918,7 +936,9 @@ class KeyManagementSettings(LiteLLMBase):
 class TeamDefaultSettings(LiteLLMBase):
     team_id: str
 
-    model_config = ConfigDict(extra="allow")  # allow params not defined here, these fall in litellm.completion(**kwargs)
+    model_config = ConfigDict(
+        extra="allow"
+    )  # allow params not defined here, these fall in litellm.completion(**kwargs)
 
 
 class DynamoDBArgs(LiteLLMBase):
@@ -1112,6 +1132,7 @@ class LiteLLM_VerificationToken(LiteLLMBase):
 
     model_config = ConfigDict(protected_namespaces=())
 
+
 class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     """
     Combined view of litellm verification token + litellm team table (select values)
@@ -1285,6 +1306,7 @@ class WebhookEvent(CallInfo):
         "threshold_crossed",
         "projected_limit_exceeded",
         "key_created",
+        "internal_user_created",
         "spend_tracked",
     ]
     event_group: Literal["internal_user", "key", "team", "proxy", "customer"]

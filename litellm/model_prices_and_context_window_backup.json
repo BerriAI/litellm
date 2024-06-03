@@ -380,6 +380,18 @@
         "output_cost_per_second": 0.0001, 
         "litellm_provider": "azure"
     },
+    "azure/gpt-4o": {
+        "max_tokens": 4096,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.000005,
+        "output_cost_per_token": 0.000015,
+        "litellm_provider": "azure",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_vision": true
+    },
     "azure/gpt-4-turbo-2024-04-09": {
         "max_tokens": 4096,
         "max_input_tokens": 128000,
@@ -692,8 +704,8 @@
         "max_tokens": 8191,
         "max_input_tokens": 32000,
         "max_output_tokens": 8191,
-        "input_cost_per_token": 0.00000015,
-        "output_cost_per_token": 0.00000046,
+        "input_cost_per_token": 0.00000025,
+        "output_cost_per_token": 0.00000025,
         "litellm_provider": "mistral",
         "mode": "chat"
     },
@@ -701,8 +713,8 @@
         "max_tokens": 8191,
         "max_input_tokens": 32000,
         "max_output_tokens": 8191,
-        "input_cost_per_token": 0.000002,
-        "output_cost_per_token": 0.000006,
+        "input_cost_per_token": 0.000001,
+        "output_cost_per_token": 0.000003,
         "litellm_provider": "mistral",
         "supports_function_calling": true,
         "mode": "chat"
@@ -711,8 +723,8 @@
         "max_tokens": 8191,
         "max_input_tokens": 32000,
         "max_output_tokens": 8191,
-        "input_cost_per_token": 0.000002,
-        "output_cost_per_token": 0.000006,
+        "input_cost_per_token": 0.000001,
+        "output_cost_per_token": 0.000003,
         "litellm_provider": "mistral",
         "supports_function_calling": true,
         "mode": "chat"
@@ -748,8 +760,8 @@
         "max_tokens": 8191,
         "max_input_tokens": 32000,
         "max_output_tokens": 8191,
-        "input_cost_per_token": 0.000008,
-        "output_cost_per_token": 0.000024,
+        "input_cost_per_token": 0.000004,
+        "output_cost_per_token": 0.000012,
         "litellm_provider": "mistral",
         "mode": "chat",
         "supports_function_calling": true
@@ -758,15 +770,34 @@
         "max_tokens": 8191,
         "max_input_tokens": 32000,
         "max_output_tokens": 8191,
-        "input_cost_per_token": 0.000008,
-        "output_cost_per_token": 0.000024,
+        "input_cost_per_token": 0.000004,
+        "output_cost_per_token": 0.000012,
         "litellm_provider": "mistral",
         "mode": "chat",
         "supports_function_calling": true
     },
+    "mistral/open-mistral-7b": {
+        "max_tokens": 8191,
+        "max_input_tokens": 32000,
+        "max_output_tokens": 8191,
+        "input_cost_per_token": 0.00000025,
+        "output_cost_per_token": 0.00000025,
+        "litellm_provider": "mistral",
+        "mode": "chat"
+    },
     "mistral/open-mixtral-8x7b": {
         "max_tokens": 8191,
         "max_input_tokens": 32000,
+        "max_output_tokens": 8191,
+        "input_cost_per_token": 0.0000007,
+        "output_cost_per_token": 0.0000007,
+        "litellm_provider": "mistral",
+        "mode": "chat",
+        "supports_function_calling": true
+    },
+    "mistral/open-mixtral-8x22b": {
+        "max_tokens": 8191,
+        "max_input_tokens": 64000,
         "max_output_tokens": 8191,
         "input_cost_per_token": 0.000002,
         "output_cost_per_token": 0.000006,
@@ -774,10 +805,28 @@
         "mode": "chat",
         "supports_function_calling": true
     },
+    "mistral/codestral-latest": {
+        "max_tokens": 8191,
+        "max_input_tokens": 32000,
+        "max_output_tokens": 8191,
+        "input_cost_per_token": 0.000001,
+        "output_cost_per_token": 0.000003,
+        "litellm_provider": "mistral",
+        "mode": "chat"
+    },
+    "mistral/codestral-2405": {
+        "max_tokens": 8191,
+        "max_input_tokens": 32000,
+        "max_output_tokens": 8191,
+        "input_cost_per_token": 0.000001,
+        "output_cost_per_token": 0.000003,
+        "litellm_provider": "mistral",
+        "mode": "chat"
+    },
     "mistral/mistral-embed": {
         "max_tokens": 8192,
         "max_input_tokens": 8192,
-        "input_cost_per_token": 0.000000111,
+        "input_cost_per_token": 0.0000001,
         "litellm_provider": "mistral",
         "mode": "embedding"
     },
@@ -1128,6 +1177,24 @@
         "supports_tool_choice": true, 
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
+    "gemini-1.5-flash-001": {
+        "max_tokens": 8192,
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 8192,
+        "max_images_per_prompt": 3000,
+        "max_videos_per_prompt": 10,
+        "max_video_length": 1,
+        "max_audio_length_hours": 8.4,
+        "max_audio_per_prompt": 1,
+        "max_pdf_size_mb": 30,
+        "input_cost_per_token": 0, 
+        "output_cost_per_token": 0,
+        "litellm_provider": "vertex_ai-language-models",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
+    },
     "gemini-1.5-flash-preview-0514": {
         "max_tokens": 8192,
         "max_input_tokens": 1000000,
@@ -1144,6 +1211,18 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
+    },
+    "gemini-1.5-pro-001": { 
+        "max_tokens": 8192,
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 0.000000625, 
+        "output_cost_per_token": 0.000001875,
+        "litellm_provider": "vertex_ai-language-models",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_tool_choice": true, 
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
     "gemini-1.5-pro-preview-0514": { 
