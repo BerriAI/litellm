@@ -13,8 +13,13 @@ import {
   Callout,
   Button,
   MultiSelect,
-  MultiSelectItem
+  MultiSelectItem,
 } from "@tremor/react";
+
+import {
+  Select as Select2
+} from "antd";
+
 import {
   userSpendLogsCall,
   keyInfoCall,
@@ -771,32 +776,75 @@ const UsagePage: React.FC<UsagePageProps> = ({
               </Col>
 
               <Col>
+                  {
+                    premiumUser ? (
+                      <div>
+                        <MultiSelect
+                            value={selectedTags}
+                            onValueChange={(value) => setSelectedTags(value as string[])}
+                          >
+                        <MultiSelectItem
+                          key={"all-tags"}
+                          value={"all-tags"}
+                          onClick={() => setSelectedTags(["all-tags"])}
+                        >
+                          All Tags
+                        </MultiSelectItem>
+                        {allTagNames &&
+                          allTagNames
+                            .filter((tag) => tag !== "all-tags")
+                            .map((tag: any, index: number) => {
+                              return (
+                                <MultiSelectItem
+                                  key={tag}
+                                  value={String(tag)}
+                                >
+                                  {tag}
+                                </MultiSelectItem>
+                              );
+                            })}
+                      </MultiSelect>
 
-              <MultiSelect
-                  value={selectedTags}
-                  onValueChange={(value) => setSelectedTags(value as string[])}
-                >
-  <MultiSelectItem
-    key={"all-tags"}
-    value={"all-tags"}
-    onClick={() => setSelectedTags(["all-tags"])}
-  >
-    All Tags
-  </MultiSelectItem>
-  {allTagNames &&
-    allTagNames
-      .filter((tag) => tag !== "all-tags")
-      .map((tag: any, index: number) => {
-        return (
-          <MultiSelectItem
-            key={tag}
-            value={String(tag)}
-          >
-            {tag}
-          </MultiSelectItem>
-        );
-      })}
-</MultiSelect>
+                      </div>
+
+                    ) : (
+                      <div>
+
+<MultiSelect
+                            value={selectedTags}
+                            onValueChange={(value) => setSelectedTags(value as string[])}
+                          >
+                        <MultiSelectItem
+                          key={"all-tags"}
+                          value={"all-tags"}
+                          onClick={() => setSelectedTags(["all-tags"])}
+                        >
+                          All Tags
+                        </MultiSelectItem>
+                        {allTagNames &&
+                          allTagNames
+                            .filter((tag) => tag !== "all-tags")
+                            .map((tag: any, index: number) => {
+                              // @ts-ignore
+                              return (
+                                <SelectItem
+                                  key={tag}
+                                  value={String(tag)}
+                                  disabled={true} // @ts-ignore
+                                >
+                                  ✨ {tag} (Enterpise only Feature)
+                                </SelectItem>
+                              );
+                            })}
+                      </MultiSelect>
+
+
+
+
+                      </div>
+                    )
+                  }
+  
               </Col>
 
               </Grid>
@@ -807,7 +855,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
 
               <Card>
               <Title>Spend Per Tag</Title>
-              <Text>Get Started Tracking cost per tag <a className="text-blue-500" href="https://docs.litellm.ai/docs/proxy/enterprise#tracking-spend-for-custom-tags" target="_blank">here</a></Text>
+              <Text>Get Started Tracking cost per tag <a className="text-blue-500" href="https://docs.litellm.ai/docs/proxy/cost_tracking" target="_blank">here</a></Text>
              <BarChart
               className="h-72"
               data={topTagsData}
