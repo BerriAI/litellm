@@ -11,7 +11,12 @@ from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapProp
 
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
+    OTLPSpanExporter as OTLPSpanExporterHTTP,
+)
+from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
+    OTLPSpanExporter as OTLPSpanExporterGRPC,
+)
 from opentelemetry.sdk.trace.export import (
     BatchSpanProcessor,
     ConsoleSpanExporter,
@@ -41,7 +46,7 @@ class OpenTelemetry(CustomLogger):
         self.config = config
         provider = TracerProvider(resource=Resource(attributes=LITELLM_RESOURCE))
         provider.add_span_processor(self._get_span_processor())
-        
+
         trace.set_tracer_provider(provider)
         self.tracer = trace.get_tracer(LITELLM_TRACER_NAME)
 
@@ -105,7 +110,14 @@ class OpenTelemetry(CustomLogger):
             return BatchSpanProcessor(ConsoleSpanExporter())
         elif self.config.exporter == "otlp_http":
             return BatchSpanProcessor(
-                OTLPSpanExporter(
+                OTLPSpanExporterHTTP(
+                    endpoint=self.OTEL_ENDPOINT,
+                    headers={"Authorization": f"Bearer {self.OTEL_BEARER_TOKEN}"},
+                )
+            )
+        elif self.config.exporter == "otlp_grpc":
+            return BatchSpanProcessor(
+                OTLPSpanExporterGRPC(
                     endpoint=self.OTEL_ENDPOINT,
                     headers={"Authorization": f"Bearer {self.OTEL_BEARER_TOKEN}"},
                 )
