@@ -8230,6 +8230,57 @@ async def get_global_spend_report(
 
 
 @router.get(
+    "/global/spend/all_tag_names",
+    tags=["Budget & Spend Tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
+    responses={
+        200: {"model": List[LiteLLM_SpendLogs]},
+    },
+)
+async def global_get_all_tag_names():
+    try:
+        if prisma_client is None:
+            raise Exception(
+                f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
+            )
+
+        sql_query = """
+        SELECT
+        jsonb_array_elements_text(request_tags) AS individual_request_tag
+        FROM "LiteLLM_SpendLogs"
+        GROUP BY individual_request_tag
+        """
+
+        db_response = await prisma_client.db.query_raw(sql_query)
+        if db_response is None:
+            return []
+
+        _tag_names = []
+        for row in db_response:
+            _tag_names.append(row.get("individual_request_tag"))
+
+        return {"tag_names": _tag_names}
+
+    except Exception as e:
+        if isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "detail", f"/spend/all_tag_names Error({str(e)})"),
+                type="internal_error",
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
+            )
+        elif isinstance(e, ProxyException):
+            raise e
+        raise ProxyException(
+            message="/spend/all_tag_names Error" + str(e),
+            type="internal_error",
+            param=getattr(e, "param", "None"),
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@router.get(
     "/global/spend/tags",
     tags=["Budget & Spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
