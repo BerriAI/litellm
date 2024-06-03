@@ -979,7 +979,8 @@ export const teamSpendLogsCall = async (accessToken: String) => {
 export const tagsSpendLogsCall = async (
   accessToken: String,
   startTime: String | undefined,
-  endTime: String | undefined
+  endTime: String | undefined,
+  tags: String[] | undefined
 ) => {
   try {
     let url = proxyBaseUrl
@@ -988,6 +989,11 @@ export const tagsSpendLogsCall = async (
 
     if (startTime && endTime) {
       url = `${url}?start_date=${startTime}&end_date=${endTime}`;
+    }
+
+    // if tags, convert the list to a comma separated string
+    if (tags) {
+      url += `${url}&tags=${tags.join(",")}`;
     }
 
     console.log("in tagsSpendLogsCall:", url);
