@@ -6062,9 +6062,9 @@ def get_optional_params(
             model=model,
             api_version=api_version,  # type: ignore
         )
-    else:  # assume passing in params for azure openai
+    else:  # assume passing in params for text-completion openai
         supported_params = get_supported_openai_params(
-            model=model, custom_llm_provider="azure"
+            model=model, custom_llm_provider="custom_openai"
         )
         _check_valid_arg(supported_params=supported_params)
         if functions is not None:
@@ -6614,7 +6614,30 @@ def get_supported_openai_params(
         ]
     elif custom_llm_provider == "watsonx":
         return litellm.IBMWatsonXAIConfig().get_supported_openai_params()
-
+    elif custom_llm_provider == "custom_openai" or "text-completion-openai":
+        return [
+            "functions",
+            "function_call",
+            "temperature",
+            "top_p",
+            "n",
+            "stream",
+            "stream_options",
+            "stop",
+            "max_tokens",
+            "presence_penalty",
+            "frequency_penalty",
+            "logit_bias",
+            "user",
+            "response_format",
+            "seed",
+            "tools",
+            "tool_choice",
+            "max_retries",
+            "logprobs",
+            "top_logprobs",
+            "extra_headers",
+        ]
     return None
 
 
