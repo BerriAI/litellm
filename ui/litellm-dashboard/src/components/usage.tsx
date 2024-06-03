@@ -825,12 +825,12 @@ const UsagePage: React.FC<UsagePageProps> = ({
                           allTagNames
                             .filter((tag) => tag !== "all-tags")
                             .map((tag: any, index: number) => {
-                              // @ts-ignore
                               return (
                                 <SelectItem
                                   key={tag}
                                   value={String(tag)}
-                                  disabled={true} // @ts-ignore
+                                  // @ts-ignore
+                                  disabled={true} 
                                 >
                                   ✨ {tag} (Enterpise only Feature)
                                 </SelectItem>
