@@ -1319,7 +1319,9 @@ class AzureAssistantsAPI(BaseLLM):
                     data["azure_endpoint"] = v
                 elif v is not None:
                     data[k] = v
-            azure_openai_client = AsyncAzureOpenAI(**data)  # type: ignore
+
+            azure_openai_client = AsyncAzureOpenAI(**data)
+            # azure_openai_client = AsyncAzureOpenAI(**data)  # type: ignore
         else:
             azure_openai_client = client
 
@@ -1888,14 +1890,24 @@ class AzureAssistantsAPI(BaseLLM):
         )
 
         response = await openai_client.beta.threads.runs.create_and_poll(  # type: ignore
-            thread_id=thread_id,
-            assistant_id=assistant_id,
-            additional_instructions=additional_instructions,
-            instructions=instructions,
-            metadata=metadata,
-            model=model,
-            tools=tools,
+            thread_id="thread_OHLZkEj5xJLxdk0REZ4cl9sP",
+            assistant_id="asst_nIzr656D1GIVMLHOKD76bN2T",
+            additional_instructions=None,
+            instructions=None,
+            metadata=None,
+            model=None,
+            tools=None,
         )
+
+        # response = await openai_client.beta.threads.runs.create_and_poll(  # type: ignore
+        #     thread_id=thread_id,
+        #     assistant_id=assistant_id,
+        #     additional_instructions=additional_instructions,
+        #     instructions=instructions,
+        #     metadata=metadata,
+        #     model=model,
+        #     tools=tools,
+        # )
 
         return response
 
