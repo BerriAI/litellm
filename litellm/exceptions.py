@@ -454,6 +454,45 @@ class ServiceUnavailableError(openai.APIStatusError):  # type: ignore
         return _message
 
 
+class InternalServerError(openai.InternalServerError):  # type: ignore
+    def __init__(
+        self,
+        message,
+        llm_provider,
+        model,
+        response: httpx.Response,
+        litellm_debug_info: Optional[str] = None,
+        max_retries: Optional[int] = None,
+        num_retries: Optional[int] = None,
+    ):
+        self.status_code = 500
+        self.message = message
+        self.llm_provider = llm_provider
+        self.model = model
+        self.litellm_debug_info = litellm_debug_info
+        self.max_retries = max_retries
+        self.num_retries = num_retries
+        super().__init__(
+            self.message, response=response, body=None
+        )  # Call the base class constructor with the parameters it needs
+
+    def __str__(self):
+        _message = self.message
+        if self.num_retries:
+            _message += f" LiteLLM Retried: {self.num_retries} times"
+        if self.max_retries:
+            _message += f", LiteLLM Max Retries: {self.max_retries}"
+        return _message
+
+    def __repr__(self):
+        _message = self.message
+        if self.num_retries:
+            _message += f" LiteLLM Retried: {self.num_retries} times"
+        if self.max_retries:
+            _message += f", LiteLLM Max Retries: {self.max_retries}"
+        return _message
+
+
 # raise this when the API returns an invalid response object - https://github.com/openai/openai-python/blob/1be14ee34a0f8e42d3f9aa5451aa4cb161f1781f/openai/api_requestor.py#L401
 class APIError(openai.APIError):  # type: ignore
     def __init__(
@@ -593,6 +632,7 @@ LITELLM_EXCEPTION_TYPES = [
     ContextWindowExceededError,
     RejectedRequestError,
     ContentPolicyViolationError,
+    InternalServerError,
     ServiceUnavailableError,
     APIError,
     APIConnectionError,
