@@ -5,6 +5,7 @@ from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfi
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from litellm._logging import verbose_logger
 import logging
+import time
 
 verbose_logger.setLevel(logging.DEBUG)
 
@@ -25,6 +26,8 @@ def test_otel_callback():
             messages=[{"role": "user", "content": "hi"}],
         )
     )
+
+    time.sleep(4)
 
     spans = exporter.get_finished_spans()
     assert len(spans) == 1 + 1
