@@ -19,6 +19,7 @@ from litellm.llms.openai import (
     AsyncCursorPage,
     SyncCursorPage,
     AssistantEventHandler,
+    AsyncAssistantEventHandler,
 )
 from typing_extensions import override
 
@@ -131,29 +132,6 @@ async def test_add_message_litellm(sync_mode, provider):
     assert isinstance(added_message, Message)
 
 
-class EventHandler(AssistantEventHandler):
-    @override
-    def on_text_created(self, text) -> None:
-        print(f"\nassistant > ", end="", flush=True)
-
-    @override
-    def on_text_delta(self, delta, snapshot):
-        print(delta.value, end="", flush=True)
-
-    def on_tool_call_created(self, tool_call):
-        print(f"\nassistant > {tool_call.type}\n", flush=True)
-
-    def on_tool_call_delta(self, delta, snapshot):
-        if delta.type == "code_interpreter":
-            if delta.code_interpreter.input:
-                print(delta.code_interpreter.input, end="", flush=True)
-            if delta.code_interpreter.outputs:
-                print(f"\n\noutput >", flush=True)
-                for output in delta.code_interpreter.outputs:
-                    if output.type == "logs":
-                        print(f"\n{output.logs}", flush=True)
-
-
 @pytest.mark.parametrize(
     "provider",
     [
@@ -163,8 +141,11 @@ class EventHandler(AssistantEventHandler):
 )  #
 @pytest.mark.parametrize(
     "sync_mode",
-    [False, True],
-)  #
+    [
+        True,
+        False,
+    ],
+)
 @pytest.mark.parametrize(
     "is_streaming",
     [True, False],
@@ -202,9 +183,7 @@ async def test_aarun_thread_litellm(sync_mode, provider, is_streaming):
         added_message = litellm.add_message(**data)
 
         if is_streaming:
-            run = litellm.run_thread_stream(
-                assistant_id=assistant_id, event_handler=EventHandler(), **data
-            )
+            run = litellm.run_thread_stream(assistant_id=assistant_id, **data)
             with run as run:
                 assert isinstance(run, AssistantEventHandler)
                 print(run)
@@ -225,11 +204,13 @@ async def test_aarun_thread_litellm(sync_mode, provider, is_streaming):
         added_message = await litellm.a_add_message(**data)
 
         if is_streaming:
-            run = litellm.run_thread_stream(
-                assistant_id=assistant_id, event_handler=EventHandler(), **data
-            )
-            with run as run:
-                assert isinstance(run, AssistantEventHandler)
+            run = litellm.arun_thread_stream(assistant_id=assistant_id, **data)
+            async with run as run:
+                print(f"run: {run}")
+                assert isinstance(
+                    run,
+                    AsyncAssistantEventHandler,
+                )
                 print(run)
                 run.until_done()
         else:
