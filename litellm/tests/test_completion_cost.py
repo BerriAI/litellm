@@ -472,7 +472,7 @@ def test_replicate_llama3_cost_tracking():
     assert cost == expected_cost
 
 
-@pytest.mark.parametrize("is_streaming", [True])  #  False
+@pytest.mark.parametrize("is_streaming", [True, False])  #
 def test_groq_response_cost_tracking(is_streaming):
     from litellm.utils import (
         ModelResponse,
@@ -517,4 +517,3 @@ def test_groq_response_cost_tracking(is_streaming):
     assert response_cost > 0.0
 
     print(f"response_cost: {response_cost}")
-    assert False
