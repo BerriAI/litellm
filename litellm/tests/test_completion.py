@@ -536,6 +536,15 @@ def test_parse_xml_params():
     assert response["location"] == "Boston, MA"
     assert response["unit"] == "fahrenheit"
 
+    ## SCENARIO 3 ## - W/ ARRAY OF OBJECTS
+    xml_content = """<invoke><tool_name>User</tool_name><parameters><name>Jason</name><age>25</age><moods><Mood><name>sad</name></Mood><Mood><name>happy</name></Mood></moods></parameters></invoke>"""
+    json_schema = {'$defs': {'Mood': {'properties': {'name': {'title': 'Name', 'type': 'string'}}, 'required': ['name'], 'title': 'Mood', 'type': 'object'}}, 'properties': {'name': {'title': 'Name', 'type': 'string'}, 'age': {'title': 'Age', 'type': 'integer'}, 'moods': {'items': {'$ref': '#/$defs/Mood'}, 'title': 'Moods', 'type': 'array'}}, 'required': ['age', 'moods', 'name'], 'type': 'object'}
+
+    response = parse_xml_params(xml_content=xml_content, json_schema=json_schema)
+
+    print(f"response: {response}")
+    assert response["moods"] == [{"name": "sad"}, {"name": "happy"}]
+
 
 def test_completion_claude_3_multi_turn_conversations():
     litellm.set_verbose = True

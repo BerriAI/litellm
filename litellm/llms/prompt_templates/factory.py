@@ -1294,7 +1294,6 @@ def parse_xml_params(xml_content, json_schema: Optional[dict] = None):
         # iterate over all properties in the schema
         for prop in json_schema["properties"]:
             _element = root.find(f"parameters/{prop}")
-            # If property is an array, get the items
             if json_schema["properties"][prop].get("type", None) == "array":
                 items = []
                 if _element is not None:
@@ -1306,16 +1305,27 @@ def parse_xml_params(xml_content, json_schema: Optional[dict] = None):
                         item_schema = json_schema["$defs"][ref]
                     else:
                         item_schema = None
-                    for item in _element:
-                        item_values = {}
-                        for item_prop in item:
-                            if item_schema and item_prop.tag in item_schema["properties"]:
-                                try:
-                                    _value = json.loads(item_prop.text)
-                                except json.JSONDecodeError:
-                                    _value = item_prop.text
-                                item_values[item_prop.tag] = _value
-                        items.append(item_values)
+                    for value in _element:
+                        if item_schema:  # If there's a schema for the items
+                            item_params = {}
+                            for item_prop in item_schema["properties"]:
+                                item_element = value.find(item_prop)
+                                if item_element is not None and item_element.text is not None:
+                                    try:
+                                        _value = json.loads(item_element.text)
+                                    except json.JSONDecodeError:
+                                        _value = item_element.text
+                                    item_params[item_prop] = _value
+                            items.append(item_params)
+                        else:
+                            try:
+                                if value.text is not None:
+                                    _value = json.loads(value.text)
+                                else:
+                                    continue
+                            except json.JSONDecodeError:
+                                _value = value.text
+                            items.append(_value)
                     params[prop] = items
             # If property is an object or has a $ref, get the nested properties
             elif json_schema["properties"][prop].get("type", None) == "object" or "$ref" in json_schema["properties"][prop]:
