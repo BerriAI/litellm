@@ -632,7 +632,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
           _initial_model_group,
           dateValue.from?.toISOString(),
           dateValue.to?.toISOString(),
-          selectedAPIKey?.token
+          selectedAPIKey?.token,
+          selectedCustomer
         );
 
         console.log("Model metrics response:", modelMetricsResponse);
@@ -661,7 +662,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
           _initial_model_group,
           dateValue.from?.toISOString(),
           dateValue.to?.toISOString(),
-          selectedAPIKey?.token
+          selectedAPIKey?.token,
+          selectedCustomer
         );
         console.log("Model exceptions response:", modelExceptionsResponse);
         setModelExceptions(modelExceptionsResponse.data);
@@ -674,7 +676,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
           _initial_model_group,
           dateValue.from?.toISOString(),
           dateValue.to?.toISOString(),
-          selectedAPIKey?.token
+          selectedAPIKey?.token,
+          selectedCustomer
         );
 
         const dailyExceptions = await adminGlobalActivityExceptions(
@@ -1977,7 +1980,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
               </Col>
               <Col>
               <Popover
-                
                 trigger="click" content={FilterByContent}
                 >
               <Button
