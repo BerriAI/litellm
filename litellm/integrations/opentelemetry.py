@@ -93,7 +93,7 @@ class OpenTelemetry(CustomLogger):
         return int(dt.timestamp() * 1e9)
 
     def _get_span_name(self, kwargs):
-        f"litellm-{kwargs.get('call_type', 'completion')}"
+        return f"litellm-{kwargs.get('call_type', 'completion')}"
 
     def _get_span_context(self, kwargs):
         litellm_params = kwargs.get("litellm_params", {}) or {}
