@@ -1935,12 +1935,13 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
             </Card>
           </TabPanel>
           <TabPanel>
-            <Grid numItems={3} className="mt-2 mb-2">
+            <Grid numItems={4} className="mt-2 mb-2">
               <Col>
                 <Text>Select Time Range</Text>
                 <DateRangePicker
                   enableSelect={true}
                   value={dateValue}
+                  className="mr-2"
                   onValueChange={(value) => {
                     setDateValue(value);
                     updateModelMetrics(
@@ -1951,7 +1952,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                   }}
                 />
               </Col>
-              <Col>
+              <Col className="ml-2">
                 <Text>Select Model Group</Text>
                 <Select
                   defaultValue={
