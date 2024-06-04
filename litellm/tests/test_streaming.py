@@ -2018,6 +2018,7 @@ def test_openai_stream_options_call():
     """
 
     assert last_chunk.usage is not None
+    assert isinstance(last_chunk.usage, litellm.Usage)
     assert last_chunk.usage.total_tokens > 0
     assert last_chunk.usage.prompt_tokens > 0
     assert last_chunk.usage.completion_tokens > 0

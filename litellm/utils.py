@@ -11460,7 +11460,12 @@ class CustomStreamWrapper:
                     self.stream_options is not None
                     and self.stream_options["include_usage"] == True
                 ):
-                    model_response.usage = response_obj["usage"]
+                    if "usage" in response_obj and response_obj["usage"] is not None:
+                        model_response.usage = litellm.Usage(
+                            prompt_tokens=response_obj["usage"].prompt_tokens,
+                            completion_tokens=response_obj["usage"].completion_tokens,
+                            total_tokens=response_obj["usage"].total_tokens,
+                        )
 
             model_response.model = self.model
             print_verbose(
@@ -11647,6 +11652,17 @@ class CustomStreamWrapper:
             elif self.received_finish_reason is not None:
                 if self.sent_last_chunk == True:
                     raise StopIteration
+
+                if (
+                    hasattr(model_response, "usage") == True
+                    and model_response.usage is not None
+                    and not isinstance(model_response.usage, litellm.Usage)
+                ):
+                    model_response.usage = litellm.Usage(
+                        prompt_tokens=model_response.usage.prompt_tokens,
+                        completion_tokens=model_response.usage.completion_tokens,
+                        total_tokens=model_response.usage.total_tokens,
+                    )
                 # flush any remaining holding chunk
                 if len(self.holding_chunk) > 0:
                     if model_response.choices[0].delta.content is None:
