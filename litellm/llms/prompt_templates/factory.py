@@ -173,14 +173,10 @@ def ollama_pt(
                             images.append(base64_image)
         return {"prompt": prompt, "images": images}
     else:
-        prompt = "".join(
-            (
-                m["content"]
-                if isinstance(m["content"], str) is str
-                else "".join(m["content"])
-            )
-            for m in messages
-        )
+        for message in messages:
+            if message["content"] is None:
+                continue
+            prompt += "".join(message["content"])
     return prompt
 
 
