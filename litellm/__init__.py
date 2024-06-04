@@ -783,7 +783,11 @@ from .llms.openai import (
     MistralConfig,
     DeepInfraConfig,
 )
-from .llms.azure import AzureOpenAIConfig, AzureOpenAIError
+from .llms.azure import (
+    AzureOpenAIConfig,
+    AzureOpenAIError,
+    AzureOpenAIAssistantsAPIConfig,
+)
 from .llms.watsonx import IBMWatsonXAIConfig
 from .main import *  # type: ignore
 from .integrations import *

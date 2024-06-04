@@ -1910,7 +1910,7 @@ class Router:
         model: Optional[str] = None,
         stream: Optional[bool] = None,
         tools: Optional[Iterable[AssistantToolParam]] = None,
-        client: Optional[AsyncOpenAI] = None,
+        client: Optional[Any] = None,
         **kwargs,
     ) -> Run:
         return await litellm.arun_thread(
