@@ -446,3 +446,8 @@ class ModelGroupInfo(BaseModel):
     supports_vision: bool = Field(default=False)
     supports_function_calling: bool = Field(default=False)
     supported_openai_params: List[str] = Field(default=[])
+
+
+class AssistantsTypedDict(TypedDict):
+    custom_llm_provider: Literal["azure", "openai"]
+    litellm_params: LiteLLMParamsTypedDict
