@@ -41,49 +41,39 @@ example_completion_result = {
         {
             "message": {
                 "content": "Whispers of the wind carry dreams to me.",
-                "role": "assistant"
+                "role": "assistant",
             }
         }
     ],
 }
 example_embedding_result = {
-  "object": "list",
-  "data": [
-    {
-      "object": "embedding",
-      "index": 0,
-      "embedding": [
-        -0.006929283495992422,
-        -0.005336422007530928,
-        -4.547132266452536e-05,
-        -0.024047505110502243,
-        -0.006929283495992422,
-        -0.005336422007530928,
-        -4.547132266452536e-05,
-        -0.024047505110502243,
-        -0.006929283495992422,
-        -0.005336422007530928,
-        -4.547132266452536e-05,
-        -0.024047505110502243,
-      ],
-    }
-  ],
-  "model": "text-embedding-3-small",
-  "usage": {
-    "prompt_tokens": 5,
-    "total_tokens": 5
-  }
+    "object": "list",
+    "data": [
+        {
+            "object": "embedding",
+            "index": 0,
+            "embedding": [
+                -0.006929283495992422,
+                -0.005336422007530928,
+                -4.547132266452536e-05,
+                -0.024047505110502243,
+                -0.006929283495992422,
+                -0.005336422007530928,
+                -4.547132266452536e-05,
+                -0.024047505110502243,
+                -0.006929283495992422,
+                -0.005336422007530928,
+                -4.547132266452536e-05,
+                -0.024047505110502243,
+            ],
+        }
+    ],
+    "model": "text-embedding-3-small",
+    "usage": {"prompt_tokens": 5, "total_tokens": 5},
 }
 example_image_generation_result = {
-  "created": 1589478378,
-  "data": [
-    {
-      "url": "https://..."
-    },
-    {
-      "url": "https://..."
-    }
-  ]
+    "created": 1589478378,
+    "data": [{"url": "https://..."}, {"url": "https://..."}],
 }
 
 
@@ -185,7 +175,9 @@ def test_engines_model_chat_completions(mock_acompletion, client_no_auth):
         }
 
         print("testing proxy server with chat completions")
-        response = client_no_auth.post("/engines/gpt-3.5-turbo/chat/completions", json=test_data)
+        response = client_no_auth.post(
+            "/engines/gpt-3.5-turbo/chat/completions", json=test_data
+        )
         mock_acompletion.assert_called_once_with(
             model="gpt-3.5-turbo",
             messages=[
@@ -249,7 +241,9 @@ def test_chat_completion_azure(mock_acompletion, client_no_auth):
 
 
 @mock_patch_acompletion()
-def test_openai_deployments_model_chat_completions_azure(mock_acompletion, client_no_auth):
+def test_openai_deployments_model_chat_completions_azure(
+    mock_acompletion, client_no_auth
+):
     global headers
     try:
         # Your test data
@@ -388,10 +382,10 @@ def test_img_gen(mock_aimage_generation, client_no_auth):
         response = client_no_auth.post("/v1/images/generations", json=test_data)
 
         mock_aimage_generation.assert_called_once_with(
-            model='dall-e-3',
-            prompt='A cute baby sea otter',
+            model="dall-e-3",
+            prompt="A cute baby sea otter",
             n=1,
-            size='1024x1024',
+            size="1024x1024",
             metadata=mock.ANY,
             proxy_server_request=mock.ANY,
         )

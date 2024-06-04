@@ -152,7 +152,7 @@ async def test_completion_databricks(sync_mode):
     response_format_tests(response=response)
 
 
-# @pytest.mark.skip(reason="local test")
+# @pytest.mark.skip(reason="local only test")
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_completion_predibase(sync_mode):
@@ -409,6 +409,7 @@ async def test_anthropic_no_content_error():
 def test_gemini_completion_call_error():
     try:
         print("test completion + streaming")
+        litellm.num_retries = 3
         litellm.set_verbose = True
         messages = [{"role": "user", "content": "what is the capital of congo?"}]
         response = completion(

@@ -28,6 +28,9 @@ python-multipart==0.0.9 # admin UI
 Pillow==10.3.0
 azure-ai-contentsafety==1.0.0 # for azure content safety
 azure-identity==1.15.0 # for azure content safety
+opentelemetry-api==1.25.0
+opentelemetry-sdk==1.25.0
+opentelemetry-exporter-otlp==1.25.0
 
 ### LITELLM PACKAGE DEPENDENCIES
 python-dotenv==1.0.0 # for env 

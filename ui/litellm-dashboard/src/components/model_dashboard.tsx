@@ -51,11 +51,13 @@ import {
   modelSettingsCall,
   adminGlobalActivityExceptions,
   adminGlobalActivityExceptionsPerDeployment,
+  allEndUsersCall,
 } from "./networking";
 import { BarChart, AreaChart } from "@tremor/react";
 import {
   Button as Button2,
   Modal,
+  Popover,
   Form,
   Input,
   Select as Select2,
@@ -80,6 +82,7 @@ import {
   RefreshIcon,
   CheckCircleIcon,
   XCircleIcon,
+  FilterIcon,
 } from "@heroicons/react/outline";
 import DeleteModelButton from "./delete_model_button";
 const { Title: Title2, Link } = Typography;
@@ -96,6 +99,7 @@ interface ModelDashboardProps {
   userRole: string | null;
   userID: string | null;
   modelData: any;
+  keys: any[] | null;
   setModelData: any;
   premiumUser: boolean;
 }
@@ -260,6 +264,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   userRole,
   userID,
   modelData = { data: [] },
+  keys,
   setModelData,
   premiumUser,
 }) => {
@@ -312,6 +317,20 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
 
   const [globalExceptionData, setGlobalExceptionData] =  useState<GlobalExceptionActivityData>({} as GlobalExceptionActivityData);
   const [globalExceptionPerDeployment, setGlobalExceptionPerDeployment] = useState<any[]>([]);
+
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState<boolean>(false);
+  const [selectedAPIKey, setSelectedAPIKey] = useState<any | null>(null);
+  const [selectedCustomer, setSelectedCustomer] = useState<any | null>(null);
+
+  const [allEndUsers, setAllEndUsers] = useState<any[]>([]);
+
+  useEffect(() => {
+    updateModelMetrics(
+      selectedModelGroup,
+      dateValue.from,
+      dateValue.to
+    );
+  }, [selectedAPIKey, selectedCustomer]);
 
   function formatCreatedAt(createdAt: string | null) {
     if (createdAt) {
@@ -612,7 +631,9 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
           userRole,
           _initial_model_group,
           dateValue.from?.toISOString(),
-          dateValue.to?.toISOString()
+          dateValue.to?.toISOString(),
+          selectedAPIKey?.token,
+          selectedCustomer
         );
 
         console.log("Model metrics response:", modelMetricsResponse);
@@ -640,7 +661,9 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
           userRole,
           _initial_model_group,
           dateValue.from?.toISOString(),
-          dateValue.to?.toISOString()
+          dateValue.to?.toISOString(),
+          selectedAPIKey?.token,
+          selectedCustomer
         );
         console.log("Model exceptions response:", modelExceptionsResponse);
         setModelExceptions(modelExceptionsResponse.data);
@@ -652,7 +675,9 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
           userRole,
           _initial_model_group,
           dateValue.from?.toISOString(),
-          dateValue.to?.toISOString()
+          dateValue.to?.toISOString(),
+          selectedAPIKey?.token,
+          selectedCustomer
         );
 
         const dailyExceptions = await adminGlobalActivityExceptions(
@@ -681,6 +706,10 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
         console.log("slowResponses:", slowResponses);
 
         setSlowResponsesData(slowResponses);
+
+        let all_end_users_data = await allEndUsersCall(accessToken);
+
+        setAllEndUsers(all_end_users_data?.end_users);
 
         const routerSettingsInfo = await getCallbacksCall(
           accessToken,
@@ -874,7 +903,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const updateModelMetrics = async (
     modelGroup: string | null,
     startTime: Date | undefined,
-    endTime: Date | undefined
+    endTime: Date | undefined,
   ) => {
     console.log("Updating model metrics for group:", modelGroup);
     if (!accessToken || !userID || !userRole || !startTime || !endTime) {
@@ -888,6 +917,26 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     );
     setSelectedModelGroup(modelGroup); // If you want to store the selected model group in state
 
+    let selected_token = selectedAPIKey?.token;
+    if (selected_token === undefined) {
+      selected_token = null;
+    }
+
+    let selected_customer = selectedCustomer;
+    if (selected_customer === undefined) {
+      selected_customer = null;
+    }
+
+    // make startTime and endTime to last hour of the day
+    startTime.setHours(0);
+    startTime.setMinutes(0);
+    startTime.setSeconds(0);
+
+    endTime.setHours(23);
+    endTime.setMinutes(59);
+    endTime.setSeconds(59);
+
+
     try {
       const modelMetricsResponse = await modelMetricsCall(
         accessToken,
@@ -895,7 +944,9 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
         userRole,
         modelGroup,
         startTime.toISOString(),
-        endTime.toISOString()
+        endTime.toISOString(),
+        selected_token,
+        selected_customer
       );
       console.log("Model metrics response:", modelMetricsResponse);
 
@@ -922,7 +973,9 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
         userRole,
         modelGroup,
         startTime.toISOString(),
-        endTime.toISOString()
+        endTime.toISOString(),
+        selected_token,
+        selected_customer
       );
       console.log("Model exceptions response:", modelExceptionsResponse);
       setModelExceptions(modelExceptionsResponse.data);
@@ -934,7 +987,9 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
         userRole,
         modelGroup,
         startTime.toISOString(),
-        endTime.toISOString()
+        endTime.toISOString(),
+        selected_token,
+        selected_customer
       );
 
       console.log("slowResponses:", slowResponses);
@@ -968,6 +1023,164 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
       console.error("Failed to fetch model metrics", error);
     }
   };
+
+
+  const FilterByContent = (
+      <div >
+        <Text className="mb-1">Select API Key Name</Text>
+
+        {
+          premiumUser ? (
+            <div>
+              <Select defaultValue="all-keys">
+                  <SelectItem
+                    key="all-keys"
+                    value="all-keys"
+                    onClick={() => {
+                      setSelectedAPIKey(null);
+                    }}
+                  >
+                    All Keys
+                  </SelectItem>
+                    {keys?.map((key: any, index: number) => {
+                      if (
+                        key &&
+                        key["key_alias"] !== null &&
+                        key["key_alias"].length > 0
+                      ) {
+                        return (
+                          
+                          <SelectItem
+                            key={index}
+                            value={String(index)}
+                            onClick={() => {
+                              setSelectedAPIKey(key);
+                            }}
+                          >
+                            {key["key_alias"]}
+                          </SelectItem>
+                        );
+                      }
+                      return null; // Add this line to handle the case when the condition is not met
+                    })}
+                  </Select>
+          
+
+          <Text className="mt-1">
+            Select Customer Name
+          </Text>
+          
+          <Select defaultValue="all-customers">
+          <SelectItem
+            key="all-customers"
+            value="all-customers"
+            onClick={() => {
+              setSelectedCustomer(null);
+            }}
+          >
+            All Customers
+            </SelectItem>
+            {
+              allEndUsers?.map((user: any, index: number) => {
+                return (
+                  <SelectItem
+                    key={index}
+                    value={user}
+                    onClick={() => {
+                      setSelectedCustomer(user);
+                    }}
+                  >
+                    {user}
+                  </SelectItem>
+                );
+              })
+            }
+          </Select>
+            
+            </div>
+          ): (
+            <div>
+
+<Select defaultValue="all-keys">
+                  <SelectItem
+                    key="all-keys"
+                    value="all-keys"
+                    onClick={() => {
+                      setSelectedAPIKey(null);
+                    }}
+                  >
+                    All Keys
+                  </SelectItem>
+                    {keys?.map((key: any, index: number) => {
+                      if (
+                        key &&
+                        key["key_alias"] !== null &&
+                        key["key_alias"].length > 0
+                      ) {
+                        return (
+                          
+                          <SelectItem
+                            key={index}
+                            value={String(index)}
+                            // @ts-ignore
+                            disabled={true}
+                            onClick={() => {
+                              setSelectedAPIKey(key);
+                            }}
+                          >
+                            ✨ {key["key_alias"]} (Enterpise only Feature) 
+                          </SelectItem>
+                        );
+                      }
+                      return null; // Add this line to handle the case when the condition is not met
+                    })}
+                  </Select>
+          
+
+          <Text className="mt-1">
+            Select Customer Name
+          </Text>
+          
+          <Select defaultValue="all-customers">
+          <SelectItem
+            key="all-customers"
+            value="all-customers"
+            onClick={() => {
+              setSelectedCustomer(null);
+            }}
+          >
+            All Customers
+            </SelectItem>
+            {
+              allEndUsers?.map((user: any, index: number) => {
+                return (
+                  <SelectItem
+                    key={index}
+                    value={user}
+                    // @ts-ignore
+                    disabled={true}
+                    onClick={() => {
+                      setSelectedCustomer(user);
+                    }}
+                  >
+                    ✨ {user} (Enterpise only Feature) 
+                  </SelectItem>
+                );
+              })
+            }
+          </Select>
+            
+            </div>
+          )
+        }
+        
+
+        
+            
+
+        </div>
+
+  );
 
   const customTooltip = (props: any) => {
     const { payload, active } = props;
@@ -1722,14 +1935,13 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
             </Card>
           </TabPanel>
           <TabPanel>
-            {/* <p style={{fontSize: '0.85rem', color: '#808080'}}>View how requests were load balanced within a model group</p> */}
-
-            <Grid numItems={2} className="mt-2">
+            <Grid numItems={4} className="mt-2 mb-2">
               <Col>
                 <Text>Select Time Range</Text>
                 <DateRangePicker
                   enableSelect={true}
                   value={dateValue}
+                  className="mr-2"
                   onValueChange={(value) => {
                     setDateValue(value);
                     updateModelMetrics(
@@ -1740,10 +1952,9 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                   }}
                 />
               </Col>
-              <Col>
+              <Col className="ml-2">
                 <Text>Select Model Group</Text>
                 <Select
-                  className="mb-4 mt-2"
                   defaultValue={
                     selectedModelGroup
                       ? selectedModelGroup
@@ -1768,7 +1979,29 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                   ))}
                 </Select>
               </Col>
-            </Grid>
+              <Col>
+              <Popover
+                trigger="click" content={FilterByContent}
+                overlayStyle={{
+                  width: "20vw"
+                }}
+                >
+              <Button
+              icon={FilterIcon}
+              size="md"
+              variant="secondary"
+              className="mt-4 ml-2"
+              style={{
+                border: "none",
+              }}
+              onClick={() => setShowAdvancedFilters(true)}
+                >
+              </Button>      
+              </Popover>
+              </Col>
+  
+              </Grid>
+
 
             <Grid numItems={2}>
               <Col>
@@ -2035,7 +2268,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
           </TabPanel>
         </TabPanels>
       </TabGroup>
-    </div>
+    </div>  
   );
 };
 

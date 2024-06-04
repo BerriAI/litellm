@@ -215,7 +215,6 @@ add_function_to_prompt: bool = (
 )
 client_session: Optional[httpx.Client] = None
 aclient_session: Optional[httpx.AsyncClient] = None
-module_level_aclient = AsyncHTTPHandler()
 model_fallbacks: Optional[List] = None  # Deprecated for 'litellm.fallbacks'
 model_cost_map_url: str = (
     "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
@@ -232,6 +231,7 @@ max_user_budget: Optional[float] = None
 max_end_user_budget: Optional[float] = None
 #### RELIABILITY ####
 request_timeout: float = 6000
+module_level_aclient = AsyncHTTPHandler(timeout=request_timeout)
 num_retries: Optional[int] = None  # per model endpoint
 default_fallbacks: Optional[List] = None
 fallbacks: Optional[List] = None
@@ -783,7 +783,11 @@ from .llms.openai import (
     MistralConfig,
     DeepInfraConfig,
 )
-from .llms.azure import AzureOpenAIConfig, AzureOpenAIError
+from .llms.azure import (
+    AzureOpenAIConfig,
+    AzureOpenAIError,
+    AzureOpenAIAssistantsAPIConfig,
+)
 from .llms.watsonx import IBMWatsonXAIConfig
 from .main import *  # type: ignore
 from .integrations import *

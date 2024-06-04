@@ -60,14 +60,13 @@ Test sync + async
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
-@pytest.mark.parametrize("error_type", ["Authorization Error", "API Error"])
+@pytest.mark.parametrize("error_type", ["API Error", "Authorization Error"])
 @pytest.mark.asyncio
 async def test_router_retries_errors(sync_mode, error_type):
     """
     - Auth Error -> 0 retries
     - API Error -> 2 retries
     """
-
     _api_key = (
         "bad-key" if error_type == "Authorization Error" else os.getenv("AZURE_API_KEY")
     )

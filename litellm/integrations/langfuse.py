@@ -396,6 +396,8 @@ class LangFuseLogger:
             cost = kwargs.get("response_cost", None)
             print_verbose(f"trace: {cost}")
 
+            clean_metadata["litellm_response_cost"] = cost
+
             if (
                 litellm._langfuse_default_tags is not None
                 and isinstance(litellm._langfuse_default_tags, list)

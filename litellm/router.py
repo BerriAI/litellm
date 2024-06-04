@@ -1910,7 +1910,7 @@ class Router:
         model: Optional[str] = None,
         stream: Optional[bool] = None,
         tools: Optional[Iterable[AssistantToolParam]] = None,
-        client: Optional[AsyncOpenAI] = None,
+        client: Optional[Any] = None,
         **kwargs,
     ) -> Run:
         return await litellm.arun_thread(
@@ -2154,7 +2154,6 @@ class Router:
             - there are no fallbacks
             - there are no healthy deployments in the same model group
         """
-
         _num_healthy_deployments = 0
         if healthy_deployments is not None and isinstance(healthy_deployments, list):
             _num_healthy_deployments = len(healthy_deployments)
@@ -2167,15 +2166,21 @@ class Router:
             raise error
 
         # Error we should only retry if there are other deployments
-        if isinstance(error, openai.RateLimitError) or isinstance(
-            error, openai.AuthenticationError
-        ):
+        if isinstance(error, openai.RateLimitError):
             if (
-                _num_healthy_deployments <= 0
-                and regular_fallbacks is not None
+                _num_healthy_deployments <= 0  # if no healthy deployments
+                and regular_fallbacks is not None  # and fallbacks available
                 and len(regular_fallbacks) > 0
             ):
-                raise error
+                raise error  # then raise the error
+
+        if isinstance(error, openai.AuthenticationError):
+            """
+            - if other deployments available -> retry
+            - else -> raise error
+            """
+            if _num_healthy_deployments <= 0:  # if no healthy deployments
+                raise error  # then raise error
 
         return True
 
@@ -2864,7 +2869,7 @@ class Router:
                 api_version = litellm.get_secret(api_version_env_name)
                 litellm_params["api_version"] = api_version
 
-            timeout = litellm_params.pop("timeout", None)
+            timeout = litellm_params.pop("timeout", None) or litellm.request_timeout
             if isinstance(timeout, str) and timeout.startswith("os.environ/"):
                 timeout_env_name = timeout.replace("os.environ/", "")
                 timeout = litellm.get_secret(timeout_env_name)

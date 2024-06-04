@@ -1305,6 +1305,13 @@ class Logging:
                 )
             else:
                 verbose_logger.info(f"\033[92m{curl_command}\033[0m\n")
+
+            # check if user wants the raw request logged to their logging provider (like LangFuse)
+            _litellm_params = self.model_call_details.get("litellm_params", {})
+            _metadata = _litellm_params.get("metadata", {}) or {}
+            if _metadata.get("log_raw_request", False) is True:
+                _metadata["raw_request"] = curl_command
+
             if self.logger_fn and callable(self.logger_fn):
                 try:
                     self.logger_fn(
@@ -9833,15 +9840,19 @@ def exception_type(
                         response=original_exception.response,
                     )
                 elif (
-                    "invalid_request_error" in error_str
-                    and "content_policy_violation" in error_str
-                ) or (
-                    "The response was filtered due to the prompt triggering Azure OpenAI's content management"
-                    in error_str
+                    (
+                        "invalid_request_error" in error_str
+                        and "content_policy_violation" in error_str
+                    )
+                    or (
+                        "The response was filtered due to the prompt triggering Azure OpenAI's content management"
+                        in error_str
+                    )
+                    or "Your task failed as a result of our safety system" in error_str
                 ):
                     exception_mapping_worked = True
                     raise ContentPolicyViolationError(
-                        message=f"AzureException ContentPolicyViolationError - {original_exception.message}",
+                        message=f"litellm.ContentPolicyViolationError: AzureException - {original_exception.message}",
                         llm_provider="azure",
                         model=model,
                         litellm_debug_info=extra_information,
@@ -11936,11 +11947,23 @@ class CustomStreamWrapper:
                     )
                 )
                 return processed_chunk
+        except httpx.TimeoutException as e:  # if httpx read timeout error occues
+            traceback_exception = traceback.format_exc()
+            ## ADD DEBUG INFORMATION - E.G. LITELLM REQUEST TIMEOUT
+            traceback_exception += "\nLiteLLM Default Request Timeout - {}".format(
+                litellm.request_timeout
+            )
+            if self.logging_obj is not None:
+                # Handle any exceptions that might occur during streaming
+                asyncio.create_task(
+                    self.logging_obj.async_failure_handler(e, traceback_exception)
+                )
+            raise e
         except Exception as e:
             traceback_exception = traceback.format_exc()
             # Handle any exceptions that might occur during streaming
             asyncio.create_task(
-                self.logging_obj.async_failure_handler(e, traceback_exception)
+                self.logging_obj.async_failure_handler(e, traceback_exception)  # type: ignore
             )
             raise e
 

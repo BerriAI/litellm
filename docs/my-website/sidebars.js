@@ -49,7 +49,7 @@ const sidebars = {
         "proxy/alerting",
         {
           type: "category",
-          label: "Logging",
+          label: "🪢 Logging",
           items: ["proxy/logging", "proxy/streaming_logging"],
         },
         "proxy/ui",

@@ -115,7 +115,9 @@ async def test_async_image_generation_openai():
 async def test_async_image_generation_azure():
     try:
         response = await litellm.aimage_generation(
-            prompt="A cute baby sea otter", model="azure/dall-e-3-test"
+            prompt="A cute baby sea otter",
+            model="azure/dall-e-3-test",
+            api_version="2023-09-01-preview",
         )
         print(f"response: {response}")
     except litellm.RateLimitError as e:
