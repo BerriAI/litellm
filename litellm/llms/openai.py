@@ -2088,7 +2088,7 @@ class OpenAIAssistantsAPI(BaseLLM):
     async def a_add_message(
         self,
         thread_id: str,
-        message_data: MessageData,
+        message_data: dict,
         api_key: Optional[str],
         api_base: Optional[str],
         timeout: Union[float, httpx.Timeout],
@@ -2123,7 +2123,7 @@ class OpenAIAssistantsAPI(BaseLLM):
     def add_message(
         self, 
         thread_id: str,
-        message_data: MessageData,
+        message_data: dict,
         api_key: Optional[str],
         api_base: Optional[str],
         timeout: Union[float, httpx.Timeout],
@@ -2138,7 +2138,7 @@ class OpenAIAssistantsAPI(BaseLLM):
     def add_message(
         self, 
         thread_id: str,
-        message_data: MessageData,
+        message_data: dict,
         api_key: Optional[str],
         api_base: Optional[str],
         timeout: Union[float, httpx.Timeout],
@@ -2154,7 +2154,7 @@ class OpenAIAssistantsAPI(BaseLLM):
     def add_message(
         self,
         thread_id: str,
-        message_data: MessageData,
+        message_data: dict,
         api_key: Optional[str],
         api_base: Optional[str],
         timeout: Union[float, httpx.Timeout],
@@ -2552,7 +2552,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         timeout: Union[float, httpx.Timeout],
         max_retries: Optional[int],
         organization: Optional[str],
-        client: Optional[AsyncOpenAI],
+        client,
         arun_thread: Literal[True], 
     ) -> Coroutine[None, None, Run]:
         ...
@@ -2573,7 +2573,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         timeout: Union[float, httpx.Timeout],
         max_retries: Optional[int],
         organization: Optional[str],
-        client: Optional[OpenAI],
+        client,
         arun_thread: Optional[Literal[False]], 
     ) -> Run: 
         ...
