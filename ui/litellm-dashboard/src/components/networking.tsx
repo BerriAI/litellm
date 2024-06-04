@@ -728,6 +728,7 @@ export const modelMetricsCall = async (
   startTime: String | undefined,
   endTime: String | undefined,
   apiKey: String | null,
+  customer: String | null
 ) => {
   /**
    * Get all models on proxy
@@ -735,7 +736,7 @@ export const modelMetricsCall = async (
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/model/metrics` : `/model/metrics`;
     if (modelGroup) {
-      url = `${url}?_selected_model_group=${modelGroup}&startTime=${startTime}&endTime=${endTime}&api_key=${apiKey}`;
+      url = `${url}?_selected_model_group=${modelGroup}&startTime=${startTime}&endTime=${endTime}&api_key=${apiKey}&customer=${customer}`;
     }
     // message.info("Requesting model data");
     const response = await fetch(url, {
@@ -807,7 +808,8 @@ export const modelMetricsSlowResponsesCall = async (
   modelGroup: String | null,
   startTime: String | undefined,
   endTime: String | undefined,
-  apiKey: String | null
+  apiKey: String | null,
+  customer: String | null
 ) => {
   /**
    * Get all models on proxy
@@ -817,7 +819,7 @@ export const modelMetricsSlowResponsesCall = async (
       ? `${proxyBaseUrl}/model/metrics/slow_responses`
       : `/model/metrics/slow_responses`;
     if (modelGroup) {
-      url = `${url}?_selected_model_group=${modelGroup}&startTime=${startTime}&endTime=${endTime}&api_key=${apiKey}`;
+      url = `${url}?_selected_model_group=${modelGroup}&startTime=${startTime}&endTime=${endTime}&api_key=${apiKey}&customer=${customer}`;
     }
 
     // message.info("Requesting model data");
@@ -851,7 +853,8 @@ export const modelExceptionsCall = async (
   modelGroup: String | null,
   startTime: String | undefined,
   endTime: String | undefined,
-  apiKey: String | null
+  apiKey: String | null,
+  customer: String | null
 ) => {
   /**
    * Get all models on proxy
@@ -862,7 +865,7 @@ export const modelExceptionsCall = async (
       : `/model/metrics/exceptions`;
 
     if (modelGroup) {
-      url = `${url}?_selected_model_group=${modelGroup}&startTime=${startTime}&endTime=${endTime}&api_key=${apiKey}`;
+      url = `${url}?_selected_model_group=${modelGroup}&startTime=${startTime}&endTime=${endTime}&api_key=${apiKey}&customer=${customer}`;
     }
     const response = await fetch(url, {
       method: "GET",
@@ -1031,6 +1034,38 @@ export const allTagNamesCall = async (
 
 
     console.log("in global/spend/all_tag_names call", url);
+    const response = await fetch(`${url}`, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+    if (!response.ok) {
+      const errorData = await response.text();
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log(data);
+    return data;
+  } catch (error) {
+    console.error("Failed to create key:", error);
+    throw error;
+  }
+};
+
+
+export const allEndUsersCall = async (
+  accessToken: String,
+) => {
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/global/all_end_users`
+      : `/global/all_end_users`;
+
+
+    console.log("in global/all_end_users call", url);
     const response = await fetch(`${url}`, {
       method: "GET",
       headers: {
