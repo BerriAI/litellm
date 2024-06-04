@@ -924,6 +924,16 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
       selected_customer = null;
     }
 
+    // make startTime and endTime to last hour of the day
+    startTime.setHours(0);
+    startTime.setMinutes(0);
+    startTime.setSeconds(0);
+
+    endTime.setHours(23);
+    endTime.setMinutes(59);
+    endTime.setSeconds(59);
+
+
     try {
       const modelMetricsResponse = await modelMetricsCall(
         accessToken,
