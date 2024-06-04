@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 import os
 
@@ -18,6 +18,8 @@ from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
     OTLPSpanExporter as OTLPSpanExporterGRPC,
 )
 from opentelemetry.sdk.trace.export import (
+    SpanExporter,
+    SimpleSpanProcessor,
     BatchSpanProcessor,
     ConsoleSpanExporter,
 )
@@ -28,7 +30,7 @@ LITELLM_RESOURCE = {"service.name": "litellm"}
 
 @dataclass
 class OpenTelemetryConfig:
-    exporter: str = field(default="console")
+    exporter: str | SpanExporter = "console"
     endpoint: Optional[str] = None
     bearer_token: Optional[str] = None
 
@@ -106,6 +108,9 @@ class OpenTelemetry(CustomLogger):
             return TraceContextTextMapPropagator().extract(carrier=carrier)
 
     def _get_span_processor(self):
+        if isinstance(self.config.exporter, SpanExporter):
+            return SimpleSpanProcessor(self.config.exporter)
+
         if self.config.exporter == "console":
             return BatchSpanProcessor(ConsoleSpanExporter())
         elif self.config.exporter == "otlp_http":
