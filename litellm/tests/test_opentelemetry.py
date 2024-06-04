@@ -3,6 +3,10 @@ import litellm
 
 from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from litellm._logging import verbose_logger
+import logging
+
+verbose_logger.setLevel(logging.DEBUG)
 
 
 def test_otel_callback():
