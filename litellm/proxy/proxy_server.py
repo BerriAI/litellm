@@ -11615,6 +11615,7 @@ async def model_metrics(
     _selected_model_group: Optional[str] = "gpt-4-32k",
     startTime: Optional[datetime] = None,
     endTime: Optional[datetime] = None,
+    api_key: Optional[str] = None,
 ):
     global prisma_client, llm_router
     if prisma_client is None:
@@ -11639,6 +11640,12 @@ async def model_metrics(
         WHERE
             "startTime" BETWEEN $2::timestamp AND $3::timestamp
             AND "model_group" = $1 AND "cache_hit" != 'True'
+            AND (
+                CASE
+                    WHEN $4 IS NOT NULL THEN "api_key" = $4
+                    ELSE TRUE
+                END
+            )
         GROUP BY
             api_base,
             model_group,
@@ -11651,7 +11658,7 @@ async def model_metrics(
     """
     _all_api_bases = set()
     db_response = await prisma_client.db.query_raw(
-        sql_query, _selected_model_group, startTime, endTime
+        sql_query, _selected_model_group, startTime, endTime, api_key
     )
     _daily_entries: dict = {}  # {"Jun 23": {"model1": 0.002, "model2": 0.003}}
 
@@ -11710,6 +11717,7 @@ async def model_metrics_slow_responses(
     _selected_model_group: Optional[str] = "gpt-4-32k",
     startTime: Optional[datetime] = None,
     endTime: Optional[datetime] = None,
+    api_key: Optional[str] = None,
 ):
     global prisma_client, llm_router, proxy_logging_obj
     if prisma_client is None:
@@ -11742,6 +11750,12 @@ WHERE
     AND "cache_hit" != 'True'
     AND "startTime" >= $3::timestamp
     AND "startTime" <= $4::timestamp
+    AND (
+        CASE
+            WHEN $5 IS NOT NULL THEN "api_key" = $4
+            ELSE TRUE
+        END
+    )
 GROUP BY
     api_base
 ORDER BY
@@ -11749,7 +11763,12 @@ ORDER BY
     """
 
     db_response = await prisma_client.db.query_raw(
-        sql_query, alerting_threshold, _selected_model_group, startTime, endTime
+        sql_query,
+        alerting_threshold,
+        _selected_model_group,
+        startTime,
+        endTime,
+        api_key,
     )
 
     if db_response is not None:
@@ -11773,6 +11792,7 @@ async def model_metrics_exceptions(
     _selected_model_group: Optional[str] = None,
     startTime: Optional[datetime] = None,
     endTime: Optional[datetime] = None,
+    api_key: Optional[str] = None,
 ):
     global prisma_client, llm_router
     if prisma_client is None:
