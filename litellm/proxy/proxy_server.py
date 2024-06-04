@@ -11677,7 +11677,7 @@ async def model_metrics(
         FROM
             "LiteLLM_SpendLogs"
         WHERE
-            "startTime" BETWEEN $2::timestamp AND $3::timestamp
+            "startTime" >= $2::timestamp AND "startTime" <= $3::timestamp
             AND "model_group" = $1 AND "cache_hit" != 'True'
             AND (
                 CASE
