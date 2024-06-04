@@ -135,10 +135,17 @@ print(f"run_thread: {run_thread}")
 </TabItem>
 <TabItem value="proxy" label="PROXY">
 
-```bash
-$ export OPENAI_API_KEY="sk-..."
+```yaml
+assistant_settings:
+  custom_llm_provider: azure
+  litellm_params: 
+    api_key: os.environ/AZURE_API_KEY
+    api_base: os.environ/AZURE_API_BASE
+    api_version: os.environ/AZURE_API_VERSION
+```
 
-$ litellm
+```bash
+$ litellm --config /path/to/config.yaml
 
 # RUNNING on http://0.0.0.0:4000
 ```
