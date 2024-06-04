@@ -2534,6 +2534,56 @@ class OpenAIAssistantsAPI(BaseLLM):
 
         return response
 
+    async def async_run_thread_stream(
+        self,
+        client: AsyncOpenAI,
+        thread_id: str,
+        assistant_id: str,
+        additional_instructions: Optional[str],
+        instructions: Optional[str],
+        metadata: Optional[object],
+        model: Optional[str],
+        tools: Optional[Iterable[AssistantToolParam]],
+        event_handler: Optional[AssistantEventHandler],
+    ) -> AsyncAssistantStreamManager[AsyncAssistantEventHandler]:
+        data = {
+            "thread_id": thread_id,
+            "assistant_id": assistant_id,
+            "additional_instructions": additional_instructions,
+            "instructions": instructions,
+            "metadata": metadata,
+            "model": model,
+            "tools": tools,
+        }
+        if event_handler is not None:
+            data["event_handler"] = event_handler
+        return client.beta.threads.runs.stream(**data)  # type: ignore
+
+    def run_thread_stream(
+        self,
+        client: OpenAI,
+        thread_id: str,
+        assistant_id: str,
+        additional_instructions: Optional[str],
+        instructions: Optional[str],
+        metadata: Optional[object],
+        model: Optional[str],
+        tools: Optional[Iterable[AssistantToolParam]],
+        event_handler: Optional[AssistantEventHandler],
+    ) -> AssistantStreamManager[AssistantEventHandler]:
+        data = {
+            "thread_id": thread_id,
+            "assistant_id": assistant_id,
+            "additional_instructions": additional_instructions,
+            "instructions": instructions,
+            "metadata": metadata,
+            "model": model,
+            "tools": tools,
+        }
+        if event_handler is not None:
+            data["event_handler"] = event_handler
+        return client.beta.threads.runs.stream(**data)  # type: ignore
+
     # fmt: off
 
     @overload
@@ -2554,6 +2604,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         organization: Optional[str],
         client,
         arun_thread: Literal[True], 
+        event_handler: Optional[AssistantEventHandler],
     ) -> Coroutine[None, None, Run]:
         ...
 
@@ -2575,6 +2626,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         organization: Optional[str],
         client,
         arun_thread: Optional[Literal[False]], 
+        event_handler: Optional[AssistantEventHandler],
     ) -> Run: 
         ...
 
@@ -2597,8 +2649,29 @@ class OpenAIAssistantsAPI(BaseLLM):
         organization: Optional[str],
         client=None,
         arun_thread=None,
+        event_handler: Optional[AssistantEventHandler] = None,
     ):
         if arun_thread is not None and arun_thread == True:
+            if stream is not None and stream == True:
+                _client = self.async_get_openai_client(
+                    api_key=api_key,
+                    api_base=api_base,
+                    timeout=timeout,
+                    max_retries=max_retries,
+                    organization=organization,
+                    client=client,
+                )
+                return self.async_run_thread_stream(
+                    client=_client,
+                    thread_id=thread_id,
+                    assistant_id=assistant_id,
+                    additional_instructions=additional_instructions,
+                    instructions=instructions,
+                    metadata=metadata,
+                    model=model,
+                    tools=tools,
+                    event_handler=event_handler,
+                )
             return self.arun_thread(
                 thread_id=thread_id,
                 assistant_id=assistant_id,
@@ -2623,6 +2696,19 @@ class OpenAIAssistantsAPI(BaseLLM):
             organization=organization,
             client=client,
         )
+
+        if stream is not None and stream == True:
+            return self.run_thread_stream(
+                client=openai_client,
+                thread_id=thread_id,
+                assistant_id=assistant_id,
+                additional_instructions=additional_instructions,
+                instructions=instructions,
+                metadata=metadata,
+                model=model,
+                tools=tools,
+                event_handler=event_handler,
+            )
 
         response = openai_client.beta.threads.runs.create_and_poll(  # type: ignore
             thread_id=thread_id,

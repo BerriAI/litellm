@@ -905,6 +905,14 @@ async def arun_thread(
         )
 
 
+def run_thread_stream(
+    *,
+    event_handler: Optional[AssistantEventHandler] = None,
+    **kwargs,
+) -> AssistantStreamManager[AssistantEventHandler]:
+    return run_thread(stream=True, event_handler=event_handler, **kwargs)  # type: ignore
+
+
 def run_thread(
     custom_llm_provider: Literal["openai", "azure"],
     thread_id: str,
@@ -916,6 +924,7 @@ def run_thread(
     stream: Optional[bool] = None,
     tools: Optional[Iterable[AssistantToolParam]] = None,
     client: Optional[Any] = None,
+    event_handler: Optional[AssistantEventHandler] = None,  # for stream=True calls
     **kwargs,
 ) -> Run:
     """Run a given thread + assistant."""
@@ -959,6 +968,7 @@ def run_thread(
             or litellm.openai_key
             or os.getenv("OPENAI_API_KEY")
         )
+
         response = openai_assistants_api.run_thread(
             thread_id=thread_id,
             assistant_id=assistant_id,
@@ -975,6 +985,7 @@ def run_thread(
             organization=organization,
             client=client,
             arun_thread=arun_thread,
+            event_handler=event_handler,
         )
     elif custom_llm_provider == "azure":
         api_base = (
