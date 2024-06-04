@@ -1025,9 +1025,11 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const FilterByContent = (
       <div >
         <Text className="mb-1">Select API Key Name</Text>
-        
 
-        <Select defaultValue="all-keys">
+        {
+          premiumUser ? (
+            <div>
+              <Select defaultValue="all-keys">
                   <SelectItem
                     key="all-keys"
                     value="all-keys"
@@ -1092,6 +1094,85 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
             }
           </Select>
             
+            </div>
+          ): (
+            <div>
+
+<Select defaultValue="all-keys">
+                  <SelectItem
+                    key="all-keys"
+                    value="all-keys"
+                    onClick={() => {
+                      setSelectedAPIKey(null);
+                    }}
+                  >
+                    All Keys
+                  </SelectItem>
+                    {keys?.map((key: any, index: number) => {
+                      if (
+                        key &&
+                        key["key_alias"] !== null &&
+                        key["key_alias"].length > 0
+                      ) {
+                        return (
+                          
+                          <SelectItem
+                            key={index}
+                            value={String(index)}
+                            // @ts-ignore
+                            disabled={true}
+                            onClick={() => {
+                              setSelectedAPIKey(key);
+                            }}
+                          >
+                            ✨ {key["key_alias"]} (Enterpise only Feature) 
+                          </SelectItem>
+                        );
+                      }
+                      return null; // Add this line to handle the case when the condition is not met
+                    })}
+                  </Select>
+          
+
+          <Text className="mt-1">
+            Select Customer Name
+          </Text>
+          
+          <Select defaultValue="all-customers">
+          <SelectItem
+            key="all-customers"
+            value="all-customers"
+            onClick={() => {
+              setSelectedCustomer(null);
+            }}
+          >
+            All Customers
+            </SelectItem>
+            {
+              allEndUsers?.map((user: any, index: number) => {
+                return (
+                  <SelectItem
+                    key={index}
+                    value={user}
+                    // @ts-ignore
+                    disabled={true}
+                    onClick={() => {
+                      setSelectedCustomer(user);
+                    }}
+                  >
+                    ✨ {user} (Enterpise only Feature) 
+                  </SelectItem>
+                );
+              })
+            }
+          </Select>
+            
+            </div>
+          )
+        }
+        
+
+        
             
 
         </div>
