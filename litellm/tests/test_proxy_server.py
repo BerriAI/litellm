@@ -604,11 +604,12 @@ def test_load_router_config(mock_cache, fake_env_vars):
 # test_load_router_config()
 
 from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
-
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 @mock_patch_acompletion()
-def test_otel_with_proxy_server(mock_acompletion, client_no_auth, capsys):
-    litellm.callbacks = [OpenTelemetry(OpenTelemetryConfig(exporter="console"))]
+def test_otel_with_proxy_server(mock_acompletion, client_no_auth):
+    exporter = InMemorySpanExporter()
+    litellm.callbacks = [OpenTelemetry(OpenTelemetryConfig(exporter=exporter))]
 
     data = {"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "hi"}]}
 
@@ -626,4 +627,5 @@ def test_otel_with_proxy_server(mock_acompletion, client_no_auth, capsys):
     assert response.status_code == 200
     assert response.json() == example_completion_result
 
-    print(capsys.readouterr())
+    spans = exporter.get_finished_spans()
+    assert len(spans) == 0
