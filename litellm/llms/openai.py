@@ -2534,7 +2534,7 @@ class OpenAIAssistantsAPI(BaseLLM):
 
         return response
 
-    async def async_run_thread_stream(
+    def async_run_thread_stream(
         self,
         client: AsyncOpenAI,
         thread_id: str,
