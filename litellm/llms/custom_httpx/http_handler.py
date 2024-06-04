@@ -84,9 +84,9 @@ class AsyncHTTPHandler:
             response.raise_for_status()
             return response
         except httpx.HTTPStatusError as e:
-            raise
+            raise e
         except Exception as e:
-            raise
+            raise e
 
     def __del__(self) -> None:
         try:

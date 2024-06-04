@@ -3724,7 +3724,7 @@ async def amoderation(input: str, model: str, api_key: Optional[str] = None, **k
 
 ##### Image Generation #######################
 @client
-async def aimage_generation(*args, **kwargs):
+async def aimage_generation(*args, **kwargs) -> ImageResponse:
     """
     Asynchronously calls the `image_generation` function with the given arguments and keyword arguments.
 
@@ -3757,6 +3757,8 @@ async def aimage_generation(*args, **kwargs):
         if isinstance(init_response, dict) or isinstance(
             init_response, ImageResponse
         ):  ## CACHING SCENARIO
+            if isinstance(init_response, dict):
+                init_response = ImageResponse(**init_response)
             response = init_response
         elif asyncio.iscoroutine(init_response):
             response = await init_response
@@ -3792,7 +3794,7 @@ def image_generation(
     litellm_logging_obj=None,
     custom_llm_provider=None,
     **kwargs,
-):
+) -> ImageResponse:
     """
     Maps the https://api.openai.com/v1/images/generations endpoint.
 
