@@ -3,6 +3,7 @@ from typing import Optional
 from dataclasses import dataclass
 
 from litellm.integrations.custom_logger import CustomLogger
+from litellm._logging import verbose_logger
 
 LITELLM_TRACER_NAME = "litellm"
 LITELLM_RESOURCE = {"service.name": "litellm"}
@@ -14,14 +15,23 @@ class OpenTelemetryConfig:
 
     exporter: str | SpanExporter = "console"
     endpoint: Optional[str] = None
-    bearer_token: Optional[str] = None
+    headers: Optional[str] = None
 
     @classmethod
     def from_env(cls):
+        """
+        OTEL_HEADERS=x-honeycomb-team=B85YgLm9****
+        OTEL_EXPORTER="otlp_http"
+        OTEL_ENDPOINT="https://api.honeycomb.io/v1/traces"
+
+        OTEL_HEADERS gets sent as headers = {"x-honeycomb-team": "B85YgLm96******"}
+        """
         return cls(
             exporter=os.getenv("OTEL_EXPORTER", "console"),
             endpoint=os.getenv("OTEL_ENDPOINT"),
-            bearer_token=os.getenv("OTEL_BEARER_TOKEN"),
+            headers=os.getenv(
+                "OTEL_HEADERS"
+            ),  # example: OTEL_HEADERS=x-honeycomb-team=B85YgLm96VGdFisfJVme1H"
         )
 
 
@@ -32,8 +42,9 @@ class OpenTelemetry(CustomLogger):
         from opentelemetry.sdk.trace import TracerProvider
 
         self.config = config
+        self.OTEL_EXPORTER = self.config.exporter
         self.OTEL_ENDPOINT = self.config.endpoint
-        self.OTEL_BEARER_TOKEN = self.config.bearer_token
+        self.OTEL_HEADERS = self.config.headers
         provider = TracerProvider(resource=Resource(attributes=LITELLM_RESOURCE))
         provider.add_span_processor(self._get_span_processor())
 
@@ -65,6 +76,12 @@ class OpenTelemetry(CustomLogger):
 
     def _handle_sucess(self, kwargs, response_obj, start_time, end_time):
         from opentelemetry.trace import Status, StatusCode
+
+        verbose_logger.debug(
+            "OpenTelemetry Logger: Logging kwargs: %s, OTEL config settings=%s",
+            kwargs,
+            self.config,
+        )
 
         span = self.tracer.start_span(
             name=self._get_span_name(kwargs),
@@ -128,23 +145,31 @@ class OpenTelemetry(CustomLogger):
             OTLPSpanExporter as OTLPSpanExporterGRPC,
         )
 
+        verbose_logger.debug(
+            "OpenTelemetry Logger, initializing span processor \nself.OTEL_EXPORTER: %s\nself.OTEL_ENDPOINT: %s\nself.OTEL_HEADERS: %s",
+            self.OTEL_EXPORTER,
+            self.OTEL_ENDPOINT,
+            self.OTEL_HEADERS,
+        )
+        _split_otel_headers = {}
+        if self.OTEL_HEADERS is not None and isinstance(self.OTEL_HEADERS, str):
+            _split_otel_headers = self.OTEL_HEADERS.split("=")
+            _split_otel_headers = {_split_otel_headers[0]: _split_otel_headers[1]}
         if isinstance(self.config.exporter, SpanExporter):
             return SimpleSpanProcessor(self.config.exporter)
 
-        if self.config.exporter == "console":
+        if self.OTEL_EXPORTER == "console":
             return BatchSpanProcessor(ConsoleSpanExporter())
-        elif self.config.exporter == "otlp_http":
+        elif self.OTEL_EXPORTER == "otlp_http":
             return BatchSpanProcessor(
                 OTLPSpanExporterHTTP(
-                    endpoint=self.OTEL_ENDPOINT,
-                    headers={"Authorization": f"Bearer {self.OTEL_BEARER_TOKEN}"},
+                    endpoint=self.OTEL_ENDPOINT, headers=_split_otel_headers
                 )
             )
-        elif self.config.exporter == "otlp_grpc":
+        elif self.OTEL_EXPORTER == "otlp_grpc":
             return BatchSpanProcessor(
                 OTLPSpanExporterGRPC(
-                    endpoint=self.OTEL_ENDPOINT,
-                    headers={"Authorization": f"Bearer {self.OTEL_BEARER_TOKEN}"},
+                    endpoint=self.OTEL_ENDPOINT, headers=_split_otel_headers
                 )
             )
         else:
