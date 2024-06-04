@@ -1500,7 +1500,7 @@
         "max_pdf_size_mb": 30,
         "input_cost_per_token": 0, 
         "output_cost_per_token": 0,
-        "litellm_provider": "vertex_ai-language-models",
+        "litellm_provider": "gemini",
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
