@@ -4,7 +4,6 @@ from dataclasses import dataclass
 
 from litellm.integrations.custom_logger import CustomLogger
 
-
 LITELLM_TRACER_NAME = "litellm"
 LITELLM_RESOURCE = {"service.name": "litellm"}
 
@@ -40,6 +39,17 @@ class OpenTelemetry(CustomLogger):
 
         trace.set_tracer_provider(provider)
         self.tracer = trace.get_tracer(LITELLM_TRACER_NAME)
+
+        if bool(os.getenv("DEBUG_OTEL", False)) is True:
+            # Set up logging
+            import logging
+
+            logging.basicConfig(level=logging.DEBUG)
+            logger = logging.getLogger(__name__)
+
+            # Enable OpenTelemetry logging
+            otel_exporter_logger = logging.getLogger("opentelemetry.sdk.trace.export")
+            otel_exporter_logger.setLevel(logging.DEBUG)
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
         self._handle_sucess(kwargs, response_obj, start_time, end_time)
