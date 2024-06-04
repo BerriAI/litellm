@@ -152,7 +152,7 @@ async def test_completion_databricks(sync_mode):
     response_format_tests(response=response)
 
 
-# @pytest.mark.skip(reason="local test")
+# @pytest.mark.skip(reason="local only test")
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_completion_predibase(sync_mode):
