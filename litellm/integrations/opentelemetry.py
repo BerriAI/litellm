@@ -155,22 +155,43 @@ class OpenTelemetry(CustomLogger):
         if self.OTEL_HEADERS is not None and isinstance(self.OTEL_HEADERS, str):
             _split_otel_headers = self.OTEL_HEADERS.split("=")
             _split_otel_headers = {_split_otel_headers[0]: _split_otel_headers[1]}
-        if isinstance(self.config.exporter, SpanExporter):
-            return SimpleSpanProcessor(self.config.exporter)
+
+        if isinstance(self.OTEL_EXPORTER, SpanExporter):
+            verbose_logger.debug(
+                "OpenTelemetry: intiializing SpanExporter. Value of OTEL_EXPORTER: %s",
+                self.OTEL_EXPORTER,
+            )
+            return SimpleSpanProcessor(self.OTEL_EXPORTER)
 
         if self.OTEL_EXPORTER == "console":
+            verbose_logger.debug(
+                "OpenTelemetry: intiializing console exporter. Value of OTEL_EXPORTER: %s",
+                self.OTEL_EXPORTER,
+            )
             return BatchSpanProcessor(ConsoleSpanExporter())
         elif self.OTEL_EXPORTER == "otlp_http":
+            verbose_logger.debug(
+                "OpenTelemetry: intiializing http exporter. Value of OTEL_EXPORTER: %s",
+                self.OTEL_EXPORTER,
+            )
             return BatchSpanProcessor(
                 OTLPSpanExporterHTTP(
                     endpoint=self.OTEL_ENDPOINT, headers=_split_otel_headers
                 )
             )
         elif self.OTEL_EXPORTER == "otlp_grpc":
+            verbose_logger.debug(
+                "OpenTelemetry: intiializing grpc exporter. Value of OTEL_EXPORTER: %s",
+                self.OTEL_EXPORTER,
+            )
             return BatchSpanProcessor(
                 OTLPSpanExporterGRPC(
                     endpoint=self.OTEL_ENDPOINT, headers=_split_otel_headers
                 )
             )
         else:
+            verbose_logger.debug(
+                "OpenTelemetry: intiializing console exporter. Value of OTEL_EXPORTER: %s",
+                self.OTEL_EXPORTER,
+            )
             return BatchSpanProcessor(ConsoleSpanExporter())
