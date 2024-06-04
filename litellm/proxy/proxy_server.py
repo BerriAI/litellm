@@ -11615,6 +11615,7 @@ async def model_metrics(
     _selected_model_group: Optional[str] = "gpt-4-32k",
     startTime: Optional[datetime] = None,
     endTime: Optional[datetime] = None,
+    api_key: Optional[str] = None,
 ):
     global prisma_client, llm_router
     if prisma_client is None:
@@ -11626,6 +11627,9 @@ async def model_metrics(
         )
     startTime = startTime or datetime.now() - timedelta(days=30)
     endTime = endTime or datetime.now()
+
+    if api_key is None or api_key == "undefined":
+        api_key = "null"
 
     sql_query = """
         SELECT
@@ -11639,6 +11643,12 @@ async def model_metrics(
         WHERE
             "startTime" BETWEEN $2::timestamp AND $3::timestamp
             AND "model_group" = $1 AND "cache_hit" != 'True'
+            AND (
+                CASE
+                    WHEN $4 != 'null' THEN "api_key" = $4
+                    ELSE TRUE
+                END
+            )
         GROUP BY
             api_base,
             model_group,
@@ -11651,7 +11661,7 @@ async def model_metrics(
     """
     _all_api_bases = set()
     db_response = await prisma_client.db.query_raw(
-        sql_query, _selected_model_group, startTime, endTime
+        sql_query, _selected_model_group, startTime, endTime, api_key
     )
     _daily_entries: dict = {}  # {"Jun 23": {"model1": 0.002, "model2": 0.003}}
 
@@ -11710,6 +11720,7 @@ async def model_metrics_slow_responses(
     _selected_model_group: Optional[str] = "gpt-4-32k",
     startTime: Optional[datetime] = None,
     endTime: Optional[datetime] = None,
+    api_key: Optional[str] = None,
 ):
     global prisma_client, llm_router, proxy_logging_obj
     if prisma_client is None:
@@ -11719,6 +11730,9 @@ async def model_metrics_slow_responses(
             param="None",
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
+    if api_key is None or api_key == "undefined":
+        api_key = "null"
+
     startTime = startTime or datetime.now() - timedelta(days=30)
     endTime = endTime or datetime.now()
 
@@ -11742,6 +11756,12 @@ WHERE
     AND "cache_hit" != 'True'
     AND "startTime" >= $3::timestamp
     AND "startTime" <= $4::timestamp
+    AND (
+        CASE
+            WHEN $5 != 'null' THEN "api_key" = $5
+            ELSE TRUE
+        END
+    )
 GROUP BY
     api_base
 ORDER BY
@@ -11749,7 +11769,12 @@ ORDER BY
     """
 
     db_response = await prisma_client.db.query_raw(
-        sql_query, alerting_threshold, _selected_model_group, startTime, endTime
+        sql_query,
+        alerting_threshold,
+        _selected_model_group,
+        startTime,
+        endTime,
+        api_key,
     )
 
     if db_response is not None:
@@ -11773,6 +11798,7 @@ async def model_metrics_exceptions(
     _selected_model_group: Optional[str] = None,
     startTime: Optional[datetime] = None,
     endTime: Optional[datetime] = None,
+    api_key: Optional[str] = None,
 ):
     global prisma_client, llm_router
     if prisma_client is None:
@@ -11786,6 +11812,9 @@ async def model_metrics_exceptions(
     startTime = startTime or datetime.now() - timedelta(days=30)
     endTime = endTime or datetime.now()
 
+    if api_key is None or api_key == "undefined":
+        api_key = "null"
+
     """
     """
     sql_query = """
@@ -11795,7 +11824,10 @@ async def model_metrics_exceptions(
                 exception_type,
                 COUNT(*) AS num_rate_limit_exceptions
             FROM "LiteLLM_ErrorLogs"
-            WHERE "startTime" >= $1::timestamp AND "endTime" <= $2::timestamp AND model_group = $3
+            WHERE 
+                "startTime" >= $1::timestamp 
+                AND "endTime" <= $2::timestamp 
+                AND model_group = $3
             GROUP BY combined_model_api_base, exception_type
         )
         SELECT 
@@ -11808,7 +11840,7 @@ async def model_metrics_exceptions(
         LIMIT 200;
     """
     db_response = await prisma_client.db.query_raw(
-        sql_query, startTime, endTime, _selected_model_group
+        sql_query, startTime, endTime, _selected_model_group, api_key
     )
     response: List[dict] = []
     exception_types = set()
