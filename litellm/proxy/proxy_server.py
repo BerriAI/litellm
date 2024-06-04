@@ -6039,12 +6039,12 @@ async def get_messages(
             )
 
 
-@router.get(
+@router.post(
     "/v1/threads/{thread_id}/runs",
     dependencies=[Depends(user_api_key_auth)],
     tags=["assistants"],
 )
-@router.get(
+@router.post(
     "/threads/{thread_id}/runs",
     dependencies=[Depends(user_api_key_auth)],
     tags=["assistants"],
