@@ -132,7 +132,7 @@ async def test_add_message_litellm(sync_mode, provider):
 @pytest.mark.parametrize("provider", ["openai", "azure"])
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
-async def test_run_thread_litellm(sync_mode, provider):
+async def test_aarun_thread_litellm(sync_mode, provider):
     """
     - Get Assistants
     - Create thread
