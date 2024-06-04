@@ -2399,6 +2399,12 @@ class ProxyConfig:
                                 and callback in known_compatible_callbacks
                             ):
                                 imported_list.append(callback)
+                            elif isinstance(callback, str) and callback == "otel":
+                                from litellm.integrations.opentelemetry import (
+                                    OpenTelemetry,
+                                )
+
+                                imported_list.append(OpenTelemetry())
                             elif isinstance(callback, str) and callback == "presidio":
                                 from litellm.proxy.hooks.presidio_pii_masking import (
                                     _OPTIONAL_PresidioPIIMasking,

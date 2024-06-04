@@ -33,6 +33,8 @@ class OpenTelemetry(CustomLogger):
         from opentelemetry.sdk.trace import TracerProvider
 
         self.config = config
+        self.OTEL_ENDPOINT = self.config.endpoint
+        self.OTEL_BEARER_TOKEN = self.config.bearer_token
         provider = TracerProvider(resource=Resource(attributes=LITELLM_RESOURCE))
         provider.add_span_processor(self._get_span_processor())
 
