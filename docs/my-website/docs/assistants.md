@@ -34,9 +34,15 @@ Call an existing Assistant.
 from litellm import get_assistants, aget_assistants
 import os 
 
+# setup env
 os.environ["OPENAI_API_KEY"] = "sk-.."
+os.environ["AZURE_API_KEY"] = "sk-.."
+os.environ["AZURE_API_BASE"] = "https://..."
+os.environ["AZURE_API_VERSION"] = "2024-02-15-preview"
 
 assistants = get_assistants(custom_llm_provider="openai")
+
+assistants = get_assistants(custom_llm_provider="azure")
 
 ### ASYNC USAGE ### 
 # assistants = await aget_assistants(custom_llm_provider="openai")
