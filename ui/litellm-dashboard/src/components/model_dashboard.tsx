@@ -1045,7 +1045,17 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
           <Text className="mt-1">
             Select Customer Name
           </Text>
-          <Select>
+          
+          <Select defaultValue="all-customers">
+          <SelectItem
+            key="all-customers"
+            value="all-customers"
+            onClick={() => {
+              setSelectedAPIKey(null);
+            }}
+          >
+            All Customers
+            </SelectItem>
             {
               allEndUsers?.map((user: any, index: number) => {
                 return (
