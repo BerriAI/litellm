@@ -320,6 +320,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
 
   const [showAdvancedFilters, setShowAdvancedFilters] = useState<boolean>(false);
   const [selectedAPIKey, setSelectedAPIKey] = useState<any | null>(null);
+  const [selectedCustomer, setSelectedCustomer] = useState<any | null>(null);
 
   const [allEndUsers, setAllEndUsers] = useState<any[]>([]);
 
@@ -329,7 +330,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
       dateValue.from,
       dateValue.to
     );
-  }, [selectedAPIKey]);
+  }, [selectedAPIKey, selectedCustomer]);
 
   function formatCreatedAt(createdAt: string | null) {
     if (createdAt) {
@@ -918,6 +919,11 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
       selected_token = null;
     }
 
+    let selected_customer = selectedCustomer;
+    if (selected_customer === undefined) {
+      selected_customer = null;
+    }
+
     try {
       const modelMetricsResponse = await modelMetricsCall(
         accessToken,
@@ -926,7 +932,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
         modelGroup,
         startTime.toISOString(),
         endTime.toISOString(),
-        selected_token
+        selected_token,
+        selected_customer
       );
       console.log("Model metrics response:", modelMetricsResponse);
 
@@ -954,7 +961,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
         modelGroup,
         startTime.toISOString(),
         endTime.toISOString(),
-        selected_token
+        selected_token,
+        selected_customer
       );
       console.log("Model exceptions response:", modelExceptionsResponse);
       setModelExceptions(modelExceptionsResponse.data);
@@ -967,7 +975,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
         modelGroup,
         startTime.toISOString(),
         endTime.toISOString(),
-        selected_token
+        selected_token,
+        selected_customer
       );
 
       console.log("slowResponses:", slowResponses);
@@ -1051,7 +1060,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
             key="all-customers"
             value="all-customers"
             onClick={() => {
-              setSelectedAPIKey(null);
+              setSelectedCustomer(null);
             }}
           >
             All Customers
@@ -1062,9 +1071,9 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                   <SelectItem
                     key={index}
                     value={user}
-                    // onClick={() => {
-                    //   setSelectedEndUser(user);
-                    // }}
+                    onClick={() => {
+                      setSelectedCustomer(user);
+                    }}
                   >
                     {user}
                   </SelectItem>
