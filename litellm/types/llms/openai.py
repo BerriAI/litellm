@@ -136,9 +136,43 @@ class Attachment(TypedDict, total=False):
     """The tools to add this file to."""
 
 
+class ImageFileObject(TypedDict):
+    file_id: Required[str]
+    detail: Optional[str]
+
+
+class ImageURLObject(TypedDict):
+    url: Required[str]
+    detail: Optional[str]
+
+
+class MessageContentTextObject(TypedDict):
+    type: Required[Literal["text"]]
+    text: str
+
+
+class MessageContentImageFileObject(TypedDict):
+    type: Literal["image_file"]
+    image_file: ImageFileObject
+
+
+class MessageContentImageURLObject(TypedDict):
+    type: Required[str]
+    image_url: ImageURLObject
+
+
 class MessageData(TypedDict):
     role: Literal["user", "assistant"]
-    content: str
+    content: Union[
+        str,
+        List[
+            Union[
+                MessageContentTextObject,
+                MessageContentImageFileObject,
+                MessageContentImageURLObject,
+            ]
+        ],
+    ]
     attachments: Optional[List[Attachment]]
     metadata: Optional[dict]
 
