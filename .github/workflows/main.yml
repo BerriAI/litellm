@@ -2,33 +2,57 @@ name: Publish Dev Release to PyPI
 
 on:
   workflow_dispatch:
-  
+
 jobs:
   publish-dev-release:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v2
+    - name: Checkout code
+      uses: actions/checkout@v2
 
-      - name: Set up Python
-        uses: actions/setup-python@v2
-        with:
-          python-version: 3.8  # Adjust the Python version as needed
+    - name: Set up Python
+      uses: actions/setup-python@v2
+      with:
+        python-version: 3.8
 
-      - name: Install dependencies
-        run: pip install toml twine
+    - name: Install dependencies
+      run: pip install toml twine
 
-      - name: Read version from pyproject.toml
-        id: read-version
-        run: |
-          version=$(python -c 'import toml; print(toml.load("pyproject.toml")["tool"]["commitizen"]["version"])')
-          printf "LITELLM_VERSION=%s" "$version" >> $GITHUB_ENV
+    - name: Read version from pyproject.toml
+      id: read-version
+      run: |
+        version=$(python -c 'import toml; print(toml.load("pyproject.toml")["tool"]["commitizen"]["version"])')
+        printf "LITELLM_VERSION=%s" "$version" >> $GITHUB_ENV
 
-      - name: Check if version exists on PyPI
-        id: check-version
-        run: |
-          set -e
-          if twine check --repository-url https://pypi.org/simple/ "litellm==$LITELLM_VERSION" >/dev/null 2>&1; then
-            echo "Version $LITELLM_VERSION already exists on PyPI. Skipping publish."
-     
+    - name: Check if version exists on PyPI
+      id: check-version
+      run: |
+        set -e
+        if twine check --repository-url https://pypi.org/simple/ "litellm==$LITELLM_VERSION" >/dev/null 2>&1; then
+          echo "Version $LITELLM_VERSION already exists on PyPI. Skipping publish."
+        else
+          echo "Version $LITELLM_VERSION does not exist on PyPI. Proceeding with publish."
+          echo "Install TOML package."
+          python -m pip install toml
+          PACKAGE_NAME=$(python -c "import toml; print(toml.load('pyproject.toml')['tool']['poetry']['name'])")
+          if ! pip show -v $PACKAGE_NAME | grep -q "Version: ${LITELLM_VERSION}"; then
+            echo "pyproject.toml modified"
+            echo -e "[pypi]\nusername = ${{ secrets.PYPI_PUBLISH_USERNAME }}\npassword = ${{ secrets.PYPI_PUBLISH_PASSWORD }}" > ~/.pypirc
+            python -m pip install --upgrade pip
+            pip install build
+            pip install wheel
+            pip install --upgrade twine setuptools
+            rm -rf build dist
+
+            echo "Building package"
+            python -m build
+
+            echo "Twine upload to dist"
+            echo "Contents of dist directory:"
+            ls dist/
+            twine upload --verbose dist/*
+          else
+            echo "Version ${LITELLM_VERSION} of package is already published on PyPI. Skipping PyPI publish."
+          fi
+        fi
