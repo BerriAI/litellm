@@ -56,6 +56,7 @@ import { BarChart, AreaChart } from "@tremor/react";
 import {
   Button as Button2,
   Modal,
+  Popover,
   Form,
   Input,
   Select as Select2,
@@ -80,6 +81,7 @@ import {
   RefreshIcon,
   CheckCircleIcon,
   XCircleIcon,
+  FilterIcon,
 } from "@heroicons/react/outline";
 import DeleteModelButton from "./delete_model_button";
 const { Title: Title2, Link } = Typography;
@@ -96,6 +98,7 @@ interface ModelDashboardProps {
   userRole: string | null;
   userID: string | null;
   modelData: any;
+  keys: any[] | null;
   setModelData: any;
   premiumUser: boolean;
 }
@@ -260,6 +263,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   userRole,
   userID,
   modelData = { data: [] },
+  keys,
   setModelData,
   premiumUser,
 }) => {
@@ -312,6 +316,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
 
   const [globalExceptionData, setGlobalExceptionData] =  useState<GlobalExceptionActivityData>({} as GlobalExceptionActivityData);
   const [globalExceptionPerDeployment, setGlobalExceptionPerDeployment] = useState<any[]>([]);
+
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState<boolean>(false);
 
   function formatCreatedAt(createdAt: string | null) {
     if (createdAt) {
@@ -968,6 +974,53 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
       console.error("Failed to fetch model metrics", error);
     }
   };
+
+
+  const FilterByContent = (
+      <div >
+        <Text className="mb-1">Select API Key Name</Text>
+        
+
+        <Select defaultValue="all-keys">
+                  <SelectItem
+                    key="all-keys"
+                    value="all-keys"
+                    // onClick={() => {
+                    //   updateEndUserData(dateValue.from, dateValue.to, null);
+                    // }}
+                  >
+                    All Keys
+                  </SelectItem>
+                    {keys?.map((key: any, index: number) => {
+                      if (
+                        key &&
+                        key["key_alias"] !== null &&
+                        key["key_alias"].length > 0
+                      ) {
+                        return (
+                          
+                          <SelectItem
+                            key={index}
+                            value={String(index)}
+                            // onClick={() => {
+                            //   updateEndUserData(dateValue.from, dateValue.to, key["token"]);
+                            // }}
+                          >
+                            {key["key_alias"]}
+                          </SelectItem>
+                        );
+                      }
+                      return null; // Add this line to handle the case when the condition is not met
+                    })}
+                  </Select>
+
+        {/* <Text className="mt-2 mb-1">Select Customer</Text>
+        <Select>
+        </Select> */}
+
+        </div>
+
+  );
 
   const customTooltip = (props: any) => {
     const { payload, active } = props;
@@ -1722,9 +1775,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
             </Card>
           </TabPanel>
           <TabPanel>
-            {/* <p style={{fontSize: '0.85rem', color: '#808080'}}>View how requests were load balanced within a model group</p> */}
-
-            <Grid numItems={2} className="mt-2">
+            <Grid numItems={3} className="mt-2">
               <Col>
                 <Text>Select Time Range</Text>
                 <DateRangePicker
@@ -1767,6 +1818,20 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                     </SelectItem>
                   ))}
                 </Select>
+              </Col>
+              <Col>
+
+                  <Popover 
+                    trigger="click" content={FilterByContent}
+                    >
+              <Button
+              icon={FilterIcon}
+              size="md"
+              className="mb-4 mt-6 ml-2"
+              onClick={() => setShowAdvancedFilters(true)}
+                >
+              </Button>      
+              </Popover>
               </Col>
             </Grid>
 
@@ -2035,7 +2100,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
           </TabPanel>
         </TabPanels>
       </TabGroup>
-    </div>
+    </div>  
   );
 };
 
