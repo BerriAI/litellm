@@ -11,8 +11,8 @@ class SchedulerCacheKeys(enum.Enum):
 
 
 class DefaultPriorities(enum.Enum):
-    High = 0
-    Medium = 128
+    High = 10  # allow for more urgent requests
+    Medium = 128  # used as default if no priority is set
     Low = 255
 
 

@@ -63,7 +63,7 @@ from litellm.types.llms.openai import (
     Run,
     AssistantToolParam,
 )
-from litellm.scheduler import Scheduler, FlowItem
+from litellm.scheduler import Scheduler, FlowItem, DefaultPriorities
 from typing import Iterable
 
 
@@ -944,10 +944,17 @@ class Router:
         self,
         model: str,
         messages: List[Dict[str, str]],
-        priority: int,
+        priority: Optional[int] = None,
         stream=False,
         **kwargs,
     ):
+        """
+        model - str : the Router 'model_name'
+        messages - List: the openai chat completion messages
+        priority - Optional[int] - if not set, defaults to DefaultPriorities.Medium
+        """
+        if priority is None:
+            priority = DefaultPriorities.Medium.value
         ### FLOW ITEM ###
         _request_id = str(uuid.uuid4())
         item = FlowItem(
