@@ -13,6 +13,12 @@ from openai.types.beta.threads.message import Message as OpenAIMessage
 from openai.types.beta.thread_create_params import (
     Message as OpenAICreateThreadParamsMessage,
 )
+from openai.lib.streaming._assistants import (
+    AssistantEventHandler,
+    AssistantStreamManager,
+    AsyncAssistantStreamManager,
+    AsyncAssistantEventHandler,
+)
 from openai.types.beta.assistant_tool_param import AssistantToolParam
 from openai.types.beta.threads.run import Run
 from openai.types.beta.assistant import Assistant
