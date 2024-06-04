@@ -885,6 +885,7 @@ def test_completion_mistral_api_mistral_large_function_call_with_streaming():
         idx = 0
         for chunk in response:
             print(f"chunk in response: {chunk}")
+            assert chunk._hidden_params["custom_llm_provider"] == "mistral"
             if idx == 0:
                 assert (
                     chunk.choices[0].delta.tool_calls[0].function.arguments is not None
@@ -898,7 +899,6 @@ def test_completion_mistral_api_mistral_large_function_call_with_streaming():
             elif chunk.choices[0].finish_reason is not None:  # last chunk
                 validate_final_streaming_function_calling_chunk(chunk=chunk)
             idx += 1
-        # raise Exception("it worked!")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
