@@ -51,6 +51,7 @@ import {
   modelSettingsCall,
   adminGlobalActivityExceptions,
   adminGlobalActivityExceptionsPerDeployment,
+  allEndUsersCall,
 } from "./networking";
 import { BarChart, AreaChart } from "@tremor/react";
 import {
@@ -319,6 +320,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
 
   const [showAdvancedFilters, setShowAdvancedFilters] = useState<boolean>(false);
   const [selectedAPIKey, setSelectedAPIKey] = useState<any | null>(null);
+
+  const [allEndUsers, setAllEndUsers] = useState<any[]>([]);
 
   useEffect(() => {
     updateModelMetrics(
@@ -700,6 +703,10 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
 
         setSlowResponsesData(slowResponses);
 
+        let all_end_users_data = await allEndUsersCall(accessToken);
+
+        setAllEndUsers(all_end_users_data?.end_users);
+
         const routerSettingsInfo = await getCallbacksCall(
           accessToken,
           userID,
@@ -1033,6 +1040,28 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                       return null; // Add this line to handle the case when the condition is not met
                     })}
                   </Select>
+          
+
+          <Text className="mt-1">
+            Select Customer Name
+          </Text>
+          <Select>
+            {
+              allEndUsers?.map((user: any, index: number) => {
+                return (
+                  <SelectItem
+                    key={index}
+                    value={user}
+                    // onClick={() => {
+                    //   setSelectedEndUser(user);
+                    // }}
+                  >
+                    {user}
+                  </SelectItem>
+                );
+              })
+            }
+          </Select>
             
             
 
