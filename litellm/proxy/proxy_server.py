@@ -8917,6 +8917,38 @@ async def global_spend_per_team():
     }
 
 
+@router.get(
+    "/global/all_end_users",
+    tags=["Budget & Spend Tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
+)
+async def global_view_all_end_users():
+    """
+    [BETA] This is a beta endpoint. It will change.
+
+    Use this to just get all the unique `end_users`
+    """
+    global prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail={"error": "No db connected"})
+
+    sql_query = """
+    SELECT DISTINCT end_user FROM "LiteLLM_SpendLogs"
+    """
+
+    db_response = await prisma_client.db.query_raw(query=sql_query)
+    if db_response is None:
+        return []
+
+    _end_users = []
+    for row in db_response:
+        _end_users.append(row["end_user"])
+
+    return {"end_users": _end_users}
+
+
 @router.post(
     "/global/spend/end_users",
     tags=["Budget & Spend Tracking"],
