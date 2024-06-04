@@ -138,6 +138,7 @@ const CreateKeyPage = () => {
               userID={userID}
               userRole={userRole}
               token={token}
+              keys={keys}
               accessToken={accessToken}
               modelData={modelData}
               setModelData={setModelData}

@@ -726,7 +726,8 @@ export const modelMetricsCall = async (
   userRole: String,
   modelGroup: String | null,
   startTime: String | undefined,
-  endTime: String | undefined
+  endTime: String | undefined,
+  apiKey: String | null,
 ) => {
   /**
    * Get all models on proxy
@@ -734,7 +735,7 @@ export const modelMetricsCall = async (
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/model/metrics` : `/model/metrics`;
     if (modelGroup) {
-      url = `${url}?_selected_model_group=${modelGroup}&startTime=${startTime}&endTime=${endTime}`;
+      url = `${url}?_selected_model_group=${modelGroup}&startTime=${startTime}&endTime=${endTime}&api_key=${apiKey}`;
     }
     // message.info("Requesting model data");
     const response = await fetch(url, {
@@ -805,7 +806,8 @@ export const modelMetricsSlowResponsesCall = async (
   userRole: String,
   modelGroup: String | null,
   startTime: String | undefined,
-  endTime: String | undefined
+  endTime: String | undefined,
+  apiKey: String | null
 ) => {
   /**
    * Get all models on proxy
@@ -815,7 +817,7 @@ export const modelMetricsSlowResponsesCall = async (
       ? `${proxyBaseUrl}/model/metrics/slow_responses`
       : `/model/metrics/slow_responses`;
     if (modelGroup) {
-      url = `${url}?_selected_model_group=${modelGroup}&startTime=${startTime}&endTime=${endTime}`;
+      url = `${url}?_selected_model_group=${modelGroup}&startTime=${startTime}&endTime=${endTime}&api_key=${apiKey}`;
     }
 
     // message.info("Requesting model data");
@@ -848,7 +850,8 @@ export const modelExceptionsCall = async (
   userRole: String,
   modelGroup: String | null,
   startTime: String | undefined,
-  endTime: String | undefined
+  endTime: String | undefined,
+  apiKey: String | null
 ) => {
   /**
    * Get all models on proxy
@@ -859,7 +862,7 @@ export const modelExceptionsCall = async (
       : `/model/metrics/exceptions`;
 
     if (modelGroup) {
-      url = `${url}?_selected_model_group=${modelGroup}&startTime=${startTime}&endTime=${endTime}`;
+      url = `${url}?_selected_model_group=${modelGroup}&startTime=${startTime}&endTime=${endTime}&api_key=${apiKey}`;
     }
     const response = await fetch(url, {
       method: "GET",
