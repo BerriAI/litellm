@@ -11648,6 +11648,7 @@ async def model_metrics(
     startTime: Optional[datetime] = None,
     endTime: Optional[datetime] = None,
     api_key: Optional[str] = None,
+    customer: Optional[str] = None,
 ):
     global prisma_client, llm_router
     if prisma_client is None:
@@ -11662,6 +11663,9 @@ async def model_metrics(
 
     if api_key is None or api_key == "undefined":
         api_key = "null"
+
+    if customer is None or customer == "undefined":
+        customer = "null"
 
     sql_query = """
         SELECT
@@ -11681,6 +11685,12 @@ async def model_metrics(
                     ELSE TRUE
                 END
             )
+            AND (
+                CASE
+                    WHEN $5 != 'null' THEN "end_user" = $5
+                    ELSE TRUE
+                END
+            )
         GROUP BY
             api_base,
             model_group,
@@ -11693,7 +11703,7 @@ async def model_metrics(
     """
     _all_api_bases = set()
     db_response = await prisma_client.db.query_raw(
-        sql_query, _selected_model_group, startTime, endTime, api_key
+        sql_query, _selected_model_group, startTime, endTime, api_key, customer
     )
     _daily_entries: dict = {}  # {"Jun 23": {"model1": 0.002, "model2": 0.003}}
 
@@ -11753,6 +11763,7 @@ async def model_metrics_slow_responses(
     startTime: Optional[datetime] = None,
     endTime: Optional[datetime] = None,
     api_key: Optional[str] = None,
+    customer: Optional[str] = None,
 ):
     global prisma_client, llm_router, proxy_logging_obj
     if prisma_client is None:
@@ -11764,6 +11775,9 @@ async def model_metrics_slow_responses(
         )
     if api_key is None or api_key == "undefined":
         api_key = "null"
+
+    if customer is None or customer == "undefined":
+        customer = "null"
 
     startTime = startTime or datetime.now() - timedelta(days=30)
     endTime = endTime or datetime.now()
@@ -11794,6 +11808,12 @@ WHERE
             ELSE TRUE
         END
     )
+    AND (
+        CASE
+            WHEN $6 != 'null' THEN "end_user" = $6
+            ELSE TRUE
+        END
+    )
 GROUP BY
     api_base
 ORDER BY
@@ -11807,6 +11827,7 @@ ORDER BY
         startTime,
         endTime,
         api_key,
+        customer,
     )
 
     if db_response is not None:
@@ -11831,6 +11852,7 @@ async def model_metrics_exceptions(
     startTime: Optional[datetime] = None,
     endTime: Optional[datetime] = None,
     api_key: Optional[str] = None,
+    customer: Optional[str] = None,
 ):
     global prisma_client, llm_router
     if prisma_client is None:
