@@ -1,28 +1,9 @@
-from dataclasses import dataclass
-from typing import Optional
 import os
+from typing import Optional
+from dataclasses import dataclass
 
 from litellm.integrations.custom_logger import CustomLogger
 
-from opentelemetry import trace
-
-from opentelemetry.trace import Status, StatusCode
-from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
-
-from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
-    OTLPSpanExporter as OTLPSpanExporterHTTP,
-)
-from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
-    OTLPSpanExporter as OTLPSpanExporterGRPC,
-)
-from opentelemetry.sdk.trace.export import (
-    SpanExporter,
-    SimpleSpanProcessor,
-    BatchSpanProcessor,
-    ConsoleSpanExporter,
-)
 
 LITELLM_TRACER_NAME = "litellm"
 LITELLM_RESOURCE = {"service.name": "litellm"}
@@ -30,6 +11,8 @@ LITELLM_RESOURCE = {"service.name": "litellm"}
 
 @dataclass
 class OpenTelemetryConfig:
+    from opentelemetry.sdk.trace.export import SpanExporter
+
     exporter: str | SpanExporter = "console"
     endpoint: Optional[str] = None
     bearer_token: Optional[str] = None
@@ -45,6 +28,10 @@ class OpenTelemetryConfig:
 
 class OpenTelemetry(CustomLogger):
     def __init__(self, config=OpenTelemetryConfig.from_env()):
+        from opentelemetry import trace
+        from opentelemetry.sdk.resources import Resource
+        from opentelemetry.sdk.trace import TracerProvider
+
         self.config = config
         provider = TracerProvider(resource=Resource(attributes=LITELLM_RESOURCE))
         provider.add_span_processor(self._get_span_processor())
@@ -65,6 +52,8 @@ class OpenTelemetry(CustomLogger):
         self._handle_failure(kwargs, response_obj, start_time, end_time)
 
     def _handle_sucess(self, kwargs, response_obj, start_time, end_time):
+        from opentelemetry.trace import Status, StatusCode
+
         span = self.tracer.start_span(
             name=self._get_span_name(kwargs),
             start_time=self._to_ns(start_time),
@@ -75,6 +64,8 @@ class OpenTelemetry(CustomLogger):
         span.end(end_time=self._to_ns(end_time))
 
     def _handle_failure(self, kwargs, response_obj, start_time, end_time):
+        from opentelemetry.trace import Status, StatusCode
+
         span = self.tracer.start_span(
             name=self._get_span_name(kwargs),
             start_time=self._to_ns(start_time),
@@ -96,6 +87,10 @@ class OpenTelemetry(CustomLogger):
         return f"litellm-{kwargs.get('call_type', 'completion')}"
 
     def _get_span_context(self, kwargs):
+        from opentelemetry.trace.propagation.tracecontext import (
+            TraceContextTextMapPropagator,
+        )
+
         litellm_params = kwargs.get("litellm_params", {}) or {}
         proxy_server_request = litellm_params.get("proxy_server_request", {}) or {}
         headers = proxy_server_request.get("headers", {}) or {}
@@ -108,6 +103,19 @@ class OpenTelemetry(CustomLogger):
             return TraceContextTextMapPropagator().extract(carrier=carrier)
 
     def _get_span_processor(self):
+        from opentelemetry.sdk.trace.export import (
+            SpanExporter,
+            SimpleSpanProcessor,
+            BatchSpanProcessor,
+            ConsoleSpanExporter,
+        )
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
+            OTLPSpanExporter as OTLPSpanExporterHTTP,
+        )
+        from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
+            OTLPSpanExporter as OTLPSpanExporterGRPC,
+        )
+
         if isinstance(self.config.exporter, SpanExporter):
             return SimpleSpanProcessor(self.config.exporter)
 
