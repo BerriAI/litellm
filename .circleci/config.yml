@@ -43,6 +43,7 @@ jobs:
             pip install "langfuse==2.27.1"
             pip install "logfire==0.29.0"
             pip install numpydoc
+            pip install traceloop-sdk==0.21.1
             pip install opentelemetry-api==1.25.0
             pip install opentelemetry-sdk==1.25.0
             pip install opentelemetry-exporter-otlp==1.25.0
