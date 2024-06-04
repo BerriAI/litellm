@@ -9838,15 +9838,19 @@ def exception_type(
                         response=original_exception.response,
                     )
                 elif (
-                    "invalid_request_error" in error_str
-                    and "content_policy_violation" in error_str
-                ) or (
-                    "The response was filtered due to the prompt triggering Azure OpenAI's content management"
-                    in error_str
+                    (
+                        "invalid_request_error" in error_str
+                        and "content_policy_violation" in error_str
+                    )
+                    or (
+                        "The response was filtered due to the prompt triggering Azure OpenAI's content management"
+                        in error_str
+                    )
+                    or "Your task failed as a result of our safety system" in error_str
                 ):
                     exception_mapping_worked = True
                     raise ContentPolicyViolationError(
-                        message=f"AzureException ContentPolicyViolationError - {original_exception.message}",
+                        message=f"litellm.ContentPolicyViolationError: AzureException - {original_exception.message}",
                         llm_provider="azure",
                         model=model,
                         litellm_debug_info=extra_information,
