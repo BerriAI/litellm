@@ -1982,6 +1982,9 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
               <Col>
               <Popover
                 trigger="click" content={FilterByContent}
+                overlayStyle={{
+                  width: "20vw"
+                }}
                 >
               <Button
               icon={FilterIcon}
