@@ -11628,6 +11628,9 @@ async def model_metrics(
     startTime = startTime or datetime.now() - timedelta(days=30)
     endTime = endTime or datetime.now()
 
+    if api_key is None or api_key == "undefined":
+        api_key = "null"
+
     sql_query = """
         SELECT
             api_base,
@@ -11642,7 +11645,7 @@ async def model_metrics(
             AND "model_group" = $1 AND "cache_hit" != 'True'
             AND (
                 CASE
-                    WHEN $4 IS NOT NULL THEN "api_key" = $4
+                    WHEN $4 != 'null' THEN "api_key" = $4
                     ELSE TRUE
                 END
             )
@@ -11727,6 +11730,9 @@ async def model_metrics_slow_responses(
             param="None",
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
+    if api_key is None or api_key == "undefined":
+        api_key = "null"
+
     startTime = startTime or datetime.now() - timedelta(days=30)
     endTime = endTime or datetime.now()
 
@@ -11752,7 +11758,7 @@ WHERE
     AND "startTime" <= $4::timestamp
     AND (
         CASE
-            WHEN $5 IS NOT NULL THEN "api_key" = $4
+            WHEN $5 != 'null' THEN "api_key" = $5
             ELSE TRUE
         END
     )
@@ -11806,6 +11812,9 @@ async def model_metrics_exceptions(
     startTime = startTime or datetime.now() - timedelta(days=30)
     endTime = endTime or datetime.now()
 
+    if api_key is None or api_key == "undefined":
+        api_key = "null"
+
     """
     """
     sql_query = """
@@ -11815,7 +11824,10 @@ async def model_metrics_exceptions(
                 exception_type,
                 COUNT(*) AS num_rate_limit_exceptions
             FROM "LiteLLM_ErrorLogs"
-            WHERE "startTime" >= $1::timestamp AND "endTime" <= $2::timestamp AND model_group = $3
+            WHERE 
+                "startTime" >= $1::timestamp 
+                AND "endTime" <= $2::timestamp 
+                AND model_group = $3
             GROUP BY combined_model_api_base, exception_type
         )
         SELECT 
@@ -11828,7 +11840,7 @@ async def model_metrics_exceptions(
         LIMIT 200;
     """
     db_response = await prisma_client.db.query_raw(
-        sql_query, startTime, endTime, _selected_model_group
+        sql_query, startTime, endTime, _selected_model_group, api_key
     )
     response: List[dict] = []
     exception_types = set()
