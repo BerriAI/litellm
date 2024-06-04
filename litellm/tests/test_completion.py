@@ -2185,12 +2185,6 @@ async def test_re_use_azure_async_client():
         pytest.fail("got Exception", e)
 
 
-# import asyncio
-# asyncio.run(
-#     test_re_use_azure_async_client()
-# )
-
-
 def test_re_use_openaiClient():
     try:
         print("gpt-3.5  with client test\n\n")
