@@ -846,6 +846,15 @@ def get_messages(
 
 
 ### RUNS ###
+def arun_thread_stream(
+    *,
+    event_handler: Optional[AssistantEventHandler] = None,
+    **kwargs,
+) -> AsyncAssistantStreamManager[AsyncAssistantEventHandler]:
+    kwargs["arun_thread"] = True
+    return run_thread(stream=True, event_handler=event_handler, **kwargs)  # type: ignore
+
+
 async def arun_thread(
     custom_llm_provider: Literal["openai", "azure"],
     thread_id: str,
