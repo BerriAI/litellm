@@ -1293,22 +1293,52 @@ def parse_xml_params(xml_content, json_schema: Optional[dict] = None):
     if json_schema is not None:  # check if we have a json schema for this function call
         # iterate over all properties in the schema
         for prop in json_schema["properties"]:
-            # If property is an array, get the nested items
             _element = root.find(f"parameters/{prop}")
-            if json_schema["properties"][prop]["type"] == "array":
+            # If property is an array, get the items
+            if json_schema["properties"][prop].get("type", None) == "array":
                 items = []
                 if _element is not None:
-                    for value in _element:
-                        try:
-                            if value.text is not None:
-                                _value = json.loads(value.text)
-                            else:
-                                continue
-                        except json.JSONDecodeError:
-                            _value = value.text
-                        items.append(_value)
+                    # If items have a $ref, get the referenced schema
+                    if "items" in json_schema["properties"][prop] and "$ref" in json_schema["properties"][prop]["items"]:
+                        ref = json_schema["properties"][prop]["items"]["$ref"]
+                        # Remove the '#/$defs/' prefix from the ref
+                        ref = ref.replace('#/$defs/', '')
+                        item_schema = json_schema["$defs"][ref]
+                    else:
+                        item_schema = None
+                    for item in _element:
+                        item_values = {}
+                        for item_prop in item:
+                            if item_schema and item_prop.tag in item_schema["properties"]:
+                                try:
+                                    _value = json.loads(item_prop.text)
+                                except json.JSONDecodeError:
+                                    _value = item_prop.text
+                                item_values[item_prop.tag] = _value
+                        items.append(item_values)
                     params[prop] = items
-            # If property is not an array, append the value directly
+            # If property is an object or has a $ref, get the nested properties
+            elif json_schema["properties"][prop].get("type", None) == "object" or "$ref" in json_schema["properties"][prop]:
+                nested_params = {}
+                if _element is not None:
+                    # If property has a $ref, get the referenced schema
+                    if "$ref" in json_schema["properties"][prop]:
+                        ref = json_schema["properties"][prop]["$ref"]
+                        # Remove the '#/$defs/' prefix from the ref
+                        ref = ref.replace('#/$defs/', '')
+                        nested_schema = json_schema["$defs"][ref]
+                    else:
+                        nested_schema = json_schema["properties"][prop]
+                    for nested_prop in nested_schema["properties"]:
+                        nested_element = _element.find(nested_prop)
+                        if nested_element is not None and nested_element.text is not None:
+                            try:
+                                _value = json.loads(nested_element.text)
+                            except json.JSONDecodeError:
+                                _value = nested_element.text
+                            nested_params[nested_prop] = _value
+                    params[prop] = nested_params
+            # If property is not an object or array, append the value directly
             elif _element is not None and _element.text is not None:
                 try:
                     _value = json.loads(_element.text)
