@@ -4536,7 +4536,7 @@ def stream_chunk_builder_text_completion(chunks: list, messages: Optional[List] 
 
 def stream_chunk_builder(
     chunks: list, messages: Optional[list] = None, start_time=None, end_time=None
-):
+) -> Union[ModelResponse, TextCompletionResponse]:
     model_response = litellm.ModelResponse()
     ### SORT CHUNKS BASED ON CREATED ORDER ##
     print_verbose("Goes into checking if chunk has hiddden created at param")
