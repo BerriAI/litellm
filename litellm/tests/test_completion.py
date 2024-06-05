@@ -1,4 +1,4 @@
-import sys, os
+import sys, os, json
 import traceback
 from dotenv import load_dotenv
 
@@ -7,13 +7,14 @@ import os, io
 
 sys.path.insert(
     0, os.path.abspath("../..")
-)  # Adds the parent directory to the, system path
+)  # Adds the parent directory to the system path
 import pytest
 import litellm
 from litellm import embedding, completion, completion_cost, Timeout
 from litellm import RateLimitError
 from litellm.llms.prompt_templates.factory import anthropic_messages_pt
 from unittest.mock import patch, MagicMock
+from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
 
 # litellm.num_retries=3
 litellm.cache = None
@@ -38,7 +39,7 @@ def reset_callbacks():
 @pytest.mark.skip(reason="Local test")
 def test_response_model_none():
     """
-    Addresses:https://github.com/BerriAI/litellm/issues/2972
+    Addresses: https://github.com/BerriAI/litellm/issues/2972
     """
     x = completion(
         model="mymodel",
@@ -131,29 +132,84 @@ def test_completion_azure_command_r():
         pytest.fail(f"Error occurred: {e}")
 
 
-# @pytest.mark.skip(reason="local test")
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
-async def test_completion_predibase(sync_mode):
+async def test_completion_databricks(sync_mode):
+    litellm.set_verbose = True
+
+    if sync_mode:
+        response: litellm.ModelResponse = completion(
+            model="databricks/databricks-dbrx-instruct",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+        )  # type: ignore
+
+    else:
+        response: litellm.ModelResponse = await litellm.acompletion(
+            model="databricks/databricks-dbrx-instruct",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+        )  # type: ignore
+    print(f"response: {response}")
+
+    response_format_tests(response=response)
+
+
+def predibase_mock_post(url, data=None, json=None, headers=None):
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {"Content-Type": "application/json"}
+    mock_response.json.return_value = {
+        "generated_text": " Is it to find happiness, to achieve success,",
+        "details": {
+            "finish_reason": "length",
+            "prompt_tokens": 8,
+            "generated_tokens": 10,
+            "seed": None,
+            "prefill": [],
+            "tokens": [
+                {"id": 2209, "text": " Is", "logprob": -1.7568359, "special": False},
+                {"id": 433, "text": " it", "logprob": -0.2220459, "special": False},
+                {"id": 311, "text": " to", "logprob": -0.6928711, "special": False},
+                {"id": 1505, "text": " find", "logprob": -0.6425781, "special": False},
+                {
+                    "id": 23871,
+                    "text": " happiness",
+                    "logprob": -0.07519531,
+                    "special": False,
+                },
+                {"id": 11, "text": ",", "logprob": -0.07110596, "special": False},
+                {"id": 311, "text": " to", "logprob": -0.79296875, "special": False},
+                {
+                    "id": 11322,
+                    "text": " achieve",
+                    "logprob": -0.7602539,
+                    "special": False,
+                },
+                {
+                    "id": 2450,
+                    "text": " success",
+                    "logprob": -0.03656006,
+                    "special": False,
+                },
+                {"id": 11, "text": ",", "logprob": -0.0011510849, "special": False},
+            ],
+        },
+    }
+    return mock_response
+
+
+# @pytest.mark.skip(reason="local only test")
+@pytest.mark.asyncio
+async def test_completion_predibase():
     try:
         litellm.set_verbose = True
 
-        if sync_mode:
+        with patch("requests.post", side_effect=predibase_mock_post):
             response = completion(
                 model="predibase/llama-3-8b-instruct",
                 tenant_id="c4768f95",
                 api_key=os.getenv("PREDIBASE_API_KEY"),
                 messages=[{"role": "user", "content": "What is the meaning of life?"}],
-            )
-
-            print(response)
-        else:
-            response = await litellm.acompletion(
-                model="predibase/llama-3-8b-instruct",
-                tenant_id="c4768f95",
-                api_base="https://serving.app.predibase.com",
-                api_key=os.getenv("PREDIBASE_API_KEY"),
-                messages=[{"role": "user", "content": "What is the meaning of life?"}],
+                max_tokens=10,
             )
 
             print(response)
@@ -278,9 +334,12 @@ def test_completion_claude_3_function_call():
             model="anthropic/claude-3-opus-20240229",
             messages=messages,
             tools=tools,
-            tool_choice={"type": "tool", "name": "get_weather"},
-            extra_headers={"anthropic-beta": "tools-2024-05-16"},
+            tool_choice={
+                "type": "function",
+                "function": {"name": "get_current_weather"},
+            },
         )
+
         # Add any assertions, here to check response args
         print(response)
         assert isinstance(response.choices[0].message.tool_calls[0].function.name, str)
@@ -385,6 +444,7 @@ async def test_anthropic_no_content_error():
 def test_gemini_completion_call_error():
     try:
         print("test completion + streaming")
+        litellm.num_retries = 3
         litellm.set_verbose = True
         messages = [{"role": "user", "content": "what is the capital of congo?"}]
         response = completion(
@@ -1054,6 +1114,25 @@ def test_completion_azure_gpt4_vision():
 # test_completion_azure_gpt4_vision()
 
 
+@pytest.mark.parametrize("model", ["gpt-3.5-turbo", "gpt-4", "gpt-4o"])
+def test_completion_openai_params(model):
+    litellm.drop_params = True
+    messages = [
+        {
+            "role": "user",
+            "content": """Generate JSON about Bill Gates: { "full_name": "", "title": "" }""",
+        }
+    ]
+
+    response = completion(
+        model=model,
+        messages=messages,
+        response_format={"type": "json_object"},
+    )
+
+    print(f"response: {response}")
+
+
 def test_completion_fireworks_ai():
     try:
         litellm.set_verbose = True
@@ -1352,6 +1431,81 @@ def test_hf_classifier_task():
             assert isinstance(response.choices[0].message.content, str)
     except Exception as e:
         pytest.fail(f"Error occurred: {str(e)}")
+
+
+def test_ollama_image():
+    """
+    Test that datauri prefixes are removed, JPEG/PNG images are passed
+    through, and other image formats are converted to JPEG.  Non-image
+    data is untouched.
+    """
+
+    import io, base64
+    from PIL import Image
+
+    def mock_post(url, **kwargs):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.headers = {"Content-Type": "application/json"}
+        mock_response.json.return_value = {
+            # return the image in the response so that it can be tested
+            # against the original
+            "response": kwargs["json"]["images"]
+        }
+        return mock_response
+
+    def make_b64image(format):
+        image = Image.new(mode="RGB", size=(1, 1))
+        image_buffer = io.BytesIO()
+        image.save(image_buffer, format)
+        return base64.b64encode(image_buffer.getvalue()).decode("utf-8")
+
+    jpeg_image = make_b64image("JPEG")
+    webp_image = make_b64image("WEBP")
+    png_image = make_b64image("PNG")
+
+    base64_data = base64.b64encode(b"some random data")
+    datauri_base64_data = f"data:text/plain;base64,{base64_data}"
+
+    tests = [
+        # input                                    expected
+        [jpeg_image, jpeg_image],
+        [webp_image, None],
+        [png_image, png_image],
+        [f"data:image/jpeg;base64,{jpeg_image}", jpeg_image],
+        [f"data:image/webp;base64,{webp_image}", None],
+        [f"data:image/png;base64,{png_image}", png_image],
+        [datauri_base64_data, datauri_base64_data],
+    ]
+
+    for test in tests:
+        try:
+            with patch("requests.post", side_effect=mock_post):
+                response = completion(
+                    model="ollama/llava",
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": "Whats in this image?"},
+                                {
+                                    "type": "image_url",
+                                    "image_url": {"url": test[0]},
+                                },
+                            ],
+                        }
+                    ],
+                )
+                if not test[1]:
+                    # the conversion process may not always generate the same image,
+                    # so just check for a JPEG image when a conversion was done.
+                    image_data = response["choices"][0]["message"]["content"][0]
+                    image = Image.open(io.BytesIO(base64.b64decode(image_data)))
+                    assert image.format == "JPEG"
+                else:
+                    assert response["choices"][0]["message"]["content"][0] == test[1]
+        except Exception as e:
+            pytest.fail(f"Error occurred: {e}")
 
 
 ########################### End of Hugging Face Tests ##############################################
@@ -2006,6 +2160,7 @@ def test_completion_azure_key_completion_arg():
             model="azure/chatgpt-v-2",
             messages=messages,
             api_key=old_key,
+            logprobs=True,
             max_tokens=10,
         )
         print(f"response: {response}")
@@ -2064,12 +2219,6 @@ async def test_re_use_azure_async_client():
             print(f"response: {response}")
     except Exception as e:
         pytest.fail("got Exception", e)
-
-
-# import asyncio
-# asyncio.run(
-#     test_re_use_azure_async_client()
-# )
 
 
 def test_re_use_openaiClient():
@@ -2300,6 +2449,8 @@ def test_completion_azure_deployment_id():
 
 
 # test_completion_azure_deployment_id()
+
+import asyncio
 
 
 @pytest.mark.parametrize("sync_mode", [False, True])
@@ -2663,14 +2814,29 @@ def response_format_tests(response: litellm.ModelResponse):
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize(
+    "model",
+    [
+        "bedrock/cohere.command-r-plus-v1:0",
+        "anthropic.claude-3-sonnet-20240229-v1:0",
+        "anthropic.claude-instant-v1",
+        "bedrock/ai21.j2-mid",
+        "mistral.mistral-7b-instruct-v0:2",
+        "bedrock/amazon.titan-tg1-large",
+        "meta.llama3-8b-instruct-v1:0",
+        "cohere.command-text-v14",
+    ],
+)
 @pytest.mark.asyncio
-async def test_completion_bedrock_command_r(sync_mode):
+async def test_completion_bedrock_httpx_models(sync_mode, model):
     litellm.set_verbose = True
 
     if sync_mode:
         response = completion(
-            model="bedrock/cohere.command-r-plus-v1:0",
+            model=model,
             messages=[{"role": "user", "content": "Hey! how's it going?"}],
+            temperature=0.2,
+            max_tokens=200,
         )
 
         assert isinstance(response, litellm.ModelResponse)
@@ -2678,8 +2844,10 @@ async def test_completion_bedrock_command_r(sync_mode):
         response_format_tests(response=response)
     else:
         response = await litellm.acompletion(
-            model="bedrock/cohere.command-r-plus-v1:0",
+            model=model,
             messages=[{"role": "user", "content": "Hey! how's it going?"}],
+            temperature=0.2,
+            max_tokens=100,
         )
 
         assert isinstance(response, litellm.ModelResponse)
@@ -2715,67 +2883,10 @@ def test_completion_bedrock_titan_null_response():
         pytest.fail(f"An error occurred - {str(e)}")
 
 
-def test_completion_bedrock_titan():
-    try:
-        response = completion(
-            model="bedrock/amazon.titan-tg1-large",
-            messages=messages,
-            temperature=0.2,
-            max_tokens=200,
-            top_p=0.8,
-            logger_fn=logger_fn,
-        )
-        # Add any assertions here to check the response
-        print(response)
-    except RateLimitError:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
 # test_completion_bedrock_titan()
 
 
-def test_completion_bedrock_claude():
-    print("calling claude")
-    try:
-        response = completion(
-            model="anthropic.claude-instant-v1",
-            messages=messages,
-            max_tokens=10,
-            temperature=0.1,
-            logger_fn=logger_fn,
-        )
-        # Add any assertions here to check the response
-        print(response)
-    except RateLimitError:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
 # test_completion_bedrock_claude()
-
-
-def test_completion_bedrock_cohere():
-    print("calling bedrock cohere")
-    litellm.set_verbose = True
-    try:
-        response = completion(
-            model="bedrock/cohere.command-text-v14",
-            messages=[{"role": "user", "content": "hi"}],
-            temperature=0.1,
-            max_tokens=10,
-            stream=True,
-        )
-        # Add any assertions here to check the response
-        print(response)
-        for chunk in response:
-            print(chunk)
-    except RateLimitError:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
 
 
 # test_completion_bedrock_cohere()
@@ -2799,23 +2910,6 @@ def test_completion_bedrock_cohere():
 #     except Exception as e:
 #         pytest.fail(f"Error occurred: {e}")
 # test_completion_bedrock_claude_stream()
-
-# def test_completion_bedrock_ai21():
-#     try:
-#         litellm.set_verbose = False
-#         response = completion(
-#             model="bedrock/ai21.j2-mid",
-#             messages=messages,
-#             temperature=0.2,
-#             top_p=0.2,
-#             max_tokens=20
-#         )
-#         # Add any assertions here to check the response
-#         print(response)
-#     except RateLimitError:
-#         pass
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
 
 
 ######## Test VLLM ########

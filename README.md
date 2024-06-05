@@ -2,6 +2,12 @@
         🚅 LiteLLM
     </h1>
     <p align="center">
+        <p align="center">
+        <a href="https://render.com/deploy?repo=https://github.com/BerriAI/litellm" target="_blank" rel="nofollow"><img src="https://render.com/images/deploy-to-render-button.svg" alt="Deploy to Render"></a>
+        <a href="https://railway.app/template/HLP0Ub?referralCode=jch2ME">
+          <img src="https://railway.app/button.svg" alt="Deploy on Railway">
+        </a>
+        </p>
         <p align="center">Call all LLM APIs using the OpenAI format [Bedrock, Huggingface, VertexAI, TogetherAI, Azure, OpenAI, etc.]
         <br>
     </p>
@@ -34,7 +40,7 @@ LiteLLM manages:
 [**Jump to OpenAI Proxy Docs**](https://github.com/BerriAI/litellm?tab=readme-ov-file#openai-proxy---docs) <br>
 [**Jump to Supported LLM Providers**](https://github.com/BerriAI/litellm?tab=readme-ov-file#supported-providers-docs)
 
-🚨 **Stable Release:** Use docker images with: `main-stable` tag. These run through 12 hr load tests (1k req./min). 
+🚨 **Stable Release:** Use docker images with the `-stable` tag. These have undergone 12 hour load tests, before being published. 
 
 Support for more providers. Missing a provider or LLM Platform, raise a [feature request](https://github.com/BerriAI/litellm/issues/new?assignees=&labels=enhancement&projects=&template=feature_request.yml&title=%5BFeature%5D%3A+).
 
@@ -141,6 +147,7 @@ The proxy provides:
 
 ## 📖 Proxy Endpoints - [Swagger Docs](https://litellm-api.up.railway.app/)
 
+
 ## Quick Start Proxy - CLI
 
 ```shell
@@ -172,6 +179,24 @@ print(response)
 ```
 
 ## Proxy Key Management ([Docs](https://docs.litellm.ai/docs/proxy/virtual_keys))
+
+Connect the proxy with a Postgres DB to create proxy keys
+
+```bash
+# Get the code
+git clone https://github.com/BerriAI/litellm
+
+# Go to folder
+cd litellm
+
+# Add the master key
+echo 'LITELLM_MASTER_KEY="sk-1234"' > .env
+source .env
+
+# Start
+docker-compose up
+```
+
 
 UI on `/ui` on your proxy server
 ![ui_3](https://github.com/BerriAI/litellm/assets/29436595/47c97d5e-b9be-4839-b28c-43d7f4f10033)
@@ -205,7 +230,7 @@ curl 'http://0.0.0.0:4000/key/generate' \
 | [azure](https://docs.litellm.ai/docs/providers/azure)                               | ✅                                                      | ✅                                                                              | ✅                                                                                  | ✅                                                                                | ✅                                                                            | ✅                                                                      |
 | [aws - sagemaker](https://docs.litellm.ai/docs/providers/aws_sagemaker)             | ✅                                                      | ✅                                                                              | ✅                                                                                  | ✅                                                                                | ✅                                                                            |
 | [aws - bedrock](https://docs.litellm.ai/docs/providers/bedrock)                     | ✅                                                      | ✅                                                                              | ✅                                                                                  | ✅                                                                                | ✅                                                                            |
-| [google - vertex_ai [Gemini]](https://docs.litellm.ai/docs/providers/vertex)        | ✅                                                      | ✅                                                                              | ✅                                                                                  | ✅                                                                                |
+| [google - vertex_ai](https://docs.litellm.ai/docs/providers/vertex)        | ✅                                                      | ✅                                                                              | ✅                                                                                  | ✅                                                                                | ✅  | ✅
 | [google - palm](https://docs.litellm.ai/docs/providers/palm)                        | ✅                                                      | ✅                                                                              | ✅                                                                                  | ✅                                                                                |
 | [google AI Studio - gemini](https://docs.litellm.ai/docs/providers/gemini)          | ✅                                                      |       ✅                                                                          | ✅                                                                                  |     ✅                                                                              |                                                                               |
 | [mistral ai api](https://docs.litellm.ai/docs/providers/mistral)                    | ✅                                                      | ✅                                                                              | ✅                                                                                  | ✅                                                                                | ✅                                                                            |

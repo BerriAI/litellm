@@ -54,6 +54,9 @@ def migrate_models(config_file, proxy_base_url):
                     new_value = input(f"Enter value for {value}: ")
                     _in_memory_os_variables[value] = new_value
                 litellm_params[param] = new_value
+        if "api_key" not in litellm_params:
+            new_value = input(f"Enter api key for {model_name}: ")
+            litellm_params["api_key"] = new_value
 
         print("\nlitellm_params: ", litellm_params)
         # Confirm before sending POST request

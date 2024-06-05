@@ -64,7 +64,8 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             cache.set_cache(request_count_api_key, new_val)
         else:
             raise HTTPException(
-                status_code=429, detail="Max parallel request limit reached."
+                status_code=429,
+                detail=f"LiteLLM Rate Limit Handler: Crossed TPM, RPM Limit. current rpm: {current['current_rpm']}, rpm limit: {rpm_limit}, current tpm: {current['current_tpm']}, tpm limit: {tpm_limit}",
             )
 
     async def async_pre_call_hook(
@@ -163,8 +164,9 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         # check if REQUEST ALLOWED for user_id
         user_id = user_api_key_dict.user_id
         if user_id is not None:
-            _user_id_rate_limits = user_api_key_dict.user_id_rate_limits
-
+            _user_id_rate_limits = await self.user_api_key_cache.async_get_cache(
+                key=user_id
+            )
             # get user tpm/rpm limits
             if _user_id_rate_limits is not None and isinstance(
                 _user_id_rate_limits, dict
@@ -195,13 +197,8 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         ## get team tpm/rpm limits
         team_id = user_api_key_dict.team_id
         if team_id is not None:
-            team_tpm_limit = getattr(user_api_key_dict, "team_tpm_limit", sys.maxsize)
-
-            if team_tpm_limit is None:
-                team_tpm_limit = sys.maxsize
-            team_rpm_limit = getattr(user_api_key_dict, "team_rpm_limit", sys.maxsize)
-            if team_rpm_limit is None:
-                team_rpm_limit = sys.maxsize
+            team_tpm_limit = user_api_key_dict.team_tpm_limit
+            team_rpm_limit = user_api_key_dict.team_rpm_limit
 
             if team_tpm_limit is None:
                 team_tpm_limit = sys.maxsize
@@ -223,6 +220,38 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 rpm_limit=team_rpm_limit,
             )
 
+        # End-User Rate Limits
+        # Only enforce if user passed `user` to /chat, /completions, /embeddings
+        if user_api_key_dict.end_user_id:
+            end_user_tpm_limit = getattr(
+                user_api_key_dict, "end_user_tpm_limit", sys.maxsize
+            )
+            end_user_rpm_limit = getattr(
+                user_api_key_dict, "end_user_rpm_limit", sys.maxsize
+            )
+
+            if end_user_tpm_limit is None:
+                end_user_tpm_limit = sys.maxsize
+            if end_user_rpm_limit is None:
+                end_user_rpm_limit = sys.maxsize
+
+            # now do the same tpm/rpm checks
+            request_count_api_key = (
+                f"{user_api_key_dict.end_user_id}::{precise_minute}::request_count"
+            )
+
+            # print(f"Checking if {request_count_api_key} is allowed to make request for minute {precise_minute}")
+            await self.check_key_in_limits(
+                user_api_key_dict=user_api_key_dict,
+                cache=cache,
+                data=data,
+                call_type=call_type,
+                max_parallel_requests=sys.maxsize,  # TODO: Support max parallel requests for an End-User
+                request_count_api_key=request_count_api_key,
+                tpm_limit=end_user_tpm_limit,
+                rpm_limit=end_user_rpm_limit,
+            )
+
         return
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
@@ -238,6 +267,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             user_api_key_team_id = kwargs["litellm_params"]["metadata"].get(
                 "user_api_key_team_id", None
             )
+            user_api_key_end_user_id = kwargs.get("user")
 
             if self.user_api_key_cache is None:
                 return
@@ -339,6 +369,40 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
 
                 request_count_api_key = (
                     f"{user_api_key_team_id}::{precise_minute}::request_count"
+                )
+
+                current = self.user_api_key_cache.get_cache(
+                    key=request_count_api_key
+                ) or {
+                    "current_requests": 1,
+                    "current_tpm": total_tokens,
+                    "current_rpm": 1,
+                }
+
+                new_val = {
+                    "current_requests": max(current["current_requests"] - 1, 0),
+                    "current_tpm": current["current_tpm"] + total_tokens,
+                    "current_rpm": current["current_rpm"] + 1,
+                }
+
+                self.print_verbose(
+                    f"updated_value in success call: {new_val}, precise_minute: {precise_minute}"
+                )
+                self.user_api_key_cache.set_cache(
+                    request_count_api_key, new_val, ttl=60
+                )  # store in cache for 1 min.
+
+            # ------------
+            # Update usage - End User
+            # ------------
+            if user_api_key_end_user_id is not None:
+                total_tokens = 0
+
+                if isinstance(response_obj, ModelResponse):
+                    total_tokens = response_obj.usage.total_tokens
+
+                request_count_api_key = (
+                    f"{user_api_key_end_user_id}::{precise_minute}::request_count"
                 )
 
                 current = self.user_api_key_cache.get_cache(

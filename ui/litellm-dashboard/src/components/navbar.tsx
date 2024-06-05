@@ -3,8 +3,8 @@
 import Link from "next/link";
 import Image from "next/image";
 import React, { useState } from "react";
-import type { MenuProps } from 'antd';
-import { Dropdown, Space } from 'antd';
+import type { MenuProps } from "antd";
+import { Dropdown, Space } from "antd";
 import { useSearchParams } from "next/navigation";
 import {
   Button,
@@ -23,31 +23,45 @@ interface NavbarProps {
   userRole: string | null;
   userEmail: string | null;
   showSSOBanner: boolean;
+  premiumUser: boolean;
 }
 const Navbar: React.FC<NavbarProps> = ({
   userID,
   userRole,
   userEmail,
   showSSOBanner,
+  premiumUser,
 }) => {
   console.log("User ID:", userID);
   console.log("userEmail:", userEmail);
   console.log("showSSOBanner:", showSSOBanner);
+  console.log("premiumUser:", premiumUser);
 
   // const userColors = require('./ui_colors.json') || {};
   const isLocal = process.env.NODE_ENV === "development";
+  const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
   const imageUrl = isLocal ? "http://localhost:4000/get_image" : "/get_image";
+  const logoutUrl = proxyBaseUrl ? `${proxyBaseUrl}` : `/`;
 
-  const items: MenuProps['items'] = [
+  const items: MenuProps["items"] = [
     {
-      key: '1',
+      key: "1",
       label: (
         <>
           <p>Role: {userRole}</p>
           <p>ID: {userID}</p>
+          <p>Premium User: {String(premiumUser)}</p>
         </>
       ),
     },
+    {
+      key: "2",
+      label: (
+        <Link href={logoutUrl}>
+          <p>Logout</p>
+        </Link>
+      ),
+    }
   ];
 
   return (
@@ -68,41 +82,39 @@ const Navbar: React.FC<NavbarProps> = ({
         </div>
       </div>
       <div className="text-right mx-4 my-2 absolute top-0 right-0 flex items-center justify-end space-x-2">
-      {showSSOBanner ? (
-          
-        <div style={{
-          // border: '1px solid #391085',
-          padding: '6px',
-          borderRadius: '8px', // Added border-radius property
-        }}
-      >
-          <a
-            href="https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat"
-            target="_blank"
+        {showSSOBanner ? (
+          <div
             style={{
-              "fontSize": "14px",
-              "textDecoration": "underline"
+              // border: '1px solid #391085',
+              padding: "6px",
+              borderRadius: "8px", // Added border-radius property
             }}
           >
-            Request hosted proxy
-          </a>
+            <a
+              href="https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat"
+              target="_blank"
+              style={{
+                fontSize: "14px",
+                textDecoration: "underline",
+              }}
+            >
+              Get enterpise license
+            </a>
           </div>
         ) : null}
 
-        <div style={{
-            border: '1px solid #391085',
-            padding: '6px',
-            borderRadius: '8px', // Added border-radius property
+        <div
+          style={{
+            border: "1px solid #391085",
+            padding: "6px",
+            borderRadius: "8px", // Added border-radius property
           }}
         >
-       <Dropdown menu={{ items }} >
-            <Space>
-              {userEmail}
-            </Space>
-        </Dropdown>
+          <Dropdown menu={{ items }}>
+            <Space>{userEmail}</Space>
+          </Dropdown>
         </div>
-        </div>
-
+      </div>
     </nav>
   );
 };
