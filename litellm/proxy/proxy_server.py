@@ -1366,8 +1366,10 @@ async def user_api_key_auth(
                 else:
                     user_role = "unknown"
                     user_id = "unknown"
-                    if user_id_information is not None and isinstance(
-                        user_id_information, list and len(user_id_information) > 0
+                    if (
+                        user_id_information is not None
+                        and isinstance(user_id_information, list)
+                        and len(user_id_information) > 0
                     ):
                         _user = user_id_information[0]
                         user_role = _user.get("user_role", "unknown")
