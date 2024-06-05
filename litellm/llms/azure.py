@@ -144,7 +144,7 @@ class AzureOpenAIConfig:
             "tools",
             "tool_choice",
             "top_p",
-            "log_probs",
+            "logprobs",
             "top_logprobs",
             "response_format",
             "seed",
