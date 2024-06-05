@@ -33,6 +33,8 @@ import {
   Divider,
 } from "@tremor/react";
 import { PencilAltIcon } from "@heroicons/react/outline";
+import OnboardingModal from "./onboarding_link";
+import { InvitationLink } from "./onboarding_link";
 interface AdminPanelProps {
   searchParams: any;
   accessToken: string | null;
@@ -40,17 +42,6 @@ interface AdminPanelProps {
   showSSOBanner: boolean;
 }
 
-interface InvitationLink {
-  id: string;
-  user_id: string;
-  is_accepted: boolean;
-  accepted_at: Date | null;
-  expires_at: Date;
-  created_at: Date;
-  created_by: string;
-  updated_at: Date;
-  updated_by: string;
-}
 import {
   userUpdateUserCall,
   Member,
@@ -84,11 +75,15 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
     useState(false);
   const router = useRouter();
 
-  const [possibleUIRoles, setPossibleUIRoles] = useState<null | Record<string, Record<string, string>>>(null);
+  const [possibleUIRoles, setPossibleUIRoles] = useState<null | Record<
+    string,
+    Record<string, string>
+  >>(null);
 
   const isLocal = process.env.NODE_ENV === "development";
-  const [baseUrl, setBaseUrl] = useState(isLocal ? "http://localhost:4000" : "");
-
+  const [baseUrl, setBaseUrl] = useState(
+    isLocal ? "http://localhost:4000" : ""
+  );
 
   let nonSssoUrl;
   try {
@@ -346,7 +341,6 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
           setIsInvitationLinkModalVisible(true);
         });
 
-  
         const foundIndex = admins.findIndex((user) => {
           console.log(
             `user.user_id=${user.user_id}; response.user_id=${response.user_id}`
@@ -462,7 +456,11 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                               ? member["user_id"]
                               : null}
                         </TableCell>
-                        <TableCell> {possibleUIRoles?.[member?.user_role]?.ui_label || "-"}</TableCell>
+                        <TableCell>
+                          {" "}
+                          {possibleUIRoles?.[member?.user_role]?.ui_label ||
+                            "-"}
+                        </TableCell>
                         <TableCell>
                           <Icon
                             icon={PencilAltIcon}
@@ -509,39 +507,12 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
             >
               {addMemberForm(handleAdminCreate)}
             </Modal>
-            <Modal
-              title="Invitation Link"
-              visible={isInvitationLinkModalVisible}
-              width={800}
-              footer={null}
-              onOk={handleAdminOk}
-              onCancel={handleAdminCancel}
-            >
-              {/* {JSON.stringify(invitationLinkData)} */}
-              <Paragraph>
-                Copy and send the generated link to onboard this user to the
-                proxy.
-              </Paragraph>
-              <div className="flex justify-between pt-5 pb-2">
-                <Text className="text-base">User ID</Text>
-                <Text>{invitationLinkData?.user_id}</Text>
-              </div>
-              <div className="flex justify-between pt-5 pb-2">
-                <Text>Invitation Link</Text>
-                <Text>
-                  {baseUrl}/ui/onboarding?id={invitationLinkData?.id}
-                </Text>
-              </div>
-              <div className="flex justify-end mt-5">
-                <div></div>
-                <CopyToClipboard
-                  text={`${baseUrl}/ui/onboarding?id=${invitationLinkData?.id}`}
-                  onCopy={() => message.success("Copied!")}
-                >
-                  <Button variant="primary">Copy invitation link</Button>
-                </CopyToClipboard>
-              </div>
-            </Modal>
+            <OnboardingModal
+              isInvitationLinkModalVisible={isInvitationLinkModalVisible}
+              setIsInvitationLinkModalVisible={setIsInvitationLinkModalVisible}
+              baseUrl={baseUrl}
+              invitationLinkData={invitationLinkData}
+            />
             <Button
               className="mb-5"
               onClick={() => setIsAddMemberModalVisible(true)}

@@ -101,7 +101,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
         return "App User";
       case "internal_user":
         return "Internal User";
-      case "internal_viewer":
+      case "internal_user_viewer":
         return "Internal Viewer";
       default:
         return "Unknown Role";
