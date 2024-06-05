@@ -1997,20 +1997,42 @@ def test_openai_chat_completion_complete_response_call():
     "model",
     ["gpt-3.5-turbo", "azure/chatgpt-v-2"],
 )
-def test_openai_stream_options_call(model):
+@pytest.mark.parametrize(
+    "sync",
+    [True, False],
+)
+@pytest.mark.asyncio
+async def test_openai_stream_options_call(model, sync):
     litellm.set_verbose = False
-    response = litellm.completion(
-        model=model,
-        messages=[{"role": "system", "content": "say GM - we're going to make it "}],
-        stream=True,
-        stream_options={"include_usage": True},
-        max_tokens=10,
-    )
     usage = None
     chunks = []
-    for chunk in response:
-        print("chunk: ", chunk)
-        chunks.append(chunk)
+    if sync:
+        response = litellm.completion(
+            model=model,
+            messages=[
+                {"role": "system", "content": "say GM - we're going to make it "}
+            ],
+            stream=True,
+            stream_options={"include_usage": True},
+            max_tokens=10,
+        )
+        for chunk in response:
+            print("chunk: ", chunk)
+            chunks.append(chunk)
+    else:
+        response = await litellm.acompletion(
+            model=model,
+            messages=[
+                {"role": "system", "content": "say GM - we're going to make it "}
+            ],
+            stream=True,
+            stream_options={"include_usage": True},
+            max_tokens=10,
+        )
+
+        async for chunk in response:
+            print("chunk: ", chunk)
+            chunks.append(chunk)
 
     last_chunk = chunks[-1]
     print("last chunk: ", last_chunk)
