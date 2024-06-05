@@ -1376,7 +1376,7 @@ class AllCallbacks(LiteLLMBase):
 
     openmeter: CallbackOnUI = CallbackOnUI(
         litellm_callback_name="openmeter",
-        ui_callback_name="openmeter",
+        ui_callback_name="OpenMeter",
         litellm_callback_params=[
             "OPENMETER_API_ENDPOINT",
             "OPENMETER_API_KEY",
@@ -1392,5 +1392,5 @@ class AllCallbacks(LiteLLMBase):
     datadog: CallbackOnUI = CallbackOnUI(
         litellm_callback_name="datadog",
         litellm_callback_params=["DD_API_KEY", "DD_SITE"],
-        ui_callback_name="datadog",
+        ui_callback_name="Datadog",
     )
