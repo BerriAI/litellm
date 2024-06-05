@@ -5173,6 +5173,7 @@ def get_optional_params(
     top_logprobs=None,
     extra_headers=None,
     api_version=None,
+    drop_params=None,
     **kwargs,
 ):
     # retrieve all parameters passed to the function
@@ -5244,6 +5245,7 @@ def get_optional_params(
         "top_logprobs": None,
         "extra_headers": None,
         "api_version": None,
+        "drop_params": None,
     }
     # filter out those parameters that were passed with non-default values
     non_default_params = {
@@ -5253,6 +5255,7 @@ def get_optional_params(
             k != "model"
             and k != "custom_llm_provider"
             and k != "api_version"
+            and k != "drop_params"
             and k in default_params
             and v != default_params[k]
         )
@@ -5335,11 +5338,16 @@ def get_optional_params(
                 # Always keeps this in elif code blocks
                 else:
                     unsupported_params[k] = non_default_params[k]
-        if unsupported_params and not litellm.drop_params:
-            raise UnsupportedParamsError(
-                status_code=500,
-                message=f"{custom_llm_provider} does not support parameters: {unsupported_params}, for model={model}. To drop these, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n",
-            )
+        if unsupported_params:
+            if litellm.drop_params == True or (
+                drop_params is not None and drop_params == True
+            ):
+                pass
+            else:
+                raise UnsupportedParamsError(
+                    status_code=500,
+                    message=f"{custom_llm_provider} does not support parameters: {unsupported_params}, for model={model}. To drop these, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n",
+                )
 
     def _map_and_modify_arg(supported_params: dict, provider: str, model: str):
         """
