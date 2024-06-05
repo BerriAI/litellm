@@ -2160,6 +2160,7 @@ def test_completion_azure_key_completion_arg():
             model="azure/chatgpt-v-2",
             messages=messages,
             api_key=old_key,
+            logprobs=True,
             max_tokens=10,
         )
         print(f"response: {response}")

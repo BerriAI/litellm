@@ -144,7 +144,7 @@ class AzureOpenAIConfig:
             "tools",
             "tool_choice",
             "top_p",
-            "log_probs",
+            "logprobs",
             "top_logprobs",
             "response_format",
             "seed",
@@ -157,6 +157,7 @@ class AzureOpenAIConfig:
         optional_params: dict,
         model: str,
         api_version: str,  # Y-M-D-{optional}
+        drop_params,
     ) -> dict:
         supported_openai_params = self.get_supported_openai_params()
 
@@ -181,7 +182,11 @@ class AzureOpenAIConfig:
                         and api_version_day < "01"
                     )
                 ):
-                    if litellm.drop_params == False:
+                    if litellm.drop_params == True or (
+                        drop_params is not None and drop_params == True
+                    ):
+                        pass
+                    else:
                         raise UnsupportedParamsError(
                             status_code=400,
                             message=f"""Azure does not support 'tool_choice', for api_version={api_version}. Bump your API version to '2023-12-01-preview' or later. This parameter requires 'api_version="2023-12-01-preview"' or later. Azure API Reference: https://learn.microsoft.com/en-us/azure/ai-services/openai/reference#chat-completions""",
@@ -189,7 +194,11 @@ class AzureOpenAIConfig:
                 elif value == "required" and (
                     api_version_year == "2024" and api_version_month <= "05"
                 ):  ## check if tool_choice value is supported ##
-                    if litellm.drop_params == False:
+                    if litellm.drop_params == True or (
+                        drop_params is not None and drop_params == True
+                    ):
+                        pass
+                    else:
                         raise UnsupportedParamsError(
                             status_code=400,
                             message=f"Azure does not support '{value}' as a {param} param, for api_version={api_version}. To drop 'tool_choice=required' for calls with this Azure API version, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\nAzure API Reference: https://learn.microsoft.com/en-us/azure/ai-services/openai/reference#chat-completions",

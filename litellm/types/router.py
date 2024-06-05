@@ -283,12 +283,6 @@ class updateDeployment(BaseModel):
 
 
 class LiteLLMParamsTypedDict(TypedDict, total=False):
-    """
-    [TODO]
-    - allow additional params (not in list)
-    - set value to none if not set -> don't raise error if value not set
-    """
-
     model: str
     custom_llm_provider: Optional[str]
     tpm: Optional[int]
@@ -300,6 +294,8 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     stream_timeout: Optional[Union[float, str]]
     max_retries: Optional[int]
     organization: Optional[str]  # for openai orgs
+    ## DROP PARAMS ##
+    drop_params: Optional[bool]
     ## UNIFIED PROJECT/REGION ##
     region_name: Optional[str]
     ## VERTEX AI ##
