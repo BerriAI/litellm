@@ -193,4 +193,43 @@ curl http://0.0.0.0:4000/v1/threads/thread_abc123/runs \
 </TabItem>
 </Tabs>
 
+## Streaming 
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import run_thread_stream 
+import os
+
+os.environ["OPENAI_API_KEY"] = "sk-.."
+
+message = {"role": "user", "content": "Hey, how's it going?"}  
+
+data = {"custom_llm_provider": "openai", "thread_id": _new_thread.id, "assistant_id": assistant_id, **message}
+
+run = run_thread_stream(**data)
+with run as run:
+    assert isinstance(run, AssistantEventHandler)
+    for chunk in run: 
+      print(f"chunk: {chunk}")
+    run.until_done()
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/threads/{thread_id}/runs' \
+-H 'Authorization: Bearer sk-1234' \
+-H 'Content-Type: application/json' \
+-D '{
+      "assistant_id": "asst_6xVZQFFy1Kw87NbnYeNebxTf",
+      "stream": true
+}'
+```
+
+</TabItem>
+</Tabs>
+
 ## [👉 Proxy API Reference](https://litellm-api.up.railway.app/#/assistants)
