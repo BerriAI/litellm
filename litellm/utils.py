@@ -9185,7 +9185,14 @@ def exception_type(
                             model=model,
                             llm_provider="vertex_ai",
                             litellm_debug_info=extra_information,
-                            request=original_exception.request,
+                            request=getattr(
+                                original_exception,
+                                "request",
+                                httpx.Request(
+                                    method="POST",
+                                    url=" https://cloud.google.com/vertex-ai/",
+                                ),
+                            ),
                         )
             elif custom_llm_provider == "palm" or custom_llm_provider == "gemini":
                 if "503 Getting metadata" in error_str:
