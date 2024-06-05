@@ -11914,7 +11914,7 @@ class CustomStreamWrapper:
                         input=self.response_uptil_now, model=self.model
                     )
                     print_verbose(f"final returned processed chunk: {processed_chunk}")
-                    self.chunks.append(response)
+                    self.chunks.append(processed_chunk)
                     return processed_chunk
                 raise StopAsyncIteration
             else:  # temporary patch for non-aiohttp async calls
@@ -11954,7 +11954,7 @@ class CustomStreamWrapper:
                             input=self.response_uptil_now, model=self.model
                         )
                         # RETURN RESULT
-                        self.chunks.append(response)
+                        self.chunks.append(processed_chunk)
                         return processed_chunk
         except StopAsyncIteration:
             if self.sent_last_chunk == True:
@@ -11965,17 +11965,17 @@ class CustomStreamWrapper:
                 ):
                     # send the final chunk with stream options
                     complete_streaming_response = litellm.stream_chunk_builder(
-                        chunks=self.chunks
+                        chunks=self.chunks, messages=self.messages
                     )
                     response = self.model_response_creator()
                     response.usage = complete_streaming_response.usage
                     ## LOGGING
                     threading.Thread(
-                        target=self.logging_obj.success_handler, args=(processed_chunk,)
+                        target=self.logging_obj.success_handler, args=(response,)
                     ).start()  # log response
                     asyncio.create_task(
                         self.logging_obj.async_success_handler(
-                            processed_chunk,
+                            response,
                         )
                     )
                     self.sent_stream_usage = True
