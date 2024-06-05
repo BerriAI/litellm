@@ -841,6 +841,7 @@ const Settings: React.FC<SettingsPageProps> = ({
             <FormItem
               label={param}
               name={param}
+              key={param}
               rules={[{ required: true, message: "Please enter the value for " + param}]}
             >
               <TextInput type="password" />
@@ -877,6 +878,7 @@ const Settings: React.FC<SettingsPageProps> = ({
           <FormItem
             label={param}
             name={param}
+            key={param}
           >
             <TextInput type="password" defaultValue={value as string}/>
           </FormItem>
