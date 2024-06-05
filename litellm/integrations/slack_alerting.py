@@ -1204,7 +1204,9 @@ Model Info:
                 return False
             from litellm.proxy.proxy_server import premium_user, prisma_client
 
-            email_logo_url = os.getenv("SMTP_SENDER_LOGO", None)
+            email_logo_url = os.getenv(
+                "SMTP_SENDER_LOGO", os.getenv("EMAIL_LOGO_URL", None)
+            )
             email_support_contact = os.getenv("EMAIL_SUPPORT_CONTACT", None)
             await self._check_if_using_premium_email_feature(
                 premium_user, email_logo_url, email_support_contact
@@ -1304,7 +1306,9 @@ Model Info:
 
         from litellm.proxy.proxy_server import premium_user, prisma_client
 
-        email_logo_url = os.getenv("SMTP_SENDER_LOGO", None)
+        email_logo_url = os.getenv(
+            "SMTP_SENDER_LOGO", os.getenv("EMAIL_LOGO_URL", None)
+        )
         email_support_contact = os.getenv("EMAIL_SUPPORT_CONTACT", None)
         await self._check_if_using_premium_email_feature(
             premium_user, email_logo_url, email_support_contact
