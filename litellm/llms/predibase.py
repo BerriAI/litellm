@@ -487,9 +487,16 @@ class PredibaseChatCompletion(BaseLLM):
         self.async_handler = AsyncHTTPHandler(
             timeout=httpx.Timeout(timeout=600.0, connect=5.0)
         )
-        response = await self.async_handler.post(
-            api_base, headers=headers, data=json.dumps(data)
-        )
+        try:
+            response = await self.async_handler.post(
+                api_base, headers=headers, data=json.dumps(data)
+            )
+        except httpx.HTTPStatusError as e:
+            raise PredibaseError(
+                status_code=e.response.status_code, message=e.response.text
+            )
+        except Exception as e:
+            raise PredibaseError(status_code=500, message=str(e))
         return self.process_response(
             model=model,
             response=response,
