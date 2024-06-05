@@ -680,12 +680,6 @@ class ModelResponse(OpenAIObject):
                 usage = usage
         elif stream is None or stream == False:
             usage = Usage()
-        elif (
-            stream == True
-            and stream_options is not None
-            and stream_options.get("include_usage") == True
-        ):
-            usage = Usage()
         if hidden_params:
             self._hidden_params = hidden_params
 
@@ -11107,8 +11101,7 @@ class CustomStreamWrapper:
             model_response.system_fingerprint = self.system_fingerprint
         model_response._hidden_params["custom_llm_provider"] = self.custom_llm_provider
         model_response._hidden_params["created_at"] = time.time()
-        model_response.choices = [StreamingChoices()]
-        model_response.choices[0].finish_reason = None
+        model_response.choices = [StreamingChoices(finish_reason=None)]
         return model_response
 
     def is_delta_empty(self, delta: Delta) -> bool:
@@ -11463,8 +11456,13 @@ class CustomStreamWrapper:
                 if (
                     self.stream_options is not None
                     and self.stream_options["include_usage"] == True
+                    and response_obj["usage"] is not None
                 ):
-                    model_response.usage = response_obj["usage"]
+                    model_response.usage = litellm.Usage(
+                        prompt_tokens=response_obj["usage"].prompt_tokens,
+                        completion_tokens=response_obj["usage"].completion_tokens,
+                        total_tokens=response_obj["usage"].total_tokens,
+                    )
 
             model_response.model = self.model
             print_verbose(
