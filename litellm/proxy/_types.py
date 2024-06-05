@@ -262,6 +262,13 @@ class LiteLLMRoutes(enum.Enum):
         "/metrics",
     ]
 
+    internal_user_routes: List = [
+        "/key/generate",
+        "/key/update",
+        "/key/delete",
+        "/key/info",
+    ] + spend_tracking_routes
+
 
 # class LiteLLMAllowedRoutes(LiteLLMBase):
 #     """
