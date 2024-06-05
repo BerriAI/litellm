@@ -1374,6 +1374,16 @@ class AllCallbacks(LiteLLMBase):
         ],
     )
 
+    s3: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="s3",
+        ui_callback_name="s3 Bucket (AWS)",
+        litellm_callback_params=[
+            "AWS_ACCESS_KEY_ID",
+            "AWS_SECRET_ACCESS_KEY",
+            "AWS_REGION_NAME",
+        ],
+    )
+
     openmeter: CallbackOnUI = CallbackOnUI(
         litellm_callback_name="openmeter",
         ui_callback_name="OpenMeter",
