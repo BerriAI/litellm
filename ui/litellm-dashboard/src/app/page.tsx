@@ -35,6 +35,10 @@ function formatUserRole(userRole: string) {
       return "Admin";
     case "proxy_admin_viewer":
       return "Admin Viewer";
+    case "internal_user":
+      return "Internal User";
+    case "internal_viewer":
+      return "Internal Viewer";
     case "app_user":
       return "App User";
     default:
