@@ -10363,6 +10363,42 @@ async def new_team(
         return team_row.dict()
 
 
+async def create_audit_log_for_update(
+    action: Literal["create", "update", "delete"],
+    # fyi: pylint does not directly allow you to pass Literal["LiteLLM_TeamTable"]
+    # because LiteLLM_TeamTable is also defined in _types.py
+    table_name: Literal[
+        LitellmTableNames.TEAM_TABLE_NAME,
+        LitellmTableNames.USER_TABLE_NAME,
+        LitellmTableNames.PROXY_MODEL_TABLE_NAME,
+    ],
+    object_id: str,
+    changed_by: str,
+    before_value: dict,
+    after_value: dict,
+):
+    if not premium_user:
+        return
+
+    try:
+        pass
+
+    except Exception as e:
+        # [Non-Blocking Exception. Do not allow blocking LLM API call]
+        verbose_proxy_logger.error(f"Failed Creating audit log {e}")
+
+    # await prisma_client.create_audit_log(
+    #     data={
+    #         "action": action,
+    #         "object_id": object_id,
+    #         "changed_by": changed_by,
+    #         "before_value": json.dumps(before_value),
+    #         "after_value": json.dumps(after_value),
+    #     }
+    # )
+    return
+
+
 @router.post(
     "/team/update", tags=["team management"], dependencies=[Depends(user_api_key_auth)]
 )
