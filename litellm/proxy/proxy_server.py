@@ -3129,9 +3129,9 @@ class ProxyConfig:
         if "alerting" in _general_settings:
             if (
                 general_settings is not None
-                and general_settings["alerting"] is not None
+                and general_settings.get("alerting", None) is not None
                 and isinstance(general_settings["alerting"], list)
-                and _general_settings["alerting"] is not None
+                and _general_settings.get("alerting", None) is not None
                 and isinstance(_general_settings["alerting"], list)
             ):
                 for alert in _general_settings["alerting"]:
@@ -13435,6 +13435,14 @@ async def update_config(config_info: ConfigYAML):
         if prisma_client is None:
             raise Exception("No DB Connected")
 
+        if store_model_in_db is not True:
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."
+                },
+            )
+
         updated_settings = config_info.json(exclude_none=True)
         updated_settings = prisma_client.jsonify_object(updated_settings)
         for k, v in updated_settings.items():
@@ -13858,6 +13866,8 @@ async def get_config():
     try:
         import base64
 
+        all_available_callbacks = AllCallbacks()
+
         config_data = await proxy_config.get_config()
         _litellm_settings = config_data.get("litellm_settings", {})
         _general_settings = config_data.get("general_settings", {})
@@ -13992,11 +14002,13 @@ async def get_config():
             _router_settings = {}
         else:
             _router_settings = llm_router.get_settings()
+
         return {
             "status": "success",
             "callbacks": _data_to_return,
             "alerts": alerting_data,
             "router_settings": _router_settings,
+            "available_callbacks": all_available_callbacks,
         }
     except Exception as e:
         traceback.print_exc()

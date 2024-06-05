@@ -1346,3 +1346,61 @@ class InvitationModel(LiteLLMBase):
 class ConfigFieldInfo(LiteLLMBase):
     field_name: str
     field_value: Any
+
+
+class CallbackOnUI(LiteLLMBase):
+    litellm_callback_name: str
+    litellm_callback_params: Optional[list]
+    ui_callback_name: str
+
+
+class AllCallbacks(LiteLLMBase):
+    langfuse: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="langfuse",
+        ui_callback_name="Langfuse",
+        litellm_callback_params=[
+            "LANGFUSE_PUBLIC_KEY",
+            "LANGFUSE_SECRET_KEY",
+        ],
+    )
+
+    otel: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="otel",
+        ui_callback_name="OpenTelemetry",
+        litellm_callback_params=[
+            "OTEL_EXPORTER",
+            "OTEL_ENDPOINT",
+            "OTEL_HEADERS",
+        ],
+    )
+
+    s3: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="s3",
+        ui_callback_name="s3 Bucket (AWS)",
+        litellm_callback_params=[
+            "AWS_ACCESS_KEY_ID",
+            "AWS_SECRET_ACCESS_KEY",
+            "AWS_REGION_NAME",
+        ],
+    )
+
+    openmeter: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="openmeter",
+        ui_callback_name="OpenMeter",
+        litellm_callback_params=[
+            "OPENMETER_API_ENDPOINT",
+            "OPENMETER_API_KEY",
+        ],
+    )
+
+    custom_callback_api: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="custom_callback_api",
+        litellm_callback_params=["GENERIC_LOGGER_ENDPOINT"],
+        ui_callback_name="Custom Callback API",
+    )
+
+    datadog: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="datadog",
+        litellm_callback_params=["DD_API_KEY", "DD_SITE"],
+        ui_callback_name="Datadog",
+    )
