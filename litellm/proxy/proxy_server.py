@@ -1311,7 +1311,9 @@ async def user_api_key_auth(
                         if user_id != valid_token.user_id:
                             raise HTTPException(
                                 status_code=status.HTTP_403_FORBIDDEN,
-                                detail="key not allowed to access this user's info",
+                                detail="key not allowed to access this user's info. user_id={}, key's user_id={}".format(
+                                    user_id, valid_token.user_id
+                                ),
                             )
                     elif route == "/model/info":
                         # /model/info just shows models user has access to
@@ -1406,7 +1408,7 @@ async def user_api_key_auth(
                 "/global/predict/spend/logs",
                 "/global/activity",
                 "/health/services",
-            ]
+            ] + LiteLLMRoutes.info_routes.value
             # check if the current route startswith any of the allowed routes
             if (
                 route is not None
@@ -9164,6 +9166,7 @@ async def new_user(data: NewUserRequest):
         data_json["table_name"] = (
             "user"  # only create a user, don't create key if 'auto_create_key' set to False
         )
+
     response = await generate_key_helper_fn(request_type="user", **data_json)
 
     # Admin UI Logic
@@ -12765,7 +12768,10 @@ async def login(request: Request):
         _password = getattr(_user_row, "password", "unknown")
 
         # check if password == _user_row.password
-        if secrets.compare_digest(password, _password):
+        hash_password = hash_token(token=password)
+        if secrets.compare_digest(password, _password) or secrets.compare_digest(
+            hash_password, _password
+        ):
             if os.getenv("DATABASE_URL") is not None:
                 response = await generate_key_helper_fn(
                     request_type="key",
@@ -12926,6 +12932,92 @@ async def onboarding(invite_link: str):
         "token": jwt_token,
         "user_email": user_email,
     }
+
+
+@app.post("/onboarding/claim_token", include_in_schema=False)
+async def claim_onboarding_link(data: InvitationClaim):
+    """
+    Special route. Allows UI link share user to update their password.
+
+    - Get the invite link
+    - Validate it's still 'valid'
+    - Check if user within initial session (prevents abuse)
+    - Get user from db
+    - Update user password
+
+    This route can only update user password.
+    """
+    global prisma_client
+    ### VALIDATE INVITE LINK ###
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
+    invite_obj = await prisma_client.db.litellm_invitationlink.find_unique(
+        where={"id": data.invitation_link}
+    )
+    if invite_obj is None:
+        raise HTTPException(
+            status_code=401, detail={"error": "Invitation link does not exist in db."}
+        )
+    #### CHECK IF EXPIRED
+    # Extract the date part from both datetime objects
+    utc_now_date = litellm.utils.get_utc_datetime().date()
+    expires_at_date = invite_obj.expires_at.date()
+    if expires_at_date < utc_now_date:
+        raise HTTPException(
+            status_code=401, detail={"error": "Invitation link has expired."}
+        )
+
+    #### CHECK IF CLAIMED
+    ##### if claimed - check if within valid session (within 10 minutes of being claimed)
+    ##### if unclaimed - reject
+
+    current_time = litellm.utils.get_utc_datetime()
+
+    if invite_obj.is_accepted == True:
+        time_difference = current_time - invite_obj.updated_at
+
+        # Check if the difference is within 10 minutes
+        if time_difference > timedelta(minutes=10):
+            raise HTTPException(
+                status_code=401,
+                detail={
+                    "error": "The invitation link has already been claimed. Please ask your admin for a new invite link."
+                },
+            )
+    else:
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error": "The invitation link was never validated. Please file an issue, if this is not intended - https://github.com/BerriAI/litellm/issues."
+            },
+        )
+
+    #### CHECK IF VALID USER ID
+    if invite_obj.user_id != data.user_id:
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error": "Invalid invitation link. The user id submitted does not match the user id this link is attached to. Got={}, Expected={}".format(
+                    data.user_id, invite_obj.user_id
+                )
+            },
+        )
+    ### UPDATE USER OBJECT ###
+    hash_password = hash_token(token=data.password)
+    user_obj = await prisma_client.db.litellm_usertable.update(
+        where={"user_id": invite_obj.user_id}, data={"password": hash_password}
+    )
+
+    if user_obj is None:
+        raise HTTPException(
+            status_code=401, detail={"error": "User does not exist in db."}
+        )
+
+    return user_obj
 
 
 @app.get("/get_image", include_in_schema=False)
