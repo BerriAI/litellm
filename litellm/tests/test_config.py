@@ -11,9 +11,9 @@ import os, io
 
 sys.path.insert(
     0, os.path.abspath("../..")
-)  # Adds the parent directory to the, system path
+)  # Adds the parent directory to the system path
 import pytest, litellm
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from litellm.proxy.proxy_server import ProxyConfig
 from litellm.proxy.utils import encrypt_value, ProxyLogging, DualCache
 from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
@@ -26,9 +26,7 @@ class DBModel(BaseModel):
     model_info: dict
     litellm_params: dict
 
-    class Config:
-        protected_namespaces = ()
-
+    model_config = ConfigDict(protected_namespaces=())
 
 @pytest.mark.asyncio
 async def test_delete_deployment():
@@ -102,7 +100,7 @@ async def test_delete_deployment():
     pc = ProxyConfig()
 
     db_model = DBModel(
-        model_id="12340523",
+        model_id=deployment.model_info.id,
         model_name="gpt-3.5-turbo",
         litellm_params=encrypted_litellm_params,
         model_info={"id": deployment.model_info.id},

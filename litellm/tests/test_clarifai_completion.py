@@ -38,6 +38,7 @@ def reset_callbacks():
     litellm.callbacks = []
 
 
+@pytest.mark.skip(reason="Account rate limited.")
 def test_completion_clarifai_claude_2_1():
     print("calling clarifai claude completion")
     import os
@@ -47,6 +48,7 @@ def test_completion_clarifai_claude_2_1():
     try:
         response = completion(
             model="clarifai/anthropic.completion.claude-2_1",
+            num_retries=3,
             messages=messages,
             max_tokens=10,
             temperature=0.1,
@@ -60,12 +62,14 @@ def test_completion_clarifai_claude_2_1():
         pytest.fail(f"Error occured: {e}")
 
 
+@pytest.mark.skip(reason="Account rate limited")
 def test_completion_clarifai_mistral_large():
     try:
         litellm.set_verbose = True
         response: ModelResponse = completion(
             model="clarifai/mistralai.completion.mistral-small",
             messages=messages,
+            num_retries=3,
             max_tokens=10,
             temperature=0.78,
         )
@@ -78,6 +82,7 @@ def test_completion_clarifai_mistral_large():
         pytest.fail(f"Error occurred: {e}")
 
 
+@pytest.mark.skip(reason="Account rate limited")
 @pytest.mark.asyncio
 def test_async_completion_clarifai():
     import asyncio
@@ -91,6 +96,7 @@ def test_async_completion_clarifai():
             response = await acompletion(
                 model="clarifai/openai.chat-completion.GPT-4",
                 messages=messages,
+                num_retries=3,
                 timeout=10,
                 api_key=os.getenv("CLARIFAI_API_KEY"),
             )

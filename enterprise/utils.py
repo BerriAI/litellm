@@ -1,5 +1,7 @@
 # Enterprise Proxy Util Endpoints
+from typing import Optional, List
 from litellm._logging import verbose_logger
+from litellm.proxy.proxy_server import PrismaClient, HTTPException
 import collections
 from datetime import datetime
 
@@ -19,27 +21,76 @@ async def get_spend_by_tags(start_date=None, end_date=None, prisma_client=None):
     return response
 
 
-async def ui_get_spend_by_tags(start_date: str, end_date: str, prisma_client):
-
-    sql_query = """
-        SELECT
-        jsonb_array_elements_text(request_tags) AS individual_request_tag,
-        DATE(s."startTime") AS spend_date,
-        COUNT(*) AS log_count,
-        SUM(spend) AS total_spend
-        FROM "LiteLLM_SpendLogs" s
-        WHERE
-            DATE(s."startTime") >= $1::date
-            AND DATE(s."startTime") <= $2::date
-        GROUP BY individual_request_tag, spend_date
-        ORDER BY spend_date
-        LIMIT 100;
+async def ui_get_spend_by_tags(
+    start_date: str,
+    end_date: str,
+    prisma_client: Optional[PrismaClient] = None,
+    tags_str: Optional[str] = None,
+):
     """
-    response = await prisma_client.db.query_raw(
-        sql_query,
-        start_date,
-        end_date,
-    )
+    Should cover 2 cases:
+    1. When user is getting spend for all_tags. "all_tags" in tags_list
+    2. When user is getting spend for specific tags.
+    """
+
+    # tags_str is a list of strings csv of tags
+    # tags_str = tag1,tag2,tag3
+    # convert to list if it's not None
+    tags_list: Optional[List[str]] = None
+    if tags_str is not None and len(tags_str) > 0:
+        tags_list = tags_str.split(",")
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail={"error": "No db connected"})
+
+    response = None
+    if tags_list is None or (isinstance(tags_list, list) and "all-tags" in tags_list):
+        # Get spend for all tags
+        sql_query = """
+            SELECT
+            jsonb_array_elements_text(request_tags) AS individual_request_tag,
+            DATE(s."startTime") AS spend_date,
+            COUNT(*) AS log_count,
+            SUM(spend) AS total_spend
+            FROM "LiteLLM_SpendLogs" s
+            WHERE
+                DATE(s."startTime") >= $1::date
+                AND DATE(s."startTime") <= $2::date
+            GROUP BY individual_request_tag, spend_date
+            ORDER BY total_spend DESC;
+        """
+        response = await prisma_client.db.query_raw(
+            sql_query,
+            start_date,
+            end_date,
+        )
+    else:
+        # filter by tags list
+        sql_query = """
+            SELECT
+                individual_request_tag,
+                COUNT(*) AS log_count,
+                SUM(spend) AS total_spend
+            FROM (
+                SELECT
+                    jsonb_array_elements_text(request_tags) AS individual_request_tag,
+                    DATE(s."startTime") AS spend_date,
+                    spend
+                FROM "LiteLLM_SpendLogs" s
+                WHERE
+                    DATE(s."startTime") >= $1::date
+                    AND DATE(s."startTime") <= $2::date
+            ) AS subquery
+            WHERE individual_request_tag = ANY($3::text[])
+            GROUP BY individual_request_tag
+            ORDER BY total_spend DESC;
+        """
+        response = await prisma_client.db.query_raw(
+            sql_query,
+            start_date,
+            end_date,
+            tags_list,
+        )
 
     # print("tags - spend")
     # print(response)

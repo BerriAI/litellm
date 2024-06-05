@@ -1,6 +1,6 @@
 #### What this does ####
 #   identifies lowest tpm deployment
-
+from pydantic import BaseModel
 import dotenv, os, requests, random
 from typing import Optional, Union, List, Dict
 from datetime import datetime
@@ -11,16 +11,31 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm._logging import verbose_router_logger
 from litellm.utils import print_verbose
 
+class LiteLLMBase(BaseModel):
+    """
+    Implements default functions, all pydantic objects should have.
+    """
 
+    def json(self, **kwargs):
+        try:
+            return self.model_dump()  # noqa
+        except:
+            # if using pydantic v1
+            return self.dict()
+
+class RoutingArgs(LiteLLMBase):
+    ttl: int = 1 * 60 # 1min (RPM/TPM expire key)
+    
 class LowestTPMLoggingHandler(CustomLogger):
     test_flag: bool = False
     logged_success: int = 0
     logged_failure: int = 0
     default_cache_time_seconds: int = 1 * 60 * 60  # 1 hour
 
-    def __init__(self, router_cache: DualCache, model_list: list):
+    def __init__(self, router_cache: DualCache, model_list: list, routing_args: dict = {}):
         self.router_cache = router_cache
         self.model_list = model_list
+        self.routing_args = RoutingArgs(**routing_args)
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
@@ -57,13 +72,13 @@ class LowestTPMLoggingHandler(CustomLogger):
                 request_count_dict = self.router_cache.get_cache(key=tpm_key) or {}
                 request_count_dict[id] = request_count_dict.get(id, 0) + total_tokens
 
-                self.router_cache.set_cache(key=tpm_key, value=request_count_dict)
+                self.router_cache.set_cache(key=tpm_key, value=request_count_dict, ttl=self.routing_args.ttl)
 
                 ## RPM
                 request_count_dict = self.router_cache.get_cache(key=rpm_key) or {}
                 request_count_dict[id] = request_count_dict.get(id, 0) + 1
 
-                self.router_cache.set_cache(key=rpm_key, value=request_count_dict)
+                self.router_cache.set_cache(key=rpm_key, value=request_count_dict, ttl=self.routing_args.ttl)
 
                 ### TESTING ###
                 if self.test_flag:
@@ -108,13 +123,13 @@ class LowestTPMLoggingHandler(CustomLogger):
                 request_count_dict = self.router_cache.get_cache(key=tpm_key) or {}
                 request_count_dict[id] = request_count_dict.get(id, 0) + total_tokens
 
-                self.router_cache.set_cache(key=tpm_key, value=request_count_dict)
+                self.router_cache.set_cache(key=tpm_key, value=request_count_dict, ttl=self.routing_args.ttl)
 
                 ## RPM
                 request_count_dict = self.router_cache.get_cache(key=rpm_key) or {}
                 request_count_dict[id] = request_count_dict.get(id, 0) + 1
 
-                self.router_cache.set_cache(key=rpm_key, value=request_count_dict)
+                self.router_cache.set_cache(key=rpm_key, value=request_count_dict, ttl=self.routing_args.ttl)
 
                 ### TESTING ###
                 if self.test_flag:

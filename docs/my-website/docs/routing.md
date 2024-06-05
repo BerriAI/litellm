@@ -713,24 +713,41 @@ response = router.completion(model="gpt-3.5-turbo", messages=messages)
 print(f"response: {response}")
 ```
 
-#### Retries based on Error Type
+### [Advanced]: Custom Retries, Cooldowns based on Error Type
 
-Use `RetryPolicy` if you want to set a `num_retries` based on the Exception receieved
+- Use `RetryPolicy` if you want to set a `num_retries` based on the Exception receieved
+- Use `AllowedFailsPolicy` to set a custom number of `allowed_fails`/minute before cooling down a deployment
 
 Example:
-- 4 retries for `ContentPolicyViolationError`
-- 0 retries for `RateLimitErrors` 
+
+```python
+retry_policy = RetryPolicy(
+    ContentPolicyViolationErrorRetries=3, 		  # run 3 retries for ContentPolicyViolationErrors
+    AuthenticationErrorRetries=0,         		  # run 0 retries for AuthenticationErrorRetries
+)
+
+allowed_fails_policy = AllowedFailsPolicy(
+	ContentPolicyViolationErrorAllowedFails=1000, # Allow 1000 ContentPolicyViolationError before cooling down a deployment
+	RateLimitErrorAllowedFails=100,               # Allow 100 RateLimitErrors before cooling down a deployment
+)
+```
 
 Example Usage
 
 ```python
-from litellm.router import RetryPolicy
+from litellm.router import RetryPolicy, AllowedFailsPolicy
+
 retry_policy = RetryPolicy(
-	ContentPolicyViolationErrorRetries=3, # run 3 retries for ContentPolicyViolationErrors
-	AuthenticationErrorRetries=0,		  # run 0 retries for AuthenticationErrorRetries
+	ContentPolicyViolationErrorRetries=3,         # run 3 retries for ContentPolicyViolationErrors
+	AuthenticationErrorRetries=0,		          # run 0 retries for AuthenticationErrorRetries
 	BadRequestErrorRetries=1,
 	TimeoutErrorRetries=2,
 	RateLimitErrorRetries=3,
+)
+
+allowed_fails_policy = AllowedFailsPolicy(
+	ContentPolicyViolationErrorAllowedFails=1000, # Allow 1000 ContentPolicyViolationError before cooling down a deployment
+	RateLimitErrorAllowedFails=100,               # Allow 100 RateLimitErrors before cooling down a deployment
 )
 
 router = litellm.Router(
@@ -755,6 +772,7 @@ router = litellm.Router(
 		},
 	],
 	retry_policy=retry_policy,
+	allowed_fails_policy=allowed_fails_policy,
 )
 
 response = await router.acompletion(

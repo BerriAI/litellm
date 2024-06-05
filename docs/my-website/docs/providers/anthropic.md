@@ -9,6 +9,12 @@ LiteLLM supports
 - `claude-2.1`
 - `claude-instant-1.2`
 
+:::info
+
+Anthropic API fails requests when `max_tokens` are not passed. Due to this litellm passes `max_tokens=4096` when no `max_tokens` are passed
+
+:::
+
 ## API Keys
 
 ```python

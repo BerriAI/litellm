@@ -93,6 +93,7 @@ class LangFuseLogger:
             )
 
             litellm_params = kwargs.get("litellm_params", {})
+            litellm_call_id = kwargs.get("litellm_call_id", None)
             metadata = (
                 litellm_params.get("metadata", {}) or {}
             )  # if litellm_params['metadata'] == None
@@ -161,6 +162,7 @@ class LangFuseLogger:
                     response_obj,
                     level,
                     print_verbose,
+                    litellm_call_id,
                 )
             elif response_obj is not None:
                 self._log_langfuse_v1(
@@ -255,6 +257,7 @@ class LangFuseLogger:
         response_obj,
         level,
         print_verbose,
+        litellm_call_id,
     ) -> tuple:
         import langfuse
 
@@ -318,7 +321,7 @@ class LangFuseLogger:
 
             session_id = clean_metadata.pop("session_id", None)
             trace_name = clean_metadata.pop("trace_name", None)
-            trace_id = clean_metadata.pop("trace_id", None)
+            trace_id = clean_metadata.pop("trace_id", litellm_call_id)
             existing_trace_id = clean_metadata.pop("existing_trace_id", None)
             update_trace_keys = clean_metadata.pop("update_trace_keys", [])
             debug = clean_metadata.pop("debug_langfuse", None)
@@ -351,9 +354,13 @@ class LangFuseLogger:
 
                 # Special keys that are found in the function arguments and not the metadata
                 if "input" in update_trace_keys:
-                    trace_params["input"] = input if not mask_input else "redacted-by-litellm"
+                    trace_params["input"] = (
+                        input if not mask_input else "redacted-by-litellm"
+                    )
                 if "output" in update_trace_keys:
-                    trace_params["output"] = output if not mask_output else "redacted-by-litellm"
+                    trace_params["output"] = (
+                        output if not mask_output else "redacted-by-litellm"
+                    )
             else:  # don't overwrite an existing trace
                 trace_params = {
                     "id": trace_id,
@@ -375,7 +382,9 @@ class LangFuseLogger:
                 if level == "ERROR":
                     trace_params["status_message"] = output
                 else:
-                    trace_params["output"] = output if not mask_output else "redacted-by-litellm"
+                    trace_params["output"] = (
+                        output if not mask_output else "redacted-by-litellm"
+                    )
 
             if debug == True or (isinstance(debug, str) and debug.lower() == "true"):
                 if "metadata" in trace_params:
@@ -386,6 +395,8 @@ class LangFuseLogger:
 
             cost = kwargs.get("response_cost", None)
             print_verbose(f"trace: {cost}")
+
+            clean_metadata["litellm_response_cost"] = cost
 
             if (
                 litellm._langfuse_default_tags is not None
@@ -412,7 +423,6 @@ class LangFuseLogger:
                 if "cache_hit" in kwargs:
                     if kwargs["cache_hit"] is None:
                         kwargs["cache_hit"] = False
-                    tags.append(f"cache_hit:{kwargs['cache_hit']}")
                     clean_metadata["cache_hit"] = kwargs["cache_hit"]
                 if existing_trace_id is None:
                     trace_params.update({"tags": tags})
@@ -447,8 +457,13 @@ class LangFuseLogger:
                 }
             generation_name = clean_metadata.pop("generation_name", None)
             if generation_name is None:
-                # just log `litellm-{call_type}` as the generation name
+                # if `generation_name` is None, use sensible default values
+                # If using litellm proxy user `key_alias` if not None
+                # If `key_alias` is None, just log `litellm-{call_type}` as the generation name
+                _user_api_key_alias = clean_metadata.get("user_api_key_alias", None)
                 generation_name = f"litellm-{kwargs.get('call_type', 'completion')}"
+                if _user_api_key_alias is not None:
+                    generation_name = f"litellm:{_user_api_key_alias}"
 
             if response_obj is not None and "system_fingerprint" in response_obj:
                 system_fingerprint = response_obj.get("system_fingerprint", None)

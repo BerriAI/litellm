@@ -39,37 +39,34 @@ This is a list of openai params we translate across providers.
 
 Use `litellm.get_supported_openai_params()` for an updated list of params for each model + provider 
 
-| Provider | temperature | max_tokens | top_p | stream | stop | n | presence_penalty | frequency_penalty | functions | function_call | logit_bias | user | response_format | seed | tools | tool_choice | logprobs | top_logprobs | extra_headers | 
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|--|
-|Anthropic| ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |  |  |  |  |  |  | ✅ | ✅ | 
-|Anthropic| ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |  |  |  |  | ✅ | ✅ | ✅ | ✅ | 
-|OpenAI| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |✅ | ✅ | ✅ | ✅ |✅ | ✅ | ✅ | ✅ | ✅ |
-|Azure OpenAI| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |✅ | ✅ | ✅ | ✅ |✅ | ✅ |  |  | ✅ |
+| Provider | temperature | max_tokens | top_p | stream | stream_options | stop | n | presence_penalty | frequency_penalty | functions | function_call | logit_bias | user | response_format | seed | tools | tool_choice | logprobs | top_logprobs | extra_headers |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+|Anthropic| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |  |  |  |✅ | ✅ | ✅ | ✅ | ✅ |  |  | ✅ |
+|OpenAI| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |✅ | ✅ | ✅ | ✅ |✅ | ✅ | ✅ | ✅ | ✅ |
+|Azure OpenAI| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |✅ | ✅ | ✅ | ✅ |✅ | ✅ |  |  | ✅ |
 |Replicate | ✅ | ✅ | ✅ | ✅ | ✅ | |  |   |  |   |
-|Anyscale | ✅ | ✅ | ✅ | ✅ |
+|Anyscale | ✅ | ✅ | ✅ | ✅ | ✅ |
 |Cohere| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |   |   |
-|Huggingface| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |    |
-|Openrouter| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-|AI21| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |   |
-|VertexAI| ✅ | ✅ |  | ✅ |  |  |  |  |  |   |
-|Bedrock| ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |  |   |
-|Sagemaker| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |  |   |
+|Huggingface| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |   |    |
+|Openrouter| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | | | | | ✅ | | | | |
+|AI21| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |
+|VertexAI| ✅ | ✅ |  | ✅ | ✅ |  |  |  |  |   | | | | | ✅ | | |
+|Bedrock| ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |  |   | | | | | ✅ (for anthropic) | |
+|Sagemaker| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |
 |TogetherAI| ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |  |   | ✅ |
-|AlephAlpha| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |   |  |   |
-|Palm| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |  |   |
-|NLP Cloud| ✅ | ✅ | ✅ | ✅ | ✅ | |  |  |  |   |
-|Petals| ✅ | ✅ |  | ✅ | |  |   |  |  |   |
-|Ollama| ✅ | ✅ | ✅ | ✅ | ✅ |  |   | ✅ |  |   |
-
+|AlephAlpha| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |   |  |   |
+|Palm| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |
+|NLP Cloud| ✅ | ✅ | ✅ | ✅ | ✅ | | |  |  |   |
+|Petals| ✅ | ✅ |  | ✅ | ✅ | |  |   |  |   |
+|Ollama| ✅ | ✅ | ✅ | ✅ | ✅ |  |   | ✅ |  |   | | | ✅ | | |
+|Databricks| ✅ | ✅ | ✅ | ✅ | ✅ |  |   | |  |   | | | | | |
+|ClarifAI| ✅ | ✅ | |✅ | ✅ |  |   | |  |   | | | | | |
 :::note
 
 By default, LiteLLM raises an exception if the openai param being passed in isn't supported. 
 
-To drop the param instead, set `litellm.drop_params = True`.
+To drop the param instead, set `litellm.drop_params = True` or `completion(..drop_params=True)`.
 
-**For function calling:**
-
-Add to prompt for non-openai models, set: `litellm.add_function_to_prompt = True`. 
 ::: 
 
 ## Input Params
