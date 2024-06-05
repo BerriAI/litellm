@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import {
   Card,
-  Title,
+
   Subtitle,
   Table,
   TableHead,
@@ -23,21 +23,35 @@ import {
   TabList,
   Tab,
   Callout,
+  SelectItem,
 } from "@tremor/react";
+
+import { Modal, Typography, Form, Input, Select, Button as Button2, message } from "antd";
+
+const { Title, Paragraph } = Typography;
 import {
   getCallbacksCall,
   setCallbacksCall,
   serviceHealthCheck,
 } from "./networking";
-import { Modal, Form, Input, Select, Button as Button2, message } from "antd";
 import StaticGenerationSearchParamsBailoutProvider from "next/dist/client/components/static-generation-searchparams-bailout-provider";
 import AlertingSettings from "./alerting/alerting_settings";
+import FormItem from "antd/es/form/FormItem";
 interface SettingsPageProps {
   accessToken: string | null;
   userRole: string | null;
   userID: string | null;
   premiumUser: boolean;
 }
+
+
+interface genericCallbackParams {
+  
+  litellm_callback_name: string  // what to send in request
+  ui_callback_name: string // what to show on UI
+  litellm_callback_params: string[] | null // known required params for this callback
+}
+
 
 interface AlertingVariables {
   SLACK_WEBHOOK_URL: string | null;
@@ -92,7 +106,7 @@ const Settings: React.FC<SettingsPageProps> = ({
   premiumUser,
 }) => {
   const [callbacks, setCallbacks] =
-    useState<AlertingObject[]>(defaultLoggingObject);
+    useState<AlertingObject[]>([]);
   const [alerts, setAlerts] = useState<any[]>([]);
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [form] = Form.useForm();
@@ -103,6 +117,12 @@ const Settings: React.FC<SettingsPageProps> = ({
     Record<string, string>
   >({});
   const [activeAlerts, setActiveAlerts] = useState<string[]>([]);
+
+  const [showAddCallbacksModal, setShowAddCallbacksModal] = useState(false);
+  const [allCallbacks, setAllCallbacks] = useState<genericCallbackParams[]>([]);
+
+  const [selectedCallbacktoAdd, setSelectedCallbacktoAdd] = useState<string | null>(null);
+  const [selectedCallbackParams, setSelectedCallbackParams] = useState<string[]>([]);
 
   const handleSwitchChange = (alertName: string) => {
     if (activeAlerts.includes(alertName)) {
@@ -128,8 +148,7 @@ const Settings: React.FC<SettingsPageProps> = ({
     }
     getCallbacksCall(accessToken, userID, userRole).then((data) => {
       console.log("callbacks", data);
-      let updatedCallbacks: any[] = defaultLoggingObject;
-
+      let updatedCallbacks: any[] = [];
       updatedCallbacks = updatedCallbacks.map((item: any) => {
         const callback = data.callbacks.find(
           (cb: any) => cb.name === item.name
@@ -145,6 +164,8 @@ const Settings: React.FC<SettingsPageProps> = ({
       });
 
       setCallbacks(updatedCallbacks);
+
+      setAllCallbacks(data.available_callbacks);
       // setCallbacks(callbacks_data);
 
       let alerts_data = data.alerts;
@@ -224,6 +245,56 @@ const Settings: React.FC<SettingsPageProps> = ({
 
     message.success("Email settings updated successfully");
   }
+
+
+  const addNewCallbackCall = async (formValues: Record<string, any>) => {
+    if (!accessToken) {
+      return;
+    }
+    let new_callback = formValues?.callback
+
+    let env_vars: Record<string, string> = {};
+    // add all other variables
+    Object.entries(formValues).forEach(([key, value]) => {
+      if (key !== "callback") {
+        env_vars[key] = value
+      }
+    });
+
+    let payload = {
+      environment_variables: env_vars,
+      litellm_settings: {
+        success_callback: [new_callback],
+      },
+    }
+
+
+    try {
+      let newCallback = await setCallbacksCall(accessToken, payload);
+      message.success(`Callback ${new_callback} added successfully`);
+      setIsModalVisible(false);
+      form.resetFields();
+      setSelectedCallback(null);
+    } catch (error) {
+      message.error("Failed to add callback: " + error, 20);
+    }
+  }
+
+
+
+  const handleSelectedCallbackChange = (callbackObject: genericCallbackParams) => {
+
+    console.log("inside handleSelectedCallbackChange", callbackObject);
+    setSelectedCallback(callbackObject.litellm_callback_name);
+
+    console.log("all callbacks", allCallbacks);
+    if (selectedCallback) {
+      setSelectedCallbackParams(callbackObject.litellm_callback_params);
+      console.log("selectedCallbackParams", selectedCallbackParams);
+    } else {
+      setSelectedCallbackParams([]);
+    }
+  };
 
   const handleSaveAlerts = () => {
     if (!accessToken) {
@@ -398,10 +469,7 @@ const Settings: React.FC<SettingsPageProps> = ({
   return (
     <div className="w-full mx-4">
       <Grid numItems={1} className="gap-2 p-8 w-full mt-2">
-        <Callout
-          title="[UI] Presidio PII + Guardrails Coming Soon. https://docs.litellm.ai/docs/proxy/pii_masking"
-          color="sky"
-        ></Callout>
+        
         <TabGroup>
           <TabList variant="line" defaultValue="1">
             <Tab value="1">Logging Callbacks</Tab>
@@ -411,7 +479,8 @@ const Settings: React.FC<SettingsPageProps> = ({
           </TabList>
           <TabPanels>
             <TabPanel>
-              <Card>
+            <Title level={4}>Active Logging Callbacks</Title>
+              <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[50vh]">
                 <Table>
                   <TableHead>
                     <TableRow>
@@ -471,6 +540,10 @@ const Settings: React.FC<SettingsPageProps> = ({
                   </TableBody>
                 </Table>
               </Card>
+              <Button
+                onClick={() => setShowAddCallbacksModal(true)}>
+                  Add Callback
+                </Button>
             </TabPanel>
 
             <TabPanel>
@@ -770,7 +843,81 @@ const Settings: React.FC<SettingsPageProps> = ({
           </div>
         </Form>
       </Modal>
+      <Modal
+      title="Add Logging Callback"
+      visible={showAddCallbacksModal}
+      width={800}
+      onCancel= {() => setShowAddCallbacksModal(false)}
+      footer={null}
+      >
+
+
+      <Form 
+      form={form} 
+      onFinish={addNewCallbackCall}
+      labelCol={{ span: 8 }}
+      wrapperCol={{ span: 16 }}
+      labelAlign="left"
+      >
+
+      <>
+        <FormItem
+          label="Callback"
+          name="callback"
+          rules={[{ required: true, message: "Please select a callback" }]}
+        >
+          <Select
+          onChange={(value) => {
+            const selectedCallback = allCallbacks[value];
+            if (selectedCallback) {
+              console.log(selectedCallback.ui_callback_name);
+              handleSelectedCallbackChange(selectedCallback);
+            }
+          }}
+          >
+        {allCallbacks &&
+          Object.values(allCallbacks).map((callback) => (
+            <SelectItem 
+            key={callback.litellm_callback_name} 
+            value={callback.litellm_callback_name}
+            >
+              {callback.ui_callback_name}
+            </SelectItem>
+          ))}
+      </Select>
+        </FormItem>
+
+
+        {
+          selectedCallbackParams && selectedCallbackParams.map((param) => (
+            <FormItem
+              label={param}
+              name={param}
+              rules={[{ required: true, message: "Please enter the value for " + param}]}
+            >
+              <TextInput type="password" />
+            </FormItem>
+          ))
+        }
+
+          <div style={{ textAlign: "right", marginTop: "10px" }}>
+              <Button2 htmlType="submit">Save</Button2>
+          </div>
+
+          </>
+        </Form>
+
+
+
+
+
+      
+            
+
+
+    </Modal>
     </div>
+    
   );
 };
 
