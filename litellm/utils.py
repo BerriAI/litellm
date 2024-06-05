@@ -1270,7 +1270,11 @@ class Logging:
                 api_base
             )  # used for alerting
             masked_headers = {
-                k: (v[:-20] + "*" * 20) if (isinstance(v, str) and len(v) > 20) else v
+                k: (
+                    (v[:-44] + "*" * 44)
+                    if (isinstance(v, str) and len(v) > 44)
+                    else "*****"
+                )
                 for k, v in headers.items()
             }
             formatted_headers = " ".join(
@@ -1309,8 +1313,7 @@ class Logging:
             # check if user wants the raw request logged to their logging provider (like LangFuse)
             _litellm_params = self.model_call_details.get("litellm_params", {})
             _metadata = _litellm_params.get("metadata", {}) or {}
-            if _metadata.get("log_raw_request", False) is True:
-                _metadata["raw_request"] = curl_command
+            _metadata["raw_request"] = curl_command
 
             if self.logger_fn and callable(self.logger_fn):
                 try:
