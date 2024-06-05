@@ -12,6 +12,7 @@ from typing import (
     Sequence,
 )
 import litellm
+import litellm.types
 from litellm.types.completion import (
     ChatCompletionUserMessageParam,
     ChatCompletionSystemMessageParam,
@@ -20,8 +21,11 @@ from litellm.types.completion import (
     ChatCompletionMessageToolCallParam,
     ChatCompletionToolMessageParam,
 )
+import litellm.types.llms
 from litellm.types.llms.anthropic import *
 import uuid
+
+import litellm.types.llms.vertex_ai
 
 
 def default_pt(messages):
@@ -111,6 +115,26 @@ def llama_2_chat_pt(messages):
     return prompt
 
 
+def convert_to_ollama_image(openai_image_url: str):
+    try:
+        if openai_image_url.startswith("http"):
+            openai_image_url = convert_url_to_base64(url=openai_image_url)
+
+        if openai_image_url.startswith("data:image/"):
+            # Extract the base64 image data
+            base64_data = openai_image_url.split("data:image/")[1].split(";base64,")[1]
+        else:
+            base64_data = openai_image_url
+
+        return base64_data
+    except Exception as e:
+        if "Error: Unable to fetch image from URL" in str(e):
+            raise e
+        raise Exception(
+            """Image url not in expected format. Example Expected input - "image_url": "data:image/jpeg;base64,{base64_image}". """
+        )
+
+
 def ollama_pt(
     model, messages
 ):  # https://github.com/ollama/ollama/blob/af4cf55884ac54b9e637cd71dadfe9b7a5685877/docs/modelfile.md#template
@@ -143,8 +167,10 @@ def ollama_pt(
                         if element["type"] == "text":
                             prompt += element["text"]
                         elif element["type"] == "image_url":
-                            image_url = element["image_url"]["url"]
-                            images.append(image_url)
+                            base64_image = convert_to_ollama_image(
+                                element["image_url"]["url"]
+                            )
+                            images.append(base64_image)
         return {"prompt": prompt, "images": images}
     else:
         prompt = "".join(
@@ -841,6 +867,175 @@ def anthropic_messages_pt_xml(messages: list):
 # ------------------------------------------------------------------------------
 
 
+def infer_protocol_value(
+    value: Any,
+) -> Literal[
+    "string_value",
+    "number_value",
+    "bool_value",
+    "struct_value",
+    "list_value",
+    "null_value",
+    "unknown",
+]:
+    if value is None:
+        return "null_value"
+    if isinstance(value, int) or isinstance(value, float):
+        return "number_value"
+    if isinstance(value, str):
+        return "string_value"
+    if isinstance(value, bool):
+        return "bool_value"
+    if isinstance(value, dict):
+        return "struct_value"
+    if isinstance(value, list):
+        return "list_value"
+
+    return "unknown"
+
+
+def convert_to_gemini_tool_call_invoke(
+    tool_calls: list,
+) -> List[litellm.types.llms.vertex_ai.PartType]:
+    """
+    OpenAI tool invokes:
+    {
+      "role": "assistant",
+      "content": null,
+      "tool_calls": [
+        {
+          "id": "call_abc123",
+          "type": "function",
+          "function": {
+            "name": "get_current_weather",
+            "arguments": "{\n\"location\": \"Boston, MA\"\n}"
+          }
+        }
+      ]
+    },
+    """
+    """
+    Gemini tool call invokes: - https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/function-calling#submit-api-output
+    content {
+        role: "model"
+        parts [
+        {
+            function_call {
+            name: "get_current_weather"
+            args {
+                fields {
+                    key: "unit"
+                    value {
+                    string_value: "fahrenheit"
+                    }
+                }
+                fields {
+                    key: "predicted_temperature"
+                    value {
+                    number_value: 45
+                    }
+                }
+                fields {
+                    key: "location"
+                    value {
+                    string_value: "Boston, MA"
+                    }
+                }
+            }
+        },
+        {
+            function_call {
+            name: "get_current_weather"
+            args {
+                fields {
+                key: "location"
+                value {
+                    string_value: "San Francisco"
+                }
+                }
+            }
+            }
+        }
+        ]
+    }
+    """
+
+    """
+    - json.load the arguments 
+    - iterate through arguments -> create a FunctionCallArgs for each field
+    """
+    try:
+        _parts_list: List[litellm.types.llms.vertex_ai.PartType] = []
+        for tool in tool_calls:
+            if "function" in tool:
+                name = tool["function"].get("name", "")
+                arguments = tool["function"].get("arguments", "")
+                arguments_dict = json.loads(arguments)
+                for k, v in arguments_dict.items():
+                    inferred_protocol_value = infer_protocol_value(value=v)
+                    _field = litellm.types.llms.vertex_ai.Field(
+                        key=k, value={inferred_protocol_value: v}
+                    )
+                    _fields = litellm.types.llms.vertex_ai.FunctionCallArgs(
+                        fields=_field
+                    )
+                    function_call = litellm.types.llms.vertex_ai.FunctionCall(
+                        name=name,
+                        args=_fields,
+                    )
+                _parts_list.append(
+                    litellm.types.llms.vertex_ai.PartType(function_call=function_call)
+                )
+        return _parts_list
+    except Exception as e:
+        raise Exception(
+            "Unable to convert openai tool calls={} to gemini tool calls. Received error={}".format(
+                tool_calls, str(e)
+            )
+        )
+
+
+def convert_to_gemini_tool_call_result(
+    message: dict,
+) -> litellm.types.llms.vertex_ai.PartType:
+    """
+    OpenAI message with a tool result looks like:
+    {
+        "tool_call_id": "tool_1",
+        "role": "tool",
+        "name": "get_current_weather",
+        "content": "function result goes here",
+    },
+
+    OpenAI message with a function call result looks like:
+    {
+        "role": "function",
+        "name": "get_current_weather",
+        "content": "function result goes here",
+    }
+    """
+    content = message.get("content", "")
+    name = message.get("name", "")
+
+    # We can't determine from openai message format whether it's a successful or
+    # error call result so default to the successful result template
+    inferred_content_value = infer_protocol_value(value=content)
+
+    _field = litellm.types.llms.vertex_ai.Field(
+        key="content", value={inferred_content_value: content}
+    )
+
+    _function_call_args = litellm.types.llms.vertex_ai.FunctionCallArgs(fields=_field)
+
+    _function_response = litellm.types.llms.vertex_ai.FunctionResponse(
+        name=name, response=_function_call_args
+    )
+
+    _part = litellm.types.llms.vertex_ai.PartType(function_response=_function_response)
+
+    return _part
+
+
 def convert_to_anthropic_tool_result(message: dict) -> dict:
     """
     OpenAI message with a tool result looks like:
@@ -1328,6 +1523,7 @@ def _gemini_vision_convert_messages(messages: list):
                 # Case 1: Image from URL
                 image = _load_image_from_url(img)
                 processed_images.append(image)
+
             else:
                 try:
                     from PIL import Image
@@ -1335,8 +1531,23 @@ def _gemini_vision_convert_messages(messages: list):
                     raise Exception(
                         "gemini image conversion failed please run `pip install Pillow`"
                     )
-                # Case 2: Image filepath (e.g. temp.jpeg) given
-                image = Image.open(img)
+
+                if "base64" in img:
+                    # Case 2: Base64 image data
+                    import base64
+                    import io
+
+                    # Extract the base64 image data
+                    base64_data = img.split("base64,")[1]
+
+                    # Decode the base64 image data
+                    image_data = base64.b64decode(base64_data)
+
+                    # Load the image from the decoded data
+                    image = Image.open(io.BytesIO(image_data))
+                else:
+                    # Case 3: Image filepath (e.g. temp.jpeg) given
+                    image = Image.open(img)
                 processed_images.append(image)
         content = [prompt] + processed_images
         return content
@@ -1513,7 +1724,7 @@ def prompt_factory(
     elif custom_llm_provider == "clarifai":
         if "claude" in model:
             return anthropic_pt(messages=messages)
-        
+
     elif custom_llm_provider == "perplexity":
         for message in messages:
             message.pop("name", None)

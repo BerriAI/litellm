@@ -80,6 +80,13 @@ For more provider-specific info, [go here](../providers/)
 $ litellm --config /path/to/config.yaml
 ```
 
+:::tip
+
+Run with `--detailed_debug` if you need detailed debug logs 
+
+```shell
+$ litellm --config /path/to/config.yaml --detailed_debug
+:::
 
 ### Using Proxy - Curl Request, OpenAI Package, Langchain, Langchain JS
 Calling a model group 

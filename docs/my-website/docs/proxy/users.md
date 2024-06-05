@@ -5,7 +5,7 @@ import TabItem from '@theme/TabItem';
 
 Requirements: 
 
-- Need to a postgres database (e.g. [Supabase](https://supabase.com/), [Neon](https://neon.tech/), etc)
+- Need to a postgres database (e.g. [Supabase](https://supabase.com/), [Neon](https://neon.tech/), etc) [**See Setup**](./virtual_keys.md#setup)
 
 
 ## Set Budgets
@@ -13,7 +13,7 @@ Requirements:
 You can set budgets at 3 levels: 
 - For the proxy 
 - For an internal user 
-- For an end-user
+- For a customer (end-user)
 - For a key
 - For a key (model specific budgets)
 
@@ -57,68 +57,6 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
     ],
 }'
 ```
-</TabItem>
-<TabItem value="per-user" label="For Internal User">
-
-Apply a budget across multiple keys.
-
-LiteLLM exposes a `/user/new` endpoint to create budgets for this.
-
-You can:
-- Add budgets to users [**Jump**](#add-budgets-to-users)
-- Add budget durations, to reset spend [**Jump**](#add-budget-duration-to-users)
-
-By default the `max_budget` is set to `null` and is not checked for keys
-
-#### **Add budgets to users**
-```shell 
-curl --location 'http://localhost:4000/user/new' \
---header 'Authorization: Bearer <your-master-key>' \
---header 'Content-Type: application/json' \
---data-raw '{"models": ["azure-models"], "max_budget": 0, "user_id": "krrish3@berri.ai"}' 
-```
-
-[**See Swagger**](https://litellm-api.up.railway.app/#/user%20management/new_user_user_new_post)
-
-**Sample Response**
-
-```shell
-{
-    "key": "sk-YF2OxDbrgd1y2KgwxmEA2w",
-    "expires": "2023-12-22T09:53:13.861000Z",
-    "user_id": "krrish3@berri.ai",
-    "max_budget": 0.0
-}
-```
-
-#### **Add budget duration to users**
-
-`budget_duration`: Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
-
-```
-curl 'http://0.0.0.0:4000/user/new' \
---header 'Authorization: Bearer <your-master-key>' \
---header 'Content-Type: application/json' \
---data-raw '{
-  "team_id": "core-infra", # [OPTIONAL]
-  "max_budget": 10,
-  "budget_duration": 10s,
-}'
-```
-
-#### Create new keys for existing user
-
-Now you can just call `/key/generate` with that user_id (i.e. krrish3@berri.ai) and:
-- **Budget Check**: krrish3@berri.ai's budget (i.e. $10) will be checked for this key
-- **Spend Tracking**: spend for this key will update krrish3@berri.ai's spend as well
-
-```bash
-curl --location 'http://0.0.0.0:4000/key/generate' \
---header 'Authorization: Bearer <your-master-key>' \
---header 'Content-Type: application/json' \
---data '{"models": ["azure-models"], "user_id": "krrish3@berri.ai"}'
-```
-
 </TabItem>
 <TabItem value="per-team" label="For Team">
 You can:
@@ -165,7 +103,77 @@ curl --location 'http://localhost:4000/team/new' \
 }
 ```
 </TabItem>
-<TabItem value="per-user-chat" label="For End User">
+<TabItem value="per-team-member" label="For Team Members">
+
+Use this when you want to budget a users spend within a Team 
+
+
+#### Step 1. Create User
+
+Create a user with `user_id=ishaan`
+
+```shell
+curl --location 'http://0.0.0.0:4000/user/new' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'Content-Type: application/json' \
+    --data '{
+        "user_id": "ishaan"
+}'
+```
+
+#### Step 2. Add User to an existing Team - set `max_budget_in_team`
+
+Set `max_budget_in_team` when adding a User to a team. We use the same `user_id` we set in Step 1
+
+```shell
+curl -X POST 'http://0.0.0.0:4000/team/member_add' \
+-H 'Authorization: Bearer sk-1234' \
+-H 'Content-Type: application/json' \
+-d '{"team_id": "e8d1460f-846c-45d7-9b43-55f3cc52ac32", "max_budget_in_team": 0.000000000001, "member": {"role": "user", "user_id": "ishaan"}}'
+```
+
+#### Step 3. Create a Key for Team member from Step 1
+
+Set `user_id=ishaan` from step 1
+
+```shell
+curl --location 'http://0.0.0.0:4000/key/generate' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'Content-Type: application/json' \
+    --data '{
+        "user_id": "ishaan",
+        "team_id": "e8d1460f-846c-45d7-9b43-55f3cc52ac32"
+}'
+```
+Response from `/key/generate`
+
+We use the `key` from this response in Step 4
+```shell
+{"key":"sk-RV-l2BJEZ_LYNChSx2EueQ", "models":[],"spend":0.0,"max_budget":null,"user_id":"ishaan","team_id":"e8d1460f-846c-45d7-9b43-55f3cc52ac32","max_parallel_requests":null,"metadata":{},"tpm_limit":null,"rpm_limit":null,"budget_duration":null,"allowed_cache_controls":[],"soft_budget":null,"key_alias":null,"duration":null,"aliases":{},"config":{},"permissions":{},"model_max_budget":{},"key_name":null,"expires":null,"token_id":null}% 
+```
+
+#### Step 4. Make /chat/completions requests for Team member
+
+Use the key from step 3 for this request. After 2-3 requests expect to see The following error `ExceededBudget: Crossed spend within team` 
+
+
+```shell
+curl --location 'http://localhost:4000/chat/completions' \
+    --header 'Authorization: Bearer sk-RV-l2BJEZ_LYNChSx2EueQ' \
+    --header 'Content-Type: application/json' \
+    --data '{
+    "model": "llama3",
+    "messages": [
+        {
+        "role": "user",
+        "content": "tes4"
+        }
+    ]
+}'
+```
+
+</TabItem>
+<TabItem value="per-user-chat" label="For Customers">
 
 Use this to budget `user` passed to `/chat/completions`, **without needing to create a key for every user**
 
@@ -215,7 +223,7 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 
 Error
 ```shell
-{"error":{"message":"Authentication Error, ExceededBudget: User ishaan3 has exceeded their budget. Current spend: 0.0008869999999999999; Max Budget: 0.0001","type":"auth_error","param":"None","code":401}}%                
+{"error":{"message":"Budget has been exceeded: User ishaan3 has exceeded their budget. Current spend: 0.0008869999999999999; Max Budget: 0.0001","type":"auth_error","param":"None","code":401}}%                
 ```
 
 </TabItem>
@@ -285,6 +293,75 @@ curl 'http://0.0.0.0:4000/key/generate' \
   "max_budget": 10,
   "budget_duration": 10s,
 }'
+```
+
+</TabItem>
+
+<TabItem value="per-user" label="For Internal User (Global)">
+
+Apply a budget across all calls an internal user (key owner) can make on the proxy. 
+
+:::info
+
+For most use-cases, we recommend setting team-member budgets
+
+:::
+
+LiteLLM exposes a `/user/new` endpoint to create budgets for this.
+
+You can:
+- Add budgets to users [**Jump**](#add-budgets-to-users)
+- Add budget durations, to reset spend [**Jump**](#add-budget-duration-to-users)
+
+By default the `max_budget` is set to `null` and is not checked for keys
+
+#### **Add budgets to users**
+```shell 
+curl --location 'http://localhost:4000/user/new' \
+--header 'Authorization: Bearer <your-master-key>' \
+--header 'Content-Type: application/json' \
+--data-raw '{"models": ["azure-models"], "max_budget": 0, "user_id": "krrish3@berri.ai"}' 
+```
+
+[**See Swagger**](https://litellm-api.up.railway.app/#/user%20management/new_user_user_new_post)
+
+**Sample Response**
+
+```shell
+{
+    "key": "sk-YF2OxDbrgd1y2KgwxmEA2w",
+    "expires": "2023-12-22T09:53:13.861000Z",
+    "user_id": "krrish3@berri.ai",
+    "max_budget": 0.0
+}
+```
+
+#### **Add budget duration to users**
+
+`budget_duration`: Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
+
+```
+curl 'http://0.0.0.0:4000/user/new' \
+--header 'Authorization: Bearer <your-master-key>' \
+--header 'Content-Type: application/json' \
+--data-raw '{
+  "team_id": "core-infra", # [OPTIONAL]
+  "max_budget": 10,
+  "budget_duration": 10s,
+}'
+```
+
+#### Create new keys for existing user
+
+Now you can just call `/key/generate` with that user_id (i.e. krrish3@berri.ai) and:
+- **Budget Check**: krrish3@berri.ai's budget (i.e. $10) will be checked for this key
+- **Spend Tracking**: spend for this key will update krrish3@berri.ai's spend as well
+
+```bash
+curl --location 'http://0.0.0.0:4000/key/generate' \
+--header 'Authorization: Bearer <your-master-key>' \
+--header 'Content-Type: application/json' \
+--data '{"models": ["azure-models"], "user_id": "krrish3@berri.ai"}'
 ```
 
 </TabItem>
@@ -373,6 +450,68 @@ curl --location 'http://0.0.0.0:4000/key/generate' \
     "user_id": "78c2c8fc-c233-43b9-b0c3-eb931da27b84"  // 👈 auto-generated
 }
 ```
+
+</TabItem>
+<TabItem value="per-end-user" label="For customers">
+
+:::info 
+
+You can also create a budget id for a customer on the UI, under the 'Rate Limits' tab.
+
+:::
+
+Use this to set rate limits for `user` passed to `/chat/completions`, without needing to create a key for every user
+
+#### Step 1. Create Budget
+
+Set a `tpm_limit` on the budget (You can also pass `rpm_limit` if needed)
+
+```shell
+curl --location 'http://0.0.0.0:4000/budget/new' \
+--header 'Authorization: Bearer sk-1234' \
+--header 'Content-Type: application/json' \
+--data '{
+    "budget_id" : "free-tier",
+    "tpm_limit": 5
+}'
+```
+
+
+#### Step 2. Create `Customer` with Budget
+
+We use `budget_id="free-tier"` from Step 1 when creating this new customers
+
+```shell
+curl --location 'http://0.0.0.0:4000/customer/new' \
+--header 'Authorization: Bearer sk-1234' \
+--header 'Content-Type: application/json' \
+--data '{
+    "user_id" : "palantir",
+    "budget_id": "free-tier"
+}'
+```
+
+
+#### Step 3. Pass `user_id` id in `/chat/completions` requests
+
+Pass the `user_id` from Step 2 as `user="palantir"` 
+
+```shell
+curl --location 'http://localhost:4000/chat/completions' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'Content-Type: application/json' \
+    --data '{
+    "model": "llama3",
+    "user": "palantir",
+    "messages": [
+        {
+        "role": "user",
+        "content": "gm"
+        }
+    ]
+}'
+```
+
 
 </TabItem>
 </Tabs>

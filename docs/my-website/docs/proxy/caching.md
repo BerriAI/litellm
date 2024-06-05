@@ -487,3 +487,14 @@ cache_params:
   s3_aws_session_token: your_session_token  # AWS Session Token for temporary credentials
 
 ```
+
+## Advanced - user api key cache ttl 
+
+Configure how long the in-memory cache stores the key object (prevents db requests)
+
+```yaml
+general_settings:
+  user_api_key_cache_ttl: <your-number> #time in seconds
+```
+
+By default this value is set to 60s.

@@ -51,7 +51,7 @@ print(f"response: {response}")
 
 - `api_base`: *string (optional)* - The api endpoint you want to call the model with
 
-- `api_version`: *string (optional)* - (Azure-specific) the api version for the call
+- `api_version`: *string (optional)* - (Azure-specific) the api version for the call; required for dall-e-3 on Azure
 
 - `api_key`: *string (optional)* - The API key to authenticate and authorize requests. If not provided, the default API key is used.
 
@@ -149,5 +149,21 @@ response = image_generation(
             prompt="A cute baby sea otter",
             model="bedrock/stability.stable-diffusion-xl-v0",
         )
+print(f"response: {response}")
+```
+
+## VertexAI - Image Generation Models
+
+### Usage 
+
+Use this for image generation models on VertexAI
+
+```python
+response = litellm.image_generation(
+    prompt="An olympic size swimming pool",
+    model="vertex_ai/imagegeneration@006",
+    vertex_ai_project="adroit-crow-413218",
+    vertex_ai_location="us-central1",
+)
 print(f"response: {response}")
 ```
