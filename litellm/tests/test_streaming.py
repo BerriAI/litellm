@@ -1993,10 +1993,14 @@ def test_openai_chat_completion_complete_response_call():
 
 
 # test_openai_chat_completion_complete_response_call()
-def test_openai_stream_options_call():
+@pytest.mark.parametrize(
+    "model",
+    ["gpt-3.5-turbo", "azure/chatgpt-v-2"],
+)
+def test_openai_stream_options_call(model):
     litellm.set_verbose = False
     response = litellm.completion(
-        model="gpt-3.5-turbo",
+        model=model,
         messages=[{"role": "system", "content": "say GM - we're going to make it "}],
         stream=True,
         stream_options={"include_usage": True},
