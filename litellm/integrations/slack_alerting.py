@@ -537,7 +537,7 @@ class SlackAlerting(CustomLogger):
             cache_list=combined_metrics_cache_keys
         )
 
-        message += f"\n\nNext Run is in: `{time.time() + self.alerting_args.daily_report_frequency}`s"
+        message += f"\n\nNext Run is at: `{time.time() + self.alerting_args.daily_report_frequency}`s"
 
         # send alert
         await self.send_alert(message=message, level="Low", alert_type="daily_reports")
