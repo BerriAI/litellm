@@ -6048,6 +6048,7 @@ def get_optional_params(
             optional_params=optional_params,
             model=model,
             api_version=api_version,  # type: ignore
+            drop_params=drop_params,
         )
     else:  # assume passing in params for text-completion openai
         supported_params = get_supported_openai_params(
