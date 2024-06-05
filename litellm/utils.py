@@ -1302,13 +1302,12 @@ class Logging:
                 print_verbose(f"\033[92m{curl_command}\033[0m\n")
 
             if litellm.json_logs:
-                verbose_logger.info(
+                verbose_logger.debug(
                     "POST Request Sent from LiteLLM",
                     extra={"api_base": {api_base}, **masked_headers},
                 )
             else:
-                verbose_logger.info(f"\033[92m{curl_command}\033[0m\n")
-
+                verbose_logger.debug(f"\033[92m{curl_command}\033[0m\n")
             # check if user wants the raw request logged to their logging provider (like LangFuse)
             try:
                 # [Non-blocking Extra Debug Information in metadata]
@@ -1317,7 +1316,6 @@ class Logging:
                 _metadata["raw_request"] = str(curl_command)
             except:
                 pass
-
             if self.logger_fn and callable(self.logger_fn):
                 try:
                     self.logger_fn(
