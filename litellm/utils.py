@@ -5457,7 +5457,7 @@ def get_optional_params(
             optional_params["top_p"] = top_p
         if stop is not None:
             optional_params["stop_sequences"] = stop
-    elif custom_llm_provider == "huggingface":
+    elif custom_llm_provider == "huggingface" or custom_llm_provider == "predibase":
         ## check if unsupported param passed in
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider
@@ -5912,7 +5912,6 @@ def get_optional_params(
             optional_params["logprobs"] = logprobs
         if top_logprobs is not None:
             optional_params["top_logprobs"] = top_logprobs
-
     elif custom_llm_provider == "openrouter":
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider
