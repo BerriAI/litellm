@@ -76,6 +76,16 @@ class LitellmUserRoles(str, enum.Enum):
         return ui_labels.get(self.value, "")
 
 
+class LitellmTableNames(str, enum.Enum):
+    """
+    Enum for Table Names used by LiteLLM
+    """
+
+    TEAM_TABLE_NAME: str = "LiteLLM_TeamTable"
+    USER_TABLE_NAME: str = "LiteLLM_UserTable"
+    PROXY_MODEL_TABLE_NAME: str = "LiteLLM_ModelTable"
+
+
 AlertType = Literal[
     "llm_exceptions",
     "llm_too_slow",
