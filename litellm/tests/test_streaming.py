@@ -2018,12 +2018,24 @@ def test_openai_stream_options_call():
     """
 
     assert last_chunk.usage is not None
+    assert isinstance(last_chunk.usage, litellm.Usage)
     assert last_chunk.usage.total_tokens > 0
     assert last_chunk.usage.prompt_tokens > 0
     assert last_chunk.usage.completion_tokens > 0
 
     # assert all non last chunks have usage=None
-    assert all(chunk.usage is None for chunk in chunks[:-1])
+    # Improved assertion with detailed error message
+    non_last_chunks_with_usage = [
+        chunk
+        for chunk in chunks[:-1]
+        if hasattr(chunk, "usage") and chunk.usage is not None
+    ]
+    assert (
+        not non_last_chunks_with_usage
+    ), f"Non-last chunks with usage not None:\n" + "\n".join(
+        f"Chunk ID: {chunk.id}, Usage: {chunk.usage}, Content: {chunk.choices[0].delta.content}"
+        for chunk in non_last_chunks_with_usage
+    )
 
 
 def test_openai_stream_options_call_text_completion():
