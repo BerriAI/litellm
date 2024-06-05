@@ -9,6 +9,7 @@ from litellm.utils import get_optional_params_embeddings, get_optional_params
 from litellm.llms.prompt_templates.factory import (
     map_system_message_pt,
 )
+from unittest.mock import patch, MagicMock
 from litellm.types.completion import (
     ChatCompletionUserMessageParam,
     ChatCompletionSystemMessageParam,
@@ -243,3 +244,45 @@ def test_azure_tool_choice(api_version):
         ), "tool_choice={} for api version={}".format(
             optional_params["tool_choice"], api_version
         )
+
+
+@pytest.mark.parametrize("drop_params", [True, False, None])
+def test_dynamic_drop_params(drop_params):
+    """
+    Make a call to cohere w/ drop params = True vs. false.
+    """
+    if drop_params == True:
+        optional_params = litellm.utils.get_optional_params(
+            model="command-r",
+            custom_llm_provider="cohere",
+            response_format="json",
+            drop_params=drop_params,
+        )
+    else:
+        try:
+            optional_params = litellm.utils.get_optional_params(
+                model="command-r",
+                custom_llm_provider="cohere",
+                response_format="json",
+                drop_params=drop_params,
+            )
+            pytest.fail("Expected to fail")
+        except Exception as e:
+            pass
+
+
+def test_dynamic_drop_params_e2e():
+    with patch("requests.post", new=MagicMock()) as mock_response:
+        try:
+            response = litellm.completion(
+                model="command-r",
+                messages=[{"role": "user", "content": "Hey, how's it going?"}],
+                response_format={"key": "value"},
+                drop_params=True,
+            )
+        except Exception as e:
+            pass
+
+        mock_response.assert_called_once()
+        print(mock_response.call_args.kwargs["data"])
+        assert "response_format" not in mock_response.call_args.kwargs["data"]
