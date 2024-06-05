@@ -284,7 +284,11 @@ class BedrockLLM(BaseLLM):
         ) = params_to_check
 
         ### CHECK STS ###
-        if aws_web_identity_token is not None and aws_role_name is not None and aws_session_name is not None:
+        if (
+            aws_web_identity_token is not None
+            and aws_role_name is not None
+            and aws_session_name is not None
+        ):
             oidc_token = get_secret(aws_web_identity_token)
 
             if oidc_token is None:
@@ -293,9 +297,7 @@ class BedrockLLM(BaseLLM):
                     status_code=401,
                 )
 
-            sts_client = boto3.client(
-                "sts"
-            )
+            sts_client = boto3.client("sts")
 
             # https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRoleWithWebIdentity.html
             # https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/sts/client/assume_role_with_web_identity.html
@@ -1007,7 +1009,7 @@ class BedrockLLM(BaseLLM):
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code = err.response.status_code
-            raise BedrockError(status_code=error_code, message=response.text)
+            raise BedrockError(status_code=error_code, message=err.response.text)
         except httpx.TimeoutException as e:
             raise BedrockError(status_code=408, message="Timeout error occurred.")
 
