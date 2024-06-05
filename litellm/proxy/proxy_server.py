@@ -1365,6 +1365,11 @@ async def user_api_key_auth(
                                 status_code=status.HTTP_403_FORBIDDEN,
                                 detail=f"user not allowed to access this route, role= {_user_role}. Trying to access: {route}",
                             )
+                elif (
+                    _user_role == LitellmUserRoles.INTERNAL_USER
+                    and route in LiteLLMRoutes.internal_user_routes.value
+                ):
+                    pass
                 else:
                     user_role = "unknown"
                     user_id = "unknown"
