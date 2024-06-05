@@ -1364,7 +1364,7 @@ class AllCallbacks(LiteLLMBase):
         ],
     )
 
-    opentelemetry: CallbackOnUI = CallbackOnUI(
+    otel: CallbackOnUI = CallbackOnUI(
         litellm_callback_name="otel",
         ui_callback_name="OpenTelemetry",
         litellm_callback_params=[
