@@ -190,6 +190,7 @@ class LiteLLMRoutes(enum.Enum):
         "/model/info",
         "/v2/model/info",
         "/v2/key/info",
+        "/model_group/info",
     ]
 
     # NOTE: ROUTES ONLY FOR MASTER KEY - only the Master Key should be able to Reset Spend
@@ -260,6 +261,13 @@ class LiteLLMRoutes(enum.Enum):
         "/config/yaml",
         "/metrics",
     ]
+
+    internal_user_routes: List = [
+        "/key/generate",
+        "/key/update",
+        "/key/delete",
+        "/key/info",
+    ] + spend_tracking_routes
 
 
 # class LiteLLMAllowedRoutes(LiteLLMBase):
@@ -1341,6 +1349,12 @@ class InvitationModel(LiteLLMBase):
     created_by: str
     updated_at: datetime
     updated_by: str
+
+
+class InvitationClaim(LiteLLMBase):
+    invitation_link: str
+    user_id: str
+    password: str
 
 
 class ConfigFieldInfo(LiteLLMBase):
