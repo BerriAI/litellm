@@ -2363,19 +2363,30 @@ class ProxyConfig:
                             )
 
                         # Assuming cache_type, cache_host, cache_port, and cache_password are strings
-                        print(  # noqa
-                            f"{blue_color_code}Cache Type:{reset_color_code} {cache_type}"
-                        )  # noqa
-                        print(  # noqa
-                            f"{blue_color_code}Cache Host:{reset_color_code} {cache_host}"
-                        )  # noqa
-                        print(  # noqa
-                            f"{blue_color_code}Cache Port:{reset_color_code} {cache_port}"
-                        )  # noqa
-                        print(  # noqa
-                            f"{blue_color_code}Cache Password:{reset_color_code} {cache_password}"
+                        verbose_proxy_logger.debug(
+                            "%sCache Type:%s %s",
+                            blue_color_code,
+                            reset_color_code,
+                            cache_type,
                         )
-                        print()  # noqa
+                        verbose_proxy_logger.debug(
+                            "%sCache Host:%s %s",
+                            blue_color_code,
+                            reset_color_code,
+                            cache_host,
+                        )
+                        verbose_proxy_logger.debug(
+                            "%sCache Port:%s %s",
+                            blue_color_code,
+                            reset_color_code,
+                            cache_port,
+                        )
+                        verbose_proxy_logger.debug(
+                            "%sCache Password:%s %s",
+                            blue_color_code,
+                            reset_color_code,
+                            cache_password,
+                        )
                     if cache_type == "redis-semantic":
                         # by default this should always be async
                         cache_params.update({"redis_semantic_cache_use_async": True})
