@@ -244,3 +244,15 @@ model LiteLLM_InvitationLink {
   liteLLM_user_table_created LiteLLM_UserTable  @relation("CreatedBy", fields: [created_by], references: [user_id])
   liteLLM_user_table_updated LiteLLM_UserTable  @relation("UpdatedBy", fields: [updated_by], references: [user_id])
 }
+
+
+model AuditLog {
+  id          Int       @id @default(autoincrement())
+  updated_at   DateTime @default(now())
+  changed_by   String       // user or system that performed the action
+  action      String        // create, update, delete
+  object_type  String       // team, key, user, model
+  object_id    String      // id of the object being audited. This can be the key id, team id, user id, model id
+  before_value Json?       // value of the row 
+  after_value  Json?       // value of the row after change
+}
