@@ -72,21 +72,27 @@ class LangFuseLogger:
     @staticmethod
     def add_metadata_from_header(litellm_params: dict, metadata: dict) -> dict:
         """
-        Adds metadata from proxy request headers to Langfuse logging if keys start with "langfuse_" 
+        Adds metadata from proxy request headers to Langfuse logging if keys start with "langfuse_"
         and overwrites litellm_params.metadata if already included.
 
         For example if you want to append your trace to an existing `trace_id` via header, send
         `headers: { ..., langfuse_existing_trace_id: your-existing-trace-id }` via proxy request.
         """
-        proxy_headers = litellm_params.get("proxy_server_request", {}).get("headers", {})
+        proxy_headers = litellm_params.get("proxy_server_request", {}).get(
+            "headers", {}
+        )
 
         for metadata_param_key in proxy_headers:
             if metadata_param_key.startswith("langfuse_"):
                 trace_param_key = metadata_param_key.replace("langfuse_", "", 1)
                 if trace_param_key in metadata:
-                    verbose_logger.warning(f"Overwriting Langfuse `{trace_param_key}` from request header")
+                    verbose_logger.warning(
+                        f"Overwriting Langfuse `{trace_param_key}` from request header"
+                    )
                 else:
-                    verbose_logger.debug(f"Found Langfuse `{trace_param_key}` in request header")
+                    verbose_logger.debug(
+                        f"Found Langfuse `{trace_param_key}` in request header"
+                    )
                 metadata[trace_param_key] = proxy_headers.get(metadata_param_key)
 
         return metadata
@@ -205,9 +211,11 @@ class LangFuseLogger:
             verbose_logger.info(f"Langfuse Layer Logging - logging success")
 
             return {"trace_id": trace_id, "generation_id": generation_id}
-        except:
-            traceback.print_exc()
-            verbose_logger.debug(f"Langfuse Layer Error - {traceback.format_exc()}")
+        except Exception as e:
+            verbose_logger.error(
+                "Langfuse Layer Error(): Exception occured - {}".format(str(e))
+            )
+            verbose_logger.debug(traceback.format_exc())
             return {"trace_id": None, "generation_id": None}
 
     async def _async_log_event(
