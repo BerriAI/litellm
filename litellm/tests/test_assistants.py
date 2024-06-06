@@ -198,7 +198,11 @@ async def test_aarun_thread_litellm(sync_mode, provider, is_streaming):
                 )
                 assert isinstance(messages.data[0], Message)
             else:
-                pytest.fail("An unexpected error occurred when running the thread")
+                pytest.fail(
+                    "An unexpected error occurred when running the thread, {}".format(
+                        run
+                    )
+                )
 
     else:
         added_message = await litellm.a_add_message(**data)
@@ -226,4 +230,8 @@ async def test_aarun_thread_litellm(sync_mode, provider, is_streaming):
                 )
                 assert isinstance(messages.data[0], Message)
             else:
-                pytest.fail("An unexpected error occurred when running the thread")
+                pytest.fail(
+                    "An unexpected error occurred when running the thread, {}".format(
+                        run
+                    )
+                )
