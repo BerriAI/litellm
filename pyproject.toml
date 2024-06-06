@@ -63,7 +63,8 @@ extra_proxy = [
     "azure-identity",
     "azure-keyvault-secrets",
     "google-cloud-kms",
-    "resend"
+    "resend",
+    "pynacl"
 ]
 
 [tool.poetry.scripts]
