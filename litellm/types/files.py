@@ -259,7 +259,7 @@ GEMINI_1_5_ACCEPTED_FILE_TYPES: Set[FileType] = {
     FileType.WEBM,
     FileType.WMV,
     FileType.THREE_GPP,
-    # Document
+    # PDF
     FileType.PDF,
 }
 
