@@ -390,7 +390,7 @@ def _gemini_convert_messages_with_history(messages: list) -> List[ContentType]:
                 assistant_content.extend(_parts)
             elif messages[msg_i].get(
                 "tool_calls", []
-            ):  # support assistant tool invoke convertion
+            ):  # support assistant tool invoke conversion
                 assistant_content.extend(
                     convert_to_gemini_tool_call_invoke(messages[msg_i]["tool_calls"])
                 )
