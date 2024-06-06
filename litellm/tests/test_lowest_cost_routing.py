@@ -102,7 +102,7 @@ async def test_get_available_deployments_custom_price():
 @pytest.mark.asyncio
 async def test_lowest_cost_routing():
     """
-    Test if router returns model with the lowest cost
+    Test if router, returns model with the lowest cost
     """
     model_list = [
         {
