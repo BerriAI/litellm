@@ -12,6 +12,7 @@ from litellm.llms.prompt_templates.factory import (
     convert_to_gemini_tool_call_result,
     convert_to_gemini_tool_call_invoke,
 )
+from litellm.types.files import get_file_mime_type_for_file_type, get_file_type_from_extension, is_gemini_1_5_accepted_file_type, is_video_file_type
 
 
 class VertexAIError(Exception):
@@ -297,29 +298,29 @@ def _convert_gemini_role(role: str) -> Literal["user", "model"]:
 
 def _process_gemini_image(image_url: str) -> PartType:
     try:
-        if ".mp4" in image_url and "gs://" in image_url:
-            # Case 1: Videos with Cloud Storage URIs
-            part_mime = "video/mp4"
-            _file_data = FileDataType(mime_type=part_mime, file_uri=image_url)
-            return PartType(file_data=_file_data)
-        elif ".pdf" in image_url and "gs://" in image_url:
-            # Case 2: PDF's with Cloud Storage URIs
-            part_mime = "application/pdf"
-            _file_data = FileDataType(mime_type=part_mime, file_uri=image_url)
-            return PartType(file_data=_file_data)
-        elif "gs://" in image_url:
-            # Case 3: Images with Cloud Storage URIs
-            # The supported MIME types for images include image/png and image/jpeg.
-            part_mime = "image/png" if "png" in image_url else "image/jpeg"
-            _file_data = FileDataType(mime_type=part_mime, file_uri=image_url)
-            return PartType(file_data=_file_data)
+        # GCS URIs
+        if "gs://" in image_url:
+            # Figure out file type
+            extension = os.path.splitext(image_url)[-1]
+            file_type = get_file_type_from_extension(extension)
+
+            # Validate the file type is supported by Gemini
+            if not is_gemini_1_5_accepted_file_type(file_type):
+                raise Exception(f"File type not supported by gemini - {file_type}")
+            
+            mime_type = get_file_mime_type_for_file_type(file_type)
+            file_data = FileDataType(mime_type=mime_type, file_uri=image_url)
+            
+            return PartType(file_data=file_data)
+
+        # Direct links
         elif "https:/" in image_url:
-            # Case 4: Images with direct links
             image = _load_image_from_url(image_url)
             _blob = BlobType(data=image.data, mime_type=image._mime_type)
             return PartType(inline_data=_blob)
+        
+        # Base64 encoding
         elif "base64" in image_url:
-            # Case 5: Images with base64 encoding
             import base64, re
 
             # base 64 is passed as data:image/jpeg;base64,<base-64-encoded-image>
