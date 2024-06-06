@@ -642,9 +642,9 @@ def completion(
 
         prompt = " ".join(
             [
-                message["content"]
+                message.get("content", "")
                 for message in messages
-                if isinstance(message["content"], str)
+                if isinstance(message.get("content", ""), str)
             ]
         )
 
