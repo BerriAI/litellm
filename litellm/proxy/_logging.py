@@ -17,4 +17,4 @@ logger = logging.root
 handler = logging.StreamHandler()
 handler.setFormatter(JsonFormatter())
 logger.handlers = [handler]
-logger.setLevel(logging.DEBUG)
+logger.setLevel(logging.INFO)
