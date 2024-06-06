@@ -10509,7 +10509,7 @@ async def update_team(
             )
         )
 
-        return team_row
+    return team_row
 
 
 @router.post(
