@@ -4,23 +4,21 @@ import TabItem from '@theme/TabItem';
 
 # ✨ Enterprise Features - SSO, Audit Logs, Guardrails
 
-Features here are behind a commercial license in our `/enterprise` folder. [**See Code**](https://github.com/BerriAI/litellm/tree/main/enterprise)
+:::tip
 
-:::info
-
-[Get Started with Enterprise here](https://github.com/BerriAI/litellm/tree/main/enterprise)
+Get in touch with us [here](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
 
 :::
 
 Features: 
 - ✅ [SSO for Admin UI](./ui.md#✨-enterprise-features)
-- ✅ [Audit Logs](./ui.md#✨-enterprise-features)
+- ✅ [Audit Logs](#audit-logs)
 - ✅ [Tracking Spend for Custom Tags](#tracking-spend-for-custom-tags)
-- ✅ Content Moderation with LLM Guard, LlamaGuard, Google Text Moderations
-- ✅ [Prompt Injection Detection (with LakeraAI API)](#prompt-injection-detection-lakeraai)
+- ✅ [Content Moderation with LLM Guard, LlamaGuard, Google Text Moderations](#content-moderation)
+- ✅ [Prompt Injection Detection (with LakeraAI API)](#prompt-injection-detection---lakeraai)
+- ✅ [Custom Branding + Routes on Swagger Docs](#swagger-docs---custom-routes--branding)
 - ✅ Reject calls from Blocked User list 
 - ✅ Reject calls (incoming / outgoing) with Banned Keywords (e.g. competitors)
-- ✅ Custom Branding + Routes on Swagger Docs
 
 ## Audit Logs
 
@@ -80,7 +78,7 @@ Requirements:
 
 - Virtual Keys & a database should be set up, see [virtual keys](https://docs.litellm.ai/docs/proxy/virtual_keys)
 
-### Usage - /chat/completions requests with request tags 
+#### Usage - /chat/completions requests with request tags 
 
 
 <Tabs>
@@ -175,7 +173,7 @@ print(response)
 </Tabs>
 
 
-### Viewing Spend per tag
+#### Viewing Spend per tag
 
 #### `/spend/tags` Request Format 
 ```shell
@@ -206,7 +204,7 @@ curl -X GET "http://0.0.0.0:4000/spend/tags" \
 ```
 
 
-<!-- ## Tracking Spend per Key
+
 
 
 ## Content Moderation
@@ -487,6 +485,42 @@ curl --location 'http://localhost:4000/chat/completions' \
 }'
 ```
 
+## Swagger Docs - Custom Routes + Branding 
+
+:::info 
+
+Requires a LiteLLM Enterprise key to use. Get a free 2-week license [here](https://forms.gle/sTDVprBs18M4V8Le8)
+
+:::
+
+Set LiteLLM Key in your environment
+
+```bash
+LITELLM_LICENSE=""
+```
+
+#### Customize Title + Description
+
+In your environment, set: 
+
+```bash
+DOCS_TITLE="TotalGPT"
+DOCS_DESCRIPTION="Sample Company Description"
+```
+
+#### Customize Routes
+
+Hide admin routes from users. 
+
+In your environment, set: 
+
+```bash
+DOCS_FILTERED="True" # only shows openai routes to user
+```
+
+<Image img={require('../../img/custom_swagger.png')}  style={{ width: '900px', height: 'auto' }} />
+
+
 ## Enable Blocked User Lists 
 If any call is made to proxy with this user id, it'll be rejected - use this if you want to let users opt-out of ai features 
 
@@ -602,43 +636,6 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
     }
 '
 ```
-
-## Tracking Spend per User -->
-
-## Swagger Docs - Custom Routes + Branding 
-
-:::info 
-
-Requires a LiteLLM Enterprise key to use. Get a free 2-week license [here](https://forms.gle/sTDVprBs18M4V8Le8)
-
-:::
-
-Set LiteLLM Key in your environment
-
-```bash
-LITELLM_LICENSE=""
-```
-
-### Customize Title + Description
-
-In your environment, set: 
-
-```bash
-DOCS_TITLE="TotalGPT"
-DOCS_DESCRIPTION="Sample Company Description"
-```
-
-### Customize Routes
-
-Hide admin routes from users. 
-
-In your environment, set: 
-
-```bash
-DOCS_FILTERED="True" # only shows openai routes to user
-```
-
-<Image img={require('../../img/custom_swagger.png')}  style={{ width: '900px', height: 'auto' }} />
 
 ## Public Model Hub 
 
