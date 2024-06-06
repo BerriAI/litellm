@@ -2,7 +2,7 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# ✨ Enterprise Features - Content Mod, SSO, Custom Swagger
+# ✨ Enterprise Features - SSO, Audit Logs, Guardrails
 
 Features here are behind a commercial license in our `/enterprise` folder. [**See Code**](https://github.com/BerriAI/litellm/tree/main/enterprise)
 
@@ -14,18 +14,203 @@ Features here are behind a commercial license in our `/enterprise` folder. [**Se
 
 Features: 
 - ✅ [SSO for Admin UI](./ui.md#✨-enterprise-features)
+- ✅ [Audit Logs](./ui.md#✨-enterprise-features)
+- ✅ [Tracking Spend for Custom Tags](#tracking-spend-for-custom-tags)
 - ✅ Content Moderation with LLM Guard, LlamaGuard, Google Text Moderations
 - ✅ [Prompt Injection Detection (with LakeraAI API)](#prompt-injection-detection-lakeraai)
 - ✅ Reject calls from Blocked User list 
 - ✅ Reject calls (incoming / outgoing) with Banned Keywords (e.g. competitors)
-- ✅ Don't log/store specific requests to Langfuse, Sentry, etc. (eg confidential LLM requests)
-- ✅ Tracking Spend for Custom Tags
 - ✅ Custom Branding + Routes on Swagger Docs
-- ✅ Audit Logs for `Created At, Created By` when Models Added
+
+## Audit Logs
+
+Store Audit logs for **Create, Update Delete Operations** done on `Teams` and `Virtual Keys`
+
+**Step 1** Switch on audit Logs 
+```shell
+litellm_settings:
+  store_audit_logs: true
+```
+
+Start the litellm proxy with this config
+
+**Step 2** Test it - Create a Team
+
+```shell
+curl --location 'http://0.0.0.0:4000/team/new' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'Content-Type: application/json' \
+    --data '{
+        "max_budget": 2
+    }'
+```
+
+**Step 3** Expected Log
+
+```json
+{
+ "id": "e1760e10-4264-4499-82cd-c08c86c8d05b",
+ "updated_at": "2024-06-06T02:10:40.836420+00:00",
+ "changed_by": "109010464461339474872",
+ "action": "created",
+ "table_name": "LiteLLM_TeamTable",
+ "object_id": "82e725b5-053f-459d-9a52-867191635446",
+ "before_value": null,
+ "updated_values": {
+   "team_id": "82e725b5-053f-459d-9a52-867191635446",
+   "admins": [],
+   "members": [],
+   "members_with_roles": [
+     {
+       "role": "admin",
+       "user_id": "109010464461339474872"
+     }
+   ],
+   "max_budget": 2.0,
+   "models": [],
+   "blocked": false
+ }
+}
+```
+
+
+## Tracking Spend for Custom Tags
+
+Requirements: 
+
+- Virtual Keys & a database should be set up, see [virtual keys](https://docs.litellm.ai/docs/proxy/virtual_keys)
+
+### Usage - /chat/completions requests with request tags 
+
+
+<Tabs>
+
+
+<TabItem value="openai" label="OpenAI Python v1.0.0+">
+
+Set `extra_body={"metadata": { }}` to `metadata` you want to pass
+
+```python
+import openai
+client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://0.0.0.0:4000"
+)
+
+# request sent to model set on litellm proxy, `litellm --model`
+response = client.chat.completions.create(
+    model="gpt-3.5-turbo",
+    messages = [
+        {
+            "role": "user",
+            "content": "this is a test request, write a short poem"
+        }
+    ],
+    extra_body={
+        "metadata": {
+            "tags": ["model-anthropic-claude-v2.1", "app-ishaan-prod"]
+        }
+    }
+)
+
+print(response)
+```
+</TabItem>
+
+<TabItem value="Curl" label="Curl Request">
+
+Pass `metadata` as part of the request body
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --data '{
+    "model": "gpt-3.5-turbo",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what llm are you"
+        }
+    ],
+    "metadata": {"tags": ["model-anthropic-claude-v2.1", "app-ishaan-prod"]}
+}'
+```
+</TabItem>
+<TabItem value="langchain" label="Langchain">
+
+```python
+from langchain.chat_models import ChatOpenAI
+from langchain.prompts.chat import (
+    ChatPromptTemplate,
+    HumanMessagePromptTemplate,
+    SystemMessagePromptTemplate,
+)
+from langchain.schema import HumanMessage, SystemMessage
+
+chat = ChatOpenAI(
+    openai_api_base="http://0.0.0.0:4000",
+    model = "gpt-3.5-turbo",
+    temperature=0.1,
+    extra_body={
+        "metadata": {
+            "tags": ["model-anthropic-claude-v2.1", "app-ishaan-prod"]
+        }
+    }
+)
+
+messages = [
+    SystemMessage(
+        content="You are a helpful assistant that im using to make a test request to."
+    ),
+    HumanMessage(
+        content="test from litellm. tell me why it's amazing in 1 sentence"
+    ),
+]
+response = chat(messages)
+
+print(response)
+```
+
+</TabItem>
+</Tabs>
+
+
+### Viewing Spend per tag
+
+#### `/spend/tags` Request Format 
+```shell
+curl -X GET "http://0.0.0.0:4000/spend/tags" \
+-H "Authorization: Bearer sk-1234"
+```
+
+#### `/spend/tags`Response Format
+```shell
+[
+  {
+    "individual_request_tag": "model-anthropic-claude-v2.1",
+    "log_count": 6,
+    "total_spend": 0.000672
+  },
+  {
+    "individual_request_tag": "app-ishaan-local",
+    "log_count": 4,
+    "total_spend": 0.000448
+  },
+  {
+    "individual_request_tag": "app-ishaan-prod",
+    "log_count": 2,
+    "total_spend": 0.000224
+  }
+]
+
+```
+
+
+<!-- ## Tracking Spend per Key
 
 
 ## Content Moderation
-### Content Moderation with LLM Guard
+#### Content Moderation with LLM Guard
 
 Set the LLM Guard API Base in your environment 
 
@@ -160,7 +345,7 @@ curl --location 'http://0.0.0.0:4000/v1/chat/completions' \
 </TabItem>
 </Tabs>
 
-### Content Moderation with LlamaGuard 
+#### Content Moderation with LlamaGuard 
 
 Currently works with Sagemaker's LlamaGuard endpoint. 
 
@@ -194,7 +379,7 @@ callbacks: ["llamaguard_moderations"]
 
 
 
-### Content Moderation with Google Text Moderation 
+#### Content Moderation with Google Text Moderation 
 
 Requires your GOOGLE_APPLICATION_CREDENTIALS to be set in your .env (same as VertexAI).
 
@@ -250,7 +435,7 @@ Here are the category specific values:
 
 
 
-### Content Moderation with OpenAI Moderations
+#### Content Moderation with OpenAI Moderations
 
 Use this if you want to reject /chat, /completions, /embeddings calls that fail OpenAI Moderations checks
 
@@ -417,139 +602,6 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
     }
 '
 ```
-## Tracking Spend for Custom Tags
-
-Requirements: 
-
-- Virtual Keys & a database should be set up, see [virtual keys](https://docs.litellm.ai/docs/proxy/virtual_keys)
-
-### Usage - /chat/completions requests with request tags 
-
-
-<Tabs>
-
-
-<TabItem value="openai" label="OpenAI Python v1.0.0+">
-
-Set `extra_body={"metadata": { }}` to `metadata` you want to pass
-
-```python
-import openai
-client = openai.OpenAI(
-    api_key="anything",
-    base_url="http://0.0.0.0:4000"
-)
-
-# request sent to model set on litellm proxy, `litellm --model`
-response = client.chat.completions.create(
-    model="gpt-3.5-turbo",
-    messages = [
-        {
-            "role": "user",
-            "content": "this is a test request, write a short poem"
-        }
-    ],
-    extra_body={
-        "metadata": {
-            "tags": ["model-anthropic-claude-v2.1", "app-ishaan-prod"]
-        }
-    }
-)
-
-print(response)
-```
-</TabItem>
-
-<TabItem value="Curl" label="Curl Request">
-
-Pass `metadata` as part of the request body
-
-```shell
-curl --location 'http://0.0.0.0:4000/chat/completions' \
-    --header 'Content-Type: application/json' \
-    --data '{
-    "model": "gpt-3.5-turbo",
-    "messages": [
-        {
-        "role": "user",
-        "content": "what llm are you"
-        }
-    ],
-    "metadata": {"tags": ["model-anthropic-claude-v2.1", "app-ishaan-prod"]}
-}'
-```
-</TabItem>
-<TabItem value="langchain" label="Langchain">
-
-```python
-from langchain.chat_models import ChatOpenAI
-from langchain.prompts.chat import (
-    ChatPromptTemplate,
-    HumanMessagePromptTemplate,
-    SystemMessagePromptTemplate,
-)
-from langchain.schema import HumanMessage, SystemMessage
-
-chat = ChatOpenAI(
-    openai_api_base="http://0.0.0.0:4000",
-    model = "gpt-3.5-turbo",
-    temperature=0.1,
-    extra_body={
-        "metadata": {
-            "tags": ["model-anthropic-claude-v2.1", "app-ishaan-prod"]
-        }
-    }
-)
-
-messages = [
-    SystemMessage(
-        content="You are a helpful assistant that im using to make a test request to."
-    ),
-    HumanMessage(
-        content="test from litellm. tell me why it's amazing in 1 sentence"
-    ),
-]
-response = chat(messages)
-
-print(response)
-```
-
-</TabItem>
-</Tabs>
-
-
-### Viewing Spend per tag
-
-#### `/spend/tags` Request Format 
-```shell
-curl -X GET "http://0.0.0.0:4000/spend/tags" \
--H "Authorization: Bearer sk-1234"
-```
-
-#### `/spend/tags`Response Format
-```shell
-[
-  {
-    "individual_request_tag": "model-anthropic-claude-v2.1",
-    "log_count": 6,
-    "total_spend": 0.000672
-  },
-  {
-    "individual_request_tag": "app-ishaan-local",
-    "log_count": 4,
-    "total_spend": 0.000448
-  },
-  {
-    "individual_request_tag": "app-ishaan-prod",
-    "log_count": 2,
-    "total_spend": 0.000224
-  }
-]
-
-```
-
-
-<!-- ## Tracking Spend per Key
 
 ## Tracking Spend per User -->
 
