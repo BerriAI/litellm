@@ -300,7 +300,14 @@ def test_completion_claude_3():
         pytest.fail(f"Error occurred: {e}")
 
 
-def test_completion_claude_3_function_call():
+@pytest.mark.parametrize(
+    "model",
+    [
+        # "anthropic/claude-3-opus-20240229",
+        "cohere.command-r-plus-v1:0"
+    ],
+)
+def test_completion_claude_3_function_call(model):
     litellm.set_verbose = True
     tools = [
         {
@@ -331,7 +338,7 @@ def test_completion_claude_3_function_call():
     try:
         # test without max tokens
         response = completion(
-            model="anthropic/claude-3-opus-20240229",
+            model=model,
             messages=messages,
             tools=tools,
             tool_choice={
@@ -364,7 +371,7 @@ def test_completion_claude_3_function_call():
         )
         # In the second response, Claude should deduce answer from tool results
         second_response = completion(
-            model="anthropic/claude-3-opus-20240229",
+            model=model,
             messages=messages,
             tools=tools,
             tool_choice="auto",
