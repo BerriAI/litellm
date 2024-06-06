@@ -1278,6 +1278,21 @@ class LiteLLM_ErrorLogs(LiteLLMBase):
     endTime: Union[str, datetime, None]
 
 
+class LiteLLM_AuditLogs(LiteLLMBase):
+    id: str
+    updated_at: datetime
+    changed_by: str
+    action: Literal["created", "updated", "deleted"]
+    table_name: Literal[
+        LitellmTableNames.TEAM_TABLE_NAME,
+        LitellmTableNames.USER_TABLE_NAME,
+        LitellmTableNames.PROXY_MODEL_TABLE_NAME,
+    ]
+    object_id: str
+    before_value: Optional[Json] = None
+    updated_values: Optional[Json] = None
+
+
 class LiteLLM_SpendLogs_ResponseObject(LiteLLMBase):
     response: Optional[List[Union[LiteLLM_SpendLogs, Any]]] = None
 
