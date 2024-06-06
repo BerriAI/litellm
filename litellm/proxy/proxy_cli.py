@@ -534,7 +534,6 @@ def run_server(
                     ssl_certfile=ssl_certfile_path,
                 )  # run uvicorn
             else:
-                print(f"litellm.json_logs: {litellm.json_logs}")
                 if litellm.json_logs:
                     from litellm.proxy._logging import logger
 
