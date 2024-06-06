@@ -7108,6 +7108,25 @@ async def generate_key_fn(
                 )
             )
 
+        # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
+        if litellm.store_audit_logs is True:
+            _updated_values = json.dumps(response)
+            asyncio.create_task(
+                create_audit_log_for_update(
+                    request_data=LiteLLM_AuditLogs(
+                        id=str(uuid.uuid4()),
+                        updated_at=datetime.now(timezone.utc),
+                        changed_by=user_api_key_dict.user_id
+                        or litellm_proxy_admin_name,
+                        table_name=LitellmTableNames.KEY_TABLE_NAME,
+                        object_id=response.get("token_id", ""),
+                        action="created",
+                        updated_values=_updated_values,
+                        before_value=None,
+                    )
+                )
+            )
+
         return GenerateKeyResponse(**response)
     except Exception as e:
         traceback.print_exc()
@@ -7131,7 +7150,11 @@ async def generate_key_fn(
 @router.post(
     "/key/update", tags=["key management"], dependencies=[Depends(user_api_key_auth)]
 )
-async def update_key_fn(request: Request, data: UpdateKeyRequest):
+async def update_key_fn(
+    request: Request,
+    data: UpdateKeyRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     """
     Update an existing key
     """
@@ -7142,6 +7165,16 @@ async def update_key_fn(request: Request, data: UpdateKeyRequest):
         # get the row from db
         if prisma_client is None:
             raise Exception("Not connected to DB!")
+
+        existing_key_row = await prisma_client.get_data(
+            token=data.key, table_name="key", query_type="find_unique"
+        )
+
+        if existing_key_row is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": f"Team not found, passed team_id={data.team_id}"},
+            )
 
         # get non default values for key
         non_default_values = {}
@@ -7168,6 +7201,29 @@ async def update_key_fn(request: Request, data: UpdateKeyRequest):
         user_api_key_cache.delete_cache(key)
         hashed_token = hash_token(key)
         user_api_key_cache.delete_cache(hashed_token)
+
+        # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
+        if litellm.store_audit_logs is True:
+            _updated_values = json.dumps(data_json)
+
+            _before_value = existing_key_row.json(exclude_none=True)
+            _before_value = json.dumps(_before_value)
+
+            asyncio.create_task(
+                create_audit_log_for_update(
+                    request_data=LiteLLM_AuditLogs(
+                        id=str(uuid.uuid4()),
+                        updated_at=datetime.now(timezone.utc),
+                        changed_by=user_api_key_dict.user_id
+                        or litellm_proxy_admin_name,
+                        table_name=LitellmTableNames.KEY_TABLE_NAME,
+                        object_id=data.key,
+                        action="updated",
+                        updated_values=_updated_values,
+                        before_value=_before_value,
+                    )
+                )
+            )
 
         return {"key": key, **response["data"]}
         # update based on remaining passed in values
@@ -7230,6 +7286,34 @@ async def delete_key_fn(
             and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
         ):
             user_id = None  # unless they're admin
+
+        # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
+        # we do this after the first for loop, since first for loop is for validation. we only want this inserted after validation passes
+        if litellm.store_audit_logs is True:
+            # make an audit log for each team deleted
+            for key in data.keys:
+                key_row = await prisma_client.get_data(  # type: ignore
+                    token=key, table_name="key", query_type="find_unique"
+                )
+
+                key_row = key_row.json(exclude_none=True)
+                _key_row = json.dumps(key_row)
+
+                asyncio.create_task(
+                    create_audit_log_for_update(
+                        request_data=LiteLLM_AuditLogs(
+                            id=str(uuid.uuid4()),
+                            updated_at=datetime.now(timezone.utc),
+                            changed_by=user_api_key_dict.user_id
+                            or litellm_proxy_admin_name,
+                            table_name=LitellmTableNames.KEY_TABLE_NAME,
+                            object_id=key,
+                            action="deleted",
+                            updated_values="{}",
+                            before_value=_key_row,
+                        )
+                    )
+                )
 
         number_deleted_keys = await delete_verification_token(
             tokens=keys, user_id=user_id
