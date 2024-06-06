@@ -2,8 +2,9 @@ from itertools import chain
 import requests, types, time  # type: ignore
 import json, uuid
 import traceback
-from typing import Optional
+from typing import Optional, List
 import litellm
+from litellm.types.utils import ProviderField
 import httpx, aiohttp, asyncio  # type: ignore
 from .prompt_templates.factory import prompt_factory, custom_prompt
 from litellm import verbose_logger
@@ -125,6 +126,18 @@ class OllamaConfig:
             )
             and v is not None
         }
+    
+    def get_required_params(self) -> List[ProviderField]:
+        """For a given provider, return it's required fields with a description"""
+        return [
+            ProviderField(
+                field_name="base_url",
+                field_type="string",
+                field_description="Your Ollama API Base",
+                field_value="http://10.10.11.249:11434",
+            )
+        ]
+
 
     def get_supported_openai_params(
         self,
