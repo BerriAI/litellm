@@ -10357,45 +10357,62 @@ async def new_team(
                 }
             },
         )
+
+    # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
+    if litellm.store_audit_logs is True:
+        _updated_values = complete_team_data.json(exclude_none=True)
+        _updated_values = json.dumps(_updated_values)
+
+        asyncio.create_task(
+            create_audit_log_for_update(
+                request_data=LiteLLM_AuditLogs(
+                    id=str(uuid.uuid4()),
+                    updated_at=datetime.now(timezone.utc),
+                    changed_by=user_api_key_dict.user_id or litellm_proxy_admin_name,
+                    table_name=LitellmTableNames.TEAM_TABLE_NAME,
+                    object_id=data.team_id,
+                    action="created",
+                    updated_values=_updated_values,
+                    before_value=None,
+                )
+            )
+        )
+
     try:
         return team_row.model_dump()
     except Exception as e:
         return team_row.dict()
 
 
-async def create_audit_log_for_update(
-    action: Literal["create", "update", "delete"],
-    # fyi: pylint does not directly allow you to pass Literal["LiteLLM_TeamTable"]
-    # because LiteLLM_TeamTable is also defined in _types.py
-    table_name: Literal[
-        LitellmTableNames.TEAM_TABLE_NAME,
-        LitellmTableNames.USER_TABLE_NAME,
-        LitellmTableNames.PROXY_MODEL_TABLE_NAME,
-    ],
-    object_id: str,
-    changed_by: str,
-    before_value: dict,
-    after_value: dict,
-):
-    if not premium_user:
+async def create_audit_log_for_update(request_data: LiteLLM_AuditLogs):
+    if premium_user is not True:
         return
 
-    try:
-        pass
+    if litellm.store_audit_logs is not True:
+        return
+    if prisma_client is None:
+        raise Exception("prisma_client is None, no DB connected")
 
+    verbose_proxy_logger.debug("creating audit log for %s", request_data)
+
+    if isinstance(request_data.updated_values, dict):
+        request_data.updated_values = json.dumps(request_data.updated_values)
+
+    if isinstance(request_data.before_value, dict):
+        request_data.before_value = json.dumps(request_data.before_value)
+
+    _request_data = request_data.dict(exclude_none=True)
+
+    try:
+        await prisma_client.db.litellm_auditlog.create(
+            data={
+                **_request_data,  # type: ignore
+            }
+        )
     except Exception as e:
         # [Non-Blocking Exception. Do not allow blocking LLM API call]
         verbose_proxy_logger.error(f"Failed Creating audit log {e}")
 
-    # await prisma_client.create_audit_log(
-    #     data={
-    #         "action": action,
-    #         "object_id": object_id,
-    #         "changed_by": changed_by,
-    #         "before_value": json.dumps(before_value),
-    #         "after_value": json.dumps(after_value),
-    #     }
-    # )
     return
 
 
@@ -10471,7 +10488,28 @@ async def update_team(
         team_id=data.team_id,
     )
 
-    return team_row
+    # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
+    if litellm.store_audit_logs is True:
+        _before_value = existing_team_row.json(exclude_none=True)
+        _before_value = json.dumps(_before_value)
+        _after_value: str = json.dumps(updated_kv)
+
+        asyncio.create_task(
+            create_audit_log_for_update(
+                request_data=LiteLLM_AuditLogs(
+                    id=str(uuid.uuid4()),
+                    updated_at=datetime.now(timezone.utc),
+                    changed_by=user_api_key_dict.user_id or litellm_proxy_admin_name,
+                    table_name=LitellmTableNames.TEAM_TABLE_NAME,
+                    object_id=data.team_id,
+                    action="updated",
+                    updated_values=_after_value,
+                    before_value=_before_value,
+                )
+            )
+        )
+
+        return team_row
 
 
 @router.post(
@@ -10741,6 +10779,35 @@ async def delete_team(
                 status_code=404,
                 detail={"error": f"Team not found, passed team_id={team_id}"},
             )
+
+    # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
+    # we do this after the first for loop, since first for loop is for validation. we only want this inserted after validation passes
+    if litellm.store_audit_logs is True:
+        # make an audit log for each team deleted
+        for team_id in data.team_ids:
+            team_row = await prisma_client.get_data(  # type: ignore
+                team_id=team_id, table_name="team", query_type="find_unique"
+            )
+
+            _team_row = team_row.json(exclude_none=True)
+
+            asyncio.create_task(
+                create_audit_log_for_update(
+                    request_data=LiteLLM_AuditLogs(
+                        id=str(uuid.uuid4()),
+                        updated_at=datetime.now(timezone.utc),
+                        changed_by=user_api_key_dict.user_id
+                        or litellm_proxy_admin_name,
+                        table_name=LitellmTableNames.TEAM_TABLE_NAME,
+                        object_id=team_id,
+                        action="deleted",
+                        updated_values="{}",
+                        before_value=_team_row,
+                    )
+                )
+            )
+
+    # End of Audit logging
 
     ## DELETE ASSOCIATED KEYS
     await prisma_client.delete_data(team_id_list=data.team_ids, table_name="key")
