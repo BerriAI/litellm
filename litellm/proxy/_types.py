@@ -83,6 +83,7 @@ class LitellmTableNames(str, enum.Enum):
 
     TEAM_TABLE_NAME: str = "LiteLLM_TeamTable"
     USER_TABLE_NAME: str = "LiteLLM_UserTable"
+    KEY_TABLE_NAME: str = "LiteLLM_VerificationToken"
     PROXY_MODEL_TABLE_NAME: str = "LiteLLM_ModelTable"
 
 
@@ -1286,6 +1287,7 @@ class LiteLLM_AuditLogs(LiteLLMBase):
     table_name: Literal[
         LitellmTableNames.TEAM_TABLE_NAME,
         LitellmTableNames.USER_TABLE_NAME,
+        LitellmTableNames.KEY_TABLE_NAME,
         LitellmTableNames.PROXY_MODEL_TABLE_NAME,
     ]
     object_id: str
