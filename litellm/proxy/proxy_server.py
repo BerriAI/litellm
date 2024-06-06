@@ -125,7 +125,10 @@ from litellm.router import (
     AssistantsTypedDict,
 )
 from litellm.router import ModelInfo as RouterModelInfo
-from litellm._logging import verbose_router_logger, verbose_proxy_logger
+from litellm._logging import (
+    verbose_router_logger,
+    verbose_proxy_logger,
+)
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.litellm_license import LicenseCheck
 from litellm.proxy.auth.model_checks import (
@@ -1471,7 +1474,12 @@ async def user_api_key_auth(
         else:
             raise Exception()
     except Exception as e:
-        traceback.print_exc()
+        verbose_proxy_logger.error(
+            "litellm.proxy.proxy_server.user_api_key_auth(): Exception occured - {}".format(
+                str(e)
+            )
+        )
+        verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, litellm.BudgetExceededError):
             raise ProxyException(
                 message=e.message, type="auth_error", param=None, code=400
@@ -3476,7 +3484,12 @@ async def generate_key_helper_fn(
             )
             key_data["token_id"] = getattr(create_key_response, "token", None)
     except Exception as e:
-        traceback.print_exc()
+        verbose_proxy_logger.error(
+            "litellm.proxy.proxy_server.generate_key_helper_fn(): Exception occured - {}".format(
+                str(e)
+            )
+        )
+        verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise e
         raise HTTPException(
@@ -3515,7 +3528,12 @@ async def delete_verification_token(tokens: List, user_id: Optional[str] = None)
         else:
             raise Exception("DB not connected. prisma_client is None")
     except Exception as e:
-        traceback.print_exc()
+        verbose_proxy_logger.error(
+            "litellm.proxy.proxy_server.delete_verification_token(): Exception occured - {}".format(
+                str(e)
+            )
+        )
+        verbose_proxy_logger.debug(traceback.format_exc())
         raise e
     return deleted_tokens
 
@@ -3676,7 +3694,12 @@ async def async_assistants_data_generator(
         done_message = "[DONE]"
         yield f"data: {done_message}\n\n"
     except Exception as e:
-        traceback.print_exc()
+        verbose_proxy_logger.error(
+            "litellm.proxy.proxy_server.async_assistants_data_generator(): Exception occured - {}".format(
+                str(e)
+            )
+        )
+        verbose_proxy_logger.debug(traceback.format_exc())
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
             original_exception=e,
@@ -3686,9 +3709,6 @@ async def async_assistants_data_generator(
             f"\033[1;31mAn error occurred: {e}\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`"
         )
         router_model_names = llm_router.model_names if llm_router is not None else []
-        if user_debug:
-            traceback.print_exc()
-
         if isinstance(e, HTTPException):
             raise e
         else:
@@ -3728,7 +3748,12 @@ async def async_data_generator(
         done_message = "[DONE]"
         yield f"data: {done_message}\n\n"
     except Exception as e:
-        traceback.print_exc()
+        verbose_proxy_logger.error(
+            "litellm.proxy.proxy_server.async_data_generator(): Exception occured - {}".format(
+                str(e)
+            )
+        )
+        verbose_proxy_logger.debug(traceback.format_exc())
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
             original_exception=e,
@@ -3738,8 +3763,6 @@ async def async_data_generator(
             f"\033[1;31mAn error occurred: {e}\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`"
         )
         router_model_names = llm_router.model_names if llm_router is not None else []
-        if user_debug:
-            traceback.print_exc()
 
         if isinstance(e, HTTPException):
             raise e
@@ -4386,7 +4409,12 @@ async def chat_completion(
         return _chat_response
     except Exception as e:
         data["litellm_status"] = "fail"  # used for alerting
-        traceback.print_exc()
+        verbose_proxy_logger.error(
+            "litellm.proxy.proxy_server.chat_completion(): Exception occured - {}".format(
+                str(e)
+            )
+        )
+        verbose_proxy_logger.debug(traceback.format_exc())
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
@@ -4397,8 +4425,6 @@ async def chat_completion(
             litellm_debug_info,
         )
         router_model_names = llm_router.model_names if llm_router is not None else []
-        if user_debug:
-            traceback.print_exc()
 
         if isinstance(e, HTTPException):
             raise ProxyException(
@@ -4630,15 +4656,12 @@ async def completion(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        verbose_proxy_logger.debug("EXCEPTION RAISED IN PROXY MAIN.PY")
-        litellm_debug_info = getattr(e, "litellm_debug_info", "")
-        verbose_proxy_logger.debug(
-            "\033[1;31mAn error occurred: %s %s\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`",
-            e,
-            litellm_debug_info,
+        verbose_proxy_logger.error(
+            "litellm.proxy.proxy_server.completion(): Exception occured - {}".format(
+                str(e)
+            )
         )
-        traceback.print_exc()
-        error_traceback = traceback.format_exc()
+        verbose_proxy_logger.debug(traceback.format_exc())
         error_msg = f"{str(e)}"
         raise ProxyException(
             message=getattr(e, "message", error_msg),
@@ -4848,7 +4871,12 @@ async def embeddings(
             e,
             litellm_debug_info,
         )
-        traceback.print_exc()
+        verbose_proxy_logger.error(
+            "litellm.proxy.proxy_server.embeddings(): Exception occured - {}".format(
+                str(e)
+            )
+        )
+        verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e)),
@@ -5027,7 +5055,12 @@ async def image_generation(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        traceback.print_exc()
+        verbose_proxy_logger.error(
+            "litellm.proxy.proxy_server.image_generation(): Exception occured - {}".format(
+                str(e)
+            )
+        )
+        verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e)),
@@ -5205,7 +5238,12 @@ async def audio_speech(
         )
 
     except Exception as e:
-        traceback.print_exc()
+        verbose_proxy_logger.error(
+            "litellm.proxy.proxy_server.audio_speech(): Exception occured - {}".format(
+                str(e)
+            )
+        )
+        verbose_proxy_logger.debug(traceback.format_exc())
         raise e
 
 
@@ -5394,7 +5432,12 @@ async def audio_transcriptions(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        traceback.print_exc()
+        verbose_proxy_logger.error(
+            "litellm.proxy.proxy_server.audio_transcription(): Exception occured - {}".format(
+                str(e)
+            )
+        )
+        verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e.detail)),
@@ -5403,7 +5446,6 @@ async def audio_transcriptions(
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
         else:
-            error_traceback = traceback.format_exc()
             error_msg = f"{str(e)}"
             raise ProxyException(
                 message=getattr(e, "message", error_msg),
@@ -5531,7 +5573,12 @@ async def get_assistants(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        traceback.print_exc()
+        verbose_proxy_logger.error(
+            "litellm.proxy.proxy_server.get_assistants(): Exception occured - {}".format(
+                str(e)
+            )
+        )
+        verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e.detail)),
@@ -5540,7 +5587,6 @@ async def get_assistants(
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
         else:
-            error_traceback = traceback.format_exc()
             error_msg = f"{str(e)}"
             raise ProxyException(
                 message=getattr(e, "message", error_msg),
@@ -5660,7 +5706,12 @@ async def create_threads(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        traceback.print_exc()
+        verbose_proxy_logger.error(
+            "litellm.proxy.proxy_server.create_threads(): Exception occured - {}".format(
+                str(e)
+            )
+        )
+        verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e.detail)),
@@ -5669,7 +5720,6 @@ async def create_threads(
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
         else:
-            error_traceback = traceback.format_exc()
             error_msg = f"{str(e)}"
             raise ProxyException(
                 message=getattr(e, "message", error_msg),
@@ -5788,7 +5838,12 @@ async def get_thread(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        traceback.print_exc()
+        verbose_proxy_logger.error(
+            "litellm.proxy.proxy_server.get_thread(): Exception occured - {}".format(
+                str(e)
+            )
+        )
+        verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e.detail)),
@@ -5797,7 +5852,6 @@ async def get_thread(
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
         else:
-            error_traceback = traceback.format_exc()
             error_msg = f"{str(e)}"
             raise ProxyException(
                 message=getattr(e, "message", error_msg),
@@ -5919,7 +5973,12 @@ async def add_messages(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        traceback.print_exc()
+        verbose_proxy_logger.error(
+            "litellm.proxy.proxy_server.add_messages(): Exception occured - {}".format(
+                str(e)
+            )
+        )
+        verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e.detail)),
@@ -5928,7 +5987,6 @@ async def add_messages(
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
         else:
-            error_traceback = traceback.format_exc()
             error_msg = f"{str(e)}"
             raise ProxyException(
                 message=getattr(e, "message", error_msg),
@@ -6046,7 +6104,12 @@ async def get_messages(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        traceback.print_exc()
+        verbose_proxy_logger.error(
+            "litellm.proxy.proxy_server.get_messages(): Exception occured - {}".format(
+                str(e)
+            )
+        )
+        verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e.detail)),
@@ -6055,7 +6118,6 @@ async def get_messages(
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
         else:
-            error_traceback = traceback.format_exc()
             error_msg = f"{str(e)}"
             raise ProxyException(
                 message=getattr(e, "message", error_msg),
@@ -6187,7 +6249,12 @@ async def run_thread(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        traceback.print_exc()
+        verbose_proxy_logger.error(
+            "litellm.proxy.proxy_server.run_thread(): Exception occured - {}".format(
+                str(e)
+            )
+        )
+        verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e.detail)),
@@ -6196,7 +6263,6 @@ async def run_thread(
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
         else:
-            error_traceback = traceback.format_exc()
             error_msg = f"{str(e)}"
             raise ProxyException(
                 message=getattr(e, "message", error_msg),
@@ -6335,7 +6401,12 @@ async def create_batch(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        traceback.print_exc()
+        verbose_proxy_logger.error(
+            "litellm.proxy.proxy_server.create_batch(): Exception occured - {}".format(
+                str(e)
+            )
+        )
+        verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e.detail)),
@@ -6344,7 +6415,6 @@ async def create_batch(
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
         else:
-            error_traceback = traceback.format_exc()
             error_msg = f"{str(e)}"
             raise ProxyException(
                 message=getattr(e, "message", error_msg),
@@ -6478,7 +6548,12 @@ async def retrieve_batch(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        traceback.print_exc()
+        verbose_proxy_logger.error(
+            "litellm.proxy.proxy_server.retrieve_batch(): Exception occured - {}".format(
+                str(e)
+            )
+        )
+        verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e.detail)),
@@ -6631,7 +6706,12 @@ async def create_file(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        traceback.print_exc()
+        verbose_proxy_logger.error(
+            "litellm.proxy.proxy_server.create_file(): Exception occured - {}".format(
+                str(e)
+            )
+        )
+        verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e.detail)),
@@ -6640,7 +6720,6 @@ async def create_file(
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
         else:
-            error_traceback = traceback.format_exc()
             error_msg = f"{str(e)}"
             raise ProxyException(
                 message=getattr(e, "message", error_msg),
@@ -6816,7 +6895,12 @@ async def moderations(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        traceback.print_exc()
+        verbose_proxy_logger.error(
+            "litellm.proxy.proxy_server.moderations(): Exception occured - {}".format(
+                str(e)
+            )
+        )
+        verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e)),
@@ -6825,7 +6909,6 @@ async def moderations(
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
         else:
-            error_traceback = traceback.format_exc()
             error_msg = f"{str(e)}"
             raise ProxyException(
                 message=getattr(e, "message", error_msg),
@@ -7136,7 +7219,12 @@ async def generate_key_fn(
 
         return GenerateKeyResponse(**response)
     except Exception as e:
-        traceback.print_exc()
+        verbose_proxy_logger.error(
+            "litellm.proxy.proxy_server.generate_key_fn(): Exception occured - {}".format(
+                str(e)
+            )
+        )
+        verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"Authentication Error({str(e)})"),
@@ -9591,7 +9679,12 @@ async def user_info(
         }
         return response_data
     except Exception as e:
-        traceback.print_exc()
+        verbose_proxy_logger.error(
+            "litellm.proxy.proxy_server.user_info(): Exception occured - {}".format(
+                str(e)
+            )
+        )
+        verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"Authentication Error({str(e)})"),
@@ -9686,7 +9779,12 @@ async def user_update(data: UpdateUserRequest):
         return response
         # update based on remaining passed in values
     except Exception as e:
-        traceback.print_exc()
+        verbose_proxy_logger.error(
+            "litellm.proxy.proxy_server.user_update(): Exception occured - {}".format(
+                str(e)
+            )
+        )
+        verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"Authentication Error({str(e)})"),
@@ -9739,7 +9837,12 @@ async def user_request_model(request: Request):
         return {"status": "success"}
         # update based on remaining passed in values
     except Exception as e:
-        traceback.print_exc()
+        verbose_proxy_logger.error(
+            "litellm.proxy.proxy_server.user_request_model(): Exception occured - {}".format(
+                str(e)
+            )
+        )
+        verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"Authentication Error({str(e)})"),
@@ -9781,7 +9884,12 @@ async def user_get_requests():
         return {"requests": response}
         # update based on remaining passed in values
     except Exception as e:
-        traceback.print_exc()
+        verbose_proxy_logger.error(
+            "litellm.proxy.proxy_server.user_get_requests(): Exception occured - {}".format(
+                str(e)
+            )
+        )
+        verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"Authentication Error({str(e)})"),
@@ -10171,7 +10279,12 @@ async def update_end_user(
 
         # update based on remaining passed in values
     except Exception as e:
-        traceback.print_exc()
+        verbose_proxy_logger.error(
+            "litellm.proxy.proxy_server.update_end_user(): Exception occured - {}".format(
+                str(e)
+            )
+        )
+        verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"Internal Server Error({str(e)})"),
@@ -10255,7 +10368,12 @@ async def delete_end_user(
 
         # update based on remaining passed in values
     except Exception as e:
-        traceback.print_exc()
+        verbose_proxy_logger.error(
+            "litellm.proxy.proxy_server.delete_end_user(): Exception occured - {}".format(
+                str(e)
+            )
+        )
+        verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"Internal Server Error({str(e)})"),
@@ -11558,7 +11676,12 @@ async def add_new_model(
         return model_response
 
     except Exception as e:
-        traceback.print_exc()
+        verbose_proxy_logger.error(
+            "litellm.proxy.proxy_server.add_new_model(): Exception occured - {}".format(
+                str(e)
+            )
+        )
+        verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"Authentication Error({str(e)})"),
@@ -11672,7 +11795,12 @@ async def update_model(
 
             return model_response
     except Exception as e:
-        traceback.print_exc()
+        verbose_proxy_logger.error(
+            "litellm.proxy.proxy_server.update_model(): Exception occured - {}".format(
+                str(e)
+            )
+        )
+        verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"Authentication Error({str(e)})"),
@@ -13906,7 +14034,12 @@ async def update_config(config_info: ConfigYAML):
 
         return {"message": "Config updated successfully"}
     except Exception as e:
-        traceback.print_exc()
+        verbose_proxy_logger.error(
+            "litellm.proxy.proxy_server.update_config(): Exception occured - {}".format(
+                str(e)
+            )
+        )
+        verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"Authentication Error({str(e)})"),
@@ -14379,7 +14512,12 @@ async def get_config():
             "available_callbacks": all_available_callbacks,
         }
     except Exception as e:
-        traceback.print_exc()
+        verbose_proxy_logger.error(
+            "litellm.proxy.proxy_server.get_config(): Exception occured - {}".format(
+                str(e)
+            )
+        )
+        verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"Authentication Error({str(e)})"),
@@ -14630,7 +14768,12 @@ async def health_services_endpoint(
             }
 
     except Exception as e:
-        traceback.print_exc()
+        verbose_proxy_logger.error(
+            "litellm.proxy.proxy_server.health_services_endpoint(): Exception occured - {}".format(
+                str(e)
+            )
+        )
+        verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"Authentication Error({str(e)})"),
@@ -14709,7 +14852,12 @@ async def health_endpoint(
                 "unhealthy_count": len(unhealthy_endpoints),
             }
     except Exception as e:
-        traceback.print_exc()
+        verbose_proxy_logger.error(
+            "litellm.proxy.proxy_server.py::health_endpoint(): Exception occured - {}".format(
+                str(e)
+            )
+        )
+        verbose_proxy_logger.debug(traceback.format_exc())
         raise e
 
 

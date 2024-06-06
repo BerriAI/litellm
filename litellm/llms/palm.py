@@ -1,11 +1,12 @@
-import os, types, traceback, copy
-import json
-from enum import Enum
+import types
+import traceback
+import copy
 import time
 from typing import Callable, Optional
-from litellm.utils import ModelResponse, get_secret, Choices, Message, Usage
+from litellm.utils import ModelResponse, Choices, Message, Usage
 import litellm
-import sys, httpx
+import httpx
+from litellm import verbose_logger
 
 
 class PalmError(Exception):
@@ -165,7 +166,10 @@ def completion(
             choices_list.append(choice_obj)
         model_response["choices"] = choices_list
     except Exception as e:
-        traceback.print_exc()
+        verbose_logger.error(
+            "litellm.llms.palm.py::completion(): Exception occured - {}".format(str(e))
+        )
+        verbose_logger.debug(traceback.format_exc())
         raise PalmError(
             message=traceback.format_exc(), status_code=response.status_code
         )
