@@ -1,8 +1,8 @@
 # Using Fine-Tuned gpt-3.5-turbo
 LiteLLM allows you to call `completion` with your fine-tuned gpt-3.5-turbo models
-If you're trying to create your custom finetuned gpt-3.5-turbo model following along on this tutorial: https://platform.openai.com/docs/guides/fine-tuning/preparing-your-dataset
+If you're trying to create your custom fine-tuned gpt-3.5-turbo model following along on this tutorial: https://platform.openai.com/docs/guides/fine-tuning/preparing-your-dataset
 
-Once you've created your fine tuned model, you can call it with `litellm.completion()` 
+Once you've created your fine-tuned model, you can call it with `litellm.completion()` 
 
 ## Usage
 ```python
