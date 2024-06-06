@@ -151,7 +151,7 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
     --header 'Content-Type: application/json' \    
     --header 'langfuse_trace_id: trace-id22' \
     --header 'langfuse_trace_user_id: user-id2' \
-    --header 'langfuse_trace_metadata: {"key":"value"}'
+    --header 'langfuse_trace_metadata: {"key":"value"}' \
     --data '{
     "model": "gpt-3.5-turbo",
     "messages": [
