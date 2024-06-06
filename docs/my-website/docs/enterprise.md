@@ -10,6 +10,7 @@ For companies that need SSO, user management and professional support for LiteLL
 This covers: 
 - ✅ **Features under the [LiteLLM Commercial License (Content Mod, Custom Tags, etc.)](https://docs.litellm.ai/docs/proxy/enterprise)**
 - ✅ [**Secure UI access with Single Sign-On**](../docs/proxy/ui.md#setup-ssoauth-for-ui)
+- ✅ [**Audit Logs with retention policy**](../docs/proxy/enterprise.md#audit-logs)
 - ✅ [**JWT-Auth**](../docs/proxy/token_auth.md)
 - ✅ [**Prompt Injection Detection**](#prompt-injection-detection-lakeraai)
 - ✅ [**Invite Team Members to access `/spend` Routes**](../docs/proxy/cost_tracking#allowing-non-proxy-admins-to-access-spend-endpoints)
