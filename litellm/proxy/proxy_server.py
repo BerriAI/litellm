@@ -112,7 +112,10 @@ from litellm import (
     CreateFileRequest,
 )
 from litellm.proxy.secret_managers.google_kms import load_google_kms
-from litellm.proxy.secret_managers.aws_secret_manager import load_aws_secret_manager
+from litellm.proxy.secret_managers.aws_secret_manager import (
+    load_aws_secret_manager,
+    load_aws_kms,
+)
 import pydantic
 from litellm.proxy._types import *
 from litellm.caching import DualCache, RedisCache
@@ -2736,10 +2739,12 @@ class ProxyConfig:
                     load_google_kms(use_google_kms=True)
                 elif (
                     key_management_system
-                    == KeyManagementSystem.AWS_SECRET_MANAGER.value
+                    == KeyManagementSystem.AWS_SECRET_MANAGER.value  # noqa: F405
                 ):
                     ### LOAD FROM AWS SECRET MANAGER ###
                     load_aws_secret_manager(use_aws_secret_manager=True)
+                elif key_management_system == KeyManagementSystem.AWS_KMS.value:
+                    load_aws_kms(use_aws_kms=True)
                 else:
                     raise ValueError("Invalid Key Management System selected")
             key_management_settings = general_settings.get(
@@ -2773,6 +2778,7 @@ class ProxyConfig:
             master_key = general_settings.get(
                 "master_key", litellm.get_secret("LITELLM_MASTER_KEY", None)
             )
+
             if master_key and master_key.startswith("os.environ/"):
                 master_key = litellm.get_secret(master_key)
                 if not isinstance(master_key, str):
@@ -4098,6 +4104,7 @@ async def chat_completion(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     global general_settings, user_debug, proxy_logging_obj, llm_model_list
+
     data = {}
     try:
         body = await request.body()
