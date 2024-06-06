@@ -69,6 +69,43 @@ class LangFuseLogger:
         else:
             self.upstream_langfuse = None
 
+    @staticmethod
+    def add_metadata_from_header(litellm_params: dict, metadata: dict) -> dict:
+        """
+        Adds metadata from proxy request headers to Langfuse logging if keys start with "langfuse_"
+        and overwrites litellm_params.metadata if already included.
+
+        For example if you want to append your trace to an existing `trace_id` via header, send
+        `headers: { ..., langfuse_existing_trace_id: your-existing-trace-id }` via proxy request.
+        """
+        if litellm_params is None:
+            return metadata
+
+        if litellm_params.get("proxy_server_request") is None:
+            return metadata
+
+        if metadata is None:
+            metadata = {}
+
+        proxy_headers = (
+            litellm_params.get("proxy_server_request", {}).get("headers", {}) or {}
+        )
+
+        for metadata_param_key in proxy_headers:
+            if metadata_param_key.startswith("langfuse_"):
+                trace_param_key = metadata_param_key.replace("langfuse_", "", 1)
+                if trace_param_key in metadata:
+                    verbose_logger.warning(
+                        f"Overwriting Langfuse `{trace_param_key}` from request header"
+                    )
+                else:
+                    verbose_logger.debug(
+                        f"Found Langfuse `{trace_param_key}` in request header"
+                    )
+                metadata[trace_param_key] = proxy_headers.get(metadata_param_key)
+
+        return metadata
+
     # def log_error(kwargs, response_obj, start_time, end_time):
     #     generation = trace.generation(
     #         level ="ERROR" # can be any of DEBUG, DEFAULT, WARNING or ERROR
@@ -97,6 +134,7 @@ class LangFuseLogger:
             metadata = (
                 litellm_params.get("metadata", {}) or {}
             )  # if litellm_params['metadata'] == None
+            metadata = self.add_metadata_from_header(litellm_params, metadata)
             optional_params = copy.deepcopy(kwargs.get("optional_params", {}))
 
             prompt = {"messages": kwargs.get("messages")}
