@@ -220,8 +220,6 @@ class Router:
             []
         )  # names of models under litellm_params. ex. azure/chatgpt-v-2
         self.deployment_latency_map = {}
-        ### SCHEDULER ###
-        self.scheduler = Scheduler(polling_interval=polling_interval)
         ### CACHING ###
         cache_type: Literal["local", "redis"] = "local"  # default to an in-memory cache
         redis_cache = None
@@ -259,6 +257,10 @@ class Router:
             redis_cache=redis_cache, in_memory_cache=InMemoryCache()
         )  # use a dual cache (Redis+In-Memory) for tracking cooldowns, usage, etc.
 
+        ### SCHEDULER ###
+        self.scheduler = Scheduler(
+            polling_interval=polling_interval, redis_cache=redis_cache
+        )
         self.default_deployment = None  # use this to track the users default deployment, when they want to use model = *
         self.default_max_parallel_requests = default_max_parallel_requests
 
