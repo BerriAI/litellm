@@ -301,7 +301,9 @@ def _process_gemini_image(image_url: str) -> PartType:
         # GCS URIs
         if "gs://" in image_url:
             # Figure out file type
-            extension = os.path.splitext(image_url)[-1]
+            extension_with_dot = os.path.splitext(image_url)[-1] # Ex: ".png"
+            extension = extension_with_dot[1:] # Ex: "png"
+
             file_type = get_file_type_from_extension(extension)
 
             # Validate the file type is supported by Gemini
