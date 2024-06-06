@@ -41,12 +41,19 @@ verbose_logger.addHandler(handler)
 
 def _turn_on_json():
     handler = logging.StreamHandler()
-    handler.setLevel(logging.DEBUG)
     handler.setFormatter(JsonFormatter())
 
-    verbose_router_logger.addHandler(handler)
-    verbose_proxy_logger.addHandler(handler)
-    verbose_logger.addHandler(handler)
+    # Define a list of the loggers to update
+    loggers = [verbose_router_logger, verbose_proxy_logger, verbose_logger]
+
+    # Iterate through each logger and update its handlers
+    for logger in loggers:
+        # Remove all existing handlers
+        for h in logger.handlers[:]:
+            logger.removeHandler(h)
+
+        # Add the new handler
+        logger.addHandler(handler)
 
 
 def _turn_on_debug():
