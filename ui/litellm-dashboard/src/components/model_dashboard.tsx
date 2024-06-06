@@ -145,6 +145,7 @@ enum Providers {
   OpenAI_Compatible = "OpenAI-Compatible Endpoints (Groq, Together AI, Mistral AI, etc.)",
   Vertex_AI = "Vertex AI (Anthropic, Gemini, etc.)",
   Databricks = "Databricks",
+  Ollama = "Ollama",
 }
 
 const provider_map: Record<string, string> = {
@@ -156,6 +157,7 @@ const provider_map: Record<string, string> = {
   OpenAI_Compatible: "openai",
   Vertex_AI: "vertex_ai",
   Databricks: "databricks",
+  Ollama: "ollama",
 };
 
 const retry_policy_map: Record<string, string> = {
@@ -1747,6 +1749,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                     )}
                   {selectedProvider != Providers.Bedrock &&
                     selectedProvider != Providers.Vertex_AI &&
+                    selectedProvider != Providers.Ollama &&
                     (dynamicProviderForm === undefined ||
                       dynamicProviderForm.fields.length == 0) && (
                       <Form.Item
