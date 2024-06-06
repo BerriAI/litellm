@@ -459,7 +459,7 @@ Step 1 Set a `LAKERA_API_KEY` in your env
 LAKERA_API_KEY="7a91a1a6059da*******"
 ```
 
-Step 2. Add `lakera_prompt_injection` to your calbacks
+Step 2. Add `lakera_prompt_injection` to your callbacks
 
 ```yaml 
 litellm_settings:
