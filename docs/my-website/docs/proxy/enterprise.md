@@ -14,7 +14,7 @@ Features:
 - ✅ [SSO for Admin UI](./ui.md#✨-enterprise-features)
 - ✅ [Audit Logs](#audit-logs)
 - ✅ [Tracking Spend for Custom Tags](#tracking-spend-for-custom-tags)
-- ✅ [Enforce Params](#tracking-spend-for-custom-tags)
+- ✅ [Enforce Required Params for LLM Requests (ex. Reject requests missing ["metadata"]["generation_name"])](#enforce-required-params-for-llm-requests)
 - ✅ [Content Moderation with LLM Guard, LlamaGuard, Google Text Moderations](#content-moderation)
 - ✅ [Prompt Injection Detection (with LakeraAI API)](#prompt-injection-detection---lakeraai)
 - ✅ [Custom Branding + Routes on Swagger Docs](#swagger-docs---custom-routes--branding)
@@ -205,7 +205,7 @@ curl -X GET "http://0.0.0.0:4000/spend/tags" \
 ```
 
 
-## Enforce Params in Requests sent to LiteLLM
+## Enforce Required Params for LLM Requests
 Use this when you want to enforce all requests to include certain params. Example you need all requests to include the `user` and `["metadata]["generation_name"]` params.
 
 **Step 1** Define all Params you want to enforce on config.yaml
