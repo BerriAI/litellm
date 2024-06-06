@@ -41,7 +41,9 @@ litellm_settings:
 **Step 3**: Set required env variables for logging to langfuse
 ```shell
 export LANGFUSE_PUBLIC_KEY="pk_kk"
-export LANGFUSE_SECRET_KEY="sk_ss
+export LANGFUSE_SECRET_KEY="sk_ss"
+# Optional, defaults to https://cloud.langfuse.com
+export LANGFUSE_HOST="https://xxx.langfuse.com"
 ```
 
 **Step 4**: Start the proxy, make a test request

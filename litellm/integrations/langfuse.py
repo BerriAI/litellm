@@ -78,8 +78,17 @@ class LangFuseLogger:
         For example if you want to append your trace to an existing `trace_id` via header, send
         `headers: { ..., langfuse_existing_trace_id: your-existing-trace-id }` via proxy request.
         """
-        proxy_headers = litellm_params.get("proxy_server_request", {}).get(
-            "headers", {}
+        if litellm_params is None:
+            return metadata
+
+        if litellm_params.get("proxy_server_request") is None:
+            return metadata
+
+        if metadata is None:
+            metadata = {}
+
+        proxy_headers = (
+            litellm_params.get("proxy_server_request", {}).get("headers", {}) or {}
         )
 
         for metadata_param_key in proxy_headers:
