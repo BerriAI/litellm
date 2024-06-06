@@ -62,6 +62,23 @@ curl -X GET 'http://localhost:4000/health/services?service=slack' \
   -H 'Authorization: Bearer sk-1234'
 ```
 
+## Advanced - Redacting Messages from Alerts
+
+By default alerts show the `messages/input` passed to the LLM. If you want to redact this from slack alerting set the following setting on your config
+
+
+```shell
+general_settings:
+  alerting: ["slack"]
+  alert_types: ["spend_reports"] 
+
+litellm_settings:
+  redact_messages_in_exceptions: True
+```
+
+
+
+
 ## Advanced - Opting into specific alert types
 
 Set `alert_types` if you want to Opt into only specific alert types
