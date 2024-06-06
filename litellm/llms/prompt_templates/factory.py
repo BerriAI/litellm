@@ -833,7 +833,7 @@ def anthropic_messages_pt_xml(messages: list):
             )  # either string or none
             if messages[msg_i].get(
                 "tool_calls", []
-            ):  # support assistant tool invoke convertion
+            ):  # support assistant tool invoke conversion
                 assistant_text += convert_to_anthropic_tool_invoke_xml(  # type: ignore
                     messages[msg_i]["tool_calls"]
                 )
@@ -1224,7 +1224,7 @@ def anthropic_messages_pt(messages: list):
 
             if messages[msg_i].get(
                 "tool_calls", []
-            ):  # support assistant tool invoke convertion
+            ):  # support assistant tool invoke conversion
                 assistant_content.extend(
                     convert_to_anthropic_tool_invoke(messages[msg_i]["tool_calls"])
                 )
