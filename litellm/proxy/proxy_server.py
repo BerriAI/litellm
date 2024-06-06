@@ -103,6 +103,7 @@ from litellm.proxy.utils import (
     update_spend,
     encrypt_value,
     decrypt_value,
+    get_error_message_str,
 )
 from litellm import (
     CreateBatchRequest,
@@ -3823,6 +3824,18 @@ def on_backoff(details):
     verbose_proxy_logger.debug("Backing off... this was attempt # %s", details["tries"])
 
 
+def giveup(e):
+    result = not (
+        isinstance(e, ProxyException)
+        and getattr(e, "message", None) is not None
+        and isinstance(e.message, str)
+        and "Max parallel request limit reached" in e.message
+    )
+    if result:
+        verbose_proxy_logger.info(json.dumps({"event": "giveup", "exception": str(e)}))
+    return result
+
+
 @router.on_event("startup")
 async def startup_event():
     global prisma_client, master_key, use_background_health_checks, llm_router, llm_model_list, general_settings, proxy_budget_rescheduler_min_time, proxy_budget_rescheduler_max_time, litellm_proxy_admin_name, db_writer_client, store_model_in_db
@@ -4107,12 +4120,8 @@ def model_list(
     max_tries=litellm.num_retries or 3,  # maximum number of retries
     max_time=litellm.request_timeout or 60,  # maximum total time to retry for
     on_backoff=on_backoff,  # specifying the function to call on backoff
-    giveup=lambda e: not (
-        isinstance(e, ProxyException)
-        and getattr(e, "message", None) is not None
-        and isinstance(e.message, str)
-        and "Max parallel request limit reached" in e.message
-    ),  # the result of the logical expression is on the second position
+    giveup=giveup,
+    logger=verbose_proxy_logger,
 )
 async def chat_completion(
     request: Request,
@@ -4411,7 +4420,7 @@ async def chat_completion(
         data["litellm_status"] = "fail"  # used for alerting
         verbose_proxy_logger.error(
             "litellm.proxy.proxy_server.chat_completion(): Exception occured - {}".format(
-                str(e)
+                get_error_message_str(e=e)
             )
         )
         verbose_proxy_logger.debug(traceback.format_exc())
