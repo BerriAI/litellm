@@ -4048,6 +4048,12 @@ class Router:
             for idx in reversed(invalid_model_indices):
                 _returned_deployments.pop(idx)
 
+        ## ORDER FILTERING ## -> if user set 'order' in deployments, return deployments with lowest order (e.g. order=1 > order=2)
+        if len(_returned_deployments) > 0:
+            _returned_deployments = litellm.utils._get_order_filtered_deployments(
+                _returned_deployments
+            )
+
         return _returned_deployments
 
     def _common_checks_available_deployment(

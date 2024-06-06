@@ -38,6 +38,48 @@ def test_router_sensitive_keys():
         assert "special-key" not in str(e)
 
 
+def test_router_order():
+    """
+    Asserts for 2 models in a model group, model with order=1 always called first
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                    "mock_response": "Hello world",
+                    "order": 1,
+                },
+                "model_info": {"id": "1"},
+            },
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_key": "bad-key",
+                    "mock_response": Exception("this is a bad key"),
+                    "order": 2,
+                },
+                "model_info": {"id": "2"},
+            },
+        ],
+        num_retries=0,
+        allowed_fails=0,
+        enable_pre_call_checks=True,
+    )
+
+    for _ in range(100):
+        response = router.completion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+        )
+
+        assert isinstance(response, litellm.ModelResponse)
+        assert response._hidden_params["model_id"] == "1"
+
+
 @pytest.mark.parametrize("num_retries", [None, 2])
 @pytest.mark.parametrize("max_retries", [None, 4])
 def test_router_num_retries_init(num_retries, max_retries):
