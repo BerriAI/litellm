@@ -2709,13 +2709,15 @@ def decrypt_value(value: bytes, master_key: str) -> str:
 
 
 # LiteLLM Admin UI - Non SSO Login
-html_form = """
+url_to_redirect_to = os.getenv("PROXY_BASE_URL", "")
+url_to_redirect_to += "/login"
+html_form = f"""
 <!DOCTYPE html>
 <html>
 <head>
     <title>LiteLLM Login</title>
     <style>
-        body {
+        body {{
             font-family: Arial, sans-serif;
             background-color: #f4f4f4;
             margin: 0;
@@ -2724,42 +2726,42 @@ html_form = """
             justify-content: center;
             align-items: center;
             height: 100vh;
-        }
+        }}
 
-        form {
+        form {{
             background-color: #fff;
             padding: 20px;
             border-radius: 8px;
             box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
-        }
+        }}
 
-        label {
+        label {{
             display: block;
             margin-bottom: 8px;
-        }
+        }}
 
-        input {
+        input {{
             width: 100%;
             padding: 8px;
             margin-bottom: 16px;
             box-sizing: border-box;
             border: 1px solid #ccc;
             border-radius: 4px;
-        }
+        }}
 
-        input[type="submit"] {
+        input[type="submit"] {{
             background-color: #4caf50;
             color: #fff;
             cursor: pointer;
-        }
+        }}
 
-        input[type="submit"]:hover {
+        input[type="submit"]:hover {{
             background-color: #45a049;
-        }
+        }}
     </style>
 </head>
 <body>
-    <form action="/login" method="post">
+    <form action="{url_to_redirect_to}" method="post">
         <h2>LiteLLM Login</h2>
 
         <p>By default Username is "admin" and Password is your set LiteLLM Proxy `MASTER_KEY`</p>
@@ -2771,8 +2773,6 @@ html_form = """
         <input type="password" id="password" name="password" required>
         <input type="submit" value="Submit">
     </form>
-</body>
-</html>
 """
 
 

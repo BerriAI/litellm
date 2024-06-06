@@ -1311,7 +1311,9 @@ async def user_api_key_auth(
                         if user_id != valid_token.user_id:
                             raise HTTPException(
                                 status_code=status.HTTP_403_FORBIDDEN,
-                                detail="key not allowed to access this user's info",
+                                detail="key not allowed to access this user's info. user_id={}, key's user_id={}".format(
+                                    user_id, valid_token.user_id
+                                ),
                             )
                     elif route == "/model/info":
                         # /model/info just shows models user has access to
@@ -1363,6 +1365,11 @@ async def user_api_key_auth(
                                 status_code=status.HTTP_403_FORBIDDEN,
                                 detail=f"user not allowed to access this route, role= {_user_role}. Trying to access: {route}",
                             )
+                elif (
+                    _user_role == LitellmUserRoles.INTERNAL_USER
+                    and route in LiteLLMRoutes.internal_user_routes.value
+                ):
+                    pass
                 else:
                     user_role = "unknown"
                     user_id = "unknown"
@@ -1406,7 +1413,7 @@ async def user_api_key_auth(
                 "/global/predict/spend/logs",
                 "/global/activity",
                 "/health/services",
-            ]
+            ] + LiteLLMRoutes.info_routes.value
             # check if the current route startswith any of the allowed routes
             if (
                 route is not None
@@ -2363,19 +2370,30 @@ class ProxyConfig:
                             )
 
                         # Assuming cache_type, cache_host, cache_port, and cache_password are strings
-                        print(  # noqa
-                            f"{blue_color_code}Cache Type:{reset_color_code} {cache_type}"
-                        )  # noqa
-                        print(  # noqa
-                            f"{blue_color_code}Cache Host:{reset_color_code} {cache_host}"
-                        )  # noqa
-                        print(  # noqa
-                            f"{blue_color_code}Cache Port:{reset_color_code} {cache_port}"
-                        )  # noqa
-                        print(  # noqa
-                            f"{blue_color_code}Cache Password:{reset_color_code} {cache_password}"
+                        verbose_proxy_logger.debug(
+                            "%sCache Type:%s %s",
+                            blue_color_code,
+                            reset_color_code,
+                            cache_type,
                         )
-                        print()  # noqa
+                        verbose_proxy_logger.debug(
+                            "%sCache Host:%s %s",
+                            blue_color_code,
+                            reset_color_code,
+                            cache_host,
+                        )
+                        verbose_proxy_logger.debug(
+                            "%sCache Port:%s %s",
+                            blue_color_code,
+                            reset_color_code,
+                            cache_port,
+                        )
+                        verbose_proxy_logger.debug(
+                            "%sCache Password:%s %s",
+                            blue_color_code,
+                            reset_color_code,
+                            cache_password,
+                        )
                     if cache_type == "redis-semantic":
                         # by default this should always be async
                         cache_params.update({"redis_semantic_cache_use_async": True})
@@ -7097,6 +7115,25 @@ async def generate_key_fn(
                 )
             )
 
+        # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
+        if litellm.store_audit_logs is True:
+            _updated_values = json.dumps(response)
+            asyncio.create_task(
+                create_audit_log_for_update(
+                    request_data=LiteLLM_AuditLogs(
+                        id=str(uuid.uuid4()),
+                        updated_at=datetime.now(timezone.utc),
+                        changed_by=user_api_key_dict.user_id
+                        or litellm_proxy_admin_name,
+                        table_name=LitellmTableNames.KEY_TABLE_NAME,
+                        object_id=response.get("token_id", ""),
+                        action="created",
+                        updated_values=_updated_values,
+                        before_value=None,
+                    )
+                )
+            )
+
         return GenerateKeyResponse(**response)
     except Exception as e:
         traceback.print_exc()
@@ -7120,7 +7157,11 @@ async def generate_key_fn(
 @router.post(
     "/key/update", tags=["key management"], dependencies=[Depends(user_api_key_auth)]
 )
-async def update_key_fn(request: Request, data: UpdateKeyRequest):
+async def update_key_fn(
+    request: Request,
+    data: UpdateKeyRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     """
     Update an existing key
     """
@@ -7131,6 +7172,16 @@ async def update_key_fn(request: Request, data: UpdateKeyRequest):
         # get the row from db
         if prisma_client is None:
             raise Exception("Not connected to DB!")
+
+        existing_key_row = await prisma_client.get_data(
+            token=data.key, table_name="key", query_type="find_unique"
+        )
+
+        if existing_key_row is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": f"Team not found, passed team_id={data.team_id}"},
+            )
 
         # get non default values for key
         non_default_values = {}
@@ -7157,6 +7208,29 @@ async def update_key_fn(request: Request, data: UpdateKeyRequest):
         user_api_key_cache.delete_cache(key)
         hashed_token = hash_token(key)
         user_api_key_cache.delete_cache(hashed_token)
+
+        # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
+        if litellm.store_audit_logs is True:
+            _updated_values = json.dumps(data_json)
+
+            _before_value = existing_key_row.json(exclude_none=True)
+            _before_value = json.dumps(_before_value)
+
+            asyncio.create_task(
+                create_audit_log_for_update(
+                    request_data=LiteLLM_AuditLogs(
+                        id=str(uuid.uuid4()),
+                        updated_at=datetime.now(timezone.utc),
+                        changed_by=user_api_key_dict.user_id
+                        or litellm_proxy_admin_name,
+                        table_name=LitellmTableNames.KEY_TABLE_NAME,
+                        object_id=data.key,
+                        action="updated",
+                        updated_values=_updated_values,
+                        before_value=_before_value,
+                    )
+                )
+            )
 
         return {"key": key, **response["data"]}
         # update based on remaining passed in values
@@ -7219,6 +7293,34 @@ async def delete_key_fn(
             and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
         ):
             user_id = None  # unless they're admin
+
+        # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
+        # we do this after the first for loop, since first for loop is for validation. we only want this inserted after validation passes
+        if litellm.store_audit_logs is True:
+            # make an audit log for each team deleted
+            for key in data.keys:
+                key_row = await prisma_client.get_data(  # type: ignore
+                    token=key, table_name="key", query_type="find_unique"
+                )
+
+                key_row = key_row.json(exclude_none=True)
+                _key_row = json.dumps(key_row)
+
+                asyncio.create_task(
+                    create_audit_log_for_update(
+                        request_data=LiteLLM_AuditLogs(
+                            id=str(uuid.uuid4()),
+                            updated_at=datetime.now(timezone.utc),
+                            changed_by=user_api_key_dict.user_id
+                            or litellm_proxy_admin_name,
+                            table_name=LitellmTableNames.KEY_TABLE_NAME,
+                            object_id=key,
+                            action="deleted",
+                            updated_values="{}",
+                            before_value=_key_row,
+                        )
+                    )
+                )
 
         number_deleted_keys = await delete_verification_token(
             tokens=keys, user_id=user_id
@@ -9164,6 +9266,7 @@ async def new_user(data: NewUserRequest):
         data_json["table_name"] = (
             "user"  # only create a user, don't create key if 'auto_create_key' set to False
         )
+
     response = await generate_key_helper_fn(request_type="user", **data_json)
 
     # Admin UI Logic
@@ -10346,10 +10449,63 @@ async def new_team(
                 }
             },
         )
+
+    # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
+    if litellm.store_audit_logs is True:
+        _updated_values = complete_team_data.json(exclude_none=True)
+        _updated_values = json.dumps(_updated_values)
+
+        asyncio.create_task(
+            create_audit_log_for_update(
+                request_data=LiteLLM_AuditLogs(
+                    id=str(uuid.uuid4()),
+                    updated_at=datetime.now(timezone.utc),
+                    changed_by=user_api_key_dict.user_id or litellm_proxy_admin_name,
+                    table_name=LitellmTableNames.TEAM_TABLE_NAME,
+                    object_id=data.team_id,
+                    action="created",
+                    updated_values=_updated_values,
+                    before_value=None,
+                )
+            )
+        )
+
     try:
         return team_row.model_dump()
     except Exception as e:
         return team_row.dict()
+
+
+async def create_audit_log_for_update(request_data: LiteLLM_AuditLogs):
+    if premium_user is not True:
+        return
+
+    if litellm.store_audit_logs is not True:
+        return
+    if prisma_client is None:
+        raise Exception("prisma_client is None, no DB connected")
+
+    verbose_proxy_logger.debug("creating audit log for %s", request_data)
+
+    if isinstance(request_data.updated_values, dict):
+        request_data.updated_values = json.dumps(request_data.updated_values)
+
+    if isinstance(request_data.before_value, dict):
+        request_data.before_value = json.dumps(request_data.before_value)
+
+    _request_data = request_data.dict(exclude_none=True)
+
+    try:
+        await prisma_client.db.litellm_auditlog.create(
+            data={
+                **_request_data,  # type: ignore
+            }
+        )
+    except Exception as e:
+        # [Non-Blocking Exception. Do not allow blocking LLM API call]
+        verbose_proxy_logger.error(f"Failed Creating audit log {e}")
+
+    return
 
 
 @router.post(
@@ -10423,6 +10579,27 @@ async def update_team(
         table_name="team",
         team_id=data.team_id,
     )
+
+    # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
+    if litellm.store_audit_logs is True:
+        _before_value = existing_team_row.json(exclude_none=True)
+        _before_value = json.dumps(_before_value)
+        _after_value: str = json.dumps(updated_kv)
+
+        asyncio.create_task(
+            create_audit_log_for_update(
+                request_data=LiteLLM_AuditLogs(
+                    id=str(uuid.uuid4()),
+                    updated_at=datetime.now(timezone.utc),
+                    changed_by=user_api_key_dict.user_id or litellm_proxy_admin_name,
+                    table_name=LitellmTableNames.TEAM_TABLE_NAME,
+                    object_id=data.team_id,
+                    action="updated",
+                    updated_values=_after_value,
+                    before_value=_before_value,
+                )
+            )
+        )
 
     return team_row
 
@@ -10694,6 +10871,35 @@ async def delete_team(
                 status_code=404,
                 detail={"error": f"Team not found, passed team_id={team_id}"},
             )
+
+    # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
+    # we do this after the first for loop, since first for loop is for validation. we only want this inserted after validation passes
+    if litellm.store_audit_logs is True:
+        # make an audit log for each team deleted
+        for team_id in data.team_ids:
+            team_row = await prisma_client.get_data(  # type: ignore
+                team_id=team_id, table_name="team", query_type="find_unique"
+            )
+
+            _team_row = team_row.json(exclude_none=True)
+
+            asyncio.create_task(
+                create_audit_log_for_update(
+                    request_data=LiteLLM_AuditLogs(
+                        id=str(uuid.uuid4()),
+                        updated_at=datetime.now(timezone.utc),
+                        changed_by=user_api_key_dict.user_id
+                        or litellm_proxy_admin_name,
+                        table_name=LitellmTableNames.TEAM_TABLE_NAME,
+                        object_id=team_id,
+                        action="deleted",
+                        updated_values="{}",
+                        before_value=_team_row,
+                    )
+                )
+            )
+
+    # End of Audit logging
 
     ## DELETE ASSOCIATED KEYS
     await prisma_client.delete_data(team_id_list=data.team_ids, table_name="key")
@@ -11752,7 +11958,7 @@ async def model_metrics(
             model_group,
             model,
             DATE_TRUNC('day', "startTime")::DATE AS day,
-            AVG(EXTRACT(epoch FROM ("endTime" - "startTime")) / "completion_tokens") AS avg_latency_per_token
+            AVG(EXTRACT(epoch FROM ("endTime" - "startTime")) / NULLIF("completion_tokens", 0)) AS avg_latency_per_token
         FROM
             "LiteLLM_SpendLogs"
         WHERE
@@ -12765,7 +12971,10 @@ async def login(request: Request):
         _password = getattr(_user_row, "password", "unknown")
 
         # check if password == _user_row.password
-        if secrets.compare_digest(password, _password):
+        hash_password = hash_token(token=password)
+        if secrets.compare_digest(password, _password) or secrets.compare_digest(
+            hash_password, _password
+        ):
             if os.getenv("DATABASE_URL") is not None:
                 response = await generate_key_helper_fn(
                     request_type="key",
@@ -12926,6 +13135,92 @@ async def onboarding(invite_link: str):
         "token": jwt_token,
         "user_email": user_email,
     }
+
+
+@app.post("/onboarding/claim_token", include_in_schema=False)
+async def claim_onboarding_link(data: InvitationClaim):
+    """
+    Special route. Allows UI link share user to update their password.
+
+    - Get the invite link
+    - Validate it's still 'valid'
+    - Check if user within initial session (prevents abuse)
+    - Get user from db
+    - Update user password
+
+    This route can only update user password.
+    """
+    global prisma_client
+    ### VALIDATE INVITE LINK ###
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
+    invite_obj = await prisma_client.db.litellm_invitationlink.find_unique(
+        where={"id": data.invitation_link}
+    )
+    if invite_obj is None:
+        raise HTTPException(
+            status_code=401, detail={"error": "Invitation link does not exist in db."}
+        )
+    #### CHECK IF EXPIRED
+    # Extract the date part from both datetime objects
+    utc_now_date = litellm.utils.get_utc_datetime().date()
+    expires_at_date = invite_obj.expires_at.date()
+    if expires_at_date < utc_now_date:
+        raise HTTPException(
+            status_code=401, detail={"error": "Invitation link has expired."}
+        )
+
+    #### CHECK IF CLAIMED
+    ##### if claimed - check if within valid session (within 10 minutes of being claimed)
+    ##### if unclaimed - reject
+
+    current_time = litellm.utils.get_utc_datetime()
+
+    if invite_obj.is_accepted == True:
+        time_difference = current_time - invite_obj.updated_at
+
+        # Check if the difference is within 10 minutes
+        if time_difference > timedelta(minutes=10):
+            raise HTTPException(
+                status_code=401,
+                detail={
+                    "error": "The invitation link has already been claimed. Please ask your admin for a new invite link."
+                },
+            )
+    else:
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error": "The invitation link was never validated. Please file an issue, if this is not intended - https://github.com/BerriAI/litellm/issues."
+            },
+        )
+
+    #### CHECK IF VALID USER ID
+    if invite_obj.user_id != data.user_id:
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error": "Invalid invitation link. The user id submitted does not match the user id this link is attached to. Got={}, Expected={}".format(
+                    data.user_id, invite_obj.user_id
+                )
+            },
+        )
+    ### UPDATE USER OBJECT ###
+    hash_password = hash_token(token=data.password)
+    user_obj = await prisma_client.db.litellm_usertable.update(
+        where={"user_id": invite_obj.user_id}, data={"password": hash_password}
+    )
+
+    if user_obj is None:
+        raise HTTPException(
+            status_code=401, detail={"error": "User does not exist in db."}
+        )
+
+    return user_obj
 
 
 @app.get("/get_image", include_in_schema=False)
