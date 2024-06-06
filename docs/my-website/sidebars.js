@@ -40,6 +40,7 @@ const sidebars = {
         "proxy/configs",
         "proxy/reliability",
         "proxy/cost_tracking",
+        "proxy/self_serve",
         "proxy/users",
         "proxy/customers",
         "proxy/billing",
