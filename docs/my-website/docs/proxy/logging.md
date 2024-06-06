@@ -42,6 +42,7 @@ litellm_settings:
 ```shell
 export LANGFUSE_PUBLIC_KEY="pk_kk"
 export LANGFUSE_SECRET_KEY="sk_ss"
+# Optional, defaults to https://cloud.langfuse.com
 export LANGFUSE_HOST="https://xxx.langfuse.com"
 ```
 
