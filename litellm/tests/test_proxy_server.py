@@ -152,6 +152,7 @@ def test_chat_completion(mock_acompletion, client_no_auth):
             specific_deployment=True,
             metadata=mock.ANY,
             proxy_server_request=mock.ANY,
+            litellm_parent_otel_span=mock.ANY,
         )
         print(f"response - {response.text}")
         assert response.status_code == 200
@@ -190,6 +191,7 @@ def test_engines_model_chat_completions(mock_acompletion, client_no_auth):
             specific_deployment=True,
             metadata=mock.ANY,
             proxy_server_request=mock.ANY,
+            litellm_parent_otel_span=mock.ANY,
         )
         print(f"response - {response.text}")
         assert response.status_code == 200
@@ -227,6 +229,7 @@ def test_chat_completion_azure(mock_acompletion, client_no_auth):
             specific_deployment=True,
             metadata=mock.ANY,
             proxy_server_request=mock.ANY,
+            litellm_parent_otel_span=mock.ANY,
         )
         assert response.status_code == 200
         result = response.json()
@@ -271,6 +274,7 @@ def test_openai_deployments_model_chat_completions_azure(
             specific_deployment=True,
             metadata=mock.ANY,
             proxy_server_request=mock.ANY,
+            litellm_parent_otel_span=mock.ANY,
         )
         assert response.status_code == 200
         result = response.json()
@@ -485,6 +489,7 @@ def test_chat_completion_optional_params(mock_acompletion, client_no_auth):
             specific_deployment=True,
             metadata=mock.ANY,
             proxy_server_request=mock.ANY,
+            litellm_parent_otel_span=mock.ANY,
         )
         assert response.status_code == 200
         result = response.json()

@@ -1,11 +1,20 @@
 from pydantic import BaseModel, Extra, Field, model_validator, Json, ConfigDict
 from dataclasses import fields
 import enum
-from typing import Optional, List, Union, Dict, Literal, Any
+from typing import Optional, List, Union, Dict, Literal, Any, TYPE_CHECKING
 from datetime import datetime
 import uuid, json, sys, os
 from litellm.types.router import UpdateRouterConfig
 from litellm.types.utils import ProviderField
+from typing_extensions import Annotated
+
+
+if TYPE_CHECKING:
+    from opentelemetry.trace import Span as _Span
+
+    Span = _Span
+else:
+    Span = Any
 
 
 class LitellmUserRoles(str, enum.Enum):
@@ -1195,6 +1204,7 @@ class UserAPIKeyAuth(
         ]
     ] = None
     allowed_model_region: Optional[Literal["eu"]] = None
+    parent_otel_span: Optional[Span] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -1206,6 +1216,9 @@ class UserAPIKeyAuth(
             ).startswith("sk-"):
                 values.update({"api_key": hash_token(values.get("api_key"))})
         return values
+
+    class Config:
+        arbitrary_types_allowed = True
 
 
 class LiteLLM_Config(LiteLLMBase):

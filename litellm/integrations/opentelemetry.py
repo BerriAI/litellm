@@ -1,9 +1,18 @@
 import os
-from typing import Optional
 from dataclasses import dataclass
+from datetime import datetime
 
 from litellm.integrations.custom_logger import CustomLogger
 from litellm._logging import verbose_logger
+from litellm.types.services import ServiceLoggerPayload
+from typing import Union, Optional, TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from opentelemetry.trace import Span as _Span
+
+    Span = _Span
+else:
+    Span = Any
 
 
 LITELLM_TRACER_NAME = os.getenv("OTEL_TRACER_NAME", "litellm")
@@ -77,6 +86,31 @@ class OpenTelemetry(CustomLogger):
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         self._handle_failure(kwargs, response_obj, start_time, end_time)
 
+    async def async_service_success_hook(
+        self,
+        payload: ServiceLoggerPayload,
+        parent_otel_span: Optional[Span] = None,
+        start_time: Optional[datetime] = None,
+        end_time: Optional[datetime] = None,
+    ):
+        from opentelemetry import trace
+        from datetime import datetime
+        from opentelemetry.trace import Status, StatusCode
+
+        if parent_otel_span is not None:
+            _span_name = payload.service
+            service_logging_span = self.tracer.start_span(
+                name=_span_name,
+                context=trace.set_span_in_context(parent_otel_span),
+                start_time=self._to_ns(start_time),
+            )
+            service_logging_span.set_attribute(key="call_type", value=payload.call_type)
+            service_logging_span.set_attribute(
+                key="service", value=payload.service.value
+            )
+            service_logging_span.set_status(Status(StatusCode.OK))
+            service_logging_span.end(end_time=self._to_ns(end_time))
+
     def _handle_sucess(self, kwargs, response_obj, start_time, end_time):
         from opentelemetry.trace import Status, StatusCode
 
@@ -85,15 +119,18 @@ class OpenTelemetry(CustomLogger):
             kwargs,
             self.config,
         )
+        _parent_context, parent_otel_span = self._get_span_context(kwargs)
 
         span = self.tracer.start_span(
             name=self._get_span_name(kwargs),
             start_time=self._to_ns(start_time),
-            context=self._get_span_context(kwargs),
+            context=_parent_context,
         )
         span.set_status(Status(StatusCode.OK))
         self.set_attributes(span, kwargs, response_obj)
         span.end(end_time=self._to_ns(end_time))
+        if parent_otel_span is not None:
+            parent_otel_span.end(end_time=self._to_ns(datetime.now()))
 
     def _handle_failure(self, kwargs, response_obj, start_time, end_time):
         from opentelemetry.trace import Status, StatusCode
@@ -122,17 +159,27 @@ class OpenTelemetry(CustomLogger):
         from opentelemetry.trace.propagation.tracecontext import (
             TraceContextTextMapPropagator,
         )
+        from opentelemetry import trace
 
         litellm_params = kwargs.get("litellm_params", {}) or {}
         proxy_server_request = litellm_params.get("proxy_server_request", {}) or {}
         headers = proxy_server_request.get("headers", {}) or {}
         traceparent = headers.get("traceparent", None)
+        parent_otel_span = litellm_params.get("litellm_parent_otel_span", None)
+
+        """
+        Two way to use parents in opentelemetry
+        - using the traceparent header
+        - using the parent_otel_span in the [metadata][parent_otel_span]
+        """
+        if parent_otel_span is not None:
+            return trace.set_span_in_context(parent_otel_span), parent_otel_span
 
         if traceparent is None:
-            return None
+            return None, None
         else:
             carrier = {"traceparent": traceparent}
-            return TraceContextTextMapPropagator().extract(carrier=carrier)
+            return TraceContextTextMapPropagator().extract(carrier=carrier), None
 
     def _get_span_processor(self):
         from opentelemetry.sdk.trace.export import (
