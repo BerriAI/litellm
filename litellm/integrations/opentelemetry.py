@@ -156,8 +156,7 @@ class OpenTelemetry(CustomLogger):
         proxy_server_request = litellm_params.get("proxy_server_request", {}) or {}
         headers = proxy_server_request.get("headers", {}) or {}
         traceparent = headers.get("traceparent", None)
-        _metadata = litellm_params.get("metadata", {}) or {}
-        parent_otel_span = _metadata.get("litellm_parent_otel_span", None)
+        parent_otel_span = litellm_params.get("litellm_parent_otel_span", None)
 
         """
         Two way to use parents in opentelemetry
