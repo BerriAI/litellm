@@ -47,6 +47,11 @@ import httpx  # type: ignore
 from .bedrock import BedrockError, convert_messages_to_prompt, ModelResponseIterator
 from litellm.types.llms.bedrock import *
 import urllib.parse
+from litellm.types.llms.openai import (
+    ChatCompletionResponseMessage,
+    ChatCompletionToolCallChunk,
+    ChatCompletionToolCallFunctionChunk,
+)
 
 
 class AmazonCohereChatConfig:
@@ -1004,12 +1009,12 @@ class BedrockLLM(BaseLLM):
                 if isinstance(timeout, float) or isinstance(timeout, int):
                     timeout = httpx.Timeout(timeout)
                 _params["timeout"] = timeout
-            self.client = AsyncHTTPHandler(**_params)  # type: ignore
+            client = AsyncHTTPHandler(**_params)  # type: ignore
         else:
-            self.client = client  # type: ignore
+            client = client  # type: ignore
 
         try:
-            response = await self.client.post(api_base, headers=headers, data=data)  # type: ignore
+            response = await client.post(api_base, headers=headers, data=data)  # type: ignore
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code = err.response.status_code
@@ -1125,11 +1130,55 @@ class AmazonConverseConfig:
             "tool_choice",
         ]
 
+    def map_tool_choice_values(
+        self, model: str, tool_choice: Union[str, dict], drop_params: bool
+    ) -> Optional[ToolChoiceValuesBlock]:
+        if not model.startswith("anthropic") and not model.startswith("mistral"):
+            # only anthropic and mistral support tool choice config. otherwise (E.g. cohere) will fail the call - https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
+            if drop_params == True or litellm.drop_params == True:
+                return None
+            else:
+                raise litellm.utils.UnsupportedParamsError(
+                    message="Only Anthropic and Mistral on Bedrock support 'tool_choice'. To drop it from the call, set `litellm.drop_params = True.`",
+                    status_code=400,
+                )
+        if tool_choice == "none":
+            if litellm.drop_params is True or drop_params is True:
+                return None
+            else:
+                raise litellm.utils.UnsupportedParamsError(
+                    message="Bedrock doesn't support tool_choice={}. To drop it from the call, set `litellm.drop_params = True.".format(
+                        tool_choice
+                    ),
+                    status_code=400,
+                )
+        elif tool_choice == "required":
+            return ToolChoiceValuesBlock(any={})
+        elif tool_choice == "auto":
+            return ToolChoiceValuesBlock(auto={})
+        elif isinstance(tool_choice, dict):
+            # only supported for anthropic + mistral models - https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
+            specific_tool = SpecificToolChoiceBlock(
+                name=tool_choice.get("function", {}).get("name", "")
+            )
+            return ToolChoiceValuesBlock(tool=specific_tool)
+        else:
+            raise litellm.utils.UnsupportedParamsError(
+                message="Bedrock doesn't support tool_choice={}. Supported tool_choice values=['auto', 'required', json object]. To drop it from the call, set `litellm.drop_params = True.".format(
+                    tool_choice
+                ),
+                status_code=400,
+            )
+
     def get_supported_image_types(self) -> List[str]:
         return ["png", "jpeg", "gif", "webp"]
 
     def map_openai_params(
-        self, non_default_params: dict, optional_params: dict
+        self,
+        model: str,
+        non_default_params: dict,
+        optional_params: dict,
+        drop_params: bool,
     ) -> dict:
         for param, value in non_default_params.items():
             if param == "max_tokens":
@@ -1144,12 +1193,138 @@ class AmazonConverseConfig:
                 optional_params["temperature"] = value
             if param == "top_p":
                 optional_params["topP"] = value
+            if param == "tools":
+                optional_params["tools"] = value
+            if param == "tool_choice":
+                _tool_choice_value = self.map_tool_choice_values(
+                    model=model, tool_choice=value, drop_params=drop_params
+                )
+                if _tool_choice_value is not None:
+                    optional_params["tool_choice"] = _tool_choice_value
         return optional_params
 
 
 class BedrockConverseLLM(BaseLLM):
     def __init__(self) -> None:
         super().__init__()
+
+    def process_response(
+        self,
+        model: str,
+        response: Union[requests.Response, httpx.Response],
+        model_response: ModelResponse,
+        stream: bool,
+        logging_obj: Logging,
+        optional_params: dict,
+        api_key: str,
+        data: Union[dict, str],
+        messages: List,
+        print_verbose,
+        encoding,
+    ) -> Union[ModelResponse, CustomStreamWrapper]:
+
+        ## LOGGING
+        logging_obj.post_call(
+            input=messages,
+            api_key=api_key,
+            original_response=response.text,
+            additional_args={"complete_input_dict": data},
+        )
+        print_verbose(f"raw model_response: {response.text}")
+
+        ## RESPONSE OBJECT
+        try:
+            completion_response = ConverseResponseBlock(**response.json())  # type: ignore
+        except Exception as e:
+            raise BedrockError(
+                message="Received={}, Error converting to valid response block={}. File an issue if litellm error - https://github.com/BerriAI/litellm/issues".format(
+                    response.text, str(e)
+                ),
+                status_code=422,
+            )
+
+        """
+        Bedrock Response Object has optional message block 
+
+        completion_response["output"].get("message", None)
+
+        A message block looks like this (Example 1): 
+        "output": {
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "text": "Is there anything else you'd like to talk about? Perhaps I can help with some economic questions or provide some information about economic concepts?"
+                    }
+                ]
+            }
+        },
+        (Example 2):
+        "output": {
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "toolUse": {
+                            "toolUseId": "tooluse_hbTgdi0CSLq_hM4P8csZJA",
+                            "name": "top_song",
+                            "input": {
+                                "sign": "WZPZ"
+                            }
+                        }
+                    }
+                ]
+            }
+        }
+
+        """
+        message: Optional[MessageBlock] = completion_response["output"]["message"]
+        chat_completion_message: ChatCompletionResponseMessage = {"role": "assistant"}
+        content_str = ""
+        tools: List[ChatCompletionToolCallChunk] = []
+        if message is not None:
+            for content in message["content"]:
+                """
+                - Content is either a tool response or text
+                """
+                if "text" in content:
+                    content_str += content["text"]
+                if "toolUse" in content:
+                    _function_chunk = ChatCompletionToolCallFunctionChunk(
+                        name=content["toolUse"]["name"],
+                        arguments=json.dumps(content["toolUse"]["input"]),
+                    )
+                    _tool_response_chunk = ChatCompletionToolCallChunk(
+                        id=content["toolUse"]["toolUseId"],
+                        type="function",
+                        function=_function_chunk,
+                    )
+                    tools.append(_tool_response_chunk)
+        chat_completion_message["content"] = content_str
+        chat_completion_message["tool_calls"] = tools
+
+        ## CALCULATING USAGE - bedrock returns usage in the headers
+        input_tokens = completion_response["usage"]["inputTokens"]
+        output_tokens = completion_response["usage"]["outputTokens"]
+        total_tokens = completion_response["usage"]["totalTokens"]
+
+        model_response.choices = [
+            litellm.Choices(
+                finish_reason=map_finish_reason(completion_response["stopReason"]),
+                index=0,
+                message=litellm.Message(**chat_completion_message),
+            )
+        ]
+        model_response["created"] = int(time.time())
+        model_response["model"] = model
+        usage = Usage(
+            prompt_tokens=input_tokens,
+            completion_tokens=output_tokens,
+            total_tokens=total_tokens,
+        )
+        setattr(model_response, "usage", usage)
+
+        return model_response
 
     def encode_model_id(self, model_id: str) -> str:
         """
@@ -1387,11 +1562,14 @@ class BedrockConverseLLM(BaseLLM):
         additional_request_keys = []
         additional_request_params = {}
         supported_converse_params = AmazonConverseConfig().get_config().keys()
-
+        supported_tool_call_params = ["tools", "tool_choice"]
         ## TRANSFORMATION ##
         # send all model-specific params in 'additional_request_params'
         for k, v in inference_params.items():
-            if k not in supported_converse_params:
+            if (
+                k not in supported_converse_params
+                and k not in supported_tool_call_params
+            ):
                 additional_request_params[k] = v
                 additional_request_keys.append(k)
         for key in additional_request_keys:
@@ -1401,23 +1579,27 @@ class BedrockConverseLLM(BaseLLM):
             messages=messages
         )
         bedrock_tools: List[ToolBlock] = _bedrock_tools_pt(
-            inference_params.get("tools", [])
+            inference_params.pop("tools", [])
         )
         bedrock_tool_config: Optional[ToolConfigBlock] = None
         if len(bedrock_tools) > 0:
+            tool_choice_values: ToolChoiceValuesBlock = inference_params.pop(
+                "tool_choice", None
+            )
             bedrock_tool_config = ToolConfigBlock(
                 tools=bedrock_tools,
-                toolChoice=inference_params.get("tool_choice", None),
             )
+            if tool_choice_values is not None:
+                bedrock_tool_config["toolChoice"] = tool_choice_values
 
-        data: RequestObject = {
+        _data: RequestObject = {
             "messages": bedrock_messages,
             "additionalModelRequestFields": additional_request_params,
             "system": system_content_blocks,
         }
         if bedrock_tool_config is not None:
-            data["toolConfig"] = bedrock_tool_config
-
+            _data["toolConfig"] = bedrock_tool_config
+        data = json.dumps(_data)
         ## COMPLETION CALL
 
         headers = {"Content-Type": "application/json"}
@@ -1441,14 +1623,38 @@ class BedrockConverseLLM(BaseLLM):
         )
 
         ### ROUTING (ASYNC, STREAMING, SYNC)
+        ### COMPLETION
+        if client is None or isinstance(client, AsyncHTTPHandler):
+            _params = {}
+            if timeout is not None:
+                if isinstance(timeout, float) or isinstance(timeout, int):
+                    timeout = httpx.Timeout(timeout)
+                _params["timeout"] = timeout
+            client = HTTPHandler(**_params)  # type: ignore
+        else:
+            client = client
         try:
-            response = self.client.post(url=prepped.url, headers=prepped.headers, data=data)  # type: ignore
+            response = client.post(url=prepped.url, headers=prepped.headers, data=data)  # type: ignore
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code = err.response.status_code
             raise BedrockError(status_code=error_code, message=response.text)
         except httpx.TimeoutException as e:
             raise BedrockError(status_code=408, message="Timeout error occurred.")
+
+        return self.process_response(
+            model=model,
+            response=response,
+            model_response=model_response,
+            stream=stream,
+            logging_obj=logging_obj,
+            optional_params=optional_params,
+            api_key="",
+            data=data,
+            messages=messages,
+            print_verbose=print_verbose,
+            encoding=encoding,
+        )
 
 
 def get_response_stream_shape():
