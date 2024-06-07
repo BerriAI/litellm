@@ -638,6 +638,7 @@ LITELLM_EXCEPTION_TYPES = [
     APIConnectionError,
     APIResponseValidationError,
     OpenAIError,
+    InternalServerError,
 ]
 
 

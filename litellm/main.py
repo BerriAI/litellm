@@ -365,7 +365,10 @@ async def acompletion(
             )  # sets the logging event loop if the user does sync streaming (e.g. on proxy for sagemaker calls)
         return response
     except Exception as e:
-        traceback.print_exc()
+        verbose_logger.error(
+            "litellm.acompletion(): Exception occured - {}".format(str(e))
+        )
+        verbose_logger.debug(traceback.format_exc())
         custom_llm_provider = custom_llm_provider or "openai"
         raise exception_type(
             model=model,
@@ -478,7 +481,10 @@ def mock_completion(
     except Exception as e:
         if isinstance(e, openai.APIError):
             raise e
-        traceback.print_exc()
+        verbose_logger.error(
+            "litellm.mock_completion(): Exception occured - {}".format(str(e))
+        )
+        verbose_logger.debug(traceback.format_exc())
         raise Exception("Mock completion response failed")
 
 
@@ -4449,7 +4455,10 @@ async def ahealth_check(
                 response = {}  # args like remaining ratelimit etc.
         return response
     except Exception as e:
-        traceback.print_exc()
+        verbose_logger.error(
+            "litellm.ahealth_check(): Exception occured - {}".format(str(e))
+        )
+        verbose_logger.debug(traceback.format_exc())
         stack_trace = traceback.format_exc()
         if isinstance(stack_trace, str):
             stack_trace = stack_trace[:1000]
