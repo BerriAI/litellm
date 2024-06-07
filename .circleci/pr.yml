@@ -317,7 +317,7 @@ jobs:
 
 workflows:
   version: 2
-  build_and_test:
+  build_and_test_pr:
     jobs:
       - hold:
           type: approval
@@ -339,7 +339,7 @@ workflows:
             - hold
           filters:
             branches:
-              ignore: 
+              ignore:
                 - main
                 - /litellm_.*/
       - installing_litellm_on_python:
@@ -350,11 +350,3 @@ workflows:
               ignore:
                 - main
                 - /litellm_.*/
-      - publish_to_pypi:
-          requires:
-            - local_testing
-            - build_and_test
-          filters:
-            branches:
-              only:
-                - main
