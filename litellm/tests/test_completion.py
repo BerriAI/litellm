@@ -1398,7 +1398,6 @@ def test_hf_test_completion_tgi():
 
 
 def mock_post(url, data=None, json=None, headers=None):
-
     print(f"url={url}")
     if "text-classification" in url:
         raise Exception("Model not found")
@@ -2238,9 +2237,6 @@ def test_re_use_openaiClient():
             print(f"response: {response}")
     except Exception as e:
         pytest.fail("got Exception", e)
-
-
-# test_re_use_openaiClient()
 
 
 def test_completion_azure():
