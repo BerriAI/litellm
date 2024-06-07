@@ -15,6 +15,7 @@ from litellm.llms.prompt_templates.factory import (
     claude_2_1_pt,
     llama_2_chat_pt,
     prompt_factory,
+    _bedrock_tools_pt,
 )
 
 
@@ -128,3 +129,27 @@ def test_anthropic_messages_pt():
 
 
 # codellama_prompt_format()
+def test_bedrock_tool_calling_pt():
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                    },
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+    converted_tools = _bedrock_tools_pt(tools=tools)
+
+    print(converted_tools)
