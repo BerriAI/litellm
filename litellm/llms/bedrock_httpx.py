@@ -1879,7 +1879,7 @@ class AWSEventStreamDecoder:
         elif "stopReason" in chunk_data:
             finish_reason = map_finish_reason(chunk_data.get("stopReason", "stop"))
         elif "usage" in chunk_data:
-            usage = ConverseTokenUsageBlock(**chunk_data["usage"])
+            usage = ConverseTokenUsageBlock(**chunk_data["usage"])  # type: ignore
         response = GenericStreamingChunk(
             text=text,
             tool_str=tool_str,
@@ -1929,11 +1929,11 @@ class AWSEventStreamDecoder:
             is_finished = True
             finish_reason = chunk_data["completionReason"]
         return GenericStreamingChunk(
-            **{
-                "text": text,
-                "is_finished": is_finished,
-                "finish_reason": finish_reason,
-            }
+            text=text,
+            is_finished=is_finished,
+            finish_reason=finish_reason,
+            tool_str="",
+            usage=None,
         )
 
     def iter_bytes(self, iterator: Iterator[bytes]) -> Iterator[GenericStreamingChunk]:
