@@ -180,6 +180,5 @@ class S3Logger:
             print_verbose(f"s3 Layer Logging - final response object: {response_obj}")
             return response
         except Exception as e:
-            traceback.print_exc()
             verbose_logger.debug(f"s3 Layer Error - {str(e)}\n{traceback.format_exc()}")
             pass
