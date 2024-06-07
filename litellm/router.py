@@ -220,8 +220,6 @@ class Router:
             []
         )  # names of models under litellm_params. ex. azure/chatgpt-v-2
         self.deployment_latency_map = {}
-        ### SCHEDULER ###
-        self.scheduler = Scheduler(polling_interval=polling_interval)
         ### CACHING ###
         cache_type: Literal["local", "redis"] = "local"  # default to an in-memory cache
         redis_cache = None
@@ -259,6 +257,10 @@ class Router:
             redis_cache=redis_cache, in_memory_cache=InMemoryCache()
         )  # use a dual cache (Redis+In-Memory) for tracking cooldowns, usage, etc.
 
+        ### SCHEDULER ###
+        self.scheduler = Scheduler(
+            polling_interval=polling_interval, redis_cache=redis_cache
+        )
         self.default_deployment = None  # use this to track the users default deployment, when they want to use model = *
         self.default_max_parallel_requests = default_max_parallel_requests
 
@@ -2096,8 +2098,8 @@ class Router:
                         except Exception as e:
                             raise e
             except Exception as e:
-                verbose_router_logger.debug(f"An exception occurred - {str(e)}")
-                traceback.print_exc()
+                verbose_router_logger.error(f"An exception occurred - {str(e)}")
+                verbose_router_logger.debug(traceback.format_exc())
             raise original_exception
 
     async def async_function_with_retries(self, *args, **kwargs):
@@ -4047,6 +4049,12 @@ class Router:
         if len(invalid_model_indices) > 0:
             for idx in reversed(invalid_model_indices):
                 _returned_deployments.pop(idx)
+
+        ## ORDER FILTERING ## -> if user set 'order' in deployments, return deployments with lowest order (e.g. order=1 > order=2)
+        if len(_returned_deployments) > 0:
+            _returned_deployments = litellm.utils._get_order_filtered_deployments(
+                _returned_deployments
+            )
 
         return _returned_deployments
 

@@ -156,12 +156,13 @@ class HTTPHandler:
         self,
         url: str,
         data: Optional[Union[dict, str]] = None,
+        json: Optional[Union[dict, str]] = None,
         params: Optional[dict] = None,
         headers: Optional[dict] = None,
         stream: bool = False,
     ):
         req = self.client.build_request(
-            "POST", url, data=data, params=params, headers=headers  # type: ignore
+            "POST", url, data=data, json=json, params=params, headers=headers  # type: ignore
         )
         response = self.client.send(req, stream=stream)
         return response

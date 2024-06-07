@@ -109,8 +109,8 @@ class PrometheusLogger:
                     end_user_id, user_api_key, model, user_api_team, user_id
                 ).inc()
         except Exception as e:
-            traceback.print_exc()
-            verbose_logger.debug(
-                f"prometheus Layer Error - {str(e)}\n{traceback.format_exc()}"
+            verbose_logger.error(
+                "prometheus Layer Error(): Exception occured - {}".format(str(e))
             )
+            verbose_logger.debug(traceback.format_exc())
             pass

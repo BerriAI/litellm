@@ -1,13 +1,14 @@
-import os, types, traceback, copy, asyncio
-import json
-from enum import Enum
+import types
+import traceback
+import copy
 import time
 from typing import Callable, Optional
-from litellm.utils import ModelResponse, get_secret, Choices, Message, Usage
+from litellm.utils import ModelResponse, Choices, Message, Usage
 import litellm
-import sys, httpx
+import httpx
 from .prompt_templates.factory import prompt_factory, custom_prompt, get_system_prompt
 from packaging.version import Version
+from litellm import verbose_logger
 
 
 class GeminiError(Exception):
@@ -264,7 +265,8 @@ def completion(
             choices_list.append(choice_obj)
         model_response["choices"] = choices_list
     except Exception as e:
-        traceback.print_exc()
+        verbose_logger.error("LiteLLM.gemini.py: Exception occured - {}".format(str(e)))
+        verbose_logger.debug(traceback.format_exc())
         raise GeminiError(
             message=traceback.format_exc(), status_code=response.status_code
         )
@@ -356,7 +358,8 @@ async def async_completion(
             choices_list.append(choice_obj)
         model_response["choices"] = choices_list
     except Exception as e:
-        traceback.print_exc()
+        verbose_logger.error("LiteLLM.gemini.py: Exception occured - {}".format(str(e)))
+        verbose_logger.debug(traceback.format_exc())
         raise GeminiError(
             message=traceback.format_exc(), status_code=response.status_code
         )
