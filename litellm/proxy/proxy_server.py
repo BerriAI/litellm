@@ -104,6 +104,7 @@ from litellm.proxy.utils import (
     update_spend,
     encrypt_value,
     decrypt_value,
+    _to_ns,
 )
 from litellm import (
     CreateBatchRequest,
@@ -399,7 +400,7 @@ disable_spend_logs = False
 jwt_handler = JWTHandler()
 prompt_injection_detection_obj: Optional[_OPTIONAL_PromptInjectionDetection] = None
 store_model_in_db: bool = False
-open_telemetry_logger = None
+open_telemetry_logger: Optional[litellm.integrations.opentelemetry.OpenTelemetry] = None
 ### INITIALIZE GLOBAL LOGGING OBJECT ###
 proxy_logging_obj = ProxyLogging(user_api_key_cache=user_api_key_cache)
 ### REDIS QUEUE ###
@@ -495,7 +496,7 @@ async def check_request_disconnection(request: Request, llm_api_call_task):
 async def user_api_key_auth(
     request: Request, api_key: str = fastapi.Security(api_key_header)
 ) -> UserAPIKeyAuth:
-    global master_key, prisma_client, llm_model_list, user_custom_auth, custom_db_client, general_settings
+    global master_key, prisma_client, llm_model_list, user_custom_auth, custom_db_client, general_settings, proxy_logging_obj
     try:
         if isinstance(api_key, str):
             passed_in_key = api_key
@@ -504,7 +505,7 @@ async def user_api_key_auth(
         if open_telemetry_logger is not None:
             parent_otel_span = open_telemetry_logger.tracer.start_span(
                 name="Received Proxy Server Request",
-                start_time=time.time(),
+                start_time=_to_ns(datetime.now()),
             )
         ### USER-DEFINED AUTH FUNCTION ###
         if user_custom_auth is not None:
@@ -588,6 +589,7 @@ async def user_api_key_auth(
                         prisma_client=prisma_client,
                         user_api_key_cache=user_api_key_cache,
                         parent_otel_span=parent_otel_span,
+                        proxy_logging_obj=proxy_logging_obj,
                     )
 
                 # [OPTIONAL] track spend for an org id - `LiteLLM_OrganizationTable`
@@ -600,6 +602,7 @@ async def user_api_key_auth(
                         prisma_client=prisma_client,
                         user_api_key_cache=user_api_key_cache,
                         parent_otel_span=parent_otel_span,
+                        proxy_logging_obj=proxy_logging_obj,
                     )
                 # [OPTIONAL] track spend against an internal employee - `LiteLLM_UserTable`
                 user_object = None
@@ -614,6 +617,7 @@ async def user_api_key_auth(
                         user_api_key_cache=user_api_key_cache,
                         user_id_upsert=jwt_handler.is_upsert_user_id(),
                         parent_otel_span=parent_otel_span,
+                        proxy_logging_obj=proxy_logging_obj,
                     )
 
                 # [OPTIONAL] track spend against an external user - `LiteLLM_EndUserTable`
@@ -628,6 +632,7 @@ async def user_api_key_auth(
                         prisma_client=prisma_client,
                         user_api_key_cache=user_api_key_cache,
                         parent_otel_span=parent_otel_span,
+                        proxy_logging_obj=proxy_logging_obj,
                     )
 
                 global_proxy_spend = None
@@ -727,6 +732,7 @@ async def user_api_key_auth(
                     prisma_client=prisma_client,
                     user_api_key_cache=user_api_key_cache,
                     parent_otel_span=parent_otel_span,
+                    proxy_logging_obj=proxy_logging_obj,
                 )
                 if _end_user_object is not None:
                     end_user_params["allowed_model_region"] = (
