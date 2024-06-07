@@ -26,6 +26,16 @@ def print_verbose(print_statement):
         pass
 
 
+def _get_parent_otel_span_from_kwargs(kwargs: Optional[dict] = None):
+    try:
+        if kwargs is None:
+            return None
+        _metadata = kwargs.get("metadata") or {}
+        return _metadata.get("litellm_parent_otel_span")
+    except:
+        return None
+
+
 class BaseCache:
     def set_cache(self, key, value, **kwargs):
         raise NotImplementedError
@@ -233,6 +243,9 @@ class RedisCache(BaseCache):
                     service=ServiceTypes.REDIS,
                     duration=_duration,
                     call_type="increment_cache",
+                    start_time=start_time,
+                    end_time=end_time,
+                    parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
                 )
             )
             return result
@@ -276,6 +289,9 @@ class RedisCache(BaseCache):
                         service=ServiceTypes.REDIS,
                         duration=_duration,
                         call_type="async_scan_iter",
+                        start_time=start_time,
+                        end_time=end_time,
+                        # parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs)
                     )
                 )  # DO NOT SLOW DOWN CALL B/C OF THIS
             return keys
@@ -331,6 +347,9 @@ class RedisCache(BaseCache):
                         service=ServiceTypes.REDIS,
                         duration=_duration,
                         call_type="async_set_cache",
+                        start_time=start_time,
+                        end_time=end_time,
+                        parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
                     )
                 )
             except Exception as e:
@@ -389,6 +408,9 @@ class RedisCache(BaseCache):
                     service=ServiceTypes.REDIS,
                     duration=_duration,
                     call_type="async_set_cache_pipeline",
+                    start_time=start_time,
+                    end_time=end_time,
+                    # parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs)
                 )
             )
             return results
@@ -434,6 +456,9 @@ class RedisCache(BaseCache):
                         service=ServiceTypes.REDIS,
                         duration=_duration,
                         call_type="async_increment",
+                        start_time=start_time,
+                        end_time=end_time,
+                        parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
                     )
                 )
                 return result
@@ -540,6 +565,9 @@ class RedisCache(BaseCache):
                         service=ServiceTypes.REDIS,
                         duration=_duration,
                         call_type="async_get_cache",
+                        start_time=start_time,
+                        end_time=end_time,
+                        parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
                     )
                 )
                 return response
@@ -583,6 +611,9 @@ class RedisCache(BaseCache):
                     service=ServiceTypes.REDIS,
                     duration=_duration,
                     call_type="async_batch_get_cache",
+                    start_time=start_time,
+                    end_time=end_time,
+                    # parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs)
                 )
             )
 
