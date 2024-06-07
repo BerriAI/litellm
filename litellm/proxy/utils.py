@@ -83,15 +83,13 @@ def safe_deep_copy(data):
     if isinstance(data, dict):
         # remove litellm_parent_otel_span since this is not picklable
         if "metadata" in data and "litellm_parent_otel_span" in data["metadata"]:
-            data["metadata"].pop("litellm_parent_otel_span")
+            litellm_parent_otel_span = data["metadata"].pop("litellm_parent_otel_span")
     new_data = copy.deepcopy(data)
 
     # Step 2: re-add the litellm_parent_otel_span after doing a deep copy
     if isinstance(data, dict):
-        if "metadata" in data and "litellm_parent_otel_span" in data["metadata"]:
-            data["metadata"]["litellm_parent_otel_span"] = data["metadata"][
-                "litellm_parent_otel_span"
-            ]
+        if "metadata" in data:
+            data["metadata"]["litellm_parent_otel_span"] = litellm_parent_otel_span
     return new_data
 
 
