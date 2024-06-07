@@ -153,5 +153,3 @@ def test_bedrock_tool_calling_pt():
     converted_tools = _bedrock_tools_pt(tools=tools)
 
     print(converted_tools)
-
-    assert False
