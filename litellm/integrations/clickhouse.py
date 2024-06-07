@@ -297,6 +297,5 @@ class ClickhouseLogger:
             # make request to endpoint with payload
             verbose_logger.debug(f"Clickhouse Logger - final response = {response}")
         except Exception as e:
-            traceback.print_exc()
             verbose_logger.debug(f"Clickhouse - {str(e)}\n{traceback.format_exc()}")
             pass

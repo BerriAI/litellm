@@ -1,13 +1,13 @@
 # What this does?
 ## Checks if key is allowed to use the cache controls passed in to the completion() call
 
-from typing import Optional
 import litellm
+from litellm import verbose_logger
 from litellm.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.integrations.custom_logger import CustomLogger
 from fastapi import HTTPException
-import json, traceback
+import traceback
 
 
 class _PROXY_CacheControlCheck(CustomLogger):
@@ -54,4 +54,9 @@ class _PROXY_CacheControlCheck(CustomLogger):
         except HTTPException as e:
             raise e
         except Exception as e:
-            traceback.print_exc()
+            verbose_logger.error(
+                "litellm.proxy.hooks.cache_control_check.py::async_pre_call_hook(): Exception occured - {}".format(
+                    str(e)
+                )
+            )
+            verbose_logger.debug(traceback.format_exc())
