@@ -1,7 +1,7 @@
 from pydantic import BaseModel, Extra, Field, model_validator, Json, ConfigDict
 from dataclasses import fields
 import enum
-from typing import Optional, List, Union, Dict, Literal, Any, TYPE_CHECKING
+from typing import Optional, List, Union, Dict, Literal, Any, TypedDict, TYPE_CHECKING
 from datetime import datetime
 import uuid, json, sys, os
 from litellm.types.router import UpdateRouterConfig
@@ -1281,7 +1281,7 @@ class LiteLLM_SpendLogs(LiteLLMBase):
     startTime: Union[str, datetime, None]
     endTime: Union[str, datetime, None]
     user: Optional[str] = ""
-    metadata: Optional[dict] = {}
+    metadata: Optional[Json] = {}
     cache_hit: Optional[str] = "False"
     cache_key: Optional[str] = None
     request_tags: Optional[Json] = None
@@ -1459,3 +1459,39 @@ class AllCallbacks(LiteLLMBase):
         litellm_callback_params=["DD_API_KEY", "DD_SITE"],
         ui_callback_name="Datadog",
     )
+
+
+class SpendLogsMetadata(TypedDict):
+    """
+    Specific metadata k,v pairs logged to spendlogs for easier cost tracking
+    """
+
+    user_api_key: Optional[str]
+    user_api_key_alias: Optional[str]
+    user_api_key_team_id: Optional[str]
+    user_api_key_user_id: Optional[str]
+    user_api_key_team_alias: Optional[str]
+
+
+class SpendLogsPayload(TypedDict):
+    request_id: str
+    call_type: str
+    api_key: str
+    spend: float
+    total_tokens: int
+    prompt_tokens: int
+    completion_tokens: int
+    startTime: datetime
+    endTime: datetime
+    completionStartTime: Optional[datetime]
+    model: str
+    model_id: Optional[str]
+    model_group: Optional[str]
+    api_base: str
+    user: str
+    metadata: str  # json str
+    cache_hit: str
+    cache_key: str
+    request_tags: str  # json str
+    team_id: Optional[str]
+    end_user: Optional[str]
