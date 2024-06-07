@@ -64,6 +64,14 @@ def print_verbose(print_statement):
         print(f"LiteLLM Proxy: {print_statement}")  # noqa
 
 
+def safe_deep_copy(data):
+    if isinstance(data, dict):
+        # remove litellm_parent_otel_span since this is not picklable
+        data.pop("litellm_parent_otel_span", None)
+    new_data = copy.deepcopy(data)
+    return new_data
+
+
 def log_to_opentelemetry(func):
     @wraps(func)
     async def wrapper(*args, **kwargs):
@@ -312,7 +320,7 @@ class ProxyLogging:
         """
         Runs the CustomLogger's async_moderation_hook()
         """
-        new_data = copy.deepcopy(data)
+        new_data = safe_deep_copy(data)
         for callback in litellm.callbacks:
             try:
                 if isinstance(callback, CustomLogger):
