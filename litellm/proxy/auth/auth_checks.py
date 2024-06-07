@@ -48,6 +48,7 @@ def log_to_opentelemetry(func):
                 service=ServiceTypes.DB,
                 call_type=func.__name__,
                 parent_otel_span=kwargs["parent_otel_span"],
+                duration=0.0,
                 start_time=start_time,
                 end_time=end_time,
             )
