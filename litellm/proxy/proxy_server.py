@@ -4146,6 +4146,7 @@ async def chat_completion(
             general_settings=general_settings,
             user_api_key_dict=user_api_key_dict,
             version=version,
+            proxy_config=proxy_config,
         )
 
         data["model"] = (
@@ -4410,7 +4411,6 @@ async def completion(
         except:
             data = json.loads(body_str)
 
-        data["user"] = data.get("user", user_api_key_dict.user_id)
         data["model"] = (
             general_settings.get("completion_model", None)  # server default
             or user_model  # model name passed via cli args
@@ -4419,30 +4419,15 @@ async def completion(
         )
         if user_model:
             data["model"] = user_model
-        if "metadata" not in data:
-            data["metadata"] = {}
-        data["metadata"]["user_api_key"] = user_api_key_dict.api_key
-        data["metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
-        data["metadata"]["user_api_key_alias"] = getattr(
-            user_api_key_dict, "key_alias", None
+
+        data = await add_litellm_data_to_request(
+            data=data,
+            request=request,
+            general_settings=general_settings,
+            user_api_key_dict=user_api_key_dict,
+            version=version,
+            proxy_config=proxy_config,
         )
-        data["metadata"]["litellm_api_version"] = version
-        data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
-        data["metadata"]["user_api_key_team_id"] = getattr(
-            user_api_key_dict, "team_id", None
-        )
-        data["metadata"]["global_max_parallel_requests"] = general_settings.get(
-            "global_max_parallel_requests", None
-        )
-        data["metadata"]["user_api_key_team_alias"] = getattr(
-            user_api_key_dict, "team_alias", None
-        )
-        _headers = dict(request.headers)
-        _headers.pop(
-            "authorization", None
-        )  # do not store the original `sk-..` api key in the db
-        data["metadata"]["headers"] = _headers
-        data["metadata"]["endpoint"] = str(request.url)
 
         # override with user settings, these are params passed via cli
         if user_temperature:
@@ -4642,15 +4627,14 @@ async def embeddings(
         data = orjson.loads(body)
 
         # Include original request and headers in the data
-        data["proxy_server_request"] = {
-            "url": str(request.url),
-            "method": request.method,
-            "headers": dict(request.headers),
-            "body": copy.copy(data),  # use copy instead of deepcopy
-        }
-
-        if data.get("user", None) is None and user_api_key_dict.user_id is not None:
-            data["user"] = user_api_key_dict.user_id
+        data = await add_litellm_data_to_request(
+            data=data,
+            request=request,
+            general_settings=general_settings,
+            user_api_key_dict=user_api_key_dict,
+            version=version,
+            proxy_config=proxy_config,
+        )
 
         data["model"] = (
             general_settings.get("embedding_model", None)  # server default
@@ -4660,45 +4644,6 @@ async def embeddings(
         )
         if user_model:
             data["model"] = user_model
-        if "metadata" not in data:
-            data["metadata"] = {}
-        data["metadata"]["user_api_key"] = user_api_key_dict.api_key
-        data["metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
-        _headers = dict(request.headers)
-        _headers.pop(
-            "authorization", None
-        )  # do not store the original `sk-..` api key in the db
-        data["metadata"]["headers"] = _headers
-        data["metadata"]["litellm_api_version"] = version
-        data["metadata"]["user_api_key_alias"] = getattr(
-            user_api_key_dict, "key_alias", None
-        )
-        data["metadata"]["global_max_parallel_requests"] = general_settings.get(
-            "global_max_parallel_requests", None
-        )
-        data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
-        data["metadata"]["user_api_key_team_id"] = getattr(
-            user_api_key_dict, "team_id", None
-        )
-        data["metadata"]["user_api_key_team_alias"] = getattr(
-            user_api_key_dict, "team_alias", None
-        )
-        data["metadata"]["endpoint"] = str(request.url)
-
-        ### TEAM-SPECIFIC PARAMS ###
-        if user_api_key_dict.team_id is not None:
-            team_config = await proxy_config.load_team_config(
-                team_id=user_api_key_dict.team_id
-            )
-            if len(team_config) == 0:
-                pass
-            else:
-                team_id = team_config.pop("team_id", None)
-                data["metadata"]["team_id"] = team_id
-                data = {
-                    **team_config,
-                    **data,
-                }  # add the team-specific configs to the completion call
 
         ### MODEL ALIAS MAPPING ###
         # check if model name in model alias map
@@ -4853,15 +4798,14 @@ async def image_generation(
         data = orjson.loads(body)
 
         # Include original request and headers in the data
-        data["proxy_server_request"] = {
-            "url": str(request.url),
-            "method": request.method,
-            "headers": dict(request.headers),
-            "body": copy.copy(data),  # use copy instead of deepcopy
-        }
-
-        if data.get("user", None) is None and user_api_key_dict.user_id is not None:
-            data["user"] = user_api_key_dict.user_id
+        data = await add_litellm_data_to_request(
+            data=data,
+            request=request,
+            general_settings=general_settings,
+            user_api_key_dict=user_api_key_dict,
+            version=version,
+            proxy_config=proxy_config,
+        )
 
         data["model"] = (
             general_settings.get("image_generation_model", None)  # server default
@@ -4870,46 +4814,6 @@ async def image_generation(
         )
         if user_model:
             data["model"] = user_model
-
-        if "metadata" not in data:
-            data["metadata"] = {}
-        data["metadata"]["user_api_key"] = user_api_key_dict.api_key
-        data["metadata"]["litellm_api_version"] = version
-        data["metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
-        _headers = dict(request.headers)
-        _headers.pop(
-            "authorization", None
-        )  # do not store the original `sk-..` api key in the db
-        data["metadata"]["headers"] = _headers
-        data["metadata"]["user_api_key_alias"] = getattr(
-            user_api_key_dict, "key_alias", None
-        )
-        data["metadata"]["global_max_parallel_requests"] = general_settings.get(
-            "global_max_parallel_requests", None
-        )
-        data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
-        data["metadata"]["user_api_key_team_id"] = getattr(
-            user_api_key_dict, "team_id", None
-        )
-        data["metadata"]["user_api_key_team_alias"] = getattr(
-            user_api_key_dict, "team_alias", None
-        )
-        data["metadata"]["endpoint"] = str(request.url)
-
-        ### TEAM-SPECIFIC PARAMS ###
-        if user_api_key_dict.team_id is not None:
-            team_config = await proxy_config.load_team_config(
-                team_id=user_api_key_dict.team_id
-            )
-            if len(team_config) == 0:
-                pass
-            else:
-                team_id = team_config.pop("team_id", None)
-                data["metadata"]["team_id"] = team_id
-                data = {
-                    **team_config,
-                    **data,
-                }  # add the team-specific configs to the completion call
 
         ### MODEL ALIAS MAPPING ###
         # check if model name in model alias map
@@ -5035,58 +4939,20 @@ async def audio_speech(
         data = orjson.loads(body)
 
         # Include original request and headers in the data
-        data["proxy_server_request"] = {  # type: ignore
-            "url": str(request.url),
-            "method": request.method,
-            "headers": dict(request.headers),
-            "body": copy.copy(data),  # use copy instead of deepcopy
-        }
+        data = await add_litellm_data_to_request(
+            data=data,
+            request=request,
+            general_settings=general_settings,
+            user_api_key_dict=user_api_key_dict,
+            version=version,
+            proxy_config=proxy_config,
+        )
 
         if data.get("user", None) is None and user_api_key_dict.user_id is not None:
             data["user"] = user_api_key_dict.user_id
 
         if user_model:
             data["model"] = user_model
-
-        if "metadata" not in data:
-            data["metadata"] = {}
-        data["metadata"]["user_api_key"] = user_api_key_dict.api_key
-        data["metadata"]["litellm_api_version"] = version
-        data["metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
-        _headers = dict(request.headers)
-        _headers.pop(
-            "authorization", None
-        )  # do not store the original `sk-..` api key in the db
-        data["metadata"]["headers"] = _headers
-        data["metadata"]["user_api_key_alias"] = getattr(
-            user_api_key_dict, "key_alias", None
-        )
-        data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
-        data["metadata"]["user_api_key_team_id"] = getattr(
-            user_api_key_dict, "team_id", None
-        )
-        data["metadata"]["global_max_parallel_requests"] = general_settings.get(
-            "global_max_parallel_requests", None
-        )
-        data["metadata"]["user_api_key_team_alias"] = getattr(
-            user_api_key_dict, "team_alias", None
-        )
-        data["metadata"]["endpoint"] = str(request.url)
-
-        ### TEAM-SPECIFIC PARAMS ###
-        if user_api_key_dict.team_id is not None:
-            team_config = await proxy_config.load_team_config(
-                team_id=user_api_key_dict.team_id
-            )
-            if len(team_config) == 0:
-                pass
-            else:
-                team_id = team_config.pop("team_id", None)
-                data["metadata"]["team_id"] = team_id
-                data = {
-                    **team_config,
-                    **data,
-                }  # add the team-specific configs to the completion call
 
         router_model_names = llm_router.model_names if llm_router is not None else []
 
@@ -5200,12 +5066,14 @@ async def audio_transcriptions(
         data = {key: value for key, value in form_data.items() if key != "file"}
 
         # Include original request and headers in the data
-        data["proxy_server_request"] = {  # type: ignore
-            "url": str(request.url),
-            "method": request.method,
-            "headers": dict(request.headers),
-            "body": copy.copy(data),  # use copy instead of deepcopy
-        }
+        data = await add_litellm_data_to_request(
+            data=data,
+            request=request,
+            general_settings=general_settings,
+            user_api_key_dict=user_api_key_dict,
+            version=version,
+            proxy_config=proxy_config,
+        )
 
         if data.get("user", None) is None and user_api_key_dict.user_id is not None:
             data["user"] = user_api_key_dict.user_id
@@ -5217,47 +5085,6 @@ async def audio_transcriptions(
         )
         if user_model:
             data["model"] = user_model
-
-        if "metadata" not in data:
-            data["metadata"] = {}
-        data["metadata"]["user_api_key"] = user_api_key_dict.api_key
-        data["metadata"]["litellm_api_version"] = version
-        data["metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
-        _headers = dict(request.headers)
-        _headers.pop(
-            "authorization", None
-        )  # do not store the original `sk-..` api key in the db
-        data["metadata"]["headers"] = _headers
-        data["metadata"]["user_api_key_alias"] = getattr(
-            user_api_key_dict, "key_alias", None
-        )
-        data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
-        data["metadata"]["user_api_key_team_id"] = getattr(
-            user_api_key_dict, "team_id", None
-        )
-        data["metadata"]["global_max_parallel_requests"] = general_settings.get(
-            "global_max_parallel_requests", None
-        )
-        data["metadata"]["user_api_key_team_alias"] = getattr(
-            user_api_key_dict, "team_alias", None
-        )
-        data["metadata"]["endpoint"] = str(request.url)
-        data["metadata"]["file_name"] = file.filename
-
-        ### TEAM-SPECIFIC PARAMS ###
-        if user_api_key_dict.team_id is not None:
-            team_config = await proxy_config.load_team_config(
-                team_id=user_api_key_dict.team_id
-            )
-            if len(team_config) == 0:
-                pass
-            else:
-                team_id = team_config.pop("team_id", None)
-                data["metadata"]["team_id"] = team_id
-                data = {
-                    **team_config,
-                    **data,
-                }  # add the team-specific configs to the completion call
 
         router_model_names = llm_router.model_names if llm_router is not None else []
 
@@ -5410,55 +5237,14 @@ async def get_assistants(
         body = await request.body()
 
         # Include original request and headers in the data
-        data["proxy_server_request"] = {  # type: ignore
-            "url": str(request.url),
-            "method": request.method,
-            "headers": dict(request.headers),
-            "body": copy.copy(data),  # use copy instead of deepcopy
-        }
-
-        if data.get("user", None) is None and user_api_key_dict.user_id is not None:
-            data["user"] = user_api_key_dict.user_id
-
-        if "metadata" not in data:
-            data["metadata"] = {}
-        data["metadata"]["user_api_key"] = user_api_key_dict.api_key
-        data["metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
-        data["metadata"]["litellm_api_version"] = version
-        _headers = dict(request.headers)
-        _headers.pop(
-            "authorization", None
-        )  # do not store the original `sk-..` api key in the db
-        data["metadata"]["headers"] = _headers
-        data["metadata"]["user_api_key_alias"] = getattr(
-            user_api_key_dict, "key_alias", None
+        data = await add_litellm_data_to_request(
+            data=data,
+            request=request,
+            general_settings=general_settings,
+            user_api_key_dict=user_api_key_dict,
+            version=version,
+            proxy_config=proxy_config,
         )
-        data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
-        data["metadata"]["user_api_key_team_id"] = getattr(
-            user_api_key_dict, "team_id", None
-        )
-        data["metadata"]["global_max_parallel_requests"] = general_settings.get(
-            "global_max_parallel_requests", None
-        )
-        data["metadata"]["user_api_key_team_alias"] = getattr(
-            user_api_key_dict, "team_alias", None
-        )
-        data["metadata"]["endpoint"] = str(request.url)
-
-        ### TEAM-SPECIFIC PARAMS ###
-        if user_api_key_dict.team_id is not None:
-            team_config = await proxy_config.load_team_config(
-                team_id=user_api_key_dict.team_id
-            )
-            if len(team_config) == 0:
-                pass
-            else:
-                team_id = team_config.pop("team_id", None)
-                data["metadata"]["team_id"] = team_id
-                data = {
-                    **team_config,
-                    **data,
-                }  # add the team-specific configs to the completion call
 
         # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
         if llm_router is None:
@@ -5539,55 +5325,14 @@ async def create_threads(
         body = await request.body()
 
         # Include original request and headers in the data
-        data["proxy_server_request"] = {  # type: ignore
-            "url": str(request.url),
-            "method": request.method,
-            "headers": dict(request.headers),
-            "body": copy.copy(data),  # use copy instead of deepcopy
-        }
-
-        if data.get("user", None) is None and user_api_key_dict.user_id is not None:
-            data["user"] = user_api_key_dict.user_id
-
-        if "litellm_metadata" not in data:
-            data["litellm_metadata"] = {}
-        data["litellm_metadata"]["user_api_key"] = user_api_key_dict.api_key
-        data["metadata"]["litellm_api_version"] = version
-        data["litellm_metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
-        _headers = dict(request.headers)
-        _headers.pop(
-            "authorization", None
-        )  # do not store the original `sk-..` api key in the db
-        data["litellm_metadata"]["headers"] = _headers
-        data["litellm_metadata"]["user_api_key_alias"] = getattr(
-            user_api_key_dict, "key_alias", None
+        data = await add_litellm_data_to_request(
+            data=data,
+            request=request,
+            general_settings=general_settings,
+            user_api_key_dict=user_api_key_dict,
+            version=version,
+            proxy_config=proxy_config,
         )
-        data["litellm_metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
-        data["litellm_metadata"]["user_api_key_team_id"] = getattr(
-            user_api_key_dict, "team_id", None
-        )
-        data["litellm_metadata"]["global_max_parallel_requests"] = general_settings.get(
-            "global_max_parallel_requests", None
-        )
-        data["litellm_metadata"]["user_api_key_team_alias"] = getattr(
-            user_api_key_dict, "team_alias", None
-        )
-        data["litellm_metadata"]["endpoint"] = str(request.url)
-
-        ### TEAM-SPECIFIC PARAMS ###
-        if user_api_key_dict.team_id is not None:
-            team_config = await proxy_config.load_team_config(
-                team_id=user_api_key_dict.team_id
-            )
-            if len(team_config) == 0:
-                pass
-            else:
-                team_id = team_config.pop("team_id", None)
-                data["litellm_metadata"]["team_id"] = team_id
-                data = {
-                    **team_config,
-                    **data,
-                }  # add the team-specific configs to the completion call
 
         # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
         if llm_router is None:
@@ -5667,55 +5412,14 @@ async def get_thread(
     try:
 
         # Include original request and headers in the data
-        data["proxy_server_request"] = {  # type: ignore
-            "url": str(request.url),
-            "method": request.method,
-            "headers": dict(request.headers),
-            "body": copy.copy(data),  # use copy instead of deepcopy
-        }
-
-        if data.get("user", None) is None and user_api_key_dict.user_id is not None:
-            data["user"] = user_api_key_dict.user_id
-
-        if "metadata" not in data:
-            data["metadata"] = {}
-        data["metadata"]["user_api_key"] = user_api_key_dict.api_key
-        data["metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
-        _headers = dict(request.headers)
-        _headers.pop(
-            "authorization", None
-        )  # do not store the original `sk-..` api key in the db
-        data["metadata"]["headers"] = _headers
-        data["metadata"]["litellm_api_version"] = version
-        data["metadata"]["user_api_key_alias"] = getattr(
-            user_api_key_dict, "key_alias", None
+        data = await add_litellm_data_to_request(
+            data=data,
+            request=request,
+            general_settings=general_settings,
+            user_api_key_dict=user_api_key_dict,
+            version=version,
+            proxy_config=proxy_config,
         )
-        data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
-        data["metadata"]["user_api_key_team_id"] = getattr(
-            user_api_key_dict, "team_id", None
-        )
-        data["metadata"]["global_max_parallel_requests"] = general_settings.get(
-            "global_max_parallel_requests", None
-        )
-        data["metadata"]["user_api_key_team_alias"] = getattr(
-            user_api_key_dict, "team_alias", None
-        )
-        data["metadata"]["endpoint"] = str(request.url)
-
-        ### TEAM-SPECIFIC PARAMS ###
-        if user_api_key_dict.team_id is not None:
-            team_config = await proxy_config.load_team_config(
-                team_id=user_api_key_dict.team_id
-            )
-            if len(team_config) == 0:
-                pass
-            else:
-                team_id = team_config.pop("team_id", None)
-                data["metadata"]["team_id"] = team_id
-                data = {
-                    **team_config,
-                    **data,
-                }  # add the team-specific configs to the completion call
 
         # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
         if llm_router is None:
@@ -5798,55 +5502,14 @@ async def add_messages(
         data = orjson.loads(body)
 
         # Include original request and headers in the data
-        data["proxy_server_request"] = {  # type: ignore
-            "url": str(request.url),
-            "method": request.method,
-            "headers": dict(request.headers),
-            "body": copy.copy(data),  # use copy instead of deepcopy
-        }
-
-        if data.get("user", None) is None and user_api_key_dict.user_id is not None:
-            data["user"] = user_api_key_dict.user_id
-
-        if "litellm_metadata" not in data:
-            data["litellm_metadata"] = {}
-        data["litellm_metadata"]["user_api_key"] = user_api_key_dict.api_key
-        data["litellm_metadata"]["litellm_api_version"] = version
-        data["litellm_metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
-        _headers = dict(request.headers)
-        _headers.pop(
-            "authorization", None
-        )  # do not store the original `sk-..` api key in the db
-        data["litellm_metadata"]["headers"] = _headers
-        data["litellm_metadata"]["user_api_key_alias"] = getattr(
-            user_api_key_dict, "key_alias", None
+        data = await add_litellm_data_to_request(
+            data=data,
+            request=request,
+            general_settings=general_settings,
+            user_api_key_dict=user_api_key_dict,
+            version=version,
+            proxy_config=proxy_config,
         )
-        data["litellm_metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
-        data["litellm_metadata"]["user_api_key_team_id"] = getattr(
-            user_api_key_dict, "team_id", None
-        )
-        data["litellm_metadata"]["global_max_parallel_requests"] = general_settings.get(
-            "global_max_parallel_requests", None
-        )
-        data["litellm_metadata"]["user_api_key_team_alias"] = getattr(
-            user_api_key_dict, "team_alias", None
-        )
-        data["litellm_metadata"]["endpoint"] = str(request.url)
-
-        ### TEAM-SPECIFIC PARAMS ###
-        if user_api_key_dict.team_id is not None:
-            team_config = await proxy_config.load_team_config(
-                team_id=user_api_key_dict.team_id
-            )
-            if len(team_config) == 0:
-                pass
-            else:
-                team_id = team_config.pop("team_id", None)
-                data["litellm_metadata"]["team_id"] = team_id
-                data = {
-                    **team_config,
-                    **data,
-                }  # add the team-specific configs to the completion call
 
         # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
         if llm_router is None:
@@ -5925,55 +5588,14 @@ async def get_messages(
     data: Dict = {}
     try:
         # Include original request and headers in the data
-        data["proxy_server_request"] = {  # type: ignore
-            "url": str(request.url),
-            "method": request.method,
-            "headers": dict(request.headers),
-            "body": copy.copy(data),  # use copy instead of deepcopy
-        }
-
-        if data.get("user", None) is None and user_api_key_dict.user_id is not None:
-            data["user"] = user_api_key_dict.user_id
-
-        if "metadata" not in data:
-            data["metadata"] = {}
-        data["metadata"]["user_api_key"] = user_api_key_dict.api_key
-        data["metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
-        _headers = dict(request.headers)
-        _headers.pop(
-            "authorization", None
-        )  # do not store the original `sk-..` api key in the db
-        data["metadata"]["headers"] = _headers
-        data["metadata"]["litellm_api_version"] = version
-        data["metadata"]["user_api_key_alias"] = getattr(
-            user_api_key_dict, "key_alias", None
+        data = await add_litellm_data_to_request(
+            data=data,
+            request=request,
+            general_settings=general_settings,
+            user_api_key_dict=user_api_key_dict,
+            version=version,
+            proxy_config=proxy_config,
         )
-        data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
-        data["metadata"]["user_api_key_team_id"] = getattr(
-            user_api_key_dict, "team_id", None
-        )
-        data["metadata"]["global_max_parallel_requests"] = general_settings.get(
-            "global_max_parallel_requests", None
-        )
-        data["metadata"]["user_api_key_team_alias"] = getattr(
-            user_api_key_dict, "team_alias", None
-        )
-        data["metadata"]["endpoint"] = str(request.url)
-
-        ### TEAM-SPECIFIC PARAMS ###
-        if user_api_key_dict.team_id is not None:
-            team_config = await proxy_config.load_team_config(
-                team_id=user_api_key_dict.team_id
-            )
-            if len(team_config) == 0:
-                pass
-            else:
-                team_id = team_config.pop("team_id", None)
-                data["metadata"]["team_id"] = team_id
-                data = {
-                    **team_config,
-                    **data,
-                }  # add the team-specific configs to the completion call
 
         # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
         if llm_router is None:
@@ -6054,55 +5676,14 @@ async def run_thread(
         body = await request.body()
         data = orjson.loads(body)
         # Include original request and headers in the data
-        data["proxy_server_request"] = {  # type: ignore
-            "url": str(request.url),
-            "method": request.method,
-            "headers": dict(request.headers),
-            "body": copy.copy(data),  # use copy instead of deepcopy
-        }
-
-        if data.get("user", None) is None and user_api_key_dict.user_id is not None:
-            data["user"] = user_api_key_dict.user_id
-
-        if "litellm_metadata" not in data:
-            data["litellm_metadata"] = {}
-        data["litellm_metadata"]["user_api_key"] = user_api_key_dict.api_key
-        data["litellm_metadata"]["litellm_api_version"] = version
-        data["litellm_metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
-        _headers = dict(request.headers)
-        _headers.pop(
-            "authorization", None
-        )  # do not store the original `sk-..` api key in the db
-        data["litellm_metadata"]["headers"] = _headers
-        data["litellm_metadata"]["user_api_key_alias"] = getattr(
-            user_api_key_dict, "key_alias", None
+        data = await add_litellm_data_to_request(
+            data=data,
+            request=request,
+            general_settings=general_settings,
+            user_api_key_dict=user_api_key_dict,
+            version=version,
+            proxy_config=proxy_config,
         )
-        data["litellm_metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
-        data["litellm_metadata"]["user_api_key_team_id"] = getattr(
-            user_api_key_dict, "team_id", None
-        )
-        data["litellm_metadata"]["global_max_parallel_requests"] = general_settings.get(
-            "global_max_parallel_requests", None
-        )
-        data["litellm_metadata"]["user_api_key_team_alias"] = getattr(
-            user_api_key_dict, "team_alias", None
-        )
-        data["litellm_metadata"]["endpoint"] = str(request.url)
-
-        ### TEAM-SPECIFIC PARAMS ###
-        if user_api_key_dict.team_id is not None:
-            team_config = await proxy_config.load_team_config(
-                team_id=user_api_key_dict.team_id
-            )
-            if len(team_config) == 0:
-                pass
-            else:
-                team_id = team_config.pop("team_id", None)
-                data["litellm_metadata"]["team_id"] = team_id
-                data = {
-                    **team_config,
-                    **data,
-                }  # add the team-specific configs to the completion call
 
         # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
         if llm_router is None:
@@ -6214,55 +5795,14 @@ async def create_batch(
         data = {key: value for key, value in form_data.items() if key != "file"}
 
         # Include original request and headers in the data
-        data["proxy_server_request"] = {  # type: ignore
-            "url": str(request.url),
-            "method": request.method,
-            "headers": dict(request.headers),
-            "body": copy.copy(data),  # use copy instead of deepcopy
-        }
-
-        if data.get("user", None) is None and user_api_key_dict.user_id is not None:
-            data["user"] = user_api_key_dict.user_id
-
-        if "metadata" not in data:
-            data["metadata"] = {}
-        data["metadata"]["user_api_key"] = user_api_key_dict.api_key
-        data["metadata"]["litellm_api_version"] = version
-        data["metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
-        _headers = dict(request.headers)
-        _headers.pop(
-            "authorization", None
-        )  # do not store the original `sk-..` api key in the db
-        data["metadata"]["headers"] = _headers
-        data["metadata"]["user_api_key_alias"] = getattr(
-            user_api_key_dict, "key_alias", None
+        data = await add_litellm_data_to_request(
+            data=data,
+            request=request,
+            general_settings=general_settings,
+            user_api_key_dict=user_api_key_dict,
+            version=version,
+            proxy_config=proxy_config,
         )
-        data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
-        data["metadata"]["user_api_key_team_id"] = getattr(
-            user_api_key_dict, "team_id", None
-        )
-        data["metadata"]["global_max_parallel_requests"] = general_settings.get(
-            "global_max_parallel_requests", None
-        )
-        data["metadata"]["user_api_key_team_alias"] = getattr(
-            user_api_key_dict, "team_alias", None
-        )
-        data["metadata"]["endpoint"] = str(request.url)
-
-        ### TEAM-SPECIFIC PARAMS ###
-        if user_api_key_dict.team_id is not None:
-            team_config = await proxy_config.load_team_config(
-                team_id=user_api_key_dict.team_id
-            )
-            if len(team_config) == 0:
-                pass
-            else:
-                team_id = team_config.pop("team_id", None)
-                data["metadata"]["team_id"] = team_id
-                data = {
-                    **team_config,
-                    **data,
-                }  # add the team-specific configs to the completion call
 
         _create_batch_data = CreateBatchRequest(**data)
 
@@ -6355,55 +5895,14 @@ async def retrieve_batch(
         data = {key: value for key, value in form_data.items() if key != "file"}
 
         # Include original request and headers in the data
-        data["proxy_server_request"] = {  # type: ignore
-            "url": str(request.url),
-            "method": request.method,
-            "headers": dict(request.headers),
-            "body": copy.copy(data),  # use copy instead of deepcopy
-        }
-
-        if data.get("user", None) is None and user_api_key_dict.user_id is not None:
-            data["user"] = user_api_key_dict.user_id
-
-        if "metadata" not in data:
-            data["metadata"] = {}
-        data["metadata"]["user_api_key"] = user_api_key_dict.api_key
-        data["metadata"]["litellm_api_version"] = version
-        data["metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
-        _headers = dict(request.headers)
-        _headers.pop(
-            "authorization", None
-        )  # do not store the original `sk-..` api key in the db
-        data["metadata"]["headers"] = _headers
-        data["metadata"]["user_api_key_alias"] = getattr(
-            user_api_key_dict, "key_alias", None
+        data = await add_litellm_data_to_request(
+            data=data,
+            request=request,
+            general_settings=general_settings,
+            user_api_key_dict=user_api_key_dict,
+            version=version,
+            proxy_config=proxy_config,
         )
-        data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
-        data["metadata"]["user_api_key_team_id"] = getattr(
-            user_api_key_dict, "team_id", None
-        )
-        data["metadata"]["global_max_parallel_requests"] = general_settings.get(
-            "global_max_parallel_requests", None
-        )
-        data["metadata"]["user_api_key_team_alias"] = getattr(
-            user_api_key_dict, "team_alias", None
-        )
-        data["metadata"]["endpoint"] = str(request.url)
-
-        ### TEAM-SPECIFIC PARAMS ###
-        if user_api_key_dict.team_id is not None:
-            team_config = await proxy_config.load_team_config(
-                team_id=user_api_key_dict.team_id
-            )
-            if len(team_config) == 0:
-                pass
-            else:
-                team_id = team_config.pop("team_id", None)
-                data["metadata"]["team_id"] = team_id
-                data = {
-                    **team_config,
-                    **data,
-                }  # add the team-specific configs to the completion call
 
         _retrieve_batch_request = RetrieveBatchRequest(
             batch_id=batch_id,
@@ -6510,55 +6009,14 @@ async def create_file(
         data = {key: value for key, value in form_data.items() if key != "file"}
 
         # Include original request and headers in the data
-        data["proxy_server_request"] = {  # type: ignore
-            "url": str(request.url),
-            "method": request.method,
-            "headers": dict(request.headers),
-            "body": copy.copy(data),  # use copy instead of deepcopy
-        }
-
-        if data.get("user", None) is None and user_api_key_dict.user_id is not None:
-            data["user"] = user_api_key_dict.user_id
-
-        if "metadata" not in data:
-            data["metadata"] = {}
-        data["metadata"]["user_api_key"] = user_api_key_dict.api_key
-        data["metadata"]["litellm_api_version"] = version
-        data["metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
-        _headers = dict(request.headers)
-        _headers.pop(
-            "authorization", None
-        )  # do not store the original `sk-..` api key in the db
-        data["metadata"]["headers"] = _headers
-        data["metadata"]["user_api_key_alias"] = getattr(
-            user_api_key_dict, "key_alias", None
+        data = await add_litellm_data_to_request(
+            data=data,
+            request=request,
+            general_settings=general_settings,
+            user_api_key_dict=user_api_key_dict,
+            version=version,
+            proxy_config=proxy_config,
         )
-        data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
-        data["metadata"]["user_api_key_team_id"] = getattr(
-            user_api_key_dict, "team_id", None
-        )
-        data["metadata"]["global_max_parallel_requests"] = general_settings.get(
-            "global_max_parallel_requests", None
-        )
-        data["metadata"]["user_api_key_team_alias"] = getattr(
-            user_api_key_dict, "team_alias", None
-        )
-        data["metadata"]["endpoint"] = str(request.url)
-
-        ### TEAM-SPECIFIC PARAMS ###
-        if user_api_key_dict.team_id is not None:
-            team_config = await proxy_config.load_team_config(
-                team_id=user_api_key_dict.team_id
-            )
-            if len(team_config) == 0:
-                pass
-            else:
-                team_id = team_config.pop("team_id", None)
-                data["metadata"]["team_id"] = team_id
-                data = {
-                    **team_config,
-                    **data,
-                }  # add the team-specific configs to the completion call
 
         _create_file_request = CreateFileRequest()
 
@@ -6648,15 +6106,14 @@ async def moderations(
         data = orjson.loads(body)
 
         # Include original request and headers in the data
-        data["proxy_server_request"] = {
-            "url": str(request.url),
-            "method": request.method,
-            "headers": dict(request.headers),
-            "body": copy.copy(data),  # use copy instead of deepcopy
-        }
-
-        if data.get("user", None) is None and user_api_key_dict.user_id is not None:
-            data["user"] = user_api_key_dict.user_id
+        data = await add_litellm_data_to_request(
+            data=data,
+            request=request,
+            general_settings=general_settings,
+            user_api_key_dict=user_api_key_dict,
+            version=version,
+            proxy_config=proxy_config,
+        )
 
         data["model"] = (
             general_settings.get("moderation_model", None)  # server default
@@ -6665,46 +6122,6 @@ async def moderations(
         )
         if user_model:
             data["model"] = user_model
-
-        if "metadata" not in data:
-            data["metadata"] = {}
-        data["metadata"]["user_api_key"] = user_api_key_dict.api_key
-        data["metadata"]["litellm_api_version"] = version
-        data["metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
-        _headers = dict(request.headers)
-        _headers.pop(
-            "authorization", None
-        )  # do not store the original `sk-..` api key in the db
-        data["metadata"]["headers"] = _headers
-        data["metadata"]["global_max_parallel_requests"] = general_settings.get(
-            "global_max_parallel_requests", None
-        )
-        data["metadata"]["user_api_key_alias"] = getattr(
-            user_api_key_dict, "key_alias", None
-        )
-        data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
-        data["metadata"]["user_api_key_team_id"] = getattr(
-            user_api_key_dict, "team_id", None
-        )
-        data["metadata"]["user_api_key_team_alias"] = getattr(
-            user_api_key_dict, "team_alias", None
-        )
-        data["metadata"]["endpoint"] = str(request.url)
-
-        ### TEAM-SPECIFIC PARAMS ###
-        if user_api_key_dict.team_id is not None:
-            team_config = await proxy_config.load_team_config(
-                team_id=user_api_key_dict.team_id
-            )
-            if len(team_config) == 0:
-                pass
-            else:
-                team_id = team_config.pop("team_id", None)
-                data["metadata"]["team_id"] = team_id
-                data = {
-                    **team_config,
-                    **data,
-                }  # add the team-specific configs to the completion call
 
         router_model_names = llm_router.model_names if llm_router is not None else []
 
