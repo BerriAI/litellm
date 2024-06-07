@@ -2163,6 +2163,7 @@ def test_completion_azure_key_completion_arg():
             logprobs=True,
             max_tokens=10,
         )
+
         print(f"response: {response}")
 
         print("Hidden Params", response._hidden_params)

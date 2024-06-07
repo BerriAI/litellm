@@ -1372,8 +1372,12 @@ class Logging:
                             callback_func=callback,
                         )
                 except Exception as e:
-                    traceback.print_exc()
-                    print_verbose(
+                    verbose_logger.error(
+                        "litellm.Logging.pre_call(): Exception occured - {}".format(
+                            str(e)
+                        )
+                    )
+                    verbose_logger.debug(
                         f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while input logging with integrations {traceback.format_exc()}"
                     )
                     print_verbose(
@@ -9823,8 +9827,7 @@ def exception_type(
             elif custom_llm_provider == "azure":
                 if "Internal server error" in error_str:
                     exception_mapping_worked = True
-                    raise APIError(
-                        status_code=500,
+                    raise litellm.InternalServerError(
                         message=f"AzureException Internal server error - {original_exception.message}",
                         llm_provider="azure",
                         model=model,
@@ -10552,7 +10555,12 @@ class CustomStreamWrapper:
                 "finish_reason": finish_reason,
             }
         except Exception as e:
-            traceback.print_exc()
+            verbose_logger.error(
+                "litellm.CustomStreamWrapper.handle_predibase_chunk(): Exception occured - {}".format(
+                    str(e)
+                )
+            )
+            verbose_logger.debug(traceback.format_exc())
             raise e
 
     def handle_huggingface_chunk(self, chunk):
@@ -10596,7 +10604,12 @@ class CustomStreamWrapper:
                 "finish_reason": finish_reason,
             }
         except Exception as e:
-            traceback.print_exc()
+            verbose_logger.error(
+                "litellm.CustomStreamWrapper.handle_huggingface_chunk(): Exception occured - {}".format(
+                    str(e)
+                )
+            )
+            verbose_logger.debug(traceback.format_exc())
             raise e
 
     def handle_ai21_chunk(self, chunk):  # fake streaming
@@ -10831,7 +10844,12 @@ class CustomStreamWrapper:
                 "usage": usage,
             }
         except Exception as e:
-            traceback.print_exc()
+            verbose_logger.error(
+                "litellm.CustomStreamWrapper.handle_openai_chat_completion_chunk(): Exception occured - {}".format(
+                    str(e)
+                )
+            )
+            verbose_logger.debug(traceback.format_exc())
             raise e
 
     def handle_azure_text_completion_chunk(self, chunk):
@@ -10912,7 +10930,12 @@ class CustomStreamWrapper:
             else:
                 return ""
         except:
-            traceback.print_exc()
+            verbose_logger.error(
+                "litellm.CustomStreamWrapper.handle_baseten_chunk(): Exception occured - {}".format(
+                    str(e)
+                )
+            )
+            verbose_logger.debug(traceback.format_exc())
             return ""
 
     def handle_cloudlfare_stream(self, chunk):
@@ -11111,7 +11134,12 @@ class CustomStreamWrapper:
                 "is_finished": True,
             }
         except:
-            traceback.print_exc()
+            verbose_logger.error(
+                "litellm.CustomStreamWrapper.handle_clarifai_chunk(): Exception occured - {}".format(
+                    str(e)
+                )
+            )
+            verbose_logger.debug(traceback.format_exc())
             return ""
 
     def model_response_creator(self):
@@ -11583,7 +11611,12 @@ class CustomStreamWrapper:
                                         tool["type"] = "function"
                             model_response.choices[0].delta = Delta(**_json_delta)
                         except Exception as e:
-                            traceback.print_exc()
+                            verbose_logger.error(
+                                "litellm.CustomStreamWrapper.chunk_creator(): Exception occured - {}".format(
+                                    str(e)
+                                )
+                            )
+                            verbose_logger.debug(traceback.format_exc())
                             model_response.choices[0].delta = Delta()
                     else:
                         try:
