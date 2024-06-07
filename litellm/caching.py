@@ -294,7 +294,6 @@ class RedisCache(BaseCache):
                         call_type="async_scan_iter",
                         start_time=start_time,
                         end_time=end_time,
-                        # parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs)
                     )
                 )  # DO NOT SLOW DOWN CALL B/C OF THIS
             return keys
@@ -311,7 +310,6 @@ class RedisCache(BaseCache):
                     call_type="async_scan_iter",
                     start_time=start_time,
                     end_time=end_time,
-                    # parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
                 )
             )
             raise e
@@ -384,7 +382,7 @@ class RedisCache(BaseCache):
                     value,
                 )
 
-    async def async_set_cache_pipeline(self, cache_list, ttl=None):
+    async def async_set_cache_pipeline(self, cache_list, ttl=None, **kwargs):
         """
         Use Redis Pipelines for bulk write operations
         """
@@ -424,7 +422,7 @@ class RedisCache(BaseCache):
                     call_type="async_set_cache_pipeline",
                     start_time=start_time,
                     end_time=end_time,
-                    # parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs)
+                    parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
                 )
             )
             return results
@@ -440,7 +438,7 @@ class RedisCache(BaseCache):
                     call_type="async_set_cache_pipeline",
                     start_time=start_time,
                     end_time=end_time,
-                    # parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
+                    parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
                 )
             )
 
@@ -636,7 +634,6 @@ class RedisCache(BaseCache):
                     call_type="async_batch_get_cache",
                     start_time=start_time,
                     end_time=end_time,
-                    # parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs)
                 )
             )
 
@@ -664,7 +661,6 @@ class RedisCache(BaseCache):
                     call_type="async_batch_get_cache",
                     start_time=start_time,
                     end_time=end_time,
-                    # parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
                 )
             )
             print_verbose(f"Error occurred in pipeline read - {str(e)}")
@@ -1452,7 +1448,7 @@ class DualCache(BaseCache):
 
             if self.redis_cache is not None and local_only == False:
                 await self.redis_cache.async_set_cache_pipeline(
-                    cache_list=cache_list, ttl=kwargs.get("ttl", None)
+                    cache_list=cache_list, ttl=kwargs.get("ttl", None), **kwargs
                 )
         except Exception as e:
             verbose_logger.error(f"LiteLLM Cache: Excepton async add_cache: {str(e)}")
