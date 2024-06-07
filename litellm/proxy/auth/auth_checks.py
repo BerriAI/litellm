@@ -18,12 +18,43 @@ from litellm.proxy._types import (
     LitellmUserRoles,
 )
 from typing import Optional, Literal, Union
-from litellm.proxy.utils import PrismaClient
+from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.caching import DualCache
 import litellm
 from opentelemetry.trace import Span
+from functools import wraps
+from litellm.types.services import ServiceLoggerPayload, ServiceTypes
+from datetime import datetime
 
 all_routes = LiteLLMRoutes.openai_routes.value + LiteLLMRoutes.management_routes.value
+
+
+def log_to_opentelemetry(func):
+    @wraps(func)
+    async def wrapper(*args, **kwargs):
+        start_time = datetime.now()
+        result = await func(*args, **kwargs)
+        end_time = datetime.now()
+
+        # Log to OTEL only if "parent_otel_span" is in kwargs and is not None
+        if (
+            "parent_otel_span" in kwargs
+            and kwargs["parent_otel_span"] is not None
+            and "proxy_logging_obj" in kwargs
+            and kwargs["proxy_logging_obj"] is not None
+        ):
+            proxy_logging_obj = kwargs["proxy_logging_obj"]
+            await proxy_logging_obj.service_logging_obj.async_service_success_hook(
+                service=ServiceTypes.DB,
+                call_type=func.__name__,
+                parent_otel_span=kwargs["parent_otel_span"],
+                start_time=start_time,
+                end_time=end_time,
+            )
+        # end of logging to otel
+        return result
+
+    return wrapper
 
 
 def common_checks(
@@ -183,11 +214,13 @@ def get_actual_routes(allowed_routes: list) -> list:
     return actual_routes
 
 
+@log_to_opentelemetry
 async def get_end_user_object(
     end_user_id: Optional[str],
     prisma_client: Optional[PrismaClient],
     user_api_key_cache: DualCache,
     parent_otel_span: Optional[Span] = None,
+    proxy_logging_obj: Optional[ProxyLogging] = None,
 ) -> Optional[LiteLLM_EndUserTable]:
     """
     Returns end user object, if in db.
@@ -247,12 +280,14 @@ async def get_end_user_object(
         return None
 
 
+@log_to_opentelemetry
 async def get_user_object(
     user_id: str,
     prisma_client: Optional[PrismaClient],
     user_api_key_cache: DualCache,
     user_id_upsert: bool,
     parent_otel_span: Optional[Span] = None,
+    proxy_logging_obj: Optional[ProxyLogging] = None,
 ) -> Optional[LiteLLM_UserTable]:
     """
     - Check if user id in proxy User Table
@@ -299,11 +334,13 @@ async def get_user_object(
         )
 
 
+@log_to_opentelemetry
 async def get_team_object(
     team_id: str,
     prisma_client: Optional[PrismaClient],
     user_api_key_cache: DualCache,
     parent_otel_span: Optional[Span] = None,
+    proxy_logging_obj: Optional[ProxyLogging] = None,
 ) -> LiteLLM_TeamTable:
     """
     - Check if team id in proxy Team Table
@@ -342,11 +379,13 @@ async def get_team_object(
         )
 
 
+@log_to_opentelemetry
 async def get_org_object(
     org_id: str,
     prisma_client: Optional[PrismaClient],
     user_api_key_cache: DualCache,
     parent_otel_span: Optional[Span] = None,
+    proxy_logging_obj: Optional[ProxyLogging] = None,
 ):
     """
     - Check if org id in proxy Org Table
