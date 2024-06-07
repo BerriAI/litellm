@@ -86,6 +86,7 @@ class OpenTelemetry(CustomLogger):
     ):
         from opentelemetry import trace
         from datetime import datetime
+        from opentelemetry.trace import Status, StatusCode
 
         if parent_otel_span is not None:
             _span_name = payload.service
@@ -98,8 +99,8 @@ class OpenTelemetry(CustomLogger):
             service_logging_span.set_attribute(
                 key="service", value=payload.service.value
             )
+            service_logging_span.set_status(Status(StatusCode.OK))
             service_logging_span.end(end_time=self._to_ns(end_time))
-            parent_otel_span.end(end_time=self._to_ns(datetime.now()))
 
     def _handle_sucess(self, kwargs, response_obj, start_time, end_time):
         from opentelemetry.trace import Status, StatusCode
@@ -109,15 +110,18 @@ class OpenTelemetry(CustomLogger):
             kwargs,
             self.config,
         )
+        _parent_context, parent_otel_span = self._get_span_context(kwargs)
 
         span = self.tracer.start_span(
             name=self._get_span_name(kwargs),
             start_time=self._to_ns(start_time),
-            context=self._get_span_context(kwargs),
+            context=_parent_context,
         )
         span.set_status(Status(StatusCode.OK))
         self.set_attributes(span, kwargs, response_obj)
         span.end(end_time=self._to_ns(end_time))
+        if parent_otel_span is not None:
+            parent_otel_span.end(end_time=self._to_ns(datetime.now()))
 
     def _handle_failure(self, kwargs, response_obj, start_time, end_time):
         from opentelemetry.trace import Status, StatusCode
@@ -146,17 +150,28 @@ class OpenTelemetry(CustomLogger):
         from opentelemetry.trace.propagation.tracecontext import (
             TraceContextTextMapPropagator,
         )
+        from opentelemetry import trace
 
         litellm_params = kwargs.get("litellm_params", {}) or {}
         proxy_server_request = litellm_params.get("proxy_server_request", {}) or {}
         headers = proxy_server_request.get("headers", {}) or {}
         traceparent = headers.get("traceparent", None)
+        _metadata = litellm_params.get("metadata", {}) or {}
+        parent_otel_span = _metadata.get("litellm_parent_otel_span", None)
+
+        """
+        Two way to use parents in opentelemetry
+        - using the traceparent header
+        - using the parent_otel_span in the [metadata][parent_otel_span]
+        """
+        if parent_otel_span is not None:
+            return trace.set_span_in_context(parent_otel_span), parent_otel_span
 
         if traceparent is None:
-            return None
+            return None, None
         else:
             carrier = {"traceparent": traceparent}
-            return TraceContextTextMapPropagator().extract(carrier=carrier)
+            return TraceContextTextMapPropagator().extract(carrier=carrier), None
 
     def _get_span_processor(self):
         from opentelemetry.sdk.trace.export import (
