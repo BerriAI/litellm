@@ -60,6 +60,7 @@ _async_failure_callback: List[Callable] = (
 pre_call_rules: List[Callable] = []
 post_call_rules: List[Callable] = []
 turn_off_message_logging: Optional[bool] = False
+store_audit_logs = False  # Enterprise feature, allow users to see audit logs
 ## end of callbacks #############
 
 email: Optional[str] = (
@@ -808,6 +809,7 @@ from .exceptions import (
     APIConnectionError,
     APIResponseValidationError,
     UnprocessableEntityError,
+    InternalServerError,
     LITELLM_EXCEPTION_TYPES,
 )
 from .budget_manager import BudgetManager

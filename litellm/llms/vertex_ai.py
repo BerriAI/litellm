@@ -297,24 +297,29 @@ def _convert_gemini_role(role: str) -> Literal["user", "model"]:
 
 def _process_gemini_image(image_url: str) -> PartType:
     try:
-        if "gs://" in image_url:
-            # Case 1: Images with Cloud Storage URIs
+        if ".mp4" in image_url and "gs://" in image_url:
+            # Case 1: Videos with Cloud Storage URIs
+            part_mime = "video/mp4"
+            _file_data = FileDataType(mime_type=part_mime, file_uri=image_url)
+            return PartType(file_data=_file_data)
+        elif ".pdf" in image_url and "gs://" in image_url:
+            # Case 2: PDF's with Cloud Storage URIs
+            part_mime = "application/pdf"
+            _file_data = FileDataType(mime_type=part_mime, file_uri=image_url)
+            return PartType(file_data=_file_data)
+        elif "gs://" in image_url:
+            # Case 3: Images with Cloud Storage URIs
             # The supported MIME types for images include image/png and image/jpeg.
             part_mime = "image/png" if "png" in image_url else "image/jpeg"
             _file_data = FileDataType(mime_type=part_mime, file_uri=image_url)
             return PartType(file_data=_file_data)
         elif "https:/" in image_url:
-            # Case 2: Images with direct links
+            # Case 4: Images with direct links
             image = _load_image_from_url(image_url)
             _blob = BlobType(data=image.data, mime_type=image._mime_type)
             return PartType(inline_data=_blob)
-        elif ".mp4" in image_url and "gs://" in image_url:
-            # Case 3: Videos with Cloud Storage URIs
-            part_mime = "video/mp4"
-            _file_data = FileDataType(mime_type=part_mime, file_uri=image_url)
-            return PartType(file_data=_file_data)
         elif "base64" in image_url:
-            # Case 4: Images with base64 encoding
+            # Case 5: Images with base64 encoding
             import base64, re
 
             # base 64 is passed as data:image/jpeg;base64,<base-64-encoded-image>
@@ -390,7 +395,7 @@ def _gemini_convert_messages_with_history(messages: list) -> List[ContentType]:
                 assistant_content.extend(_parts)
             elif messages[msg_i].get(
                 "tool_calls", []
-            ):  # support assistant tool invoke convertion
+            ):  # support assistant tool invoke conversion
                 assistant_content.extend(
                     convert_to_gemini_tool_call_invoke(messages[msg_i]["tool_calls"])
                 )
@@ -642,9 +647,9 @@ def completion(
 
         prompt = " ".join(
             [
-                message["content"]
+                message.get("content")
                 for message in messages
-                if isinstance(message["content"], str)
+                if isinstance(message.get("content", None), str)
             ]
         )
 

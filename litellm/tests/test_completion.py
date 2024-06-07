@@ -2169,6 +2169,7 @@ def test_completion_azure_key_completion_arg():
             logprobs=True,
             max_tokens=10,
         )
+
         print(f"response: {response}")
 
         print("Hidden Params", response._hidden_params)
@@ -2544,6 +2545,8 @@ def test_replicate_custom_prompt_dict():
                     "content": "what is yc write 1 paragraph",
                 }
             ],
+            mock_response="Hello world",
+            mock_response="hello world",
             repetition_penalty=0.1,
             num_retries=3,
         )

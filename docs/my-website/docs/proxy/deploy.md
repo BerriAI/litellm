@@ -260,7 +260,7 @@ Requirements:
 
 <TabItem value="docker-deploy" label="Dockerfile">
 
-We maintain a [seperate Dockerfile](https://github.com/BerriAI/litellm/pkgs/container/litellm-database) for reducing build time when running LiteLLM proxy with a connected Postgres Database 
+We maintain a [separate Dockerfile](https://github.com/BerriAI/litellm/pkgs/container/litellm-database) for reducing build time when running LiteLLM proxy with a connected Postgres Database 
 
 ```shell
 docker pull ghcr.io/berriai/litellm-database:main-latest
