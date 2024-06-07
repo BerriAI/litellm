@@ -4927,7 +4927,6 @@ def get_litellm_params(
     input_cost_per_token=None,
     output_cost_per_token=None,
     output_cost_per_second=None,
-    litellm_parent_otel_span=None,
 ):
     litellm_params = {
         "acompletion": acompletion,
@@ -4950,7 +4949,6 @@ def get_litellm_params(
         "input_cost_per_second": input_cost_per_second,
         "output_cost_per_token": output_cost_per_token,
         "output_cost_per_second": output_cost_per_second,
-        "litellm_parent_otel_span": litellm_parent_otel_span,
     }
 
     return litellm_params
