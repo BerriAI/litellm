@@ -1621,7 +1621,7 @@ from litellm.types.llms.bedrock import (
 )
 
 
-def get_image_details(image_url) -> Tuple[bytes, str]:
+def get_image_details(image_url) -> Tuple[str, str]:
     try:
         import base64
 
@@ -1637,7 +1637,7 @@ def get_image_details(image_url) -> Tuple[bytes, str]:
             )
 
         # Convert the image content to base64 bytes
-        base64_bytes = base64.b64encode(response.content)
+        base64_bytes = base64.b64encode(response.content).decode("utf-8")
 
         # Get mime-type
         mime_type = content_type.split("/")[
@@ -1659,18 +1659,17 @@ def _process_bedrock_converse_image_block(image_url: str) -> BedrockImageBlock:
 
         # base 64 is passed as data:image/jpeg;base64,<base-64-encoded-image>
         image_metadata, img_without_base_64 = image_url.split(",")
-        image_format = image_metadata.split("/")[1]
 
         # read mime_type from img_without_base_64=data:image/jpeg;base64
         # Extract MIME type using regular expression
         mime_type_match = re.match(r"data:(.*?);base64", image_metadata)
-
         if mime_type_match:
             mime_type = mime_type_match.group(1)
+            image_format = mime_type.split("/")[1]
         else:
-            mime_type = "jpeg"
-        decoded_img = base64.b64decode(img_without_base_64)
-        _blob = BedrockImageSourceBlock(bytes=decoded_img)
+            mime_type = "image/jpeg"
+            image_format = "jpeg"
+        _blob = BedrockImageSourceBlock(bytes=img_without_base_64)
         supported_image_formats = (
             litellm.AmazonConverseConfig().get_supported_image_types()
         )
@@ -1701,7 +1700,8 @@ def _process_bedrock_converse_image_block(image_url: str) -> BedrockImageBlock:
             )
     else:
         raise ValueError(
-            "Unsupported image type. Expected either image url or base64 encoded string"
+            "Unsupported image type. Expected either image url or base64 encoded string - \
+                e.g. 'data:image/jpeg;base64,<base64-encoded-string>'"
         )
 
 

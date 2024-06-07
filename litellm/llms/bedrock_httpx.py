@@ -1158,6 +1158,7 @@ class AmazonConverseConfig:
             "stop",
             "temperature",
             "top_p",
+            "extra_headers",
         ]
 
         if (

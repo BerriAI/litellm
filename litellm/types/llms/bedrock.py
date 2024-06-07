@@ -16,7 +16,7 @@ class SystemContentBlock(TypedDict):
 
 
 class ImageSourceBlock(TypedDict):
-    bytes: Optional[bytes]
+    bytes: Optional[str]  # base 64 encoded string
 
 
 class ImageBlock(TypedDict):
