@@ -9805,8 +9805,7 @@ def exception_type(
             elif custom_llm_provider == "azure":
                 if "Internal server error" in error_str:
                     exception_mapping_worked = True
-                    raise APIError(
-                        status_code=500,
+                    raise litellm.InternalServerError(
                         message=f"AzureException Internal server error - {original_exception.message}",
                         llm_provider="azure",
                         model=model,
