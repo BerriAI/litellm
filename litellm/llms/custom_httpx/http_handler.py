@@ -168,7 +168,6 @@ class HTTPHandler:
         return response
 
     def __del__(self) -> None:
-        traceback.print_stack()
         try:
             self.close()
         except Exception:
