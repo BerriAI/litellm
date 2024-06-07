@@ -5,8 +5,11 @@ from dataclasses import dataclass
 from litellm.integrations.custom_logger import CustomLogger
 from litellm._logging import verbose_logger
 
-LITELLM_TRACER_NAME = "litellm"
-LITELLM_RESOURCE = {"service.name": "litellm"}
+
+LITELLM_TRACER_NAME = os.getenv("OTEL_TRACER_NAME", "litellm")
+LITELLM_RESOURCE = {
+    "service.name": os.getenv("OTEL_SERVICE_NAME", "litellm"),
+}
 
 
 @dataclass

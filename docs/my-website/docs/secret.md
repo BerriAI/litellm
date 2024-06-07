@@ -1,10 +1,30 @@
 # Secret Manager
 LiteLLM supports reading secrets from Azure Key Vault and Infisical
 
+- AWS Key Managemenet Service
+- AWS Secret Manager
 - [Azure Key Vault](#azure-key-vault)
 - Google Key Management Service
 - [Infisical Secret Manager](#infisical-secret-manager)
 - [.env Files](#env-files)
+
+## AWS Key Management Service
+
+Use AWS KMS to storing a hashed copy of your Proxy Master Key in the environment. 
+
+```bash
+export LITELLM_MASTER_KEY="djZ9xjVaZ..." # 👈 ENCRYPTED KEY
+export AWS_REGION_NAME="us-west-2"
+```
+
+```yaml
+general_settings:
+  key_management_system: "aws_kms"
+  key_management_settings:
+    hosted_keys: ["LITELLM_MASTER_KEY"] # 👈 WHICH KEYS ARE STORED ON KMS
+```
+
+[**See Decryption Code**](https://github.com/BerriAI/litellm/blob/a2da2a8f168d45648b61279d4795d647d94f90c9/litellm/utils.py#L10182)
 
 ## AWS Secret Manager
 

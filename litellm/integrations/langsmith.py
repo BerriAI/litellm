@@ -44,7 +44,9 @@ class LangsmithLogger:
         print_verbose(
             f"Langsmith Logging - project_name: {project_name}, run_name {run_name}"
         )
-        langsmith_base_url = os.getenv("LANGSMITH_BASE_URL", "https://api.smith.langchain.com")
+        langsmith_base_url = os.getenv(
+            "LANGSMITH_BASE_URL", "https://api.smith.langchain.com"
+        )
 
         try:
             print_verbose(
@@ -89,9 +91,7 @@ class LangsmithLogger:
             }
 
             url = f"{langsmith_base_url}/runs"
-            print_verbose(
-                f"Langsmith Logging - About to send data to {url} ..."
-            )
+            print_verbose(f"Langsmith Logging - About to send data to {url} ...")
             response = requests.post(
                 url=url,
                 json=data,
@@ -106,6 +106,5 @@ class LangsmithLogger:
                 f"Langsmith Layer Logging - final response object: {response_obj}"
             )
         except:
-            # traceback.print_exc()
             print_verbose(f"Langsmith Layer Error - {traceback.format_exc()}")
             pass
