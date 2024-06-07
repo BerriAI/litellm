@@ -4918,6 +4918,7 @@ def get_litellm_params(
     input_cost_per_token=None,
     output_cost_per_token=None,
     output_cost_per_second=None,
+    litellm_parent_otel_span=None,
 ):
     litellm_params = {
         "acompletion": acompletion,
@@ -4940,6 +4941,7 @@ def get_litellm_params(
         "input_cost_per_second": input_cost_per_second,
         "output_cost_per_token": output_cost_per_token,
         "output_cost_per_second": output_cost_per_second,
+        "litellm_parent_otel_span": litellm_parent_otel_span,
     }
 
     return litellm_params
@@ -7351,10 +7353,10 @@ def get_provider_fields(custom_llm_provider: str) -> List[ProviderField]:
 
     if custom_llm_provider == "databricks":
         return litellm.DatabricksConfig().get_required_params()
-    
+
     elif custom_llm_provider == "ollama":
         return litellm.OllamaConfig().get_required_params()
-    
+
     else:
         return []
 
