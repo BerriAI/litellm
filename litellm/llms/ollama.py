@@ -7,6 +7,7 @@ import litellm
 from litellm.types.utils import ProviderField
 import httpx, aiohttp, asyncio  # type: ignore
 from .prompt_templates.factory import prompt_factory, custom_prompt
+from litellm import verbose_logger
 
 
 class OllamaError(Exception):
@@ -137,6 +138,7 @@ class OllamaConfig:
             )
         ]
 
+
     def get_supported_openai_params(
         self,
     ):
@@ -151,10 +153,12 @@ class OllamaConfig:
             "response_format",
         ]
 
+
 # ollama wants plain base64 jpeg/png files as images.  strip any leading dataURI
 # and convert to jpeg if necessary.
 def _convert_image(image):
     import base64, io
+
     try:
         from PIL import Image
     except:
@@ -404,7 +408,13 @@ async def ollama_async_streaming(url, data, model_response, encoding, logging_ob
                 async for transformed_chunk in streamwrapper:
                     yield transformed_chunk
     except Exception as e:
-        traceback.print_exc()
+        verbose_logger.error(
+            "LiteLLM.ollama.py::ollama_async_streaming(): Exception occured - {}".format(
+                str(e)
+            )
+        )
+        verbose_logger.debug(traceback.format_exc())
+
         raise e
 
 
@@ -468,7 +478,12 @@ async def ollama_acompletion(url, data, model_response, encoding, logging_obj):
             )
             return model_response
     except Exception as e:
-        traceback.print_exc()
+        verbose_logger.error(
+            "LiteLLM.ollama.py::ollama_acompletion(): Exception occured - {}".format(
+                str(e)
+            )
+        )
+        verbose_logger.debug(traceback.format_exc())
         raise e
 
 

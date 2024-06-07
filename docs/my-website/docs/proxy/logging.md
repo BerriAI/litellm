@@ -313,6 +313,18 @@ You will see `raw_request` in your Langfuse Metadata. This is the RAW CURL comma
 
 
 ## Logging Proxy Input/Output in OpenTelemetry format
+
+:::info 
+
+[Optional] Customize OTEL Service Name and OTEL TRACER NAME by setting the following variables in your environment
+
+```shell
+OTEL_TRACER_NAME=<your-trace-name>     # default="litellm"
+OTEL_SERVICE_NAME=<your-service-name>` # default="litellm"
+```
+
+:::
+
 <Tabs>
 
 

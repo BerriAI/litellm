@@ -115,7 +115,6 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
             )
             print_verbose(f"Custom Logger - model call details: {kwargs}")
         except:
-            traceback.print_exc()
             print_verbose(f"Custom Logger Error - {traceback.format_exc()}")
 
     async def async_log_input_event(
@@ -130,7 +129,6 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
             )
             print_verbose(f"Custom Logger - model call details: {kwargs}")
         except:
-            traceback.print_exc()
             print_verbose(f"Custom Logger Error - {traceback.format_exc()}")
 
     def log_event(
@@ -146,7 +144,6 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
                 end_time,
             )
         except:
-            # traceback.print_exc()
             print_verbose(f"Custom Logger Error - {traceback.format_exc()}")
             pass
 
@@ -163,6 +160,5 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
                 end_time,
             )
         except:
-            # traceback.print_exc()
             print_verbose(f"Custom Logger Error - {traceback.format_exc()}")
             pass
