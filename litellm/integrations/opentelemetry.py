@@ -1,12 +1,18 @@
 import os
-from typing import Optional
 from dataclasses import dataclass
+from datetime import datetime
 
 from litellm.integrations.custom_logger import CustomLogger
 from litellm._logging import verbose_logger
-from litellm.types.services import ServiceLoggerPayload, ServiceTypes
-from opentelemetry.trace import Span
-from datetime import datetime
+from litellm.types.services import ServiceLoggerPayload
+from typing import Union, Optional, TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from opentelemetry.trace import Span as _Span
+
+    Span = _Span
+else:
+    Span = Any
 
 LITELLM_TRACER_NAME = "litellm"
 LITELLM_RESOURCE = {"service.name": "litellm"}

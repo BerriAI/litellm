@@ -2,12 +2,18 @@ import sys, os, platform, time, copy, re, asyncio, inspect
 import threading, ast
 import shutil, random, traceback, requests
 from datetime import datetime, timedelta, timezone
-from typing import Optional, List, Callable, get_args, Set
+from typing import Optional, List, Callable, get_args, Set, Any, TYPE_CHECKING
 import secrets, subprocess
 import hashlib, uuid
 import warnings
 import importlib
-from opentelemetry.trace import Span
+
+if TYPE_CHECKING:
+    from opentelemetry.trace import Span as _Span
+
+    Span = _Span
+else:
+    Span = Any
 
 
 def showwarning(message, category, filename, lineno, file=None, line=None):
