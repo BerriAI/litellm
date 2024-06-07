@@ -2538,6 +2538,7 @@ def test_replicate_custom_prompt_dict():
                     "content": "what is yc write 1 paragraph",
                 }
             ],
+            mock_response="hello world",
             repetition_penalty=0.1,
             num_retries=3,
         )
