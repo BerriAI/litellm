@@ -14,6 +14,7 @@ Features:
 - ✅ [SSO for Admin UI](./ui.md#✨-enterprise-features)
 - ✅ [Audit Logs](#audit-logs)
 - ✅ [Tracking Spend for Custom Tags](#tracking-spend-for-custom-tags)
+- ✅ [Enforce Required Params for LLM Requests (ex. Reject requests missing ["metadata"]["generation_name"])](#enforce-required-params-for-llm-requests)
 - ✅ [Content Moderation with LLM Guard, LlamaGuard, Google Text Moderations](#content-moderation)
 - ✅ [Prompt Injection Detection (with LakeraAI API)](#prompt-injection-detection---lakeraai)
 - ✅ [Custom Branding + Routes on Swagger Docs](#swagger-docs---custom-routes--branding)
@@ -202,6 +203,109 @@ curl -X GET "http://0.0.0.0:4000/spend/tags" \
 ]
 
 ```
+
+
+## Enforce Required Params for LLM Requests
+Use this when you want to enforce all requests to include certain params. Example you need all requests to include the `user` and `["metadata]["generation_name"]` params.
+
+**Step 1** Define all Params you want to enforce on config.yaml
+
+This means `["user"]` and `["metadata]["generation_name"]` are required in all LLM Requests to LiteLLM
+
+```yaml
+general_settings:
+  master_key: sk-1234
+  enforced_params:  
+    - user
+    - metadata.generation_name
+```
+
+Start LiteLLM Proxy
+
+**Step 2 Verify if this works**
+
+<Tabs>
+
+<TabItem value="bad" label="Invalid Request (No `user` passed)">
+
+```shell
+curl --location 'http://localhost:4000/chat/completions' \
+    --header 'Authorization: Bearer sk-5fmYeaUEbAMpwBNT-QpxyA' \
+    --header 'Content-Type: application/json' \
+    --data '{
+    "model": "gpt-3.5-turbo",
+    "messages": [
+        {
+        "role": "user",
+        "content": "hi"
+        }
+    ]
+}'
+```
+
+Expected Response 
+
+```shell
+{"error":{"message":"Authentication Error, BadRequest please pass param=user in request body. This is a required param","type":"auth_error","param":"None","code":401}}% 
+```
+
+</TabItem>
+
+<TabItem value="bad2" label="Invalid Request (No `metadata` passed)">
+
+```shell
+curl --location 'http://localhost:4000/chat/completions' \
+    --header 'Authorization: Bearer sk-5fmYeaUEbAMpwBNT-QpxyA' \
+    --header 'Content-Type: application/json' \
+    --data '{
+    "model": "gpt-3.5-turbo",
+    "user": "gm",
+    "messages": [
+        {
+        "role": "user",
+        "content": "hi"
+        }
+    ],
+   "metadata": {}
+}'
+```
+
+Expected Response 
+
+```shell
+{"error":{"message":"Authentication Error, BadRequest please pass param=[metadata][generation_name] in request body. This is a required param","type":"auth_error","param":"None","code":401}}% 
+```
+
+
+</TabItem>
+<TabItem value="good" label="Valid Request">
+
+```shell
+curl --location 'http://localhost:4000/chat/completions' \
+    --header 'Authorization: Bearer sk-5fmYeaUEbAMpwBNT-QpxyA' \
+    --header 'Content-Type: application/json' \
+    --data '{
+    "model": "gpt-3.5-turbo",
+    "user": "gm",
+    "messages": [
+        {
+        "role": "user",
+        "content": "hi"
+        }
+    ],
+   "metadata": {"generation_name": "prod-app"}
+}'
+```
+
+Expected Response
+
+```shell
+{"id":"chatcmpl-9XALnHqkCBMBKrOx7Abg0hURHqYtY","choices":[{"finish_reason":"stop","index":0,"message":{"content":"Hello! How can I assist you today?","role":"assistant"}}],"created":1717691639,"model":"gpt-3.5-turbo-0125","object":"chat.completion","system_fingerprint":null,"usage":{"completion_tokens":9,"prompt_tokens":8,"total_tokens":17}}%  
+```
+
+</TabItem>
+</Tabs>
+
 
 
 
