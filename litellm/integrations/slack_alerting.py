@@ -326,8 +326,8 @@ class SlackAlerting(CustomLogger):
                 end_time=end_time,
             )
         )
-        if litellm.turn_off_message_logging:
-            messages = "Message not logged. `litellm.turn_off_message_logging=True`."
+        if litellm.turn_off_message_logging or litellm.redact_messages_in_exceptions:
+            messages = "Message not logged. litellm.redact_messages_in_exceptions=True"
         request_info = f"\nRequest Model: `{model}`\nAPI Base: `{api_base}`\nMessages: `{messages}`"
         slow_message = f"`Responses are slow - {round(time_difference_float,2)}s response time > Alerting threshold: {self.alerting_threshold}s`"
         if time_difference_float > self.alerting_threshold:
@@ -567,9 +567,12 @@ class SlackAlerting(CustomLogger):
             except:
                 messages = ""
 
-            if litellm.turn_off_message_logging:
+            if (
+                litellm.turn_off_message_logging
+                or litellm.redact_messages_in_exceptions
+            ):
                 messages = (
-                    "Message not logged. `litellm.turn_off_message_logging=True`."
+                    "Message not logged. litellm.redact_messages_in_exceptions=True"
                 )
             request_info = f"\nRequest Model: `{model}`\nMessages: `{messages}`"
         else:
