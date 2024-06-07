@@ -400,7 +400,7 @@ disable_spend_logs = False
 jwt_handler = JWTHandler()
 prompt_injection_detection_obj: Optional[_OPTIONAL_PromptInjectionDetection] = None
 store_model_in_db: bool = False
-open_telemetry_logger: Optional[litellm.integrations.opentelemetry.OpenTelemetry] = None
+open_telemetry_logger = None
 ### INITIALIZE GLOBAL LOGGING OBJECT ###
 proxy_logging_obj = ProxyLogging(user_api_key_cache=user_api_key_cache)
 ### REDIS QUEUE ###
@@ -845,7 +845,10 @@ async def user_api_key_auth(
             verbose_proxy_logger.debug("api key: %s", api_key)
             if prisma_client is not None:
                 _valid_token: Optional[BaseModel] = await prisma_client.get_data(
-                    token=api_key, table_name="combined_view"
+                    token=api_key,
+                    table_name="combined_view",
+                    parent_otel_span=parent_otel_span,
+                    proxy_logging_obj=proxy_logging_obj,
                 )
                 if _valid_token is not None:
                     valid_token = UserAPIKeyAuth(
