@@ -946,6 +946,7 @@ class KeyManagementSystem(enum.Enum):
     AZURE_KEY_VAULT = "azure_key_vault"
     AWS_SECRET_MANAGER = "aws_secret_manager"
     LOCAL = "local"
+    AWS_KMS = "aws_kms"
 
 
 class KeyManagementSettings(LiteLLMBase):
