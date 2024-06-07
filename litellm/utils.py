@@ -4066,7 +4066,9 @@ def openai_token_counter(
                     for c in value:
                         if c["type"] == "text":
                             text += c["text"]
-                            num_tokens += len(encoding.encode(c["text"], disallowed_special=()))
+                            num_tokens += len(
+                                encoding.encode(c["text"], disallowed_special=())
+                            )
                         elif c["type"] == "image_url":
                             if isinstance(c["image_url"], dict):
                                 image_url_dict = c["image_url"]
@@ -5639,16 +5641,30 @@ def get_optional_params(
                 optional_params["stream"] = stream
         elif "anthropic" in model:
             _check_valid_arg(supported_params=supported_params)
-            optional_params = litellm.AmazonConverseConfig().map_openai_params(
-                model=model,
-                non_default_params=non_default_params,
-                optional_params=optional_params,
-                drop_params=(
-                    drop_params
-                    if drop_params is not None and isinstance(drop_params, bool)
-                    else False
-                ),
-            )
+            if "aws_bedrock_client" in passed_params:  # deprecated boto3.invoke route.
+                if model.startswith("anthropic.claude-3"):
+                    optional_params = (
+                        litellm.AmazonAnthropicClaude3Config().map_openai_params(
+                            non_default_params=non_default_params,
+                            optional_params=optional_params,
+                        )
+                    )
+                else:
+                    optional_params = litellm.AmazonAnthropicConfig().map_openai_params(
+                        non_default_params=non_default_params,
+                        optional_params=optional_params,
+                    )
+            else:  # bedrock httpx route
+                optional_params = litellm.AmazonConverseConfig().map_openai_params(
+                    model=model,
+                    non_default_params=non_default_params,
+                    optional_params=optional_params,
+                    drop_params=(
+                        drop_params
+                        if drop_params is not None and isinstance(drop_params, bool)
+                        else False
+                    ),
+                )
         elif "amazon" in model:  # amazon titan llms
             _check_valid_arg(supported_params=supported_params)
             # see https://us-west-2.console.aws.amazon.com/bedrock/home?region=us-west-2#/providers?model=titan-large
