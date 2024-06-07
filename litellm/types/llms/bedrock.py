@@ -107,10 +107,30 @@ class ToolConfigBlock(TypedDict, total=False):
     toolChoice: Union[str, ToolChoiceValuesBlock]
 
 
+class InferenceConfig(TypedDict, total=False):
+    maxTokens: int
+    stopSequences: List[str]
+    temperature: float
+    topP: float
+
+
+class ToolBlockDeltaEvent(TypedDict):
+    input: str
+
+
+class ContentBlockDeltaEvent(TypedDict, total=False):
+    """
+    Either 'text' or 'toolUse' will be specified for Converse API streaming response.
+    """
+
+    text: str
+    toolUse: ToolBlockDeltaEvent
+
+
 class RequestObject(TypedDict, total=False):
     additionalModelRequestFields: dict
     additionalModelResponseFieldPaths: List[str]
-    inferenceConfig: dict
+    inferenceConfig: InferenceConfig
     messages: Required[List[MessageBlock]]
     system: List[SystemContentBlock]
     toolConfig: ToolConfigBlock
@@ -118,8 +138,10 @@ class RequestObject(TypedDict, total=False):
 
 class GenericStreamingChunk(TypedDict):
     text: Required[str]
+    tool_str: Required[str]
     is_finished: Required[bool]
     finish_reason: Required[str]
+    usage: Optional[ConverseTokenUsageBlock]
 
 
 class Document(TypedDict):
