@@ -152,7 +152,6 @@ def test_chat_completion(mock_acompletion, client_no_auth):
             specific_deployment=True,
             metadata=mock.ANY,
             proxy_server_request=mock.ANY,
-            litellm_parent_otel_span=mock.ANY,
         )
         print(f"response - {response.text}")
         assert response.status_code == 200
