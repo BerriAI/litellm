@@ -8,8 +8,8 @@
 #  Tell us how we can improve! - Krrish & Ishaan
 
 
-from typing import Optional, Literal, Union
-import litellm, traceback, sys, uuid, json
+from typing import Optional, Union
+import litellm, traceback, uuid, json  # noqa: E401
 from litellm.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.integrations.custom_logger import CustomLogger
@@ -21,8 +21,8 @@ from litellm.utils import (
     ImageResponse,
     StreamingChoices,
 )
-from datetime import datetime
-import aiohttp, asyncio
+import aiohttp
+import asyncio
 
 
 class _OPTIONAL_PresidioPIIMasking(CustomLogger):
@@ -138,7 +138,12 @@ class _OPTIONAL_PresidioPIIMasking(CustomLogger):
                 else:
                     raise Exception(f"Invalid anonymizer response: {redacted_text}")
         except Exception as e:
-            traceback.print_exc()
+            verbose_proxy_logger.error(
+                "litellm.proxy.hooks.presidio_pii_masking.py::async_pre_call_hook(): Exception occured - {}".format(
+                    str(e)
+                )
+            )
+            verbose_proxy_logger.debug(traceback.format_exc())
             raise e
 
     async def async_pre_call_hook(
