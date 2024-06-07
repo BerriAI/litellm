@@ -549,7 +549,10 @@ async def user_api_key_auth(
                         litellm_proxy_roles=jwt_handler.litellm_jwtauth,
                     )
                     if is_allowed:
-                        return UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+                        return UserAPIKeyAuth(
+                            user_role=LitellmUserRoles.PROXY_ADMIN,
+                            parent_otel_span=parent_otel_span,
+                        )
                     else:
                         allowed_routes = (
                             jwt_handler.litellm_jwtauth.admin_allowed_routes
@@ -666,7 +669,6 @@ async def user_api_key_auth(
                                 user_info=user_info,
                             )
                         )
-
                 # get the request body
                 request_data = await _read_request_body(request=request)
 
@@ -695,15 +697,21 @@ async def user_api_key_auth(
                     user_role=LitellmUserRoles.INTERNAL_USER,
                     user_id=user_id,
                     org_id=org_id,
+                    parent_otel_span=parent_otel_span,
                 )
         #### ELSE ####
         if master_key is None:
             if isinstance(api_key, str):
                 return UserAPIKeyAuth(
-                    api_key=api_key, user_role=LitellmUserRoles.PROXY_ADMIN
+                    api_key=api_key,
+                    user_role=LitellmUserRoles.PROXY_ADMIN,
+                    parent_otel_span=parent_otel_span,
                 )
             else:
-                return UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+                return UserAPIKeyAuth(
+                    user_role=LitellmUserRoles.PROXY_ADMIN,
+                    parent_otel_span=parent_otel_span,
+                )
         elif api_key is None:  # only require api key if master key is set
             raise Exception("No api key passed in.")
         elif api_key == "":
@@ -781,6 +789,7 @@ async def user_api_key_auth(
             valid_token.allowed_model_region = end_user_params.get(
                 "allowed_model_region"
             )
+            valid_token.parent_otel_span = parent_otel_span
 
             return valid_token
 
@@ -807,6 +816,7 @@ async def user_api_key_auth(
                 api_key=master_key,
                 user_role=LitellmUserRoles.PROXY_ADMIN,
                 user_id=litellm_proxy_admin_name,
+                parent_otel_span=parent_otel_span,
                 **end_user_params,
             )
             await user_api_key_cache.async_set_cache(
@@ -1452,6 +1462,7 @@ async def user_api_key_auth(
                     return UserAPIKeyAuth(
                         api_key=api_key,
                         user_role=LitellmUserRoles.PROXY_ADMIN,
+                        parent_otel_span=parent_otel_span,
                         **valid_token_dict,
                     )
                 elif (
@@ -1459,7 +1470,10 @@ async def user_api_key_auth(
                     and route in LiteLLMRoutes.sso_only_routes.value
                 ):
                     return UserAPIKeyAuth(
-                        api_key=api_key, user_role="app_owner", **valid_token_dict
+                        api_key=api_key,
+                        user_role="app_owner",
+                        parent_otel_span=parent_otel_span,
+                        **valid_token_dict,
                     )
                 else:
                     raise Exception(
@@ -1475,18 +1489,21 @@ async def user_api_key_auth(
                 return UserAPIKeyAuth(
                     api_key=api_key,
                     user_role=LitellmUserRoles.PROXY_ADMIN,
+                    parent_otel_span=parent_otel_span,
                     **valid_token_dict,
                 )
             elif _has_user_setup_sso() and route in LiteLLMRoutes.sso_only_routes.value:
                 return UserAPIKeyAuth(
                     api_key=api_key,
                     user_role=LitellmUserRoles.INTERNAL_USER,
+                    parent_otel_span=parent_otel_span,
                     **valid_token_dict,
                 )
             else:
                 return UserAPIKeyAuth(
                     api_key=api_key,
                     user_role=LitellmUserRoles.INTERNAL_USER,
+                    parent_otel_span=parent_otel_span,
                     **valid_token_dict,
                 )
         else:
@@ -4193,6 +4210,8 @@ async def chat_completion(
         )  # do not store the original `sk-..` api key in the db
         data["metadata"]["headers"] = _headers
         data["metadata"]["endpoint"] = str(request.url)
+        # Add the OTEL Parent Trace before sending it LiteLLM
+        data["litellm_parent_otel_span"] = user_api_key_dict.parent_otel_span
 
         ### TEAM-SPECIFIC PARAMS ###
         if user_api_key_dict.team_id is not None:
