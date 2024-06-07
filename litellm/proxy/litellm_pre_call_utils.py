@@ -1,0 +1,93 @@
+import copy
+from fastapi import Request
+from typing import Any, Dict, Optional
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm._logging import verbose_proxy_logger, verbose_logger
+
+
+def parse_cache_control(cache_control):
+    cache_dict = {}
+    directives = cache_control.split(", ")
+
+    for directive in directives:
+        if "=" in directive:
+            key, value = directive.split("=")
+            cache_dict[key] = value
+        else:
+            cache_dict[directive] = True
+
+    return cache_dict
+
+
+async def add_litellm_data_to_request(
+    data: dict,
+    request: Request,
+    user_api_key_dict: UserAPIKeyAuth,
+    general_settings: Optional[Dict[str, Any]] = None,
+    version: Optional[str] = None,
+):
+    # Azure OpenAI only: check if user passed api-version
+    query_params = dict(request.query_params)
+    if "api-version" in query_params:
+        data["api_version"] = query_params["api-version"]
+
+    # Include original request and headers in the data
+    data["proxy_server_request"] = {
+        "url": str(request.url),
+        "method": request.method,
+        "headers": dict(request.headers),
+        "body": copy.copy(data),  # use copy instead of deepcopy
+    }
+
+    ## Cache Controls
+    headers = request.headers
+    verbose_proxy_logger.debug("Request Headers: %s", headers)
+    cache_control_header = headers.get("Cache-Control", None)
+    if cache_control_header:
+        cache_dict = parse_cache_control(cache_control_header)
+        data["ttl"] = cache_dict.get("s-maxage")
+
+    verbose_proxy_logger.debug("receiving data: %s", data)
+    # users can pass in 'user' param to /chat/completions. Don't override it
+    if data.get("user", None) is None and user_api_key_dict.user_id is not None:
+        # if users are using user_api_key_auth, set `user` in `data`
+        data["user"] = user_api_key_dict.user_id
+
+    if "metadata" not in data:
+        data["metadata"] = {}
+    data["metadata"]["user_api_key"] = user_api_key_dict.api_key
+    data["metadata"]["user_api_key_alias"] = getattr(
+        user_api_key_dict, "key_alias", None
+    )
+    data["metadata"]["user_api_end_user_max_budget"] = getattr(
+        user_api_key_dict, "end_user_max_budget", None
+    )
+    data["metadata"]["litellm_api_version"] = version
+
+    if general_settings is not None:
+        data["metadata"]["global_max_parallel_requests"] = general_settings.get(
+            "global_max_parallel_requests", None
+        )
+
+    data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
+    data["metadata"]["user_api_key_org_id"] = user_api_key_dict.org_id
+    data["metadata"]["user_api_key_team_id"] = getattr(
+        user_api_key_dict, "team_id", None
+    )
+    data["metadata"]["user_api_key_team_alias"] = getattr(
+        user_api_key_dict, "team_alias", None
+    )
+    data["metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
+    _headers = dict(request.headers)
+    _headers.pop(
+        "authorization", None
+    )  # do not store the original `sk-..` api key in the db
+    data["metadata"]["headers"] = _headers
+    data["metadata"]["endpoint"] = str(request.url)
+    # Add the OTEL Parent Trace before sending it LiteLLM
+    data["litellm_parent_otel_span"] = user_api_key_dict.parent_otel_span
+
+    ### END-USER SPECIFIC PARAMS ###
+    if user_api_key_dict.allowed_model_region is not None:
+        data["allowed_model_region"] = user_api_key_dict.allowed_model_region
+    return data
