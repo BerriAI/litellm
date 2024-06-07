@@ -56,7 +56,9 @@ def print_verbose(print_statement):
     :param print_statement: The statement to be printed and logged.
     :type print_statement: Any
     """
-    verbose_proxy_logger.debug(print_statement)
+    import traceback
+
+    verbose_proxy_logger.debug("{}\n{}".format(print_statement, traceback.format_exc()))
     if litellm.set_verbose:
         print(f"LiteLLM Proxy: {print_statement}")  # noqa
 
@@ -1965,13 +1967,15 @@ def get_logging_payload(
             startTime=start_time,
             endTime=end_time,
             completionStartTime=completion_start_time,
-            model=kwargs.get("model", ""),
+            model=kwargs.get("model", "") or "",
             user=kwargs.get("litellm_params", {})
             .get("metadata", {})
-            .get("user_api_key_user_id", ""),
+            .get("user_api_key_user_id", "")
+            or "",
             team_id=kwargs.get("litellm_params", {})
             .get("metadata", {})
-            .get("user_api_key_team_id", ""),
+            .get("user_api_key_team_id", "")
+            or "",
             metadata=json.dumps(clean_metadata),
             cache_key=cache_key,
             spend=kwargs.get("response_cost", 0),
