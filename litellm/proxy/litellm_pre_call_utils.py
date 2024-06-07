@@ -3,6 +3,7 @@ from fastapi import Request
 from typing import Any, Dict, Optional
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm._logging import verbose_proxy_logger, verbose_logger
+from litellm.proxy.proxy_server import ProxyConfig
 
 
 def parse_cache_control(cache_control):
@@ -23,10 +24,24 @@ async def add_litellm_data_to_request(
     data: dict,
     request: Request,
     user_api_key_dict: UserAPIKeyAuth,
+    proxy_config: ProxyConfig,
     general_settings: Optional[Dict[str, Any]] = None,
     version: Optional[str] = None,
 ):
-    # Azure OpenAI only: check if user passed api-version
+    """
+    Adds LiteLLM-specific data to the request.
+
+    Args:
+        data (dict): The data dictionary to be modified.
+        request (Request): The incoming request.
+        user_api_key_dict (UserAPIKeyAuth): The user API key dictionary.
+        general_settings (Optional[Dict[str, Any]], optional): General settings. Defaults to None.
+        version (Optional[str], optional): Version. Defaults to None.
+
+    Returns:
+        dict: The modified data dictionary.
+
+    """
     query_params = dict(request.query_params)
     if "api-version" in query_params:
         data["api_version"] = query_params["api-version"]
@@ -90,4 +105,20 @@ async def add_litellm_data_to_request(
     ### END-USER SPECIFIC PARAMS ###
     if user_api_key_dict.allowed_model_region is not None:
         data["allowed_model_region"] = user_api_key_dict.allowed_model_region
+
+    ### TEAM-SPECIFIC PARAMS ###
+    if user_api_key_dict.team_id is not None:
+        team_config = await proxy_config.load_team_config(
+            team_id=user_api_key_dict.team_id
+        )
+        if len(team_config) == 0:
+            pass
+        else:
+            team_id = team_config.pop("team_id", None)
+            data["metadata"]["team_id"] = team_id
+            data = {
+                **team_config,
+                **data,
+            }  # add the team-specific configs to the completion call
+
     return data
