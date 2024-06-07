@@ -1,12 +1,18 @@
-import litellm, traceback
+from datetime import datetime
+import litellm
 from litellm.proxy._types import UserAPIKeyAuth
 from .types.services import ServiceTypes, ServiceLoggerPayload
 from .integrations.prometheus_services import PrometheusServicesLogger
 from .integrations.custom_logger import CustomLogger
 from datetime import timedelta
-from typing import Union, Optional
-from opentelemetry.trace import Span
-from datetime import datetime
+from typing import Union, Optional, TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from opentelemetry.trace import Span as _Span
+
+    Span = _Span
+else:
+    Span = Any
 
 
 class ServiceLogging(CustomLogger):
