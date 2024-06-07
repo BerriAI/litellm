@@ -9,10 +9,13 @@ from typing import Union, Optional, TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
+    from litellm.proxy.proxy_server import UserAPIKeyAuth as _UserAPIKeyAuth
 
     Span = _Span
+    UserAPIKeyAuth = _UserAPIKeyAuth
 else:
     Span = Any
+    UserAPIKeyAuth = Any
 
 LITELLM_TRACER_NAME = "litellm"
 LITELLM_RESOURCE = {"service.name": "litellm"}
@@ -107,6 +110,29 @@ class OpenTelemetry(CustomLogger):
             )
             service_logging_span.set_status(Status(StatusCode.OK))
             service_logging_span.end(end_time=self._to_ns(end_time))
+
+    async def async_post_call_failure_hook(
+        self, original_exception: Exception, user_api_key_dict: UserAPIKeyAuth
+    ):
+        from opentelemetry.trace import Status, StatusCode
+        from opentelemetry import trace
+
+        parent_otel_span = user_api_key_dict.parent_otel_span
+        if parent_otel_span is not None:
+            parent_otel_span.set_status(Status(StatusCode.ERROR))
+            _span_name = "endpoint_failure"
+
+            # create a new child span with Exception
+            exception_logging_span = self.tracer.start_span(
+                name=_span_name,
+                context=trace.set_span_in_context(parent_otel_span),
+                # start_time=self._to_ns(start_time),
+            )
+            # service_logging_span.set_attribute(key="call_type", value=payload.call_type)
+            # service_logging_span.set_attribute(
+            #     key="service", value=payload.service.value
+            # )
+        pass
 
     def _handle_sucess(self, kwargs, response_obj, start_time, end_time):
         from opentelemetry.trace import Status, StatusCode
