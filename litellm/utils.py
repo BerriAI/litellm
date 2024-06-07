@@ -5620,13 +5620,80 @@ def get_optional_params(
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider
         )
-        _check_valid_arg(supported_params=supported_params)
-        optional_params = litellm.AmazonConverseConfig().map_openai_params(
-            model=model,
-            non_default_params=non_default_params,
-            optional_params=optional_params,
-            drop_params=drop_params,
-        )
+        if "ai21" in model:
+            _check_valid_arg(supported_params=supported_params)
+            # params "maxTokens":200,"temperature":0,"topP":250,"stop_sequences":[],
+            # https://us-west-2.console.aws.amazon.com/bedrock/home?region=us-west-2#/providers?model=j2-ultra
+            if max_tokens is not None:
+                optional_params["maxTokens"] = max_tokens
+            if temperature is not None:
+                optional_params["temperature"] = temperature
+            if top_p is not None:
+                optional_params["topP"] = top_p
+            if stream:
+                optional_params["stream"] = stream
+        elif "anthropic" in model:
+            _check_valid_arg(supported_params=supported_params)
+            optional_params = litellm.AmazonConverseConfig().map_openai_params(
+                model=model,
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+                drop_params=(
+                    drop_params
+                    if drop_params is not None and isinstance(drop_params, bool)
+                    else False
+                ),
+            )
+        elif "amazon" in model:  # amazon titan llms
+            _check_valid_arg(supported_params=supported_params)
+            # see https://us-west-2.console.aws.amazon.com/bedrock/home?region=us-west-2#/providers?model=titan-large
+            if max_tokens is not None:
+                optional_params["maxTokenCount"] = max_tokens
+            if temperature is not None:
+                optional_params["temperature"] = temperature
+            if stop is not None:
+                filtered_stop = _map_and_modify_arg(
+                    {"stop": stop}, provider="bedrock", model=model
+                )
+                optional_params["stopSequences"] = filtered_stop["stop"]
+            if top_p is not None:
+                optional_params["topP"] = top_p
+            if stream:
+                optional_params["stream"] = stream
+        elif "meta" in model:  # amazon / meta llms
+            _check_valid_arg(supported_params=supported_params)
+            # see https://us-west-2.console.aws.amazon.com/bedrock/home?region=us-west-2#/providers?model=titan-large
+            if max_tokens is not None:
+                optional_params["max_gen_len"] = max_tokens
+            if temperature is not None:
+                optional_params["temperature"] = temperature
+            if top_p is not None:
+                optional_params["top_p"] = top_p
+            if stream:
+                optional_params["stream"] = stream
+        elif "cohere" in model:  # cohere models on bedrock
+            _check_valid_arg(supported_params=supported_params)
+            # handle cohere params
+            if stream:
+                optional_params["stream"] = stream
+            if temperature is not None:
+                optional_params["temperature"] = temperature
+            if max_tokens is not None:
+                optional_params["max_tokens"] = max_tokens
+        elif "mistral" in model:
+            _check_valid_arg(supported_params=supported_params)
+            # mistral params on bedrock
+            # \"max_tokens\":400,\"temperature\":0.7,\"top_p\":0.7,\"stop\":[\"\\\\n\\\\nHuman:\"]}"
+            if max_tokens is not None:
+                optional_params["max_tokens"] = max_tokens
+            if temperature is not None:
+                optional_params["temperature"] = temperature
+            if top_p is not None:
+                optional_params["top_p"] = top_p
+            if stop is not None:
+                optional_params["stop"] = stop
+            if stream is not None:
+                optional_params["stream"] = stream
     elif custom_llm_provider == "aleph_alpha":
         supported_params = [
             "max_tokens",
