@@ -178,7 +178,7 @@ async def make_call(
     logging_obj.post_call(
         input=messages,
         api_key="",
-        original_response=completion_stream,  # Pass the completion stream for logging
+        original_response="first stream response received",
         additional_args={"complete_input_dict": data},
     )
 
@@ -209,7 +209,7 @@ def make_sync_call(
     logging_obj.post_call(
         input=messages,
         api_key="",
-        original_response=completion_stream,  # Pass the completion stream for logging
+        original_response="first stream response received",
         additional_args={"complete_input_dict": data},
     )
 
@@ -1805,13 +1805,6 @@ class BedrockConverseLLM(BaseLLM):
                 logging_obj=logging_obj,
             )
 
-            ## LOGGING
-            logging_obj.post_call(
-                input=messages,
-                api_key="",
-                original_response=streaming_response,
-                additional_args={"complete_input_dict": data},
-            )
             return streaming_response
         ### COMPLETION
 
