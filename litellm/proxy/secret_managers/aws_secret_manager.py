@@ -8,7 +8,8 @@ Requires:
 * `pip install boto3>=1.28.57`
 """
 
-import litellm, os
+import litellm
+import os
 from typing import Optional
 from litellm.proxy._types import KeyManagementSystem
 
@@ -35,6 +36,24 @@ def load_aws_secret_manager(use_aws_secret_manager: Optional[bool]):
 
         litellm.secret_manager_client = client
         litellm._key_management_system = KeyManagementSystem.AWS_SECRET_MANAGER
+
+    except Exception as e:
+        raise e
+
+
+def load_aws_kms(use_aws_kms: Optional[bool]):
+    if use_aws_kms is None or use_aws_kms is False:
+        return
+    try:
+        import boto3
+
+        validate_environment()
+
+        # Create a Secrets Manager client
+        kms_client = boto3.client("kms", region_name=os.getenv("AWS_REGION_NAME"))
+
+        litellm.secret_manager_client = kms_client
+        litellm._key_management_system = KeyManagementSystem.AWS_KMS
 
     except Exception as e:
         raise e
