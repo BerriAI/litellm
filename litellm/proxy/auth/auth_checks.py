@@ -97,6 +97,40 @@ def common_checks(
             raise Exception(
                 f"'user' param not passed in. 'enforce_user_param'={general_settings['enforce_user_param']}"
             )
+    if general_settings.get("enforced_params", None) is not None:
+        # Enterprise ONLY Feature
+        # we already validate if user is premium_user when reading the config
+        # Add an extra premium_usercheck here too, just incase
+        from litellm.proxy.proxy_server import premium_user, CommonProxyErrors
+
+        if premium_user is not True:
+            raise ValueError(
+                "Trying to use `enforced_params`"
+                + CommonProxyErrors.not_premium_user.value
+            )
+
+        if route in LiteLLMRoutes.openai_routes.value:
+            # loop through each enforced param
+            # example enforced_params ['user', 'metadata', 'metadata.generation_name']
+            for enforced_param in general_settings["enforced_params"]:
+                _enforced_params = enforced_param.split(".")
+                if len(_enforced_params) == 1:
+                    if _enforced_params[0] not in request_body:
+                        raise ValueError(
+                            f"BadRequest please pass param={_enforced_params[0]} in request body. This is a required param"
+                        )
+                elif len(_enforced_params) == 2:
+                    # this is a scenario where user requires request['metadata']['generation_name'] to exist
+                    if _enforced_params[0] not in request_body:
+                        raise ValueError(
+                            f"BadRequest please pass param={_enforced_params[0]} in request body. This is a required param"
+                        )
+                    if _enforced_params[1] not in request_body[_enforced_params[0]]:
+                        raise ValueError(
+                            f"BadRequest please pass param=[{_enforced_params[0]}][{_enforced_params[1]}] in request body. This is a required param"
+                        )
+
+        pass
     # 7. [OPTIONAL] If 'litellm.max_budget' is set (>0), is proxy under budget
     if (
         litellm.max_budget > 0
