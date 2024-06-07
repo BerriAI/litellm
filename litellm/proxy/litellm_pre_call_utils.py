@@ -1,9 +1,15 @@
 import copy
 from fastapi import Request
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, TYPE_CHECKING
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm._logging import verbose_proxy_logger, verbose_logger
-from litellm.proxy.proxy_server import ProxyConfig
+
+if TYPE_CHECKING:
+    from litellm.proxy.proxy_server import ProxyConfig as _ProxyConfig
+
+    ProxyConfig = _ProxyConfig
+else:
+    ProxyConfig = Any
 
 
 def parse_cache_control(cache_control):
