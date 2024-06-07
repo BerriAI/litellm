@@ -17,13 +17,19 @@ from litellm.proxy._types import (
     LiteLLM_OrganizationTable,
     LitellmUserRoles,
 )
-from typing import Optional, Literal, Union
+from typing import Optional, Literal, TYPE_CHECKING, Any
 from litellm.proxy.utils import PrismaClient, ProxyLogging, log_to_opentelemetry
 from litellm.caching import DualCache
 import litellm
-from opentelemetry.trace import Span
 from litellm.types.services import ServiceLoggerPayload, ServiceTypes
 from datetime import datetime
+
+if TYPE_CHECKING:
+    from opentelemetry.trace import Span as _Span
+
+    Span = _Span
+else:
+    Span = Any
 
 all_routes = LiteLLMRoutes.openai_routes.value + LiteLLMRoutes.management_routes.value
 
