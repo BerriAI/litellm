@@ -8541,7 +8541,11 @@ def exception_type(
                 extra_information = f"\nModel: {model}"
                 if _api_base:
                     extra_information += f"\nAPI Base: `{_api_base}`"
-                if messages and len(messages) > 0:
+                if (
+                    messages
+                    and len(messages) > 0
+                    and litellm.redact_messages_in_exceptions is False
+                ):
                     extra_information += f"\nMessages: `{messages}`"
 
                 if _model_group is not None:
