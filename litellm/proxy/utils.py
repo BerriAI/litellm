@@ -1,4 +1,4 @@
-from typing import Optional, List, Any, Literal, Union
+from typing import Optional, List, Any, Literal, Union, TYPE_CHECKING
 import os, subprocess, hashlib, importlib, asyncio, copy, json, aiohttp, httpx, time
 import litellm, backoff, traceback
 from litellm.proxy._types import (
@@ -47,8 +47,14 @@ from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timedelta
 from litellm.integrations.slack_alerting import SlackAlerting
 from typing_extensions import overload
-from opentelemetry.trace import Span
 from functools import wraps
+
+if TYPE_CHECKING:
+    from opentelemetry.trace import Span as _Span
+
+    Span = _Span
+else:
+    Span = Any
 
 
 def print_verbose(print_statement):
