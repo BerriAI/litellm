@@ -21,6 +21,7 @@ from typing import Optional, Literal, Union
 from litellm.proxy.utils import PrismaClient
 from litellm.caching import DualCache
 import litellm
+from opentelemetry.trace import Span
 
 all_routes = LiteLLMRoutes.openai_routes.value + LiteLLMRoutes.management_routes.value
 
@@ -186,6 +187,7 @@ async def get_end_user_object(
     end_user_id: Optional[str],
     prisma_client: Optional[PrismaClient],
     user_api_key_cache: DualCache,
+    parent_otel_span: Optional[Span] = None,
 ) -> Optional[LiteLLM_EndUserTable]:
     """
     Returns end user object, if in db.
@@ -250,6 +252,7 @@ async def get_user_object(
     prisma_client: Optional[PrismaClient],
     user_api_key_cache: DualCache,
     user_id_upsert: bool,
+    parent_otel_span: Optional[Span] = None,
 ) -> Optional[LiteLLM_UserTable]:
     """
     - Check if user id in proxy User Table
@@ -300,6 +303,7 @@ async def get_team_object(
     team_id: str,
     prisma_client: Optional[PrismaClient],
     user_api_key_cache: DualCache,
+    parent_otel_span: Optional[Span] = None,
 ) -> LiteLLM_TeamTable:
     """
     - Check if team id in proxy Team Table
@@ -342,6 +346,7 @@ async def get_org_object(
     org_id: str,
     prisma_client: Optional[PrismaClient],
     user_api_key_cache: DualCache,
+    parent_otel_span: Optional[Span] = None,
 ):
     """
     - Check if org id in proxy Org Table
