@@ -103,6 +103,7 @@ def test_chat_completion_exception_azure(mock_acompletion, client):
             request_timeout=mock.ANY,
             metadata=mock.ANY,
             proxy_server_request=mock.ANY,
+            litellm_parent_otel_span=mock.ANY,
         )
 
         json_response = response.json()
@@ -271,6 +272,7 @@ def test_chat_completion_exception_azure_context_window(mock_acompletion, client
             request_timeout=mock.ANY,
             metadata=mock.ANY,
             proxy_server_request=mock.ANY,
+            litellm_parent_otel_span=mock.ANY,
         )
 
         json_response = response.json()

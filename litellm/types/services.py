@@ -3,7 +3,7 @@ from pydantic import BaseModel, Field
 from typing import Optional
 
 
-class ServiceTypes(enum.Enum):
+class ServiceTypes(str, enum.Enum):
     """
     Enum for litellm + litellm-adjacent services (redis/postgres/etc.)
     """
