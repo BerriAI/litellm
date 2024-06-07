@@ -4,6 +4,9 @@ from dataclasses import dataclass
 
 from litellm.integrations.custom_logger import CustomLogger
 from litellm._logging import verbose_logger
+from litellm.types.services import ServiceLoggerPayload, ServiceTypes
+from opentelemetry.trace import Span
+from datetime import datetime
 
 LITELLM_TRACER_NAME = "litellm"
 LITELLM_RESOURCE = {"service.name": "litellm"}
@@ -73,6 +76,30 @@ class OpenTelemetry(CustomLogger):
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         self._handle_failure(kwargs, response_obj, start_time, end_time)
+
+    async def async_service_success_hook(
+        self,
+        payload: ServiceLoggerPayload,
+        parent_otel_span: Optional[Span] = None,
+        start_time: Optional[datetime] = None,
+        end_time: Optional[datetime] = None,
+    ):
+        from opentelemetry import trace
+        from datetime import datetime
+
+        if parent_otel_span is not None:
+            _span_name = payload.service
+            service_logging_span = self.tracer.start_span(
+                name=_span_name,
+                context=trace.set_span_in_context(parent_otel_span),
+                start_time=self._to_ns(start_time),
+            )
+            service_logging_span.set_attribute(key="call_type", value=payload.call_type)
+            service_logging_span.set_attribute(
+                key="service", value=payload.service.value
+            )
+            service_logging_span.end(end_time=self._to_ns(end_time))
+            parent_otel_span.end(end_time=self._to_ns(datetime.now()))
 
     def _handle_sucess(self, kwargs, response_obj, start_time, end_time):
         from opentelemetry.trace import Status, StatusCode

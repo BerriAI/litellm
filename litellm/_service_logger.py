@@ -4,7 +4,9 @@ from .types.services import ServiceTypes, ServiceLoggerPayload
 from .integrations.prometheus_services import PrometheusServicesLogger
 from .integrations.custom_logger import CustomLogger
 from datetime import timedelta
-from typing import Union
+from typing import Union, Optional
+from opentelemetry.trace import Span
+from datetime import datetime
 
 
 class ServiceLogging(CustomLogger):
@@ -40,7 +42,13 @@ class ServiceLogging(CustomLogger):
             self.mock_testing_sync_failure_hook += 1
 
     async def async_service_success_hook(
-        self, service: ServiceTypes, duration: float, call_type: str
+        self,
+        service: ServiceTypes,
+        call_type: str,
+        duration: float,
+        parent_otel_span: Optional[Span] = None,
+        start_time: Optional[datetime] = None,
+        end_time: Optional[datetime] = None,
     ):
         """
         - For counting if the redis, postgres call is successful
@@ -60,6 +68,16 @@ class ServiceLogging(CustomLogger):
                 await self.prometheusServicesLogger.async_service_success_hook(
                     payload=payload
                 )
+
+        from litellm.proxy.proxy_server import open_telemetry_logger
+
+        if parent_otel_span is not None and open_telemetry_logger is not None:
+            await open_telemetry_logger.async_service_success_hook(
+                payload=payload,
+                parent_otel_span=parent_otel_span,
+                start_time=start_time,
+                end_time=end_time,
+            )
 
     async def async_service_failure_hook(
         self,
