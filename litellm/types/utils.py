@@ -1,5 +1,10 @@
 from typing import List, Optional, Union, Dict, Tuple, Literal
 from typing_extensions import TypedDict
+from enum import Enum
+
+
+class LiteLLMCommonStrings(Enum):
+    redacted_by_litellm = "redacted by litellm. 'litellm.turn_off_message_logging=True'"
 
 
 class CostPerToken(TypedDict):

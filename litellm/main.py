@@ -471,10 +471,14 @@ def mock_completion(
         try:
             _, custom_llm_provider, _, _ = litellm.utils.get_llm_provider(model=model)
             model_response._hidden_params["custom_llm_provider"] = custom_llm_provider
-        except:
+        except Exception:
             # dont let setting a hidden param block a mock_respose
             pass
-
+        logging.post_call(
+            input=messages,
+            api_key="my-secret-key",
+            original_response="my-original-response",
+        )
         return model_response
 
     except Exception as e:
