@@ -168,11 +168,11 @@ model LiteLLM_Config {
   param_value Json?
 }
 
-// View spend, model, api_key per request
+// View spend, model, hashed api_key per request
 model LiteLLM_SpendLogs {
   request_id          String @id
   call_type           String
-  api_key             String  @default ("")
+  api_key             String  @default ("") // Hashed API Token. Not the actual Virtual Key. Equivalent to 'token' column in LiteLLM_VerificationToken
   spend               Float    @default(0.0)
   total_tokens        Int     @default(0)
   prompt_tokens       Int     @default(0)
