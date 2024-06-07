@@ -97,27 +97,47 @@ def log_to_opentelemetry(func):
     @wraps(func)
     async def wrapper(*args, **kwargs):
         start_time = datetime.now()
-        result = await func(*args, **kwargs)
-        end_time = datetime.now()
 
-        # Log to OTEL only if "parent_otel_span" is in kwargs and is not None
-        if (
-            "parent_otel_span" in kwargs
-            and kwargs["parent_otel_span"] is not None
-            and "proxy_logging_obj" in kwargs
-            and kwargs["proxy_logging_obj"] is not None
-        ):
-            proxy_logging_obj = kwargs["proxy_logging_obj"]
-            await proxy_logging_obj.service_logging_obj.async_service_success_hook(
-                service=ServiceTypes.DB,
-                call_type=func.__name__,
-                parent_otel_span=kwargs["parent_otel_span"],
-                duration=0.0,
-                start_time=start_time,
-                end_time=end_time,
-            )
-        # end of logging to otel
-        return result
+        try:
+            result = await func(*args, **kwargs)
+            end_time = datetime.now()
+
+            # Log to OTEL only if "parent_otel_span" is in kwargs and is not None
+            if (
+                "parent_otel_span" in kwargs
+                and kwargs["parent_otel_span"] is not None
+                and "proxy_logging_obj" in kwargs
+                and kwargs["proxy_logging_obj"] is not None
+            ):
+                proxy_logging_obj = kwargs["proxy_logging_obj"]
+                await proxy_logging_obj.service_logging_obj.async_service_success_hook(
+                    service=ServiceTypes.DB,
+                    call_type=func.__name__,
+                    parent_otel_span=kwargs["parent_otel_span"],
+                    duration=0.0,
+                    start_time=start_time,
+                    end_time=end_time,
+                )
+            # end of logging to otel
+            return result
+        except Exception as e:
+            end_time = datetime.now()
+            if (
+                "parent_otel_span" in kwargs
+                and kwargs["parent_otel_span"] is not None
+                and "proxy_logging_obj" in kwargs
+                and kwargs["proxy_logging_obj"] is not None
+            ):
+                proxy_logging_obj = kwargs["proxy_logging_obj"]
+                await proxy_logging_obj.service_logging_obj.async_service_failure_hook(
+                    error=e,
+                    service=ServiceTypes.DB,
+                    call_type=func.__name__,
+                    duration=0.0,
+                    start_time=start_time,
+                    end_time=end_time,
+                )
+            raise e
 
     return wrapper
 
