@@ -2540,7 +2540,6 @@ def test_replicate_custom_prompt_dict():
                 }
             ],
             mock_response="Hello world",
-            mock_response="hello world",
             repetition_penalty=0.1,
             num_retries=3,
         )
