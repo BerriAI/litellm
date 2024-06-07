@@ -31,7 +31,7 @@ class ToolResultContentBlock(TypedDict, total=False):
 
 
 class ToolResultBlock(TypedDict, total=False):
-    content: Required[ToolResultContentBlock]
+    content: Required[List[ToolResultContentBlock]]
     toolUseId: Required[str]
     status: Literal["success", "error"]
 
@@ -54,6 +54,30 @@ class MessageBlock(TypedDict):
     role: Literal["user", "assistant"]
 
 
+class ConverseMetricsBlock(TypedDict):
+    latencyMs: float  # time in ms
+
+
+class ConverseResponseOutputBlock(TypedDict):
+    message: Optional[MessageBlock]
+
+
+class ConverseTokenUsageBlock(TypedDict):
+    inputTokens: int
+    outputTokens: int
+    totalTokens: int
+
+
+class ConverseResponseBlock(TypedDict):
+    additionalModelResponseFields: dict
+    metrics: ConverseMetricsBlock
+    output: ConverseResponseOutputBlock
+    stopReason: (
+        str  # end_turn | tool_use | max_tokens | stop_sequence | content_filtered
+    )
+    usage: ConverseTokenUsageBlock
+
+
 class ToolInputSchemaBlock(TypedDict):
     json: Optional[dict]
 
@@ -72,9 +96,15 @@ class SpecificToolChoiceBlock(TypedDict):
     name: str
 
 
+class ToolChoiceValuesBlock(TypedDict, total=False):
+    any: dict
+    auto: dict
+    tool: SpecificToolChoiceBlock
+
+
 class ToolConfigBlock(TypedDict, total=False):
     tools: Required[List[ToolBlock]]
-    toolChoice: Union[str, SpecificToolChoiceBlock]
+    toolChoice: Union[str, ToolChoiceValuesBlock]
 
 
 class RequestObject(TypedDict, total=False):
