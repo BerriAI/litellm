@@ -73,7 +73,8 @@ def print_verbose(print_statement):
 def safe_deep_copy(data):
     if isinstance(data, dict):
         # remove litellm_parent_otel_span since this is not picklable
-        data.pop("litellm_parent_otel_span", None)
+        if "metadata" in data and "litellm_parent_otel_span" in data["metadata"]:
+            data["metadata"].pop("litellm_parent_otel_span")
     new_data = copy.deepcopy(data)
     return new_data
 
