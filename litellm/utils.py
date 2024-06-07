@@ -9111,7 +9111,7 @@ def exception_type(
                 if "Unable to locate credentials" in error_str:
                     exception_mapping_worked = True
                     raise BadRequestError(
-                        message=f"SagemakerException - {error_str}",
+                        message=f"litellm.BadRequestError: SagemakerException - {error_str}",
                         model=model,
                         llm_provider="sagemaker",
                         response=original_exception.response,
@@ -9145,10 +9145,16 @@ def exception_type(
                 ):
                     exception_mapping_worked = True
                     raise BadRequestError(
-                        message=f"VertexAIException BadRequestError - {error_str}",
+                        message=f"litellm.BadRequestError: VertexAIException - {error_str}",
                         model=model,
                         llm_provider="vertex_ai",
-                        response=original_exception.response,
+                        response=httpx.Response(
+                            status_code=429,
+                            request=httpx.Request(
+                                method="POST",
+                                url=" https://cloud.google.com/vertex-ai/",
+                            ),
+                        ),
                         litellm_debug_info=extra_information,
                     )
                 elif (
@@ -9156,12 +9162,19 @@ def exception_type(
                     or "Content has no parts." in error_str
                 ):
                     exception_mapping_worked = True
-                    raise APIError(
-                        message=f"VertexAIException APIError - {error_str}",
+                    raise litellm.InternalServerError(
+                        message=f"litellm.InternalServerError: VertexAIException - {error_str}",
                         status_code=500,
                         model=model,
                         llm_provider="vertex_ai",
-                        request=original_exception.request,
+                        request=(
+                            original_exception.request
+                            if hasattr(original_exception, "request")
+                            else httpx.Request(
+                                method="POST",
+                                url=" https://cloud.google.com/vertex-ai/",
+                            )
+                        ),
                         litellm_debug_info=extra_information,
                     )
                 elif "403" in error_str:
@@ -9170,7 +9183,13 @@ def exception_type(
                         message=f"VertexAIException BadRequestError - {error_str}",
                         model=model,
                         llm_provider="vertex_ai",
-                        response=original_exception.response,
+                        response=httpx.Response(
+                            status_code=429,
+                            request=httpx.Request(
+                                method="POST",
+                                url=" https://cloud.google.com/vertex-ai/",
+                            ),
+                        ),
                         litellm_debug_info=extra_information,
                     )
                 elif "The response was blocked." in error_str:
@@ -9217,12 +9236,18 @@ def exception_type(
                             model=model,
                             llm_provider="vertex_ai",
                             litellm_debug_info=extra_information,
-                            response=original_exception.response,
+                            response=httpx.Response(
+                                status_code=429,
+                                request=httpx.Request(
+                                    method="POST",
+                                    url=" https://cloud.google.com/vertex-ai/",
+                                ),
+                            ),
                         )
                     if original_exception.status_code == 500:
                         exception_mapping_worked = True
-                        raise APIError(
-                            message=f"VertexAIException APIError - {error_str}",
+                        raise litellm.InternalServerError(
+                            message=f"VertexAIException InternalServerError - {error_str}",
                             status_code=500,
                             model=model,
                             llm_provider="vertex_ai",
