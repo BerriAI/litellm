@@ -71,11 +71,27 @@ def print_verbose(print_statement):
 
 
 def safe_deep_copy(data):
+    """
+    Safe Deep Copy
+
+    The LiteLLM Request has some object that can-not be pickled / deep copied
+
+    Use this function to safely deep copy the LiteLLM Request
+    """
+
+    # Step 1: Remove the litellm_parent_otel_span
     if isinstance(data, dict):
         # remove litellm_parent_otel_span since this is not picklable
         if "metadata" in data and "litellm_parent_otel_span" in data["metadata"]:
             data["metadata"].pop("litellm_parent_otel_span")
     new_data = copy.deepcopy(data)
+
+    # Step 2: re-add the litellm_parent_otel_span after doing a deep copy
+    if isinstance(data, dict):
+        if "metadata" in data and "litellm_parent_otel_span" in data["metadata"]:
+            data["metadata"]["litellm_parent_otel_span"] = data["metadata"][
+                "litellm_parent_otel_span"
+            ]
     return new_data
 
 
@@ -2890,6 +2906,7 @@ missing_keys_html_form = """
 
 def _to_ns(dt):
     return int(dt.timestamp() * 1e9)
+
 
 def get_error_message_str(e: Exception) -> str:
     error_message = ""
