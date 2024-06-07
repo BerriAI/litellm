@@ -21,7 +21,10 @@ model_list:
 
 general_settings:
   master_key: sk-1234
+  enforced_params:  
+    - user
+    - metadata
+    - metadata.generation_name
 
 litellm_settings:
-  callbacks: ["otel"]
   store_audit_logs: true

@@ -2878,6 +2878,16 @@ class ProxyConfig:
             )
             health_check_interval = general_settings.get("health_check_interval", 300)
 
+            ## check if user has set a premium feature in general_settings
+            if (
+                general_settings.get("enforced_params") is not None
+                and premium_user is not True
+            ):
+                raise ValueError(
+                    "Trying to use `enforced_params`"
+                    + CommonProxyErrors.not_premium_user.value
+                )
+
         router_params: dict = {
             "cache_responses": litellm.cache
             != None,  # cache if user passed in cache values
