@@ -7,6 +7,7 @@ import secrets, subprocess
 import hashlib, uuid
 import warnings
 import importlib
+from opentelemetry.trace import Span
 
 
 def showwarning(message, category, filename, lineno, file=None, line=None):
@@ -398,6 +399,7 @@ disable_spend_logs = False
 jwt_handler = JWTHandler()
 prompt_injection_detection_obj: Optional[_OPTIONAL_PromptInjectionDetection] = None
 store_model_in_db: bool = False
+open_telemetry_logger = None
 ### INITIALIZE GLOBAL LOGGING OBJECT ###
 proxy_logging_obj = ProxyLogging(user_api_key_cache=user_api_key_cache)
 ### REDIS QUEUE ###
@@ -498,7 +500,12 @@ async def user_api_key_auth(
         if isinstance(api_key, str):
             passed_in_key = api_key
             api_key = _get_bearer_token(api_key=api_key)
-
+        parent_otel_span: Optional[Span] = None
+        if open_telemetry_logger is not None:
+            parent_otel_span = open_telemetry_logger.tracer.start_span(
+                name="Received Proxy Server Request",
+                start_time=time.time(),
+            )
         ### USER-DEFINED AUTH FUNCTION ###
         if user_custom_auth is not None:
             response = await user_custom_auth(request=request, api_key=api_key)
@@ -580,6 +587,7 @@ async def user_api_key_auth(
                         team_id=team_id,
                         prisma_client=prisma_client,
                         user_api_key_cache=user_api_key_cache,
+                        parent_otel_span=parent_otel_span,
                     )
 
                 # [OPTIONAL] track spend for an org id - `LiteLLM_OrganizationTable`
@@ -591,6 +599,7 @@ async def user_api_key_auth(
                         org_id=org_id,
                         prisma_client=prisma_client,
                         user_api_key_cache=user_api_key_cache,
+                        parent_otel_span=parent_otel_span,
                     )
                 # [OPTIONAL] track spend against an internal employee - `LiteLLM_UserTable`
                 user_object = None
@@ -604,6 +613,7 @@ async def user_api_key_auth(
                         prisma_client=prisma_client,
                         user_api_key_cache=user_api_key_cache,
                         user_id_upsert=jwt_handler.is_upsert_user_id(),
+                        parent_otel_span=parent_otel_span,
                     )
 
                 # [OPTIONAL] track spend against an external user - `LiteLLM_EndUserTable`
@@ -617,6 +627,7 @@ async def user_api_key_auth(
                         end_user_id=end_user_id,
                         prisma_client=prisma_client,
                         user_api_key_cache=user_api_key_cache,
+                        parent_otel_span=parent_otel_span,
                     )
 
                 global_proxy_spend = None
@@ -715,6 +726,7 @@ async def user_api_key_auth(
                     end_user_id=request_data["user"],
                     prisma_client=prisma_client,
                     user_api_key_cache=user_api_key_cache,
+                    parent_otel_span=parent_otel_span,
                 )
                 if _end_user_object is not None:
                     end_user_params["allowed_model_region"] = (
@@ -2306,7 +2318,7 @@ class ProxyConfig:
         """
         Load config values into proxy global state
         """
-        global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, use_background_health_checks, health_check_interval, use_queue, custom_db_client, proxy_budget_rescheduler_max_time, proxy_budget_rescheduler_min_time, ui_access_mode, litellm_master_key_hash, proxy_batch_write_at, disable_spend_logs, prompt_injection_detection_obj, redis_usage_cache, store_model_in_db, premium_user
+        global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, use_background_health_checks, health_check_interval, use_queue, custom_db_client, proxy_budget_rescheduler_max_time, proxy_budget_rescheduler_min_time, ui_access_mode, litellm_master_key_hash, proxy_batch_write_at, disable_spend_logs, prompt_injection_detection_obj, redis_usage_cache, store_model_in_db, premium_user, open_telemetry_logger
 
         # Load existing config
         config = await self.get_config(config_file_path=config_file_path)
@@ -2430,7 +2442,9 @@ class ProxyConfig:
                                     OpenTelemetry,
                                 )
 
-                                imported_list.append(OpenTelemetry())
+                                open_telemetry_logger = OpenTelemetry()
+
+                                imported_list.append(open_telemetry_logger)
                             elif isinstance(callback, str) and callback == "presidio":
                                 from litellm.proxy.hooks.presidio_pii_masking import (
                                     _OPTIONAL_PresidioPIIMasking,
