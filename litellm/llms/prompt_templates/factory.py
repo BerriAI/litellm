@@ -1617,6 +1617,7 @@ from litellm.types.llms.bedrock import (
     ToolInputSchemaBlock as BedrockToolInputSchemaBlock,
     ToolSpecBlock as BedrockToolSpecBlock,
     ToolBlock as BedrockToolBlock,
+    ToolChoiceValuesBlock as BedrockToolChoiceValuesBlock,
 )
 
 
@@ -1814,7 +1815,7 @@ def _convert_to_bedrock_tool_call_result(
 
     tool_result_content_block = BedrockToolResultContentBlock(text=content)
     tool_result = BedrockToolResultBlock(
-        content=tool_result_content_block,
+        content=[tool_result_content_block],
         toolUseId=id,
     )
     content_block = BedrockContentBlock(toolResult=tool_result)

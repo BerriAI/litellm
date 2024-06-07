@@ -302,10 +302,7 @@ def test_completion_claude_3():
 
 @pytest.mark.parametrize(
     "model",
-    [
-        # "anthropic/claude-3-opus-20240229",
-        "cohere.command-r-plus-v1:0"
-    ],
+    ["anthropic/claude-3-opus-20240229", "anthropic.claude-3-sonnet-20240229-v1:0"],
 )
 def test_completion_claude_3_function_call(model):
     litellm.set_verbose = True
@@ -345,6 +342,7 @@ def test_completion_claude_3_function_call(model):
                 "type": "function",
                 "function": {"name": "get_current_weather"},
             },
+            drop_params=True,
         )
 
         # Add any assertions, here to check response args
@@ -375,6 +373,7 @@ def test_completion_claude_3_function_call(model):
             messages=messages,
             tools=tools,
             tool_choice="auto",
+            drop_params=True,
         )
         print(second_response)
     except Exception as e:
