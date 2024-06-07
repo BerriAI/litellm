@@ -1,6 +1,7 @@
 import json
 import logging
 from logging import Formatter
+import sys
 
 
 class JsonFormatter(Formatter):

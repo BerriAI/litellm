@@ -186,3 +186,13 @@ def test_load_test_token_counter(model):
     total_time = end_time - start_time
     print("model={}, total test time={}".format(model, total_time))
     assert total_time < 10, f"Total encoding time > 10s, {total_time}"
+
+def test_openai_token_with_image_and_text():
+    model = "gpt-4o"
+    full_request = {'model': 'gpt-4o', 'tools': [{'type': 'function', 'function': {'name': 'json', 'parameters': {'type': 'object', 'required': ['clause'], 'properties': {'clause': {'type': 'string'}}}, 'description': 'Respond with a JSON object.'}}], 'logprobs': False, 'messages': [{'role': 'user', 'content': [{'text': '\n    Just some long text, long long text, and you know it will be longer than 7 tokens definetly.', 'type': 'text'}]}], 'tool_choice': {'type': 'function', 'function': {'name': 'json'}}, 'exclude_models': [], 'disable_fallback': False, 'exclude_providers': []}
+    messages = full_request.get("messages", [])
+
+    token_count = token_counter(model=model, messages=messages)
+    print(token_count)
+    
+test_openai_token_with_image_and_text()

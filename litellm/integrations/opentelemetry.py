@@ -14,8 +14,11 @@ if TYPE_CHECKING:
 else:
     Span = Any
 
-LITELLM_TRACER_NAME = "litellm"
-LITELLM_RESOURCE = {"service.name": "litellm"}
+
+LITELLM_TRACER_NAME = os.getenv("OTEL_TRACER_NAME", "litellm")
+LITELLM_RESOURCE = {
+    "service.name": os.getenv("OTEL_SERVICE_NAME", "litellm"),
+}
 
 
 @dataclass
