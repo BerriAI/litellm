@@ -118,4 +118,4 @@ class _ENTERPRISE_BlockedUserList(CustomLogger):
         except HTTPException as e:
             raise e
         except Exception as e:
-            traceback.print_exc()
+            verbose_proxy_logger.error(traceback.format_exc())
