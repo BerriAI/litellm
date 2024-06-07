@@ -808,6 +808,7 @@ from .exceptions import (
     APIConnectionError,
     APIResponseValidationError,
     UnprocessableEntityError,
+    InternalServerError,
     LITELLM_EXCEPTION_TYPES,
 )
 from .budget_manager import BudgetManager
