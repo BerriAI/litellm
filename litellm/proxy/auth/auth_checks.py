@@ -18,44 +18,14 @@ from litellm.proxy._types import (
     LitellmUserRoles,
 )
 from typing import Optional, Literal, Union
-from litellm.proxy.utils import PrismaClient, ProxyLogging
+from litellm.proxy.utils import PrismaClient, ProxyLogging, log_to_opentelemetry
 from litellm.caching import DualCache
 import litellm
 from opentelemetry.trace import Span
-from functools import wraps
 from litellm.types.services import ServiceLoggerPayload, ServiceTypes
 from datetime import datetime
 
 all_routes = LiteLLMRoutes.openai_routes.value + LiteLLMRoutes.management_routes.value
-
-
-def log_to_opentelemetry(func):
-    @wraps(func)
-    async def wrapper(*args, **kwargs):
-        start_time = datetime.now()
-        result = await func(*args, **kwargs)
-        end_time = datetime.now()
-
-        # Log to OTEL only if "parent_otel_span" is in kwargs and is not None
-        if (
-            "parent_otel_span" in kwargs
-            and kwargs["parent_otel_span"] is not None
-            and "proxy_logging_obj" in kwargs
-            and kwargs["proxy_logging_obj"] is not None
-        ):
-            proxy_logging_obj = kwargs["proxy_logging_obj"]
-            await proxy_logging_obj.service_logging_obj.async_service_success_hook(
-                service=ServiceTypes.DB,
-                call_type=func.__name__,
-                parent_otel_span=kwargs["parent_otel_span"],
-                duration=0.0,
-                start_time=start_time,
-                end_time=end_time,
-            )
-        # end of logging to otel
-        return result
-
-    return wrapper
 
 
 def common_checks(
