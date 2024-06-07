@@ -5,7 +5,7 @@ warnings.filterwarnings("ignore", message=".*conflict with protected namespace.*
 ### INIT VARIABLES ###
 import threading, requests, os
 from typing import Callable, List, Optional, Dict, Union, Any, Literal
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.caching import Cache
 from litellm._logging import (
     set_verbose,
@@ -232,6 +232,7 @@ max_end_user_budget: Optional[float] = None
 #### RELIABILITY ####
 request_timeout: float = 6000
 module_level_aclient = AsyncHTTPHandler(timeout=request_timeout)
+module_level_client = HTTPHandler(timeout=request_timeout)
 num_retries: Optional[int] = None  # per model endpoint
 default_fallbacks: Optional[List] = None
 fallbacks: Optional[List] = None

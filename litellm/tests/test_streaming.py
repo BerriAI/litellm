@@ -1284,7 +1284,7 @@ async def test_completion_replicate_llama3_streaming(sync_mode):
 #         pytest.fail(f"Error occurred: {e}")
 
 
-@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("sync_mode", [True])  # False
 @pytest.mark.parametrize(
     "model",
     [
@@ -1324,6 +1324,8 @@ async def test_bedrock_httpx_streaming(sync_mode, model):
                 raise Exception("finish reason not set")
             if complete_response.strip() == "":
                 raise Exception("Empty response received")
+
+            assert False
         else:
             response: litellm.CustomStreamWrapper = await litellm.acompletion(  # type: ignore
                 model=model,

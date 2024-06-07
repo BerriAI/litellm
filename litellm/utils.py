@@ -239,6 +239,8 @@ def map_finish_reason(
         return "length"
     elif finish_reason == "tool_use":  # anthropic
         return "tool_calls"
+    elif finish_reason == "content_filtered":
+        return "content_filter"
     return finish_reason
 
 
@@ -6330,7 +6332,7 @@ def get_supported_openai_params(
     - None if unmapped
     """
     if custom_llm_provider == "bedrock":
-        return litellm.AmazonConverseConfig().get_supported_openai_params()
+        return litellm.AmazonConverseConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "ollama":
         return litellm.OllamaConfig().get_supported_openai_params()
     elif custom_llm_provider == "ollama_chat":
@@ -11242,12 +11244,27 @@ class CustomStreamWrapper:
                 if response_obj["is_finished"]:
                     self.received_finish_reason = response_obj["finish_reason"]
             elif self.custom_llm_provider == "bedrock":
+                from litellm.types.llms.bedrock import GenericStreamingChunk
+
                 if self.received_finish_reason is not None:
                     raise StopIteration
-                response_obj = self.handle_bedrock_stream(chunk)
+                response_obj: GenericStreamingChunk = chunk
                 completion_obj["content"] = response_obj["text"]
+
                 if response_obj["is_finished"]:
                     self.received_finish_reason = response_obj["finish_reason"]
+
+                if (
+                    self.stream_options
+                    and self.stream_options.get("include_usage", False) is True
+                    and response_obj["usage"] is not None
+                ):
+                    self.sent_stream_usage = True
+                    model_response.usage = litellm.Usage(
+                        prompt_tokens=response_obj["usage"]["inputTokens"],
+                        completion_tokens=response_obj["usage"]["outputTokens"],
+                        total_tokens=response_obj["usage"]["totalTokens"],
+                    )
             elif self.custom_llm_provider == "sagemaker":
                 print_verbose(f"ENTERS SAGEMAKER STREAMING for chunk {chunk}")
                 response_obj = self.handle_sagemaker_stream(chunk)
@@ -11509,7 +11526,7 @@ class CustomStreamWrapper:
                 and hasattr(model_response, "usage")
                 and hasattr(model_response.usage, "prompt_tokens")
             ):
-                if self.sent_first_chunk == False:
+                if self.sent_first_chunk is False:
                     completion_obj["role"] = "assistant"
                     self.sent_first_chunk = True
                 model_response.choices[0].delta = Delta(**completion_obj)
@@ -11677,6 +11694,8 @@ class CustomStreamWrapper:
 
     def __next__(self):
         try:
+            if self.completion_stream is None:
+                self.fetch_sync_stream()
             while True:
                 if (
                     isinstance(self.completion_stream, str)
@@ -11750,6 +11769,14 @@ class CustomStreamWrapper:
                     original_exception=e,
                     custom_llm_provider=self.custom_llm_provider,
                 )
+
+    def fetch_sync_stream(self):
+        if self.completion_stream is None and self.make_call is not None:
+            # Call make_call to get the completion stream
+            self.completion_stream = self.make_call(client=litellm.module_level_client)
+            self._stream_iter = self.completion_stream.__iter__()
+
+        return self.completion_stream
 
     async def fetch_stream(self):
         if self.completion_stream is None and self.make_call is not None:

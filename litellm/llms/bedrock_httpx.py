@@ -185,6 +185,37 @@ async def make_call(
     return completion_stream
 
 
+def make_sync_call(
+    client: Optional[HTTPHandler],
+    api_base: str,
+    headers: dict,
+    data: str,
+    model: str,
+    messages: list,
+    logging_obj,
+):
+    if client is None:
+        client = HTTPHandler()  # Create a new client if none provided
+
+    response = client.post(api_base, headers=headers, data=data, stream=True)
+
+    if response.status_code != 200:
+        raise BedrockError(status_code=response.status_code, message=response.read())
+
+    decoder = AWSEventStreamDecoder(model=model)
+    completion_stream = decoder.iter_bytes(response.iter_bytes(chunk_size=1024))
+
+    # LOGGING
+    logging_obj.post_call(
+        input=messages,
+        api_key="",
+        original_response=completion_stream,  # Pass the completion stream for logging
+        additional_args={"complete_input_dict": data},
+    )
+
+    return completion_stream
+
+
 class BedrockLLM(BaseLLM):
     """
     Example call
@@ -1081,6 +1112,7 @@ class BedrockLLM(BaseLLM):
 class AmazonConverseConfig:
     """
     Reference - https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
+    #2 - https://docs.aws.amazon.com/bedrock/latest/userguide/conversation-inference.html#conversation-inference-supported-models-features
     """
 
     maxTokens: Optional[int]
@@ -1118,30 +1150,32 @@ class AmazonConverseConfig:
             and v is not None
         }
 
-    def get_supported_openai_params(self) -> List[str]:
-        return [
+    def get_supported_openai_params(self, model: str) -> List[str]:
+        supported_params = [
             "max_tokens",
             "stream",
             "stream_options",
             "stop",
             "temperature",
             "top_p",
-            "tools",
-            "tool_choice",
         ]
+
+        if (
+            model.startswith("anthropic")
+            or model.startswith("mistral")
+            or model.startswith("cohere")
+        ):
+            supported_params.append("tools")
+
+        if model.startswith("anthropic") or model.startswith("mistral"):
+            # only anthropic and mistral support tool choice config. otherwise (E.g. cohere) will fail the call - https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
+            supported_params.append("tool_choice")
+
+        return supported_params
 
     def map_tool_choice_values(
         self, model: str, tool_choice: Union[str, dict], drop_params: bool
     ) -> Optional[ToolChoiceValuesBlock]:
-        if not model.startswith("anthropic") and not model.startswith("mistral"):
-            # only anthropic and mistral support tool choice config. otherwise (E.g. cohere) will fail the call - https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
-            if drop_params == True or litellm.drop_params == True:
-                return None
-            else:
-                raise litellm.utils.UnsupportedParamsError(
-                    message="Only Anthropic and Mistral on Bedrock support 'tool_choice'. To drop it from the call, set `litellm.drop_params = True.`",
-                    status_code=400,
-                )
         if tool_choice == "none":
             if litellm.drop_params is True or drop_params is True:
                 return None
@@ -1197,7 +1231,7 @@ class AmazonConverseConfig:
                 optional_params["tools"] = value
             if param == "tool_choice":
                 _tool_choice_value = self.map_tool_choice_values(
-                    model=model, tool_choice=value, drop_params=drop_params
+                    model=model, tool_choice=value, drop_params=drop_params  # type: ignore
                 )
                 if _tool_choice_value is not None:
                     optional_params["tool_choice"] = _tool_choice_value
@@ -1539,7 +1573,7 @@ class BedrockConverseLLM(BaseLLM):
         else:
             endpoint_url = f"https://bedrock-runtime.{aws_region_name}.amazonaws.com"
 
-        if (stream is not None and stream == True) and provider != "ai21":
+        if (stream is not None and stream is True) and provider != "ai21":
             endpoint_url = f"{endpoint_url}/model/{modelId}/converse-stream"
         else:
             endpoint_url = f"{endpoint_url}/model/{modelId}/converse"
@@ -1561,7 +1595,7 @@ class BedrockConverseLLM(BaseLLM):
         inference_params = copy.deepcopy(optional_params)
         additional_request_keys = []
         additional_request_params = {}
-        supported_converse_params = AmazonConverseConfig().get_config().keys()
+        supported_converse_params = AmazonConverseConfig.__annotations__.keys()
         supported_tool_call_params = ["tools", "tool_choice"]
         ## TRANSFORMATION ##
         # send all model-specific params in 'additional_request_params'
@@ -1596,6 +1630,7 @@ class BedrockConverseLLM(BaseLLM):
             "messages": bedrock_messages,
             "additionalModelRequestFields": additional_request_params,
             "system": system_content_blocks,
+            "inferenceConfig": InferenceConfig(**inference_params),
         }
         if bedrock_tool_config is not None:
             _data["toolConfig"] = bedrock_tool_config
@@ -1623,7 +1658,35 @@ class BedrockConverseLLM(BaseLLM):
         )
 
         ### ROUTING (ASYNC, STREAMING, SYNC)
+        if (stream is not None and stream is True) and provider != "ai21":
+
+            streaming_response = CustomStreamWrapper(
+                completion_stream=None,
+                make_call=partial(
+                    make_sync_call,
+                    client=None,
+                    api_base=prepped.url,
+                    headers=prepped.headers,
+                    data=data,
+                    model=model,
+                    messages=messages,
+                    logging_obj=logging_obj,
+                ),
+                model=model,
+                custom_llm_provider="bedrock",
+                logging_obj=logging_obj,
+            )
+
+            ## LOGGING
+            logging_obj.post_call(
+                input=messages,
+                api_key="",
+                original_response=streaming_response,
+                additional_args={"complete_input_dict": data},
+            )
+            return streaming_response
         ### COMPLETION
+
         if client is None or isinstance(client, AsyncHTTPHandler):
             _params = {}
             if timeout is not None:
@@ -1675,6 +1738,31 @@ class AWSEventStreamDecoder:
         self.parser = EventStreamJSONParser()
 
     def _chunk_parser(self, chunk_data: dict) -> GenericStreamingChunk:
+        text = ""
+        tool_str = ""
+        is_finished = False
+        finish_reason = ""
+        usage: Optional[ConverseTokenUsageBlock] = None
+        if "delta" in chunk_data:
+            delta_obj = ContentBlockDeltaEvent(**chunk_data["delta"])
+            if "text" in delta_obj:
+                text = delta_obj["text"]
+            elif "toolUse" in delta_obj:
+                tool_str = delta_obj["toolUse"]["input"]
+        elif "stopReason" in chunk_data:
+            finish_reason = map_finish_reason(chunk_data.get("stopReason", "stop"))
+        elif "usage" in chunk_data:
+            usage = ConverseTokenUsageBlock(**chunk_data["usage"])
+        response = GenericStreamingChunk(
+            text=text,
+            tool_str=tool_str,
+            is_finished=is_finished,
+            finish_reason=finish_reason,
+            usage=usage,
+        )
+        return response
+
+    def _old_chunk_parser(self, chunk_data: dict) -> GenericStreamingChunk:
         text = ""
         is_finished = False
         finish_reason = ""
@@ -1763,12 +1851,11 @@ class AWSEventStreamDecoder:
 
     def _parse_message_from_event(self, event) -> Optional[str]:
         response_dict = event.to_response_dict()
-        parsed_response = self.parser.parse(response_dict, get_response_stream_shape())
         if response_dict["status_code"] != 200:
             raise ValueError(f"Bad response code, expected 200: {response_dict}")
 
-        chunk = parsed_response.get("chunk")
+        chunk = response_dict.get("body")
         if not chunk:
             return None
 
-        return chunk.get("bytes").decode()  # type: ignore[no-any-return]
+        return chunk.decode()  # type: ignore[no-any-return]
