@@ -600,7 +600,6 @@ def completion(
     client = kwargs.get("client", None)
     ### Admin Controls ###
     no_log = kwargs.get("no-log", False)
-    litellm_parent_otel_span = kwargs.get("litellm_parent_otel_span", None)
     ######## end of unpacking kwargs ###########
     openai_params = [
         "functions",
@@ -690,7 +689,6 @@ def completion(
         "allowed_model_region",
         "model_config",
         "fastest_response",
-        "litellm_parent_otel_span",
     ]
 
     default_params = openai_params + litellm_params
@@ -875,7 +873,6 @@ def completion(
             input_cost_per_token=input_cost_per_token,
             output_cost_per_second=output_cost_per_second,
             output_cost_per_token=output_cost_per_token,
-            litellm_parent_otel_span=litellm_parent_otel_span,
         )
         logging.update_environment_variables(
             model=model,
