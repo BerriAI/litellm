@@ -106,7 +106,7 @@ async def add_litellm_data_to_request(
     data["metadata"]["headers"] = _headers
     data["metadata"]["endpoint"] = str(request.url)
     # Add the OTEL Parent Trace before sending it LiteLLM
-    data["litellm_parent_otel_span"] = user_api_key_dict.parent_otel_span
+    data["metadata"]["litellm_parent_otel_span"] = user_api_key_dict.parent_otel_span
 
     ### END-USER SPECIFIC PARAMS ###
     if user_api_key_dict.allowed_model_region is not None:
