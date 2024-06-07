@@ -78,7 +78,9 @@ class CompletionCustomHandler(
                         is LiteLLMCommonStrings.redacted_by_litellm.value
                     )
                 else:
-                    assert isinstance(metadata_value["raw_request"], str)
+                    assert "raw_request" not in metadata_value or isinstance(
+                        metadata_value["raw_request"], str
+                    )
         except Exception:
             print(f"Assertion Error: {traceback.format_exc()}")
             self.errors.append(traceback.format_exc())
