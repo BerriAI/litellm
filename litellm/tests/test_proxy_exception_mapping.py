@@ -103,7 +103,6 @@ def test_chat_completion_exception_azure(mock_acompletion, client):
             request_timeout=mock.ANY,
             metadata=mock.ANY,
             proxy_server_request=mock.ANY,
-            litellm_parent_otel_span=mock.ANY,
         )
 
         json_response = response.json()
@@ -211,7 +210,9 @@ def test_chat_completion_exception_any_model(client):
         )
         assert isinstance(openai_exception, openai.BadRequestError)
         _error_message = openai_exception.message
-        assert "chat_completion: Invalid model name passed in model=Lite-GPT-12" in str(_error_message)
+        assert "chat_completion: Invalid model name passed in model=Lite-GPT-12" in str(
+            _error_message
+        )
 
     except Exception as e:
         pytest.fail(f"LiteLLM Proxy test failed. Exception {str(e)}")
@@ -239,7 +240,9 @@ def test_embedding_exception_any_model(client):
         print("Exception raised=", openai_exception)
         assert isinstance(openai_exception, openai.BadRequestError)
         _error_message = openai_exception.message
-        assert "embeddings: Invalid model name passed in model=Lite-GPT-12" in str(_error_message)
+        assert "embeddings: Invalid model name passed in model=Lite-GPT-12" in str(
+            _error_message
+        )
 
     except Exception as e:
         pytest.fail(f"LiteLLM Proxy test failed. Exception {str(e)}")
@@ -272,7 +275,6 @@ def test_chat_completion_exception_azure_context_window(mock_acompletion, client
             request_timeout=mock.ANY,
             metadata=mock.ANY,
             proxy_server_request=mock.ANY,
-            litellm_parent_otel_span=mock.ANY,
         )
 
         json_response = response.json()
