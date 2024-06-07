@@ -12,6 +12,7 @@ from litellm.llms.prompt_templates.factory import (
     convert_to_gemini_tool_call_result,
     convert_to_gemini_tool_call_invoke,
 )
+from litellm.types.files import get_file_mime_type_for_file_type, get_file_type_from_extension, is_gemini_1_5_accepted_file_type, is_video_file_type
 
 
 class VertexAIError(Exception):
@@ -297,29 +298,31 @@ def _convert_gemini_role(role: str) -> Literal["user", "model"]:
 
 def _process_gemini_image(image_url: str) -> PartType:
     try:
-        if ".mp4" in image_url and "gs://" in image_url:
-            # Case 1: Videos with Cloud Storage URIs
-            part_mime = "video/mp4"
-            _file_data = FileDataType(mime_type=part_mime, file_uri=image_url)
-            return PartType(file_data=_file_data)
-        elif ".pdf" in image_url and "gs://" in image_url:
-            # Case 2: PDF's with Cloud Storage URIs
-            part_mime = "application/pdf"
-            _file_data = FileDataType(mime_type=part_mime, file_uri=image_url)
-            return PartType(file_data=_file_data)
-        elif "gs://" in image_url:
-            # Case 3: Images with Cloud Storage URIs
-            # The supported MIME types for images include image/png and image/jpeg.
-            part_mime = "image/png" if "png" in image_url else "image/jpeg"
-            _file_data = FileDataType(mime_type=part_mime, file_uri=image_url)
-            return PartType(file_data=_file_data)
+        # GCS URIs
+        if "gs://" in image_url:
+            # Figure out file type
+            extension_with_dot = os.path.splitext(image_url)[-1] # Ex: ".png"
+            extension = extension_with_dot[1:] # Ex: "png"
+
+            file_type = get_file_type_from_extension(extension)
+
+            # Validate the file type is supported by Gemini
+            if not is_gemini_1_5_accepted_file_type(file_type):
+                raise Exception(f"File type not supported by gemini - {file_type}")
+            
+            mime_type = get_file_mime_type_for_file_type(file_type)
+            file_data = FileDataType(mime_type=mime_type, file_uri=image_url)
+
+            return PartType(file_data=file_data)
+
+        # Direct links
         elif "https:/" in image_url:
-            # Case 4: Images with direct links
             image = _load_image_from_url(image_url)
             _blob = BlobType(data=image.data, mime_type=image._mime_type)
             return PartType(inline_data=_blob)
+        
+        # Base64 encoding
         elif "base64" in image_url:
-            # Case 5: Images with base64 encoding
             import base64, re
 
             # base 64 is passed as data:image/jpeg;base64,<base-64-encoded-image>
@@ -424,112 +427,6 @@ def _gemini_convert_messages_with_history(messages: list) -> List[ContentType]:
             )
 
     return contents
-
-
-def _gemini_vision_convert_messages(messages: list):
-    """
-    Converts given messages for GPT-4 Vision to Gemini format.
-
-    Args:
-        messages (list): The messages to convert. Each message can be a dictionary with a "content" key. The content can be a string or a list of elements. If it is a string, it will be concatenated to the prompt. If it is a list, each element will be processed based on its type:
-            - If the element is a dictionary with a "type" key equal to "text", its "text" value will be concatenated to the prompt.
-            - If the element is a dictionary with a "type" key equal to "image_url", its "image_url" value will be added to the list of images.
-
-    Returns:
-        tuple: A tuple containing the prompt (a string) and the processed images (a list of objects representing the images).
-
-    Raises:
-        VertexAIError: If the import of the 'vertexai' module fails, indicating that 'google-cloud-aiplatform' needs to be installed.
-        Exception: If any other exception occurs during the execution of the function.
-
-    Note:
-        This function is based on the code from the 'gemini/getting-started/intro_gemini_python.ipynb' notebook in the 'generative-ai' repository on GitHub.
-        The supported MIME types for images include 'image/png' and 'image/jpeg'.
-
-    Examples:
-        >>> messages = [
-        ...     {"content": "Hello, world!"},
-        ...     {"content": [{"type": "text", "text": "This is a text message."}, {"type": "image_url", "image_url": "example.com/image.png"}]},
-        ... ]
-        >>> _gemini_vision_convert_messages(messages)
-        ('Hello, world!This is a text message.', [<Part object>, <Part object>])
-    """
-    try:
-        import vertexai
-    except:
-        raise VertexAIError(
-            status_code=400,
-            message="vertexai import failed please run `pip install google-cloud-aiplatform`",
-        )
-    try:
-        from vertexai.preview.language_models import (
-            ChatModel,
-            CodeChatModel,
-            InputOutputTextPair,
-        )
-        from vertexai.language_models import TextGenerationModel, CodeGenerationModel
-        from vertexai.preview.generative_models import (
-            GenerativeModel,
-            Part,
-            GenerationConfig,
-            Image,
-        )
-
-        # given messages for gpt-4 vision, convert them for gemini
-        # https://github.com/GoogleCloudPlatform/generative-ai/blob/main/gemini/getting-started/intro_gemini_python.ipynb
-        prompt = ""
-        images = []
-        for message in messages:
-            if isinstance(message["content"], str):
-                prompt += message["content"]
-            elif isinstance(message["content"], list):
-                # see https://docs.litellm.ai/docs/providers/openai#openai-vision-models
-                for element in message["content"]:
-                    if isinstance(element, dict):
-                        if element["type"] == "text":
-                            prompt += element["text"]
-                        elif element["type"] == "image_url":
-                            image_url = element["image_url"]["url"]
-                            images.append(image_url)
-        # processing images passed to gemini
-        processed_images = []
-        for img in images:
-            if "gs://" in img:
-                # Case 1: Images with Cloud Storage URIs
-                # The supported MIME types for images include image/png and image/jpeg.
-                part_mime = "image/png" if "png" in img else "image/jpeg"
-                google_clooud_part = Part.from_uri(img, mime_type=part_mime)
-                processed_images.append(google_clooud_part)
-            elif "https:/" in img:
-                # Case 2: Images with direct links
-                image = _load_image_from_url(img)
-                processed_images.append(image)
-            elif ".mp4" in img and "gs://" in img:
-                # Case 3: Videos with Cloud Storage URIs
-                part_mime = "video/mp4"
-                google_clooud_part = Part.from_uri(img, mime_type=part_mime)
-                processed_images.append(google_clooud_part)
-            elif "base64" in img:
-                # Case 4: Images with base64 encoding
-                import base64, re
-
-                # base 64 is passed as data:image/jpeg;base64,<base-64-encoded-image>
-                image_metadata, img_without_base_64 = img.split(",")
-
-                # read mime_type from img_without_base_64=data:image/jpeg;base64
-                # Extract MIME type using regular expression
-                mime_type_match = re.match(r"data:(.*?);base64", image_metadata)
-
-                if mime_type_match:
-                    mime_type = mime_type_match.group(1)
-                else:
-                    mime_type = "image/jpeg"
-                decoded_img = base64.b64decode(img_without_base_64)
-                processed_image = Part.from_data(data=decoded_img, mime_type=mime_type)
-                processed_images.append(processed_image)
-        return prompt, processed_images
-    except Exception as e:
-        raise e
 
 
 def _get_client_cache_key(model: str, vertex_project: str, vertex_location: str):
