@@ -100,19 +100,70 @@ class OpenTelemetry(CustomLogger):
         from datetime import datetime
         from opentelemetry.trace import Status, StatusCode
 
+        _start_time_ns = start_time
+        _end_time_ns = end_time
+
+        if isinstance(start_time, float):
+            _start_time_ns = int(int(start_time) * 1e9)
+        else:
+            _start_time_ns = self._to_ns(start_time)
+
+        if isinstance(end_time, float):
+            _end_time_ns = int(int(end_time) * 1e9)
+        else:
+            _end_time_ns = self._to_ns(end_time)
+
         if parent_otel_span is not None:
             _span_name = payload.service
             service_logging_span = self.tracer.start_span(
                 name=_span_name,
                 context=trace.set_span_in_context(parent_otel_span),
-                start_time=self._to_ns(start_time),
+                start_time=_start_time_ns,
             )
             service_logging_span.set_attribute(key="call_type", value=payload.call_type)
             service_logging_span.set_attribute(
                 key="service", value=payload.service.value
             )
             service_logging_span.set_status(Status(StatusCode.OK))
-            service_logging_span.end(end_time=self._to_ns(end_time))
+            service_logging_span.end(end_time=_end_time_ns)
+
+    async def async_service_failure_hook(
+        self,
+        payload: ServiceLoggerPayload,
+        parent_otel_span: Optional[Span] = None,
+        start_time: Optional[datetime] = None,
+        end_time: Optional[datetime] = None,
+    ):
+        from opentelemetry import trace
+        from datetime import datetime
+        from opentelemetry.trace import Status, StatusCode
+
+        _start_time_ns = start_time
+        _end_time_ns = end_time
+
+        if isinstance(start_time, float):
+            _start_time_ns = int(int(start_time) * 1e9)
+        else:
+            _start_time_ns = self._to_ns(start_time)
+
+        if isinstance(end_time, float):
+            _end_time_ns = int(int(end_time) * 1e9)
+        else:
+            _end_time_ns = self._to_ns(end_time)
+
+        if parent_otel_span is not None:
+            _span_name = payload.service
+            service_logging_span = self.tracer.start_span(
+                name=_span_name,
+                context=trace.set_span_in_context(parent_otel_span),
+                start_time=_start_time_ns,
+            )
+            service_logging_span.set_attribute(key="call_type", value=payload.call_type)
+            service_logging_span.set_attribute(
+                key="service", value=payload.service.value
+            )
+            service_logging_span.set_status(Status(StatusCode.ERROR))
+            service_logging_span.end(end_time=_end_time_ns)
 
     async def async_post_call_failure_hook(
         self, original_exception: Exception, user_api_key_dict: UserAPIKeyAuth
