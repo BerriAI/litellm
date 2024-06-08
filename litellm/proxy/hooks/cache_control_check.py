@@ -27,7 +27,7 @@ class _PROXY_CacheControlCheck(CustomLogger):
         call_type: str,
     ):
         try:
-            self.print_verbose(f"Inside Cache Control Check Pre-Call Hook")
+            self.print_verbose("Inside Cache Control Check Pre-Call Hook")
             allowed_cache_controls = user_api_key_dict.allowed_cache_controls
 
             if data.get("cache", None) is None:

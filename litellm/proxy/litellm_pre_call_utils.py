@@ -3,6 +3,7 @@ from fastapi import Request
 from typing import Any, Dict, Optional, TYPE_CHECKING
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm._logging import verbose_proxy_logger, verbose_logger
+from litellm.types.utils import SupportedCacheControls
 
 if TYPE_CHECKING:
     from litellm.proxy.proxy_server import ProxyConfig as _ProxyConfig
@@ -67,6 +68,15 @@ async def add_litellm_data_to_request(
     if cache_control_header:
         cache_dict = parse_cache_control(cache_control_header)
         data["ttl"] = cache_dict.get("s-maxage")
+
+    ### KEY-LEVEL CACHNG
+    key_metadata = user_api_key_dict.metadata
+    if "cache" in key_metadata:
+        data["cache"] = {}
+        if isinstance(key_metadata["cache"], dict):
+            for k, v in key_metadata["cache"].items():
+                if k in SupportedCacheControls:
+                    data["cache"][k] = v
 
     verbose_proxy_logger.debug("receiving data: %s", data)
     # users can pass in 'user' param to /chat/completions. Don't override it

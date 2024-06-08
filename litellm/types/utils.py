@@ -7,6 +7,9 @@ class LiteLLMCommonStrings(Enum):
     redacted_by_litellm = "redacted by litellm. 'litellm.turn_off_message_logging=True'"
 
 
+SupportedCacheControls = ["ttl", "s-maxage", "no-cache", "no-store"]
+
+
 class CostPerToken(TypedDict):
     input_cost_per_token: float
     output_cost_per_token: float
