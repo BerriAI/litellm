@@ -223,10 +223,106 @@ class OpenTelemetry(CustomLogger):
         self.set_attributes(span, kwargs, response_obj)
         span.end(end_time=self._to_ns(end_time))
 
-    def set_attributes(self, span, kwargs, response_obj):
-        for key in ["model", "api_base", "api_version"]:
-            if key in kwargs:
-                span.set_attribute(key, kwargs[key])
+    def set_attributes(self, span: Span, kwargs, response_obj):
+        from opentelemetry.semconv.ai import SpanAttributes
+
+        optional_params = kwargs.get("optional_params", {})
+        litellm_params = kwargs.get("litellm_params", {}) or {}
+
+        # https://github.com/open-telemetry/semantic-conventions/blob/main/model/registry/gen-ai.yaml
+        # Following Conventions here: https://github.com/open-telemetry/semantic-conventions/blob/main/docs/gen-ai/llm-spans.md
+
+        #############################################
+        ########## LLM Request Attributes ###########
+        #############################################
+
+        # The name of the LLM a request is being made to
+        span.set_attribute(SpanAttributes.LLM_REQUEST_MODEL, kwargs.get("model"))
+
+        # The Generative AI Provider: Azure, OpenAI, etc.
+        span.set_attribute(
+            SpanAttributes.LLM_SYSTEM,
+            litellm_params.get("custom_llm_provider", "Unknown"),
+        )
+
+        # The maximum number of tokens the LLM generates for a request.
+        span.set_attribute(
+            SpanAttributes.LLM_REQUEST_MAX_TOKENS, optional_params.get("max_tokens")
+        )
+
+        # The temperature setting for the LLM request.
+        span.set_attribute(
+            SpanAttributes.LLM_REQUEST_TEMPERATURE, optional_params.get("temperature")
+        )
+
+        # The top_p sampling setting for the LLM request.
+        span.set_attribute(
+            SpanAttributes.LLM_REQUEST_TOP_P, optional_params.get("top_p")
+        )
+
+        span.set_attribute(
+            SpanAttributes.LLM_IS_STREAMING, optional_params.get("stream")
+        )
+
+        span.set_attribute(
+            SpanAttributes.LLM_REQUEST_FUNCTIONS,
+            optional_params.get("tools"),
+        )
+
+        span.set_attribute(SpanAttributes.LLM_USER, optional_params.get("user"))
+
+        for idx, prompt in enumerate(kwargs.get("messages")):
+            span.set_attribute(
+                f"{SpanAttributes.LLM_PROMPTS}.{idx}.role",
+                prompt.get("role"),
+            )
+            span.set_attribute(
+                f"{SpanAttributes.LLM_PROMPTS}.{idx}.content",
+                prompt.get("content"),
+            )
+
+        #############################################
+        ########## LLM Response Attributes ##########
+        #############################################
+
+        for idx, choice in enumerate(response_obj.get("choices")):
+            span.set_attribute(
+                f"{SpanAttributes.LLM_COMPLETIONS}.{idx}.finish_reason",
+                choice.get("finish_reason"),
+            )
+            span.set_attribute(
+                f"{SpanAttributes.LLM_COMPLETIONS}.{idx}.role",
+                choice.get("message").get("role"),
+            )
+            span.set_attribute(
+                f"{SpanAttributes.LLM_COMPLETIONS}.{idx}.content",
+                choice.get("message").get("content"),
+            )
+
+        # The unique identifier for the completion.
+        span.set_attribute("gen_ai.response.id", response_obj.get("id"))
+
+        # The model used to generate the response.
+        span.set_attribute(SpanAttributes.LLM_RESPONSE_MODEL, response_obj.get("model"))
+
+        usage = response_obj.get("usage")
+        if usage:
+            span.set_attribute(
+                SpanAttributes.LLM_USAGE_TOTAL_TOKENS,
+                usage.get("total_tokens"),
+            )
+
+            # The number of tokens used in the LLM response (completion).
+            span.set_attribute(
+                SpanAttributes.LLM_USAGE_COMPLETION_TOKENS,
+                usage.get("completion_tokens"),
+            )
+
+            # The number of tokens used in the LLM prompt.
+            span.set_attribute(
+                SpanAttributes.LLM_USAGE_PROMPT_TOKENS,
+                usage.get("prompt_tokens"),
+            )
 
     def _to_ns(self, dt):
         return int(dt.timestamp() * 1e9)
@@ -244,7 +340,7 @@ class OpenTelemetry(CustomLogger):
         proxy_server_request = litellm_params.get("proxy_server_request", {}) or {}
         headers = proxy_server_request.get("headers", {}) or {}
         traceparent = headers.get("traceparent", None)
-        _metadata = litellm_params.get("metadata", {})
+        _metadata = litellm_params.get("metadata", {}) or {}
         parent_otel_span = _metadata.get("litellm_parent_otel_span", None)
 
         """
