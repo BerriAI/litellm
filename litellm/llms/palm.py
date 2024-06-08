@@ -52,14 +52,14 @@ class PalmConfig:
     max_output_tokens: Optional[int] = None
 
     def __init__(
-        self,
-        context: Optional[str] = None,
-        examples: Optional[list] = None,
-        temperature: Optional[float] = None,
-        candidate_count: Optional[int] = None,
-        top_k: Optional[int] = None,
-        top_p: Optional[float] = None,
-        max_output_tokens: Optional[int] = None,
+            self,
+            context: Optional[str] = None,
+            examples: Optional[list] = None,
+            temperature: Optional[float] = None,
+            candidate_count: Optional[int] = None,
+            top_k: Optional[int] = None,
+            top_p: Optional[float] = None,
+            max_output_tokens: Optional[int] = None,
     ) -> None:
         locals_ = locals()
         for key, value in locals_.items():
@@ -72,7 +72,7 @@ class PalmConfig:
             k: v
             for k, v in cls.__dict__.items()
             if not k.startswith("__")
-            and not isinstance(
+               and not isinstance(
                 v,
                 (
                     types.FunctionType,
@@ -81,21 +81,21 @@ class PalmConfig:
                     staticmethod,
                 ),
             )
-            and v is not None
+               and v is not None
         }
 
-
 def completion(
-    model: str,
-    messages: list,
-    model_response: ModelResponse,
-    print_verbose: Callable,
-    api_key,
-    encoding,
-    logging_obj,
-    optional_params=None,
-    litellm_params=None,
-    logger_fn=None,
+        model: str,
+        context: str,
+        messages: list,
+        model_response: ModelResponse,
+        print_verbose: Callable,
+        api_key,
+        encoding,
+        logging_obj,
+        optional_params=None,
+        litellm_params=None,
+        logger_fn=None,
 ):
     try:
         import google.generativeai as palm  # type: ignore
@@ -105,8 +105,6 @@ def completion(
         )
     palm.configure(api_key=api_key)
 
-    model = model
-
     ## Load Config
     inference_params = copy.deepcopy(optional_params)
     inference_params.pop(
@@ -115,9 +113,10 @@ def completion(
     config = litellm.PalmConfig.get_config()
     for k, v in config.items():
         if (
-            k not in inference_params
+                k not in inference_params
         ):  # completion(top_k=3) > palm_config(top_k=3) <- allows for dynamic variables to be passed in
             inference_params[k] = v
+<<<<<<< Updated upstream
     prompt = []
     palm_messages = []     # Construct messages with roles
     context = inference_params.get("context", None)
@@ -125,15 +124,44 @@ def completion(
         role = message.get("role", "user")
         palm_messages.append({"author": role, "content": message["content"]})
         prompt.append({"context": context, "messages": palm_messages})
+=======
+
+    prompt = ""
+    formatted_messages = []
+    for message in messages:
+        role = message.get('role', 'system')
+        content = message["content"]
+
+        if "role" not in message:
+            prompt += f"{message['content']}\n"
+        elif role == "user":
+            prompt += f"User: {content}\n"
+        else:
+            prompt += f"System: {content}\n"
+
+        formatted_messages.append({"author": role, "content":content})
+
+    request_payload = {
+        "context": context,
+        "messages": formatted_messages,
+        **inference_params,
+    }
+
+>>>>>>> Stashed changes
     ## LOGGING
     logging_obj.pre_call(
-        input=prompt,
+        input=request_payload,
         api_key="",
         additional_args={"complete_input_dict": {"inference_params": inference_params}},
     )
+
     ## COMPLETION CALL
     try:
+<<<<<<< Updated upstream
         response = palm.chat(messages=palm_messages, context=context, **inference_params)
+=======
+        response = palm.generate_text(**request_payload)
+>>>>>>> Stashed changes
     except Exception as e:
         raise PalmError(
             message=str(e),
@@ -142,12 +170,13 @@ def completion(
 
     ## LOGGING
     logging_obj.post_call(
-        input=prompt,
+        input=request_payload,
         api_key="",
         original_response=response,
         additional_args={"complete_input_dict": {}},
     )
     print_verbose(f"raw model_response: {response}")
+
     ## RESPONSE OBJECT
     completion_response = response
     try:
@@ -190,8 +219,3 @@ def completion(
     )
     setattr(model_response, "usage", usage)
     return model_response
-
-
-def embedding():
-    # logic for parsing in - calling - parsing out model embedding calls
-    pass
