@@ -294,6 +294,7 @@ def handle_prediction_response_streaming(prediction_url, api_token, print_verbos
                 new_output = output_string[len(previous_output) :]
                 print_verbose(f"New chunk: {new_output}")
                 yield {"output": new_output, "status": status}
+
                 previous_output = output_string
             status = response_data["status"]
             if status == "failed":
