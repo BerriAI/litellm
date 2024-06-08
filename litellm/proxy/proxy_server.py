@@ -10283,36 +10283,39 @@ async def team_member_delete(
             detail={"error": "Either user_id or user_email needs to be passed in"},
         )
 
-    existing_team_row = await prisma_client.get_data(  # type: ignore
-        team_id=data.team_id, table_name="team", query_type="find_unique"
+    _existing_team_row = await prisma_client.db.litellm_teamtable.find_unique(
+        where={"team_id": data.team_id}
     )
 
+    if _existing_team_row is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "Team id={} does not exist in db".format(data.team_id)},
+        )
+    existing_team_row = LiteLLM_TeamTable(**_existing_team_row.model_dump())
+
     ## DELETE MEMBER FROM TEAM
-    new_team_members = []
+    new_team_members: List[dict] = []
     for m in existing_team_row.members_with_roles:
         if (
             data.user_id is not None
-            and m["user_id"] is not None
-            and data.user_id == m["user_id"]
+            and m.user_id is not None
+            and data.user_id == m.user_id
         ):
             continue
         elif (
             data.user_email is not None
-            and m["user_email"] is not None
-            and data.user_email == m["user_email"]
+            and m.user_email is not None
+            and data.user_email == m.user_email
         ):
             continue
-        new_team_members.append(m)
-    existing_team_row.members_with_roles = new_team_members
-    complete_team_data = LiteLLM_TeamTable(
-        **existing_team_row.model_dump(),
-    )
+        new_team_members.append(m.model_dump())
 
-    team_row = await prisma_client.update_data(
-        update_key_values=complete_team_data.json(exclude_none=True),
-        data=complete_team_data.json(exclude_none=True),
-        table_name="team",
-        team_id=data.team_id,
+    _ = await prisma_client.db.litellm_teamtable.update(
+        where={
+            "team_id": data.team_id,
+        },
+        data={"members_with_roles": json.dumps(new_team_members)},  # type: ignore
     )
 
     ## DELETE TEAM ID from USER ROW, IF EXISTS ##
@@ -10322,36 +10325,26 @@ async def team_member_delete(
         key_val["user_id"] = data.user_id
     elif data.user_email is not None:
         key_val["user_email"] = data.user_email
-    existing_user_rows = await prisma_client.get_data(
-        key_val=key_val,
-        table_name="user",
-        query_type="find_all",
+    existing_user_rows = await prisma_client.db.litellm_usertable.find_many(
+        where=key_val  # type: ignore
     )
-    user_data = {  # type: ignore
-        "teams": [],
-        "models": team_row["data"].models,
-    }
+
     if existing_user_rows is not None and (
         isinstance(existing_user_rows, list) and len(existing_user_rows) > 0
     ):
         for existing_user in existing_user_rows:
             team_list = []
-            if hasattr(existing_user, "teams"):
+            if data.team_id in existing_user.teams:
                 team_list = existing_user.teams
                 team_list.remove(data.team_id)
-                user_data["user_id"] = existing_user.user_id
-                await prisma_client.update_data(
-                    user_id=existing_user.user_id,
-                    data=user_data,
-                    update_key_values_custom_query={
-                        "teams": {
-                            "set": [team_row["team_id"]],
-                        }
+                await prisma_client.db.litellm_usertable.update(
+                    where={
+                        "user_id": existing_user.user_id,
                     },
-                    table_name="user",
+                    data={"teams": {"set": team_list}},
                 )
 
-    return team_row["data"]
+    return existing_team_row
 
 
 @router.post(
