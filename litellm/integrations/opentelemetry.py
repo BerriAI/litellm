@@ -23,7 +23,8 @@ LITELLM_TRACER_NAME = os.getenv("OTEL_TRACER_NAME", "litellm")
 LITELLM_RESOURCE = {
     "service.name": os.getenv("OTEL_SERVICE_NAME", "litellm"),
 }
-RAW_REQUEST_SPAN_NAME = "RAW_GENAI_REQUEST"
+RAW_REQUEST_SPAN_NAME = "raw_gen_ai_request"
+LITELLM_REQUEST_SPAN_NAME = "litellm_request"
 
 
 @dataclass
@@ -412,7 +413,7 @@ class OpenTelemetry(CustomLogger):
         return int(dt.timestamp() * 1e9)
 
     def _get_span_name(self, kwargs):
-        return f"litellm-{kwargs.get('call_type', 'completion')}"
+        return LITELLM_REQUEST_SPAN_NAME
 
     def _get_span_context(self, kwargs):
         from opentelemetry.trace.propagation.tracecontext import (
