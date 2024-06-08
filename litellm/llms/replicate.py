@@ -155,42 +155,101 @@ def handle_prediction_response(prediction_url, api_token, print_verbose, streami
 
     status = ""
     logs = ""
-    previous_output = ""
 
     while status not in ["succeeded", "failed", "canceled"]:
+        print_verbose(f"replicate: polling endpoint: {prediction_url}")
+        time.sleep(0.5)
         try:
-            print_verbose(f"replicate: polling endpoint: {prediction_url}")
-            time.sleep(0.5)
             response = requests.get(prediction_url, headers=headers)
             response.raise_for_status()
-
-            response_data = response.json()
-            status = response_data.get("status", None)
-
-            if "output" in response_data:
-                output_string = "".join(response_data["output"])
-
-                if streaming:
-                    new_output = output_string[len(previous_output):]
-                    print_verbose(f"New chunk: {new_output}")
-                    yield {"output": new_output, "status": status}
-                    previous_output = output_string
-                else:
-                    print_verbose(f"Non-streamed output: {output_string}")
-
-            if status == "failed":
-                replicate_error = response_data.get("error", "")
-                raise ReplicateError(400, f"Error: {replicate_error}, \nReplicate logs: {logs}")
-
         except requests.RequestException as e:
-            print_verbose(f"Request failed: {e}")
+            print_verbose(f"Replicate: Exception occurred: {str(e)}")
+            continue
 
-    if not streaming and status != "succeeded":
-        raise ReplicateError(400, "Prediction failed.")
+        response_data = response.json()
+        output_string = "".join(response_data.get("output", ""))
+        print_verbose(f"Non-streamed output: {output_string}")
 
-    return output_string if not streaming else None
+        status = response_data.get("status", "")
+        logs = response_data.get("logs", "")
+        if status == "failed":
+            replicate_error = response_data.get("error", "")
+            raise ReplicateError(
+                status_code=400,
+                message=f"Error: {replicate_error}, \nReplicate logs: {logs}",
+            )
 
+    return output_string, logs
 
+# Function to handle prediction response (non-streaming)
+def handle_prediction_response(prediction_url, api_token, print_verbose):
+    output_string = ""
+    headers = {
+        "Authorization": f"Token {api_token}",
+        "Content-Type": "application/json",
+    }
+
+    status = ""
+    logs = ""
+    while status not in ["succeeded", "failed", "canceled"]:
+        print_verbose(f"replicate: polling endpoint: {prediction_url}")
+        time.sleep(0.5)
+        try:
+            response = requests.get(prediction_url, headers=headers)
+            response.raise_for_status()
+        except requests.RequestException as e:
+            print_verbose(f"Replicate: Exception occurred: {str(e)}")
+            continue
+
+        response_data = response.json()
+        output_string = "".join(response_data.get("output", ""))
+        print_verbose(f"Non-streamed output: {output_string}")
+
+        status = response_data.get("status", "")
+        logs = response_data.get("logs", "")
+        if status == "failed":
+            replicate_error = response_data.get("error", "")
+            raise ReplicateError(
+                status_code=400,
+                message=f"Error: {replicate_error}, \nReplicate logs: {logs}",
+            )
+
+    return output_string, logs
+
+# Function to handle prediction response (streaming)
+def handle_prediction_response_streaming(prediction_url, api_token, print_verbose):
+    previous_output = ""
+    output_string = ""
+
+    headers = {
+        "Authorization": f"Token {api_token}",
+        "Content-Type": "application/json",
+    }
+    status = ""
+    while status not in ["succeeded", "failed", "canceled"]:
+        time.sleep(0.5)  # prevent being rate-limited by replicate
+        print_verbose(f"replicate: polling endpoint: {prediction_url}")
+        try:
+            response = requests.get(prediction_url, headers=headers)
+            response.raise_for_status()
+        except requests.RequestException as e:
+            print_verbose(f"Replicate: Exception occurred: {str(e)}")
+            continue
+
+        response_data = response.json()
+        status = response_data.get("status", "")
+        output_string = "".join(response_data.get("output", ""))
+        new_output = output_string[len(previous_output):]
+        print_verbose(f"New chunk: {new_output}")
+        yield {"output": new_output, "status": status}
+        previous_output = output_string
+
+        if status == "failed":
+            replicate_error = response_data.get("error", "")
+            raise ReplicateError(
+                status_code=400,
+                message=f"Error: {replicate_error}"
+            )
 
 # Function to extract version ID from model string
 def model_to_version_id(model):
