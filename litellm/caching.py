@@ -26,6 +26,16 @@ def print_verbose(print_statement):
         pass
 
 
+def _get_parent_otel_span_from_kwargs(kwargs: Optional[dict] = None):
+    try:
+        if kwargs is None:
+            return None
+        _metadata = kwargs.get("metadata") or {}
+        return _metadata.get("litellm_parent_otel_span")
+    except:
+        return None
+
+
 class BaseCache:
     def set_cache(self, key, value, **kwargs):
         raise NotImplementedError
@@ -233,6 +243,9 @@ class RedisCache(BaseCache):
                     service=ServiceTypes.REDIS,
                     duration=_duration,
                     call_type="increment_cache",
+                    start_time=start_time,
+                    end_time=end_time,
+                    parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
                 )
             )
             return result
@@ -246,6 +259,9 @@ class RedisCache(BaseCache):
                     duration=_duration,
                     error=e,
                     call_type="increment_cache",
+                    start_time=start_time,
+                    end_time=end_time,
+                    parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
                 )
             )
             verbose_logger.error(
@@ -276,6 +292,8 @@ class RedisCache(BaseCache):
                         service=ServiceTypes.REDIS,
                         duration=_duration,
                         call_type="async_scan_iter",
+                        start_time=start_time,
+                        end_time=end_time,
                     )
                 )  # DO NOT SLOW DOWN CALL B/C OF THIS
             return keys
@@ -290,6 +308,8 @@ class RedisCache(BaseCache):
                     duration=_duration,
                     error=e,
                     call_type="async_scan_iter",
+                    start_time=start_time,
+                    end_time=end_time,
                 )
             )
             raise e
@@ -303,7 +323,12 @@ class RedisCache(BaseCache):
             _duration = end_time - start_time
             asyncio.create_task(
                 self.service_logger_obj.async_service_failure_hook(
-                    service=ServiceTypes.REDIS, duration=_duration, error=e
+                    service=ServiceTypes.REDIS,
+                    duration=_duration,
+                    error=e,
+                    start_time=start_time,
+                    end_time=end_time,
+                    parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
                 )
             )
             # NON blocking - notify users Redis is throwing an exception
@@ -331,6 +356,9 @@ class RedisCache(BaseCache):
                         service=ServiceTypes.REDIS,
                         duration=_duration,
                         call_type="async_set_cache",
+                        start_time=start_time,
+                        end_time=end_time,
+                        parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
                     )
                 )
             except Exception as e:
@@ -342,6 +370,9 @@ class RedisCache(BaseCache):
                         duration=_duration,
                         error=e,
                         call_type="async_set_cache",
+                        start_time=start_time,
+                        end_time=end_time,
+                        parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
                     )
                 )
                 # NON blocking - notify users Redis is throwing an exception
@@ -351,7 +382,7 @@ class RedisCache(BaseCache):
                     value,
                 )
 
-    async def async_set_cache_pipeline(self, cache_list, ttl=None):
+    async def async_set_cache_pipeline(self, cache_list, ttl=None, **kwargs):
         """
         Use Redis Pipelines for bulk write operations
         """
@@ -389,6 +420,9 @@ class RedisCache(BaseCache):
                     service=ServiceTypes.REDIS,
                     duration=_duration,
                     call_type="async_set_cache_pipeline",
+                    start_time=start_time,
+                    end_time=end_time,
+                    parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
                 )
             )
             return results
@@ -402,6 +436,9 @@ class RedisCache(BaseCache):
                     duration=_duration,
                     error=e,
                     call_type="async_set_cache_pipeline",
+                    start_time=start_time,
+                    end_time=end_time,
+                    parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
                 )
             )
 
@@ -434,6 +471,9 @@ class RedisCache(BaseCache):
                         service=ServiceTypes.REDIS,
                         duration=_duration,
                         call_type="async_increment",
+                        start_time=start_time,
+                        end_time=end_time,
+                        parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
                     )
                 )
                 return result
@@ -447,6 +487,9 @@ class RedisCache(BaseCache):
                     duration=_duration,
                     error=e,
                     call_type="async_increment",
+                    start_time=start_time,
+                    end_time=end_time,
+                    parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
                 )
             )
             verbose_logger.error(
@@ -540,6 +583,9 @@ class RedisCache(BaseCache):
                         service=ServiceTypes.REDIS,
                         duration=_duration,
                         call_type="async_get_cache",
+                        start_time=start_time,
+                        end_time=end_time,
+                        parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
                     )
                 )
                 return response
@@ -553,6 +599,9 @@ class RedisCache(BaseCache):
                         duration=_duration,
                         error=e,
                         call_type="async_get_cache",
+                        start_time=start_time,
+                        end_time=end_time,
+                        parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
                     )
                 )
                 # NON blocking - notify users Redis is throwing an exception
@@ -583,6 +632,8 @@ class RedisCache(BaseCache):
                     service=ServiceTypes.REDIS,
                     duration=_duration,
                     call_type="async_batch_get_cache",
+                    start_time=start_time,
+                    end_time=end_time,
                 )
             )
 
@@ -608,6 +659,8 @@ class RedisCache(BaseCache):
                     duration=_duration,
                     error=e,
                     call_type="async_batch_get_cache",
+                    start_time=start_time,
+                    end_time=end_time,
                 )
             )
             print_verbose(f"Error occurred in pipeline read - {str(e)}")
@@ -1395,7 +1448,7 @@ class DualCache(BaseCache):
 
             if self.redis_cache is not None and local_only == False:
                 await self.redis_cache.async_set_cache_pipeline(
-                    cache_list=cache_list, ttl=kwargs.get("ttl", None)
+                    cache_list=cache_list, ttl=kwargs.get("ttl", None), **kwargs
                 )
         except Exception as e:
             verbose_logger.error(f"LiteLLM Cache: Excepton async add_cache: {str(e)}")
