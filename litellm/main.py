@@ -475,11 +475,13 @@ def mock_completion(
         except Exception:
             # dont let setting a hidden param block a mock_respose
             pass
-        logging.post_call(
-            input=messages,
-            api_key="my-secret-key",
-            original_response="my-original-response",
-        )
+
+        if logging is not None:
+            logging.post_call(
+                input=messages,
+                api_key="my-secret-key",
+                original_response="my-original-response",
+            )
         return model_response
 
     except Exception as e:
