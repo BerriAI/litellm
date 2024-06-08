@@ -302,6 +302,8 @@ class OpenTelemetry(CustomLogger):
                     )
 
                 if prompt.get("content"):
+                    if not isinstance(prompt.get("content"), str):
+                        prompt["content"] = str(prompt.get("content"))
                     span.set_attribute(
                         f"{SpanAttributes.LLM_PROMPTS}.{idx}.content",
                         prompt.get("content"),
