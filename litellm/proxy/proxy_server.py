@@ -6426,7 +6426,10 @@ async def supported_openai_params(model: str):
 async def generate_key_fn(
     data: GenerateKeyRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    Authorization: Optional[str] = Header(None),
+    litellm_changed_by: Optional[str] = Header(
+        None,
+        description="The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
+    ),
 ):
     """
     Generate an API key based on the provided data.
@@ -6611,8 +6614,10 @@ async def generate_key_fn(
                     request_data=LiteLLM_AuditLogs(
                         id=str(uuid.uuid4()),
                         updated_at=datetime.now(timezone.utc),
-                        changed_by=user_api_key_dict.user_id
+                        changed_by=litellm_changed_by
+                        or user_api_key_dict.user_id
                         or litellm_proxy_admin_name,
+                        changed_by_api_key=user_api_key_dict.api_key,
                         table_name=LitellmTableNames.KEY_TABLE_NAME,
                         object_id=response.get("token_id", ""),
                         action="created",
@@ -6654,6 +6659,10 @@ async def update_key_fn(
     request: Request,
     data: UpdateKeyRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    litellm_changed_by: Optional[str] = Header(
+        None,
+        description="The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
+    ),
 ):
     """
     Update an existing key
@@ -6714,8 +6723,10 @@ async def update_key_fn(
                     request_data=LiteLLM_AuditLogs(
                         id=str(uuid.uuid4()),
                         updated_at=datetime.now(timezone.utc),
-                        changed_by=user_api_key_dict.user_id
+                        changed_by=litellm_changed_by
+                        or user_api_key_dict.user_id
                         or litellm_proxy_admin_name,
+                        changed_by_api_key=user_api_key_dict.api_key,
                         table_name=LitellmTableNames.KEY_TABLE_NAME,
                         object_id=data.key,
                         action="updated",
@@ -6751,6 +6762,10 @@ async def update_key_fn(
 async def delete_key_fn(
     data: KeyRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    litellm_changed_by: Optional[str] = Header(
+        None,
+        description="The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
+    ),
 ):
     """
     Delete a key from the key management system.
@@ -6804,8 +6819,10 @@ async def delete_key_fn(
                         request_data=LiteLLM_AuditLogs(
                             id=str(uuid.uuid4()),
                             updated_at=datetime.now(timezone.utc),
-                            changed_by=user_api_key_dict.user_id
+                            changed_by=litellm_changed_by
+                            or user_api_key_dict.user_id
                             or litellm_proxy_admin_name,
+                            changed_by_api_key=user_api_key_dict.api_key,
                             table_name=LitellmTableNames.KEY_TABLE_NAME,
                             object_id=key,
                             action="deleted",
@@ -9809,6 +9826,10 @@ async def delete_end_user(
 async def new_team(
     data: NewTeamRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    litellm_changed_by: Optional[str] = Header(
+        None,
+        description="The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
+    ),
 ):
     """
     Allow users to create a new team. Apply user permissions to their team.
@@ -9983,7 +10004,10 @@ async def new_team(
                 request_data=LiteLLM_AuditLogs(
                     id=str(uuid.uuid4()),
                     updated_at=datetime.now(timezone.utc),
-                    changed_by=user_api_key_dict.user_id or litellm_proxy_admin_name,
+                    changed_by=litellm_changed_by
+                    or user_api_key_dict.user_id
+                    or litellm_proxy_admin_name,
+                    changed_by_api_key=user_api_key_dict.api_key,
                     table_name=LitellmTableNames.TEAM_TABLE_NAME,
                     object_id=data.team_id,
                     action="created",
@@ -10037,6 +10061,10 @@ async def create_audit_log_for_update(request_data: LiteLLM_AuditLogs):
 async def update_team(
     data: UpdateTeamRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    litellm_changed_by: Optional[str] = Header(
+        None,
+        description="The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
+    ),
 ):
     """
     Use `/team/member_add` AND `/team/member/delete` to add/remove new team members  
@@ -10114,7 +10142,10 @@ async def update_team(
                 request_data=LiteLLM_AuditLogs(
                     id=str(uuid.uuid4()),
                     updated_at=datetime.now(timezone.utc),
-                    changed_by=user_api_key_dict.user_id or litellm_proxy_admin_name,
+                    changed_by=litellm_changed_by
+                    or user_api_key_dict.user_id
+                    or litellm_proxy_admin_name,
+                    changed_by_api_key=user_api_key_dict.api_key,
                     table_name=LitellmTableNames.TEAM_TABLE_NAME,
                     object_id=data.team_id,
                     action="updated",
@@ -10360,6 +10391,10 @@ async def team_member_delete(
 async def delete_team(
     data: DeleteTeamRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    litellm_changed_by: Optional[str] = Header(
+        None,
+        description="The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
+    ),
 ):
     """
     delete team and associated team keys
@@ -10411,8 +10446,10 @@ async def delete_team(
                     request_data=LiteLLM_AuditLogs(
                         id=str(uuid.uuid4()),
                         updated_at=datetime.now(timezone.utc),
-                        changed_by=user_api_key_dict.user_id
+                        changed_by=litellm_changed_by
+                        or user_api_key_dict.user_id
                         or litellm_proxy_admin_name,
+                        changed_by_api_key=user_api_key_dict.api_key,
                         table_name=LitellmTableNames.TEAM_TABLE_NAME,
                         object_id=team_id,
                         action="deleted",
