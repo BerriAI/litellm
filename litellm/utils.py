@@ -1787,7 +1787,7 @@ class Logging:
                     if callback == "helicone":
                         print_verbose("reaches helicone for logging!")
                         model = self.model
-                        messages = kwargs["input"]
+                        messages = self.model_call_details["input"]
                         heliconeLogger.log_success(
                             model=model,
                             messages=messages,
