@@ -9180,16 +9180,12 @@ def exception_type(
                     exception_mapping_worked = True
                     raise litellm.InternalServerError(
                         message=f"litellm.InternalServerError: VertexAIException - {error_str}",
-                        status_code=500,
                         model=model,
                         llm_provider="vertex_ai",
-                        request=(
-                            original_exception.request
-                            if hasattr(original_exception, "request")
-                            else httpx.Request(
-                                method="POST",
-                                url=" https://cloud.google.com/vertex-ai/",
-                            )
+                        response=httpx.Response(
+                            status_code=500,
+                            content=str(original_exception),
+                            request=httpx.Request(method="completion", url="https://github.com/BerriAI/litellm"),  # type: ignore
                         ),
                         litellm_debug_info=extra_information,
                     )
@@ -9264,17 +9260,13 @@ def exception_type(
                         exception_mapping_worked = True
                         raise litellm.InternalServerError(
                             message=f"VertexAIException InternalServerError - {error_str}",
-                            status_code=500,
                             model=model,
                             llm_provider="vertex_ai",
                             litellm_debug_info=extra_information,
-                            request=getattr(
-                                original_exception,
-                                "request",
-                                httpx.Request(
-                                    method="POST",
-                                    url=" https://cloud.google.com/vertex-ai/",
-                                ),
+                            response=httpx.Response(
+                                status_code=500,
+                                content=str(original_exception),
+                                request=httpx.Request(method="completion", url="https://github.com/BerriAI/litellm"),  # type: ignore
                             ),
                         )
             elif custom_llm_provider == "palm" or custom_llm_provider == "gemini":
@@ -9878,7 +9870,11 @@ def exception_type(
                         llm_provider="azure",
                         model=model,
                         litellm_debug_info=extra_information,
-                        request=httpx.Request(method="POST", url="https://openai.com/"),
+                        response=httpx.Response(
+                            status_code=400,
+                            content=str(original_exception),
+                            request=httpx.Request(method="completion", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                        ),
                     )
                 elif "This model's maximum context length is" in error_str:
                     exception_mapping_worked = True
