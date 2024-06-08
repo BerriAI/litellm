@@ -1,6 +1,6 @@
 from enum import Enum
 from types import MappingProxyType
-from typing import List, Set
+from typing import List, Set, Mapping
 
 """
 Base Enums/Consts
@@ -52,7 +52,7 @@ class FileType(Enum):
     XLSX = "XLSX"
 
 
-FILE_EXTENSIONS: MappingProxyType[FileType, List[str]] = MappingProxyType(
+FILE_EXTENSIONS: Mapping[FileType, List[str]] = MappingProxyType(
     {
         FileType.AAC: ["aac"],
         FileType.CSV: ["csv"],
@@ -99,7 +99,7 @@ FILE_EXTENSIONS: MappingProxyType[FileType, List[str]] = MappingProxyType(
     }
 )
 
-FILE_MIME_TYPES: MappingProxyType[FileType, str] = MappingProxyType(
+FILE_MIME_TYPES: Mapping[FileType, str] = MappingProxyType(
     {
         FileType.AAC: "audio/aac",
         FileType.CSV: "text/csv",
