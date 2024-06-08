@@ -9165,7 +9165,7 @@ def exception_type(
                         model=model,
                         llm_provider="vertex_ai",
                         response=httpx.Response(
-                            status_code=429,
+                            status_code=400,
                             request=httpx.Request(
                                 method="POST",
                                 url=" https://cloud.google.com/vertex-ai/",
@@ -9196,7 +9196,7 @@ def exception_type(
                         model=model,
                         llm_provider="vertex_ai",
                         response=httpx.Response(
-                            status_code=429,
+                            status_code=403,
                             request=httpx.Request(
                                 method="POST",
                                 url=" https://cloud.google.com/vertex-ai/",
@@ -9212,7 +9212,7 @@ def exception_type(
                         llm_provider="vertex_ai",
                         litellm_debug_info=extra_information,
                         response=httpx.Response(
-                            status_code=429,
+                            status_code=422,
                             request=httpx.Request(
                                 method="POST",
                                 url=" https://cloud.google.com/vertex-ai/",
@@ -9249,10 +9249,10 @@ def exception_type(
                             llm_provider="vertex_ai",
                             litellm_debug_info=extra_information,
                             response=httpx.Response(
-                                status_code=429,
+                                status_code=400,
                                 request=httpx.Request(
                                     method="POST",
-                                    url=" https://cloud.google.com/vertex-ai/",
+                                    url="https://cloud.google.com/vertex-ai/",
                                 ),
                             ),
                         )
