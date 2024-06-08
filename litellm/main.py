@@ -432,9 +432,9 @@ def mock_completion(
             if isinstance(mock_response, openai.APIError):
                 raise mock_response
             raise litellm.APIError(
-                status_code=500,  # type: ignore
-                message=str(mock_response),
-                llm_provider="openai",  # type: ignore
+                status_code=getattr(mock_response, "status_code", 500),  # type: ignore
+                message=getattr(mock_response, "text", str(mock_response)),
+                llm_provider=getattr(mock_response, "llm_provider", "openai"),  # type: ignore
                 model=model,  # type: ignore
                 request=httpx.Request(method="POST", url="https://api.openai.com/v1/"),
             )
@@ -1949,7 +1949,8 @@ def completion(
             )
 
             api_base = (
-                optional_params.pop("api_base", None)
+                api_base
+                or optional_params.pop("api_base", None)
                 or optional_params.pop("base_url", None)
                 or litellm.api_base
                 or get_secret("PREDIBASE_API_BASE")
@@ -1977,12 +1978,13 @@ def completion(
                 custom_prompt_dict=custom_prompt_dict,
                 api_key=api_key,
                 tenant_id=tenant_id,
+                timeout=timeout,
             )
 
             if (
                 "stream" in optional_params
-                and optional_params["stream"] == True
-                and acompletion == False
+                and optional_params["stream"] is True
+                and acompletion is False
             ):
                 return _model_response
             response = _model_response
