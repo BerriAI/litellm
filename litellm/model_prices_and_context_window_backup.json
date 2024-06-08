@@ -2564,6 +2564,20 @@
         "litellm_provider": "bedrock",
         "mode": "chat"
     },
+    "openrouter/openai/gpt-3.5-turbo": {
+            "max_tokens": 4095,
+            "input_cost_per_token": 0.0000015,
+            "output_cost_per_token": 0.000002,
+            "litellm_provider": "openrouter",
+            "mode": "chat"
+        },
+        "openrouter/another-model": {
+            "max_tokens": 2048,
+            "input_cost_per_token": 0.000001,
+            "output_cost_per_token": 0.0000015,
+            "litellm_provider": "openrouter",
+            "mode": "completion"
+        },
     "bedrock/us-east-1/anthropic.claude-v2:1": {
         "max_tokens": 8191, 
         "max_input_tokens": 100000, 
