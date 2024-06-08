@@ -22,6 +22,7 @@ LITELLM_TRACER_NAME = os.getenv("OTEL_TRACER_NAME", "litellm")
 LITELLM_RESOURCE = {
     "service.name": os.getenv("OTEL_SERVICE_NAME", "litellm"),
 }
+RAW_REQUEST_SPAN_NAME = "RAW_GENAI_REQUEST"
 
 
 @dataclass
@@ -200,6 +201,7 @@ class OpenTelemetry(CustomLogger):
         )
         _parent_context, parent_otel_span = self._get_span_context(kwargs)
 
+        # Span 1: Requst sent to litellm SDK
         span = self.tracer.start_span(
             name=self._get_span_name(kwargs),
             start_time=self._to_ns(start_time),
@@ -208,6 +210,18 @@ class OpenTelemetry(CustomLogger):
         span.set_status(Status(StatusCode.OK))
         self.set_attributes(span, kwargs, response_obj)
         span.end(end_time=self._to_ns(end_time))
+
+        # Span 2: Raw Request / Response to LLM
+        raw_request_span = self.tracer.start_span(
+            name=RAW_REQUEST_SPAN_NAME,
+            start_time=self._to_ns(start_time),
+            context=_parent_context,
+        )
+
+        raw_request_span.set_status(Status(StatusCode.OK))
+        self.set_raw_request_attributes(raw_request_span, kwargs, response_obj)
+        raw_request_span.end(end_time=self._to_ns(end_time))
+
         if parent_otel_span is not None:
             parent_otel_span.end(end_time=self._to_ns(datetime.now()))
 
@@ -323,6 +337,144 @@ class OpenTelemetry(CustomLogger):
                 SpanAttributes.LLM_USAGE_PROMPT_TOKENS,
                 usage.get("prompt_tokens"),
             )
+
+    def set_anthropic_raw_request_attributes(self, span: Span, kwargs, response_obj):
+        from opentelemetry.semconv.ai import SpanAttributes
+
+        optional_params = kwargs.get("optional_params", {})
+        litellm_params = kwargs.get("litellm_params", {}) or {}
+        custom_llm_provider = "anthropic"
+
+        _raw_response = kwargs.get("original_response")
+        _additional_args = kwargs.get("additional_args", {}) or {}
+        complete_input_dict = _additional_args.get("complete_input_dict")
+        #############################################
+        ########## LLM Request Attributes ###########
+        #############################################
+
+        # OTEL Attributes for the RAW Request to https://docs.anthropic.com/en/api/messages
+        if complete_input_dict:
+            if complete_input_dict.get("model"):
+                span.set_attribute(
+                    SpanAttributes.LLM_REQUEST_MODEL, complete_input_dict.get("model")
+                )
+
+            if complete_input_dict.get("messages"):
+                for idx, prompt in enumerate(complete_input_dict.get("messages")):
+                    span.set_attribute(
+                        f"{SpanAttributes.LLM_PROMPTS}.{idx}.role",
+                        prompt.get("role"),
+                    )
+                    span.set_attribute(
+                        f"{SpanAttributes.LLM_PROMPTS}.{idx}.content",
+                        prompt.get("content"),
+                    )
+            if complete_input_dict.get("max_tokens"):
+                span.set_attribute(
+                    SpanAttributes.LLM_REQUEST_MAX_TOKENS,
+                    complete_input_dict.get("max_tokens"),
+                )
+
+            if complete_input_dict.get("temperature"):
+                span.set_attribute(
+                    SpanAttributes.LLM_REQUEST_TEMPERATURE,
+                    complete_input_dict.get("temperature"),
+                )
+
+            if complete_input_dict.get("top_p"):
+                span.set_attribute(
+                    SpanAttributes.LLM_REQUEST_TOP_P, complete_input_dict.get("top_p")
+                )
+
+            if complete_input_dict.get("stream"):
+                span.set_attribute(
+                    SpanAttributes.LLM_IS_STREAMING, complete_input_dict.get("stream")
+                )
+
+            if complete_input_dict.get("tools"):
+                span.set_attribute(
+                    SpanAttributes.LLM_REQUEST_FUNCTIONS,
+                    complete_input_dict.get("tools"),
+                )
+
+            if complete_input_dict.get("user"):
+                span.set_attribute(
+                    SpanAttributes.LLM_USER, complete_input_dict.get("user")
+                )
+
+        #############################################
+        ########## LLM Response Attributes ##########
+        #############################################
+        if _raw_response:
+            # cast sr -> dict
+            import json
+
+            _raw_response = json.loads(_raw_response)
+
+            # The unique identifier for the completion.
+            if _raw_response.get("id"):
+                span.set_attribute("gen_ai.response.id", _raw_response.get("id"))
+
+            # The model used to generate the response.
+            if _raw_response.get("model"):
+                span.set_attribute(
+                    SpanAttributes.LLM_RESPONSE_MODEL, _raw_response.get("model")
+                )
+
+            if _raw_response.get("content"):
+                for idx, choice in enumerate(_raw_response.get("content")):
+                    if choice.get("type"):
+                        span.set_attribute(
+                            f"{SpanAttributes.LLM_COMPLETIONS}.{idx}.type",
+                            choice.get("type"),
+                        )
+
+                    if choice.get("text"):
+                        span.set_attribute(
+                            f"{SpanAttributes.LLM_COMPLETIONS}.{idx}.content",
+                            choice.get("text"),
+                        )
+
+                    if choice.get("id"):
+                        # https://docs.anthropic.com/en/docs/tool-use
+                        span.set_attribute(
+                            f"{SpanAttributes.LLM_COMPLETIONS}.{idx}.id",
+                            choice.get("id"),
+                        )
+
+                    if choice.get("name"):
+                        span.set_attribute(
+                            f"{SpanAttributes.LLM_COMPLETIONS}.{idx}.name",
+                            choice.get("name"),
+                        )
+
+                    if choice.get("input"):
+                        span.set_attribute(
+                            f"{SpanAttributes.LLM_COMPLETIONS}.{idx}.input",
+                            choice.get("input"),
+                        )
+
+        pass
+
+    def set_openai_raw_request_attributes(self, span: Span, kwargs, response_obj):
+        from opentelemetry.semconv.ai import SpanAttributes
+
+        pass
+
+    def set_default_raw_request_attributes(self, span: Span, kwargs, response_obj):
+        from opentelemetry.semconv.ai import SpanAttributes
+
+        pass
+
+    def set_raw_request_attributes(self, span: Span, kwargs, response_obj):
+        litellm_params = kwargs.get("litellm_params", {}) or {}
+        custom_llm_provider = litellm_params.get("custom_llm_provider", "Unknown")
+        if custom_llm_provider == "anthropic":
+            self.set_anthropic_raw_request_attributes(span, kwargs, response_obj)
+        elif custom_llm_provider == "openai":
+            self.set_openai_raw_request_attributes(span, kwargs, response_obj)
+        else:
+            self.set_default_raw_request_attributes(span, kwargs, response_obj)
 
     def _to_ns(self, dt):
         return int(dt.timestamp() * 1e9)
