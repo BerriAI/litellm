@@ -46,6 +46,11 @@ function formatUserRole(userRole: string) {
   }
 }
 
+interface ProxySettings {
+  PROXY_BASE_URL: string;
+  PROXY_LOGOUT_URL: string;
+}
+
 const CreateKeyPage = () => {
   const { Title, Paragraph } = Typography;
   const [userRole, setUserRole] = useState("");
@@ -53,6 +58,11 @@ const CreateKeyPage = () => {
   const [userEmail, setUserEmail] = useState<null | string>(null);
   const [teams, setTeams] = useState<null | any[]>(null);
   const [keys, setKeys] = useState<null | any[]>(null);
+  const [proxySettings, setProxySettings] = useState<ProxySettings>({
+    PROXY_BASE_URL: "",
+    PROXY_LOGOUT_URL: "",
+  });
+
   const [showSSOBanner, setShowSSOBanner] = useState<boolean>(true);
   const searchParams = useSearchParams();
   const [modelData, setModelData] = useState<any>({ data: [] });
@@ -115,6 +125,8 @@ const CreateKeyPage = () => {
           userEmail={userEmail}
           showSSOBanner={showSSOBanner}
           premiumUser={premiumUser}
+          setProxySettings={setProxySettings}
+          proxySettings={proxySettings}
         />
         <div className="flex flex-1 overflow-auto">
           <div className="mt-8">
@@ -136,6 +148,8 @@ const CreateKeyPage = () => {
               setUserEmail={setUserEmail}
               setTeams={setTeams}
               setKeys={setKeys}
+              setProxySettings={setProxySettings}
+              proxySettings={proxySettings}
             />
           ) : page == "models" ? (
             <ModelDashboard
@@ -182,7 +196,9 @@ const CreateKeyPage = () => {
               showSSOBanner={showSSOBanner}
             />
           ) : page == "api_ref" ? (
-            <APIRef />
+            <APIRef 
+            proxySettings={proxySettings}
+            />
           ) : page == "settings" ? (
             <Settings
               userID={userID}

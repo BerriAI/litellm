@@ -12568,6 +12568,19 @@ async def login(request: Request):
         )
 
 
+@app.get(
+    "/sso/get/logout_url",
+    tags=["experimental"],
+    include_in_schema=False,
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def get_logout_url(request: Request):
+    _proxy_base_url = os.getenv("PROXY_BASE_URL", None)
+    _logout_url = os.getenv("PROXY_LOGOUT_URL", None)
+
+    return {"PROXY_BASE_URL": _proxy_base_url, "PROXY_LOGOUT_URL": _logout_url}
+
+
 @app.get("/onboarding/get_token", include_in_schema=False)
 async def onboarding(invite_link: str):
     """
