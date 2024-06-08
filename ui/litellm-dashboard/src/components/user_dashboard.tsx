@@ -4,6 +4,7 @@ import {
   userInfoCall,
   modelAvailableCall,
   getTotalSpendCall,
+  getProxyBaseUrlAndLogoutUrl,
 } from "./networking";
 import { Grid, Col, Card, Text, Title } from "@tremor/react";
 import CreateKey from "./create_key_button";
@@ -33,6 +34,8 @@ interface UserDashboardProps {
   setUserEmail: React.Dispatch<React.SetStateAction<string | null>>;
   setTeams: React.Dispatch<React.SetStateAction<Object[] | null>>;
   setKeys: React.Dispatch<React.SetStateAction<Object[] | null>>;
+  setProxySettings: React.Dispatch<React.SetStateAction<any>>;
+  proxySettings: any;
 }
 
 type TeamInterface = {
@@ -51,6 +54,8 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   setUserEmail,
   setTeams,
   setKeys,
+  setProxySettings,
+  proxySettings,
 }) => {
   const [userSpendData, setUserSpendData] = useState<UserSpendData | null>(
     null
@@ -144,6 +149,9 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
       } else {
         const fetchData = async () => {
           try {
+            const proxy_settings = await getProxyBaseUrlAndLogoutUrl(accessToken);
+            setProxySettings(proxy_settings);
+
             const response = await userInfoCall(
               accessToken,
               userID,
