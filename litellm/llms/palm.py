@@ -116,15 +116,7 @@ def completion(
                 k not in inference_params
         ):  # completion(top_k=3) > palm_config(top_k=3) <- allows for dynamic variables to be passed in
             inference_params[k] = v
-<<<<<<< Updated upstream
-    prompt = []
-    palm_messages = []     # Construct messages with roles
-    context = inference_params.get("context", None)
-    for message in messages:
-        role = message.get("role", "user")
-        palm_messages.append({"author": role, "content": message["content"]})
-        prompt.append({"context": context, "messages": palm_messages})
-=======
+
 
     prompt = ""
     formatted_messages = []
@@ -147,7 +139,6 @@ def completion(
         **inference_params,
     }
 
->>>>>>> Stashed changes
     ## LOGGING
     logging_obj.pre_call(
         input=request_payload,
@@ -157,11 +148,7 @@ def completion(
 
     ## COMPLETION CALL
     try:
-<<<<<<< Updated upstream
-        response = palm.chat(messages=palm_messages, context=context, **inference_params)
-=======
         response = palm.generate_text(**request_payload)
->>>>>>> Stashed changes
     except Exception as e:
         raise PalmError(
             message=str(e),
@@ -204,11 +191,10 @@ def completion(
         )
 
     ## CALCULATING USAGE - baseten charges on time, not tokens - have some mapping of cost here.
-    prompt_tokens = len(encoding.encode(context or ""))
-    for msg in palm_messages:
-        prompt_tokens += len(encoding.encode(msg["content"]))
-    completion_tokens = len(encoding.encode(model_response["choices"][0]["message"].get("content", ""))
-                            )
+    prompt_tokens = len(encoding.encode(prompt))
+    completion_tokens = len(
+        encoding.encode(model_response["choices"][0]["message"].get("content", ""))
+    )
 
     model_response["created"] = int(time.time())
     model_response["model"] = "palm/" + model
@@ -219,3 +205,7 @@ def completion(
     )
     setattr(model_response, "usage", usage)
     return model_response
+
+def embedding():
+    # logic for parsing in - calling - parsing out model embedding calls
+    pass
