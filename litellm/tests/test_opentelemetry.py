@@ -17,13 +17,11 @@ def test_otel_callback():
     litellm.set_verbose = True
     litellm.callbacks = [OpenTelemetry(OpenTelemetryConfig(exporter=exporter))]
 
-    asyncio.run(
-        litellm.acompletion(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": "hi"}],
-            temperature=0.1,
-            user="OTEL_USER",
-        )
+    litellm.completion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hi"}],
+        temperature=0.1,
+        user="OTEL_USER",
     )
 
     time.sleep(4)
