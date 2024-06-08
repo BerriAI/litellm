@@ -213,16 +213,20 @@ class OpenTelemetry(CustomLogger):
         span.set_status(Status(StatusCode.OK))
         self.set_attributes(span, kwargs, response_obj)
 
-        # Span 2: Raw Request / Response to LLM
-        raw_request_span = self.tracer.start_span(
-            name=RAW_REQUEST_SPAN_NAME,
-            start_time=self._to_ns(start_time),
-            context=trace.set_span_in_context(span),
-        )
+        if litellm.turn_off_message_logging is True:
+            pass
+        else:
+            # Span 2: Raw Request / Response to LLM
+            raw_request_span = self.tracer.start_span(
+                name=RAW_REQUEST_SPAN_NAME,
+                start_time=self._to_ns(start_time),
+                context=trace.set_span_in_context(span),
+            )
 
-        raw_request_span.set_status(Status(StatusCode.OK))
-        self.set_raw_request_attributes(raw_request_span, kwargs, response_obj)
-        raw_request_span.end(end_time=self._to_ns(end_time))
+            raw_request_span.set_status(Status(StatusCode.OK))
+            self.set_raw_request_attributes(raw_request_span, kwargs, response_obj)
+            raw_request_span.end(end_time=self._to_ns(end_time))
+
         span.end(end_time=self._to_ns(end_time))
 
         if parent_otel_span is not None:
@@ -372,7 +376,6 @@ class OpenTelemetry(CustomLogger):
 
         optional_params = kwargs.get("optional_params", {})
         litellm_params = kwargs.get("litellm_params", {}) or {}
-        custom_llm_provider = "anthropic"
 
         _raw_response = kwargs.get("original_response")
         _additional_args = kwargs.get("additional_args", {}) or {}
