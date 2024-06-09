@@ -3610,7 +3610,7 @@ class Router:
                 # get model info
                 try:
                     model_info = litellm.get_model_info(model=litellm_params.model)
-                except Exception as e:
+                except Exception:
                     model_info = None
                 # get llm provider
                 try:
@@ -3619,7 +3619,9 @@ class Router:
                         custom_llm_provider=litellm_params.custom_llm_provider,
                     )
                 except litellm.exceptions.BadRequestError as e:
-                    continue
+                    verbose_router_logger.error(
+                        "litellm.router.py::get_model_group_info() - {}".format(str(e))
+                    )
 
                 if model_info is None:
                     supported_openai_params = litellm.get_supported_openai_params(

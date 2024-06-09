@@ -435,13 +435,15 @@ class ModelGroupInfo(BaseModel):
     max_output_tokens: Optional[float] = None
     input_cost_per_token: Optional[float] = None
     output_cost_per_token: Optional[float] = None
-    mode: Literal[
-        "chat", "embedding", "completion", "image_generation", "audio_transcription"
-    ]
+    mode: Optional[
+        Literal[
+            "chat", "embedding", "completion", "image_generation", "audio_transcription"
+        ]
+    ] = Field(default="chat")
     supports_parallel_function_calling: bool = Field(default=False)
     supports_vision: bool = Field(default=False)
     supports_function_calling: bool = Field(default=False)
-    supported_openai_params: List[str] = Field(default=[])
+    supported_openai_params: Optional[List[str]] = Field(default=[])
 
 
 class AssistantsTypedDict(TypedDict):
