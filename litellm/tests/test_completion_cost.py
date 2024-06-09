@@ -560,9 +560,8 @@ def test_together_ai_qwen_completion_cost():
         "custom_cost_per_second": None,
     }
 
-    try:
-        litellm.completion_cost(**input_kwargs)
-    except litellm.NotFoundError:
-        pass
-    except Exception:
-        pytest.fail("This should have returned a 'not found error'")
+    response = litellm.cost_calculator.get_model_params_and_category(
+        model_name="qwen/Qwen2-72B-Instruct"
+    )
+
+    assert response == "together-ai-41.1b-80b"
