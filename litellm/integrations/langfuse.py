@@ -40,6 +40,7 @@ class LangFuseLogger:
             self.langfuse_host = "http://" + self.langfuse_host
         self.langfuse_release = os.getenv("LANGFUSE_RELEASE")
         self.langfuse_debug = os.getenv("LANGFUSE_DEBUG")
+        self.langfuse_ui_base_url = os.getenv("LANGFUSE_UI_BASE_URL")
 
         parameters = {
             "public_key": self.public_key,
@@ -232,6 +233,18 @@ class LangFuseLogger:
                 f"Langfuse Layer Logging - final response object: {response_obj}"
             )
             verbose_logger.info(f"Langfuse Layer Logging - logging success")
+
+            # response_obj.metadata["trace_id"] = trace_id
+            if "litellm" not in response_obj:
+                response_obj["litellm"] = {}
+            if "langfuse" not in response_obj["litellm"]:
+                response_obj["litellm"]["langfuse"] = {}
+            trace_url = f"{self.langfuse_ui_base_url}/trace/{trace_id}"
+            response_obj["litellm"]["langfuse"] = {
+                "trace_id": trace_id,
+                "trace_url": trace_url,
+                "generation_id": generation_id,
+            }
 
             return {"trace_id": trace_id, "generation_id": generation_id}
         except Exception as e:

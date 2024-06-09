@@ -258,7 +258,7 @@ class SlackAlerting(CustomLogger):
 
             if litellm.litellm_core_utils.litellm_logging.langFuseLogger is not None:
                 base_url = (
-                    litellm.litellm_core_utils.litellm_logging.langFuseLogger.Langfuse.base_url
+                    litellm.litellm_core_utils.litellm_logging.langFuseLogger.Langfuse.langfuse_ui_base_url
                 )
                 return f"{base_url}/trace/{trace_id}"
         return None
