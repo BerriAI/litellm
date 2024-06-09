@@ -1305,6 +1305,7 @@ class LiteLLM_AuditLogs(LiteLLMBase):
     id: str
     updated_at: datetime
     changed_by: str
+    changed_by_api_key: Optional[str] = None
     action: Literal["created", "updated", "deleted"]
     table_name: Literal[
         LitellmTableNames.TEAM_TABLE_NAME,
