@@ -42,16 +42,18 @@ def get_model_params_and_category(model_name) -> str:
         else:
             return model_name
         # Determine the category based on the number of parameters
-        if params_billion <= 3.0:
-            category = "together-ai-up-to-3b"
-        elif params_billion <= 7.0:
-            category = "together-ai-3.1b-7b"
-        elif params_billion <= 20.0:
-            category = "together-ai-7.1b-20b"
-        elif params_billion <= 40.0:
-            category = "together-ai-20.1b-40b"
-        elif params_billion <= 70.0:
-            category = "together-ai-40.1b-70b"
+        if params_billion <= 4.0:
+            category = "together-ai-up-to-4b"
+        elif params_billion <= 8.0:
+            category = "together-ai-4.1b-8b"
+        elif params_billion <= 21.0:
+            category = "together-ai-8.1b-21b"
+        elif params_billion <= 41.0:
+            category = "together-ai-21.1b-41b"
+        elif params_billion <= 80.0:
+            category = "together-ai-41.1b-80b"
+        elif params_billion <= 110.0:
+            category = "together-ai-81.1b-110b"
         if category is not None:
             return category
 
