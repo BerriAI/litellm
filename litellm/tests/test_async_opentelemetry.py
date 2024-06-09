@@ -12,19 +12,20 @@ verbose_logger.setLevel(logging.DEBUG)
 
 
 # @pytest.mark.skip(reason="new test")
-def test_otel_callback():
+@pytest.mark.asyncio
+async def test_otel_callback():
     exporter = InMemorySpanExporter()
     litellm.set_verbose = True
     litellm.callbacks = [OpenTelemetry(OpenTelemetryConfig(exporter=exporter))]
 
-    litellm.completion(
+    await litellm.acompletion(
         model="gpt-3.5-turbo",
         messages=[{"role": "user", "content": "hi"}],
         temperature=0.1,
         user="OTEL_USER",
     )
 
-    time.sleep(4)
+    await asyncio.sleep(4)
 
     spans = exporter.get_finished_spans()
     print("spans", spans)
