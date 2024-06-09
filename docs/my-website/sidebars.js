@@ -55,6 +55,7 @@ const sidebars = {
         },
         "proxy/ui",
         "proxy/email",
+        "proxy/multiple_admins",
         "proxy/team_based_routing",
         "proxy/customer_routing",
         "proxy/token_auth",
