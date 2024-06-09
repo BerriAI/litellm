@@ -364,8 +364,6 @@ class OpenTelemetry(CustomLogger):
                         )
 
                     message = choice.get("message")
-                    if not isinstance(message, dict):
-                        message = message.dict()
                     tool_calls = message.get("tool_calls")
                     if tool_calls:
                         span.set_attribute(
