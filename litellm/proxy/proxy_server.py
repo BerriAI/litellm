@@ -10189,10 +10189,8 @@ async def team_member_add(
 
         complete_team_data.members_with_roles.extend(new_members)
 
-        # ADD MEMBER TO TEAM
-        _db_team_members = [
-            m.model_dump() for m in complete_team_data.members_with_roles
-        ]
+    # ADD MEMBER TO TEAM
+    _db_team_members = [m.model_dump() for m in complete_team_data.members_with_roles]
     updated_team = await prisma_client.db.litellm_teamtable.update(
         where={"team_id": data.team_id},
         data={"members_with_roles": json.dumps(_db_team_members)},  # type: ignore
