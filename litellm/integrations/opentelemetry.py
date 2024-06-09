@@ -293,7 +293,9 @@ class OpenTelemetry(CustomLogger):
         if optional_params.get("tools"):
             # cast to str - since OTEL only accepts string values
             _tools = str(optional_params.get("tools"))
-            span.set_attribute(SpanAttributes.LLM_REQUEST_FUNCTIONS, _tools)
+            span.set_attribute(
+                SpanAttributes.LLM_REQUEST_FUNCTIONS, optional_params.get("tools")
+            )
 
         if optional_params.get("user"):
             span.set_attribute(SpanAttributes.LLM_USER, optional_params.get("user"))
@@ -330,6 +332,10 @@ class OpenTelemetry(CustomLogger):
                             choice.get("message").get("role"),
                         )
                     if choice.get("message").get("content"):
+                        if not isinstance(choice.get("message").get("content"), str):
+                            choice["message"]["content"] = str(
+                                choice.get("message").get("content")
+                            )
                         span.set_attribute(
                             f"{SpanAttributes.LLM_COMPLETIONS}.{idx}.content",
                             choice.get("message").get("content"),
@@ -337,6 +343,8 @@ class OpenTelemetry(CustomLogger):
 
                     if choice.get("message").get("tool_calls"):
                         _tool_calls = choice.get("message").get("tool_calls")
+                        if not isinstance(_tool_calls, str):
+                            _tool_calls = str(_tool_calls)
                         span.set_attribute(
                             f"{SpanAttributes.LLM_COMPLETIONS}.{idx}.tool_calls",
                             _tool_calls,
@@ -376,6 +384,7 @@ class OpenTelemetry(CustomLogger):
 
         optional_params = kwargs.get("optional_params", {})
         litellm_params = kwargs.get("litellm_params", {}) or {}
+        custom_llm_provider = litellm_params.get("custom_llm_provider", "Unknown")
 
         _raw_response = kwargs.get("original_response")
         _additional_args = kwargs.get("additional_args", {}) or {}
@@ -390,7 +399,7 @@ class OpenTelemetry(CustomLogger):
                 if not isinstance(val, str):
                     val = str(val)
                 span.set_attribute(
-                    f"gen_ai.request.{param}",
+                    f"llm.{custom_llm_provider}.{param}",
                     val,
                 )
 
@@ -406,7 +415,7 @@ class OpenTelemetry(CustomLogger):
                 if not isinstance(val, str):
                     val = str(val)
                 span.set_attribute(
-                    f"gen_ai.response.{param}",
+                    f"llm.{custom_llm_provider}.{param}",
                     val,
                 )
 
