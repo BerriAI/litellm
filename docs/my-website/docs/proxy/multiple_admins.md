@@ -8,7 +8,7 @@ Requires Enterprise License for usage.
 
 ## Set `LiteLLM-Changed-By` in request headers
 
-Set the 'user_id' in request headers, when calling a management endpoint. [View Full List](/link to litellm management routes).
+Set the 'user_id' in request headers, when calling a management endpoint. [View Full List](https://litellm-api.up.railway.app/#/team%20management).
 
 - Update Team budget with master key. 
 - Attribute change to 'krrish@berri.ai'. 
