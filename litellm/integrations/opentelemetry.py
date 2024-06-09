@@ -244,6 +244,31 @@ class OpenTelemetry(CustomLogger):
         self.set_attributes(span, kwargs, response_obj)
         span.end(end_time=self._to_ns(end_time))
 
+    def set_tools_attributes(self, span: Span, tools):
+        from opentelemetry.semconv.ai import SpanAttributes
+        import json
+
+        if not tools:
+            return
+
+        try:
+            for i, tool in enumerate(tools):
+                function = tool.get("function")
+                if not function:
+                    continue
+
+                prefix = f"{SpanAttributes.LLM_REQUEST_FUNCTIONS}.{i}"
+                span.set_attribute(f"{prefix}.name", function.get("name"))
+                span.set_attribute(f"{prefix}.description", function.get("description"))
+                span.set_attribute(
+                    f"{prefix}.parameters", json.dumps(function.get("parameters"))
+                )
+        except Exception as e:
+            verbose_logger.error(
+                "OpenTelemetry: Error setting tools attributes: %s", str(e)
+            )
+            pass
+
     def set_attributes(self, span: Span, kwargs, response_obj):
         from opentelemetry.semconv.ai import SpanAttributes
 
@@ -291,11 +316,8 @@ class OpenTelemetry(CustomLogger):
         )
 
         if optional_params.get("tools"):
-            # cast to str - since OTEL only accepts string values
-            _tools = str(optional_params.get("tools"))
-            span.set_attribute(
-                SpanAttributes.LLM_REQUEST_FUNCTIONS, optional_params.get("tools")
-            )
+            tools = optional_params["tools"]
+            self.set_tools_attributes(span, tools)
 
         if optional_params.get("user"):
             span.set_attribute(SpanAttributes.LLM_USER, optional_params.get("user"))
@@ -341,13 +363,18 @@ class OpenTelemetry(CustomLogger):
                             choice.get("message").get("content"),
                         )
 
-                    if choice.get("message").get("tool_calls"):
-                        _tool_calls = choice.get("message").get("tool_calls")
-                        if not isinstance(_tool_calls, str):
-                            _tool_calls = str(_tool_calls)
+                    message = choice.get("message")
+                    if not isinstance(message, dict):
+                        message = message.dict()
+                    tool_calls = message.get("tool_calls")
+                    if tool_calls:
                         span.set_attribute(
-                            f"{SpanAttributes.LLM_COMPLETIONS}.{idx}.tool_calls",
-                            _tool_calls,
+                            f"{SpanAttributes.LLM_COMPLETIONS}.{idx}.function_call.name",
+                            tool_calls[0].get("function").get("name"),
+                        )
+                        span.set_attribute(
+                            f"{SpanAttributes.LLM_COMPLETIONS}.{idx}.function_call.arguments",
+                            tool_calls[0].get("function").get("arguments"),
                         )
 
         # The unique identifier for the completion.
