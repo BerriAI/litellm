@@ -66,7 +66,9 @@ class OpenTelemetry(CustomLogger):
         trace.set_tracer_provider(provider)
         self.tracer = trace.get_tracer(LITELLM_TRACER_NAME)
 
-        if bool(os.getenv("DEBUG_OTEL", False)) is True:
+        _debug_otel = str(os.getenv("DEBUG_OTEL", "False")).lower()
+
+        if _debug_otel == "true":
             # Set up logging
             import logging
 
