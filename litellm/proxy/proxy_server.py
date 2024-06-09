@@ -90,6 +90,7 @@ from litellm.types.llms.openai import (
     HttpxBinaryResponseContent,
 )
 from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+from litellm.proxy.management_helpers.utils import add_new_member
 from litellm.proxy.utils import (
     PrismaClient,
     DBClient,
@@ -10159,10 +10160,12 @@ async def team_member_add(
         raise HTTPException(status_code=400, detail={"error": "No team id passed in"})
 
     if data.member is None:
-        raise HTTPException(status_code=400, detail={"error": "No member passed in"})
+        raise HTTPException(
+            status_code=400, detail={"error": "No member/members passed in"}
+        )
 
-    existing_team_row = await prisma_client.get_data(  # type: ignore
-        team_id=data.team_id, table_name="team", query_type="find_unique"
+    existing_team_row = await prisma_client.db.litellm_teamtable.find_unique(
+        where={"team_id": data.team_id}
     )
     if existing_team_row is None:
         raise HTTPException(
@@ -10172,75 +10175,52 @@ async def team_member_add(
             },
         )
 
-    new_member = data.member
+    complete_team_data = LiteLLM_TeamTable(**existing_team_row.model_dump())
 
-    existing_team_row.members_with_roles.append(new_member)
+    if isinstance(data.member, Member):
+        # add to team db
+        new_member = data.member
 
-    complete_team_data = LiteLLM_TeamTable(
-        **_get_pydantic_json_dict(existing_team_row),
+        complete_team_data.members_with_roles.append(new_member)
+
+    elif isinstance(data.member, List):
+        # add to team db
+        new_members = data.member
+
+        complete_team_data.members_with_roles.extend(new_members)
+
+        # ADD MEMBER TO TEAM
+        _db_team_members = [
+            m.model_dump() for m in complete_team_data.members_with_roles
+        ]
+    updated_team = await prisma_client.db.litellm_teamtable.update(
+        where={"team_id": data.team_id},
+        data={"members_with_roles": json.dumps(_db_team_members)},  # type: ignore
     )
 
-    team_row = await prisma_client.update_data(
-        update_key_values=complete_team_data.json(exclude_none=True),
-        data=complete_team_data.json(exclude_none=True),
-        table_name="team",
-        team_id=data.team_id,
-    )
-
-    ## ADD USER, IF NEW ##
-    user_data = {  # type: ignore
-        "teams": [team_row["team_id"]],
-        "models": team_row["data"].models,
-    }
-    if new_member.user_id is not None:
-        user_data["user_id"] = new_member.user_id  # type: ignore
-        await prisma_client.update_data(
-            user_id=new_member.user_id,
-            data=user_data,
-            update_key_values_custom_query={
-                "teams": {
-                    "push": [team_row["team_id"]],
-                }
-            },
-            table_name="user",
+    if isinstance(data.member, Member):
+        await add_new_member(
+            new_member=data.member,
+            max_budget_in_team=data.max_budget_in_team,
+            prisma_client=prisma_client,
+            user_api_key_dict=user_api_key_dict,
+            litellm_proxy_admin_name=litellm_proxy_admin_name,
+            team_id=data.team_id,
         )
-    elif new_member.user_email is not None:
-        user_data["user_id"] = str(uuid.uuid4())
-        user_data["user_email"] = new_member.user_email
-        ## user email is not unique acc. to prisma schema -> future improvement
-        ### for now: check if it exists in db, if not - insert it
-        existing_user_row = await prisma_client.get_data(
-            key_val={"user_email": new_member.user_email},
-            table_name="user",
-            query_type="find_all",
-        )
-        if existing_user_row is None or (
-            isinstance(existing_user_row, list) and len(existing_user_row) == 0
-        ):
+    elif isinstance(data.member, List):
+        tasks: List = []
+        for m in data.member:
+            await add_new_member(
+                new_member=m,
+                max_budget_in_team=data.max_budget_in_team,
+                prisma_client=prisma_client,
+                user_api_key_dict=user_api_key_dict,
+                litellm_proxy_admin_name=litellm_proxy_admin_name,
+                team_id=data.team_id,
+            )
+        await asyncio.gather(*tasks)
 
-            await prisma_client.insert_data(data=user_data, table_name="user")
-
-    # Check if trying to set a budget for team member
-    if data.max_budget_in_team is not None and new_member.user_id is not None:
-        # create a new budget item for this member
-        response = await prisma_client.db.litellm_budgettable.create(
-            data={
-                "max_budget": data.max_budget_in_team,
-                "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
-                "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
-            }
-        )
-
-        _budget_id = response.budget_id
-        await prisma_client.db.litellm_teammembership.create(
-            data={
-                "team_id": data.team_id,
-                "user_id": new_member.user_id,
-                "budget_id": _budget_id,
-            }
-        )
-
-    return team_row
+    return updated_team
 
 
 @router.post(
