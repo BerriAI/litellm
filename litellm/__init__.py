@@ -709,6 +709,7 @@ all_embedding_models = (
 openai_image_generation_models = ["dall-e-2", "dall-e-3"]
 
 from .timeout import timeout
+from .cost_calculator import completion_cost
 from .utils import (
     client,
     exception_type,
@@ -718,7 +719,6 @@ from .utils import (
     create_pretrained_tokenizer,
     create_tokenizer,
     cost_per_token,
-    completion_cost,
     supports_function_calling,
     supports_parallel_function_calling,
     supports_vision,
