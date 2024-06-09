@@ -1275,6 +1275,21 @@ def test_openai_completion_on_router():
 # test_openai_completion_on_router()
 
 
+def test_model_group_info():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "command-r-plus",
+                "litellm_params": {"model": "cohere.command-r-plus-v1:0"},
+            }
+        ]
+    )
+
+    response = router.get_model_group_info(model_group="command-r-plus")
+
+    assert response is not None
+
+
 def test_consistent_model_id():
     """
     - For a given model group + litellm params, assert the model id is always the same
