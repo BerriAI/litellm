@@ -12283,7 +12283,7 @@ def get_token_count(messages, model):
     return token_counter(model=model, messages=messages)
 
 
-def shorten_message_to_fit_limit(message, tokens_needed, model):
+def shorten_message_to_fit_limit(message: dict, tokens_needed: int, model: str) -> dict:
     """
     Shorten a message to fit within a token limit by removing characters from the middle.
     """
