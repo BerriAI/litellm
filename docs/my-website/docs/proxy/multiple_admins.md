@@ -2,11 +2,21 @@
 
 Call management endpoints on behalf of a user. (Useful when connecting proxy to your development platform).
 
-:::info 
-Requires Enterprise License for usage.
-::: 
 
-## Set `LiteLLM-Changed-By` in request headers
+:::tip
+
+Requires Enterprise License, Get in touch with us [here](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+
+:::
+
+## 1. Switch on audit Logs 
+Add `store_audit_logs` to your litellm config.yaml and then start the proxy
+```shell
+litellm_settings:
+  store_audit_logs: true
+```
+
+## 2. Set `LiteLLM-Changed-By` in request headers
 
 Set the 'user_id' in request headers, when calling a management endpoint. [View Full List](https://litellm-api.up.railway.app/#/team%20management).
 
@@ -26,7 +36,7 @@ curl -X POST 'http://0.0.0.0:4000/team/update' \
     }'
 ```
 
-## Emitted Audit Log 
+## 3. Emitted Audit Log 
 
 ```bash
 {
