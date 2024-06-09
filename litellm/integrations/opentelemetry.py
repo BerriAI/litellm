@@ -1,6 +1,7 @@
 import os
 from dataclasses import dataclass
 from datetime import datetime
+import litellm
 
 from litellm.integrations.custom_logger import CustomLogger
 from litellm._logging import verbose_logger
@@ -22,6 +23,8 @@ LITELLM_TRACER_NAME = os.getenv("OTEL_TRACER_NAME", "litellm")
 LITELLM_RESOURCE = {
     "service.name": os.getenv("OTEL_SERVICE_NAME", "litellm"),
 }
+RAW_REQUEST_SPAN_NAME = "raw_gen_ai_request"
+LITELLM_REQUEST_SPAN_NAME = "litellm_request"
 
 
 @dataclass
@@ -194,6 +197,7 @@ class OpenTelemetry(CustomLogger):
 
     def _handle_sucess(self, kwargs, response_obj, start_time, end_time):
         from opentelemetry.trace import Status, StatusCode
+        from opentelemetry import trace
 
         verbose_logger.debug(
             "OpenTelemetry Logger: Logging kwargs: %s, OTEL config settings=%s",
@@ -202,6 +206,7 @@ class OpenTelemetry(CustomLogger):
         )
         _parent_context, parent_otel_span = self._get_span_context(kwargs)
 
+        # Span 1: Requst sent to litellm SDK
         span = self.tracer.start_span(
             name=self._get_span_name(kwargs),
             start_time=self._to_ns(start_time),
@@ -209,7 +214,23 @@ class OpenTelemetry(CustomLogger):
         )
         span.set_status(Status(StatusCode.OK))
         self.set_attributes(span, kwargs, response_obj)
+
+        if litellm.turn_off_message_logging is True:
+            pass
+        else:
+            # Span 2: Raw Request / Response to LLM
+            raw_request_span = self.tracer.start_span(
+                name=RAW_REQUEST_SPAN_NAME,
+                start_time=self._to_ns(start_time),
+                context=trace.set_span_in_context(span),
+            )
+
+            raw_request_span.set_status(Status(StatusCode.OK))
+            self.set_raw_request_attributes(raw_request_span, kwargs, response_obj)
+            raw_request_span.end(end_time=self._to_ns(end_time))
+
         span.end(end_time=self._to_ns(end_time))
+
         if parent_otel_span is not None:
             parent_otel_span.end(end_time=self._to_ns(datetime.now()))
 
@@ -225,6 +246,31 @@ class OpenTelemetry(CustomLogger):
         self.set_attributes(span, kwargs, response_obj)
         span.end(end_time=self._to_ns(end_time))
 
+    def set_tools_attributes(self, span: Span, tools):
+        from opentelemetry.semconv.ai import SpanAttributes
+        import json
+
+        if not tools:
+            return
+
+        try:
+            for i, tool in enumerate(tools):
+                function = tool.get("function")
+                if not function:
+                    continue
+
+                prefix = f"{SpanAttributes.LLM_REQUEST_FUNCTIONS}.{i}"
+                span.set_attribute(f"{prefix}.name", function.get("name"))
+                span.set_attribute(f"{prefix}.description", function.get("description"))
+                span.set_attribute(
+                    f"{prefix}.parameters", json.dumps(function.get("parameters"))
+                )
+        except Exception as e:
+            verbose_logger.error(
+                "OpenTelemetry: Error setting tools attributes: %s", str(e)
+            )
+            pass
+
     def set_attributes(self, span: Span, kwargs, response_obj):
         from opentelemetry.semconv.ai import SpanAttributes
 
@@ -239,7 +285,8 @@ class OpenTelemetry(CustomLogger):
         #############################################
 
         # The name of the LLM a request is being made to
-        span.set_attribute(SpanAttributes.LLM_REQUEST_MODEL, kwargs.get("model"))
+        if kwargs.get("model"):
+            span.set_attribute(SpanAttributes.LLM_REQUEST_MODEL, kwargs.get("model"))
 
         # The Generative AI Provider: Azure, OpenAI, etc.
         span.set_attribute(
@@ -248,64 +295,99 @@ class OpenTelemetry(CustomLogger):
         )
 
         # The maximum number of tokens the LLM generates for a request.
-        span.set_attribute(
-            SpanAttributes.LLM_REQUEST_MAX_TOKENS, optional_params.get("max_tokens")
-        )
+        if optional_params.get("max_tokens"):
+            span.set_attribute(
+                SpanAttributes.LLM_REQUEST_MAX_TOKENS, optional_params.get("max_tokens")
+            )
 
         # The temperature setting for the LLM request.
-        span.set_attribute(
-            SpanAttributes.LLM_REQUEST_TEMPERATURE, optional_params.get("temperature")
-        )
+        if optional_params.get("temperature"):
+            span.set_attribute(
+                SpanAttributes.LLM_REQUEST_TEMPERATURE,
+                optional_params.get("temperature"),
+            )
 
         # The top_p sampling setting for the LLM request.
-        span.set_attribute(
-            SpanAttributes.LLM_REQUEST_TOP_P, optional_params.get("top_p")
-        )
-
-        span.set_attribute(
-            SpanAttributes.LLM_IS_STREAMING, optional_params.get("stream")
-        )
-
-        span.set_attribute(
-            SpanAttributes.LLM_REQUEST_FUNCTIONS,
-            optional_params.get("tools"),
-        )
-
-        span.set_attribute(SpanAttributes.LLM_USER, optional_params.get("user"))
-
-        for idx, prompt in enumerate(kwargs.get("messages")):
+        if optional_params.get("top_p"):
             span.set_attribute(
-                f"{SpanAttributes.LLM_PROMPTS}.{idx}.role",
-                prompt.get("role"),
-            )
-            span.set_attribute(
-                f"{SpanAttributes.LLM_PROMPTS}.{idx}.content",
-                prompt.get("content"),
+                SpanAttributes.LLM_REQUEST_TOP_P, optional_params.get("top_p")
             )
 
+        span.set_attribute(
+            SpanAttributes.LLM_IS_STREAMING, optional_params.get("stream", False)
+        )
+
+        if optional_params.get("tools"):
+            tools = optional_params["tools"]
+            self.set_tools_attributes(span, tools)
+
+        if optional_params.get("user"):
+            span.set_attribute(SpanAttributes.LLM_USER, optional_params.get("user"))
+
+        if kwargs.get("messages"):
+            for idx, prompt in enumerate(kwargs.get("messages")):
+                if prompt.get("role"):
+                    span.set_attribute(
+                        f"{SpanAttributes.LLM_PROMPTS}.{idx}.role",
+                        prompt.get("role"),
+                    )
+
+                if prompt.get("content"):
+                    if not isinstance(prompt.get("content"), str):
+                        prompt["content"] = str(prompt.get("content"))
+                    span.set_attribute(
+                        f"{SpanAttributes.LLM_PROMPTS}.{idx}.content",
+                        prompt.get("content"),
+                    )
         #############################################
         ########## LLM Response Attributes ##########
         #############################################
+        if response_obj.get("choices"):
+            for idx, choice in enumerate(response_obj.get("choices")):
+                if choice.get("finish_reason"):
+                    span.set_attribute(
+                        f"{SpanAttributes.LLM_COMPLETIONS}.{idx}.finish_reason",
+                        choice.get("finish_reason"),
+                    )
+                if choice.get("message"):
+                    if choice.get("message").get("role"):
+                        span.set_attribute(
+                            f"{SpanAttributes.LLM_COMPLETIONS}.{idx}.role",
+                            choice.get("message").get("role"),
+                        )
+                    if choice.get("message").get("content"):
+                        if not isinstance(choice.get("message").get("content"), str):
+                            choice["message"]["content"] = str(
+                                choice.get("message").get("content")
+                            )
+                        span.set_attribute(
+                            f"{SpanAttributes.LLM_COMPLETIONS}.{idx}.content",
+                            choice.get("message").get("content"),
+                        )
 
-        for idx, choice in enumerate(response_obj.get("choices")):
-            span.set_attribute(
-                f"{SpanAttributes.LLM_COMPLETIONS}.{idx}.finish_reason",
-                choice.get("finish_reason"),
-            )
-            span.set_attribute(
-                f"{SpanAttributes.LLM_COMPLETIONS}.{idx}.role",
-                choice.get("message").get("role"),
-            )
-            span.set_attribute(
-                f"{SpanAttributes.LLM_COMPLETIONS}.{idx}.content",
-                choice.get("message").get("content"),
-            )
+                    message = choice.get("message")
+                    if not isinstance(message, dict):
+                        message = message.dict()
+                    tool_calls = message.get("tool_calls")
+                    if tool_calls:
+                        span.set_attribute(
+                            f"{SpanAttributes.LLM_COMPLETIONS}.{idx}.function_call.name",
+                            tool_calls[0].get("function").get("name"),
+                        )
+                        span.set_attribute(
+                            f"{SpanAttributes.LLM_COMPLETIONS}.{idx}.function_call.arguments",
+                            tool_calls[0].get("function").get("arguments"),
+                        )
 
         # The unique identifier for the completion.
-        span.set_attribute("gen_ai.response.id", response_obj.get("id"))
+        if response_obj.get("id"):
+            span.set_attribute("gen_ai.response.id", response_obj.get("id"))
 
         # The model used to generate the response.
-        span.set_attribute(SpanAttributes.LLM_RESPONSE_MODEL, response_obj.get("model"))
+        if response_obj.get("model"):
+            span.set_attribute(
+                SpanAttributes.LLM_RESPONSE_MODEL, response_obj.get("model")
+            )
 
         usage = response_obj.get("usage")
         if usage:
@@ -326,11 +408,53 @@ class OpenTelemetry(CustomLogger):
                 usage.get("prompt_tokens"),
             )
 
+    def set_raw_request_attributes(self, span: Span, kwargs, response_obj):
+        from opentelemetry.semconv.ai import SpanAttributes
+
+        optional_params = kwargs.get("optional_params", {})
+        litellm_params = kwargs.get("litellm_params", {}) or {}
+        custom_llm_provider = litellm_params.get("custom_llm_provider", "Unknown")
+
+        _raw_response = kwargs.get("original_response")
+        _additional_args = kwargs.get("additional_args", {}) or {}
+        complete_input_dict = _additional_args.get("complete_input_dict")
+        #############################################
+        ########## LLM Request Attributes ###########
+        #############################################
+
+        # OTEL Attributes for the RAW Request to https://docs.anthropic.com/en/api/messages
+        if complete_input_dict:
+            for param, val in complete_input_dict.items():
+                if not isinstance(val, str):
+                    val = str(val)
+                span.set_attribute(
+                    f"llm.{custom_llm_provider}.{param}",
+                    val,
+                )
+
+        #############################################
+        ########## LLM Response Attributes ##########
+        #############################################
+        if _raw_response:
+            # cast sr -> dict
+            import json
+
+            _raw_response = json.loads(_raw_response)
+            for param, val in _raw_response.items():
+                if not isinstance(val, str):
+                    val = str(val)
+                span.set_attribute(
+                    f"llm.{custom_llm_provider}.{param}",
+                    val,
+                )
+
+        pass
+
     def _to_ns(self, dt):
         return int(dt.timestamp() * 1e9)
 
     def _get_span_name(self, kwargs):
-        return f"litellm-{kwargs.get('call_type', 'completion')}"
+        return LITELLM_REQUEST_SPAN_NAME
 
     def _get_span_context(self, kwargs):
         from opentelemetry.trace.propagation.tracecontext import (
