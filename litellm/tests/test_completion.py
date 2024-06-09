@@ -345,7 +345,7 @@ def test_completion_claude_3_function_call(model):
             drop_params=True,
         )
 
-        # Add any assertions, here to check response args
+        # Add any assertions here to check response args
         print(response)
         assert isinstance(response.choices[0].message.tool_calls[0].function.name, str)
         assert isinstance(
