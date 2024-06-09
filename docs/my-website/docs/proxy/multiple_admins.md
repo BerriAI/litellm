@@ -10,14 +10,17 @@ Requires Enterprise License for usage.
 
 Set the 'user_id' in request headers, when calling a management endpoint. [View Full List](/link to litellm management routes).
 
+- Update Team budget with master key. 
+- Attribute change to 'krrish@berri.ai'. 
+
+**👉 Key change:** Passing `-H 'LiteLLM-Changed-By: krrish@berri.ai'`
+
 ```shell
-# Update Team budget with master key. 
-# Attribute change to 'krrish@berri.ai'. 
 curl -X POST 'http://0.0.0.0:4000/team/update' \
     -H 'Authorization: Bearer sk-1234' \
-    -H 'LiteLLM-Changed-By: krrish@berri.ai' \ # 👈 KEY CHANGE
+    -H 'LiteLLM-Changed-By: krrish@berri.ai' \
     -H 'Content-Type: application/json' \
-    -D '{
+    -d '{
         "team_id" : "8bf18b11-7f52-4717-8e1f-7c65f9d01e52",
         "max_budget": 2000
     }'
