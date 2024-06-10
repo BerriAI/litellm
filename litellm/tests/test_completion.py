@@ -530,6 +530,7 @@ def test_completion_cohere_command_r_plus_function_call():
             messages=messages,
             tools=tools,
             tool_choice="auto",
+            force_single_step=True,
         )
         print(second_response)
     except Exception as e:
