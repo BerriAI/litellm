@@ -68,7 +68,7 @@ Example  Usage - Note: liteLLM supports all models deployed on Clarifai
 | clarifai/meta.Llama-2.codeLlama-70b-Python   | `completion('clarifai/meta.Llama-2.codeLlama-70b-Python', messages)`| 
 | clarifai/meta.Llama-2.codeLlama-70b-Instruct | `completion('clarifai/meta.Llama-2.codeLlama-70b-Instruct', messages)` |   
 
-## Mistal LLMs
+## Mistral LLMs
 | Model Name                                  | Function Call                                                         |
 |---------------------------------------------|------------------------------------------------------------------------|
 | clarifai/mistralai.completion.mixtral-8x22B            | `completion('clarifai/mistralai.completion.mixtral-8x22B', messages)`               |

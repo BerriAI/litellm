@@ -6,6 +6,7 @@ from typing import Callable, Optional
 from litellm.utils import ModelResponse, Usage, Choices, Message, CustomStreamWrapper
 import litellm
 import httpx
+import asyncio
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from .prompt_templates.factory import prompt_factory, custom_prompt
 
@@ -171,8 +172,14 @@ async def async_completion(
 
     async_handler = AsyncHTTPHandler(timeout=httpx.Timeout(timeout=600.0, connect=5.0))
     response = await async_handler.post(
-        api_base, headers=headers, data=json.dumps(data)
+        model, headers=headers, data=json.dumps(data)
     )
+    response.raise_for_status()
+
+    if response.status_code != 200:
+        raise ClarifaiError(
+            status_code=response.status_code, message=response.text, url=model
+        )
 
     return process_response(
         model=model,
@@ -245,7 +252,7 @@ def completion(
         },
     )
     if acompletion == True:
-        return async_completion(
+        return asyncio.run(async_completion(
             model=model,
             prompt=prompt,
             api_base=api_base,
@@ -261,6 +268,7 @@ def completion(
             logger_fn=logger_fn,
             headers=headers,
         )
+    )
     else:
         ## COMPLETION CALL
         response = requests.post(
