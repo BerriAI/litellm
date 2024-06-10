@@ -150,6 +150,7 @@ const sidebars = {
         "providers/groq", 
         "providers/deepseek", 
         "providers/fireworks_ai", 
+        "providers/friendli_ai",
         "providers/vllm", 
         "providers/xinference", 
         "providers/cloudflare_workers", 
