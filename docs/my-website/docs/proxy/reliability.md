@@ -4,13 +4,8 @@ import TabItem from '@theme/TabItem';
 
 # 🔥 Load Balancing, Fallbacks, Retries, Timeouts
 
-Retry call with multiple instances of the same model.
-
-If a call fails after num_retries, fall back to another model group.
-
-If the error is a context window exceeded error, fall back to a larger model group (if given).
-
-[**See Code**](https://github.com/BerriAI/litellm/blob/main/litellm/router.py)
+- Quick Start [load balancing](#test---load-balancing)
+- Quick Start [client side fallbacks](#test---client-side-fallbacks)
 
 ## Quick Start - Load Balancing
 #### Step 1 - Set deployments on config
