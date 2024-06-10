@@ -2056,12 +2056,15 @@ class Router:
                     verbose_router_logger.debug(f"inside model fallbacks: {fallbacks}")
                     generic_fallback_idx: Optional[int] = None
                     ## check for specific model group-specific fallbacks
-                    for idx, item in enumerate(fallbacks):
-                        if list(item.keys())[0] == model_group:
-                            fallback_model_group = item[model_group]
-                            break
-                        elif list(item.keys())[0] == "*":
-                            generic_fallback_idx = idx
+                    if isinstance(fallbacks, list):
+                        fallback_model_group = fallbacks
+                    else:
+                        for idx, item in enumerate(fallbacks):
+                            if list(item.keys())[0] == model_group:
+                                fallback_model_group = item[model_group]
+                                break
+                            elif list(item.keys())[0] == "*":
+                                generic_fallback_idx = idx
                     ## if none, check for generic fallback
                     if (
                         fallback_model_group is None
