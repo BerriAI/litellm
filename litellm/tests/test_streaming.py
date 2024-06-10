@@ -2573,9 +2573,8 @@ def test_streaming_and_function_calling(model):
         # Add any assertions here to check the response
         for idx, chunk in enumerate(response):
             # continue
-            # print("\n{}\n".format(chunk))
+            print("\n{}\n".format(chunk))
             if idx == 0:
-                print(chunk)
                 assert (
                     chunk.choices[0].delta.tool_calls[0].function.arguments is not None
                 )

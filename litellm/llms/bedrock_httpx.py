@@ -1898,8 +1898,10 @@ class AWSEventStreamDecoder:
                     }
             elif "stopReason" in chunk_data:
                 finish_reason = map_finish_reason(chunk_data.get("stopReason", "stop"))
+                is_finished = True
             elif "usage" in chunk_data:
                 usage = ConverseTokenUsageBlock(**chunk_data["usage"])  # type: ignore
+
             response = GenericStreamingChunk(
                 text=text,
                 tool_use=tool_use,
@@ -1924,7 +1926,11 @@ class AWSEventStreamDecoder:
             is_finished = True
             finish_reason = "stop"
         ######## bedrock.anthropic mappings ###############
-        elif "contentBlockIndex" in chunk_data:
+        elif (
+            "contentBlockIndex" in chunk_data
+            or "stopReason" in chunk_data
+            or "metrics" in chunk_data
+        ):
             return self.converse_chunk_parser(chunk_data=chunk_data)
         ######## bedrock.mistral mappings ###############
         elif "outputs" in chunk_data:
