@@ -24,3 +24,12 @@ general_settings:
 
 litellm_settings:
   callbacks: ["otel"]
+  store_audit_logs: true
+  redact_messages_in_exceptions: True
+  enforced_params:  
+    - user
+    - metadata
+    - metadata.generation_name
+  cache: True
+
+

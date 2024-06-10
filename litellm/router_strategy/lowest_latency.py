@@ -1,16 +1,16 @@
 #### What this does ####
 #   picks based on response time (for streaming, this is time to first token)
-from pydantic import BaseModel, Extra, Field, root_validator  # type: ignore
-import dotenv, os, requests, random  # type: ignore
+from pydantic import BaseModel
+import random
 from typing import Optional, Union, List, Dict
 from datetime import datetime, timedelta
-import random
 import traceback
 from litellm.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm import ModelResponse
 from litellm import token_counter
 import litellm
+from litellm import verbose_logger
 
 
 class LiteLLMBase(BaseModel):
@@ -165,7 +165,12 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 if self.test_flag:
                     self.logged_success += 1
         except Exception as e:
-            traceback.print_exc()
+            verbose_logger.error(
+                "litellm.proxy.hooks.prompt_injection_detection.py::async_pre_call_hook(): Exception occured - {}".format(
+                    str(e)
+                )
+            )
+            verbose_logger.debug(traceback.format_exc())
             pass
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
@@ -229,7 +234,12 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 # do nothing if it's not a timeout error
                 return
         except Exception as e:
-            traceback.print_exc()
+            verbose_logger.error(
+                "litellm.proxy.hooks.prompt_injection_detection.py::async_pre_call_hook(): Exception occured - {}".format(
+                    str(e)
+                )
+            )
+            verbose_logger.debug(traceback.format_exc())
             pass
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
@@ -352,7 +362,12 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 if self.test_flag:
                     self.logged_success += 1
         except Exception as e:
-            traceback.print_exc()
+            verbose_logger.error(
+                "litellm.router_strategy.lowest_latency.py::async_log_success_event(): Exception occured - {}".format(
+                    str(e)
+                )
+            )
+            verbose_logger.debug(traceback.format_exc())
             pass
 
     def get_available_deployments(

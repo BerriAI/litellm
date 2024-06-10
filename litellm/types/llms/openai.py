@@ -13,6 +13,12 @@ from openai.types.beta.threads.message import Message as OpenAIMessage
 from openai.types.beta.thread_create_params import (
     Message as OpenAICreateThreadParamsMessage,
 )
+from openai.lib.streaming._assistants import (
+    AssistantEventHandler,
+    AssistantStreamManager,
+    AsyncAssistantStreamManager,
+    AsyncAssistantEventHandler,
+)
 from openai.types.beta.assistant_tool_param import AssistantToolParam
 from openai.types.beta.threads.run import Run
 from openai.types.beta.assistant import Assistant
@@ -287,3 +293,20 @@ class ListBatchRequest(TypedDict, total=False):
     extra_headers: Optional[Dict[str, str]]
     extra_body: Optional[Dict[str, str]]
     timeout: Optional[float]
+
+
+class ChatCompletionToolCallFunctionChunk(TypedDict):
+    name: str
+    arguments: str
+
+
+class ChatCompletionToolCallChunk(TypedDict):
+    id: str
+    type: Literal["function"]
+    function: ChatCompletionToolCallFunctionChunk
+
+
+class ChatCompletionResponseMessage(TypedDict, total=False):
+    content: Optional[str]
+    tool_calls: List[ChatCompletionToolCallChunk]
+    role: Literal["assistant"]

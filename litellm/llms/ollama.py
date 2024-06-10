@@ -2,10 +2,12 @@ from itertools import chain
 import requests, types, time  # type: ignore
 import json, uuid
 import traceback
-from typing import Optional
+from typing import Optional, List
 import litellm
+from litellm.types.utils import ProviderField
 import httpx, aiohttp, asyncio  # type: ignore
 from .prompt_templates.factory import prompt_factory, custom_prompt
+from litellm import verbose_logger
 
 
 class OllamaError(Exception):
@@ -124,6 +126,19 @@ class OllamaConfig:
             )
             and v is not None
         }
+    
+    def get_required_params(self) -> List[ProviderField]:
+        """For a given provider, return it's required fields with a description"""
+        return [
+            ProviderField(
+                field_name="base_url",
+                field_type="string",
+                field_description="Your Ollama API Base",
+                field_value="http://10.10.11.249:11434",
+            )
+        ]
+
+
     def get_supported_openai_params(
         self,
     ):
@@ -138,10 +153,12 @@ class OllamaConfig:
             "response_format",
         ]
 
+
 # ollama wants plain base64 jpeg/png files as images.  strip any leading dataURI
 # and convert to jpeg if necessary.
 def _convert_image(image):
     import base64, io
+
     try:
         from PIL import Image
     except:
@@ -391,7 +408,13 @@ async def ollama_async_streaming(url, data, model_response, encoding, logging_ob
                 async for transformed_chunk in streamwrapper:
                     yield transformed_chunk
     except Exception as e:
-        traceback.print_exc()
+        verbose_logger.error(
+            "LiteLLM.ollama.py::ollama_async_streaming(): Exception occured - {}".format(
+                str(e)
+            )
+        )
+        verbose_logger.debug(traceback.format_exc())
+
         raise e
 
 
@@ -455,7 +478,12 @@ async def ollama_acompletion(url, data, model_response, encoding, logging_obj):
             )
             return model_response
     except Exception as e:
-        traceback.print_exc()
+        verbose_logger.error(
+            "LiteLLM.ollama.py::ollama_acompletion(): Exception occured - {}".format(
+                str(e)
+            )
+        )
+        verbose_logger.debug(traceback.format_exc())
         raise e
 
 

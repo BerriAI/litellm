@@ -36,13 +36,8 @@ import os
 
 # setup env
 os.environ["OPENAI_API_KEY"] = "sk-.."
-os.environ["AZURE_API_KEY"] = "sk-.."
-os.environ["AZURE_API_BASE"] = "https://..."
-os.environ["AZURE_API_VERSION"] = "2024-02-15-preview"
 
 assistants = get_assistants(custom_llm_provider="openai")
-
-assistants = get_assistants(custom_llm_provider="azure")
 
 ### ASYNC USAGE ### 
 # assistants = await aget_assistants(custom_llm_provider="openai")
@@ -135,10 +130,17 @@ print(f"run_thread: {run_thread}")
 </TabItem>
 <TabItem value="proxy" label="PROXY">
 
-```bash
-$ export OPENAI_API_KEY="sk-..."
+```yaml
+assistant_settings:
+  custom_llm_provider: azure
+  litellm_params: 
+    api_key: os.environ/AZURE_API_KEY
+    api_base: os.environ/AZURE_API_BASE
+    api_version: os.environ/AZURE_API_VERSION
+```
 
-$ litellm
+```bash
+$ litellm --config /path/to/config.yaml
 
 # RUNNING on http://0.0.0.0:4000
 ```
@@ -181,6 +183,45 @@ curl http://0.0.0.0:4000/v1/threads/thread_abc123/runs \
   -d '{
     "assistant_id": "asst_abc123"
   }'
+```
+
+</TabItem>
+</Tabs>
+
+## Streaming 
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import run_thread_stream 
+import os
+
+os.environ["OPENAI_API_KEY"] = "sk-.."
+
+message = {"role": "user", "content": "Hey, how's it going?"}  
+
+data = {"custom_llm_provider": "openai", "thread_id": _new_thread.id, "assistant_id": assistant_id, **message}
+
+run = run_thread_stream(**data)
+with run as run:
+    assert isinstance(run, AssistantEventHandler)
+    for chunk in run: 
+      print(f"chunk: {chunk}")
+    run.until_done()
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/threads/{thread_id}/runs' \
+-H 'Authorization: Bearer sk-1234' \
+-H 'Content-Type: application/json' \
+-D '{
+      "assistant_id": "asst_6xVZQFFy1Kw87NbnYeNebxTf",
+      "stream": true
+}'
 ```
 
 </TabItem>

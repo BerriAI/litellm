@@ -3,11 +3,12 @@ import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
 
-# 🪢 Logging - Custom Callbacks, DataDog, Langfuse, s3 Bucket, Sentry, OpenTelemetry, Athina, Azure Content-Safety
+# 🪢 Logging - Langfuse, OpenTelemetry, Custom Callbacks, DataDog, s3 Bucket, Sentry, Athina, Azure Content-Safety
 
-Log Proxy Input, Output, Exceptions using Custom Callbacks, Langfuse, OpenTelemetry, LangFuse, DynamoDB, s3 Bucket
+Log Proxy Input, Output, Exceptions using Langfuse, OpenTelemetry, Custom Callbacks, DataDog, DynamoDB, s3 Bucket
 
 - [Logging to Langfuse](#logging-proxy-inputoutput---langfuse)
+- [Logging with OpenTelemetry (OpenTelemetry)](#logging-proxy-inputoutput-in-opentelemetry-format)
 - [Async Custom Callbacks](#custom-callback-class-async)
 - [Async Custom Callback APIs](#custom-callback-apis-async)
 - [Logging to OpenMeter](#logging-proxy-inputoutput---langfuse)
@@ -15,7 +16,6 @@ Log Proxy Input, Output, Exceptions using Custom Callbacks, Langfuse, OpenTeleme
 - [Logging to DataDog](#logging-proxy-inputoutput---datadog)
 - [Logging to DynamoDB](#logging-proxy-inputoutput---dynamodb)
 - [Logging to Sentry](#logging-proxy-inputoutput---sentry)
-- [Logging with OpenTelemetry (OpenTelemetry)](#logging-proxy-inputoutput-in-opentelemetry-format)
 - [Logging to Athina](#logging-proxy-inputoutput-athina)
 - [(BETA) Moderation with Azure Content-Safety](#moderation-with-azure-content-safety)
 
@@ -41,7 +41,9 @@ litellm_settings:
 **Step 3**: Set required env variables for logging to langfuse
 ```shell
 export LANGFUSE_PUBLIC_KEY="pk_kk"
-export LANGFUSE_SECRET_KEY="sk_ss
+export LANGFUSE_SECRET_KEY="sk_ss"
+# Optional, defaults to https://cloud.langfuse.com
+export LANGFUSE_HOST="https://xxx.langfuse.com"
 ```
 
 **Step 4**: Start the proxy, make a test request
@@ -308,6 +310,302 @@ print(response)
 You will see `raw_request` in your Langfuse Metadata. This is the RAW CURL command sent from LiteLLM to your LLM API provider
 
 <Image img={require('../../img/debug_langfuse.png')} />
+
+
+## Logging Proxy Input/Output in OpenTelemetry format
+
+:::info 
+
+[Optional] Customize OTEL Service Name and OTEL TRACER NAME by setting the following variables in your environment
+
+```shell
+OTEL_TRACER_NAME=<your-trace-name>     # default="litellm"
+OTEL_SERVICE_NAME=<your-service-name>` # default="litellm"
+```
+
+:::
+
+<Tabs>
+
+
+<TabItem value="Console Exporter" label="Log to console">
+
+
+**Step 1:** Set callbacks and env vars
+
+Add the following to your env
+
+```shell
+OTEL_EXPORTER="console"
+```
+
+Add `otel` as a callback on your `litellm_config.yaml`
+
+```shell
+litellm_settings:
+  callbacks: ["otel"]
+```
+
+
+**Step 2**: Start the proxy, make a test request
+
+Start proxy
+
+```shell
+litellm --config config.yaml --detailed_debug
+```
+
+Test Request
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --data ' {
+    "model": "gpt-3.5-turbo",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what llm are you"
+        }
+    ]
+    }'
+```
+
+**Step 3**: **Expect to see the following logged on your server logs / console**
+
+This is the Span from OTEL Logging
+
+```json
+{
+    "name": "litellm-acompletion",
+    "context": {
+        "trace_id": "0x8d354e2346060032703637a0843b20a3",
+        "span_id": "0xd8d3476a2eb12724",
+        "trace_state": "[]"
+    },
+    "kind": "SpanKind.INTERNAL",
+    "parent_id": null,
+    "start_time": "2024-06-04T19:46:56.415888Z",
+    "end_time": "2024-06-04T19:46:56.790278Z",
+    "status": {
+        "status_code": "OK"
+    },
+    "attributes": {
+        "model": "llama3-8b-8192"
+    },
+    "events": [],
+    "links": [],
+    "resource": {
+        "attributes": {
+            "service.name": "litellm"
+        },
+        "schema_url": ""
+    }
+}
+```
+
+</TabItem>
+
+
+<TabItem value="Honeycomb" label="Log to Honeycomb">
+
+#### Quick Start - Log to Honeycomb
+
+**Step 1:** Set callbacks and env vars
+
+Add the following to your env
+
+```shell
+OTEL_EXPORTER="otlp_http"
+OTEL_ENDPOINT="https://api.honeycomb.io/v1/traces"
+OTEL_HEADERS="x-honeycomb-team=<your-api-key>"
+```
+
+Add `otel` as a callback on your `litellm_config.yaml`
+
+```shell
+litellm_settings:
+  callbacks: ["otel"]
+```
+
+
+**Step 2**: Start the proxy, make a test request
+
+Start proxy
+
+```shell
+litellm --config config.yaml --detailed_debug
+```
+
+Test Request
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --data ' {
+    "model": "gpt-3.5-turbo",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what llm are you"
+        }
+    ]
+    }'
+```
+
+
+</TabItem>
+
+
+<TabItem value="otel-col" label="Log to OTEL HTTP Collector">
+
+#### Quick Start - Log to OTEL Collector
+
+**Step 1:** Set callbacks and env vars
+
+Add the following to your env
+
+```shell
+OTEL_EXPORTER="otlp_http"
+OTEL_ENDPOINT="http:/0.0.0.0:4317"
+OTEL_HEADERS="x-honeycomb-team=<your-api-key>" # Optional
+```
+
+Add `otel` as a callback on your `litellm_config.yaml`
+
+```shell
+litellm_settings:
+  callbacks: ["otel"]
+```
+
+
+**Step 2**: Start the proxy, make a test request
+
+Start proxy
+
+```shell
+litellm --config config.yaml --detailed_debug
+```
+
+Test Request
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --data ' {
+    "model": "gpt-3.5-turbo",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what llm are you"
+        }
+    ]
+    }'
+```
+
+</TabItem>
+
+
+<TabItem value="otel-col-grpc" label="Log to OTEL GRPC Collector">
+
+#### Quick Start - Log to OTEL GRPC Collector
+
+**Step 1:** Set callbacks and env vars
+
+Add the following to your env
+
+```shell
+OTEL_EXPORTER="otlp_grpc"
+OTEL_ENDPOINT="http:/0.0.0.0:4317"
+OTEL_HEADERS="x-honeycomb-team=<your-api-key>" # Optional
+```
+
+Add `otel` as a callback on your `litellm_config.yaml`
+
+```shell
+litellm_settings:
+  callbacks: ["otel"]
+```
+
+
+**Step 2**: Start the proxy, make a test request
+
+Start proxy
+
+```shell
+litellm --config config.yaml --detailed_debug
+```
+
+Test Request
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --data ' {
+    "model": "gpt-3.5-turbo",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what llm are you"
+        }
+    ]
+    }'
+```
+
+
+</TabItem>
+
+<TabItem value="traceloop" label="Log to Traceloop Cloud">
+
+#### Quick Start - Log to Traceloop
+
+**Step 1:** Install the `traceloop-sdk` SDK
+
+```shell
+pip install traceloop-sdk==0.21.2
+```
+
+**Step 2:** Add `traceloop` as a success_callback
+
+```shell
+litellm_settings:
+  success_callback: ["traceloop"]
+
+environment_variables:
+  TRACELOOP_API_KEY: "XXXXX"
+```
+
+
+**Step 3**: Start the proxy, make a test request
+
+Start proxy
+
+```shell
+litellm --config config.yaml --detailed_debug
+```
+
+Test Request
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --data ' {
+    "model": "gpt-3.5-turbo",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what llm are you"
+        }
+    ]
+    }'
+```
+
+</TabItem>
+
+</Tabs>
+
+** 🎉 Expect to see this trace logged in your OTEL collector**
+
 
 
 
@@ -1015,170 +1313,6 @@ Test Request
 ```
 litellm --test
 ```
-
-## Logging Proxy Input/Output in OpenTelemetry format
-<Tabs>
-
-<TabItem value="Honeycomb" label="Log to Honeycomb">
-
-#### Quick Start - Log to Honeycomb
-
-**Step 1:** Install the SDK
-
-```shell
-pip install traceloop-sdk==0.21.2
-```
-
-**Step 2:** Add `traceloop` as a success_callback
-
-:::info
-
-Ensure you DO NOT have `TRACELOOP_API_KEY` in your env
-
-:::
-
-```shell
-litellm_settings:
-  success_callback: ["traceloop"]
-
-environment_variables:
-  TRACELOOP_BASE_URL: "https://api.honeycomb.io"
-  TRACELOOP_HEADERS: "x-honeycomb-team=B85YgLm96*****"
-```
-
-
-**Step 3**: Start the proxy, make a test request
-
-Start proxy
-
-```shell
-litellm --config config.yaml --detailed_debug
-```
-
-Test Request
-
-```shell
-curl --location 'http://0.0.0.0:4000/chat/completions' \
-    --header 'Content-Type: application/json' \
-    --data ' {
-    "model": "gpt-3.5-turbo",
-    "messages": [
-        {
-        "role": "user",
-        "content": "what llm are you"
-        }
-    ]
-    }'
-```
-
-</TabItem>
-
-
-<TabItem value="otel-col" label="Log to OTEL Collector">
-
-#### Quick Start - Log to OTEL Collector
-
-**Step 1:** Install the SDK
-
-```shell
-pip install traceloop-sdk==0.21.2
-```
-
-**Step 2:** Add `traceloop` as a success_callback
-
-Since Traceloop is emitting standard OTLP HTTP (standard OpenTelemetry protocol), you can use any OpenTelemetry Collector
-
-:::info
-
-Ensure you DO NOT have `TRACELOOP_API_KEY` in your env
-
-:::
-
-```shell
-litellm_settings:
-  success_callback: ["traceloop"]
-
-environment_variables:
-  TRACELOOP_BASE_URL: "https://<opentelemetry-collector-hostname>:4318"
-```
-
-
-**Step 3**: Start the proxy, make a test request
-
-Start proxy
-
-```shell
-litellm --config config.yaml --detailed_debug
-```
-
-Test Request
-
-```shell
-curl --location 'http://0.0.0.0:4000/chat/completions' \
-    --header 'Content-Type: application/json' \
-    --data ' {
-    "model": "gpt-3.5-turbo",
-    "messages": [
-        {
-        "role": "user",
-        "content": "what llm are you"
-        }
-    ]
-    }'
-```
-
-</TabItem>
-
-<TabItem value="traceloop" label="Log to Traceloop Cloud">
-
-#### Quick Start - Log to Traceloop
-
-**Step 1:** Install the `traceloop-sdk` SDK
-
-```shell
-pip install traceloop-sdk==0.21.2
-```
-
-**Step 2:** Add `traceloop` as a success_callback
-
-```shell
-litellm_settings:
-  success_callback: ["traceloop"]
-
-environment_variables:
-  TRACELOOP_API_KEY: "XXXXX"
-```
-
-
-**Step 3**: Start the proxy, make a test request
-
-Start proxy
-
-```shell
-litellm --config config.yaml --detailed_debug
-```
-
-Test Request
-
-```shell
-curl --location 'http://0.0.0.0:4000/chat/completions' \
-    --header 'Content-Type: application/json' \
-    --data ' {
-    "model": "gpt-3.5-turbo",
-    "messages": [
-        {
-        "role": "user",
-        "content": "what llm are you"
-        }
-    ]
-    }'
-```
-
-</TabItem>
-
-</Tabs>
-
-** 🎉 Expect to see this trace logged in your OTEL collector**
 
 ## Logging Proxy Input/Output Athina
 

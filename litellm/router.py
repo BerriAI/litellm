@@ -51,6 +51,7 @@ from litellm.types.router import (
     AlertingConfig,
     DeploymentTypedDict,
     ModelGroupInfo,
+    AssistantsTypedDict,
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.azure import get_azure_ad_token_from_oidc
@@ -78,6 +79,8 @@ class Router:
     def __init__(
         self,
         model_list: Optional[List[Union[DeploymentTypedDict, Dict]]] = None,
+        ## ASSISTANTS API ##
+        assistants_config: Optional[AssistantsTypedDict] = None,
         ## CACHING ##
         redis_url: Optional[str] = None,
         redis_host: Optional[str] = None,
@@ -212,12 +215,11 @@ class Router:
             elif debug_level == "DEBUG":
                 verbose_router_logger.setLevel(logging.DEBUG)
 
+        self.assistants_config = assistants_config
         self.deployment_names: List = (
             []
         )  # names of models under litellm_params. ex. azure/chatgpt-v-2
         self.deployment_latency_map = {}
-        ### SCHEDULER ###
-        self.scheduler = Scheduler(polling_interval=polling_interval)
         ### CACHING ###
         cache_type: Literal["local", "redis"] = "local"  # default to an in-memory cache
         redis_cache = None
@@ -255,6 +257,10 @@ class Router:
             redis_cache=redis_cache, in_memory_cache=InMemoryCache()
         )  # use a dual cache (Redis+In-Memory) for tracking cooldowns, usage, etc.
 
+        ### SCHEDULER ###
+        self.scheduler = Scheduler(
+            polling_interval=polling_interval, redis_cache=redis_cache
+        )
         self.default_deployment = None  # use this to track the users default deployment, when they want to use model = *
         self.default_max_parallel_requests = default_max_parallel_requests
 
@@ -1831,31 +1837,56 @@ class Router:
 
     async def aget_assistants(
         self,
-        custom_llm_provider: Literal["openai"],
+        custom_llm_provider: Optional[Literal["openai", "azure"]] = None,
         client: Optional[AsyncOpenAI] = None,
         **kwargs,
     ) -> AsyncCursorPage[Assistant]:
+        if custom_llm_provider is None:
+            if self.assistants_config is not None:
+                custom_llm_provider = self.assistants_config["custom_llm_provider"]
+                kwargs.update(self.assistants_config["litellm_params"])
+            else:
+                raise Exception(
+                    "'custom_llm_provider' must be set. Either via:\n `Router(assistants_config={'custom_llm_provider': ..})` \nor\n `router.arun_thread(custom_llm_provider=..)`"
+                )
+
         return await litellm.aget_assistants(
             custom_llm_provider=custom_llm_provider, client=client, **kwargs
         )
 
     async def acreate_thread(
         self,
-        custom_llm_provider: Literal["openai"],
+        custom_llm_provider: Optional[Literal["openai", "azure"]] = None,
         client: Optional[AsyncOpenAI] = None,
         **kwargs,
     ) -> Thread:
+        if custom_llm_provider is None:
+            if self.assistants_config is not None:
+                custom_llm_provider = self.assistants_config["custom_llm_provider"]
+                kwargs.update(self.assistants_config["litellm_params"])
+            else:
+                raise Exception(
+                    "'custom_llm_provider' must be set. Either via:\n `Router(assistants_config={'custom_llm_provider': ..})` \nor\n `router.arun_thread(custom_llm_provider=..)`"
+                )
         return await litellm.acreate_thread(
             custom_llm_provider=custom_llm_provider, client=client, **kwargs
         )
 
     async def aget_thread(
         self,
-        custom_llm_provider: Literal["openai"],
         thread_id: str,
+        custom_llm_provider: Optional[Literal["openai", "azure"]] = None,
         client: Optional[AsyncOpenAI] = None,
         **kwargs,
     ) -> Thread:
+        if custom_llm_provider is None:
+            if self.assistants_config is not None:
+                custom_llm_provider = self.assistants_config["custom_llm_provider"]
+                kwargs.update(self.assistants_config["litellm_params"])
+            else:
+                raise Exception(
+                    "'custom_llm_provider' must be set. Either via:\n `Router(assistants_config={'custom_llm_provider': ..})` \nor\n `router.arun_thread(custom_llm_provider=..)`"
+                )
         return await litellm.aget_thread(
             custom_llm_provider=custom_llm_provider,
             thread_id=thread_id,
@@ -1865,15 +1896,24 @@ class Router:
 
     async def a_add_message(
         self,
-        custom_llm_provider: Literal["openai"],
         thread_id: str,
         role: Literal["user", "assistant"],
         content: str,
         attachments: Optional[List[Attachment]] = None,
         metadata: Optional[dict] = None,
+        custom_llm_provider: Optional[Literal["openai", "azure"]] = None,
         client: Optional[AsyncOpenAI] = None,
         **kwargs,
     ) -> OpenAIMessage:
+        if custom_llm_provider is None:
+            if self.assistants_config is not None:
+                custom_llm_provider = self.assistants_config["custom_llm_provider"]
+                kwargs.update(self.assistants_config["litellm_params"])
+            else:
+                raise Exception(
+                    "'custom_llm_provider' must be set. Either via:\n `Router(assistants_config={'custom_llm_provider': ..})` \nor\n `router.arun_thread(custom_llm_provider=..)`"
+                )
+
         return await litellm.a_add_message(
             custom_llm_provider=custom_llm_provider,
             thread_id=thread_id,
@@ -1887,11 +1927,19 @@ class Router:
 
     async def aget_messages(
         self,
-        custom_llm_provider: Literal["openai"],
         thread_id: str,
+        custom_llm_provider: Optional[Literal["openai", "azure"]] = None,
         client: Optional[AsyncOpenAI] = None,
         **kwargs,
     ) -> AsyncCursorPage[OpenAIMessage]:
+        if custom_llm_provider is None:
+            if self.assistants_config is not None:
+                custom_llm_provider = self.assistants_config["custom_llm_provider"]
+                kwargs.update(self.assistants_config["litellm_params"])
+            else:
+                raise Exception(
+                    "'custom_llm_provider' must be set. Either via:\n `Router(assistants_config={'custom_llm_provider': ..})` \nor\n `router.arun_thread(custom_llm_provider=..)`"
+                )
         return await litellm.aget_messages(
             custom_llm_provider=custom_llm_provider,
             thread_id=thread_id,
@@ -1901,9 +1949,9 @@ class Router:
 
     async def arun_thread(
         self,
-        custom_llm_provider: Literal["openai"],
         thread_id: str,
         assistant_id: str,
+        custom_llm_provider: Optional[Literal["openai", "azure"]] = None,
         additional_instructions: Optional[str] = None,
         instructions: Optional[str] = None,
         metadata: Optional[dict] = None,
@@ -1913,6 +1961,16 @@ class Router:
         client: Optional[Any] = None,
         **kwargs,
     ) -> Run:
+
+        if custom_llm_provider is None:
+            if self.assistants_config is not None:
+                custom_llm_provider = self.assistants_config["custom_llm_provider"]
+                kwargs.update(self.assistants_config["litellm_params"])
+            else:
+                raise Exception(
+                    "'custom_llm_provider' must be set. Either via:\n `Router(assistants_config={'custom_llm_provider': ..})` \nor\n `router.arun_thread(custom_llm_provider=..)`"
+                )
+
         return await litellm.arun_thread(
             custom_llm_provider=custom_llm_provider,
             thread_id=thread_id,
@@ -2040,8 +2098,8 @@ class Router:
                         except Exception as e:
                             raise e
             except Exception as e:
-                verbose_router_logger.debug(f"An exception occurred - {str(e)}")
-                traceback.print_exc()
+                verbose_router_logger.error(f"An exception occurred - {str(e)}")
+                verbose_router_logger.debug(traceback.format_exc())
             raise original_exception
 
     async def async_function_with_retries(self, *args, **kwargs):
@@ -3552,7 +3610,7 @@ class Router:
                 # get model info
                 try:
                     model_info = litellm.get_model_info(model=litellm_params.model)
-                except Exception as e:
+                except Exception:
                     model_info = None
                 # get llm provider
                 try:
@@ -3561,7 +3619,9 @@ class Router:
                         custom_llm_provider=litellm_params.custom_llm_provider,
                     )
                 except litellm.exceptions.BadRequestError as e:
-                    continue
+                    verbose_router_logger.error(
+                        "litellm.router.py::get_model_group_info() - {}".format(str(e))
+                    )
 
                 if model_info is None:
                     supported_openai_params = litellm.get_supported_openai_params(
@@ -3991,6 +4051,12 @@ class Router:
         if len(invalid_model_indices) > 0:
             for idx in reversed(invalid_model_indices):
                 _returned_deployments.pop(idx)
+
+        ## ORDER FILTERING ## -> if user set 'order' in deployments, return deployments with lowest order (e.g. order=1 > order=2)
+        if len(_returned_deployments) > 0:
+            _returned_deployments = litellm.utils._get_order_filtered_deployments(
+                _returned_deployments
+            )
 
         return _returned_deployments
 

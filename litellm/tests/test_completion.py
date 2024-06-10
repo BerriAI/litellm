@@ -14,6 +14,7 @@ from litellm import embedding, completion, completion_cost, Timeout
 from litellm import RateLimitError
 from litellm.llms.prompt_templates.factory import anthropic_messages_pt
 from unittest.mock import patch, MagicMock
+from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
 
 # litellm.num_retries=3
 litellm.cache = None
@@ -152,29 +153,63 @@ async def test_completion_databricks(sync_mode):
     response_format_tests(response=response)
 
 
+def predibase_mock_post(url, data=None, json=None, headers=None):
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {"Content-Type": "application/json"}
+    mock_response.json.return_value = {
+        "generated_text": " Is it to find happiness, to achieve success,",
+        "details": {
+            "finish_reason": "length",
+            "prompt_tokens": 8,
+            "generated_tokens": 10,
+            "seed": None,
+            "prefill": [],
+            "tokens": [
+                {"id": 2209, "text": " Is", "logprob": -1.7568359, "special": False},
+                {"id": 433, "text": " it", "logprob": -0.2220459, "special": False},
+                {"id": 311, "text": " to", "logprob": -0.6928711, "special": False},
+                {"id": 1505, "text": " find", "logprob": -0.6425781, "special": False},
+                {
+                    "id": 23871,
+                    "text": " happiness",
+                    "logprob": -0.07519531,
+                    "special": False,
+                },
+                {"id": 11, "text": ",", "logprob": -0.07110596, "special": False},
+                {"id": 311, "text": " to", "logprob": -0.79296875, "special": False},
+                {
+                    "id": 11322,
+                    "text": " achieve",
+                    "logprob": -0.7602539,
+                    "special": False,
+                },
+                {
+                    "id": 2450,
+                    "text": " success",
+                    "logprob": -0.03656006,
+                    "special": False,
+                },
+                {"id": 11, "text": ",", "logprob": -0.0011510849, "special": False},
+            ],
+        },
+    }
+    return mock_response
+
+
 # @pytest.mark.skip(reason="local only test")
-@pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
-async def test_completion_predibase(sync_mode):
+async def test_completion_predibase():
     try:
         litellm.set_verbose = True
 
-        if sync_mode:
+        with patch("requests.post", side_effect=predibase_mock_post):
             response = completion(
                 model="predibase/llama-3-8b-instruct",
                 tenant_id="c4768f95",
                 api_key=os.getenv("PREDIBASE_API_KEY"),
                 messages=[{"role": "user", "content": "What is the meaning of life?"}],
-            )
-
-            print(response)
-        else:
-            response = await litellm.acompletion(
-                model="predibase/llama-3-8b-instruct",
-                tenant_id="c4768f95",
-                api_base="https://serving.app.predibase.com",
-                api_key=os.getenv("PREDIBASE_API_KEY"),
-                messages=[{"role": "user", "content": "What is the meaning of life?"}],
+                max_tokens=10,
             )
 
             print(response)
@@ -265,7 +300,11 @@ def test_completion_claude_3():
         pytest.fail(f"Error occurred: {e}")
 
 
-def test_completion_claude_3_function_call():
+@pytest.mark.parametrize(
+    "model",
+    ["anthropic/claude-3-opus-20240229", "anthropic.claude-3-sonnet-20240229-v1:0"],
+)
+def test_completion_claude_3_function_call(model):
     litellm.set_verbose = True
     tools = [
         {
@@ -296,16 +335,17 @@ def test_completion_claude_3_function_call():
     try:
         # test without max tokens
         response = completion(
-            model="anthropic/claude-3-opus-20240229",
+            model=model,
             messages=messages,
             tools=tools,
             tool_choice={
                 "type": "function",
                 "function": {"name": "get_current_weather"},
             },
+            drop_params=True,
         )
 
-        # Add any assertions, here to check response args
+        # Add any assertions here to check response args
         print(response)
         assert isinstance(response.choices[0].message.tool_calls[0].function.name, str)
         assert isinstance(
@@ -329,10 +369,11 @@ def test_completion_claude_3_function_call():
         )
         # In the second response, Claude should deduce answer from tool results
         second_response = completion(
-            model="anthropic/claude-3-opus-20240229",
+            model=model,
             messages=messages,
             tools=tools,
             tool_choice="auto",
+            drop_params=True,
         )
         print(second_response)
     except Exception as e:
@@ -489,6 +530,7 @@ def test_completion_cohere_command_r_plus_function_call():
             messages=messages,
             tools=tools,
             tool_choice="auto",
+            force_single_step=True,
         )
         print(second_response)
     except Exception as e:
@@ -1363,7 +1405,6 @@ def test_hf_test_completion_tgi():
 
 
 def mock_post(url, data=None, json=None, headers=None):
-
     print(f"url={url}")
     if "text-classification" in url:
         raise Exception("Model not found")
@@ -2125,8 +2166,10 @@ def test_completion_azure_key_completion_arg():
             model="azure/chatgpt-v-2",
             messages=messages,
             api_key=old_key,
+            logprobs=True,
             max_tokens=10,
         )
+
         print(f"response: {response}")
 
         print("Hidden Params", response._hidden_params)
@@ -2185,12 +2228,6 @@ async def test_re_use_azure_async_client():
         pytest.fail("got Exception", e)
 
 
-# import asyncio
-# asyncio.run(
-#     test_re_use_azure_async_client()
-# )
-
-
 def test_re_use_openaiClient():
     try:
         print("gpt-3.5  with client test\n\n")
@@ -2210,9 +2247,6 @@ def test_re_use_openaiClient():
         pytest.fail("got Exception", e)
 
 
-# test_re_use_openaiClient()
-
-
 def test_completion_azure():
     try:
         print("azure gpt-3.5 test\n\n")
@@ -2224,7 +2258,7 @@ def test_completion_azure():
             api_key="os.environ/AZURE_API_KEY",
         )
         print(f"response: {response}")
-        ## Test azure flag for backwards compat
+        ## Test azure flag for backwards-compat
         # response = completion(
         #     model="chatgpt-v-2",
         #     messages=messages,
@@ -2508,6 +2542,7 @@ def test_replicate_custom_prompt_dict():
                     "content": "what is yc write 1 paragraph",
                 }
             ],
+            mock_response="Hello world",
             repetition_penalty=0.1,
             num_retries=3,
         )

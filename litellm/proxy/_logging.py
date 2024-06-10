@@ -1,6 +1,7 @@
 import json
 import logging
 from logging import Formatter
+import sys
 
 
 class JsonFormatter(Formatter):
@@ -17,4 +18,4 @@ logger = logging.root
 handler = logging.StreamHandler()
 handler.setFormatter(JsonFormatter())
 logger.handlers = [handler]
-logger.setLevel(logging.DEBUG)
+logger.setLevel(logging.INFO)

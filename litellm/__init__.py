@@ -5,7 +5,7 @@ warnings.filterwarnings("ignore", message=".*conflict with protected namespace.*
 ### INIT VARIABLES ###
 import threading, requests, os
 from typing import Callable, List, Optional, Dict, Union, Any, Literal
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.caching import Cache
 from litellm._logging import (
     set_verbose,
@@ -60,6 +60,8 @@ _async_failure_callback: List[Callable] = (
 pre_call_rules: List[Callable] = []
 post_call_rules: List[Callable] = []
 turn_off_message_logging: Optional[bool] = False
+redact_messages_in_exceptions: Optional[bool] = False
+store_audit_logs = False  # Enterprise feature, allow users to see audit logs
 ## end of callbacks #############
 
 email: Optional[str] = (
@@ -232,6 +234,7 @@ max_end_user_budget: Optional[float] = None
 #### RELIABILITY ####
 request_timeout: float = 6000
 module_level_aclient = AsyncHTTPHandler(timeout=request_timeout)
+module_level_client = HTTPHandler(timeout=request_timeout)
 num_retries: Optional[int] = None  # per model endpoint
 default_fallbacks: Optional[List] = None
 fallbacks: Optional[List] = None
@@ -706,6 +709,7 @@ all_embedding_models = (
 openai_image_generation_models = ["dall-e-2", "dall-e-3"]
 
 from .timeout import timeout
+from .cost_calculator import completion_cost
 from .utils import (
     client,
     exception_type,
@@ -715,7 +719,6 @@ from .utils import (
     create_pretrained_tokenizer,
     create_tokenizer,
     cost_per_token,
-    completion_cost,
     supports_function_calling,
     supports_parallel_function_calling,
     supports_vision,
@@ -765,7 +768,7 @@ from .llms.sagemaker import SagemakerConfig
 from .llms.ollama import OllamaConfig
 from .llms.ollama_chat import OllamaChatConfig
 from .llms.maritalk import MaritTalkConfig
-from .llms.bedrock_httpx import AmazonCohereChatConfig
+from .llms.bedrock_httpx import AmazonCohereChatConfig, AmazonConverseConfig
 from .llms.bedrock import (
     AmazonTitanConfig,
     AmazonAI21Config,
@@ -807,6 +810,7 @@ from .exceptions import (
     APIConnectionError,
     APIResponseValidationError,
     UnprocessableEntityError,
+    InternalServerError,
     LITELLM_EXCEPTION_TYPES,
 )
 from .budget_manager import BudgetManager
@@ -815,3 +819,4 @@ from .router import Router
 from .assistants.main import *
 from .batches.main import *
 from .scheduler import *
+from .cost_calculator import response_cost_calculator

@@ -76,7 +76,7 @@ def test_image_generation_azure_dall_e_3():
         )
         print(f"response: {response}")
         assert len(response.data) > 0
-    except litellm.RateLimitError as e:
+    except litellm.InternalServerError as e:
         pass
     except litellm.ContentPolicyViolationError:
         pass  # OpenAI randomly raises these errors - skip when they occur

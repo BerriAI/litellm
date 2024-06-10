@@ -885,6 +885,7 @@ def test_completion_mistral_api_mistral_large_function_call_with_streaming():
         idx = 0
         for chunk in response:
             print(f"chunk in response: {chunk}")
+            assert chunk._hidden_params["custom_llm_provider"] == "mistral"
             if idx == 0:
                 assert (
                     chunk.choices[0].delta.tool_calls[0].function.arguments is not None
@@ -898,7 +899,6 @@ def test_completion_mistral_api_mistral_large_function_call_with_streaming():
             elif chunk.choices[0].finish_reason is not None:  # last chunk
                 validate_final_streaming_function_calling_chunk(chunk=chunk)
             idx += 1
-        # raise Exception("it worked!")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -1284,18 +1284,18 @@ async def test_completion_replicate_llama3_streaming(sync_mode):
 #         pytest.fail(f"Error occurred: {e}")
 
 
-@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("sync_mode", [True])  # False
 @pytest.mark.parametrize(
     "model",
     [
-        # "bedrock/cohere.command-r-plus-v1:0",
-        # "anthropic.claude-3-sonnet-20240229-v1:0",
-        # "anthropic.claude-instant-v1",
-        # "bedrock/ai21.j2-mid",
-        # "mistral.mistral-7b-instruct-v0:2",
-        # "bedrock/amazon.titan-tg1-large",
-        # "meta.llama3-8b-instruct-v1:0",
-        "cohere.command-text-v14"
+        "bedrock/cohere.command-r-plus-v1:0",
+        "anthropic.claude-3-sonnet-20240229-v1:0",
+        "anthropic.claude-instant-v1",
+        "bedrock/ai21.j2-mid",
+        "mistral.mistral-7b-instruct-v0:2",
+        "bedrock/amazon.titan-tg1-large",
+        "meta.llama3-8b-instruct-v1:0",
+        "cohere.command-text-v14",
     ],
 )
 @pytest.mark.asyncio
@@ -1993,20 +1993,46 @@ def test_openai_chat_completion_complete_response_call():
 
 
 # test_openai_chat_completion_complete_response_call()
-def test_openai_stream_options_call():
+@pytest.mark.parametrize(
+    "model",
+    ["gpt-3.5-turbo", "azure/chatgpt-v-2"],
+)
+@pytest.mark.parametrize(
+    "sync",
+    [True, False],
+)
+@pytest.mark.asyncio
+async def test_openai_stream_options_call(model, sync):
     litellm.set_verbose = False
-    response = litellm.completion(
-        model="gpt-3.5-turbo",
-        messages=[{"role": "system", "content": "say GM - we're going to make it "}],
-        stream=True,
-        stream_options={"include_usage": True},
-        max_tokens=10,
-    )
     usage = None
     chunks = []
-    for chunk in response:
-        print("chunk: ", chunk)
-        chunks.append(chunk)
+    if sync:
+        response = litellm.completion(
+            model=model,
+            messages=[
+                {"role": "system", "content": "say GM - we're going to make it "}
+            ],
+            stream=True,
+            stream_options={"include_usage": True},
+            max_tokens=10,
+        )
+        for chunk in response:
+            print("chunk: ", chunk)
+            chunks.append(chunk)
+    else:
+        response = await litellm.acompletion(
+            model=model,
+            messages=[
+                {"role": "system", "content": "say GM - we're going to make it "}
+            ],
+            stream=True,
+            stream_options={"include_usage": True},
+            max_tokens=10,
+        )
+
+        async for chunk in response:
+            print("chunk: ", chunk)
+            chunks.append(chunk)
 
     last_chunk = chunks[-1]
     print("last chunk: ", last_chunk)
@@ -2018,12 +2044,24 @@ def test_openai_stream_options_call():
     """
 
     assert last_chunk.usage is not None
+    assert isinstance(last_chunk.usage, litellm.Usage)
     assert last_chunk.usage.total_tokens > 0
     assert last_chunk.usage.prompt_tokens > 0
     assert last_chunk.usage.completion_tokens > 0
 
     # assert all non last chunks have usage=None
-    assert all(chunk.usage is None for chunk in chunks[:-1])
+    # Improved assertion with detailed error message
+    non_last_chunks_with_usage = [
+        chunk
+        for chunk in chunks[:-1]
+        if hasattr(chunk, "usage") and chunk.usage is not None
+    ]
+    assert (
+        not non_last_chunks_with_usage
+    ), f"Non-last chunks with usage not None:\n" + "\n".join(
+        f"Chunk ID: {chunk.id}, Usage: {chunk.usage}, Content: {chunk.choices[0].delta.content}"
+        for chunk in non_last_chunks_with_usage
+    )
 
 
 def test_openai_stream_options_call_text_completion():

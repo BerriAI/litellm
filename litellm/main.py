@@ -79,7 +79,7 @@ from .llms.anthropic import AnthropicChatCompletion
 from .llms.anthropic_text import AnthropicTextCompletion
 from .llms.huggingface_restapi import Huggingface
 from .llms.predibase import PredibaseChatCompletion
-from .llms.bedrock_httpx import BedrockLLM
+from .llms.bedrock_httpx import BedrockLLM, BedrockConverseLLM
 from .llms.vertex_httpx import VertexLLM
 from .llms.triton import TritonChatCompletion
 from .llms.prompt_templates.factory import (
@@ -122,6 +122,7 @@ huggingface = Huggingface()
 predibase_chat_completions = PredibaseChatCompletion()
 triton_chat_completions = TritonChatCompletion()
 bedrock_chat_completion = BedrockLLM()
+bedrock_converse_chat_completion = BedrockConverseLLM()
 vertex_chat_completion = VertexLLM()
 ####### COMPLETION ENDPOINTS ################
 
@@ -364,7 +365,10 @@ async def acompletion(
             )  # sets the logging event loop if the user does sync streaming (e.g. on proxy for sagemaker calls)
         return response
     except Exception as e:
-        traceback.print_exc()
+        verbose_logger.error(
+            "litellm.acompletion(): Exception occured - {}".format(str(e))
+        )
+        verbose_logger.debug(traceback.format_exc())
         custom_llm_provider = custom_llm_provider or "openai"
         raise exception_type(
             model=model,
@@ -428,9 +432,9 @@ def mock_completion(
             if isinstance(mock_response, openai.APIError):
                 raise mock_response
             raise litellm.APIError(
-                status_code=500,  # type: ignore
-                message=str(mock_response),
-                llm_provider="openai",  # type: ignore
+                status_code=getattr(mock_response, "status_code", 500),  # type: ignore
+                message=getattr(mock_response, "text", str(mock_response)),
+                llm_provider=getattr(mock_response, "llm_provider", "openai"),  # type: ignore
                 model=model,  # type: ignore
                 request=httpx.Request(method="POST", url="https://api.openai.com/v1/"),
             )
@@ -468,16 +472,25 @@ def mock_completion(
         try:
             _, custom_llm_provider, _, _ = litellm.utils.get_llm_provider(model=model)
             model_response._hidden_params["custom_llm_provider"] = custom_llm_provider
-        except:
+        except Exception:
             # dont let setting a hidden param block a mock_respose
             pass
 
+        if logging is not None:
+            logging.post_call(
+                input=messages,
+                api_key="my-secret-key",
+                original_response="my-original-response",
+            )
         return model_response
 
     except Exception as e:
         if isinstance(e, openai.APIError):
             raise e
-        traceback.print_exc()
+        verbose_logger.error(
+            "litellm.mock_completion(): Exception occured - {}".format(str(e))
+        )
+        verbose_logger.debug(traceback.format_exc())
         raise Exception("Mock completion response failed")
 
 
@@ -1936,7 +1949,8 @@ def completion(
             )
 
             api_base = (
-                optional_params.pop("api_base", None)
+                api_base
+                or optional_params.pop("api_base", None)
                 or optional_params.pop("base_url", None)
                 or litellm.api_base
                 or get_secret("PREDIBASE_API_BASE")
@@ -1964,12 +1978,13 @@ def completion(
                 custom_prompt_dict=custom_prompt_dict,
                 api_key=api_key,
                 tenant_id=tenant_id,
+                timeout=timeout,
             )
 
             if (
                 "stream" in optional_params
-                and optional_params["stream"] == True
-                and acompletion == False
+                and optional_params["stream"] is True
+                and acompletion is False
             ):
                 return _model_response
             response = _model_response
@@ -2097,22 +2112,40 @@ def completion(
                             logging_obj=logging,
                         )
             else:
-                response = bedrock_chat_completion.completion(
-                    model=model,
-                    messages=messages,
-                    custom_prompt_dict=custom_prompt_dict,
-                    model_response=model_response,
-                    print_verbose=print_verbose,
-                    optional_params=optional_params,
-                    litellm_params=litellm_params,
-                    logger_fn=logger_fn,
-                    encoding=encoding,
-                    logging_obj=logging,
-                    extra_headers=extra_headers,
-                    timeout=timeout,
-                    acompletion=acompletion,
-                    client=client,
-                )
+                if model.startswith("anthropic"):
+                    response = bedrock_converse_chat_completion.completion(
+                        model=model,
+                        messages=messages,
+                        custom_prompt_dict=custom_prompt_dict,
+                        model_response=model_response,
+                        print_verbose=print_verbose,
+                        optional_params=optional_params,
+                        litellm_params=litellm_params,
+                        logger_fn=logger_fn,
+                        encoding=encoding,
+                        logging_obj=logging,
+                        extra_headers=extra_headers,
+                        timeout=timeout,
+                        acompletion=acompletion,
+                        client=client,
+                    )
+                else:
+                    response = bedrock_chat_completion.completion(
+                        model=model,
+                        messages=messages,
+                        custom_prompt_dict=custom_prompt_dict,
+                        model_response=model_response,
+                        print_verbose=print_verbose,
+                        optional_params=optional_params,
+                        litellm_params=litellm_params,
+                        logger_fn=logger_fn,
+                        encoding=encoding,
+                        logging_obj=logging,
+                        extra_headers=extra_headers,
+                        timeout=timeout,
+                        acompletion=acompletion,
+                        client=client,
+                    )
             if optional_params.get("stream", False):
                 ## LOGGING
                 logging.post_call(
@@ -2415,6 +2448,7 @@ def completion(
                         "top_k": kwargs.get("top_k", 40),
                     },
                 },
+                verify=litellm.ssl_verify,
             )
             response_json = resp.json()
             """
@@ -4429,7 +4463,10 @@ async def ahealth_check(
                 response = {}  # args like remaining ratelimit etc.
         return response
     except Exception as e:
-        traceback.print_exc()
+        verbose_logger.error(
+            "litellm.ahealth_check(): Exception occured - {}".format(str(e))
+        )
+        verbose_logger.debug(traceback.format_exc())
         stack_trace = traceback.format_exc()
         if isinstance(stack_trace, str):
             stack_trace = stack_trace[:1000]
@@ -4535,7 +4572,7 @@ def stream_chunk_builder_text_completion(chunks: list, messages: Optional[List] 
 
 def stream_chunk_builder(
     chunks: list, messages: Optional[list] = None, start_time=None, end_time=None
-):
+) -> Union[ModelResponse, TextCompletionResponse]:
     model_response = litellm.ModelResponse()
     ### SORT CHUNKS BASED ON CREATED ORDER ##
     print_verbose("Goes into checking if chunk has hiddden created at param")
