@@ -51,6 +51,7 @@ from litellm.types.llms.openai import (
     ChatCompletionResponseMessage,
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
+    ChatCompletionDeltaChunk,
 )
 
 
@@ -1859,29 +1860,57 @@ class AWSEventStreamDecoder:
         self.parser = EventStreamJSONParser()
 
     def converse_chunk_parser(self, chunk_data: dict) -> GenericStreamingChunk:
-        text = ""
-        tool_str = ""
-        is_finished = False
-        finish_reason = ""
-        usage: Optional[ConverseTokenUsageBlock] = None
-        if "delta" in chunk_data:
-            delta_obj = ContentBlockDeltaEvent(**chunk_data["delta"])
-            if "text" in delta_obj:
-                text = delta_obj["text"]
-            elif "toolUse" in delta_obj:
-                tool_str = delta_obj["toolUse"]["input"]
-        elif "stopReason" in chunk_data:
-            finish_reason = map_finish_reason(chunk_data.get("stopReason", "stop"))
-        elif "usage" in chunk_data:
-            usage = ConverseTokenUsageBlock(**chunk_data["usage"])  # type: ignore
-        response = GenericStreamingChunk(
-            text=text,
-            tool_str=tool_str,
-            is_finished=is_finished,
-            finish_reason=finish_reason,
-            usage=usage,
-        )
-        return response
+        try:
+            text = ""
+            tool_use: Optional[ChatCompletionToolCallChunk] = None
+            is_finished = False
+            finish_reason = ""
+            usage: Optional[ConverseTokenUsageBlock] = None
+
+            index = int(chunk_data.get("contentBlockIndex", 0))
+            if "start" in chunk_data:
+                start_obj = ContentBlockStartEvent(**chunk_data["start"])
+                if (
+                    start_obj is not None
+                    and "toolUse" in start_obj
+                    and start_obj["toolUse"] is not None
+                ):
+                    tool_use = {
+                        "id": start_obj["toolUse"]["toolUseId"],
+                        "type": "function",
+                        "function": {
+                            "name": start_obj["toolUse"]["name"],
+                            "arguments": "",
+                        },
+                    }
+            elif "delta" in chunk_data:
+                delta_obj = ContentBlockDeltaEvent(**chunk_data["delta"])
+                if "text" in delta_obj:
+                    text = delta_obj["text"]
+                elif "toolUse" in delta_obj:
+                    tool_use = {
+                        "id": None,
+                        "type": "function",
+                        "function": {
+                            "name": None,
+                            "arguments": delta_obj["toolUse"]["input"],
+                        },
+                    }
+            elif "stopReason" in chunk_data:
+                finish_reason = map_finish_reason(chunk_data.get("stopReason", "stop"))
+            elif "usage" in chunk_data:
+                usage = ConverseTokenUsageBlock(**chunk_data["usage"])  # type: ignore
+            response = GenericStreamingChunk(
+                text=text,
+                tool_use=tool_use,
+                is_finished=is_finished,
+                finish_reason=finish_reason,
+                usage=usage,
+                index=index,
+            )
+            return response
+        except Exception as e:
+            raise Exception("Received streaming error - {}".format(str(e)))
 
     def _chunk_parser(self, chunk_data: dict) -> GenericStreamingChunk:
         text = ""
@@ -1890,12 +1919,12 @@ class AWSEventStreamDecoder:
         if "outputText" in chunk_data:
             text = chunk_data["outputText"]
         # ai21 mapping
-        if "ai21" in self.model:  # fake ai21 streaming
+        elif "ai21" in self.model:  # fake ai21 streaming
             text = chunk_data.get("completions")[0].get("data").get("text")  # type: ignore
             is_finished = True
             finish_reason = "stop"
         ######## bedrock.anthropic mappings ###############
-        elif "delta" in chunk_data:
+        elif "contentBlockIndex" in chunk_data:
             return self.converse_chunk_parser(chunk_data=chunk_data)
         ######## bedrock.mistral mappings ###############
         elif "outputs" in chunk_data:
@@ -1905,7 +1934,7 @@ class AWSEventStreamDecoder:
             ):
                 text = chunk_data["outputs"][0]["text"]
             stop_reason = chunk_data.get("stop_reason", None)
-            if stop_reason != None:
+            if stop_reason is not None:
                 is_finished = True
                 finish_reason = stop_reason
         ######## bedrock.cohere mappings ###############
@@ -1926,8 +1955,9 @@ class AWSEventStreamDecoder:
             text=text,
             is_finished=is_finished,
             finish_reason=finish_reason,
-            tool_str="",
             usage=None,
+            index=0,
+            tool_use=None,
         )
 
     def iter_bytes(self, iterator: Iterator[bytes]) -> Iterator[GenericStreamingChunk]:
