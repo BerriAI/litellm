@@ -1059,3 +1059,53 @@ async def test_default_model_fallbacks(sync_mode, litellm_module_fallbacks):
 
     assert isinstance(response, litellm.ModelResponse)
     assert response.model is not None and response.model == "gpt-4o"
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_client_side_fallbacks_list(sync_mode):
+    """
+
+    Tests Client Side Fallbacks
+
+    User can pass "fallbacks": ["gpt-3.5-turbo"] and this should work
+
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "bad-model",
+                "litellm_params": {
+                    "model": "openai/my-bad-model",
+                    "api_key": "my-bad-api-key",
+                },
+            },
+            {
+                "model_name": "my-good-model",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                },
+            },
+        ],
+    )
+
+    if sync_mode:
+        response = router.completion(
+            model="bad-model",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+            fallbacks=["my-good-model"],
+            mock_testing_fallbacks=True,
+            mock_response="Hey! nice day",
+        )
+    else:
+        response = await router.acompletion(
+            model="bad-model",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+            fallbacks=["my-good-model"],
+            mock_testing_fallbacks=True,
+            mock_response="Hey! nice day",
+        )
+
+    assert isinstance(response, litellm.ModelResponse)
+    assert response.model is not None and response.model == "gpt-4o"
