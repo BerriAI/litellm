@@ -127,9 +127,6 @@ print(response)
 </Tabs>
 
 
-
-
-
 ### Test - Client Side Fallbacks
 In this request the following will occur:
 1. The request to `model="zephyr-beta"` will fail
@@ -248,8 +245,8 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
      }'
 ``` -->
 
-
-## Fallbacks + Retries + Timeouts + Cooldowns
+## Advanced
+### Fallbacks + Retries + Timeouts + Cooldowns
 
 **Set via config**
 ```yaml
@@ -282,7 +279,7 @@ litellm_settings:
   context_window_fallbacks: [{"zephyr-beta": ["gpt-3.5-turbo-16k"]}, {"gpt-3.5-turbo": ["gpt-3.5-turbo-16k"]}] # fallback to gpt-3.5-turbo-16k if context window error
   allowed_fails: 3 # cooldown model if it fails > 1 call in a minute. 
 ```
-## Advanced - Context Window Fallbacks (Pre-Call Checks + Fallbacks)
+### Context Window Fallbacks (Pre-Call Checks + Fallbacks)
 
 **Before call is made** check if a call is within model context window with  **`enable_pre_call_checks: true`**.
 
@@ -418,7 +415,7 @@ print(response)
 </Tabs>
 
 
-## Advanced - EU-Region Filtering (Pre-Call Checks)
+### EU-Region Filtering (Pre-Call Checks)
 
 **Before call is made** check if a call is within model context window with  **`enable_pre_call_checks: true`**.
 
@@ -481,7 +478,7 @@ print(response)
 print(f"response.headers.get('x-litellm-model-api-base')")
 ```
 
-## Advanced - Custom Timeouts, Stream Timeouts - Per Model
+### Custom Timeouts, Stream Timeouts - Per Model
 For each model you can set `timeout` & `stream_timeout` under `litellm_params`
 ```yaml
 model_list:
@@ -510,7 +507,7 @@ $ litellm --config /path/to/config.yaml
 ```
 
 
-## Advanced - Setting Dynamic Timeouts - Per Request
+### Setting Dynamic Timeouts - Per Request
 
 LiteLLM Proxy supports setting a `timeout` per request 
 
