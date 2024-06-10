@@ -10119,7 +10119,6 @@ def get_secret(
 ):
     key_management_system = litellm._key_management_system
     key_management_settings = litellm._key_management_settings
-    args = locals()
 
     if secret_name.startswith("os.environ/"):
         secret_name = secret_name.replace("os.environ/", "")
@@ -10248,13 +10247,16 @@ def get_secret(
                     """
                     encrypted_value = os.getenv(secret_name, None)
                     if encrypted_value is None:
-                        raise Exception("encrypted value for AWS KMS cannot be None.")
+                        raise Exception(
+                            "AWS KMS - Encrypted Value of Key={} is None".format(
+                                secret_name
+                            )
+                        )
                     # Decode the base64 encoded ciphertext
                     ciphertext_blob = base64.b64decode(encrypted_value)
 
                     # Set up the parameters for the decrypt call
                     params = {"CiphertextBlob": ciphertext_blob}
-
                     # Perform the decryption
                     response = client.decrypt(**params)
 
@@ -10287,7 +10289,7 @@ def get_secret(
                     secret = client.get_secret(secret_name).secret_value
             except Exception as e:  # check if it's in os.environ
                 verbose_logger.error(
-                    f"An exception occurred - {str(e)}\n\n{traceback.format_exc()}"
+                    f"Defaulting to os.environ value for key={secret_name}. An exception occurred - {str(e)}.\n\n{traceback.format_exc()}"
                 )
                 secret = os.getenv(secret_name)
             try:
