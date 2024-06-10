@@ -76,7 +76,7 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
           "content": "what llm are you"
         }
       ],
-      "fallbacks": [{"zephyr-beta": ["gpt-3.5-turbo"]}],
+      "fallbacks": ["gpt-3.5-turbo"]}],
       "context_window_fallbacks": [{"zephyr-beta": ["gpt-3.5-turbo"]}],
       "num_retries": 2,
       "timeout": 10
