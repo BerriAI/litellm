@@ -160,6 +160,7 @@ from litellm.proxy.auth.auth_checks import (
     get_user_object,
     allowed_routes_check,
     get_actual_routes,
+    log_to_opentelemetry,
 )
 from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
 from litellm.exceptions import RejectedRequestError
@@ -1506,7 +1507,7 @@ async def user_api_key_auth(
                     )
         if valid_token is None:
             # No token was found when looking up in the DB
-            raise Exception("Invalid token passed")
+            raise Exception("Invalid proxy server token passed")
         if valid_token_dict is not None:
             if user_id_information is not None and _is_user_proxy_admin(
                 user_id_information
@@ -1539,6 +1540,14 @@ async def user_api_key_auth(
                 str(e)
             )
         )
+
+        # Log this exception to OTEL
+        if open_telemetry_logger is not None:
+            await open_telemetry_logger.async_post_call_failure_hook(
+                original_exception=e,
+                user_api_key_dict=UserAPIKeyAuth(parent_otel_span=parent_otel_span),
+            )
+
         verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, litellm.BudgetExceededError):
             raise ProxyException(

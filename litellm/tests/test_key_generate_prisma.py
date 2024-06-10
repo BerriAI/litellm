@@ -272,7 +272,7 @@ def test_call_with_invalid_key(prisma_client):
     except Exception as e:
         print("Got Exception", e)
         print(e.message)
-        assert "Authentication Error, Invalid token passed" in e.message
+        assert "Authentication Error, Invalid proxy server token passed" in e.message
         pass
 
 
