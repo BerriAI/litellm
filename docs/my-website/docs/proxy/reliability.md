@@ -2,7 +2,7 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# 🔥 Fallbacks, Retries, Timeouts, Load Balancing
+# 🔥 Load Balancing, Fallbacks, Retries, Timeouts
 
 Retry call with multiple instances of the same model.
 
@@ -13,7 +13,7 @@ If the error is a context window exceeded error, fall back to a larger model gro
 [**See Code**](https://github.com/BerriAI/litellm/blob/main/litellm/router.py)
 
 ## Quick Start - Load Balancing
-### Step 1 - Set deployments on config
+#### Step 1 - Set deployments on config
 
 **Example config below**. Here requests with `model=gpt-3.5-turbo` will be routed across multiple instances of `azure/gpt-3.5-turbo`
 ```yaml
@@ -38,13 +38,13 @@ model_list:
       rpm: 1440
 ```
 
-### Step 2: Start Proxy with config
+#### Step 2: Start Proxy with config
 
 ```shell
 $ litellm --config /path/to/config.yaml
 ```
 
-### Step 3: Use proxy - Call a model group [Load Balancing]
+### Test - Load Balancing
 Curl Command
 ```shell
 curl --location 'http://0.0.0.0:4000/chat/completions' \
@@ -61,25 +61,44 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 '
 ```
 
-### Usage - Call a specific model deployment
-If you want to call a specific model defined in the `config.yaml`, you can call the `litellm_params: model`
 
-In this example it will call `azure/gpt-turbo-small-ca`. Defined in the config on Step 1
+
+### Test - Client Side Fallbacks
 
 ```bash
 curl --location 'http://0.0.0.0:4000/chat/completions' \
 --header 'Content-Type: application/json' \
 --data ' {
-      "model": "azure/gpt-turbo-small-ca",
+      "model": "zephyr-beta",
       "messages": [
         {
           "role": "user",
           "content": "what llm are you"
         }
       ],
+      "fallbacks": [{"zephyr-beta": ["gpt-3.5-turbo"]}],
+      "context_window_fallbacks": [{"zephyr-beta": ["gpt-3.5-turbo"]}],
+      "num_retries": 2,
+      "timeout": 10
     }
 '
 ```
+<!-- 
+### Test it!
+
+
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+     --header 'Content-Type: application/json' \
+     --data-raw '{
+        "model": "zephyr-beta", # 👈 MODEL NAME to fallback from
+        "messages": [
+            {"role": "user", "content": "what color is red"}
+        ],
+        "mock_testing_fallbacks": true
+     }'
+``` -->
+
 
 ## Fallbacks + Retries + Timeouts + Cooldowns
 
@@ -114,43 +133,6 @@ litellm_settings:
   context_window_fallbacks: [{"zephyr-beta": ["gpt-3.5-turbo-16k"]}, {"gpt-3.5-turbo": ["gpt-3.5-turbo-16k"]}] # fallback to gpt-3.5-turbo-16k if context window error
   allowed_fails: 3 # cooldown model if it fails > 1 call in a minute. 
 ```
-
-**Set dynamically**
-
-```bash
-curl --location 'http://0.0.0.0:4000/chat/completions' \
---header 'Content-Type: application/json' \
---data ' {
-      "model": "zephyr-beta",
-      "messages": [
-        {
-          "role": "user",
-          "content": "what llm are you"
-        }
-      ],
-      "fallbacks": [{"zephyr-beta": ["gpt-3.5-turbo"]}],
-      "context_window_fallbacks": [{"zephyr-beta": ["gpt-3.5-turbo"]}],
-      "num_retries": 2,
-      "timeout": 10
-    }
-'
-```
-
-### Test it!
-
-
-```bash
-curl --location 'http://0.0.0.0:4000/chat/completions' \
-     --header 'Content-Type: application/json' \
-     --data-raw '{
-        "model": "zephyr-beta", # 👈 MODEL NAME to fallback from
-        "messages": [
-            {"role": "user", "content": "what color is red"}
-        ],
-        "mock_testing_fallbacks": true
-     }'
-```
-
 ## Advanced - Context Window Fallbacks (Pre-Call Checks + Fallbacks)
 
 **Before call is made** check if a call is within model context window with  **`enable_pre_call_checks: true`**.
