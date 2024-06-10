@@ -11458,7 +11458,6 @@ class CustomStreamWrapper:
                     raise StopIteration
                 response_obj: GenericStreamingChunk = chunk
                 completion_obj["content"] = response_obj["text"]
-
                 if response_obj["is_finished"]:
                     self.received_finish_reason = response_obj["finish_reason"]
 
@@ -11591,7 +11590,7 @@ class CustomStreamWrapper:
                         # for azure, we need to pass the model from the orignal chunk
                         self.model = chunk.model
                 response_obj = self.handle_openai_chat_completion_chunk(chunk)
-                if response_obj == None:
+                if response_obj is None:
                     return
                 completion_obj["content"] = response_obj["text"]
                 print_verbose(f"completion obj content: {completion_obj['content']}")
@@ -11821,7 +11820,7 @@ class CustomStreamWrapper:
                 else:
                     return
             elif self.received_finish_reason is not None:
-                if self.sent_last_chunk == True:
+                if self.sent_last_chunk is True:
                     raise StopIteration
                 # flush any remaining holding chunk
                 if len(self.holding_chunk) > 0:
