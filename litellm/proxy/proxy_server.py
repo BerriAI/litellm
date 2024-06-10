@@ -2315,16 +2315,16 @@ class ProxyConfig:
         return config
 
     async def save_config(self, new_config: dict):
-        global prisma_client, general_settings, user_config_file_path
+        global prisma_client, general_settings, user_config_file_path, store_model_in_db
         # Load existing config
         ## DB - writes valid config to db
         """
         - Do not write restricted params like 'api_key' to the database
         - if api_key is passed, save that to the local environment or connected secret manage (maybe expose `litellm.save_secret()`)
         """
-        if prisma_client is not None and (
-            general_settings.get("store_model_in_db", False) == True
-        ):
+        if store_model_in_db is True:
+            if prisma_client is None:
+                raise Exception("prisma_client is None, DB not connected")
             # if using - db for config - models are in ModelTable
             new_config.pop("model_list", None)
             await prisma_client.insert_data(data=new_config, table_name="config")
@@ -3159,7 +3159,7 @@ class ProxyConfig:
         new_models: list,
         proxy_logging_obj: ProxyLogging,
     ):
-        global llm_router, llm_model_list, master_key, general_settings
+        global llm_router, llm_model_list, master_key, general_settings, open_telemetry_logger
         import base64
 
         try:
@@ -3219,6 +3219,7 @@ class ProxyConfig:
         litellm_settings = config_data.get("litellm_settings", {}) or {}
         success_callbacks = litellm_settings.get("success_callback", None)
         failure_callbacks = litellm_settings.get("failure_callback", None)
+        callbacks = litellm_settings.get("callbacks", None)
 
         if success_callbacks is not None and isinstance(success_callbacks, list):
             for success_callback in success_callbacks:
@@ -3230,6 +3231,16 @@ class ProxyConfig:
             for failure_callback in failure_callbacks:
                 if failure_callback not in litellm.failure_callback:
                     litellm.failure_callback.append(failure_callback)
+
+        # add generic callbacks
+        if callbacks is not None and isinstance(callbacks, list):
+            for callback in callbacks:
+                if callback not in litellm.callbacks:
+                    if callback == "otel":
+                        from litellm.integrations.opentelemetry import OpenTelemetry
+
+                        open_telemetry_logger = OpenTelemetry()
+                        litellm.callbacks.append(callback)
         # we need to set env variables too
         environment_variables = config_data.get("environment_variables", {})
         for k, v in environment_variables.items():
