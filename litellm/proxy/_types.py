@@ -719,6 +719,8 @@ class Member(LiteLLMBase):
     @model_validator(mode="before")
     @classmethod
     def check_user_info(cls, values):
+        if not isinstance(values, dict):
+            raise ValueError("input needs to be a dictionary")
         if values.get("user_id") is None and values.get("user_email") is None:
             raise ValueError("Either user id or user email must be provided")
         return values
@@ -757,8 +759,23 @@ class GlobalEndUsersSpend(LiteLLMBase):
 
 class TeamMemberAddRequest(LiteLLMBase):
     team_id: str
-    member: Member
+    member: Union[List[Member], Member]
     max_budget_in_team: Optional[float] = None  # Users max budget within the team
+
+    def __init__(self, **data):
+        member_data = data.get("member")
+        if isinstance(member_data, list):
+            # If member is a list of dictionaries, convert each dictionary to a Member object
+            members = [Member(**item) for item in member_data]
+            # Replace member_data with the list of Member objects
+            data["member"] = members
+        elif isinstance(member_data, dict):
+            # If member is a dictionary, convert it to a single Member object
+            member = Member(**member_data)
+            # Replace member_data with the single Member object
+            data["member"] = member
+        # Call the superclass __init__ method to initialize the object
+        super().__init__(**data)
 
 
 class TeamMemberDeleteRequest(LiteLLMBase):
