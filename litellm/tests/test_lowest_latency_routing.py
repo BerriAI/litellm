@@ -275,7 +275,7 @@ async def _deploy(lowest_latency_logger, deployment_id, tokens_used, duration):
     }
     start_time = time.time()
     response_obj = {"usage": {"total_tokens": tokens_used}}
-    time.sleep(duration)
+    await asyncio.sleep(duration)
     end_time = time.time()
     lowest_latency_logger.log_success_event(
         response_obj=response_obj,
@@ -325,6 +325,7 @@ def test_get_available_endpoints_tpm_rpm_check_async(ans_rpm):
     d1 = [(lowest_latency_logger, "1234", 50, 0.01)] * non_ans_rpm
     d2 = [(lowest_latency_logger, "5678", 50, 0.01)] * non_ans_rpm
     asyncio.run(_gather_deploy([*d1, *d2]))
+    time.sleep(3)
     ## CHECK WHAT'S SELECTED ##
     d_ans = lowest_latency_logger.get_available_deployments(
         model_group=model_group, healthy_deployments=model_list

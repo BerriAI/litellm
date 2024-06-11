@@ -4,21 +4,29 @@ from typing import Iterable
 from functools import partial
 import os, asyncio, contextvars
 import litellm
-from openai import OpenAI, AsyncOpenAI
+from openai import OpenAI, AsyncOpenAI, AzureOpenAI, AsyncAzureOpenAI
 from litellm import client
-from litellm.utils import supports_httpx_timeout, exception_type, get_llm_provider
+from litellm.utils import (
+    supports_httpx_timeout,
+    exception_type,
+    get_llm_provider,
+    get_secret,
+)
 from ..llms.openai import OpenAIAssistantsAPI
+from ..llms.azure import AzureAssistantsAPI
 from ..types.llms.openai import *
 from ..types.router import *
+from .utils import get_optional_params_add_message
 
 ####### ENVIRONMENT VARIABLES ###################
 openai_assistants_api = OpenAIAssistantsAPI()
+azure_assistants_api = AzureAssistantsAPI()
 
 ### ASSISTANTS ###
 
 
 async def aget_assistants(
-    custom_llm_provider: Literal["openai"],
+    custom_llm_provider: Literal["openai", "azure"],
     client: Optional[AsyncOpenAI] = None,
     **kwargs,
 ) -> AsyncCursorPage[Assistant]:
@@ -55,12 +63,21 @@ async def aget_assistants(
 
 
 def get_assistants(
-    custom_llm_provider: Literal["openai"],
-    client: Optional[OpenAI] = None,
+    custom_llm_provider: Literal["openai", "azure"],
+    client: Optional[Any] = None,
+    api_key: Optional[str] = None,
+    api_base: Optional[str] = None,
+    api_version: Optional[str] = None,
     **kwargs,
 ) -> SyncCursorPage[Assistant]:
-    aget_assistants = kwargs.pop("aget_assistants", None)
-    optional_params = GenericLiteLLMParams(**kwargs)
+    aget_assistants: Optional[bool] = kwargs.pop("aget_assistants", None)
+    if aget_assistants is not None and not isinstance(aget_assistants, bool):
+        raise Exception(
+            "Invalid value passed in for aget_assistants. Only bool or None allowed"
+        )
+    optional_params = GenericLiteLLMParams(
+        api_key=api_key, api_base=api_base, api_version=api_version, **kwargs
+    )
 
     ### TIMEOUT LOGIC ###
     timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
@@ -99,6 +116,7 @@ def get_assistants(
             or litellm.openai_key
             or os.getenv("OPENAI_API_KEY")
         )
+
         response = openai_assistants_api.get_assistants(
             api_base=api_base,
             api_key=api_key,
@@ -106,7 +124,43 @@ def get_assistants(
             max_retries=optional_params.max_retries,
             organization=organization,
             client=client,
-            aget_assistants=aget_assistants,
+            aget_assistants=aget_assistants,  # type: ignore
+        )  # type: ignore
+    elif custom_llm_provider == "azure":
+        api_base = (
+            optional_params.api_base or litellm.api_base or get_secret("AZURE_API_BASE")
+        )  # type: ignore
+
+        api_version = (
+            optional_params.api_version
+            or litellm.api_version
+            or get_secret("AZURE_API_VERSION")
+        )  # type: ignore
+
+        api_key = (
+            optional_params.api_key
+            or litellm.api_key
+            or litellm.azure_key
+            or get_secret("AZURE_OPENAI_API_KEY")
+            or get_secret("AZURE_API_KEY")
+        )  # type: ignore
+
+        extra_body = optional_params.get("extra_body", {})
+        azure_ad_token: Optional[str] = None
+        if extra_body is not None:
+            azure_ad_token = extra_body.pop("azure_ad_token", None)
+        else:
+            azure_ad_token = get_secret("AZURE_AD_TOKEN")  # type: ignore
+
+        response = azure_assistants_api.get_assistants(
+            api_base=api_base,
+            api_key=api_key,
+            api_version=api_version,
+            azure_ad_token=azure_ad_token,
+            timeout=timeout,
+            max_retries=optional_params.max_retries,
+            client=client,
+            aget_assistants=aget_assistants,  # type: ignore
         )
     else:
         raise litellm.exceptions.BadRequestError(
@@ -127,7 +181,9 @@ def get_assistants(
 ### THREADS ###
 
 
-async def acreate_thread(custom_llm_provider: Literal["openai"], **kwargs) -> Thread:
+async def acreate_thread(
+    custom_llm_provider: Literal["openai", "azure"], **kwargs
+) -> Thread:
     loop = asyncio.get_event_loop()
     ### PASS ARGS TO GET ASSISTANTS ###
     kwargs["acreate_thread"] = True
@@ -161,7 +217,7 @@ async def acreate_thread(custom_llm_provider: Literal["openai"], **kwargs) -> Th
 
 
 def create_thread(
-    custom_llm_provider: Literal["openai"],
+    custom_llm_provider: Literal["openai", "azure"],
     messages: Optional[Iterable[OpenAICreateThreadParamsMessage]] = None,
     metadata: Optional[dict] = None,
     tool_resources: Optional[OpenAICreateThreadParamsToolResources] = None,
@@ -241,6 +297,47 @@ def create_thread(
             client=client,
             acreate_thread=acreate_thread,
         )
+    elif custom_llm_provider == "azure":
+        api_base = (
+            optional_params.api_base or litellm.api_base or get_secret("AZURE_API_BASE")
+        )  # type: ignore
+
+        api_version = (
+            optional_params.api_version
+            or litellm.api_version
+            or get_secret("AZURE_API_VERSION")
+        )  # type: ignore
+
+        api_key = (
+            optional_params.api_key
+            or litellm.api_key
+            or litellm.azure_key
+            or get_secret("AZURE_OPENAI_API_KEY")
+            or get_secret("AZURE_API_KEY")
+        )  # type: ignore
+
+        extra_body = optional_params.get("extra_body", {})
+        azure_ad_token = None
+        if extra_body is not None:
+            azure_ad_token = extra_body.pop("azure_ad_token", None)
+        else:
+            azure_ad_token = get_secret("AZURE_AD_TOKEN")  # type: ignore
+
+        if isinstance(client, OpenAI):
+            client = None  # only pass client if it's AzureOpenAI
+
+        response = azure_assistants_api.create_thread(
+            messages=messages,
+            metadata=metadata,
+            api_base=api_base,
+            api_key=api_key,
+            azure_ad_token=azure_ad_token,
+            api_version=api_version,
+            timeout=timeout,
+            max_retries=optional_params.max_retries,
+            client=client,
+            acreate_thread=acreate_thread,
+        )  # type :ignore
     else:
         raise litellm.exceptions.BadRequestError(
             message="LiteLLM doesn't support {} for 'create_thread'. Only 'openai' is supported.".format(
@@ -254,11 +351,11 @@ def create_thread(
                 request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),  # type: ignore
             ),
         )
-    return response
+    return response  # type: ignore
 
 
 async def aget_thread(
-    custom_llm_provider: Literal["openai"],
+    custom_llm_provider: Literal["openai", "azure"],
     thread_id: str,
     client: Optional[AsyncOpenAI] = None,
     **kwargs,
@@ -296,9 +393,9 @@ async def aget_thread(
 
 
 def get_thread(
-    custom_llm_provider: Literal["openai"],
+    custom_llm_provider: Literal["openai", "azure"],
     thread_id: str,
-    client: Optional[OpenAI] = None,
+    client=None,
     **kwargs,
 ) -> Thread:
     """Get the thread object, given a thread_id"""
@@ -342,6 +439,7 @@ def get_thread(
             or litellm.openai_key
             or os.getenv("OPENAI_API_KEY")
         )
+
         response = openai_assistants_api.get_thread(
             thread_id=thread_id,
             api_base=api_base,
@@ -349,6 +447,46 @@ def get_thread(
             timeout=timeout,
             max_retries=optional_params.max_retries,
             organization=organization,
+            client=client,
+            aget_thread=aget_thread,
+        )
+    elif custom_llm_provider == "azure":
+        api_base = (
+            optional_params.api_base or litellm.api_base or get_secret("AZURE_API_BASE")
+        )  # type: ignore
+
+        api_version = (
+            optional_params.api_version
+            or litellm.api_version
+            or get_secret("AZURE_API_VERSION")
+        )  # type: ignore
+
+        api_key = (
+            optional_params.api_key
+            or litellm.api_key
+            or litellm.azure_key
+            or get_secret("AZURE_OPENAI_API_KEY")
+            or get_secret("AZURE_API_KEY")
+        )  # type: ignore
+
+        extra_body = optional_params.get("extra_body", {})
+        azure_ad_token = None
+        if extra_body is not None:
+            azure_ad_token = extra_body.pop("azure_ad_token", None)
+        else:
+            azure_ad_token = get_secret("AZURE_AD_TOKEN")  # type: ignore
+
+        if isinstance(client, OpenAI):
+            client = None  # only pass client if it's AzureOpenAI
+
+        response = azure_assistants_api.get_thread(
+            thread_id=thread_id,
+            api_base=api_base,
+            api_key=api_key,
+            azure_ad_token=azure_ad_token,
+            api_version=api_version,
+            timeout=timeout,
+            max_retries=optional_params.max_retries,
             client=client,
             aget_thread=aget_thread,
         )
@@ -365,20 +503,20 @@ def get_thread(
                 request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),  # type: ignore
             ),
         )
-    return response
+    return response  # type: ignore
 
 
 ### MESSAGES ###
 
 
 async def a_add_message(
-    custom_llm_provider: Literal["openai"],
+    custom_llm_provider: Literal["openai", "azure"],
     thread_id: str,
     role: Literal["user", "assistant"],
     content: str,
     attachments: Optional[List[Attachment]] = None,
     metadata: Optional[dict] = None,
-    client: Optional[AsyncOpenAI] = None,
+    client=None,
     **kwargs,
 ) -> OpenAIMessage:
     loop = asyncio.get_event_loop()
@@ -425,21 +563,29 @@ async def a_add_message(
 
 
 def add_message(
-    custom_llm_provider: Literal["openai"],
+    custom_llm_provider: Literal["openai", "azure"],
     thread_id: str,
     role: Literal["user", "assistant"],
     content: str,
     attachments: Optional[List[Attachment]] = None,
     metadata: Optional[dict] = None,
-    client: Optional[OpenAI] = None,
+    client=None,
     **kwargs,
 ) -> OpenAIMessage:
     ### COMMON OBJECTS ###
     a_add_message = kwargs.pop("a_add_message", None)
-    message_data = MessageData(
+    _message_data = MessageData(
         role=role, content=content, attachments=attachments, metadata=metadata
     )
     optional_params = GenericLiteLLMParams(**kwargs)
+
+    message_data = get_optional_params_add_message(
+        role=_message_data["role"],
+        content=_message_data["content"],
+        attachments=_message_data["attachments"],
+        metadata=_message_data["metadata"],
+        custom_llm_provider=custom_llm_provider,
+    )
 
     ### TIMEOUT LOGIC ###
     timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
@@ -489,6 +635,44 @@ def add_message(
             client=client,
             a_add_message=a_add_message,
         )
+    elif custom_llm_provider == "azure":
+        api_base = (
+            optional_params.api_base or litellm.api_base or get_secret("AZURE_API_BASE")
+        )  # type: ignore
+
+        api_version = (
+            optional_params.api_version
+            or litellm.api_version
+            or get_secret("AZURE_API_VERSION")
+        )  # type: ignore
+
+        api_key = (
+            optional_params.api_key
+            or litellm.api_key
+            or litellm.azure_key
+            or get_secret("AZURE_OPENAI_API_KEY")
+            or get_secret("AZURE_API_KEY")
+        )  # type: ignore
+
+        extra_body = optional_params.get("extra_body", {})
+        azure_ad_token = None
+        if extra_body is not None:
+            azure_ad_token = extra_body.pop("azure_ad_token", None)
+        else:
+            azure_ad_token = get_secret("AZURE_AD_TOKEN")  # type: ignore
+
+        response = azure_assistants_api.add_message(
+            thread_id=thread_id,
+            message_data=message_data,
+            api_base=api_base,
+            api_key=api_key,
+            api_version=api_version,
+            azure_ad_token=azure_ad_token,
+            timeout=timeout,
+            max_retries=optional_params.max_retries,
+            client=client,
+            a_add_message=a_add_message,
+        )
     else:
         raise litellm.exceptions.BadRequestError(
             message="LiteLLM doesn't support {} for 'create_thread'. Only 'openai' is supported.".format(
@@ -503,11 +687,11 @@ def add_message(
             ),
         )
 
-    return response
+    return response  # type: ignore
 
 
 async def aget_messages(
-    custom_llm_provider: Literal["openai"],
+    custom_llm_provider: Literal["openai", "azure"],
     thread_id: str,
     client: Optional[AsyncOpenAI] = None,
     **kwargs,
@@ -552,9 +736,9 @@ async def aget_messages(
 
 
 def get_messages(
-    custom_llm_provider: Literal["openai"],
+    custom_llm_provider: Literal["openai", "azure"],
     thread_id: str,
-    client: Optional[OpenAI] = None,
+    client: Optional[Any] = None,
     **kwargs,
 ) -> SyncCursorPage[OpenAIMessage]:
     aget_messages = kwargs.pop("aget_messages", None)
@@ -607,6 +791,43 @@ def get_messages(
             client=client,
             aget_messages=aget_messages,
         )
+    elif custom_llm_provider == "azure":
+        api_base = (
+            optional_params.api_base or litellm.api_base or get_secret("AZURE_API_BASE")
+        )  # type: ignore
+
+        api_version = (
+            optional_params.api_version
+            or litellm.api_version
+            or get_secret("AZURE_API_VERSION")
+        )  # type: ignore
+
+        api_key = (
+            optional_params.api_key
+            or litellm.api_key
+            or litellm.azure_key
+            or get_secret("AZURE_OPENAI_API_KEY")
+            or get_secret("AZURE_API_KEY")
+        )  # type: ignore
+
+        extra_body = optional_params.get("extra_body", {})
+        azure_ad_token = None
+        if extra_body is not None:
+            azure_ad_token = extra_body.pop("azure_ad_token", None)
+        else:
+            azure_ad_token = get_secret("AZURE_AD_TOKEN")  # type: ignore
+
+        response = azure_assistants_api.get_messages(
+            thread_id=thread_id,
+            api_base=api_base,
+            api_key=api_key,
+            api_version=api_version,
+            azure_ad_token=azure_ad_token,
+            timeout=timeout,
+            max_retries=optional_params.max_retries,
+            client=client,
+            aget_messages=aget_messages,
+        )
     else:
         raise litellm.exceptions.BadRequestError(
             message="LiteLLM doesn't support {} for 'get_messages'. Only 'openai' is supported.".format(
@@ -621,12 +842,21 @@ def get_messages(
             ),
         )
 
-    return response
+    return response  # type: ignore
 
 
 ### RUNS ###
+def arun_thread_stream(
+    *,
+    event_handler: Optional[AssistantEventHandler] = None,
+    **kwargs,
+) -> AsyncAssistantStreamManager[AsyncAssistantEventHandler]:
+    kwargs["arun_thread"] = True
+    return run_thread(stream=True, event_handler=event_handler, **kwargs)  # type: ignore
+
+
 async def arun_thread(
-    custom_llm_provider: Literal["openai"],
+    custom_llm_provider: Literal["openai", "azure"],
     thread_id: str,
     assistant_id: str,
     additional_instructions: Optional[str] = None,
@@ -635,7 +865,7 @@ async def arun_thread(
     model: Optional[str] = None,
     stream: Optional[bool] = None,
     tools: Optional[Iterable[AssistantToolParam]] = None,
-    client: Optional[AsyncOpenAI] = None,
+    client: Optional[Any] = None,
     **kwargs,
 ) -> Run:
     loop = asyncio.get_event_loop()
@@ -684,8 +914,16 @@ async def arun_thread(
         )
 
 
+def run_thread_stream(
+    *,
+    event_handler: Optional[AssistantEventHandler] = None,
+    **kwargs,
+) -> AssistantStreamManager[AssistantEventHandler]:
+    return run_thread(stream=True, event_handler=event_handler, **kwargs)  # type: ignore
+
+
 def run_thread(
-    custom_llm_provider: Literal["openai"],
+    custom_llm_provider: Literal["openai", "azure"],
     thread_id: str,
     assistant_id: str,
     additional_instructions: Optional[str] = None,
@@ -694,7 +932,8 @@ def run_thread(
     model: Optional[str] = None,
     stream: Optional[bool] = None,
     tools: Optional[Iterable[AssistantToolParam]] = None,
-    client: Optional[OpenAI] = None,
+    client: Optional[Any] = None,
+    event_handler: Optional[AssistantEventHandler] = None,  # for stream=True calls
     **kwargs,
 ) -> Run:
     """Run a given thread + assistant."""
@@ -738,6 +977,7 @@ def run_thread(
             or litellm.openai_key
             or os.getenv("OPENAI_API_KEY")
         )
+
         response = openai_assistants_api.run_thread(
             thread_id=thread_id,
             assistant_id=assistant_id,
@@ -754,7 +994,52 @@ def run_thread(
             organization=organization,
             client=client,
             arun_thread=arun_thread,
+            event_handler=event_handler,
         )
+    elif custom_llm_provider == "azure":
+        api_base = (
+            optional_params.api_base or litellm.api_base or get_secret("AZURE_API_BASE")
+        )  # type: ignore
+
+        api_version = (
+            optional_params.api_version
+            or litellm.api_version
+            or get_secret("AZURE_API_VERSION")
+        )  # type: ignore
+
+        api_key = (
+            optional_params.api_key
+            or litellm.api_key
+            or litellm.azure_key
+            or get_secret("AZURE_OPENAI_API_KEY")
+            or get_secret("AZURE_API_KEY")
+        )  # type: ignore
+
+        extra_body = optional_params.get("extra_body", {})
+        azure_ad_token = None
+        if extra_body is not None:
+            azure_ad_token = extra_body.pop("azure_ad_token", None)
+        else:
+            azure_ad_token = get_secret("AZURE_AD_TOKEN")  # type: ignore
+
+        response = azure_assistants_api.run_thread(
+            thread_id=thread_id,
+            assistant_id=assistant_id,
+            additional_instructions=additional_instructions,
+            instructions=instructions,
+            metadata=metadata,
+            model=model,
+            stream=stream,
+            tools=tools,
+            api_base=str(api_base) if api_base is not None else None,
+            api_key=str(api_key) if api_key is not None else None,
+            api_version=str(api_version) if api_version is not None else None,
+            azure_ad_token=str(azure_ad_token) if azure_ad_token is not None else None,
+            timeout=timeout,
+            max_retries=optional_params.max_retries,
+            client=client,
+            arun_thread=arun_thread,
+        )  # type: ignore
     else:
         raise litellm.exceptions.BadRequestError(
             message="LiteLLM doesn't support {} for 'run_thread'. Only 'openai' is supported.".format(
@@ -768,4 +1053,4 @@ def run_thread(
                 request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),  # type: ignore
             ),
         )
-    return response
+    return response  # type: ignore

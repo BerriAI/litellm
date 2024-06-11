@@ -1,4 +1,5 @@
-from typing import Optional, Union, Any, Literal
+from typing import Optional, Union, Any, Literal, Coroutine, Iterable
+from typing_extensions import overload
 import types, requests
 from .base import BaseLLM
 from litellm.utils import (
@@ -9,6 +10,7 @@ from litellm.utils import (
     convert_to_model_response_object,
     TranscriptionResponse,
     get_secret,
+    UnsupportedParamsError,
 )
 from typing import Callable, Optional, BinaryIO, List
 from litellm import OpenAIConfig
@@ -18,6 +20,22 @@ from .custom_httpx.azure_dall_e_2 import CustomHTTPTransport, AsyncCustomHTTPTra
 from openai import AzureOpenAI, AsyncAzureOpenAI
 import uuid
 import os
+from ..types.llms.openai import (
+    AsyncCursorPage,
+    AssistantToolParam,
+    SyncCursorPage,
+    Assistant,
+    MessageData,
+    OpenAIMessage,
+    OpenAICreateThreadParamsMessage,
+    Thread,
+    AssistantToolParam,
+    Run,
+    AssistantEventHandler,
+    AsyncAssistantEventHandler,
+    AsyncAssistantStreamManager,
+    AssistantStreamManager,
+)
 
 
 class AzureOpenAIError(Exception):
@@ -45,9 +63,9 @@ class AzureOpenAIError(Exception):
         )  # Call the base class constructor with the parameters it needs
 
 
-class AzureOpenAIConfig(OpenAIConfig):
+class AzureOpenAIConfig:
     """
-    Reference: https://platform.openai.com/docs/api-reference/chat/create
+    Reference: https://learn.microsoft.com/en-us/azure/ai-services/openai/reference#chat-completions
 
     The class `AzureOpenAIConfig` provides configuration for the OpenAI's Chat API interface, for use with Azure. It inherits from `OpenAIConfig`. Below are the parameters::
 
@@ -85,18 +103,111 @@ class AzureOpenAIConfig(OpenAIConfig):
         temperature: Optional[int] = None,
         top_p: Optional[int] = None,
     ) -> None:
-        super().__init__(
-            frequency_penalty,
-            function_call,
-            functions,
-            logit_bias,
-            max_tokens,
-            n,
-            presence_penalty,
-            stop,
-            temperature,
-            top_p,
-        )
+        locals_ = locals().copy()
+        for key, value in locals_.items():
+            if key != "self" and value is not None:
+                setattr(self.__class__, key, value)
+
+    @classmethod
+    def get_config(cls):
+        return {
+            k: v
+            for k, v in cls.__dict__.items()
+            if not k.startswith("__")
+            and not isinstance(
+                v,
+                (
+                    types.FunctionType,
+                    types.BuiltinFunctionType,
+                    classmethod,
+                    staticmethod,
+                ),
+            )
+            and v is not None
+        }
+
+    def get_supported_openai_params(self):
+        return [
+            "temperature",
+            "n",
+            "stream",
+            "stop",
+            "max_tokens",
+            "tools",
+            "tool_choice",
+            "presence_penalty",
+            "frequency_penalty",
+            "logit_bias",
+            "user",
+            "function_call",
+            "functions",
+            "tools",
+            "tool_choice",
+            "top_p",
+            "logprobs",
+            "top_logprobs",
+            "response_format",
+            "seed",
+            "extra_headers",
+        ]
+
+    def map_openai_params(
+        self,
+        non_default_params: dict,
+        optional_params: dict,
+        model: str,
+        api_version: str,  # Y-M-D-{optional}
+        drop_params,
+    ) -> dict:
+        supported_openai_params = self.get_supported_openai_params()
+
+        api_version_times = api_version.split("-")
+        api_version_year = api_version_times[0]
+        api_version_month = api_version_times[1]
+        api_version_day = api_version_times[2]
+        for param, value in non_default_params.items():
+            if param == "tool_choice":
+                """
+                This parameter requires API version 2023-12-01-preview or later
+
+                tool_choice='required' is not supported as of 2024-05-01-preview
+                """
+                ## check if api version supports this param ##
+                if (
+                    api_version_year < "2023"
+                    or (api_version_year == "2023" and api_version_month < "12")
+                    or (
+                        api_version_year == "2023"
+                        and api_version_month == "12"
+                        and api_version_day < "01"
+                    )
+                ):
+                    if litellm.drop_params == True or (
+                        drop_params is not None and drop_params == True
+                    ):
+                        pass
+                    else:
+                        raise UnsupportedParamsError(
+                            status_code=400,
+                            message=f"""Azure does not support 'tool_choice', for api_version={api_version}. Bump your API version to '2023-12-01-preview' or later. This parameter requires 'api_version="2023-12-01-preview"' or later. Azure API Reference: https://learn.microsoft.com/en-us/azure/ai-services/openai/reference#chat-completions""",
+                        )
+                elif value == "required" and (
+                    api_version_year == "2024" and api_version_month <= "05"
+                ):  ## check if tool_choice value is supported ##
+                    if litellm.drop_params == True or (
+                        drop_params is not None and drop_params == True
+                    ):
+                        pass
+                    else:
+                        raise UnsupportedParamsError(
+                            status_code=400,
+                            message=f"Azure does not support '{value}' as a {param} param, for api_version={api_version}. To drop 'tool_choice=required' for calls with this Azure API version, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\nAzure API Reference: https://learn.microsoft.com/en-us/azure/ai-services/openai/reference#chat-completions",
+                        )
+                else:
+                    optional_params["tool_choice"] = value
+            elif param in supported_openai_params:
+                optional_params[param] = value
+        return optional_params
 
     def get_mapped_special_auth_params(self) -> dict:
         return {"token": "azure_ad_token"}
@@ -112,6 +223,68 @@ class AzureOpenAIConfig(OpenAIConfig):
         Source: https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models#gpt-4-and-gpt-4-turbo-model-availability
         """
         return ["europe", "sweden", "switzerland", "france", "uk"]
+
+
+class AzureOpenAIAssistantsAPIConfig:
+    """
+    Reference: https://learn.microsoft.com/en-us/azure/ai-services/openai/assistants-reference-messages?tabs=python#create-message
+    """
+
+    def __init__(
+        self,
+    ) -> None:
+        pass
+
+    def get_supported_openai_create_message_params(self):
+        return [
+            "role",
+            "content",
+            "attachments",
+            "metadata",
+        ]
+
+    def map_openai_params_create_message_params(
+        self, non_default_params: dict, optional_params: dict
+    ):
+        for param, value in non_default_params.items():
+            if param == "role":
+                optional_params["role"] = value
+            if param == "metadata":
+                optional_params["metadata"] = value
+            elif param == "content":  # only string accepted
+                if isinstance(value, str):
+                    optional_params["content"] = value
+                else:
+                    raise litellm.utils.UnsupportedParamsError(
+                        message="Azure only accepts content as a string.",
+                        status_code=400,
+                    )
+            elif (
+                param == "attachments"
+            ):  # this is a v2 param. Azure currently supports the old 'file_id's param
+                file_ids: List[str] = []
+                if isinstance(value, list):
+                    for item in value:
+                        if "file_id" in item:
+                            file_ids.append(item["file_id"])
+                        else:
+                            if litellm.drop_params == True:
+                                pass
+                            else:
+                                raise litellm.utils.UnsupportedParamsError(
+                                    message="Azure doesn't support {}. To drop it from the call, set `litellm.drop_params = True.".format(
+                                        value
+                                    ),
+                                    status_code=400,
+                                )
+                else:
+                    raise litellm.utils.UnsupportedParamsError(
+                        message="Invalid param. attachments should always be a list. Got={}, Expected=List. Raw value={}".format(
+                            type(value), value
+                        ),
+                        status_code=400,
+                    )
+        return optional_params
 
 
 def select_azure_base_url_or_endpoint(azure_client_params: dict):
@@ -172,9 +345,7 @@ def get_azure_ad_token_from_oidc(azure_ad_token: str):
     possible_azure_ad_token = req_token.json().get("access_token", None)
 
     if possible_azure_ad_token is None:
-        raise AzureOpenAIError(
-            status_code=422, message="Azure AD Token not returned"
-        )
+        raise AzureOpenAIError(status_code=422, message="Azure AD Token not returned")
 
     return possible_azure_ad_token
 
@@ -245,7 +416,9 @@ class AzureChatCompletion(BaseLLM):
                         azure_client_params["api_key"] = api_key
                     elif azure_ad_token is not None:
                         if azure_ad_token.startswith("oidc/"):
-                            azure_ad_token = get_azure_ad_token_from_oidc(azure_ad_token)
+                            azure_ad_token = get_azure_ad_token_from_oidc(
+                                azure_ad_token
+                            )
 
                         azure_client_params["azure_ad_token"] = azure_ad_token
 
@@ -1190,5 +1363,830 @@ class AzureChatCompletion(BaseLLM):
 
         if completion.headers.get("x-ms-region", None) is not None:
             response["x-ms-region"] = completion.headers["x-ms-region"]
+
+        return response
+
+
+class AzureAssistantsAPI(BaseLLM):
+    def __init__(self) -> None:
+        super().__init__()
+
+    def get_azure_client(
+        self,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        api_version: Optional[str],
+        azure_ad_token: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        client: Optional[AzureOpenAI] = None,
+    ) -> AzureOpenAI:
+        received_args = locals()
+        if client is None:
+            data = {}
+            for k, v in received_args.items():
+                if k == "self" or k == "client":
+                    pass
+                elif k == "api_base" and v is not None:
+                    data["azure_endpoint"] = v
+                elif v is not None:
+                    data[k] = v
+            azure_openai_client = AzureOpenAI(**data)  # type: ignore
+        else:
+            azure_openai_client = client
+
+        return azure_openai_client
+
+    def async_get_azure_client(
+        self,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        api_version: Optional[str],
+        azure_ad_token: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        client: Optional[AsyncAzureOpenAI] = None,
+    ) -> AsyncAzureOpenAI:
+        received_args = locals()
+        if client is None:
+            data = {}
+            for k, v in received_args.items():
+                if k == "self" or k == "client":
+                    pass
+                elif k == "api_base" and v is not None:
+                    data["azure_endpoint"] = v
+                elif v is not None:
+                    data[k] = v
+
+            azure_openai_client = AsyncAzureOpenAI(**data)
+            # azure_openai_client = AsyncAzureOpenAI(**data)  # type: ignore
+        else:
+            azure_openai_client = client
+
+        return azure_openai_client
+
+    ### ASSISTANTS ###
+
+    async def async_get_assistants(
+        self,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        api_version: Optional[str],
+        azure_ad_token: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        client: Optional[AsyncAzureOpenAI],
+    ) -> AsyncCursorPage[Assistant]:
+        azure_openai_client = self.async_get_azure_client(
+            api_key=api_key,
+            api_base=api_base,
+            api_version=api_version,
+            azure_ad_token=azure_ad_token,
+            timeout=timeout,
+            max_retries=max_retries,
+            client=client,
+        )
+
+        response = await azure_openai_client.beta.assistants.list()
+
+        return response
+
+    # fmt: off
+
+    @overload
+    def get_assistants(
+        self, 
+        api_key: Optional[str],
+        api_base: Optional[str],
+        api_version: Optional[str],
+        azure_ad_token: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        client: Optional[AsyncAzureOpenAI],
+        aget_assistants: Literal[True], 
+    ) -> Coroutine[None, None, AsyncCursorPage[Assistant]]:
+        ...
+
+    @overload
+    def get_assistants(
+        self, 
+        api_key: Optional[str],
+        api_base: Optional[str],
+        api_version: Optional[str],
+        azure_ad_token: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        client: Optional[AzureOpenAI],
+        aget_assistants: Optional[Literal[False]], 
+    ) -> SyncCursorPage[Assistant]: 
+        ...
+
+    # fmt: on
+
+    def get_assistants(
+        self,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        api_version: Optional[str],
+        azure_ad_token: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        client=None,
+        aget_assistants=None,
+    ):
+        if aget_assistants is not None and aget_assistants == True:
+            return self.async_get_assistants(
+                api_key=api_key,
+                api_base=api_base,
+                api_version=api_version,
+                azure_ad_token=azure_ad_token,
+                timeout=timeout,
+                max_retries=max_retries,
+                client=client,
+            )
+        azure_openai_client = self.get_azure_client(
+            api_key=api_key,
+            api_base=api_base,
+            azure_ad_token=azure_ad_token,
+            timeout=timeout,
+            max_retries=max_retries,
+            client=client,
+            api_version=api_version,
+        )
+
+        response = azure_openai_client.beta.assistants.list()
+
+        return response
+
+    ### MESSAGES ###
+
+    async def a_add_message(
+        self,
+        thread_id: str,
+        message_data: dict,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        api_version: Optional[str],
+        azure_ad_token: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        client: Optional[AsyncAzureOpenAI] = None,
+    ) -> OpenAIMessage:
+        openai_client = self.async_get_azure_client(
+            api_key=api_key,
+            api_base=api_base,
+            api_version=api_version,
+            azure_ad_token=azure_ad_token,
+            timeout=timeout,
+            max_retries=max_retries,
+            client=client,
+        )
+
+        thread_message: OpenAIMessage = await openai_client.beta.threads.messages.create(  # type: ignore
+            thread_id, **message_data  # type: ignore
+        )
+
+        response_obj: Optional[OpenAIMessage] = None
+        if getattr(thread_message, "status", None) is None:
+            thread_message.status = "completed"
+            response_obj = OpenAIMessage(**thread_message.dict())
+        else:
+            response_obj = OpenAIMessage(**thread_message.dict())
+        return response_obj
+
+    # fmt: off
+
+    @overload
+    def add_message(
+        self,
+        thread_id: str,
+        message_data: dict,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        api_version: Optional[str],
+        azure_ad_token: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        client: Optional[AsyncAzureOpenAI],
+        a_add_message: Literal[True],
+    ) -> Coroutine[None, None, OpenAIMessage]:
+        ...
+
+    @overload
+    def add_message(
+        self,
+        thread_id: str,
+        message_data: dict,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        api_version: Optional[str],
+        azure_ad_token: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        client: Optional[AzureOpenAI],
+        a_add_message: Optional[Literal[False]],
+    ) -> OpenAIMessage:
+        ...
+
+    # fmt: on
+
+    def add_message(
+        self,
+        thread_id: str,
+        message_data: dict,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        api_version: Optional[str],
+        azure_ad_token: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        client=None,
+        a_add_message: Optional[bool] = None,
+    ):
+        if a_add_message is not None and a_add_message == True:
+            return self.a_add_message(
+                thread_id=thread_id,
+                message_data=message_data,
+                api_key=api_key,
+                api_base=api_base,
+                api_version=api_version,
+                azure_ad_token=azure_ad_token,
+                timeout=timeout,
+                max_retries=max_retries,
+                client=client,
+            )
+        openai_client = self.get_azure_client(
+            api_key=api_key,
+            api_base=api_base,
+            api_version=api_version,
+            azure_ad_token=azure_ad_token,
+            timeout=timeout,
+            max_retries=max_retries,
+            client=client,
+        )
+
+        thread_message: OpenAIMessage = openai_client.beta.threads.messages.create(  # type: ignore
+            thread_id, **message_data  # type: ignore
+        )
+
+        response_obj: Optional[OpenAIMessage] = None
+        if getattr(thread_message, "status", None) is None:
+            thread_message.status = "completed"
+            response_obj = OpenAIMessage(**thread_message.dict())
+        else:
+            response_obj = OpenAIMessage(**thread_message.dict())
+        return response_obj
+
+    async def async_get_messages(
+        self,
+        thread_id: str,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        api_version: Optional[str],
+        azure_ad_token: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        client: Optional[AsyncAzureOpenAI] = None,
+    ) -> AsyncCursorPage[OpenAIMessage]:
+        openai_client = self.async_get_azure_client(
+            api_key=api_key,
+            api_base=api_base,
+            api_version=api_version,
+            azure_ad_token=azure_ad_token,
+            timeout=timeout,
+            max_retries=max_retries,
+            client=client,
+        )
+
+        response = await openai_client.beta.threads.messages.list(thread_id=thread_id)
+
+        return response
+
+    # fmt: off
+
+    @overload
+    def get_messages(
+        self,
+        thread_id: str,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        api_version: Optional[str],
+        azure_ad_token: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        client: Optional[AsyncAzureOpenAI],
+        aget_messages: Literal[True],
+    ) -> Coroutine[None, None, AsyncCursorPage[OpenAIMessage]]:
+        ...
+
+    @overload
+    def get_messages(
+        self,
+        thread_id: str,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        api_version: Optional[str],
+        azure_ad_token: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        client: Optional[AzureOpenAI],
+        aget_messages: Optional[Literal[False]],
+    ) -> SyncCursorPage[OpenAIMessage]:
+        ...
+
+    # fmt: on
+
+    def get_messages(
+        self,
+        thread_id: str,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        api_version: Optional[str],
+        azure_ad_token: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        client=None,
+        aget_messages=None,
+    ):
+        if aget_messages is not None and aget_messages == True:
+            return self.async_get_messages(
+                thread_id=thread_id,
+                api_key=api_key,
+                api_base=api_base,
+                api_version=api_version,
+                azure_ad_token=azure_ad_token,
+                timeout=timeout,
+                max_retries=max_retries,
+                client=client,
+            )
+        openai_client = self.get_azure_client(
+            api_key=api_key,
+            api_base=api_base,
+            api_version=api_version,
+            azure_ad_token=azure_ad_token,
+            timeout=timeout,
+            max_retries=max_retries,
+            client=client,
+        )
+
+        response = openai_client.beta.threads.messages.list(thread_id=thread_id)
+
+        return response
+
+    ### THREADS ###
+
+    async def async_create_thread(
+        self,
+        metadata: Optional[dict],
+        api_key: Optional[str],
+        api_base: Optional[str],
+        api_version: Optional[str],
+        azure_ad_token: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        client: Optional[AsyncAzureOpenAI],
+        messages: Optional[Iterable[OpenAICreateThreadParamsMessage]],
+    ) -> Thread:
+        openai_client = self.async_get_azure_client(
+            api_key=api_key,
+            api_base=api_base,
+            api_version=api_version,
+            azure_ad_token=azure_ad_token,
+            timeout=timeout,
+            max_retries=max_retries,
+            client=client,
+        )
+
+        data = {}
+        if messages is not None:
+            data["messages"] = messages  # type: ignore
+        if metadata is not None:
+            data["metadata"] = metadata  # type: ignore
+
+        message_thread = await openai_client.beta.threads.create(**data)  # type: ignore
+
+        return Thread(**message_thread.dict())
+
+    # fmt: off
+
+    @overload
+    def create_thread(
+        self,
+        metadata: Optional[dict],
+        api_key: Optional[str],
+        api_base: Optional[str],
+        api_version: Optional[str],
+        azure_ad_token: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        messages: Optional[Iterable[OpenAICreateThreadParamsMessage]],
+        client: Optional[AsyncAzureOpenAI],
+        acreate_thread: Literal[True],
+    ) -> Coroutine[None, None, Thread]:
+        ...
+
+    @overload
+    def create_thread(
+        self,
+        metadata: Optional[dict],
+        api_key: Optional[str],
+        api_base: Optional[str],
+        api_version: Optional[str],
+        azure_ad_token: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        messages: Optional[Iterable[OpenAICreateThreadParamsMessage]],
+        client: Optional[AzureOpenAI],
+        acreate_thread: Optional[Literal[False]],
+    ) -> Thread:
+        ...
+
+    # fmt: on
+
+    def create_thread(
+        self,
+        metadata: Optional[dict],
+        api_key: Optional[str],
+        api_base: Optional[str],
+        api_version: Optional[str],
+        azure_ad_token: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        messages: Optional[Iterable[OpenAICreateThreadParamsMessage]],
+        client=None,
+        acreate_thread=None,
+    ):
+        """
+        Here's an example:
+        ```
+        from litellm.llms.openai import OpenAIAssistantsAPI, MessageData
+
+        # create thread
+        message: MessageData = {"role": "user", "content": "Hey, how's it going?"}
+        openai_api.create_thread(messages=[message])
+        ```
+        """
+        if acreate_thread is not None and acreate_thread == True:
+            return self.async_create_thread(
+                metadata=metadata,
+                api_key=api_key,
+                api_base=api_base,
+                api_version=api_version,
+                azure_ad_token=azure_ad_token,
+                timeout=timeout,
+                max_retries=max_retries,
+                client=client,
+                messages=messages,
+            )
+        azure_openai_client = self.get_azure_client(
+            api_key=api_key,
+            api_base=api_base,
+            api_version=api_version,
+            azure_ad_token=azure_ad_token,
+            timeout=timeout,
+            max_retries=max_retries,
+            client=client,
+        )
+
+        data = {}
+        if messages is not None:
+            data["messages"] = messages  # type: ignore
+        if metadata is not None:
+            data["metadata"] = metadata  # type: ignore
+
+        message_thread = azure_openai_client.beta.threads.create(**data)  # type: ignore
+
+        return Thread(**message_thread.dict())
+
+    async def async_get_thread(
+        self,
+        thread_id: str,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        api_version: Optional[str],
+        azure_ad_token: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        client: Optional[AsyncAzureOpenAI],
+    ) -> Thread:
+        openai_client = self.async_get_azure_client(
+            api_key=api_key,
+            api_base=api_base,
+            api_version=api_version,
+            azure_ad_token=azure_ad_token,
+            timeout=timeout,
+            max_retries=max_retries,
+            client=client,
+        )
+
+        response = await openai_client.beta.threads.retrieve(thread_id=thread_id)
+
+        return Thread(**response.dict())
+
+    # fmt: off
+
+    @overload
+    def get_thread(
+        self,
+        thread_id: str,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        api_version: Optional[str],
+        azure_ad_token: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        client: Optional[AsyncAzureOpenAI],
+        aget_thread: Literal[True],
+    ) -> Coroutine[None, None, Thread]:
+        ...
+
+    @overload
+    def get_thread(
+        self,
+        thread_id: str,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        api_version: Optional[str],
+        azure_ad_token: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        client: Optional[AzureOpenAI],
+        aget_thread: Optional[Literal[False]],
+    ) -> Thread:
+        ...
+
+    # fmt: on
+
+    def get_thread(
+        self,
+        thread_id: str,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        api_version: Optional[str],
+        azure_ad_token: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        client=None,
+        aget_thread=None,
+    ):
+        if aget_thread is not None and aget_thread == True:
+            return self.async_get_thread(
+                thread_id=thread_id,
+                api_key=api_key,
+                api_base=api_base,
+                api_version=api_version,
+                azure_ad_token=azure_ad_token,
+                timeout=timeout,
+                max_retries=max_retries,
+                client=client,
+            )
+        openai_client = self.get_azure_client(
+            api_key=api_key,
+            api_base=api_base,
+            api_version=api_version,
+            azure_ad_token=azure_ad_token,
+            timeout=timeout,
+            max_retries=max_retries,
+            client=client,
+        )
+
+        response = openai_client.beta.threads.retrieve(thread_id=thread_id)
+
+        return Thread(**response.dict())
+
+    # def delete_thread(self):
+    #     pass
+
+    ### RUNS ###
+
+    async def arun_thread(
+        self,
+        thread_id: str,
+        assistant_id: str,
+        additional_instructions: Optional[str],
+        instructions: Optional[str],
+        metadata: Optional[object],
+        model: Optional[str],
+        stream: Optional[bool],
+        tools: Optional[Iterable[AssistantToolParam]],
+        api_key: Optional[str],
+        api_base: Optional[str],
+        api_version: Optional[str],
+        azure_ad_token: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        client: Optional[AsyncAzureOpenAI],
+    ) -> Run:
+        openai_client = self.async_get_azure_client(
+            api_key=api_key,
+            api_base=api_base,
+            timeout=timeout,
+            max_retries=max_retries,
+            api_version=api_version,
+            azure_ad_token=azure_ad_token,
+            client=client,
+        )
+
+        response = await openai_client.beta.threads.runs.create_and_poll(  # type: ignore
+            thread_id=thread_id,
+            assistant_id=assistant_id,
+            additional_instructions=additional_instructions,
+            instructions=instructions,
+            metadata=metadata,
+            model=model,
+            tools=tools,
+        )
+
+        return response
+
+    def async_run_thread_stream(
+        self,
+        client: AsyncAzureOpenAI,
+        thread_id: str,
+        assistant_id: str,
+        additional_instructions: Optional[str],
+        instructions: Optional[str],
+        metadata: Optional[object],
+        model: Optional[str],
+        tools: Optional[Iterable[AssistantToolParam]],
+        event_handler: Optional[AssistantEventHandler],
+    ) -> AsyncAssistantStreamManager[AsyncAssistantEventHandler]:
+        data = {
+            "thread_id": thread_id,
+            "assistant_id": assistant_id,
+            "additional_instructions": additional_instructions,
+            "instructions": instructions,
+            "metadata": metadata,
+            "model": model,
+            "tools": tools,
+        }
+        if event_handler is not None:
+            data["event_handler"] = event_handler
+        return client.beta.threads.runs.stream(**data)  # type: ignore
+
+    def run_thread_stream(
+        self,
+        client: AzureOpenAI,
+        thread_id: str,
+        assistant_id: str,
+        additional_instructions: Optional[str],
+        instructions: Optional[str],
+        metadata: Optional[object],
+        model: Optional[str],
+        tools: Optional[Iterable[AssistantToolParam]],
+        event_handler: Optional[AssistantEventHandler],
+    ) -> AssistantStreamManager[AssistantEventHandler]:
+        data = {
+            "thread_id": thread_id,
+            "assistant_id": assistant_id,
+            "additional_instructions": additional_instructions,
+            "instructions": instructions,
+            "metadata": metadata,
+            "model": model,
+            "tools": tools,
+        }
+        if event_handler is not None:
+            data["event_handler"] = event_handler
+        return client.beta.threads.runs.stream(**data)  # type: ignore
+
+    # fmt: off
+
+    @overload
+    def run_thread(
+        self,
+        thread_id: str,
+        assistant_id: str,
+        additional_instructions: Optional[str],
+        instructions: Optional[str],
+        metadata: Optional[object],
+        model: Optional[str],
+        stream: Optional[bool],
+        tools: Optional[Iterable[AssistantToolParam]],
+        api_key: Optional[str],
+        api_base: Optional[str],
+        api_version: Optional[str],
+        azure_ad_token: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        client: Optional[AsyncAzureOpenAI],
+        arun_thread: Literal[True],
+    ) -> Coroutine[None, None, Run]:
+        ...
+
+    @overload
+    def run_thread(
+        self,
+        thread_id: str,
+        assistant_id: str,
+        additional_instructions: Optional[str],
+        instructions: Optional[str],
+        metadata: Optional[object],
+        model: Optional[str],
+        stream: Optional[bool],
+        tools: Optional[Iterable[AssistantToolParam]],
+        api_key: Optional[str],
+        api_base: Optional[str],
+        api_version: Optional[str],
+        azure_ad_token: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        client: Optional[AzureOpenAI],
+        arun_thread: Optional[Literal[False]],
+    ) -> Run:
+        ...
+
+    # fmt: on
+
+    def run_thread(
+        self,
+        thread_id: str,
+        assistant_id: str,
+        additional_instructions: Optional[str],
+        instructions: Optional[str],
+        metadata: Optional[object],
+        model: Optional[str],
+        stream: Optional[bool],
+        tools: Optional[Iterable[AssistantToolParam]],
+        api_key: Optional[str],
+        api_base: Optional[str],
+        api_version: Optional[str],
+        azure_ad_token: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        client=None,
+        arun_thread=None,
+        event_handler: Optional[AssistantEventHandler] = None,
+    ):
+        if arun_thread is not None and arun_thread == True:
+            if stream is not None and stream == True:
+                azure_client = self.async_get_azure_client(
+                    api_key=api_key,
+                    api_base=api_base,
+                    api_version=api_version,
+                    azure_ad_token=azure_ad_token,
+                    timeout=timeout,
+                    max_retries=max_retries,
+                    client=client,
+                )
+                return self.async_run_thread_stream(
+                    client=azure_client,
+                    thread_id=thread_id,
+                    assistant_id=assistant_id,
+                    additional_instructions=additional_instructions,
+                    instructions=instructions,
+                    metadata=metadata,
+                    model=model,
+                    tools=tools,
+                    event_handler=event_handler,
+                )
+            return self.arun_thread(
+                thread_id=thread_id,
+                assistant_id=assistant_id,
+                additional_instructions=additional_instructions,
+                instructions=instructions,
+                metadata=metadata,
+                model=model,
+                stream=stream,
+                tools=tools,
+                api_key=api_key,
+                api_base=api_base,
+                api_version=api_version,
+                azure_ad_token=azure_ad_token,
+                timeout=timeout,
+                max_retries=max_retries,
+                client=client,
+            )
+        openai_client = self.get_azure_client(
+            api_key=api_key,
+            api_base=api_base,
+            api_version=api_version,
+            azure_ad_token=azure_ad_token,
+            timeout=timeout,
+            max_retries=max_retries,
+            client=client,
+        )
+
+        if stream is not None and stream == True:
+            return self.run_thread_stream(
+                client=openai_client,
+                thread_id=thread_id,
+                assistant_id=assistant_id,
+                additional_instructions=additional_instructions,
+                instructions=instructions,
+                metadata=metadata,
+                model=model,
+                tools=tools,
+                event_handler=event_handler,
+            )
+
+        response = openai_client.beta.threads.runs.create_and_poll(  # type: ignore
+            thread_id=thread_id,
+            assistant_id=assistant_id,
+            additional_instructions=additional_instructions,
+            instructions=instructions,
+            metadata=metadata,
+            model=model,
+            tools=tools,
+        )
 
         return response

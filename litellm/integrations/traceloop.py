@@ -9,6 +9,7 @@ class TraceloopLogger:
             from traceloop.sdk.tracing.tracing import TracerWrapper
             from traceloop.sdk import Traceloop
             from traceloop.sdk.instruments import Instruments
+            from opentelemetry.sdk.trace.export import ConsoleSpanExporter
         except ModuleNotFoundError as e:
             verbose_logger.error(
                 f"Traceloop not installed, try running 'pip install traceloop-sdk' to fix this error: {e}\n{traceback.format_exc()}"
@@ -17,13 +18,6 @@ class TraceloopLogger:
         Traceloop.init(
             app_name="Litellm-Server",
             disable_batch=True,
-            instruments=[
-                Instruments.CHROMA,
-                Instruments.PINECONE,
-                Instruments.WEAVIATE,
-                Instruments.LLAMA_INDEX,
-                Instruments.LANGCHAIN,
-            ],
         )
         self.tracer_wrapper = TracerWrapper()
 
@@ -50,6 +44,8 @@ class TraceloopLogger:
             tracer = self.tracer_wrapper.get_tracer()
 
             optional_params = kwargs.get("optional_params", {})
+            start_time = int(start_time.timestamp())
+            end_time = int(end_time.timestamp())
             span = tracer.start_span(
                 "litellm.completion", kind=SpanKind.CLIENT, start_time=start_time
             )

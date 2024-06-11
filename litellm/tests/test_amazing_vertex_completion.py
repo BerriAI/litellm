@@ -295,6 +295,7 @@ async def test_vertex_ai_anthropic_async_streaming():
 def test_vertex_ai():
     import random
 
+    litellm.num_retries = 3
     load_vertex_ai_credentials()
     test_models = (
         litellm.vertex_chat_models

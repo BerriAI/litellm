@@ -1,11 +1,15 @@
 from itertools import chain
-import requests, types, time
-import json, uuid
+import requests
+import types
+import time
+import json
+import uuid
 import traceback
 from typing import Optional
+from litellm import verbose_logger
 import litellm
-import httpx, aiohttp, asyncio
-from .prompt_templates.factory import prompt_factory, custom_prompt
+import httpx
+import aiohttp
 
 
 class OllamaError(Exception):
@@ -299,7 +303,10 @@ def get_ollama_response(
             tool_calls=[
                 {
                     "id": f"call_{str(uuid.uuid4())}",
-                    "function": {"name": function_call["name"], "arguments": json.dumps(function_call["arguments"])},
+                    "function": {
+                        "name": function_call["name"],
+                        "arguments": json.dumps(function_call["arguments"]),
+                    },
                     "type": "function",
                 }
             ],
@@ -307,7 +314,9 @@ def get_ollama_response(
         model_response["choices"][0]["message"] = message
         model_response["choices"][0]["finish_reason"] = "tool_calls"
     else:
-        model_response["choices"][0]["message"]["content"] = response_json["message"]["content"]
+        model_response["choices"][0]["message"]["content"] = response_json["message"][
+            "content"
+        ]
     model_response["created"] = int(time.time())
     model_response["model"] = "ollama/" + model
     prompt_tokens = response_json.get("prompt_eval_count", litellm.token_counter(messages=messages))  # type: ignore
@@ -361,7 +370,10 @@ def ollama_completion_stream(url, api_key, data, logging_obj):
                     tool_calls=[
                         {
                             "id": f"call_{str(uuid.uuid4())}",
-                            "function": {"name": function_call["name"], "arguments": json.dumps(function_call["arguments"])},
+                            "function": {
+                                "name": function_call["name"],
+                                "arguments": json.dumps(function_call["arguments"]),
+                            },
                             "type": "function",
                         }
                     ],
@@ -410,9 +422,10 @@ async def ollama_async_streaming(
                 first_chunk_content = first_chunk.choices[0].delta.content or ""
                 response_content = first_chunk_content + "".join(
                     [
-                    chunk.choices[0].delta.content
-                    async for chunk in streamwrapper
-                    if chunk.choices[0].delta.content]
+                        chunk.choices[0].delta.content
+                        async for chunk in streamwrapper
+                        if chunk.choices[0].delta.content
+                    ]
                 )
                 function_call = json.loads(response_content)
                 delta = litellm.utils.Delta(
@@ -420,7 +433,10 @@ async def ollama_async_streaming(
                     tool_calls=[
                         {
                             "id": f"call_{str(uuid.uuid4())}",
-                            "function": {"name": function_call["name"], "arguments": json.dumps(function_call["arguments"])},
+                            "function": {
+                                "name": function_call["name"],
+                                "arguments": json.dumps(function_call["arguments"]),
+                            },
                             "type": "function",
                         }
                     ],
@@ -433,7 +449,8 @@ async def ollama_async_streaming(
                 async for transformed_chunk in streamwrapper:
                     yield transformed_chunk
     except Exception as e:
-        traceback.print_exc()
+        verbose_logger.error("LiteLLM.gemini(): Exception occured - {}".format(str(e)))
+        verbose_logger.debug(traceback.format_exc())
 
 
 async def ollama_acompletion(
@@ -483,7 +500,10 @@ async def ollama_acompletion(
                     tool_calls=[
                         {
                             "id": f"call_{str(uuid.uuid4())}",
-                            "function": {"name": function_call["name"], "arguments": json.dumps(function_call["arguments"])},
+                            "function": {
+                                "name": function_call["name"],
+                                "arguments": json.dumps(function_call["arguments"]),
+                            },
                             "type": "function",
                         }
                     ],
@@ -491,7 +511,9 @@ async def ollama_acompletion(
                 model_response["choices"][0]["message"] = message
                 model_response["choices"][0]["finish_reason"] = "tool_calls"
             else:
-                model_response["choices"][0]["message"]["content"] = response_json["message"]["content"]
+                model_response["choices"][0]["message"]["content"] = response_json[
+                    "message"
+                ]["content"]
 
             model_response["created"] = int(time.time())
             model_response["model"] = "ollama_chat/" + data["model"]
@@ -509,5 +531,9 @@ async def ollama_acompletion(
             )
             return model_response
     except Exception as e:
-        traceback.print_exc()
+        verbose_logger.error(
+            "LiteLLM.ollama_acompletion(): Exception occured - {}".format(str(e))
+        )
+        verbose_logger.debug(traceback.format_exc())
+
         raise e
