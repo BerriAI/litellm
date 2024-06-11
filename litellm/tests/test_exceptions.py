@@ -55,8 +55,12 @@ async def test_content_policy_exception_azure():
     except litellm.ContentPolicyViolationError as e:
         print("caught a content policy violation error! Passed")
         print("exception", e)
+        assert e.litellm_debug_info is not None
+        assert isinstance(e.litellm_debug_info, str)
+        assert len(e.litellm_debug_info) > 0
         pass
     except Exception as e:
+        print()
         pytest.fail(f"An exception occurred - {str(e)}")
 
 
