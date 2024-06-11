@@ -337,8 +337,6 @@ def response_cost_calculator(
                     and custom_llm_provider is True
                 ):  # override defaults if custom pricing is set
                     base_model = model
-                elif base_model is None:
-                    base_model = model
                 # base_model defaults to None if not set on model_info
                 response_cost = completion_cost(
                     completion_response=response_object,
