@@ -48,6 +48,7 @@ from datetime import datetime, timedelta
 from litellm.integrations.slack_alerting import SlackAlerting
 from typing_extensions import overload
 from functools import wraps
+from fastapi import Request
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -2595,7 +2596,7 @@ async def update_spend(
                 raise e
 
 
-async def _read_request_body(request):
+async def _read_request_body(request: Optional[Request]) -> dict:
     """
     Asynchronous function to read the request body and parse it as JSON or literal data.
 
@@ -2608,7 +2609,7 @@ async def _read_request_body(request):
     import ast, json
 
     try:
-        request_data = {}
+        request_data: dict = {}
         if request is None:
             return request_data
         body = await request.body()
