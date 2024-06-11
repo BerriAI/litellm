@@ -49,5 +49,5 @@ We support ALL FriendliAI AI models, just set `friendli_ai/` as a prefix when se
 | Model Name               | Function Call                                                                                                                                                      |
 |--------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | mixtral-8x7b-instruct | `completion(model="friendli_ai/mixtral-8x7b-instruct-v0-1", messages)` | 
-| llama3-8b-instruct | `completion(model="friendli_ai/meta-llama-3-8b-instruct", messages)` |
-| llama3-70b-instruct | `completion(model="friendli_ai/meta-llama-3-70b-instruct", messages)` |  
+| meta-llama-3-8b-instruct | `completion(model="friendli_ai/meta-llama-3-8b-instruct", messages)` |
+| meta-llama-3-70b-instruct | `completion(model="friendli_ai/meta-llama-3-70b-instruct", messages)` |  
