@@ -31,7 +31,11 @@ V0 Scope:
 """
 
 
-@pytest.mark.parametrize("provider", ["openai", "azure", "astra-assistants"])
+@pytest.mark.parametrize(
+    "provider",
+    ["openai", "azure", "astra-assistants"],
+    ids=["provider_openai", "provider_azure", "provider_astra"]
+)
 @pytest.mark.parametrize(
     "sync_mode",
     [True, False],
@@ -52,7 +56,11 @@ async def test_get_assistants(provider, sync_mode):
         assert isinstance(assistants, AsyncCursorPage)
 
 
-@pytest.mark.parametrize("provider", ["openai", "azure", "astra-assistants"])
+@pytest.mark.parametrize(
+    "provider",
+    ["openai", "azure", "astra-assistants"],
+    ids=["provider_openai", "provider_azure", "provider_astra"]
+)
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_create_thread_litellm(sync_mode, provider) -> Thread:
@@ -75,8 +83,11 @@ async def test_create_thread_litellm(sync_mode, provider) -> Thread:
 
     return new_thread
 
-
-@pytest.mark.parametrize("provider", ["openai", "azure", "astra-assistants"])
+@pytest.mark.parametrize(
+    "provider",
+    ["openai", "azure", "astra-assistants"],
+    ids=["provider_openai", "provider_azure", "provider_astra"]
+)
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_get_thread_litellm(provider, sync_mode):
@@ -104,8 +115,11 @@ async def test_get_thread_litellm(provider, sync_mode):
     ), f"type of thread={type(received_thread)}. Expected Thread-type"
     return new_thread
 
-
-@pytest.mark.parametrize("provider", ["openai", "azure", "astra-assistants"])
+@pytest.mark.parametrize(
+    "provider",
+    ["openai", "azure", "astra-assistants"],
+    ids=["provider_openai", "provider_azure", "provider_astra"]
+)
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_add_message_litellm(sync_mode, provider):
@@ -134,12 +148,9 @@ async def test_add_message_litellm(sync_mode, provider):
 
 @pytest.mark.parametrize(
     "provider",
-    [
-        "azure",
-        "openai",
-        "astra-assistants",
-    ],
-)  #
+    ["openai", "azure", "astra-assistants"],
+    ids=["provider_openai", "provider_azure", "provider_astra"]
+)
 @pytest.mark.parametrize(
     "sync_mode",
     [
