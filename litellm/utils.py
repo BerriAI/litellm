@@ -38,20 +38,21 @@ from litellm.types.utils import CostPerToken, ProviderField, ModelInfo
 
 oidc_cache = DualCache()
 
-try:
-    # New and recommended way to access resources
-    from importlib import resources
+if not os.getenv("TIKTOKEN_CACHE_DIR"):
+    try:
+        # New and recommended way to access resources
+        from importlib import resources
 
-    filename = str(resources.files(litellm).joinpath("llms/tokenizers"))
-except (ImportError, AttributeError):
-    # Old way to access resources, which setuptools deprecated some time ago
-    import pkg_resources  # type: ignore
+        filename = str(resources.files(litellm).joinpath("llms/tokenizers"))
+    except (ImportError, AttributeError):
+        # Old way to access resources, which setuptools deprecated some time ago
+        import pkg_resources  # type: ignore
 
-    filename = pkg_resources.resource_filename(__name__, "llms/tokenizers")
+        filename = pkg_resources.resource_filename(__name__, "llms/tokenizers")
 
-os.environ["TIKTOKEN_CACHE_DIR"] = (
-    filename  # use local copy of tiktoken b/c of - https://github.com/BerriAI/litellm/issues/1071
-)
+    os.environ["TIKTOKEN_CACHE_DIR"] = (
+        filename  # use local copy of tiktoken b/c of - https://github.com/BerriAI/litellm/issues/1071
+    )
 
 encoding = tiktoken.get_encoding("cl100k_base")
 from importlib import resources
