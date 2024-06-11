@@ -3,6 +3,7 @@ import os
 import sys
 import traceback
 import subprocess, asyncio
+from typing import Any
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -19,6 +20,7 @@ from litellm import (
 )
 from concurrent.futures import ThreadPoolExecutor
 import pytest
+from unittest.mock import patch, MagicMock
 
 litellm.vertex_project = "pathrise-convert-1606954137718"
 litellm.vertex_location = "us-central1"
@@ -53,8 +55,12 @@ async def test_content_policy_exception_azure():
     except litellm.ContentPolicyViolationError as e:
         print("caught a content policy violation error! Passed")
         print("exception", e)
+        assert e.litellm_debug_info is not None
+        assert isinstance(e.litellm_debug_info, str)
+        assert len(e.litellm_debug_info) > 0
         pass
     except Exception as e:
+        print()
         pytest.fail(f"An exception occurred - {str(e)}")
 
 
@@ -655,3 +661,47 @@ def test_litellm_predibase_exception():
 
 # accuracy_score = counts[True]/(counts[True] + counts[False])
 # print(f"accuracy_score: {accuracy_score}")
+
+
+@pytest.mark.parametrize("provider", ["predibase"])
+def test_exception_mapping(provider):
+    """
+    For predibase, run through a set of mock exceptions
+
+    assert that they are being mapped correctly
+    """
+    litellm.set_verbose = True
+    error_map = {
+        400: litellm.BadRequestError,
+        401: litellm.AuthenticationError,
+        404: litellm.NotFoundError,
+        408: litellm.Timeout,
+        429: litellm.RateLimitError,
+        500: litellm.InternalServerError,
+        503: litellm.ServiceUnavailableError,
+    }
+
+    for code, expected_exception in error_map.items():
+        mock_response = Exception()
+        setattr(mock_response, "text", "This is an error message")
+        setattr(mock_response, "llm_provider", provider)
+        setattr(mock_response, "status_code", code)
+
+        response: Any = None
+        try:
+            response = completion(
+                model="{}/test-model".format(provider),
+                messages=[{"role": "user", "content": "Hey, how's it going?"}],
+                mock_response=mock_response,
+            )
+        except expected_exception:
+            continue
+        except Exception as e:
+            response = "{}\n{}".format(str(e), traceback.format_exc())
+        pytest.fail(
+            "Did not raise expected exception. Expected={}, Return={},".format(
+                expected_exception, response
+            )
+        )
+
+    pass

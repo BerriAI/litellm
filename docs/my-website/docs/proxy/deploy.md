@@ -7,6 +7,23 @@ You can find the Dockerfile to build litellm proxy [here](https://github.com/Ber
 
 ## Quick Start
 
+To start using Litellm, run the following commands in a shell:
+
+```bash
+# Get the code
+git clone https://github.com/BerriAI/litellm
+
+# Go to folder
+cd litellm
+
+# Add the master key
+echo 'LITELLM_MASTER_KEY="sk-1234"' > .env
+source .env
+
+# Start
+docker-compose up
+```
+
 <Tabs>
 
 <TabItem value="basic" label="Basic">
@@ -243,7 +260,7 @@ Requirements:
 
 <TabItem value="docker-deploy" label="Dockerfile">
 
-We maintain a [seperate Dockerfile](https://github.com/BerriAI/litellm/pkgs/container/litellm-database) for reducing build time when running LiteLLM proxy with a connected Postgres Database 
+We maintain a [separate Dockerfile](https://github.com/BerriAI/litellm/pkgs/container/litellm-database) for reducing build time when running LiteLLM proxy with a connected Postgres Database 
 
 ```shell
 docker pull ghcr.io/berriai/litellm-database:main-latest

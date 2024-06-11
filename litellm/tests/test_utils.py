@@ -22,6 +22,7 @@ from litellm.utils import (
     token_counter,
     create_pretrained_tokenizer,
     create_tokenizer,
+    get_max_tokens,
 )
 
 # Assuming your trim_messages, shorten_message_to_fit_limit, and get_token_count functions are all in a module named 'message_utils'
@@ -372,3 +373,16 @@ def test_supports_function_calling():
         assert litellm.supports_function_calling(model="claude-2") == False
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
+def test_get_max_token_unit_test():
+    """
+    More complete testing in `test_completion_cost.py`
+    """
+    model = "bedrock/anthropic.claude-3-haiku-20240307-v1:0"
+
+    max_tokens = get_max_tokens(
+        model
+    )  # Returns a number instead of throwing an Exception
+
+    assert isinstance(max_tokens, int)

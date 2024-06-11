@@ -251,7 +251,7 @@ async def async_handle_prediction_response(
     logs = ""
     while True and (status not in ["succeeded", "failed", "canceled"]):
         print_verbose(f"replicate: polling endpoint: {prediction_url}")
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(0.5)  # prevent replicate rate limit errors
         response = await http_handler.get(prediction_url, headers=headers)
         if response.status_code == 200:
             response_data = response.json()

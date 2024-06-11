@@ -21,7 +21,15 @@ model_list:
 
 general_settings:
   master_key: sk-1234
-  alerting: ["slack"]
 
 litellm_settings:
-  callbacks: custom_callbacks1.proxy_handler_instance
+  callbacks: ["otel"]
+  store_audit_logs: true
+  redact_messages_in_exceptions: True
+  enforced_params:  
+    - user
+    - metadata
+    - metadata.generation_name
+  cache: True
+
+

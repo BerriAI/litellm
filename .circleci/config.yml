@@ -2,7 +2,7 @@ version: 4.3.4
 jobs:
   local_testing:
     docker:
-      - image: circleci/python:3.9
+      - image: cimg/python:3.11
     working_directory: ~/project
 
     steps:
@@ -43,7 +43,10 @@ jobs:
             pip install "langfuse==2.27.1"
             pip install "logfire==0.29.0"
             pip install numpydoc
-            pip install traceloop-sdk==0.18.2
+            pip install traceloop-sdk==0.21.1
+            pip install opentelemetry-api==1.25.0
+            pip install opentelemetry-sdk==1.25.0
+            pip install opentelemetry-exporter-otlp==1.25.0
             pip install openai
             pip install prisma            
             pip install "httpx==0.24.1"
@@ -61,6 +64,7 @@ jobs:
             pip install prometheus-client==0.20.0
             pip install "pydantic==2.7.1"
             pip install "diskcache==5.6.1"
+            pip install "Pillow==10.3.0"
       - save_cache:
           paths:
             - ./venv
