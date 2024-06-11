@@ -63,7 +63,7 @@ You can:
 - Add budgets to Teams
 
 
-#### **Add budgets to users**
+#### **Add budgets to teams**
 ```shell 
 curl --location 'http://localhost:4000/team/new' \
 --header 'Authorization: Bearer <your-master-key>' \
