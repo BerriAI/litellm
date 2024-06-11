@@ -1202,8 +1202,9 @@ async def user_api_key_auth(
                 ####################################
 
                 if valid_token.spend >= valid_token.max_budget:
-                    raise Exception(
-                        f"ExceededTokenBudget: Current spend for token: {valid_token.spend}; Max Budget for Token: {valid_token.max_budget}"
+                    raise litellm.BudgetExceededError(
+                        current_cost=valid_token.spend,
+                        max_budget=valid_token.max_budget,
                     )
 
             # Check 5. Token Model Spend is under Model budget
@@ -1239,8 +1240,9 @@ async def user_api_key_auth(
                     ):
                         current_model_spend = model_spend[0]["_sum"]["spend"]
                         current_model_budget = max_budget_per_model[current_model]
-                        raise Exception(
-                            f"ExceededModelBudget: Current spend for model: {current_model_spend}; Max Budget for Model: {current_model_budget}"
+                        raise litellm.BudgetExceededError(
+                            current_cost=current_model_spend,
+                            max_budget=current_model_budget,
                         )
 
             # Check 6. Team spend is under Team budget
@@ -1264,8 +1266,9 @@ async def user_api_key_auth(
                 )
 
                 if valid_token.team_spend >= valid_token.team_max_budget:
-                    raise Exception(
-                        f"ExceededTokenBudget: Current Team Spend: {valid_token.team_spend}; Max Budget for Team: {valid_token.team_max_budget}"
+                    raise litellm.BudgetExceededError(
+                        current_cost=valid_token.team_spend,
+                        max_budget=valid_token.team_max_budget,
                     )
 
             # Check 8: Additional Common Checks across jwt + key auth
