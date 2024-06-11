@@ -326,8 +326,8 @@ class SlackAlerting(CustomLogger):
                 end_time=end_time,
             )
         )
-        if litellm.turn_off_message_logging:
-            messages = "Message not logged. `litellm.turn_off_message_logging=True`."
+        if litellm.turn_off_message_logging or litellm.redact_messages_in_exceptions:
+            messages = "Message not logged. litellm.redact_messages_in_exceptions=True"
         request_info = f"\nRequest Model: `{model}`\nAPI Base: `{api_base}`\nMessages: `{messages}`"
         slow_message = f"`Responses are slow - {round(time_difference_float,2)}s response time > Alerting threshold: {self.alerting_threshold}s`"
         if time_difference_float > self.alerting_threshold:
@@ -537,7 +537,7 @@ class SlackAlerting(CustomLogger):
             cache_list=combined_metrics_cache_keys
         )
 
-        message += f"\n\nNext Run is in: `{time.time() + self.alerting_args.daily_report_frequency}`s"
+        message += f"\n\nNext Run is at: `{time.time() + self.alerting_args.daily_report_frequency}`s"
 
         # send alert
         await self.send_alert(message=message, level="Low", alert_type="daily_reports")
@@ -567,9 +567,12 @@ class SlackAlerting(CustomLogger):
             except:
                 messages = ""
 
-            if litellm.turn_off_message_logging:
+            if (
+                litellm.turn_off_message_logging
+                or litellm.redact_messages_in_exceptions
+            ):
                 messages = (
-                    "Message not logged. `litellm.turn_off_message_logging=True`."
+                    "Message not logged. litellm.redact_messages_in_exceptions=True"
                 )
             request_info = f"\nRequest Model: `{model}`\nMessages: `{messages}`"
         else:
@@ -1204,7 +1207,9 @@ Model Info:
                 return False
             from litellm.proxy.proxy_server import premium_user, prisma_client
 
-            email_logo_url = os.getenv("SMTP_SENDER_LOGO", None)
+            email_logo_url = os.getenv(
+                "SMTP_SENDER_LOGO", os.getenv("EMAIL_LOGO_URL", None)
+            )
             email_support_contact = os.getenv("EMAIL_SUPPORT_CONTACT", None)
             await self._check_if_using_premium_email_feature(
                 premium_user, email_logo_url, email_support_contact
@@ -1304,7 +1309,9 @@ Model Info:
 
         from litellm.proxy.proxy_server import premium_user, prisma_client
 
-        email_logo_url = os.getenv("SMTP_SENDER_LOGO", None)
+        email_logo_url = os.getenv(
+            "SMTP_SENDER_LOGO", os.getenv("EMAIL_LOGO_URL", None)
+        )
         email_support_contact = os.getenv("EMAIL_SUPPORT_CONTACT", None)
         await self._check_if_using_premium_email_feature(
             premium_user, email_logo_url, email_support_contact

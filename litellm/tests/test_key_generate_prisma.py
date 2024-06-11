@@ -272,7 +272,7 @@ def test_call_with_invalid_key(prisma_client):
     except Exception as e:
         print("Got Exception", e)
         print(e.message)
-        assert "Authentication Error, Invalid token passed" in e.message
+        assert "Authentication Error, Invalid proxy server token passed" in e.message
         pass
 
 
@@ -1175,7 +1175,6 @@ def test_generate_and_update_key(prisma_client):
         asyncio.run(test())
     except Exception as e:
         print("Got Exception", e)
-        print(e.message)
         pytest.fail(f"An exception occurred - {str(e)}")
 
 
@@ -2248,3 +2247,55 @@ async def test_create_update_team(prisma_client):
     assert _team_info["budget_reset_at"] is not None and isinstance(
         _team_info["budget_reset_at"], datetime.datetime
     )
+
+
+@pytest.mark.asyncio()
+async def test_enforced_params(prisma_client):
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    from litellm.proxy.proxy_server import general_settings
+
+    general_settings["enforced_params"] = [
+        "user",
+        "metadata",
+        "metadata.generation_name",
+    ]
+
+    await litellm.proxy.proxy_server.prisma_client.connect()
+    request = NewUserRequest()
+    key = await new_user(request)
+    print(key)
+
+    generated_key = key.key
+    bearer_token = "Bearer " + generated_key
+
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+
+    # Case 1: Missing user
+    async def return_body():
+        return b'{"model": "gemini-pro-vision"}'
+
+    request.body = return_body
+    try:
+        await user_api_key_auth(request=request, api_key=bearer_token)
+        pytest.fail(f"This should have failed!. IT's an invalid request")
+    except Exception as e:
+        assert (
+            "BadRequest please pass param=user in request body. This is a required param"
+            in e.message
+        )
+
+    # Case 2: Missing metadata["generation_name"]
+    async def return_body_2():
+        return b'{"model": "gemini-pro-vision", "user": "1234", "metadata": {}}'
+
+    request.body = return_body_2
+    try:
+        await user_api_key_auth(request=request, api_key=bearer_token)
+        pytest.fail(f"This should have failed!. IT's an invalid request")
+    except Exception as e:
+        assert (
+            "Authentication Error, BadRequest please pass param=[metadata][generation_name] in request body"
+            in e.message
+        )

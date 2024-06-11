@@ -76,7 +76,9 @@ class ModelInfo(BaseModel):
     id: Optional[
         str
     ]  # Allow id to be optional on input, but it will always be present as a str in the model instance
-    db_model: bool = False  # used for proxy - to separate models which are stored in the db vs. config.
+    db_model: bool = (
+        False  # used for proxy - to separate models which are stored in the db vs. config.
+    )
     updated_at: Optional[datetime.datetime] = None
     updated_by: Optional[str] = None
 
@@ -281,12 +283,6 @@ class updateDeployment(BaseModel):
 
 
 class LiteLLMParamsTypedDict(TypedDict, total=False):
-    """
-    [TODO]
-    - allow additional params (not in list)
-    - set value to none if not set -> don't raise error if value not set
-    """
-
     model: str
     custom_llm_provider: Optional[str]
     tpm: Optional[int]
@@ -298,6 +294,8 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     stream_timeout: Optional[Union[float, str]]
     max_retries: Optional[int]
     organization: Optional[str]  # for openai orgs
+    ## DROP PARAMS ##
+    drop_params: Optional[bool]
     ## UNIFIED PROJECT/REGION ##
     region_name: Optional[str]
     ## VERTEX AI ##
@@ -381,6 +379,23 @@ class RouterErrors(enum.Enum):
     no_deployments_available = "No deployments available for selected model"
 
 
+class AllowedFailsPolicy(BaseModel):
+    """
+    Use this to set a custom number of allowed fails/minute before cooling down a deployment
+    If `AuthenticationErrorAllowedFails = 1000`, then 1000 AuthenticationError will be allowed before cooling down a deployment
+
+    Mapping of Exception type to allowed_fails for each exception
+    https://docs.litellm.ai/docs/exception_mapping
+    """
+
+    BadRequestErrorAllowedFails: Optional[int] = None
+    AuthenticationErrorAllowedFails: Optional[int] = None
+    TimeoutErrorAllowedFails: Optional[int] = None
+    RateLimitErrorAllowedFails: Optional[int] = None
+    ContentPolicyViolationErrorAllowedFails: Optional[int] = None
+    InternalServerErrorAllowedFails: Optional[int] = None
+
+
 class RetryPolicy(BaseModel):
     """
     Use this to set a custom number of retries per exception type
@@ -420,10 +435,17 @@ class ModelGroupInfo(BaseModel):
     max_output_tokens: Optional[float] = None
     input_cost_per_token: Optional[float] = None
     output_cost_per_token: Optional[float] = None
-    mode: Literal[
-        "chat", "embedding", "completion", "image_generation", "audio_transcription"
-    ]
+    mode: Optional[
+        Literal[
+            "chat", "embedding", "completion", "image_generation", "audio_transcription"
+        ]
+    ] = Field(default="chat")
     supports_parallel_function_calling: bool = Field(default=False)
     supports_vision: bool = Field(default=False)
     supports_function_calling: bool = Field(default=False)
-    supported_openai_params: List[str] = Field(default=[])
+    supported_openai_params: Optional[List[str]] = Field(default=[])
+
+
+class AssistantsTypedDict(TypedDict):
+    custom_llm_provider: Literal["azure", "openai"]
+    litellm_params: LiteLLMParamsTypedDict

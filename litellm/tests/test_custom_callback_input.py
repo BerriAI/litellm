@@ -10,6 +10,7 @@ from typing import Optional, Literal, List, Union
 from litellm import completion, embedding, Cache
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.types.utils import LiteLLMCommonStrings
 
 # Test Scenarios (test across completion, streaming, embedding)
 ## 1: Pre-API-Call
@@ -67,7 +68,20 @@ class CompletionCustomHandler(
             assert isinstance(kwargs["start_time"], (datetime, type(None)))
             assert isinstance(kwargs["stream"], bool)
             assert isinstance(kwargs["user"], (str, type(None)))
-        except Exception as e:
+            ### METADATA
+            metadata_value = kwargs["litellm_params"].get("metadata")
+            assert metadata_value is None or isinstance(metadata_value, dict)
+            if metadata_value is not None:
+                if litellm.turn_off_message_logging is True:
+                    assert (
+                        metadata_value["raw_request"]
+                        is LiteLLMCommonStrings.redacted_by_litellm.value
+                    )
+                else:
+                    assert "raw_request" not in metadata_value or isinstance(
+                        metadata_value["raw_request"], str
+                    )
+        except Exception:
             print(f"Assertion Error: {traceback.format_exc()}")
             self.errors.append(traceback.format_exc())
 
@@ -177,6 +191,8 @@ class CompletionCustomHandler(
             assert isinstance(
                 kwargs["original_response"],
                 (str, litellm.CustomStreamWrapper, BaseModel),
+            ), "Original Response={}. Allowed types=[str, litellm.CustomStreamWrapper, BaseModel]".format(
+                kwargs["original_response"]
             )
             assert isinstance(kwargs["additional_args"], (dict, type(None)))
             assert isinstance(kwargs["log_event_type"], str)
@@ -1053,3 +1069,25 @@ def test_image_generation_openai():
 ## Test Azure + Sync
 
 ## Test Azure + Async
+
+##### PII REDACTION ######
+
+
+def test_turn_off_message_logging():
+    """
+    If 'turn_off_message_logging' is true, assert no user request information is logged.
+    """
+    litellm.turn_off_message_logging = True
+
+    # sync completion
+    customHandler = CompletionCustomHandler()
+    litellm.callbacks = [customHandler]
+
+    _ = litellm.completion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "Hey, how's it going?"}],
+        mock_response="Going well!",
+    )
+
+    time.sleep(2)
+    assert len(customHandler.errors) == 0

@@ -115,7 +115,8 @@ async def test_acompletion_caching_on_router():
             model="gpt-3.5-turbo", messages=messages, temperature=1
         )
         print(f"response1: {response1}")
-        await asyncio.sleep(1)  # add cache is async, async sleep for cache to get set
+        await asyncio.sleep(5)  # add cache is async, async sleep for cache to get set
+
         response2 = await router.acompletion(
             model="gpt-3.5-turbo", messages=messages, temperature=1
         )

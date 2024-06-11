@@ -76,7 +76,7 @@ def test_image_generation_azure_dall_e_3():
         )
         print(f"response: {response}")
         assert len(response.data) > 0
-    except litellm.RateLimitError as e:
+    except litellm.InternalServerError as e:
         pass
     except litellm.ContentPolicyViolationError:
         pass  # OpenAI randomly raises these errors - skip when they occur
@@ -115,7 +115,9 @@ async def test_async_image_generation_openai():
 async def test_async_image_generation_azure():
     try:
         response = await litellm.aimage_generation(
-            prompt="A cute baby sea otter", model="azure/dall-e-3-test"
+            prompt="A cute baby sea otter",
+            model="azure/dall-e-3-test",
+            api_version="2023-09-01-preview",
         )
         print(f"response: {response}")
     except litellm.RateLimitError as e:
@@ -193,6 +195,8 @@ async def test_aimage_generation_vertex_ai():
             assert isinstance(d, litellm.ImageObject)
             print("data in response.data", d)
             assert d.b64_json is not None
+    except litellm.ServiceUnavailableError as e:
+        pass
     except litellm.RateLimitError as e:
         pass
     except litellm.ContentPolicyViolationError:

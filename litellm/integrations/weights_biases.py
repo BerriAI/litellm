@@ -217,6 +217,5 @@ class WeightsBiasesLogger:
                 f"W&B Logging Logging - final response object: {response_obj}"
             )
         except:
-            # traceback.print_exc()
             print_verbose(f"W&B Logging Layer Error - {traceback.format_exc()}")
             pass

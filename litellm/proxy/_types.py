@@ -1,11 +1,20 @@
 from pydantic import BaseModel, Extra, Field, model_validator, Json, ConfigDict
 from dataclasses import fields
 import enum
-from typing import Optional, List, Union, Dict, Literal, Any
+from typing import Optional, List, Union, Dict, Literal, Any, TypedDict, TYPE_CHECKING
 from datetime import datetime
 import uuid, json, sys, os
 from litellm.types.router import UpdateRouterConfig
 from litellm.types.utils import ProviderField
+from typing_extensions import Annotated
+
+
+if TYPE_CHECKING:
+    from opentelemetry.trace import Span as _Span
+
+    Span = _Span
+else:
+    Span = Any
 
 
 class LitellmUserRoles(str, enum.Enum):
@@ -74,6 +83,17 @@ class LitellmUserRoles(str, enum.Enum):
             "customer": "Customer",
         }
         return ui_labels.get(self.value, "")
+
+
+class LitellmTableNames(str, enum.Enum):
+    """
+    Enum for Table Names used by LiteLLM
+    """
+
+    TEAM_TABLE_NAME: str = "LiteLLM_TeamTable"
+    USER_TABLE_NAME: str = "LiteLLM_UserTable"
+    KEY_TABLE_NAME: str = "LiteLLM_VerificationToken"
+    PROXY_MODEL_TABLE_NAME: str = "LiteLLM_ModelTable"
 
 
 AlertType = Literal[
@@ -190,6 +210,7 @@ class LiteLLMRoutes(enum.Enum):
         "/model/info",
         "/v2/model/info",
         "/v2/key/info",
+        "/model_group/info",
     ]
 
     # NOTE: ROUTES ONLY FOR MASTER KEY - only the Master Key should be able to Reset Spend
@@ -260,6 +281,13 @@ class LiteLLMRoutes(enum.Enum):
         "/config/yaml",
         "/metrics",
     ]
+
+    internal_user_routes: List = [
+        "/key/generate",
+        "/key/update",
+        "/key/delete",
+        "/key/info",
+    ] + spend_tracking_routes
 
 
 # class LiteLLMAllowedRoutes(LiteLLMBase):
@@ -691,6 +719,8 @@ class Member(LiteLLMBase):
     @model_validator(mode="before")
     @classmethod
     def check_user_info(cls, values):
+        if not isinstance(values, dict):
+            raise ValueError("input needs to be a dictionary")
         if values.get("user_id") is None and values.get("user_email") is None:
             raise ValueError("Either user id or user email must be provided")
         return values
@@ -729,8 +759,23 @@ class GlobalEndUsersSpend(LiteLLMBase):
 
 class TeamMemberAddRequest(LiteLLMBase):
     team_id: str
-    member: Member
+    member: Union[List[Member], Member]
     max_budget_in_team: Optional[float] = None  # Users max budget within the team
+
+    def __init__(self, **data):
+        member_data = data.get("member")
+        if isinstance(member_data, list):
+            # If member is a list of dictionaries, convert each dictionary to a Member object
+            members = [Member(**item) for item in member_data]
+            # Replace member_data with the list of Member objects
+            data["member"] = members
+        elif isinstance(member_data, dict):
+            # If member is a dictionary, convert it to a single Member object
+            member = Member(**member_data)
+            # Replace member_data with the single Member object
+            data["member"] = member
+        # Call the superclass __init__ method to initialize the object
+        super().__init__(**data)
 
 
 class TeamMemberDeleteRequest(LiteLLMBase):
@@ -927,6 +972,7 @@ class KeyManagementSystem(enum.Enum):
     AZURE_KEY_VAULT = "azure_key_vault"
     AWS_SECRET_MANAGER = "aws_secret_manager"
     LOCAL = "local"
+    AWS_KMS = "aws_kms"
 
 
 class KeyManagementSettings(LiteLLMBase):
@@ -1175,6 +1221,7 @@ class UserAPIKeyAuth(
         ]
     ] = None
     allowed_model_region: Optional[Literal["eu"]] = None
+    parent_otel_span: Optional[Span] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -1186,6 +1233,9 @@ class UserAPIKeyAuth(
             ).startswith("sk-"):
                 values.update({"api_key": hash_token(values.get("api_key"))})
         return values
+
+    class Config:
+        arbitrary_types_allowed = True
 
 
 class LiteLLM_Config(LiteLLMBase):
@@ -1248,7 +1298,7 @@ class LiteLLM_SpendLogs(LiteLLMBase):
     startTime: Union[str, datetime, None]
     endTime: Union[str, datetime, None]
     user: Optional[str] = ""
-    metadata: Optional[dict] = {}
+    metadata: Optional[Json] = {}
     cache_hit: Optional[str] = "False"
     cache_key: Optional[str] = None
     request_tags: Optional[Json] = None
@@ -1266,6 +1316,23 @@ class LiteLLM_ErrorLogs(LiteLLMBase):
     exception_string: Optional[str] = ""
     startTime: Union[str, datetime, None]
     endTime: Union[str, datetime, None]
+
+
+class LiteLLM_AuditLogs(LiteLLMBase):
+    id: str
+    updated_at: datetime
+    changed_by: str
+    changed_by_api_key: Optional[str] = None
+    action: Literal["created", "updated", "deleted"]
+    table_name: Literal[
+        LitellmTableNames.TEAM_TABLE_NAME,
+        LitellmTableNames.USER_TABLE_NAME,
+        LitellmTableNames.KEY_TABLE_NAME,
+        LitellmTableNames.PROXY_MODEL_TABLE_NAME,
+    ]
+    object_id: str
+    before_value: Optional[Json] = None
+    updated_values: Optional[Json] = None
 
 
 class LiteLLM_SpendLogs_ResponseObject(LiteLLMBase):
@@ -1343,6 +1410,106 @@ class InvitationModel(LiteLLMBase):
     updated_by: str
 
 
+class InvitationClaim(LiteLLMBase):
+    invitation_link: str
+    user_id: str
+    password: str
+
+
 class ConfigFieldInfo(LiteLLMBase):
     field_name: str
     field_value: Any
+
+
+class CallbackOnUI(LiteLLMBase):
+    litellm_callback_name: str
+    litellm_callback_params: Optional[list]
+    ui_callback_name: str
+
+
+class AllCallbacks(LiteLLMBase):
+    langfuse: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="langfuse",
+        ui_callback_name="Langfuse",
+        litellm_callback_params=[
+            "LANGFUSE_PUBLIC_KEY",
+            "LANGFUSE_SECRET_KEY",
+        ],
+    )
+
+    otel: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="otel",
+        ui_callback_name="OpenTelemetry",
+        litellm_callback_params=[
+            "OTEL_EXPORTER",
+            "OTEL_ENDPOINT",
+            "OTEL_HEADERS",
+        ],
+    )
+
+    s3: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="s3",
+        ui_callback_name="s3 Bucket (AWS)",
+        litellm_callback_params=[
+            "AWS_ACCESS_KEY_ID",
+            "AWS_SECRET_ACCESS_KEY",
+            "AWS_REGION_NAME",
+        ],
+    )
+
+    openmeter: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="openmeter",
+        ui_callback_name="OpenMeter",
+        litellm_callback_params=[
+            "OPENMETER_API_ENDPOINT",
+            "OPENMETER_API_KEY",
+        ],
+    )
+
+    custom_callback_api: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="custom_callback_api",
+        litellm_callback_params=["GENERIC_LOGGER_ENDPOINT"],
+        ui_callback_name="Custom Callback API",
+    )
+
+    datadog: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="datadog",
+        litellm_callback_params=["DD_API_KEY", "DD_SITE"],
+        ui_callback_name="Datadog",
+    )
+
+
+class SpendLogsMetadata(TypedDict):
+    """
+    Specific metadata k,v pairs logged to spendlogs for easier cost tracking
+    """
+
+    user_api_key: Optional[str]
+    user_api_key_alias: Optional[str]
+    user_api_key_team_id: Optional[str]
+    user_api_key_user_id: Optional[str]
+    user_api_key_team_alias: Optional[str]
+
+
+class SpendLogsPayload(TypedDict):
+    request_id: str
+    call_type: str
+    api_key: str
+    spend: float
+    total_tokens: int
+    prompt_tokens: int
+    completion_tokens: int
+    startTime: datetime
+    endTime: datetime
+    completionStartTime: Optional[datetime]
+    model: str
+    model_id: Optional[str]
+    model_group: Optional[str]
+    api_base: str
+    user: str
+    metadata: str  # json str
+    cache_hit: str
+    cache_key: str
+    request_tags: str  # json str
+    team_id: Optional[str]
+    end_user: Optional[str]

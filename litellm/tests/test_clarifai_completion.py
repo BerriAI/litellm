@@ -38,6 +38,7 @@ def reset_callbacks():
     litellm.callbacks = []
 
 
+@pytest.mark.skip(reason="Account rate limited.")
 def test_completion_clarifai_claude_2_1():
     print("calling clarifai claude completion")
     import os
@@ -61,6 +62,7 @@ def test_completion_clarifai_claude_2_1():
         pytest.fail(f"Error occured: {e}")
 
 
+@pytest.mark.skip(reason="Account rate limited")
 def test_completion_clarifai_mistral_large():
     try:
         litellm.set_verbose = True
@@ -80,6 +82,7 @@ def test_completion_clarifai_mistral_large():
         pytest.fail(f"Error occurred: {e}")
 
 
+@pytest.mark.skip(reason="Account rate limited")
 @pytest.mark.asyncio
 def test_async_completion_clarifai():
     import asyncio

@@ -14,6 +14,7 @@ def parse_usage(usage):
         "prompt": usage["prompt_tokens"] if "prompt_tokens" in usage else 0,
     }
 
+
 def parse_tool_calls(tool_calls):
     if tool_calls is None:
         return None
@@ -26,13 +27,13 @@ def parse_tool_calls(tool_calls):
             "function": {
                 "name": tool_call.function.name,
                 "arguments": tool_call.function.arguments,
-            }
+            },
         }
 
         return serialized
-    
+
     return [clean_tool_call(tool_call) for tool_call in tool_calls]
-    
+
 
 def parse_messages(input):
 
@@ -176,6 +177,5 @@ class LunaryLogger:
             )
 
         except:
-            # traceback.print_exc()
             print_verbose(f"Lunary Logging Error - {traceback.format_exc()}")
             pass

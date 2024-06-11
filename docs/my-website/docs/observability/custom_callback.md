@@ -38,7 +38,7 @@ class MyCustomHandler(CustomLogger):
         print(f"On Async Success")
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
-        print(f"On Async Success")
+        print(f"On Async Failure")
 
 customHandler = MyCustomHandler()
 
