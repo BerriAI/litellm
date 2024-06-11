@@ -1,5 +1,6 @@
 from typing import TypedDict, Any, Union, Optional, Literal, List
 import json
+from .openai import ChatCompletionToolCallChunk
 from typing_extensions import (
     Self,
     Protocol,
@@ -118,6 +119,15 @@ class ToolBlockDeltaEvent(TypedDict):
     input: str
 
 
+class ToolUseBlockStartEvent(TypedDict):
+    name: str
+    toolUseId: str
+
+
+class ContentBlockStartEvent(TypedDict, total=False):
+    toolUse: Optional[ToolUseBlockStartEvent]
+
+
 class ContentBlockDeltaEvent(TypedDict, total=False):
     """
     Either 'text' or 'toolUse' will be specified for Converse API streaming response.
@@ -138,10 +148,11 @@ class RequestObject(TypedDict, total=False):
 
 class GenericStreamingChunk(TypedDict):
     text: Required[str]
-    tool_str: Required[str]
+    tool_use: Optional[ChatCompletionToolCallChunk]
     is_finished: Required[bool]
     finish_reason: Required[str]
     usage: Optional[ConverseTokenUsageBlock]
+    index: int
 
 
 class Document(TypedDict):
