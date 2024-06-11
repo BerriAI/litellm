@@ -114,7 +114,7 @@ from litellm.proxy.utils import (
     _to_ns,
     get_error_message_str,
 )
-from litellm.proxy.utils.http_parsing_utils import _read_request_body
+from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 
 from litellm import (
     CreateBatchRequest,
@@ -164,7 +164,9 @@ from litellm.proxy.auth.auth_checks import (
     get_actual_routes,
     log_to_opentelemetry,
 )
-from litellm.proxy.utils.management_endpoint_utils import management_endpoint_wrapper
+from litellm.proxy.common_utils.management_endpoint_utils import (
+    management_endpoint_wrapper,
+)
 from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
 from litellm.exceptions import RejectedRequestError
 from litellm.integrations.slack_alerting import SlackAlertingArgs, SlackAlerting

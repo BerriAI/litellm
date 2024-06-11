@@ -613,3 +613,46 @@ class OpenTelemetry(CustomLogger):
                     management_endpoint_span.set_attribute(f"response.{key}", value)
             management_endpoint_span.set_status(Status(StatusCode.OK))
             management_endpoint_span.end(end_time=_end_time_ns)
+
+    async def async_management_endpoint_failure_hook(
+        self,
+        logging_payload: ManagementEndpointLoggingPayload,
+        parent_otel_span: Optional[Span] = None,
+    ):
+        from opentelemetry import trace
+        from datetime import datetime
+        from opentelemetry.trace import Status, StatusCode
+
+        _start_time_ns = logging_payload.start_time
+        _end_time_ns = logging_payload.end_time
+
+        start_time = logging_payload.start_time
+        end_time = logging_payload.end_time
+
+        if isinstance(start_time, float):
+            _start_time_ns = int(int(start_time) * 1e9)
+        else:
+            _start_time_ns = self._to_ns(start_time)
+
+        if isinstance(end_time, float):
+            _end_time_ns = int(int(end_time) * 1e9)
+        else:
+            _end_time_ns = self._to_ns(end_time)
+
+        if parent_otel_span is not None:
+            _span_name = logging_payload.route
+            management_endpoint_span = self.tracer.start_span(
+                name=_span_name,
+                context=trace.set_span_in_context(parent_otel_span),
+                start_time=_start_time_ns,
+            )
+
+            _request_data = logging_payload.request_data
+            if _request_data is not None:
+                for key, value in _request_data.items():
+                    management_endpoint_span.set_attribute(f"request.{key}", value)
+
+            _exception = logging_payload.exception
+            management_endpoint_span.set_attribute(f"exception", str(_exception))
+            management_endpoint_span.set_status(Status(StatusCode.ERROR))
+            management_endpoint_span.end(end_time=_end_time_ns)
