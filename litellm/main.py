@@ -4288,7 +4288,7 @@ def speech(
     response: Optional[HttpxBinaryResponseContent] = None
     if custom_llm_provider == "openai":
         api_base = (
-            api_base  # for deepinfra/perplexity/anyscale/groq/friendli we check in get_llm_provider and pass in the api base from there
+            api_base  # for deepinfra/perplexity/anyscale/groq/friendli_ai we check in get_llm_provider and pass in the api base from there
             or litellm.api_base
             or get_secret("OPENAI_API_BASE")
             or "https://api.openai.com/v1"
