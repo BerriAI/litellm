@@ -1446,7 +1446,11 @@ class BedrockConverseLLM(BaseLLM):
                     status_code=401,
                 )
 
-            sts_client = boto3.client("sts")
+            sts_client = boto3.client(
+                "sts",
+                region_name=aws_region_name,
+                endpoint_url=f"https://sts.{aws_region_name}.amazonaws.com"
+            )
 
             # https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRoleWithWebIdentity.html
             # https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/sts/client/assume_role_with_web_identity.html
