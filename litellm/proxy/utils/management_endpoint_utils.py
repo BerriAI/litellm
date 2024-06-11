@@ -1,7 +1,7 @@
 from datetime import datetime
 from functools import wraps
 from litellm.proxy._types import UserAPIKeyAuth, ManagementEndpointLoggingPayload
-from litellm.proxy.utils import _read_request_body
+from http_parsing_utils import _read_request_body
 from fastapi import Request
 
 
@@ -20,8 +20,9 @@ def management_endpoint_wrapper(func):
         try:
             result = await func(*args, **kwargs)
             end_time = datetime.now()
-            user_api_key_dict: UserAPIKeyAuth = kwargs["user_api_key_dict"]
-
+            if kwargs is None:
+                kwargs = {}
+            user_api_key_dict: UserAPIKeyAuth = kwargs.get("user_api_key_dict")
             parent_otel_span = user_api_key_dict.parent_otel_span
             if parent_otel_span is not None:
                 from litellm.proxy.proxy_server import open_telemetry_logger
