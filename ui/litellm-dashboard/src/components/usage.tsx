@@ -832,7 +832,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
                                   // @ts-ignore
                                   disabled={true} 
                                 >
-                                  ✨ {tag} (Enterpise only Feature)
+                                  ✨ {tag} (Enterprise only Feature)
                                 </SelectItem>
                               );
                             })}
