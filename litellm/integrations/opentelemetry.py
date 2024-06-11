@@ -454,6 +454,23 @@ class OpenTelemetry(CustomLogger):
     def _get_span_name(self, kwargs):
         return LITELLM_REQUEST_SPAN_NAME
 
+    def get_traceparent_from_header(self, headers):
+        if headers is None:
+            return None
+        _traceparent = headers.get("traceparent", None)
+        if _traceparent is None:
+            return None
+
+        from opentelemetry.trace.propagation.tracecontext import (
+            TraceContextTextMapPropagator,
+        )
+
+        verbose_logger.debug("OpenTelemetry: GOT A TRACEPARENT {}".format(_traceparent))
+        propagator = TraceContextTextMapPropagator()
+        _parent_context = propagator.extract(carrier={"traceparent": _traceparent})
+        verbose_logger.debug("OpenTelemetry: PARENT CONTEXT {}".format(_parent_context))
+        return _parent_context
+
     def _get_span_context(self, kwargs):
         from opentelemetry.trace.propagation.tracecontext import (
             TraceContextTextMapPropagator,
