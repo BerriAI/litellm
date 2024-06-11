@@ -103,7 +103,7 @@ curl --location 'http://localhost:4000/team/new' \
 }
 ```
 
-#### **Add budget duration to users**
+#### **Add budget duration to teams**
 
 `budget_duration`: Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
 
