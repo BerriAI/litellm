@@ -1,12 +1,12 @@
 # FriendliAI
-https://friendli.ai/
+https://suite.friendli.ai/
 
 **We support ALL FriendliAI models, just set `friendli_ai/` as a prefix when sending completion requests**
 
 ## API Key
 ```python
 # env variable
-os.environ['FRIENDLI_AI_API_KEY']
+os.environ['FRIENDLI_TOKEN']
 ```
 
 ## Sample Usage
@@ -14,7 +14,7 @@ os.environ['FRIENDLI_AI_API_KEY']
 from litellm import completion
 import os
 
-os.environ['FRIENDLI_AI_API_KEY'] = ""
+os.environ['FRIENDLI_TOKEN'] = ""
 response = completion(
     model="friendli_ai/mixtral-8x7b-instruct-v0-1", 
     messages=[
@@ -29,7 +29,7 @@ print(response)
 from litellm import completion
 import os
 
-os.environ['FRIENDLI_AI_API_KEY'] = ""
+os.environ['FRIENDLI_TOKEN'] = ""
 response = completion(
     model="friendli_ai/mixtral-8x7b-instruct-v0-1", 
     messages=[
