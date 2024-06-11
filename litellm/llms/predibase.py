@@ -1,8 +1,9 @@
 # What is this?
 ## Controller file for Predibase Integration - https://predibase.com/
 
-
+from functools import partial
 import os, types
+import traceback
 import json
 from enum import Enum
 import requests, copy  # type: ignore
@@ -49,6 +50,32 @@ class PredibaseError(Exception):
         super().__init__(
             self.message
         )  # Call the base class constructor with the parameters it needs
+
+
+async def make_call(
+    client: AsyncHTTPHandler,
+    api_base: str,
+    headers: dict,
+    data: str,
+    model: str,
+    messages: list,
+    logging_obj,
+):
+    response = await client.post(api_base, headers=headers, data=data, stream=True)
+
+    if response.status_code != 200:
+        raise PredibaseError(status_code=response.status_code, message=response.text)
+
+    completion_stream = response.aiter_lines()
+    # LOGGING
+    logging_obj.post_call(
+        input=messages,
+        api_key="",
+        original_response=completion_stream,  # Pass the completion stream for logging
+        additional_args={"complete_input_dict": data},
+    )
+
+    return completion_stream
 
 
 class PredibaseConfig:
@@ -126,10 +153,16 @@ class PredibaseChatCompletion(BaseLLM):
     def __init__(self) -> None:
         super().__init__()
 
-    def _validate_environment(self, api_key: Optional[str], user_headers: dict) -> dict:
+    def _validate_environment(
+        self, api_key: Optional[str], user_headers: dict, tenant_id: Optional[str]
+    ) -> dict:
         if api_key is None:
             raise ValueError(
                 "Missing Predibase API Key - A call is being made to predibase but no key is set either in the environment variables or via params"
+            )
+        if tenant_id is None:
+            raise ValueError(
+                "Missing Predibase Tenant ID - Required for making the request. Set dynamically (e.g. `completion(..tenant_id=<MY-ID>)`) or in env - `PREDIBASE_TENANT_ID`."
             )
         headers = {
             "content-type": "application/json",
@@ -210,12 +243,12 @@ class PredibaseChatCompletion(BaseLLM):
                 "details" in completion_response
                 and "tokens" in completion_response["details"]
             ):
-                model_response.choices[0].finish_reason = completion_response[
-                    "details"
-                ]["finish_reason"]
+                model_response.choices[0].finish_reason = map_finish_reason(
+                    completion_response["details"]["finish_reason"]
+                )
                 sum_logprob = 0
                 for token in completion_response["details"]["tokens"]:
-                    if token["logprob"] != None:
+                    if token["logprob"] is not None:
                         sum_logprob += token["logprob"]
                 model_response["choices"][0][
                     "message"
@@ -233,7 +266,7 @@ class PredibaseChatCompletion(BaseLLM):
                     ):
                         sum_logprob = 0
                         for token in item["tokens"]:
-                            if token["logprob"] != None:
+                            if token["logprob"] is not None:
                                 sum_logprob += token["logprob"]
                         if len(item["generated_text"]) > 0:
                             message_obj = Message(
@@ -243,7 +276,7 @@ class PredibaseChatCompletion(BaseLLM):
                         else:
                             message_obj = Message(content=None)
                         choice_obj = Choices(
-                            finish_reason=item["finish_reason"],
+                            finish_reason=map_finish_reason(item["finish_reason"]),
                             index=idx + 1,
                             message=message_obj,
                         )
@@ -253,10 +286,8 @@ class PredibaseChatCompletion(BaseLLM):
         ## CALCULATING USAGE
         prompt_tokens = 0
         try:
-            prompt_tokens = len(
-                encoding.encode(model_response["choices"][0]["message"]["content"])
-            )  ##[TODO] use a model-specific tokenizer here
-        except:
+            prompt_tokens = litellm.token_counter(messages=messages)
+        except Exception:
             # this should remain non blocking we should not block a response returning if calculating usage fails
             pass
         output_text = model_response["choices"][0]["message"].get("content", "")
@@ -299,15 +330,17 @@ class PredibaseChatCompletion(BaseLLM):
         logging_obj,
         optional_params: dict,
         tenant_id: str,
+        timeout: Union[float, httpx.Timeout],
         acompletion=None,
         litellm_params=None,
         logger_fn=None,
         headers: dict = {},
     ) -> Union[ModelResponse, CustomStreamWrapper]:
-        headers = self._validate_environment(api_key, headers)
+        headers = self._validate_environment(api_key, headers, tenant_id=tenant_id)
         completion_url = ""
         input_text = ""
         base_url = "https://serving.app.predibase.com"
+
         if "https" in model:
             completion_url = model
         elif api_base:
@@ -317,7 +350,7 @@ class PredibaseChatCompletion(BaseLLM):
 
         completion_url = f"{base_url}/{tenant_id}/deployments/v2/llms/{model}"
 
-        if optional_params.get("stream", False) == True:
+        if optional_params.get("stream", False) is True:
             completion_url += "/generate_stream"
         else:
             completion_url += "/generate"
@@ -361,9 +394,9 @@ class PredibaseChatCompletion(BaseLLM):
             },
         )
         ## COMPLETION CALL
-        if acompletion == True:
+        if acompletion is True:
             ### ASYNC STREAMING
-            if stream == True:
+            if stream is True:
                 return self.async_streaming(
                     model=model,
                     messages=messages,
@@ -378,6 +411,7 @@ class PredibaseChatCompletion(BaseLLM):
                     litellm_params=litellm_params,
                     logger_fn=logger_fn,
                     headers=headers,
+                    timeout=timeout,
                 )  # type: ignore
             else:
                 ### ASYNC COMPLETION
@@ -396,10 +430,11 @@ class PredibaseChatCompletion(BaseLLM):
                     litellm_params=litellm_params,
                     logger_fn=logger_fn,
                     headers=headers,
+                    timeout=timeout,
                 )  # type: ignore
 
         ### SYNC STREAMING
-        if stream == True:
+        if stream is True:
             response = requests.post(
                 completion_url,
                 headers=headers,
@@ -420,7 +455,6 @@ class PredibaseChatCompletion(BaseLLM):
                 headers=headers,
                 data=json.dumps(data),
             )
-
         return self.process_response(
             model=model,
             response=response,
@@ -448,16 +482,26 @@ class PredibaseChatCompletion(BaseLLM):
         stream,
         data: dict,
         optional_params: dict,
+        timeout: Union[float, httpx.Timeout],
         litellm_params=None,
         logger_fn=None,
         headers={},
     ) -> ModelResponse:
-        self.async_handler = AsyncHTTPHandler(
-            timeout=httpx.Timeout(timeout=600.0, connect=5.0)
-        )
-        response = await self.async_handler.post(
-            api_base, headers=headers, data=json.dumps(data)
-        )
+
+        async_handler = AsyncHTTPHandler(timeout=httpx.Timeout(timeout=timeout))
+        try:
+            response = await async_handler.post(
+                api_base, headers=headers, data=json.dumps(data)
+            )
+        except httpx.HTTPStatusError as e:
+            raise PredibaseError(
+                status_code=e.response.status_code,
+                message="HTTPStatusError - {}".format(e.response.text),
+            )
+        except Exception as e:
+            raise PredibaseError(
+                status_code=500, message="{}\n{}".format(str(e), traceback.format_exc())
+            )
         return self.process_response(
             model=model,
             response=response,
@@ -483,31 +527,25 @@ class PredibaseChatCompletion(BaseLLM):
         api_key,
         logging_obj,
         data: dict,
+        timeout: Union[float, httpx.Timeout],
         optional_params=None,
         litellm_params=None,
         logger_fn=None,
         headers={},
     ) -> CustomStreamWrapper:
-        self.async_handler = AsyncHTTPHandler(
-            timeout=httpx.Timeout(timeout=600.0, connect=5.0)
-        )
         data["stream"] = True
-        response = await self.async_handler.post(
-            url=api_base,
-            headers=headers,
-            data=json.dumps(data),
-            stream=True,
-        )
-
-        if response.status_code != 200:
-            raise PredibaseError(
-                status_code=response.status_code, message=response.text
-            )
-
-        completion_stream = response.aiter_lines()
 
         streamwrapper = CustomStreamWrapper(
-            completion_stream=completion_stream,
+            completion_stream=None,
+            make_call=partial(
+                make_call,
+                api_base=api_base,
+                headers=headers,
+                data=json.dumps(data),
+                model=model,
+                messages=messages,
+                logging_obj=logging_obj,
+            ),
             model=model,
             custom_llm_provider="predibase",
             logging_obj=logging_obj,

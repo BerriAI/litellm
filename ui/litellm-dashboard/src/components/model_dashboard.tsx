@@ -49,11 +49,15 @@ import {
   getCallbacksCall,
   setCallbacksCall,
   modelSettingsCall,
+  adminGlobalActivityExceptions,
+  adminGlobalActivityExceptionsPerDeployment,
+  allEndUsersCall,
 } from "./networking";
 import { BarChart, AreaChart } from "@tremor/react";
 import {
   Button as Button2,
   Modal,
+  Popover,
   Form,
   Input,
   Select as Select2,
@@ -78,6 +82,7 @@ import {
   RefreshIcon,
   CheckCircleIcon,
   XCircleIcon,
+  FilterIcon,
 } from "@heroicons/react/outline";
 import DeleteModelButton from "./delete_model_button";
 const { Title: Title2, Link } = Typography;
@@ -86,12 +91,15 @@ import type { UploadProps } from "antd";
 import { Upload } from "antd";
 import TimeToFirstToken from "./model_metrics/time_to_first_token";
 import DynamicFields from "./model_add/dynamic_form";
+import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
+
 interface ModelDashboardProps {
   accessToken: string | null;
   token: string | null;
   userRole: string | null;
   userID: string | null;
   modelData: any;
+  keys: any[] | null;
   setModelData: any;
   premiumUser: boolean;
 }
@@ -106,6 +114,13 @@ interface EditModelModalProps {
 interface RetryPolicyObject {
   [key: string]: { [retryPolicyKey: string]: number } | undefined;
 }
+
+
+interface GlobalExceptionActivityData {
+  sum_num_rate_limit_exceptions: number;
+  daily_data: { date: string; num_rate_limit_exceptions: number; }[];
+}
+
 
 //["OpenAI", "Azure OpenAI", "Anthropic", "Gemini (Google AI Studio)", "Amazon Bedrock", "OpenAI-Compatible Endpoints (Groq, Together AI, Mistral AI, etc.)"]
 
@@ -130,6 +145,7 @@ enum Providers {
   OpenAI_Compatible = "OpenAI-Compatible Endpoints (Groq, Together AI, Mistral AI, etc.)",
   Vertex_AI = "Vertex AI (Anthropic, Gemini, etc.)",
   Databricks = "Databricks",
+  Ollama = "Ollama",
 }
 
 const provider_map: Record<string, string> = {
@@ -141,6 +157,7 @@ const provider_map: Record<string, string> = {
   OpenAI_Compatible: "openai",
   Vertex_AI: "vertex_ai",
   Databricks: "databricks",
+  Ollama: "ollama",
 };
 
 const retry_policy_map: Record<string, string> = {
@@ -249,6 +266,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   userRole,
   userID,
   modelData = { data: [] },
+  keys,
   setModelData,
   premiumUser,
 }) => {
@@ -269,6 +287,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const [selectedProvider, setSelectedProvider] = useState<String>("OpenAI");
   const [healthCheckResponse, setHealthCheckResponse] = useState<string>("");
   const [editModalVisible, setEditModalVisible] = useState<boolean>(false);
+  const [infoModalVisible, setInfoModalVisible] = useState<boolean>(false);
+
   const [selectedModel, setSelectedModel] = useState<any>(null);
   const [availableModelGroups, setAvailableModelGroups] = useState<
     Array<string>
@@ -296,6 +316,32 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const [modelGroupRetryPolicy, setModelGroupRetryPolicy] =
     useState<RetryPolicyObject | null>(null);
   const [defaultRetry, setDefaultRetry] = useState<number>(0);
+
+  const [globalExceptionData, setGlobalExceptionData] =  useState<GlobalExceptionActivityData>({} as GlobalExceptionActivityData);
+  const [globalExceptionPerDeployment, setGlobalExceptionPerDeployment] = useState<any[]>([]);
+
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState<boolean>(false);
+  const [selectedAPIKey, setSelectedAPIKey] = useState<any | null>(null);
+  const [selectedCustomer, setSelectedCustomer] = useState<any | null>(null);
+
+  const [allEndUsers, setAllEndUsers] = useState<any[]>([]);
+
+  useEffect(() => {
+    updateModelMetrics(
+      selectedModelGroup,
+      dateValue.from,
+      dateValue.to
+    );
+  }, [selectedAPIKey, selectedCustomer]);
+
+  function formatCreatedAt(createdAt: string | null) {
+    if (createdAt) {
+      const date = new Date(createdAt);
+      const options = { month: "long", day: "numeric", year: "numeric" };
+      return date.toLocaleDateString("en-US");
+    }
+    return null;
+  }
 
   const EditModelModal: React.FC<EditModelModalProps> = ({
     visible,
@@ -423,8 +469,18 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     setEditModalVisible(true);
   };
 
+  const handleInfoClick = (model: any) => {
+    setSelectedModel(model);
+    setInfoModalVisible(true);
+  };
+
   const handleEditCancel = () => {
     setEditModalVisible(false);
+    setSelectedModel(null);
+  };
+
+  const handleInfoCancel = () => {
+    setInfoModalVisible(false);
     setSelectedModel(null);
   };
 
@@ -577,7 +633,9 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
           userRole,
           _initial_model_group,
           dateValue.from?.toISOString(),
-          dateValue.to?.toISOString()
+          dateValue.to?.toISOString(),
+          selectedAPIKey?.token,
+          selectedCustomer
         );
 
         console.log("Model metrics response:", modelMetricsResponse);
@@ -605,7 +663,9 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
           userRole,
           _initial_model_group,
           dateValue.from?.toISOString(),
-          dateValue.to?.toISOString()
+          dateValue.to?.toISOString(),
+          selectedAPIKey?.token,
+          selectedCustomer
         );
         console.log("Model exceptions response:", modelExceptionsResponse);
         setModelExceptions(modelExceptionsResponse.data);
@@ -617,12 +677,41 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
           userRole,
           _initial_model_group,
           dateValue.from?.toISOString(),
-          dateValue.to?.toISOString()
+          dateValue.to?.toISOString(),
+          selectedAPIKey?.token,
+          selectedCustomer
         );
 
+        const dailyExceptions = await adminGlobalActivityExceptions(
+          accessToken,
+          dateValue.from?.toISOString().split('T')[0],
+          dateValue.to?.toISOString().split('T')[0],
+          _initial_model_group,
+        );
+
+        setGlobalExceptionData(dailyExceptions);
+
+        const dailyExceptionsPerDeplyment = await adminGlobalActivityExceptionsPerDeployment(
+          accessToken,
+          dateValue.from?.toISOString().split('T')[0],
+          dateValue.to?.toISOString().split('T')[0],
+          _initial_model_group,
+        )
+
+        setGlobalExceptionPerDeployment(dailyExceptionsPerDeplyment);
+
+        console.log("dailyExceptions:", dailyExceptions);
+
+        console.log("dailyExceptionsPerDeplyment:", dailyExceptionsPerDeplyment);
+
+      
         console.log("slowResponses:", slowResponses);
 
         setSlowResponsesData(slowResponses);
+
+        let all_end_users_data = await allEndUsersCall(accessToken);
+
+        setAllEndUsers(all_end_users_data?.end_users);
 
         const routerSettingsInfo = await getCallbacksCall(
           accessToken,
@@ -816,7 +905,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const updateModelMetrics = async (
     modelGroup: string | null,
     startTime: Date | undefined,
-    endTime: Date | undefined
+    endTime: Date | undefined,
   ) => {
     console.log("Updating model metrics for group:", modelGroup);
     if (!accessToken || !userID || !userRole || !startTime || !endTime) {
@@ -830,6 +919,26 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     );
     setSelectedModelGroup(modelGroup); // If you want to store the selected model group in state
 
+    let selected_token = selectedAPIKey?.token;
+    if (selected_token === undefined) {
+      selected_token = null;
+    }
+
+    let selected_customer = selectedCustomer;
+    if (selected_customer === undefined) {
+      selected_customer = null;
+    }
+
+    // make startTime and endTime to last hour of the day
+    startTime.setHours(0);
+    startTime.setMinutes(0);
+    startTime.setSeconds(0);
+
+    endTime.setHours(23);
+    endTime.setMinutes(59);
+    endTime.setSeconds(59);
+
+
     try {
       const modelMetricsResponse = await modelMetricsCall(
         accessToken,
@@ -837,7 +946,9 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
         userRole,
         modelGroup,
         startTime.toISOString(),
-        endTime.toISOString()
+        endTime.toISOString(),
+        selected_token,
+        selected_customer
       );
       console.log("Model metrics response:", modelMetricsResponse);
 
@@ -864,7 +975,9 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
         userRole,
         modelGroup,
         startTime.toISOString(),
-        endTime.toISOString()
+        endTime.toISOString(),
+        selected_token,
+        selected_customer
       );
       console.log("Model exceptions response:", modelExceptionsResponse);
       setModelExceptions(modelExceptionsResponse.data);
@@ -876,16 +989,200 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
         userRole,
         modelGroup,
         startTime.toISOString(),
-        endTime.toISOString()
+        endTime.toISOString(),
+        selected_token,
+        selected_customer
       );
 
       console.log("slowResponses:", slowResponses);
 
       setSlowResponsesData(slowResponses);
+
+
+      if (modelGroup) {
+        const dailyExceptions = await adminGlobalActivityExceptions(
+          accessToken,
+          startTime?.toISOString().split('T')[0],
+          endTime?.toISOString().split('T')[0],
+          modelGroup,
+        );
+  
+        setGlobalExceptionData(dailyExceptions);
+  
+        const dailyExceptionsPerDeplyment = await adminGlobalActivityExceptionsPerDeployment(
+          accessToken,
+          startTime?.toISOString().split('T')[0],
+          endTime?.toISOString().split('T')[0],
+          modelGroup,
+        )
+  
+        setGlobalExceptionPerDeployment(dailyExceptionsPerDeplyment);
+
+      }
+
+      
     } catch (error) {
       console.error("Failed to fetch model metrics", error);
     }
   };
+
+
+  const FilterByContent = (
+      <div >
+        <Text className="mb-1">Select API Key Name</Text>
+
+        {
+          premiumUser ? (
+            <div>
+              <Select defaultValue="all-keys">
+                  <SelectItem
+                    key="all-keys"
+                    value="all-keys"
+                    onClick={() => {
+                      setSelectedAPIKey(null);
+                    }}
+                  >
+                    All Keys
+                  </SelectItem>
+                    {keys?.map((key: any, index: number) => {
+                      if (
+                        key &&
+                        key["key_alias"] !== null &&
+                        key["key_alias"].length > 0
+                      ) {
+                        return (
+                          
+                          <SelectItem
+                            key={index}
+                            value={String(index)}
+                            onClick={() => {
+                              setSelectedAPIKey(key);
+                            }}
+                          >
+                            {key["key_alias"]}
+                          </SelectItem>
+                        );
+                      }
+                      return null; // Add this line to handle the case when the condition is not met
+                    })}
+                  </Select>
+          
+
+          <Text className="mt-1">
+            Select Customer Name
+          </Text>
+          
+          <Select defaultValue="all-customers">
+          <SelectItem
+            key="all-customers"
+            value="all-customers"
+            onClick={() => {
+              setSelectedCustomer(null);
+            }}
+          >
+            All Customers
+            </SelectItem>
+            {
+              allEndUsers?.map((user: any, index: number) => {
+                return (
+                  <SelectItem
+                    key={index}
+                    value={user}
+                    onClick={() => {
+                      setSelectedCustomer(user);
+                    }}
+                  >
+                    {user}
+                  </SelectItem>
+                );
+              })
+            }
+          </Select>
+            
+            </div>
+          ): (
+            <div>
+
+<Select defaultValue="all-keys">
+                  <SelectItem
+                    key="all-keys"
+                    value="all-keys"
+                    onClick={() => {
+                      setSelectedAPIKey(null);
+                    }}
+                  >
+                    All Keys
+                  </SelectItem>
+                    {keys?.map((key: any, index: number) => {
+                      if (
+                        key &&
+                        key["key_alias"] !== null &&
+                        key["key_alias"].length > 0
+                      ) {
+                        return (
+                          
+                          <SelectItem
+                            key={index}
+                            value={String(index)}
+                            // @ts-ignore
+                            disabled={true}
+                            onClick={() => {
+                              setSelectedAPIKey(key);
+                            }}
+                          >
+                            ✨ {key["key_alias"]} (Enterprise only Feature)
+                          </SelectItem>
+                        );
+                      }
+                      return null; // Add this line to handle the case when the condition is not met
+                    })}
+                  </Select>
+          
+
+          <Text className="mt-1">
+            Select Customer Name
+          </Text>
+          
+          <Select defaultValue="all-customers">
+          <SelectItem
+            key="all-customers"
+            value="all-customers"
+            onClick={() => {
+              setSelectedCustomer(null);
+            }}
+          >
+            All Customers
+            </SelectItem>
+            {
+              allEndUsers?.map((user: any, index: number) => {
+                return (
+                  <SelectItem
+                    key={index}
+                    value={user}
+                    // @ts-ignore
+                    disabled={true}
+                    onClick={() => {
+                      setSelectedCustomer(user);
+                    }}
+                  >
+                    ✨ {user} (Enterprise only Feature)
+                  </SelectItem>
+                );
+              })
+            }
+          </Select>
+            
+            </div>
+          )
+        }
+        
+
+        
+            
+
+        </div>
+
+  );
 
   const customTooltip = (props: any) => {
     const { payload, active } = props;
@@ -1038,10 +1335,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                 </Select>
               </div>
               <Card>
-                <Table
-                  className="mt-5"
-                  style={{ maxWidth: "1500px", width: "100%" }}
-                >
+                <Table style={{ maxWidth: "1500px", width: "100%" }}>
                   <TableHead>
                     <TableRow>
                       <TableHeaderCell
@@ -1049,6 +1343,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                           maxWidth: "150px",
                           whiteSpace: "normal",
                           wordBreak: "break-word",
+                          fontSize: "11px",
                         }}
                       >
                         Public Model Name
@@ -1058,6 +1353,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                           maxWidth: "100px",
                           whiteSpace: "normal",
                           wordBreak: "break-word",
+                          fontSize: "11px",
                         }}
                       >
                         Provider
@@ -1068,6 +1364,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                             maxWidth: "150px",
                             whiteSpace: "normal",
                             wordBreak: "break-word",
+                            fontSize: "11px",
                           }}
                         >
                           API Base
@@ -1075,18 +1372,10 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                       )}
                       <TableHeaderCell
                         style={{
-                          maxWidth: "200px",
-                          whiteSpace: "normal",
-                          wordBreak: "break-word",
-                        }}
-                      >
-                        Extra litellm Params
-                      </TableHeaderCell>
-                      <TableHeaderCell
-                        style={{
                           maxWidth: "85px",
                           whiteSpace: "normal",
                           wordBreak: "break-word",
+                          fontSize: "11px",
                         }}
                       >
                         Input Price{" "}
@@ -1099,6 +1388,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                           maxWidth: "85px",
                           whiteSpace: "normal",
                           wordBreak: "break-word",
+                          fontSize: "11px",
                         }}
                       >
                         Output Price{" "}
@@ -1106,24 +1396,60 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                           /1M Tokens ($)
                         </p>
                       </TableHeaderCell>
+
                       <TableHeaderCell
                         style={{
-                          maxWidth: "120px",
+                          maxWidth: "100px",
                           whiteSpace: "normal",
                           wordBreak: "break-word",
+                          fontSize: "11px",
                         }}
                       >
-                        Max Tokens
+                        {premiumUser ? (
+                          "Created At"
+                        ) : (
+                          <a
+                            href="https://forms.gle/W3U4PZpJGFHWtHyA9"
+                            target="_blank"
+                            style={{ color: "#72bcd4" }}
+                          >
+                            {" "}
+                            ✨ Created At
+                          </a>
+                        )}
+                      </TableHeaderCell>
+                      <TableHeaderCell
+                        style={{
+                          maxWidth: "100px",
+                          whiteSpace: "normal",
+                          wordBreak: "break-word",
+                          fontSize: "11px",
+                        }}
+                      >
+                        {premiumUser ? (
+                          "Created By"
+                        ) : (
+                          <a
+                            href="https://forms.gle/W3U4PZpJGFHWtHyA9"
+                            target="_blank"
+                            style={{ color: "#72bcd4" }}
+                          >
+                            {" "}
+                            ✨ Created By
+                          </a>
+                        )}
                       </TableHeaderCell>
                       <TableHeaderCell
                         style={{
                           maxWidth: "50px",
                           whiteSpace: "normal",
                           wordBreak: "break-word",
+                          fontSize: "11px",
                         }}
                       >
                         Status
                       </TableHeaderCell>
+                      <TableHeaderCell></TableHeaderCell>
                     </TableRow>
                   </TableHead>
                   <TableBody>
@@ -1137,15 +1463,18 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                           selectedModelGroup === ""
                       )
                       .map((model: any, index: number) => (
-                        <TableRow key={index}>
+                        <TableRow
+                          key={index}
+                          style={{ maxHeight: "1px", minHeight: "1px" }}
+                        >
                           <TableCell
                             style={{
-                              maxWidth: "150px",
+                              maxWidth: "100px",
                               whiteSpace: "normal",
                               wordBreak: "break-word",
                             }}
                           >
-                            <Text>{model.model_name}</Text>
+                            <p className="text-xs">{model.model_name || "-"}</p>
                           </TableCell>
                           <TableCell
                             style={{
@@ -1154,7 +1483,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                               wordBreak: "break-word",
                             }}
                           >
-                            {model.provider}
+                            <p className="text-xs">{model.provider || "-"}</p>
                           </TableCell>
                           {userRole === "Admin" && (
                             <TableCell
@@ -1164,30 +1493,46 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                                 wordBreak: "break-word",
                               }}
                             >
-                              {model.api_base}
+                              <Tooltip title={model && model.api_base}>
+                                <pre
+                                  style={{
+                                    maxWidth: "150px",
+                                    whiteSpace: "normal",
+                                    wordBreak: "break-word",
+                                  }}
+                                  className="text-xs"
+                                  title={
+                                    model && model.api_base
+                                      ? model.api_base
+                                      : ""
+                                  }
+                                >
+                                  {model && model.api_base
+                                    ? model.api_base.slice(0, 20)
+                                    : "-"}
+                                </pre>
+                              </Tooltip>
                             </TableCell>
                           )}
                           <TableCell
                             style={{
-                              maxWidth: "200px",
+                              maxWidth: "80px",
                               whiteSpace: "normal",
                               wordBreak: "break-word",
                             }}
                           >
-                            <Accordion>
-                              <AccordionHeader>
-                                <Text>Litellm params</Text>
-                              </AccordionHeader>
-                              <AccordionBody>
-                                <pre>
-                                  {JSON.stringify(
-                                    model.cleanedLitellmParams,
-                                    null,
-                                    2
-                                  )}
-                                </pre>
-                              </AccordionBody>
-                            </Accordion>
+                            <pre className="text-xs">
+                              {model.input_cost
+                                ? model.input_cost
+                                : model.litellm_params.input_cost_per_token
+                                  ? (
+                                      Number(
+                                        model.litellm_params
+                                          .input_cost_per_token
+                                      ) * 1000000
+                                    ).toFixed(2)
+                                  : null}
+                            </pre>
                           </TableCell>
                           <TableCell
                             style={{
@@ -1196,31 +1541,33 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                               wordBreak: "break-word",
                             }}
                           >
-                            {model.input_cost ||
-                              model.litellm_params.input_cost_per_token ||
-                              null}
+                            <pre className="text-xs">
+                              {model.output_cost
+                                ? model.output_cost
+                                : model.litellm_params.output_cost_per_token
+                                  ? (
+                                      Number(
+                                        model.litellm_params
+                                          .output_cost_per_token
+                                      ) * 1000000
+                                    ).toFixed(2)
+                                  : null}
+                            </pre>
                           </TableCell>
-                          <TableCell
-                            style={{
-                              maxWidth: "80px",
-                              whiteSpace: "normal",
-                              wordBreak: "break-word",
-                            }}
-                          >
-                            {model.output_cost ||
-                              model.litellm_params.output_cost_per_token ||
-                              null}
+                          <TableCell>
+                            <p className="text-xs">
+                              {premiumUser
+                                ? formatCreatedAt(
+                                    model.model_info.created_at
+                                  ) || "-"
+                                : "-"}
+                            </p>
                           </TableCell>
-                          <TableCell
-                            style={{
-                              maxWidth: "120px",
-                              whiteSpace: "normal",
-                              wordBreak: "break-word",
-                            }}
-                          >
-                            <p style={{ fontSize: "10px" }}>
-                              Max Tokens: {model.max_tokens} <br></br>
-                              Max Input Tokens: {model.max_input_tokens}
+                          <TableCell>
+                            <p className="text-xs">
+                              {premiumUser
+                                ? model.model_info.created_by || "-"
+                                : "-"}
                             </p>
                           </TableCell>
                           <TableCell
@@ -1231,39 +1578,45 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                             }}
                           >
                             {model.model_info.db_model ? (
-                              <Badge
-                                icon={CheckCircleIcon}
-                                size="xs"
-                                className="text-white"
-                              >
-                                <p style={{ fontSize: "10px" }}>DB Model</p>
+                              <Badge size="xs" className="text-white">
+                                <p className="text-xs">DB Model</p>
                               </Badge>
                             ) : (
-                              <Badge
-                                icon={XCircleIcon}
-                                size="xs"
-                                className="text-black"
-                              >
-                                <p style={{ fontSize: "10px" }}>Config Model</p>
+                              <Badge size="xs" className="text-black">
+                                <p className="text-xs">Config Model</p>
                               </Badge>
                             )}
                           </TableCell>
                           <TableCell
                             style={{
-                              maxWidth: "100px",
+                              maxWidth: "150px",
                               whiteSpace: "normal",
                               wordBreak: "break-word",
                             }}
                           >
-                            <Icon
-                              icon={PencilAltIcon}
-                              size="sm"
-                              onClick={() => handleEditClick(model)}
-                            />
-                            <DeleteModelButton
-                              modelID={model.model_info.id}
-                              accessToken={accessToken}
-                            />
+                            <Grid numItems={3}>
+                              <Col>
+                                <Icon
+                                  icon={InformationCircleIcon}
+                                  size="sm"
+                                  onClick={() => handleInfoClick(model)}
+                                />
+                              </Col>
+                              <Col>
+                                <Icon
+                                  icon={PencilAltIcon}
+                                  size="sm"
+                                  onClick={() => handleEditClick(model)}
+                                />
+                              </Col>
+
+                              <Col>
+                                <DeleteModelButton
+                                  modelID={model.model_info.id}
+                                  accessToken={accessToken}
+                                />
+                              </Col>
+                            </Grid>
                           </TableCell>
                         </TableRow>
                       ))}
@@ -1277,6 +1630,18 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
               model={selectedModel}
               onSubmit={handleEditSubmit}
             />
+            <Modal
+              title={selectedModel && selectedModel.model_name}
+              visible={infoModalVisible}
+              width={800}
+              footer={null}
+              onCancel={handleInfoCancel}
+            >
+              <Title>Model Info</Title>
+              <SyntaxHighlighter language="json">
+                {selectedModel && JSON.stringify(selectedModel, null, 2)}
+              </SyntaxHighlighter>
+            </Modal>
           </TabPanel>
           <TabPanel className="h-full">
             <Title2 level={2}>Add new model</Title2>
@@ -1384,7 +1749,9 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                     )}
                   {selectedProvider != Providers.Bedrock &&
                     selectedProvider != Providers.Vertex_AI &&
-                    dynamicProviderForm === undefined && (
+                    selectedProvider != Providers.Ollama &&
+                    (dynamicProviderForm === undefined ||
+                      dynamicProviderForm.fields.length == 0) && (
                       <Form.Item
                         rules={[{ required: true, message: "Required" }]}
                         label="API Key"
@@ -1571,14 +1938,13 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
             </Card>
           </TabPanel>
           <TabPanel>
-            {/* <p style={{fontSize: '0.85rem', color: '#808080'}}>View how requests were load balanced within a model group</p> */}
-
-            <Grid numItems={2} className="mt-2">
+            <Grid numItems={4} className="mt-2 mb-2">
               <Col>
                 <Text>Select Time Range</Text>
                 <DateRangePicker
                   enableSelect={true}
                   value={dateValue}
+                  className="mr-2"
                   onValueChange={(value) => {
                     setDateValue(value);
                     updateModelMetrics(
@@ -1589,10 +1955,9 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                   }}
                 />
               </Col>
-              <Col>
+              <Col className="ml-2">
                 <Text>Select Model Group</Text>
                 <Select
-                  className="mb-4 mt-2"
                   defaultValue={
                     selectedModelGroup
                       ? selectedModelGroup
@@ -1617,7 +1982,29 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                   ))}
                 </Select>
               </Col>
-            </Grid>
+              <Col>
+              <Popover
+                trigger="click" content={FilterByContent}
+                overlayStyle={{
+                  width: "20vw"
+                }}
+                >
+              <Button
+              icon={FilterIcon}
+              size="md"
+              variant="secondary"
+              className="mt-4 ml-2"
+              style={{
+                border: "none",
+              }}
+              onClick={() => setShowAdvancedFilters(true)}
+                >
+              </Button>      
+              </Popover>
+              </Col>
+  
+              </Grid>
+
 
             <Grid numItems={2}>
               <Col>
@@ -1686,18 +2073,110 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                 </Card>
               </Col>
             </Grid>
-            <Card className="mt-4">
-              <Title>Exceptions per Model</Title>
-              <BarChart
-                className="h-72"
-                data={modelExceptions}
-                index="model"
-                categories={allExceptions}
-                stack={true}
-                colors={["indigo-300", "rose-200", "#ffcc33"]}
-                yAxisWidth={30}
-              />
-            </Card>
+
+            <Grid numItems={1} className="gap-2 w-full mt-2">
+                <Card>
+                <Title>All Up Rate Limit Errors (429) for {selectedModelGroup}</Title>
+                <Grid numItems={1}>
+                <Col>
+                <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>Num Rate Limit Errors { (globalExceptionData.sum_num_rate_limit_exceptions)}</Subtitle>
+                <BarChart
+                    className="h-40"
+                    data={globalExceptionData.daily_data}
+                    index="date"
+                    colors={['rose']}
+                    categories={['num_rate_limit_exceptions']}
+                    onValueChange={(v) => console.log(v)}
+                  />
+                  </Col>
+                  <Col>
+
+                {/* <BarChart
+                    className="h-40"
+                    data={modelExceptions}
+                    index="model"
+                    categories={allExceptions}
+                    stack={true}
+                    yAxisWidth={30}
+              /> */}
+      
+
+                </Col>
+
+                </Grid>
+                
+
+                </Card>
+
+                {
+                  premiumUser ? ( 
+                    <>
+                    {globalExceptionPerDeployment.map((globalActivity, index) => (
+                <Card key={index}>
+                  <Title>{globalActivity.api_base ? globalActivity.api_base : "Unknown API Base"}</Title>
+                  <Grid numItems={1}>
+                    <Col>
+                      <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>Num Rate Limit Errors (429) {(globalActivity.sum_num_rate_limit_exceptions)}</Subtitle>
+                      <BarChart
+                        className="h-40"
+                        data={globalActivity.daily_data}
+                        index="date"
+                        colors={['rose']}
+                        categories={['num_rate_limit_exceptions']}
+          
+                        onValueChange={(v) => console.log(v)}
+                      />
+                      
+                    </Col>
+                  </Grid>
+                </Card>
+              ))}
+                    </>
+                  ) : 
+                  <>
+                  {globalExceptionPerDeployment && globalExceptionPerDeployment.length > 0 &&
+                    globalExceptionPerDeployment.slice(0, 1).map((globalActivity, index) => (
+                      <Card key={index}>
+                        <Title>✨ Rate Limit Errors by Deployment</Title>
+                        <p className="mb-2 text-gray-500 italic text-[12px]">Upgrade to see exceptions for all deployments</p>
+                        <Button variant="primary" className="mb-2">
+                          <a href="https://forms.gle/W3U4PZpJGFHWtHyA9" target="_blank">
+                            Get Free Trial
+                          </a>
+                        </Button>
+                        <Card>
+                        <Title>{globalActivity.api_base}</Title>
+                        <Grid numItems={1}>
+                          <Col>
+                            <Subtitle
+                              style={{
+                                fontSize: "15px",
+                                fontWeight: "normal",
+                                color: "#535452",
+                              }}
+                            >
+                              Num Rate Limit Errors {(globalActivity.sum_num_rate_limit_exceptions)}
+                            </Subtitle>
+                            <BarChart
+                                className="h-40"
+                                data={globalActivity.daily_data}
+                                index="date"
+                                colors={['rose']}
+                                categories={['num_rate_limit_exceptions']}
+                  
+                                onValueChange={(v) => console.log(v)}
+                              />
+                          </Col>
+                          
+                          
+                        </Grid>
+                        </Card>
+                      </Card>
+                    ))}
+                </>
+                }              
+              </Grid>
+              
           </TabPanel>
           <TabPanel>
             <div className="flex items-center">
@@ -1792,7 +2271,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
           </TabPanel>
         </TabPanels>
       </TabGroup>
-    </div>
+    </div>  
   );
 };
 

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import Image from "next/image";
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import type { MenuProps } from "antd";
 import { Dropdown, Space } from "antd";
 import { useSearchParams } from "next/navigation";
@@ -24,6 +24,8 @@ interface NavbarProps {
   userEmail: string | null;
   showSSOBanner: boolean;
   premiumUser: boolean;
+  setProxySettings: React.Dispatch<React.SetStateAction<any>>;
+  proxySettings: any;
 }
 const Navbar: React.FC<NavbarProps> = ({
   userID,
@@ -31,6 +33,8 @@ const Navbar: React.FC<NavbarProps> = ({
   userEmail,
   showSSOBanner,
   premiumUser,
+  setProxySettings,
+  proxySettings,
 }) => {
   console.log("User ID:", userID);
   console.log("userEmail:", userEmail);
@@ -39,7 +43,21 @@ const Navbar: React.FC<NavbarProps> = ({
 
   // const userColors = require('./ui_colors.json') || {};
   const isLocal = process.env.NODE_ENV === "development";
+  const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
   const imageUrl = isLocal ? "http://localhost:4000/get_image" : "/get_image";
+  let logoutUrl = "";
+
+  console.log("PROXY_settings=", proxySettings);
+
+  if (proxySettings) {
+    if (proxySettings.PROXY_LOGOUT_URL && proxySettings.PROXY_LOGOUT_URL !== undefined) {
+      logoutUrl = proxySettings.PROXY_LOGOUT_URL;
+    }
+  }
+
+  console.log("logoutUrl=", logoutUrl);
+
+
 
   const items: MenuProps["items"] = [
     {
@@ -52,6 +70,14 @@ const Navbar: React.FC<NavbarProps> = ({
         </>
       ),
     },
+    {
+      key: "2",
+      label: (
+        <a href={logoutUrl}>
+          <p>Logout</p>
+        </a>
+      ),
+    }
   ];
 
   return (
@@ -88,7 +114,7 @@ const Navbar: React.FC<NavbarProps> = ({
                 textDecoration: "underline",
               }}
             >
-              Get enterpise license
+              Get enterprise license
             </a>
           </div>
         ) : null}
