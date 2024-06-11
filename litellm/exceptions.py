@@ -337,6 +337,7 @@ class ContextWindowExceededError(BadRequestError):  # type: ignore
             model=self.model,  # type: ignore
             llm_provider=self.llm_provider,  # type: ignore
             response=response,
+            litellm_debug_info=self.litellm_debug_info,
         )  # Call the base class constructor with the parameters it needs
 
     def __str__(self):
@@ -379,6 +380,7 @@ class RejectedRequestError(BadRequestError):  # type: ignore
             model=self.model,  # type: ignore
             llm_provider=self.llm_provider,  # type: ignore
             response=response,
+            litellm_debug_info=self.litellm_debug_info,
         )  # Call the base class constructor with the parameters it needs
 
     def __str__(self):
@@ -418,6 +420,7 @@ class ContentPolicyViolationError(BadRequestError):  # type: ignore
             model=self.model,  # type: ignore
             llm_provider=self.llm_provider,  # type: ignore
             response=response,
+            litellm_debug_info=self.litellm_debug_info,
         )  # Call the base class constructor with the parameters it needs
 
     def __str__(self):
