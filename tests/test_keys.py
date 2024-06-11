@@ -664,7 +664,7 @@ async def test_key_crossing_budget():
             response = await chat_completion(session=session, key=key)
             pytest.fail("Should have failed - Key crossed it's budget")
         except Exception as e:
-            assert "ExceededTokenBudget: Current spend for token:" in str(e)
+            assert "Budget has been exceeded!" in str(e)
 
 
 @pytest.mark.skip(reason="AWS Suspended Account")
