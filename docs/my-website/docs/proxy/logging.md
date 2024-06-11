@@ -606,6 +606,52 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 
 ** 🎉 Expect to see this trace logged in your OTEL collector**
 
+### Context propagation across Services `Traceparent HTTP Header`
+
+❓ Use this when you want to **pass information about the incoming request in a distributed tracing system**
+
+✅ Key change: Pass the **`traceparent` header** in your requests. [Read more about traceparent headers here](https://uptrace.dev/opentelemetry/opentelemetry-traceparent.html#what-is-traceparent-header)
+```curl
+traceparent: 00-80e1afed08e019fc1110464cfa66635c-7a085853722dc6d2-01
+```
+Example Usage
+1. Make Request to LiteLLM Proxy with `traceparent` header
+```python
+import openai
+import uuid
+
+client = openai.OpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+example_traceparent = f"00-80e1afed08e019fc1110464cfa66635c-02e80198930058d4-01"
+extra_headers = {
+    "traceparent": example_traceparent
+}
+_trace_id = example_traceparent.split("-")[1]
+
+print("EXTRA HEADERS: ", extra_headers)
+print("Trace ID: ", _trace_id)
+
+response = client.chat.completions.create(
+    model="llama3",
+    messages=[
+        {"role": "user", "content": "this is a test request, write a short poem"}
+    ],
+    extra_headers=extra_headers,
+)
+
+print(response)
+
+```
+
+```shell
+# EXTRA HEADERS:  {'traceparent': '00-80e1afed08e019fc1110464cfa66635c-02e80198930058d4-01'}
+# Trace ID:  80e1afed08e019fc1110464cfa66635c
+```
+
+2. Lookup Trace ID on OTEL Logger
+
+Search for Trace=`80e1afed08e019fc1110464cfa66635c` on your OTEL Collector
+
+<Image img={require('../../img/otel_parent.png')} />
 
 
 
