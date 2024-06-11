@@ -741,11 +741,13 @@ def test_completion_claude_3_function_plus_image():
 
     print(response)
 
+
 @pytest.mark.parametrize(
-    "provider", [
+    "provider",
+    [
         "azure",
         "azure_ai"
-    ]
+    ],
 )
 def test_completion_azure_mistral_large_function_calling(provider):
     """
