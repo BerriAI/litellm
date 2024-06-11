@@ -155,9 +155,7 @@ response = client.chat.completions.create(
         }
     ],
     extra_body={
-        "metadata": {
-            "fallbacks": ["gpt-3.5-turbo"]
-        }
+        "fallbacks": ["gpt-3.5-turbo"]
     }
 )
 
@@ -180,9 +178,7 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
         "content": "what llm are you"
         }
     ],
-    "metadata": {
-        "fallbacks": ["gpt-3.5-turbo"]
-    }
+    "fallbacks": ["gpt-3.5-turbo"]
 }'
 ```
 </TabItem>
@@ -204,9 +200,7 @@ chat = ChatOpenAI(
     openai_api_base="http://0.0.0.0:4000",
     model="zephyr-beta",
     extra_body={
-        "metadata": {
-            "fallbacks": ["gpt-3.5-turbo"]
-        }
+        "fallbacks": ["gpt-3.5-turbo"]
     }
 )
 
