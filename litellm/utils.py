@@ -6612,6 +6612,12 @@ def get_llm_provider(
                     or get_secret("TOGETHERAI_API_KEY")
                     or get_secret("TOGETHER_AI_TOKEN")
                 )
+            elif custom_llm_provider == "azure_ai":
+                api_base = (
+                    api_base
+                    or get_secret("AZURE_AI_API_BASE")  # for Azure AI Mistral
+                )  # type: ignore
+                dynamic_api_key = get_secret("AZURE_AI_API_KEY")
             if api_base is not None and not isinstance(api_base, str):
                 raise Exception(
                     "api base needs to be a string. api_base={}".format(api_base)
