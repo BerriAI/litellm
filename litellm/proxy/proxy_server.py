@@ -103,7 +103,6 @@ from litellm.proxy.utils import (
     hash_token,
     html_form,
     missing_keys_html_form,
-    _read_request_body,
     _is_valid_team_configs,
     _is_user_proxy_admin,
     _get_user_role,
@@ -115,6 +114,8 @@ from litellm.proxy.utils import (
     _to_ns,
     get_error_message_str,
 )
+from litellm.proxy.utils.http_parsing_utils import _read_request_body
+
 from litellm import (
     CreateBatchRequest,
     RetrieveBatchRequest,
@@ -163,7 +164,7 @@ from litellm.proxy.auth.auth_checks import (
     get_actual_routes,
     log_to_opentelemetry,
 )
-from litellm.proxy.management_endpoint_utils import management_endpoint_wrapper
+from litellm.proxy.utils.management_endpoint_utils import management_endpoint_wrapper
 from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
 from litellm.exceptions import RejectedRequestError
 from litellm.integrations.slack_alerting import SlackAlertingArgs, SlackAlerting
