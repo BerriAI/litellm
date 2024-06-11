@@ -741,8 +741,13 @@ def test_completion_claude_3_function_plus_image():
 
     print(response)
 
-
-def test_completion_azure_mistral_large_function_calling():
+@pytest.mark.parametrize(
+    "provider", [
+        "azure",
+        "azure_ai"
+    ]
+)
+def test_completion_azure_mistral_large_function_calling(provider):
     """
     This primarily tests if the 'Function()' pydantic object correctly handles argument param passed in as a dict vs. string
     """
@@ -774,7 +779,7 @@ def test_completion_azure_mistral_large_function_calling():
         }
     ]
     response = completion(
-        model="azure/mistral-large-latest",
+        model="{}/mistral-large-latest".format(provider),
         api_base=os.getenv("AZURE_MISTRAL_API_BASE"),
         api_key=os.getenv("AZURE_MISTRAL_API_KEY"),
         messages=messages,
