@@ -470,3 +470,98 @@ def test_replicate_llama3_cost_tracking():
         5,
     )
     assert cost == expected_cost
+
+
+@pytest.mark.parametrize("is_streaming", [True, False])  #
+def test_groq_response_cost_tracking(is_streaming):
+    from litellm.utils import (
+        ModelResponse,
+        Choices,
+        Message,
+        Usage,
+        CallTypes,
+        StreamingChoices,
+        Delta,
+    )
+
+    response = ModelResponse(
+        id="chatcmpl-876cce24-e520-4cf8-8649-562a9be11c02",
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(
+                    content="Hi! I'm an AI, so I don't have emotions or feelings like humans do, but I'm functioning properly and ready to help with any questions or topics you'd like to discuss! How can I assist you today?",
+                    role="assistant",
+                ),
+            )
+        ],
+        created=1717519830,
+        model="llama3-70b-8192",
+        object="chat.completion",
+        system_fingerprint="fp_c1a4bcec29",
+        usage=Usage(completion_tokens=46, prompt_tokens=17, total_tokens=63),
+    )
+    response._hidden_params["custom_llm_provider"] = "groq"
+    print(response)
+
+    response_cost = litellm.response_cost_calculator(
+        response_object=response,
+        model="groq/llama3-70b-8192",
+        custom_llm_provider="groq",
+        call_type=CallTypes.acompletion.value,
+        optional_params={},
+    )
+
+    assert isinstance(response_cost, float)
+    assert response_cost > 0.0
+
+    print(f"response_cost: {response_cost}")
+
+
+def test_together_ai_qwen_completion_cost():
+    input_kwargs = {
+        "completion_response": litellm.ModelResponse(
+            **{
+                "id": "890db0c33c4ef94b-SJC",
+                "choices": [
+                    {
+                        "finish_reason": "eos",
+                        "index": 0,
+                        "message": {
+                            "content": "I am Qwen, a large language model created by Alibaba Cloud.",
+                            "role": "assistant",
+                        },
+                    }
+                ],
+                "created": 1717900130,
+                "model": "together_ai/qwen/Qwen2-72B-Instruct",
+                "object": "chat.completion",
+                "system_fingerprint": None,
+                "usage": {
+                    "completion_tokens": 15,
+                    "prompt_tokens": 23,
+                    "total_tokens": 38,
+                },
+            }
+        ),
+        "model": "qwen/Qwen2-72B-Instruct",
+        "prompt": "",
+        "messages": [],
+        "completion": "",
+        "total_time": 0.0,
+        "call_type": "completion",
+        "custom_llm_provider": "together_ai",
+        "region_name": None,
+        "size": None,
+        "quality": None,
+        "n": None,
+        "custom_cost_per_token": None,
+        "custom_cost_per_second": None,
+    }
+
+    response = litellm.cost_calculator.get_model_params_and_category(
+        model_name="qwen/Qwen2-72B-Instruct"
+    )
+
+    assert response == "together-ai-41.1b-80b"

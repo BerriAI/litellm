@@ -51,7 +51,7 @@ print(f"response: {response}")
 
 - `api_base`: *string (optional)* - The api endpoint you want to call the model with
 
-- `api_version`: *string (optional)* - (Azure-specific) the api version for the call
+- `api_version`: *string (optional)* - (Azure-specific) the api version for the call; required for dall-e-3 on Azure
 
 - `api_key`: *string (optional)* - The API key to authenticate and authorize requests. If not provided, the default API key is used.
 

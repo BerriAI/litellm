@@ -2,10 +2,12 @@ from itertools import chain
 import requests, types, time  # type: ignore
 import json, uuid
 import traceback
-from typing import Optional
+from typing import Optional, List
 import litellm
+from litellm.types.utils import ProviderField
 import httpx, aiohttp, asyncio  # type: ignore
 from .prompt_templates.factory import prompt_factory, custom_prompt
+from litellm import verbose_logger
 
 
 class OllamaError(Exception):
@@ -45,6 +47,8 @@ class OllamaConfig:
 
     - `temperature` (float): The temperature of the model. Increasing the temperature will make the model answer more creatively. Default: 0.8. Example usage: temperature 0.7
 
+    - `seed` (int): Sets the random number seed to use for generation. Setting this to a specific number will make the model generate the same text for the same prompt. Example usage: seed 42
+
     - `stop` (string[]): Sets the stop sequences to use. Example usage: stop "AI assistant:"
 
     - `tfs_z` (float): Tail free sampling is used to reduce the impact of less probable tokens from the output. A higher value (e.g., 2.0) will reduce the impact more, while a value of 1.0 disables this setting. Default: 1. Example usage: tfs_z 1
@@ -69,6 +73,7 @@ class OllamaConfig:
     repeat_last_n: Optional[int] = None
     repeat_penalty: Optional[float] = None
     temperature: Optional[float] = None
+    seed: Optional[int] = None
     stop: Optional[list] = (
         None  # stop is a list based on this - https://github.com/ollama/ollama/pull/442
     )
@@ -90,6 +95,7 @@ class OllamaConfig:
         repeat_last_n: Optional[int] = None,
         repeat_penalty: Optional[float] = None,
         temperature: Optional[float] = None,
+        seed: Optional[int] = None,
         stop: Optional[list] = None,
         tfs_z: Optional[float] = None,
         num_predict: Optional[int] = None,
@@ -120,6 +126,59 @@ class OllamaConfig:
             )
             and v is not None
         }
+    
+    def get_required_params(self) -> List[ProviderField]:
+        """For a given provider, return it's required fields with a description"""
+        return [
+            ProviderField(
+                field_name="base_url",
+                field_type="string",
+                field_description="Your Ollama API Base",
+                field_value="http://10.10.11.249:11434",
+            )
+        ]
+
+
+    def get_supported_openai_params(
+        self,
+    ):
+        return [
+            "max_tokens",
+            "stream",
+            "top_p",
+            "temperature",
+            "seed",
+            "frequency_penalty",
+            "stop",
+            "response_format",
+        ]
+
+
+# ollama wants plain base64 jpeg/png files as images.  strip any leading dataURI
+# and convert to jpeg if necessary.
+def _convert_image(image):
+    import base64, io
+
+    try:
+        from PIL import Image
+    except:
+        raise Exception(
+            "ollama image conversion failed please run `pip install Pillow`"
+        )
+
+    orig = image
+    if image.startswith("data:"):
+        image = image.split(",")[-1]
+    try:
+        image_data = Image.open(io.BytesIO(base64.b64decode(image)))
+        if image_data.format in ["JPEG", "PNG"]:
+            return image
+    except:
+        return orig
+    jpeg_image = io.BytesIO()
+    image_data.convert("RGB").save(jpeg_image, "JPEG")
+    jpeg_image.seek(0)
+    return base64.b64encode(jpeg_image.getvalue()).decode("utf-8")
 
 
 # ollama implementation
@@ -158,7 +217,7 @@ def get_ollama_response(
     if format is not None:
         data["format"] = format
     if images is not None:
-        data["images"] = images
+        data["images"] = [_convert_image(image) for image in images]
 
     ## LOGGING
     logging_obj.pre_call(
@@ -349,7 +408,13 @@ async def ollama_async_streaming(url, data, model_response, encoding, logging_ob
                 async for transformed_chunk in streamwrapper:
                     yield transformed_chunk
     except Exception as e:
-        traceback.print_exc()
+        verbose_logger.error(
+            "LiteLLM.ollama.py::ollama_async_streaming(): Exception occured - {}".format(
+                str(e)
+            )
+        )
+        verbose_logger.debug(traceback.format_exc())
+
         raise e
 
 
@@ -413,7 +478,12 @@ async def ollama_acompletion(url, data, model_response, encoding, logging_obj):
             )
             return model_response
     except Exception as e:
-        traceback.print_exc()
+        verbose_logger.error(
+            "LiteLLM.ollama.py::ollama_acompletion(): Exception occured - {}".format(
+                str(e)
+            )
+        )
+        verbose_logger.debug(traceback.format_exc())
         raise e
 
 

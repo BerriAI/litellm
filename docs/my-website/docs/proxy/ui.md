@@ -2,10 +2,9 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# [BETA] Proxy UI 
-### **Create + delete keys through a UI**
+# [BETA] UI - Admin 
 
-[Let users create their own keys](#setup-ssoauth-for-ui)
+Create keys, track spend, add models without worrying about the config / CRUD endpoints.
 
 :::info
 

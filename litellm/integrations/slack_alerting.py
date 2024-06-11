@@ -18,6 +18,7 @@ from litellm.proxy._types import WebhookEvent
 import random
 from typing import TypedDict
 from openai import APIError
+from .email_templates.templates import *
 
 import litellm.types
 from litellm.types.router import LiteLLM_Params
@@ -41,10 +42,7 @@ class ProviderRegionOutageModel(BaseOutageModel):
 
 # we use this for the email header, please send a test email if you change this. verify it looks good on email
 LITELLM_LOGO_URL = "https://litellm-listing.s3.amazonaws.com/litellm_logo.png"
-EMAIL_LOGO_URL = os.getenv(
-    "SMTP_SENDER_LOGO", "https://litellm-listing.s3.amazonaws.com/litellm_logo.png"
-)
-EMAIL_SUPPORT_CONTACT = os.getenv("EMAIL_SUPPORT_CONTACT", "support@berri.ai")
+LITELLM_SUPPORT_CONTACT = "support@berri.ai"
 
 
 class LiteLLMBase(BaseModel):
@@ -328,8 +326,8 @@ class SlackAlerting(CustomLogger):
                 end_time=end_time,
             )
         )
-        if litellm.turn_off_message_logging:
-            messages = "Message not logged. `litellm.turn_off_message_logging=True`."
+        if litellm.turn_off_message_logging or litellm.redact_messages_in_exceptions:
+            messages = "Message not logged. litellm.redact_messages_in_exceptions=True"
         request_info = f"\nRequest Model: `{model}`\nAPI Base: `{api_base}`\nMessages: `{messages}`"
         slow_message = f"`Responses are slow - {round(time_difference_float,2)}s response time > Alerting threshold: {self.alerting_threshold}s`"
         if time_difference_float > self.alerting_threshold:
@@ -539,7 +537,7 @@ class SlackAlerting(CustomLogger):
             cache_list=combined_metrics_cache_keys
         )
 
-        message += f"\n\nNext Run is in: `{time.time() + self.alerting_args.daily_report_frequency}`s"
+        message += f"\n\nNext Run is at: `{time.time() + self.alerting_args.daily_report_frequency}`s"
 
         # send alert
         await self.send_alert(message=message, level="Low", alert_type="daily_reports")
@@ -569,9 +567,12 @@ class SlackAlerting(CustomLogger):
             except:
                 messages = ""
 
-            if litellm.turn_off_message_logging:
+            if (
+                litellm.turn_off_message_logging
+                or litellm.redact_messages_in_exceptions
+            ):
                 messages = (
-                    "Message not logged. `litellm.turn_off_message_logging=True`."
+                    "Message not logged. litellm.redact_messages_in_exceptions=True"
                 )
             request_info = f"\nRequest Model: `{model}`\nMessages: `{messages}`"
         else:
@@ -687,14 +688,16 @@ class SlackAlerting(CustomLogger):
         event: Optional[
             Literal["budget_crossed", "threshold_crossed", "projected_limit_exceeded"]
         ] = None
-        event_group: Optional[Literal["user", "team", "key", "proxy"]] = None
+        event_group: Optional[
+            Literal["internal_user", "team", "key", "proxy", "customer"]
+        ] = None
         event_message: str = ""
         webhook_event: Optional[WebhookEvent] = None
         if type == "proxy_budget":
             event_group = "proxy"
             event_message += "Proxy Budget: "
         elif type == "user_budget":
-            event_group = "user"
+            event_group = "internal_user"
             event_message += "User Budget: "
             _id = user_info.user_id or _id
         elif type == "team_budget":
@@ -757,6 +760,36 @@ class SlackAlerting(CustomLogger):
 
             return
         return
+
+    async def customer_spend_alert(
+        self,
+        token: Optional[str],
+        key_alias: Optional[str],
+        end_user_id: Optional[str],
+        response_cost: Optional[float],
+        max_budget: Optional[float],
+    ):
+        if end_user_id is not None and token is not None and response_cost is not None:
+            # log customer spend
+            event = WebhookEvent(
+                spend=response_cost,
+                max_budget=max_budget,
+                token=token,
+                customer_id=end_user_id,
+                user_id=None,
+                team_id=None,
+                user_email=None,
+                key_alias=key_alias,
+                projected_exceeded_date=None,
+                projected_spend=None,
+                event="spend_tracked",
+                event_group="customer",
+                event_message="Customer spend tracked. Customer={}, spend={}".format(
+                    end_user_id, response_cost
+                ),
+            )
+
+            await self.send_webhook_alert(webhook_event=event)
 
     def _count_outage_alerts(self, alerts: List[int]) -> str:
         """
@@ -1147,102 +1180,122 @@ Model Info:
 
         return False
 
-    async def send_key_created_email(self, webhook_event: WebhookEvent) -> bool:
-        from litellm.proxy.utils import send_email
-
-        if self.alerting is None or "email" not in self.alerting:
-            # do nothing if user does not want email alerts
-            return False
-
-        # make sure this is a premium user
+    async def _check_if_using_premium_email_feature(
+        self,
+        premium_user: bool,
+        email_logo_url: Optional[str] = None,
+        email_support_contact: Optional[str] = None,
+    ):
         from litellm.proxy.proxy_server import premium_user
-        from litellm.proxy.proxy_server import CommonProxyErrors, prisma_client
+        from litellm.proxy.proxy_server import CommonProxyErrors
 
-        if premium_user != True:
-            raise Exception(
-                f"Trying to use Email Alerting on key creation\n {CommonProxyErrors.not_premium_user.value}"
+        if premium_user is not True:
+            if email_logo_url is not None or email_support_contact is not None:
+                raise ValueError(
+                    f"Trying to Customize Email Alerting\n {CommonProxyErrors.not_premium_user.value}"
+                )
+        return
+
+    async def send_key_created_or_user_invited_email(
+        self, webhook_event: WebhookEvent
+    ) -> bool:
+        try:
+            from litellm.proxy.utils import send_email
+
+            if self.alerting is None or "email" not in self.alerting:
+                # do nothing if user does not want email alerts
+                return False
+            from litellm.proxy.proxy_server import premium_user, prisma_client
+
+            email_logo_url = os.getenv(
+                "SMTP_SENDER_LOGO", os.getenv("EMAIL_LOGO_URL", None)
+            )
+            email_support_contact = os.getenv("EMAIL_SUPPORT_CONTACT", None)
+            await self._check_if_using_premium_email_feature(
+                premium_user, email_logo_url, email_support_contact
+            )
+            if email_logo_url is None:
+                email_logo_url = LITELLM_LOGO_URL
+            if email_support_contact is None:
+                email_support_contact = LITELLM_SUPPORT_CONTACT
+
+            event_name = webhook_event.event_message
+            recipient_email = webhook_event.user_email
+            recipient_user_id = webhook_event.user_id
+            if (
+                recipient_email is None
+                and recipient_user_id is not None
+                and prisma_client is not None
+            ):
+                user_row = await prisma_client.db.litellm_usertable.find_unique(
+                    where={"user_id": recipient_user_id}
+                )
+
+                if user_row is not None:
+                    recipient_email = user_row.user_email
+
+            key_name = webhook_event.key_alias
+            key_token = webhook_event.token
+            key_budget = webhook_event.max_budget
+            base_url = os.getenv("PROXY_BASE_URL", "http://0.0.0.0:4000")
+
+            email_html_content = "Alert from LiteLLM Server"
+            if recipient_email is None:
+                verbose_proxy_logger.error(
+                    "Trying to send email alert to no recipient",
+                    extra=webhook_event.dict(),
+                )
+
+            if webhook_event.event == "key_created":
+                email_html_content = KEY_CREATED_EMAIL_TEMPLATE.format(
+                    email_logo_url=email_logo_url,
+                    recipient_email=recipient_email,
+                    key_budget=key_budget,
+                    key_token=key_token,
+                    base_url=base_url,
+                    email_support_contact=email_support_contact,
+                )
+            elif webhook_event.event == "internal_user_created":
+                # GET TEAM NAME
+                team_id = webhook_event.team_id
+                team_name = "Default Team"
+                if team_id is not None and prisma_client is not None:
+                    team_row = await prisma_client.db.litellm_teamtable.find_unique(
+                        where={"team_id": team_id}
+                    )
+                    if team_row is not None:
+                        team_name = team_row.team_alias or "-"
+                email_html_content = USER_INVITED_EMAIL_TEMPLATE.format(
+                    email_logo_url=email_logo_url,
+                    recipient_email=recipient_email,
+                    team_name=team_name,
+                    base_url=base_url,
+                    email_support_contact=email_support_contact,
+                )
+            else:
+                verbose_proxy_logger.error(
+                    "Trying to send email alert on unknown webhook event",
+                    extra=webhook_event.model_dump(),
+                )
+
+            payload = webhook_event.model_dump_json()
+            email_event = {
+                "to": recipient_email,
+                "subject": f"LiteLLM: {event_name}",
+                "html": email_html_content,
+            }
+
+            response = await send_email(
+                receiver_email=email_event["to"],
+                subject=email_event["subject"],
+                html=email_event["html"],
             )
 
-        event_name = webhook_event.event_message
-        recipient_email = webhook_event.user_email
-        recipient_user_id = webhook_event.user_id
-        if (
-            recipient_email is None
-            and recipient_user_id is not None
-            and prisma_client is not None
-        ):
-            user_row = await prisma_client.db.litellm_usertable.find_unique(
-                where={"user_id": recipient_user_id}
-            )
+            return True
 
-            if user_row is not None:
-                recipient_email = user_row.user_email
-
-        key_name = webhook_event.key_alias
-        key_token = webhook_event.token
-        key_budget = webhook_event.max_budget
-
-        email_html_content = "Alert from LiteLLM Server"
-        if recipient_email is None:
-            verbose_proxy_logger.error(
-                "Trying to send email alert to no recipient", extra=webhook_event.dict()
-            )
-        email_html_content = f"""
-            <img src="{EMAIL_LOGO_URL}" alt="LiteLLM Logo" width="150" height="50" />
-
-            <p> Hi {recipient_email}, <br/>
- 
-            I'm happy to provide you with an OpenAI Proxy API Key, loaded with ${key_budget} per month. <br /> <br />
-
-            <b>
-            Key: <pre>{key_token}</pre> <br>
-            </b>
-
-            <h2>Usage Example</h2>
-
-            Detailed Documentation on <a href="https://docs.litellm.ai/docs/proxy/user_keys">Usage with OpenAI Python SDK, Langchain, LlamaIndex, Curl</a>
-
-            <pre>
-
-            import openai
-            client = openai.OpenAI(
-                api_key="{key_token}",
-                base_url={os.getenv("PROXY_BASE_URL", "http://0.0.0.0:4000")}
-            )
-
-            response = client.chat.completions.create(
-                model="gpt-3.5-turbo", # model to send to the proxy
-                messages = [
-                    {{
-                        "role": "user",
-                        "content": "this is a test request, write a short poem"
-                    }}
-                ]
-            )
-
-            </pre>
-
-
-            If you have any questions, please send an email to {EMAIL_SUPPORT_CONTACT} <br /> <br />
-
-            Best, <br />
-            The LiteLLM team <br />
-            """
-
-        payload = webhook_event.model_dump_json()
-        email_event = {
-            "to": recipient_email,
-            "subject": f"LiteLLM: {event_name}",
-            "html": email_html_content,
-        }
-
-        response = await send_email(
-            receiver_email=email_event["to"],
-            subject=email_event["subject"],
-            html=email_event["html"],
-        )
-
-        return False
+        except Exception as e:
+            verbose_proxy_logger.error("Error sending email alert %s", str(e))
+            return False
 
     async def send_email_alert_using_smtp(self, webhook_event: WebhookEvent) -> bool:
         """
@@ -1253,6 +1306,21 @@ Model Info:
         Returns -> True if sent, False if not.
         """
         from litellm.proxy.utils import send_email
+
+        from litellm.proxy.proxy_server import premium_user, prisma_client
+
+        email_logo_url = os.getenv(
+            "SMTP_SENDER_LOGO", os.getenv("EMAIL_LOGO_URL", None)
+        )
+        email_support_contact = os.getenv("EMAIL_SUPPORT_CONTACT", None)
+        await self._check_if_using_premium_email_feature(
+            premium_user, email_logo_url, email_support_contact
+        )
+
+        if email_logo_url is None:
+            email_logo_url = LITELLM_LOGO_URL
+        if email_support_contact is None:
+            email_support_contact = LITELLM_SUPPORT_CONTACT
 
         event_name = webhook_event.event_message
         recipient_email = webhook_event.user_email
@@ -1266,7 +1334,7 @@ Model Info:
 
         if webhook_event.event == "budget_crossed":
             email_html_content = f"""
-            <img src="{EMAIL_LOGO_URL}" alt="LiteLLM Logo" width="150" height="50" />
+            <img src="{email_logo_url}" alt="LiteLLM Logo" width="150" height="50" />
 
             <p> Hi {user_name}, <br/>
 
@@ -1274,7 +1342,7 @@ Model Info:
 
             API requests will be rejected until either (a) you increase your monthly budget or (b) your monthly usage resets at the beginning of the next calendar month. <br /> <br />
 
-            If you have any questions, please send an email to {EMAIL_SUPPORT_CONTACT} <br /> <br />
+            If you have any questions, please send an email to {email_support_contact} <br /> <br />
 
             Best, <br />
             The LiteLLM team <br />
@@ -1384,7 +1452,9 @@ Model Info:
         if response.status_code == 200:
             pass
         else:
-            print("Error sending slack alert. Error=", response.text)  # noqa
+            verbose_proxy_logger.debug(
+                "Error sending slack alert. Error=", response.text
+            )
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         """Log deployment latency"""
@@ -1404,6 +1474,8 @@ Model Info:
                         final_value = float(
                             response_s.total_seconds() / completion_tokens
                         )
+                if isinstance(final_value, timedelta):
+                    final_value = final_value.total_seconds()
 
                 await self.async_update_daily_reports(
                     DeploymentMetrics(

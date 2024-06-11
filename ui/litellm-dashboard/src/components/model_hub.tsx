@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from "react";
+import { useRouter, usePathname, useSearchParams } from "next/navigation";
 
 import { modelHubCall } from "./networking";
-
+import { getConfigFieldSetting, updateConfigFieldSetting } from "./networking";
 import {
   Card,
   Text,
@@ -15,70 +16,70 @@ import {
   TabPanel,
   TabPanels,
 } from "@tremor/react";
-
 import { RightOutlined, CopyOutlined } from "@ant-design/icons";
 
-import { Modal, Tooltip } from "antd";
+import { Modal, Tooltip, message } from "antd";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 
 interface ModelHubProps {
-  userID: string | null;
-  userRole: string | null;
-  token: string | null;
   accessToken: string | null;
-  keys: any; // Replace with the appropriate type for 'keys' prop
+  publicPage: boolean;
   premiumUser: boolean;
 }
 
 interface ModelInfo {
-    model_group: string;
-    mode: string;
-    supports_function_calling: boolean;
-    supports_vision: boolean;
-    max_input_tokens?: number;
-    max_output_tokens?: number;
-    supported_openai_params?: string[];
-
-
-  // Add other properties if needed
+  model_group: string;
+  mode: string;
+  supports_function_calling: boolean;
+  supports_vision: boolean;
+  max_input_tokens?: number;
+  max_output_tokens?: number;
+  supported_openai_params?: string[];
 }
 
 const ModelHub: React.FC<ModelHubProps> = ({
-  userID,
-
-  userRole,
-
-  token,
-
   accessToken,
-
-  keys,
-
+  publicPage,
   premiumUser,
 }) => {
+  const [publicPageAllowed, setPublicPageAllowed] = useState<boolean>(false);
   const [modelHubData, setModelHubData] = useState<ModelInfo[] | null>(null);
   const [isModalVisible, setIsModalVisible] = useState(false);
+  const [isPublicPageModalVisible, setIsPublicPageModalVisible] =
+    useState(false);
   const [selectedModel, setSelectedModel] = useState<null | ModelInfo>(null);
+  const router = useRouter();
 
   useEffect(() => {
-    if (!accessToken || !token || !userRole || !userID) {
+    if (!accessToken) {
       return;
     }
 
     const fetchData = async () => {
       try {
-        const _modelHubData = await modelHubCall(accessToken, userID, userRole);
+        const _modelHubData = await modelHubCall(accessToken);
 
         console.log("ModelHubData:", _modelHubData);
 
         setModelHubData(_modelHubData.data);
+
+        getConfigFieldSetting(accessToken, "enable_public_model_hub")
+          .then((data) => {
+            console.log(`data: ${JSON.stringify(data)}`);
+            if (data.field_value == true) {
+              setPublicPageAllowed(true);
+            }
+          })
+          .catch((error) => {
+            // do nothing
+          });
       } catch (error) {
         console.error("There was an error fetching the model data", error);
       }
     };
 
     fetchData();
-  }, [accessToken, token, userRole, userID]);
+  }, [accessToken, publicPage]);
 
   const showModal = (model: ModelInfo) => {
     setSelectedModel(model);
@@ -86,15 +87,29 @@ const ModelHub: React.FC<ModelHubProps> = ({
     setIsModalVisible(true);
   };
 
+  const goToPublicModelPage = () => {
+    router.replace(`/model_hub?key=${accessToken}`);
+  };
+  const handleMakePublicPage = async () => {
+    if (!accessToken) {
+      return;
+    }
+    updateConfigFieldSetting(accessToken, "enable_public_model_hub", true).then(
+      (data) => {
+        setIsPublicPageModalVisible(true);
+      }
+    );
+  };
+
   const handleOk = () => {
     setIsModalVisible(false);
-
+    setIsPublicPageModalVisible(false);
     setSelectedModel(null);
   };
 
   const handleCancel = () => {
     setIsModalVisible(false);
-
+    setIsPublicPageModalVisible(false);
     setSelectedModel(null);
   };
 
@@ -104,55 +119,118 @@ const ModelHub: React.FC<ModelHubProps> = ({
 
   return (
     <div>
-      <div className="w-full m-2 mt-2 p-8">
-        <div className="relative w-full"></div>
+      {(publicPage && publicPageAllowed) || publicPage == false ? (
+        <div className="w-full m-2 mt-2 p-8">
+          <div className="relative w-full"></div>
 
-        <div className="flex items-center">
-          <Title className="ml-8 text-center ">Model Hub</Title>
-          <Button className="ml-4">
-            <a href="https://forms.gle/W3U4PZpJGFHWtHyA9" target="_blank">
-              ✨ Make Public
-            </a>
-          </Button>
-        </div>
-
-        <div className="grid grid-cols-2 gap-6 sm:grid-cols-3 lg:grid-cols-4">
-          {modelHubData &&
-            modelHubData.map((model: ModelInfo) => (
-              <Card key={model.model_group} className="mt-5 mx-8">
-                <pre className="flex justify-between">
-                  <Title>{model.model_group}</Title>
-                  <Tooltip title={model.model_group}>
-                    <CopyOutlined
-                      onClick={() => copyToClipboard(model.model_group)}
-                      style={{ cursor: "pointer", marginRight: "10px" }}
-                    />
-                  </Tooltip>
-                </pre>
-              <div className='my-5'>
-
-              <Text>Mode: {model.mode}</Text>
-              <Text>Supports Function Calling: {model?.supports_function_calling == true ? "Yes" : "No"}</Text>
-              <Text>Supports Vision: {model?.supports_vision == true ? "Yes" : "No"}</Text>
-              <Text>Max Input Tokens: {model?.max_input_tokens ? model?.max_input_tokens : "N/A"}</Text>
-              <Text>Max Output Tokens: {model?.max_output_tokens ? model?.max_output_tokens : "N/A"}</Text>
-              </div>
-                <div style={{ marginTop: "auto", textAlign: "right" }}>
-                  <a
-                    href="#"
-                    onClick={() => showModal(model)}
-                    style={{ color: "#1890ff", fontSize: "smaller" }}
-                  >
-                    View more <RightOutlined />
+          <div
+            className={`flex ${publicPage ? "justify-between" : "items-center"}`}
+          >
+            <Title className="ml-8 text-center ">Model Hub</Title>
+            {publicPage == false ? (
+              premiumUser ? (
+                <Button className="ml-4" onClick={() => handleMakePublicPage()}>
+                  ✨ Make Public
+                </Button>
+              ) : (
+                <Button className="ml-4">
+                  <a href="https://forms.gle/W3U4PZpJGFHWtHyA9" target="_blank">
+                    ✨ Make Public
                   </a>
-                </div>
-              </Card>
-            ))}
+                </Button>
+              )
+            ) : (
+              <div className="flex justify-between items-center">
+                <p>Filter by key:</p>
+                <Text className="bg-gray-200 pr-2 pl-2 pt-1 pb-1 text-center">{`/ui/model_hub?key=<YOUR_KEY>`}</Text>
+              </div>
+            )}
+          </div>
+
+          <div className="grid grid-cols-2 gap-6 sm:grid-cols-3 lg:grid-cols-4 pr-8">
+            {modelHubData &&
+              modelHubData.map((model: ModelInfo) => (
+                <Card key={model.model_group} className="mt-5 mx-8">
+                  <pre className="flex justify-between">
+                    <Title>{model.model_group}</Title>
+                    <Tooltip title={model.model_group}>
+                      <CopyOutlined
+                        onClick={() => copyToClipboard(model.model_group)}
+                        style={{ cursor: "pointer", marginRight: "10px" }}
+                      />
+                    </Tooltip>
+                  </pre>
+                  <div className="my-5">
+                    <Text>Mode: {model.mode}</Text>
+                    <Text>
+                      Supports Function Calling:{" "}
+                      {model?.supports_function_calling == true ? "Yes" : "No"}
+                    </Text>
+                    <Text>
+                      Supports Vision:{" "}
+                      {model?.supports_vision == true ? "Yes" : "No"}
+                    </Text>
+                    <Text>
+                      Max Input Tokens:{" "}
+                      {model?.max_input_tokens
+                        ? model?.max_input_tokens
+                        : "N/A"}
+                    </Text>
+                    <Text>
+                      Max Output Tokens:{" "}
+                      {model?.max_output_tokens
+                        ? model?.max_output_tokens
+                        : "N/A"}
+                    </Text>
+                  </div>
+                  <div style={{ marginTop: "auto", textAlign: "right" }}>
+                    <a
+                      href="#"
+                      onClick={() => showModal(model)}
+                      style={{ color: "#1890ff", fontSize: "smaller" }}
+                    >
+                      View more <RightOutlined />
+                    </a>
+                  </div>
+                </Card>
+              ))}
+          </div>
         </div>
-      </div>
+      ) : (
+        <Card className="mx-auto max-w-xl mt-10">
+          <Text className="text-xl text-center mb-2 text-black">
+            Public Model Hub not enabled.
+          </Text>
+          <p className="text-base text-center text-slate-800">
+            Ask your proxy admin to enable this on their Admin UI.
+          </p>
+        </Card>
+      )}
 
       <Modal
-        title={selectedModel && selectedModel.model_group ? selectedModel.model_group : "Unknown Model"}
+        title={"Public Model Hub"}
+        width={600}
+        visible={isPublicPageModalVisible}
+        footer={null}
+        onOk={handleOk}
+        onCancel={handleCancel}
+      >
+        <div className="pt-5 pb-5">
+          <div className="flex justify-between mb-4">
+            <Text className="text-base mr-2">Shareable Link:</Text>
+            <Text className="max-w-sm ml-2 bg-gray-200 pr-2 pl-2 pt-1 pb-1 text-center rounded">{`<proxy_base_url>/ui/model_hub?key=<YOUR_API_KEY>`}</Text>
+          </div>
+          <div className="flex justify-end">
+            <Button onClick={goToPublicModelPage}>See Page</Button>
+          </div>
+        </div>
+      </Modal>
+      <Modal
+        title={
+          selectedModel && selectedModel.model_group
+            ? selectedModel.model_group
+            : "Unknown Model"
+        }
         width={800}
         visible={isModalVisible}
         footer={null}
@@ -161,19 +239,21 @@ const ModelHub: React.FC<ModelHubProps> = ({
       >
         {selectedModel && (
           <div>
-            <p className='mb-4'><strong>Model Information & Usage</strong></p>
-           
+            <p className="mb-4">
+              <strong>Model Information & Usage</strong>
+            </p>
+
             <TabGroup>
-                  <TabList>
-                    <Tab>OpenAI Python SDK</Tab>
-                    <Tab>Supported OpenAI Params</Tab>
-                    <Tab>LlamaIndex</Tab>
-                    <Tab>Langchain Py</Tab>
-                  </TabList>
-                  <TabPanels>
-                    <TabPanel>
-                      <SyntaxHighlighter language="python">
-                        {`
+              <TabList>
+                <Tab>OpenAI Python SDK</Tab>
+                <Tab>Supported OpenAI Params</Tab>
+                <Tab>LlamaIndex</Tab>
+                <Tab>Langchain Py</Tab>
+              </TabList>
+              <TabPanels>
+                <TabPanel>
+                  <SyntaxHighlighter language="python">
+                    {`
 import openai
 client = openai.OpenAI(
     api_key="your_api_key",
@@ -192,13 +272,13 @@ response = client.chat.completions.create(
 
 print(response)
             `}
-                      </SyntaxHighlighter>
-                    </TabPanel>
-                    <TabPanel>
-                    <SyntaxHighlighter language="python">
-                        {`${selectedModel.supported_openai_params?.map((param) => `${param}\n`).join('')}`}
-                        </SyntaxHighlighter>
-                        </TabPanel>
+                  </SyntaxHighlighter>
+                </TabPanel>
+                <TabPanel>
+                  <SyntaxHighlighter language="python">
+                    {`${selectedModel.supported_openai_params?.map((param) => `${param}\n`).join("")}`}
+                  </SyntaxHighlighter>
+                </TabPanel>
                 <TabPanel>
                   <SyntaxHighlighter language="python">
                     {`

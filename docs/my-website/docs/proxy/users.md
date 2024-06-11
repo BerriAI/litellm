@@ -13,7 +13,7 @@ Requirements:
 You can set budgets at 3 levels: 
 - For the proxy 
 - For an internal user 
-- For an end-user
+- For a customer (end-user)
 - For a key
 - For a key (model specific budgets)
 
@@ -63,7 +63,7 @@ You can:
 - Add budgets to Teams
 
 
-#### **Add budgets to users**
+#### **Add budgets to teams**
 ```shell 
 curl --location 'http://localhost:4000/team/new' \
 --header 'Authorization: Bearer <your-master-key>' \
@@ -102,6 +102,22 @@ curl --location 'http://localhost:4000/team/new' \
     "budget_reset_at": null
 }
 ```
+
+#### **Add budget duration to teams**
+
+`budget_duration`: Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
+
+```
+curl 'http://0.0.0.0:4000/team/new' \
+--header 'Authorization: Bearer <your-master-key>' \
+--header 'Content-Type: application/json' \
+--data-raw '{
+  "team_alias": "my-new-team_4",
+  "members_with_roles": [{"role": "admin", "user_id": "5c4a0aa3-a1e1-43dc-bd87-3c2da8382a3a"}],
+  "budget_duration": 10s,
+}'
+```
+
 </TabItem>
 <TabItem value="per-team-member" label="For Team Members">
 
@@ -173,7 +189,7 @@ curl --location 'http://localhost:4000/chat/completions' \
 ```
 
 </TabItem>
-<TabItem value="per-user-chat" label="For End User">
+<TabItem value="per-user-chat" label="For Customers">
 
 Use this to budget `user` passed to `/chat/completions`, **without needing to create a key for every user**
 
@@ -223,7 +239,7 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 
 Error
 ```shell
-{"error":{"message":"Authentication Error, ExceededBudget: User ishaan3 has exceeded their budget. Current spend: 0.0008869999999999999; Max Budget: 0.0001","type":"auth_error","param":"None","code":401}}%                
+{"error":{"message":"Budget has been exceeded: User ishaan3 has exceeded their budget. Current spend: 0.0008869999999999999; Max Budget: 0.0001","type":"auth_error","param":"None","code":401}}%                
 ```
 
 </TabItem>
@@ -452,7 +468,7 @@ curl --location 'http://0.0.0.0:4000/key/generate' \
 ```
 
 </TabItem>
-<TabItem value="per-end-user" label="For End User">
+<TabItem value="per-end-user" label="For customers">
 
 :::info 
 
@@ -477,12 +493,12 @@ curl --location 'http://0.0.0.0:4000/budget/new' \
 ```
 
 
-#### Step 2. Create `End-User` with Budget
+#### Step 2. Create `Customer` with Budget
 
-We use `budget_id="free-tier"` from Step 1 when creating this new end user
+We use `budget_id="free-tier"` from Step 1 when creating this new customers
 
 ```shell
-curl --location 'http://0.0.0.0:4000/end_user/new' \
+curl --location 'http://0.0.0.0:4000/customer/new' \
 --header 'Authorization: Bearer sk-1234' \
 --header 'Content-Type: application/json' \
 --data '{
@@ -492,7 +508,7 @@ curl --location 'http://0.0.0.0:4000/end_user/new' \
 ```
 
 
-#### Step 3. Pass end user id in `/chat/completions` requests
+#### Step 3. Pass `user_id` id in `/chat/completions` requests
 
 Pass the `user_id` from Step 2 as `user="palantir"` 
 

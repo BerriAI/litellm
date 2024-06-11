@@ -91,7 +91,7 @@ model LiteLLM_TeamTable {
     updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")
     model_spend      Json @default("{}")
     model_max_budget Json @default("{}")
-    model_id Int? @unique
+    model_id Int? @unique // id for LiteLLM_ModelTable -> stores team-level model aliases
     litellm_organization_table LiteLLM_OrganizationTable?   @relation(fields: [organization_id], references: [organization_id])
     litellm_model_table LiteLLM_ModelTable? @relation(fields: [model_id], references: [id])
 }
@@ -102,6 +102,7 @@ model LiteLLM_UserTable {
     user_alias String? 
     team_id    String?
     organization_id String?
+    password  String?
     teams    String[] @default([])
     user_role  String?
 		max_budget Float?
@@ -117,6 +118,9 @@ model LiteLLM_UserTable {
     model_spend      Json @default("{}")
     model_max_budget Json @default("{}")
     litellm_organization_table LiteLLM_OrganizationTable?   @relation(fields: [organization_id], references: [organization_id])
+    invitations_created LiteLLM_InvitationLink[] @relation("CreatedBy")
+    invitations_updated LiteLLM_InvitationLink[] @relation("UpdatedBy")
+    invitations_user    LiteLLM_InvitationLink[] @relation("UserId")
 }
 
 // Generate Tokens for Proxy
@@ -164,11 +168,11 @@ model LiteLLM_Config {
   param_value Json?
 }
 
-// View spend, model, api_key per request
+// View spend, model, hashed api_key per request
 model LiteLLM_SpendLogs {
   request_id          String @id
   call_type           String
-  api_key             String  @default ("")
+  api_key             String  @default ("") // Hashed API Token. Not the actual Virtual Key. Equivalent to 'token' column in LiteLLM_VerificationToken
   spend               Float    @default(0.0)
   total_tokens        Int     @default(0)
   prompt_tokens       Int     @default(0)
@@ -221,4 +225,35 @@ model LiteLLM_TeamMembership {
   budget_id String?
   litellm_budget_table LiteLLM_BudgetTable?   @relation(fields: [budget_id], references: [budget_id])
   @@id([user_id, team_id])
+}
+
+model LiteLLM_InvitationLink {
+  // use this table to track invite links sent by admin for people to join the proxy
+  id String   @id @default(uuid())
+  user_id String
+  is_accepted Boolean @default(false)
+  accepted_at DateTime? // when link is claimed (user successfully onboards via link)
+  expires_at  DateTime // till when is link valid
+  created_at DateTime // when did admin create the link
+  created_by String // who created the link
+  updated_at DateTime // when was invite status updated
+  updated_by String // who updated the status (admin/user who accepted invite)
+
+  // Relations
+  liteLLM_user_table_user    LiteLLM_UserTable  @relation("UserId", fields: [user_id], references: [user_id])
+  liteLLM_user_table_created LiteLLM_UserTable  @relation("CreatedBy", fields: [created_by], references: [user_id])
+  liteLLM_user_table_updated LiteLLM_UserTable  @relation("UpdatedBy", fields: [updated_by], references: [user_id])
+}
+
+
+model LiteLLM_AuditLog {
+  id                 String   @id @default(uuid())
+  updated_at         DateTime @default(now())
+  changed_by         String   @default("")   // user or system that performed the action
+  changed_by_api_key String   @default("")   // api key hash that performed the action
+  action             String      // create, update, delete
+  table_name         String      // on of  LitellmTableNames.TEAM_TABLE_NAME, LitellmTableNames.USER_TABLE_NAME, LitellmTableNames.PROXY_MODEL_TABLE_NAME,
+  object_id          String      // id of the object being audited. This can be the key id, team id, user id, model id
+  before_value       Json?       // value of the row 
+  updated_values     Json?       // value of the row after change
 }
