@@ -406,7 +406,7 @@ openai_compatible_providers: List = [
     "xinference",
     "together_ai",
     "fireworks_ai",
-    "friendli_ai",
+    "friendliai",
 ]
 
 
@@ -630,7 +630,7 @@ provider_list: List = [
     "cloudflare",
     "xinference",
     "fireworks_ai",
-    "friendli_ai",
+    "friendliai",
     "watsonx",
     "triton",
     "predibase",
