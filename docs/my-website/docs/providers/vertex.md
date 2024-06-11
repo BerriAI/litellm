@@ -449,6 +449,54 @@ print(response)
 </TabItem>
 </Tabs>
 
+## Usage - Function Calling 
+
+LiteLLM supports Function Calling for Vertex AI gemini models. 
+
+```python
+from litellm import completion
+import os
+# set env
+os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = ".."
+os.environ["VERTEX_AI_PROJECT"] = ".."
+os.environ["VERTEX_AI_LOCATION"] = ".."
+
+tools = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_current_weather",
+            "description": "Get the current weather in a given location",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location": {
+                        "type": "string",
+                        "description": "The city and state, e.g. San Francisco, CA",
+                    },
+                    "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                },
+                "required": ["location"],
+            },
+        },
+    }
+]
+messages = [{"role": "user", "content": "What's the weather like in Boston today?"}]
+
+response = completion(
+    model="vertex_ai/gemini-pro-vision",
+    messages=messages,
+    tools=tools,
+)
+# Add any assertions, here to check response args
+print(response)
+assert isinstance(response.choices[0].message.tool_calls[0].function.name, str)
+assert isinstance(
+    response.choices[0].message.tool_calls[0].function.arguments, str
+)
+
+```
+
 
 ## Chat Models
 | Model Name       | Function Call                        |
