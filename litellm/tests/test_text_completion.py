@@ -3990,6 +3990,7 @@ def test_async_text_completion():
     asyncio.run(test_get_response())
 
 
+@pytest.mark.skip(reason="Tgai endpoints are unstable")
 def test_async_text_completion_together_ai():
     litellm.set_verbose = True
     print("test_async_text_completion")
