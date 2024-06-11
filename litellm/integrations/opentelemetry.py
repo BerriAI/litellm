@@ -247,7 +247,7 @@ class OpenTelemetry(CustomLogger):
         span.end(end_time=self._to_ns(end_time))
 
     def set_tools_attributes(self, span: Span, tools):
-        from opentelemetry.semconv.ai import SpanAttributes
+        from litellm.proxy._types import SpanAttributes
         import json
 
         if not tools:
@@ -272,7 +272,7 @@ class OpenTelemetry(CustomLogger):
             pass
 
     def set_attributes(self, span: Span, kwargs, response_obj):
-        from opentelemetry.semconv.ai import SpanAttributes
+        from litellm.proxy._types import SpanAttributes
 
         optional_params = kwargs.get("optional_params", {})
         litellm_params = kwargs.get("litellm_params", {}) or {}
@@ -407,7 +407,7 @@ class OpenTelemetry(CustomLogger):
             )
 
     def set_raw_request_attributes(self, span: Span, kwargs, response_obj):
-        from opentelemetry.semconv.ai import SpanAttributes
+        from litellm.proxy._types import SpanAttributes
 
         optional_params = kwargs.get("optional_params", {})
         litellm_params = kwargs.get("litellm_params", {}) or {}
