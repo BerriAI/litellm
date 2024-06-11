@@ -1347,28 +1347,29 @@ class Logging:
                 )
             else:
                 verbose_logger.debug(f"\033[92m{curl_command}\033[0m\n")
-            # log raw request to provider (like LangFuse)
-            try:
-                # [Non-blocking Extra Debug Information in metadata]
-                _litellm_params = self.model_call_details.get("litellm_params", {})
-                _metadata = _litellm_params.get("metadata", {}) or {}
-                if (
-                    litellm.turn_off_message_logging is not None
-                    and litellm.turn_off_message_logging is True
-                ):
+            # log raw request to provider (like LangFuse) -- if opted in.
+            if litellm.log_raw_request_response is True:
+                try:
+                    # [Non-blocking Extra Debug Information in metadata]
+                    _litellm_params = self.model_call_details.get("litellm_params", {})
+                    _metadata = _litellm_params.get("metadata", {}) or {}
+                    if (
+                        litellm.turn_off_message_logging is not None
+                        and litellm.turn_off_message_logging is True
+                    ):
+                        _metadata["raw_request"] = (
+                            "redacted by litellm. \
+                            'litellm.turn_off_message_logging=True'"
+                        )
+                    else:
+                        _metadata["raw_request"] = str(curl_command)
+                except Exception as e:
                     _metadata["raw_request"] = (
-                        "redacted by litellm. \
-                        'litellm.turn_off_message_logging=True'"
+                        "Unable to Log \
+                        raw request: {}".format(
+                            str(e)
+                        )
                     )
-                else:
-                    _metadata["raw_request"] = str(curl_command)
-            except Exception as e:
-                _metadata["raw_request"] = (
-                    "Unable to Log \
-                    raw request: {}".format(
-                        str(e)
-                    )
-                )
             if self.logger_fn and callable(self.logger_fn):
                 try:
                     self.logger_fn(
@@ -2735,7 +2736,7 @@ class Logging:
         only redacts when litellm.turn_off_message_logging == True
         """
         # check if user opted out of logging message/response to callbacks
-        if litellm.turn_off_message_logging == True:
+        if litellm.turn_off_message_logging is True:
             # remove messages, prompts, input, response from logging
             self.model_call_details["messages"] = [
                 {"role": "user", "content": "redacted-by-litellm"}
