@@ -533,6 +533,9 @@ async def user_api_key_auth(
             parent_otel_span = open_telemetry_logger.tracer.start_span(
                 name="Received Proxy Server Request",
                 start_time=_to_ns(datetime.now()),
+                context=open_telemetry_logger.get_traceparent_from_header(
+                    headers=request.headers
+                ),
             )
         ### USER-DEFINED AUTH FUNCTION ###
         if user_custom_auth is not None:
