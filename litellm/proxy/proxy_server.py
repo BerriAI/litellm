@@ -13070,7 +13070,9 @@ async def auth_callback(request: Request):
         user_role = getattr(result, generic_user_role_attribute_name, None)
 
     if user_id is None:
-        user_id = getattr(result, "first_name", "") + getattr(result, "last_name", "")
+        _first_name = getattr(result, "first_name", "") or ""
+        _last_name = getattr(result, "last_name", "") or ""
+        user_id = _first_name + _last_name
 
     user_info = None
     user_id_models: List = []
