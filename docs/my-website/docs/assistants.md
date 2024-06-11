@@ -13,6 +13,29 @@ LiteLLM currently covers:
 - Get Messages
 - Run Thread
 
+## Providers
+
+LiteLLM currently supports three providers for Assistants:
+- [openai](https://platform.openai.com/docs/assistants/overview)
+- [azure](https://learn.microsoft.com/en-us/azure/ai-services/openai/how-to/assistant)
+- [astra-assistants](https://github.com/datastax/astra-assistants-api)
+
+## Models and Embeddings
+
+OpenAI and Azure support OpenAI models.
+
+Astra Assistants supports all the models and embeddings available in LiteLLM. 
+When calling Astra Assistants through LiteLLM, make sure to configure the provider credentials that match the models configured in your existing files and assistants as environment variables in addition to your Astra credentials.
+
+For example: if your assistant uses the `claude-3-haiku-20240307` model, make sure to pass your Anthropic keys: 
+
+`os.environ["ANTHROPIC_API_KEY"] = "sk-.."` 
+
+and 
+
+`os.environ["ASTRA_DB_APPLICATION_TOKEN"] = "AstraCS:..."`
+
+
 ## Quick Start 
 
 Call an existing Assistant. 

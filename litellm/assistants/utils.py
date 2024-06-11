@@ -65,7 +65,7 @@ def get_optional_params_add_message(
                     )
             return non_default_params
 
-    if custom_llm_provider == "openai":
+    if custom_llm_provider == "openai" or custom_llm_provider == "astra-assistants":
         optional_params = non_default_params
     elif custom_llm_provider == "azure":
         supported_params = (
