@@ -1,14 +1,14 @@
-import heapq, time
+import heapq
 from pydantic import BaseModel
 from typing import Optional
 import enum
-from litellm.caching import DualCache
-from litellm import Router
+from litellm.caching import DualCache, RedisCache
 from litellm import print_verbose
 
 
 class SchedulerCacheKeys(enum.Enum):
     queue = "scheduler:queue"
+    default_in_memory_ttl = 5  # cache queue in-memory for 5s when redis cache available
 
 
 class DefaultPriorities(enum.Enum):
@@ -25,16 +25,24 @@ class FlowItem(BaseModel):
 
 class Scheduler:
     cache: DualCache
-    llm_router: Optional[Router] = None
 
-    def __init__(self):
-        self.queue = []
-        self.cache = DualCache()
-
-    def update_variables(self, llm_router: Router, cache: Optional[DualCache] = None):
-        self.llm_router = llm_router
-        if cache is not None:
-            self.cache = cache
+    def __init__(
+        self,
+        polling_interval: Optional[float] = None,
+        redis_cache: Optional[RedisCache] = None,
+    ):
+        """
+        polling_interval: float or null - frequency of polling queue. Default is 3ms.
+        """
+        self.queue: list = []
+        default_in_memory_ttl: Optional[float] = None
+        if redis_cache is not None:
+            # if redis-cache available frequently poll that instead of using in-memory.
+            default_in_memory_ttl = SchedulerCacheKeys.default_in_memory_ttl.value
+        self.cache = DualCache(
+            redis_cache=redis_cache, default_in_memory_ttl=default_in_memory_ttl
+        )
+        self.polling_interval = polling_interval or 0.03  # default to 3ms
 
     async def add_request(self, request: FlowItem):
         # We use the priority directly, as lower values indicate higher priority
@@ -46,7 +54,7 @@ class Scheduler:
         # save the queue
         await self.save_queue(queue=queue, model_name=request.model_name)
 
-    async def poll(self, id: str, model_name: str) -> bool:
+    async def poll(self, id: str, model_name: str, health_deployments: list) -> bool:
         """
         Return if request can be processed.
 
@@ -59,22 +67,17 @@ class Scheduler:
             * AND request not at the top of queue
         """
         queue = await self.get_queue(model_name=model_name)
-        if not queue or not self.llm_router:
+        if not queue:
             raise Exception(
-                "Incorrectly setup. Queue or Router is invalid. Queue={}, Router={}".format(
-                    queue, self.llm_router
-                )
+                "Incorrectly setup. Queue is invalid. Queue={}".format(queue)
             )
 
         # ------------
         # Setup values
         # ------------
-        _healthy_deployments = await self.llm_router._async_get_healthy_deployments(
-            model=model_name
-        )
 
-        print_verbose(f"len(_healthy_deployments): {len(_healthy_deployments)}")
-        if len(_healthy_deployments) == 0:
+        print_verbose(f"len(health_deployments): {len(health_deployments)}")
+        if len(health_deployments) == 0:
             print_verbose(f"queue: {queue}, seeking id={id}")
             # Check if the id is at the top of the heap
             if queue[0][1] == id:
@@ -87,24 +90,17 @@ class Scheduler:
 
         return True
 
-    async def peek(self, id: str, model_name: str) -> bool:
+    async def peek(self, id: str, model_name: str, health_deployments: list) -> bool:
         """Return if the id is at the top of the queue. Don't pop the value from heap."""
         queue = await self.get_queue(model_name=model_name)
-        if not queue or not self.llm_router:
+        if not queue:
             raise Exception(
-                "Incorrectly setup. Queue or Router is invalid. Queue={}, Router={}".format(
-                    queue, self.llm_router
-                )
+                "Incorrectly setup. Queue is invalid. Queue={}".format(queue)
             )
 
         # ------------
         # Setup values
         # ------------
-        _healthy_deployments = await self.llm_router._async_get_healthy_deployments(
-            model=model_name
-        )
-        if len(_healthy_deployments) == 0:
-            return False
 
         # Check if the id is at the top of the heap
         if queue[0][1] == id:

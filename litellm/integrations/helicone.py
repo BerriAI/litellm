@@ -112,6 +112,5 @@ class HeliconeLogger:
                 )
                 print_verbose(f"Helicone Logging - Error {response.text}")
         except:
-            # traceback.print_exc()
             print_verbose(f"Helicone Logging Error - {traceback.format_exc()}")
             pass

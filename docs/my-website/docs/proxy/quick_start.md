@@ -24,6 +24,15 @@ $ litellm --model huggingface/bigcode/starcoder
 #INFO: Proxy running on http://0.0.0.0:4000
 ```
 
+
+:::info
+
+Run with `--detailed_debug` if you need detailed debug logs 
+
+```shell
+$ litellm --model huggingface/bigcode/starcoder --detailed_debug
+:::
+
 ### Test
 In a new shell, run, this will make an `openai.chat.completions` request. Ensure you're using openai v1.0.0+
 ```shell
