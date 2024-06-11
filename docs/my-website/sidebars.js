@@ -255,6 +255,7 @@ const sidebars = {
             "projects/GPT Migrate",
             "projects/YiVal",
             "projects/LiteLLM Proxy",
+            "projects/llm_cord",
           ],
         },
       ],

@@ -517,3 +517,51 @@ def test_groq_response_cost_tracking(is_streaming):
     assert response_cost > 0.0
 
     print(f"response_cost: {response_cost}")
+
+
+def test_together_ai_qwen_completion_cost():
+    input_kwargs = {
+        "completion_response": litellm.ModelResponse(
+            **{
+                "id": "890db0c33c4ef94b-SJC",
+                "choices": [
+                    {
+                        "finish_reason": "eos",
+                        "index": 0,
+                        "message": {
+                            "content": "I am Qwen, a large language model created by Alibaba Cloud.",
+                            "role": "assistant",
+                        },
+                    }
+                ],
+                "created": 1717900130,
+                "model": "together_ai/qwen/Qwen2-72B-Instruct",
+                "object": "chat.completion",
+                "system_fingerprint": None,
+                "usage": {
+                    "completion_tokens": 15,
+                    "prompt_tokens": 23,
+                    "total_tokens": 38,
+                },
+            }
+        ),
+        "model": "qwen/Qwen2-72B-Instruct",
+        "prompt": "",
+        "messages": [],
+        "completion": "",
+        "total_time": 0.0,
+        "call_type": "completion",
+        "custom_llm_provider": "together_ai",
+        "region_name": None,
+        "size": None,
+        "quality": None,
+        "n": None,
+        "custom_cost_per_token": None,
+        "custom_cost_per_second": None,
+    }
+
+    response = litellm.cost_calculator.get_model_params_and_category(
+        model_name="qwen/Qwen2-72B-Instruct"
+    )
+
+    assert response == "together-ai-41.1b-80b"
