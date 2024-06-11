@@ -6607,9 +6607,9 @@ def get_llm_provider(
                     or get_secret("TOGETHERAI_API_KEY")
                     or get_secret("TOGETHER_AI_TOKEN")
                 )
-            elif custom_llm_provider == "friendli_ai":
+            elif custom_llm_provider == "friendliai":
                 api_base = "https://inference.friendli.ai/v1"
-                dynamic_api_key = get_secret("FRIENDLI_AI_API_KEY") or get_secret(
+                dynamic_api_key = get_secret("FRIENDLIAI_API_KEY") or get_secret(
                     "FRIENDLI_TOKEN"
                 )
             if api_base is not None and not isinstance(api_base, str):
@@ -6660,9 +6660,9 @@ def get_llm_provider(
                         custom_llm_provider = "deepseek"
                         dynamic_api_key = get_secret("DEEPSEEK_API_KEY")
                     elif endpoint == "inference.friendli.ai/v1":
-                        custom_llm_provider = "friendli_ai"
+                        custom_llm_provider = "friendliai"
                         dynamic_api_key = get_secret(
-                            "FRIENDLI_AI_API_KEY"
+                            "FRIENDLIAI_API_KEY"
                         ) or get_secret("FRIENDLI_TOKEN")
 
                     if api_base is not None and not isinstance(api_base, str):

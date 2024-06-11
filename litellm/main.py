@@ -1051,7 +1051,7 @@ def completion(
             # note: if a user sets a custom base - we should ensure this works
             # allow for the setting of dynamic and stateful api-bases
             api_base = (
-                api_base  # for deepinfra/perplexity/anyscale/groq/friendli_ai we check in get_llm_provider and pass in the api base from there
+                api_base  # for deepinfra/perplexity/anyscale/groq/friendliai we check in get_llm_provider and pass in the api base from there
                 or litellm.api_base
                 or get_secret("OPENAI_API_BASE")
                 or "https://api.openai.com/v1"
@@ -1065,7 +1065,7 @@ def completion(
             # set API KEY
             api_key = (
                 api_key
-                or litellm.api_key  # for deepinfra/perplexity/anyscale/friendli_ai we check in get_llm_provider and pass in the api key from there
+                or litellm.api_key  # for deepinfra/perplexity/anyscale/friendliai we check in get_llm_provider and pass in the api key from there
                 or litellm.openai_key
                 or get_secret("OPENAI_API_KEY")
             )
@@ -4288,7 +4288,7 @@ def speech(
     response: Optional[HttpxBinaryResponseContent] = None
     if custom_llm_provider == "openai":
         api_base = (
-            api_base  # for deepinfra/perplexity/anyscale/groq/friendli_ai we check in get_llm_provider and pass in the api base from there
+            api_base  # for deepinfra/perplexity/anyscale/groq/friendliai we check in get_llm_provider and pass in the api base from there
             or litellm.api_base
             or get_secret("OPENAI_API_BASE")
             or "https://api.openai.com/v1"
