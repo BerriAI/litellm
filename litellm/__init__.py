@@ -405,6 +405,7 @@ openai_compatible_providers: List = [
     "xinference",
     "together_ai",
     "fireworks_ai",
+    "azure_ai",
 ]
 
 
@@ -609,6 +610,7 @@ provider_list: List = [
     "baseten",
     "azure",
     "azure_text",
+    "azure_ai",
     "sagemaker",
     "bedrock",
     "vllm",
