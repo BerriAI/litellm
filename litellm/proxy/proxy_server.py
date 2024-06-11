@@ -163,6 +163,7 @@ from litellm.proxy.auth.auth_checks import (
     get_actual_routes,
     log_to_opentelemetry,
 )
+from litellm.proxy.management_endpoint_utils import management_endpoint_wrapper
 from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
 from litellm.exceptions import RejectedRequestError
 from litellm.integrations.slack_alerting import SlackAlertingArgs, SlackAlerting
@@ -9912,8 +9913,10 @@ async def delete_end_user(
     dependencies=[Depends(user_api_key_auth)],
     response_model=LiteLLM_TeamTable,
 )
+@management_endpoint_wrapper
 async def new_team(
     data: NewTeamRequest,
+    http_request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     litellm_changed_by: Optional[str] = Header(
         None,
@@ -10147,6 +10150,7 @@ async def create_audit_log_for_update(request_data: LiteLLM_AuditLogs):
 @router.post(
     "/team/update", tags=["team management"], dependencies=[Depends(user_api_key_auth)]
 )
+@management_endpoint_wrapper
 async def update_team(
     data: UpdateTeamRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -10252,8 +10256,10 @@ async def update_team(
     tags=["team management"],
     dependencies=[Depends(user_api_key_auth)],
 )
+@management_endpoint_wrapper
 async def team_member_add(
     data: TeamMemberAddRequest,
+    http_request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -10345,8 +10351,10 @@ async def team_member_add(
     tags=["team management"],
     dependencies=[Depends(user_api_key_auth)],
 )
+@management_endpoint_wrapper
 async def team_member_delete(
     data: TeamMemberDeleteRequest,
+    http_request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -10450,8 +10458,10 @@ async def team_member_delete(
 @router.post(
     "/team/delete", tags=["team management"], dependencies=[Depends(user_api_key_auth)]
 )
+@management_endpoint_wrapper
 async def delete_team(
     data: DeleteTeamRequest,
+    http_request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     litellm_changed_by: Optional[str] = Header(
         None,
@@ -10535,10 +10545,12 @@ async def delete_team(
 @router.get(
     "/team/info", tags=["team management"], dependencies=[Depends(user_api_key_auth)]
 )
+@management_endpoint_wrapper
 async def team_info(
+    http_request: Request,
     team_id: str = fastapi.Query(
         default=None, description="Team ID in the request parameters"
-    )
+    ),
 ):
     """
     get info on team + related keys
@@ -10622,8 +10634,10 @@ async def team_info(
 @router.post(
     "/team/block", tags=["team management"], dependencies=[Depends(user_api_key_auth)]
 )
+@management_endpoint_wrapper
 async def block_team(
     data: BlockTeamRequest,
+    http_request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -10644,8 +10658,10 @@ async def block_team(
 @router.post(
     "/team/unblock", tags=["team management"], dependencies=[Depends(user_api_key_auth)]
 )
+@management_endpoint_wrapper
 async def unblock_team(
     data: BlockTeamRequest,
+    http_request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -10666,7 +10682,9 @@ async def unblock_team(
 @router.get(
     "/team/list", tags=["team management"], dependencies=[Depends(user_api_key_auth)]
 )
+@management_endpoint_wrapper
 async def list_team(
+    http_request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
