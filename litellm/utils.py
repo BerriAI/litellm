@@ -9080,7 +9080,7 @@ def exception_type(
                 ):
                     exception_mapping_worked = True
                     raise RateLimitError(
-                        message=f"VertexAIException RateLimitError - {error_str}",
+                        message=f"litellm.RateLimitError: VertexAIException - {error_str}",
                         model=model,
                         llm_provider="vertex_ai",
                         litellm_debug_info=extra_information,
@@ -9092,7 +9092,14 @@ def exception_type(
                             ),
                         ),
                     )
-
+                elif "500 Internal Server Error" in error_str:
+                    exception_mapping_worked = True
+                    raise ServiceUnavailableError(
+                        message=f"litellm.ServiceUnavailableError: VertexAIException - {error_str}",
+                        model=model,
+                        llm_provider="vertex_ai",
+                        litellm_debug_info=extra_information,
+                    )
                 if hasattr(original_exception, "status_code"):
                     if original_exception.status_code == 400:
                         exception_mapping_worked = True
