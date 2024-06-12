@@ -4,6 +4,7 @@ import Image from '@theme/IdealImage';
 
 See the raw request/response sent by LiteLLM in your logging provider (OTEL/Langfuse/etc.).
 
+**on SDK**
 ```python
 # pip install langfuse 
 import litellm
@@ -31,6 +32,13 @@ response = litellm.completion(
     {"role": "user", "content": "Hi 👋 - i'm openai"}
   ]
 )
+```
+
+**on Proxy**
+
+```yaml
+litellm_settings:
+  log_raw_request_response: True
 ```
 
 **Expected Log**
