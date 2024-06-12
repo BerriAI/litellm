@@ -787,6 +787,7 @@ from .llms.openai import (
     OpenAIConfig,
     OpenAITextCompletionConfig,
     MistralConfig,
+    MistralEmbeddingConfig,
     DeepInfraConfig,
 )
 from .llms.azure import (
