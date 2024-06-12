@@ -162,8 +162,12 @@ class ProxyLogging:
         ## INITIALIZE  LITELLM CALLBACKS ##
         self.call_details: dict = {}
         self.call_details["user_api_key_cache"] = user_api_key_cache
-        self.internal_usage_cache = DualCache()
-        self.max_parallel_request_limiter = _PROXY_MaxParallelRequestsHandler()
+        self.internal_usage_cache = DualCache(
+            default_in_memory_ttl=1
+        )  # ping redis cache every 1s
+        self.max_parallel_request_limiter = _PROXY_MaxParallelRequestsHandler(
+            self.internal_usage_cache
+        )
         self.max_budget_limiter = _PROXY_MaxBudgetLimiter()
         self.cache_control_check = _PROXY_CacheControlCheck()
         self.alerting: Optional[List] = None
@@ -189,39 +193,45 @@ class ProxyLogging:
 
     def update_values(
         self,
-        alerting: Optional[List],
-        alerting_threshold: Optional[float],
-        redis_cache: Optional[RedisCache],
+        alerting: Optional[List] = None,
+        alerting_threshold: Optional[float] = None,
+        redis_cache: Optional[RedisCache] = None,
         alert_types: Optional[List[AlertType]] = None,
         alerting_args: Optional[dict] = None,
     ):
-        self.alerting = alerting
+        updated_slack_alerting: bool = False
+        if self.alerting is not None:
+            self.alerting = alerting
+            updated_slack_alerting = True
         if alerting_threshold is not None:
             self.alerting_threshold = alerting_threshold
+            updated_slack_alerting = True
         if alert_types is not None:
             self.alert_types = alert_types
+            updated_slack_alerting = True
 
-        self.slack_alerting_instance.update_values(
-            alerting=self.alerting,
-            alerting_threshold=self.alerting_threshold,
-            alert_types=self.alert_types,
-            alerting_args=alerting_args,
-        )
+        if updated_slack_alerting is True:
+            self.slack_alerting_instance.update_values(
+                alerting=self.alerting,
+                alerting_threshold=self.alerting_threshold,
+                alert_types=self.alert_types,
+                alerting_args=alerting_args,
+            )
 
-        if (
-            self.alerting is not None
-            and "slack" in self.alerting
-            and "daily_reports" in self.alert_types
-        ):
-            # NOTE: ENSURE we only add callbacks when alerting is on
-            # We should NOT add callbacks when alerting is off
-            litellm.callbacks.append(self.slack_alerting_instance)  # type: ignore
+            if (
+                self.alerting is not None
+                and "slack" in self.alerting
+                and "daily_reports" in self.alert_types
+            ):
+                # NOTE: ENSURE we only add callbacks when alerting is on
+                # We should NOT add callbacks when alerting is off
+                litellm.callbacks.append(self.slack_alerting_instance)  # type: ignore
 
         if redis_cache is not None:
             self.internal_usage_cache.redis_cache = redis_cache
 
     def _init_litellm_callbacks(self):
-        print_verbose(f"INITIALIZING LITELLM CALLBACKS!")
+        print_verbose("INITIALIZING LITELLM CALLBACKS!")
         self.service_logging_obj = ServiceLogging()
         litellm.callbacks.append(self.max_parallel_request_limiter)
         litellm.callbacks.append(self.max_budget_limiter)
