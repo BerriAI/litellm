@@ -6242,7 +6242,10 @@ def get_supported_openai_params(
     - None if unmapped
     """
     if not custom_llm_provider:
-        custom_llm_provider = litellm.get_llm_provider(model=model)[1]
+        try:
+            custom_llm_provider = litellm.get_llm_provider(model=model)[1]
+        except BadRequestError:
+            return None
     if custom_llm_provider == "bedrock":
         return litellm.AmazonConverseConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "ollama":

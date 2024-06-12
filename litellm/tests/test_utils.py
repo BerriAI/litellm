@@ -390,4 +390,8 @@ def test_get_max_token_unit_test():
 
 
 def test_get_supported_openai_params() -> None:
+    # Mapped provider
     assert isinstance(get_supported_openai_params("gpt-4"), list)
+
+    # Unmapped provider
+    assert get_supported_openai_params("nonexistent") is None
