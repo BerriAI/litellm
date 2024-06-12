@@ -471,7 +471,7 @@ def test_call_with_user_over_budget(prisma_client):
         asyncio.run(test())
     except Exception as e:
         error_detail = e.message
-        assert "Authentication Error, ExceededBudget:" in error_detail
+        assert "Budget has been exceeded" in error_detail
         print(vars(e))
 
 
@@ -652,7 +652,7 @@ def test_call_with_proxy_over_budget(prisma_client):
             error_detail = e.message
         else:
             error_detail = traceback.format_exc()
-        assert "Authentication Error, ExceededBudget:" in error_detail
+        assert "Budget has been exceeded" in error_detail
         print(vars(e))
 
 
@@ -730,7 +730,7 @@ def test_call_with_user_over_budget_stream(prisma_client):
         asyncio.run(test())
     except Exception as e:
         error_detail = e.message
-        assert "Authentication Error, ExceededBudget:" in error_detail
+        assert "Budget has been exceeded" in error_detail
         print(vars(e))
 
 
@@ -827,7 +827,7 @@ def test_call_with_proxy_over_budget_stream(prisma_client):
         asyncio.run(test())
     except Exception as e:
         error_detail = e.message
-        assert "Authentication Error, ExceededBudget:" in error_detail
+        assert "Budget has been exceeded" in error_detail
         print(vars(e))
 
 
@@ -1362,7 +1362,7 @@ def test_call_with_key_over_budget(prisma_client):
             error_detail = e.message
         else:
             error_detail = str(e)
-        assert "Authentication Error, ExceededTokenBudget:" in error_detail
+        assert "Budget has been exceeded" in error_detail
         print(vars(e))
 
 
@@ -1476,7 +1476,7 @@ def test_call_with_key_over_model_budget(prisma_client):
         # print(f"Error - {str(e)}")
         traceback.print_exc()
         error_detail = e.message
-        assert "Authentication Error, ExceededModelBudget:" in error_detail
+        assert "Budget has been exceeded!" in error_detail
         print(vars(e))
 
 
@@ -1637,7 +1637,7 @@ async def test_call_with_key_over_budget_stream(prisma_client):
     except Exception as e:
         print("Got Exception", e)
         error_detail = e.message
-        assert "Authentication Error, ExceededTokenBudget:" in error_detail
+        assert "Budget has been exceeded" in error_detail
         print(vars(e))
 
 
