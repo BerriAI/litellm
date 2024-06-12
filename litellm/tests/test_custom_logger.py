@@ -34,14 +34,15 @@ class MyCustomHandler(CustomLogger):
         self.response_cost = 0
 
     def log_pre_api_call(self, model, messages, kwargs):
-        print(f"Pre-API Call")
+        print("Pre-API Call")
+        traceback.print_stack()
         self.data_sent_to_api = kwargs["additional_args"].get("complete_input_dict", {})
 
     def log_post_api_call(self, kwargs, response_obj, start_time, end_time):
-        print(f"Post-API Call")
+        print("Post-API Call")
 
     def log_stream_event(self, kwargs, response_obj, start_time, end_time):
-        print(f"On Stream")
+        print("On Stream")
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
         print(f"On Success")
@@ -372,6 +373,7 @@ async def test_async_custom_handler_embedding_optional_param():
     Tests if the openai optional params for embedding - user + encoding_format,
     are logged
     """
+    litellm.set_verbose = True
     customHandler_optional_params = MyCustomHandler()
     litellm.callbacks = [customHandler_optional_params]
     response = await litellm.aembedding(
