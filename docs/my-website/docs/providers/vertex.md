@@ -558,6 +558,29 @@ All models listed [here](https://github.com/BerriAI/litellm/blob/57f37f743886a02
 | text-embedding-preview-0409 | `embedding(model="vertex_ai/text-embedding-preview-0409", input)` |
 | text-multilingual-embedding-preview-0409 | `embedding(model="vertex_ai/text-multilingual-embedding-preview-0409", input)` | 
 
+### Advanced Use `task_type` and `title` (Vertex Specific Params)
+
+👉 `task_type` and `title` are vertex specific params
+
+LiteLLM Supported Vertex Specific Params
+
+```python
+auto_truncate: Optional[bool] = None
+task_type: Optional[Literal["RETRIEVAL_QUERY","RETRIEVAL_DOCUMENT", "SEMANTIC_SIMILARITY", "CLASSIFICATION", "CLUSTERING", "QUESTION_ANSWERING", "FACT_VERIFICATION"]] = None
+title: Optional[str] = None # The title of the document to be embedded. (only valid with task_type=RETRIEVAL_DOCUMENT).
+```
+
+**Example Usage with LiteLLM**
+```python
+response = litellm.embedding(
+    model="vertex_ai/text-embedding-004",
+    input=["good morning from litellm", "gm"]
+    task_type = "RETRIEVAL_DOCUMENT",
+    dimensions=1,
+    auto_truncate=True,
+)
+```
+
 ## Image Generation Models
 
 Usage 
