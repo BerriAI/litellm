@@ -6581,6 +6581,9 @@ def get_llm_provider(
                     or get_secret("FIREWORKSAI_API_KEY")
                     or get_secret("FIREWORKS_AI_TOKEN")
                 )
+            elif custom_llm_provider == "azure_ai":
+                api_base = api_base or get_secret("AZURE_AI_API_BASE")  # type: ignore
+                dynamic_api_key = api_key or get_secret("AZURE_AI_API_KEY")
             elif custom_llm_provider == "mistral":
                 # mistral is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.mistral.ai
                 api_base = (
@@ -6599,9 +6602,6 @@ def get_llm_provider(
                     or get_secret("MISTRAL_AZURE_API_KEY")  # for Azure AI Mistral
                     or get_secret("MISTRAL_API_KEY")
                 )
-            elif custom_llm_provider == "azure_ai":
-                api_base = api_base or get_secret("AZURE_AI_API_BASE")  # type: ignore
-                dynamic_api_key = get_secret("AZURE_AI_API_KEY")
             elif custom_llm_provider == "voyage":
                 # voyage is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.voyageai.com/v1
                 api_base = "https://api.voyageai.com/v1"
