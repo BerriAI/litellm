@@ -115,7 +115,7 @@ class LunaryLogger:
             if optional_params:
                 extra = {**extra, **optional_params}
 
-            tags = metadata.get("metadata", None) 
+            tags = metadata.get("tags", None) 
 
             if extra:
                 extra.pop("extra_body", None)
