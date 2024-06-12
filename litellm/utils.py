@@ -938,7 +938,6 @@ class TextCompletionResponse(OpenAIObject):
         object=None,
         **params,
     ):
-
         if stream:
             object = "text_completion.chunk"
             choices = [TextChoices()]
@@ -947,7 +946,6 @@ class TextCompletionResponse(OpenAIObject):
             if choices is not None and isinstance(choices, list):
                 new_choices = []
                 for choice in choices:
-
                     if isinstance(choice, TextChoices):
                         _new_choice = choice
                     elif isinstance(choice, dict):
@@ -1023,7 +1021,6 @@ class ImageObject(OpenAIObject):
     revised_prompt: Optional[str] = None
 
     def __init__(self, b64_json=None, url=None, revised_prompt=None):
-
         super().__init__(b64_json=b64_json, url=url, revised_prompt=revised_prompt)
 
     def __contains__(self, key):
@@ -1627,7 +1624,6 @@ class Logging:
                             end_time=end_time,
                         )
                     except Exception as e:
-
                         complete_streaming_response = None
                 else:
                     self.sync_streaming_chunks.append(result)
@@ -2397,7 +2393,6 @@ class Logging:
                             "async_complete_streaming_response"
                             in self.model_call_details
                         ):
-
                             await customLogger.async_log_event(
                                 kwargs=self.model_call_details,
                                 response_obj=self.model_call_details[
@@ -6172,13 +6167,16 @@ def get_api_base(
     if litellm.model_alias_map and model in litellm.model_alias_map:
         model = litellm.model_alias_map[model]
     try:
-        model, custom_llm_provider, dynamic_api_key, dynamic_api_base = (
-            get_llm_provider(
-                model=model,
-                custom_llm_provider=_optional_params.custom_llm_provider,
-                api_base=_optional_params.api_base,
-                api_key=_optional_params.api_key,
-            )
+        (
+            model,
+            custom_llm_provider,
+            dynamic_api_key,
+            dynamic_api_base,
+        ) = get_llm_provider(
+            model=model,
+            custom_llm_provider=_optional_params.custom_llm_provider,
+            api_base=_optional_params.api_base,
+            api_key=_optional_params.api_key,
         )
     except Exception as e:
         verbose_logger.debug("Error occurred in getting api base - {}".format(str(e)))
@@ -6583,6 +6581,9 @@ def get_llm_provider(
                     or get_secret("FIREWORKSAI_API_KEY")
                     or get_secret("FIREWORKS_AI_TOKEN")
                 )
+            elif custom_llm_provider == "azure_ai":
+                api_base = api_base or get_secret("AZURE_AI_API_BASE")  # type: ignore
+                dynamic_api_key = api_key or get_secret("AZURE_AI_API_KEY")
             elif custom_llm_provider == "mistral":
                 # mistral is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.mistral.ai
                 api_base = (
@@ -7454,7 +7455,6 @@ def validate_environment(model: Optional[str] = None) -> dict:
 
 
 def set_callbacks(callback_list, function_id=None):
-
     global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, athinaLogger, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, lunaryLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, langsmithLogger, logfireLogger, dynamoLogger, s3Logger, dataDogLogger, prometheusLogger, greenscaleLogger, openMeterLogger
 
     try:
