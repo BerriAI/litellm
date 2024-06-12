@@ -744,10 +744,7 @@ def test_completion_claude_3_function_plus_image():
 
 @pytest.mark.parametrize(
     "provider",
-    [
-        "azure",
-        "azure_ai"
-    ],
+    ["azure", "azure_ai"],
 )
 def test_completion_azure_mistral_large_function_calling(provider):
     """
@@ -780,6 +777,7 @@ def test_completion_azure_mistral_large_function_calling(provider):
             "content": "What's the weather like in Boston today in Fahrenheit?",
         }
     ]
+
     response = completion(
         model="{}/mistral-large-latest".format(provider),
         api_base=os.getenv("AZURE_MISTRAL_API_BASE"),
