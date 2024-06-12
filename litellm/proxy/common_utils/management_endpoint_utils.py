@@ -23,7 +23,9 @@ def management_endpoint_wrapper(func):
 
             if kwargs is None:
                 kwargs = {}
-            user_api_key_dict: UserAPIKeyAuth = kwargs.get("user_api_key_dict")
+            user_api_key_dict: UserAPIKeyAuth = (
+                kwargs.get("user_api_key_dict") or UserAPIKeyAuth()
+            )
             parent_otel_span = user_api_key_dict.parent_otel_span
             if parent_otel_span is not None:
                 from litellm.proxy.proxy_server import open_telemetry_logger
@@ -56,7 +58,9 @@ def management_endpoint_wrapper(func):
 
             if kwargs is None:
                 kwargs = {}
-            user_api_key_dict: UserAPIKeyAuth = kwargs.get("user_api_key_dict")
+            user_api_key_dict: UserAPIKeyAuth = (
+                kwargs.get("user_api_key_dict") or UserAPIKeyAuth()
+            )
             parent_otel_span = user_api_key_dict.parent_otel_span
             if parent_otel_span is not None:
                 from litellm.proxy.proxy_server import open_telemetry_logger
