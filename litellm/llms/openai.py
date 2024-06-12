@@ -164,6 +164,49 @@ class MistralConfig:
         return optional_params
 
 
+class MistralEmbeddingConfig:
+    """
+    Reference: https://docs.mistral.ai/api/#operation/createEmbedding
+    """
+
+    def __init__(
+        self,
+    ) -> None:
+        locals_ = locals().copy()
+        for key, value in locals_.items():
+            if key != "self" and value is not None:
+                setattr(self.__class__, key, value)
+
+    @classmethod
+    def get_config(cls):
+        return {
+            k: v
+            for k, v in cls.__dict__.items()
+            if not k.startswith("__")
+            and not isinstance(
+                v,
+                (
+                    types.FunctionType,
+                    types.BuiltinFunctionType,
+                    classmethod,
+                    staticmethod,
+                ),
+            )
+            and v is not None
+        }
+
+    def get_supported_openai_params(self):
+        return [
+            "encoding_format",
+        ]
+
+    def map_openai_params(self, non_default_params: dict, optional_params: dict):
+        for param, value in non_default_params.items():
+            if param == "encoding_format":
+                optional_params["encoding_format"] = value
+        return optional_params
+
+
 class DeepInfraConfig:
     """
     Reference: https://deepinfra.com/docs/advanced/openai_api
