@@ -6227,7 +6227,7 @@ def get_first_chars_messages(kwargs: dict) -> str:
 
 def get_supported_openai_params(
     model: str,
-    custom_llm_provider: str,
+    custom_llm_provider: Optional[str] = None,
     request_type: Literal["chat_completion", "embeddings"] = "chat_completion",
 ) -> Optional[list]:
     """
@@ -6242,6 +6242,11 @@ def get_supported_openai_params(
     - List if custom_llm_provider is mapped
     - None if unmapped
     """
+    if not custom_llm_provider:
+        try:
+            custom_llm_provider = litellm.get_llm_provider(model=model)[1]
+        except BadRequestError:
+            return None
     if custom_llm_provider == "bedrock":
         return litellm.AmazonConverseConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "ollama":
