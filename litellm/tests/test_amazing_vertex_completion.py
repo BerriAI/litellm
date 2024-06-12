@@ -810,6 +810,21 @@ def test_vertexai_embedding():
         pytest.fail(f"Error occurred: {e}")
 
 
+def test_vertexai_embedding_embedding_latest():
+    try:
+        load_vertex_ai_credentials()
+        litellm.set_verbose = True
+        response = embedding(
+            model="vertex_ai/text-embedding-004",
+            input=["good morning from litellm", "this is another item"],
+        )
+        print(f"response:", response)
+    except litellm.RateLimitError as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
 @pytest.mark.asyncio
 async def test_vertexai_aembedding():
     try:

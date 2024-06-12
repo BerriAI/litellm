@@ -548,6 +548,8 @@ All models listed [here](https://github.com/BerriAI/litellm/blob/57f37f743886a02
 
 | Model Name               | Function Call                                                                                                                                                      |
 |--------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| text-embedding-004 | `embedding(model="vertex_ai/text-embedding-004", input)` | 
+| text-multilingual-embedding-002 | `embedding(model="vertex_ai/text-multilingual-embedding-002", input)` | 
 | textembedding-gecko | `embedding(model="vertex_ai/textembedding-gecko", input)` | 
 | textembedding-gecko-multilingual | `embedding(model="vertex_ai/textembedding-gecko-multilingual", input)` | 
 | textembedding-gecko-multilingual@001 | `embedding(model="vertex_ai/textembedding-gecko-multilingual@001", input)` | 
