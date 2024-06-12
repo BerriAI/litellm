@@ -30,7 +30,7 @@ from dataclasses import (
     dataclass,
     field,
 )
-
+import os
 import litellm._service_logger  # for storing API inputs, outputs, and metadata
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
 from litellm.caching import DualCache
@@ -49,9 +49,9 @@ except (ImportError, AttributeError):
 
     filename = pkg_resources.resource_filename(__name__, "llms/tokenizers")
 
-os.environ["TIKTOKEN_CACHE_DIR"] = (
-    filename  # use local copy of tiktoken b/c of - https://github.com/BerriAI/litellm/issues/1071
-)
+os.environ["TIKTOKEN_CACHE_DIR"] = os.getenv(
+    "CUSTOM_TIKTOKEN_CACHE_DIR", filename
+)  # use local copy of tiktoken b/c of - https://github.com/BerriAI/litellm/issues/1071
 
 encoding = tiktoken.get_encoding("cl100k_base")
 from importlib import resources
@@ -4031,7 +4031,10 @@ def openai_token_counter(
     """
     print_verbose(f"LiteLLM: Utils - Counting tokens for OpenAI model={model}")
     try:
-        encoding = tiktoken.encoding_for_model(model)
+        if "gpt-4o" in model:
+            encoding = tiktoken.get_encoding("o200k_base")
+        else:
+            encoding = tiktoken.encoding_for_model(model)
     except KeyError:
         print_verbose("Warning: model not found. Using cl100k_base encoding.")
         encoding = tiktoken.get_encoding("cl100k_base")
