@@ -518,15 +518,18 @@ class Choices(OpenAIObject):
         self,
         finish_reason=None,
         index=0,
-        message=None,
+        message: Optional[Union[Message, dict]] = None,
         logprobs=None,
         enhancements=None,
         **params,
     ):
         super(Choices, self).__init__(**params)
-        self.finish_reason = (
-            map_finish_reason(finish_reason) or "stop"
-        )  # set finish_reason for all responses
+        if finish_reason is not None:
+            self.finish_reason = map_finish_reason(
+                finish_reason
+            )  # set finish_reason for all responses
+        else:
+            self.finish_reason = "stop"
         self.index = index
         if message is None:
             self.message = Message()
@@ -2822,7 +2825,9 @@ class Rules:
                     raise litellm.APIResponseValidationError(message="LLM Response failed post-call-rule check", llm_provider="", model=model)  # type: ignore
         return True
 
-    def post_call_rules(self, input: str, model: str):
+    def post_call_rules(self, input: Optional[str], model: str) -> bool:
+        if input is None:
+            return True
         for rule in litellm.post_call_rules:
             if callable(rule):
                 decision = rule(input)
@@ -3101,9 +3106,9 @@ def client(original_function):
                         pass
                     else:
                         if isinstance(original_response, ModelResponse):
-                            model_response = original_response["choices"][0]["message"][
-                                "content"
-                            ]
+                            model_response = original_response.choices[
+                                0
+                            ].message.content
                             ### POST-CALL RULES ###
                             rules_obj.post_call_rules(input=model_response, model=model)
         except Exception as e:

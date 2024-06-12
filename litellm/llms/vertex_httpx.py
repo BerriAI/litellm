@@ -9,6 +9,14 @@ import litellm, uuid
 import httpx, inspect  # type: ignore
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from .base import BaseLLM
+from litellm.types.llms.vertex_ai import (
+    ContentType,
+    SystemInstructions,
+    PartType,
+    RequestBody,
+    GenerateContentResponseBody,
+)
+from litellm.llms.vertex_ai import _gemini_convert_messages_with_history
 
 
 class VertexAIError(Exception):
@@ -33,16 +41,110 @@ class VertexLLM(BaseLLM):
         self.project_id: Optional[str] = None
         self.async_handler: Optional[AsyncHTTPHandler] = None
 
-    def load_auth(self) -> Tuple[Any, str]:
+    def _process_response(
+        self,
+        model: str,
+        response: httpx.Response,
+        model_response: ModelResponse,
+        stream: bool,
+        logging_obj: litellm.utils.Logging,
+        optional_params: dict,
+        api_key: str,
+        data: Union[dict, str],
+        messages: List,
+        print_verbose,
+        encoding,
+    ) -> ModelResponse:
+
+        ## LOGGING
+        logging_obj.post_call(
+            input=messages,
+            api_key="",
+            original_response=response.text,
+            additional_args={"complete_input_dict": data},
+        )
+
+        print_verbose(f"raw model_response: {response.text}")
+
+        ## RESPONSE OBJECT
+        try:
+            completion_response = GenerateContentResponseBody(**response.json())  # type: ignore
+        except Exception as e:
+            raise VertexAIError(
+                message="Received={}, Error converting to valid response block={}. File an issue if litellm error - https://github.com/BerriAI/litellm/issues".format(
+                    response.text, str(e)
+                ),
+                status_code=422,
+            )
+
+        model_response.choices = []
+
+        ## GET MODEL ##
+        model_response.model = model
+        ## GET TEXT ##
+        for idx, candidate in enumerate(completion_response["candidates"]):
+            if candidate.get("content", None) is None:
+                continue
+
+            message = litellm.Message(
+                content=candidate["content"]["parts"][0]["text"],
+                role="assistant",
+                logprobs=None,
+                function_call=None,
+                tool_calls=None,
+            )
+            choice = litellm.Choices(
+                finish_reason=candidate.get("finishReason", "stop"),
+                index=candidate.get("index", idx),
+                message=message,
+                logprobs=None,
+                enhancements=None,
+            )
+
+            model_response.choices.append(choice)
+
+        ## GET USAGE ##
+        usage = litellm.Usage(
+            prompt_tokens=completion_response["usageMetadata"]["promptTokenCount"],
+            completion_tokens=completion_response["usageMetadata"][
+                "candidatesTokenCount"
+            ],
+            total_tokens=completion_response["usageMetadata"]["totalTokenCount"],
+        )
+
+        setattr(model_response, "usage", usage)
+
+        return model_response
+
+    def get_vertex_region(self, vertex_region: Optional[str]) -> str:
+        return vertex_region or "us-central1"
+
+    def load_auth(
+        self, credentials: Optional[str], project_id: Optional[str]
+    ) -> Tuple[Any, str]:
         from google.auth.transport.requests import Request  # type: ignore[import-untyped]
         from google.auth.credentials import Credentials  # type: ignore[import-untyped]
         import google.auth as google_auth
 
-        credentials, project_id = google_auth.default(
-            scopes=["https://www.googleapis.com/auth/cloud-platform"],
-        )
+        if credentials is not None and isinstance(credentials, str):
+            import google.oauth2.service_account
 
-        credentials.refresh(Request())
+            json_obj = json.loads(credentials)
+
+            creds = google.oauth2.service_account.Credentials.from_service_account_info(
+                json_obj,
+                scopes=["https://www.googleapis.com/auth/cloud-platform"],
+            )
+
+            if project_id is None:
+                project_id = creds.project_id
+        else:
+            creds, project_id = google_auth.default(
+                quota_project_id=project_id,
+                scopes=["https://www.googleapis.com/auth/cloud-platform"],
+            )
+
+        creds.refresh(Request())
 
         if not project_id:
             raise ValueError("Could not resolve project_id")
@@ -52,38 +154,135 @@ class VertexLLM(BaseLLM):
                 f"Expected project_id to be a str but got {type(project_id)}"
             )
 
-        return credentials, project_id
+        return creds, project_id
 
     def refresh_auth(self, credentials: Any) -> None:
         from google.auth.transport.requests import Request  # type: ignore[import-untyped]
 
         credentials.refresh(Request())
 
-    def _prepare_request(self, request: httpx.Request) -> None:
-        access_token = self._ensure_access_token()
-
-        if request.headers.get("Authorization"):
-            # already authenticated, nothing for us to do
-            return
-
-        request.headers["Authorization"] = f"Bearer {access_token}"
-
-    def _ensure_access_token(self) -> str:
-        if self.access_token is not None:
-            return self.access_token
+    def _ensure_access_token(
+        self, credentials: Optional[str], project_id: Optional[str]
+    ) -> Tuple[str, str]:
+        """
+        Returns auth token and project id
+        """
+        if self.access_token is not None and self.project_id is not None:
+            return self.access_token, self.project_id
 
         if not self._credentials:
-            self._credentials, project_id = self.load_auth()
+            self._credentials, project_id = self.load_auth(
+                credentials=credentials, project_id=project_id
+            )
             if not self.project_id:
                 self.project_id = project_id
         else:
             self.refresh_auth(self._credentials)
 
-        if not self._credentials.token:
+            if not self.project_id:
+                self.project_id = self._credentials.project_id
+
+        if not self.project_id:
+            raise ValueError("Could not resolve project_id")
+
+        if not self._credentials or not self._credentials.token:
             raise RuntimeError("Could not resolve API token from the environment")
 
-        assert isinstance(self._credentials.token, str)
-        return self._credentials.token
+        return self._credentials.token, self.project_id
+
+    def completion(
+        self,
+        model: str,
+        messages: list,
+        model_response: ModelResponse,
+        print_verbose: Callable,
+        encoding,
+        logging_obj,
+        optional_params: dict,
+        acompletion: bool,
+        timeout: Optional[Union[float, httpx.Timeout]],
+        vertex_project: Optional[str],
+        vertex_location: Optional[str],
+        vertex_credentials: Optional[str],
+        litellm_params=None,
+        logger_fn=None,
+        extra_headers: Optional[dict] = None,
+        client: Optional[Union[AsyncHTTPHandler, HTTPHandler]] = None,
+    ) -> Union[ModelResponse, CustomStreamWrapper]:
+
+        auth_header, vertex_project = self._ensure_access_token(
+            credentials=vertex_credentials, project_id=vertex_project
+        )
+        vertex_location = self.get_vertex_region(vertex_region=vertex_location)
+        stream = optional_params.pop("stream", None)
+
+        ### SET RUNTIME ENDPOINT ###
+        url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:generateContent"
+
+        ## TRANSFORMATION ##
+        # Separate system prompt from rest of message
+        system_prompt_indices = []
+        system_content_blocks: List[PartType] = []
+        for idx, message in enumerate(messages):
+            if message["role"] == "system":
+                _system_content_block = PartType(text=message["content"])
+                system_content_blocks.append(_system_content_block)
+                system_prompt_indices.append(idx)
+        if len(system_prompt_indices) > 0:
+            for idx in reversed(system_prompt_indices):
+                messages.pop(idx)
+        system_instructions = SystemInstructions(parts=system_content_blocks)
+        content = _gemini_convert_messages_with_history(messages=messages)
+
+        data = RequestBody(system_instruction=system_instructions, contents=content)
+        headers = {
+            "Content-Type": "application/json; charset=utf-8",
+            "Authorization": f"Bearer {auth_header}",
+        }
+
+        ## LOGGING
+        logging_obj.pre_call(
+            input=messages,
+            api_key="",
+            additional_args={
+                "complete_input_dict": data,
+                "api_base": url,
+                "headers": headers,
+            },
+        )
+
+        ## COMPLETION CALL ##
+        if client is None or isinstance(client, AsyncHTTPHandler):
+            _params = {}
+            if timeout is not None:
+                if isinstance(timeout, float) or isinstance(timeout, int):
+                    timeout = httpx.Timeout(timeout)
+                _params["timeout"] = timeout
+            client = HTTPHandler(**_params)  # type: ignore
+        else:
+            client = client
+        try:
+            response = client.post(url=url, headers=headers, json=data)  # type: ignore
+            response.raise_for_status()
+        except httpx.HTTPStatusError as err:
+            error_code = err.response.status_code
+            raise VertexAIError(status_code=error_code, message=response.text)
+        except httpx.TimeoutException:
+            raise VertexAIError(status_code=408, message="Timeout error occurred.")
+
+        return self._process_response(
+            model=model,
+            response=response,
+            model_response=model_response,
+            stream=stream,
+            logging_obj=logging_obj,
+            optional_params=optional_params,
+            api_key="",
+            data=data,  # type: ignore
+            messages=messages,
+            print_verbose=print_verbose,
+            encoding=encoding,
+        )
 
     def image_generation(
         self,
@@ -163,7 +362,7 @@ class VertexLLM(BaseLLM):
         } \
         "https://us-central1-aiplatform.googleapis.com/v1/projects/PROJECT_ID/locations/us-central1/publishers/google/models/imagegeneration:predict"
         """
-        auth_header = self._ensure_access_token()
+        auth_header, _ = self._ensure_access_token(credentials=None, project_id=None)
         optional_params = optional_params or {
             "sampleCount": 1
         }  # default optional params
