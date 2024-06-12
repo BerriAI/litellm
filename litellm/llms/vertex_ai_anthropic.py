@@ -123,7 +123,7 @@ class VertexAIAnthropicConfig:
 
 
 """
-- Run client init 
+- Run client init
 - Support async completion, streaming
 """
 
@@ -236,15 +236,17 @@ def completion(
         if client is None:
             if vertex_credentials is not None and isinstance(vertex_credentials, str):
                 import google.oauth2.service_account
-
-                json_obj = json.loads(vertex_credentials)
-
                 creds = (
                     google.oauth2.service_account.Credentials.from_service_account_info(
-                        json_obj,
+                        json.loads(vertex_credentials),
                         scopes=["https://www.googleapis.com/auth/cloud-platform"],
                     )
                 )
+                ### CHECK IF ACCESS
+                access_token = refresh_auth(credentials=creds)
+            else:
+                import google.auth
+                creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
                 ### CHECK IF ACCESS
                 access_token = refresh_auth(credentials=creds)
 
