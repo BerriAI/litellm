@@ -79,10 +79,6 @@ async def add_litellm_data_to_request(
                     data["cache"][k] = v
 
     verbose_proxy_logger.debug("receiving data: %s", data)
-    # users can pass in 'user' param to /chat/completions. Don't override it
-    if data.get("user", None) is None and user_api_key_dict.user_id is not None:
-        # if users are using user_api_key_auth, set `user` in `data`
-        data["user"] = user_api_key_dict.user_id
 
     if "metadata" not in data:
         data["metadata"] = {}
