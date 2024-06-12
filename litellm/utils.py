@@ -10066,6 +10066,14 @@ def get_secret(
                 return oidc_token
             else:
                 raise ValueError("Github OIDC provider failed")
+        elif oidc_provider == "azure":
+            # https://azure.github.io/azure-workload-identity/docs/quick-start.html
+            azure_federated_token_file = os.getenv("AZURE_FEDERATED_TOKEN_FILE")
+            if azure_federated_token_file is None:
+                raise ValueError("AZURE_FEDERATED_TOKEN_FILE not found in environment")
+            with open(azure_federated_token_file, "r") as f:
+                oidc_token = f.read()
+                return oidc_token
         else:
             raise ValueError("Unsupported OIDC provider")
 
