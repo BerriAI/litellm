@@ -8771,6 +8771,13 @@ def exception_type(
                         response=original_exception.response,
                         litellm_debug_info=extra_information,
                     )
+                if "Request failed during generation" in error_str:
+                    # this is an internal server error from predibase
+                    raise litellm.InternalServerError(
+                        message=f"PredibaseException - {error_str}",
+                        llm_provider="predibase",
+                        model=model,
+                    )
                 elif hasattr(original_exception, "status_code"):
                     if original_exception.status_code == 500:
                         exception_mapping_worked = True
