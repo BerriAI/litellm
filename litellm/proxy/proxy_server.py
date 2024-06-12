@@ -8190,7 +8190,9 @@ async def _get_spend_report_for_time_range(
 
         return response, spend_per_tag
     except Exception as e:
-        verbose_proxy_logger.error("Exception in _get_daily_spend_reports", e)  # noqa
+        verbose_proxy_logger.error(
+            "Exception in _get_daily_spend_reports {}".format(str(e))
+        )  # noqa
 
 
 @router.post(
