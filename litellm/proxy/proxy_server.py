@@ -2852,6 +2852,7 @@ class ProxyConfig:
             use_azure_key_vault = general_settings.get("use_azure_key_vault", False)
             load_from_azure_key_vault(use_azure_key_vault=use_azure_key_vault)
             ### ALERTING ###
+
             proxy_logging_obj.update_values(
                 alerting=general_settings.get("alerting", None),
                 alerting_threshold=general_settings.get("alerting_threshold", 600),
@@ -3962,6 +3963,11 @@ async def startup_event():
     proxy_logging_obj.slack_alerting_instance.update_values(llm_router=llm_router)
 
     db_writer_client = HTTPHandler()
+
+    ## UPDATE INTERNAL USAGE CACHE ##
+    proxy_logging_obj.update_values(
+        redis_cache=redis_usage_cache
+    )  # used by parallel request limiter for rate limiting keys across instances
 
     proxy_logging_obj._init_litellm_callbacks()  # INITIALIZE LITELLM CALLBACKS ON SERVER STARTUP <- do this to catch any logging errors on startup, not when calls are being made
 
