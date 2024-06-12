@@ -578,4 +578,4 @@ async def test_users_in_team_budget():
         except Exception as e:
             print("got exception, this is expected")
             print(e)
-            assert "Crossed spend within team" in str(e)
+            assert "Budget has been exceeded" in str(e)
