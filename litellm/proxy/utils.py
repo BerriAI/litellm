@@ -2018,6 +2018,7 @@ def get_logging_payload(
         user_api_key_team_id=None,
         user_api_key_user_id=None,
         user_api_key_team_alias=None,
+        spend_logs_metadata=None,
     )
     if isinstance(metadata, dict):
         verbose_proxy_logger.debug(
