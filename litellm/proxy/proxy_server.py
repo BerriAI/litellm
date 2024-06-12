@@ -1078,8 +1078,9 @@ async def user_api_key_auth(
 
                                 _user_id = _user.get("user_id", None)
                                 if user_current_spend > user_max_budget:
-                                    raise Exception(
-                                        f"ExceededBudget: User {_user_id} has exceeded their budget. Current spend: {user_current_spend}; Max Budget: {user_max_budget}"
+                                    raise litellm.BudgetExceededError(
+                                        current_cost=user_current_spend,
+                                        max_budget=user_max_budget,
                                     )
                     else:
                         # Token exists, not expired now check if its in budget for the user
@@ -1110,9 +1111,11 @@ async def user_api_key_auth(
                             )
 
                             if user_current_spend > user_max_budget:
-                                raise Exception(
-                                    f"ExceededBudget: User {valid_token.user_id} has exceeded their budget. Current spend: {user_current_spend}; Max Budget: {user_max_budget}"
+                                raise litellm.BudgetExceededError(
+                                    current_cost=user_current_spend,
+                                    max_budget=user_max_budget,
                                 )
+
             # Check 3. Check if user is in their team budget
             if valid_token.team_member_spend is not None:
                 if prisma_client is not None:
@@ -1146,8 +1149,9 @@ async def user_api_key_auth(
                         )
                         if team_member_budget is not None and team_member_budget > 0:
                             if valid_token.team_member_spend > team_member_budget:
-                                raise Exception(
-                                    f"ExceededBudget: Crossed spend within team. UserID: {valid_token.user_id}, in team {valid_token.team_id} has exceeded their budget. Current spend: {valid_token.team_member_spend}; Max Budget: {team_member_budget}"
+                                raise litellm.BudgetExceededError(
+                                    current_cost=valid_token.team_member_spend,
+                                    max_budget=team_member_budget,
                                 )
 
             # Check 3. If token is expired
@@ -1205,8 +1209,9 @@ async def user_api_key_auth(
                 ####################################
 
                 if valid_token.spend >= valid_token.max_budget:
-                    raise Exception(
-                        f"ExceededTokenBudget: Current spend for token: {valid_token.spend}; Max Budget for Token: {valid_token.max_budget}"
+                    raise litellm.BudgetExceededError(
+                        current_cost=valid_token.spend,
+                        max_budget=valid_token.max_budget,
                     )
 
             # Check 5. Token Model Spend is under Model budget
@@ -1242,8 +1247,9 @@ async def user_api_key_auth(
                     ):
                         current_model_spend = model_spend[0]["_sum"]["spend"]
                         current_model_budget = max_budget_per_model[current_model]
-                        raise Exception(
-                            f"ExceededModelBudget: Current spend for model: {current_model_spend}; Max Budget for Model: {current_model_budget}"
+                        raise litellm.BudgetExceededError(
+                            current_cost=current_model_spend,
+                            max_budget=current_model_budget,
                         )
 
             # Check 6. Team spend is under Team budget
@@ -1267,8 +1273,9 @@ async def user_api_key_auth(
                 )
 
                 if valid_token.team_spend >= valid_token.team_max_budget:
-                    raise Exception(
-                        f"ExceededTokenBudget: Current Team Spend: {valid_token.team_spend}; Max Budget for Team: {valid_token.team_max_budget}"
+                    raise litellm.BudgetExceededError(
+                        current_cost=valid_token.team_spend,
+                        max_budget=valid_token.team_max_budget,
                     )
 
             # Check 8: Additional Common Checks across jwt + key auth
