@@ -1561,3 +1561,12 @@ class SpanAttributes(str, enum.Enum):
     LLM_OPENAI_API_BASE = "gen_ai.openai.api_base"
     LLM_OPENAI_API_VERSION = "gen_ai.openai.api_version"
     LLM_OPENAI_API_TYPE = "gen_ai.openai.api_type"
+
+
+class ManagementEndpointLoggingPayload(LiteLLMBase):
+    route: str
+    request_data: dict
+    response: Optional[dict] = None
+    exception: Optional[Any] = None
+    start_time: Optional[datetime] = None
+    end_time: Optional[datetime] = None
