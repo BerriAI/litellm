@@ -9919,7 +9919,7 @@ async def delete_end_user(
 @management_endpoint_wrapper
 async def new_team(
     data: NewTeamRequest,
-    http_request: Request,
+    http_request: Optional[Request] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     litellm_changed_by: Optional[str] = Header(
         None,
@@ -10262,7 +10262,7 @@ async def update_team(
 @management_endpoint_wrapper
 async def team_member_add(
     data: TeamMemberAddRequest,
-    http_request: Request,
+    http_request: Optional[Request] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -10357,7 +10357,7 @@ async def team_member_add(
 @management_endpoint_wrapper
 async def team_member_delete(
     data: TeamMemberDeleteRequest,
-    http_request: Request,
+    http_request: Optional[Request] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -10464,7 +10464,7 @@ async def team_member_delete(
 @management_endpoint_wrapper
 async def delete_team(
     data: DeleteTeamRequest,
-    http_request: Request,
+    http_request: Optional[Request] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     litellm_changed_by: Optional[str] = Header(
         None,
@@ -10550,7 +10550,7 @@ async def delete_team(
 )
 @management_endpoint_wrapper
 async def team_info(
-    http_request: Request,
+    http_request: Optional[Request] = None,
     team_id: str = fastapi.Query(
         default=None, description="Team ID in the request parameters"
     ),
@@ -10640,7 +10640,7 @@ async def team_info(
 @management_endpoint_wrapper
 async def block_team(
     data: BlockTeamRequest,
-    http_request: Request,
+    http_request: Optional[Request] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -10664,7 +10664,7 @@ async def block_team(
 @management_endpoint_wrapper
 async def unblock_team(
     data: BlockTeamRequest,
-    http_request: Request,
+    http_request: Optional[Request] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -10687,7 +10687,7 @@ async def unblock_team(
 )
 @management_endpoint_wrapper
 async def list_team(
-    http_request: Request,
+    http_request: Optional[Request] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
