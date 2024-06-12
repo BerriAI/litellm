@@ -4036,9 +4036,6 @@ async def startup_event():
             )
         )
 
-    verbose_proxy_logger.debug(
-        f"custom_db_client client {custom_db_client}. Master_key: {master_key}"
-    )
     if custom_db_client is not None and master_key is not None:
         # add master key to db
         await generate_key_helper_fn(
