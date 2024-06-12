@@ -816,8 +816,10 @@ def test_vertexai_embedding_embedding_latest():
         litellm.set_verbose = True
         response = embedding(
             model="vertex_ai/text-embedding-004",
-            input=["good morning from litellm", "this is another item"],
+            input=["hi"],
+            dimensions=1,
         )
+        assert len(response.data[0]["embedding"]) == 1
         print(f"response:", response)
     except litellm.RateLimitError as e:
         pass
