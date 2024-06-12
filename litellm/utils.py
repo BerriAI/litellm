@@ -4943,7 +4943,18 @@ def get_optional_params_embeddings(
                 message=f"Setting user/encoding format is not supported by {custom_llm_provider}. To drop it from the call, set `litellm.drop_params = True`.",
             )
         return {**non_default_params, **kwargs}
-
+    if custom_llm_provider == "mistral":
+        supported_params = get_supported_openai_params(
+            model=model,
+            custom_llm_provider="mistral",
+            request_type="embeddings",
+        )
+        _check_valid_arg(supported_params=supported_params)
+        optional_params = litellm.MistralEmbeddingConfig().map_openai_params(
+            non_default_params=non_default_params, optional_params={}
+        )
+        final_params = {**optional_params, **kwargs}
+        return final_params
     if (
         custom_llm_provider != "openai"
         and custom_llm_provider != "azure"
@@ -6352,7 +6363,10 @@ def get_supported_openai_params(
             "max_retries",
         ]
     elif custom_llm_provider == "mistral":
-        return litellm.MistralConfig().get_supported_openai_params()
+        if request_type == "chat_completion":
+            return litellm.MistralConfig().get_supported_openai_params()
+        elif request_type == "embeddings":
+            return litellm.MistralEmbeddingConfig().get_supported_openai_params()
     elif custom_llm_provider == "replicate":
         return [
             "stream",
