@@ -137,6 +137,7 @@ async def test_new_user_response(prisma_client):
             NewTeamRequest(
                 team_id=_team_id,
             ),
+            http_request=Request(scope={"type": "http"}),
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.PROXY_ADMIN,
                 api_key="sk-1234",
@@ -368,6 +369,7 @@ async def test_call_with_valid_model_using_all_models(prisma_client):
         new_team_response = await new_team(
             data=team_request,
             user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+            http_request=Request(scope={"type": "http"}),
         )
         print("new_team_response", new_team_response)
         created_team_id = new_team_response["team_id"]
@@ -1086,6 +1088,7 @@ def test_generate_and_update_key(prisma_client):
                     api_key="sk-1234",
                     user_id="1234",
                 ),
+                http_request=Request(scope={"type": "http"}),
             )
 
             _team_2 = "ishaan-special-team_{}".format(uuid.uuid4())
@@ -1098,6 +1101,7 @@ def test_generate_and_update_key(prisma_client):
                     api_key="sk-1234",
                     user_id="1234",
                 ),
+                http_request=Request(scope={"type": "http"}),
             )
 
             request = NewUserRequest(
@@ -2050,6 +2054,7 @@ async def test_master_key_hashing(prisma_client):
                 api_key="sk-1234",
                 user_id="1234",
             ),
+            http_request=Request(scope={"type": "http"}),
         )
 
         _response = await new_user(
@@ -2183,6 +2188,7 @@ async def test_create_update_team(prisma_client):
             tpm_limit=20,
             rpm_limit=20,
         ),
+        http_request=Request(scope={"type": "http"}),
         user_api_key_dict=UserAPIKeyAuth(
             user_role=LitellmUserRoles.PROXY_ADMIN,
             api_key="sk-1234",
@@ -2232,7 +2238,10 @@ async def test_create_update_team(prisma_client):
     )
 
     # now hit team_info
-    response = await team_info(team_id=_team_id)
+    response = await team_info(
+        team_id=_team_id,
+        http_request=Request(scope={"type": "http"}),
+    )
 
     print("RESPONSE from team_info", response)
 
