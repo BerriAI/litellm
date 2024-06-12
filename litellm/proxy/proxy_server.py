@@ -1075,8 +1075,9 @@ async def user_api_key_auth(
 
                                 _user_id = _user.get("user_id", None)
                                 if user_current_spend > user_max_budget:
-                                    raise Exception(
-                                        f"ExceededBudget: User {_user_id} has exceeded their budget. Current spend: {user_current_spend}; Max Budget: {user_max_budget}"
+                                    raise litellm.BudgetExceededError(
+                                        current_cost=user_current_spend,
+                                        max_budget=user_max_budget,
                                     )
                     else:
                         # Token exists, not expired now check if its in budget for the user
@@ -1107,9 +1108,11 @@ async def user_api_key_auth(
                             )
 
                             if user_current_spend > user_max_budget:
-                                raise Exception(
-                                    f"ExceededBudget: User {valid_token.user_id} has exceeded their budget. Current spend: {user_current_spend}; Max Budget: {user_max_budget}"
+                                raise litellm.BudgetExceededError(
+                                    current_cost=user_current_spend,
+                                    max_budget=user_max_budget,
                                 )
+
             # Check 3. Check if user is in their team budget
             if valid_token.team_member_spend is not None:
                 if prisma_client is not None:
@@ -1143,8 +1146,9 @@ async def user_api_key_auth(
                         )
                         if team_member_budget is not None and team_member_budget > 0:
                             if valid_token.team_member_spend > team_member_budget:
-                                raise Exception(
-                                    f"ExceededBudget: Crossed spend within team. UserID: {valid_token.user_id}, in team {valid_token.team_id} has exceeded their budget. Current spend: {valid_token.team_member_spend}; Max Budget: {team_member_budget}"
+                                raise litellm.BudgetExceededError(
+                                    current_cost=valid_token.team_member_spend,
+                                    max_budget=team_member_budget,
                                 )
 
             # Check 3. If token is expired
