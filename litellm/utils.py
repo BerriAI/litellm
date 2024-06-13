@@ -3568,7 +3568,7 @@ def client(original_function):
                     if cached_result is not None and not isinstance(
                         cached_result, list
                     ):
-                        print_verbose(f"Cache Hit!")
+                        print_verbose("Cache Hit!", log_level="INFO")
                         cache_hit = True
                         end_time = datetime.datetime.now()
                         (
