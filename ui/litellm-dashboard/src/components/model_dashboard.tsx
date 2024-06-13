@@ -139,6 +139,7 @@ interface ProviderSettings {
 enum Providers {
   OpenAI = "OpenAI",
   Azure = "Azure",
+  Azure_AI_Studio = "Azure AI Studio",
   Anthropic = "Anthropic",
   Google_AI_Studio = "Google AI Studio",
   Bedrock = "Amazon Bedrock",
@@ -151,6 +152,7 @@ enum Providers {
 const provider_map: Record<string, string> = {
   OpenAI: "openai",
   Azure: "azure",
+  Azure_AI_Studio: "azure_ai",
   Anthropic: "anthropic",
   Google_AI_Studio: "gemini",
   Bedrock: "bedrock",
@@ -158,6 +160,7 @@ const provider_map: Record<string, string> = {
   Vertex_AI: "vertex_ai",
   Databricks: "databricks",
   Ollama: "ollama",
+
 };
 
 const retry_policy_map: Record<string, string> = {
@@ -1245,6 +1248,10 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
       return "claude-3-opus";
     } else if (selectedProvider == Providers.Google_AI_Studio) {
       return "gemini-pro";
+    } else if (selectedProvider == Providers.Azure_AI_Studio) {
+      return "azure_ai/command-r-plus";
+    } else if (selectedProvider == Providers.Azure) {
+      return "azure/my-deployment";
     } else {
       return "gpt-3.5-turbo";
     }
