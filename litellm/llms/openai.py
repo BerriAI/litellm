@@ -28,6 +28,7 @@ from .prompt_templates.factory import prompt_factory, custom_prompt
 from openai import OpenAI, AsyncOpenAI
 from ..types.llms.openai import *
 import openai
+from litellm.types.utils import ProviderField
 
 
 class OpenAIError(Exception):
@@ -205,6 +206,25 @@ class MistralEmbeddingConfig:
             if param == "encoding_format":
                 optional_params["encoding_format"] = value
         return optional_params
+
+
+class AzureAIStudioConfig:
+    def get_required_params(self) -> List[ProviderField]:
+        """For a given provider, return it's required fields with a description"""
+        return [
+            ProviderField(
+                field_name="api_key",
+                field_type="string",
+                field_description="Your Azure AI Studio API Key.",
+                field_value="zEJ...",
+            ),
+            ProviderField(
+                field_name="api_base",
+                field_type="string",
+                field_description="Your Azure AI Studio API Base.",
+                field_value="https://Mistral-serverless.",
+            ),
+        ]
 
 
 class DeepInfraConfig:
