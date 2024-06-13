@@ -255,7 +255,7 @@ def test_completion_claude():
         {"content": user_message, "role": "user"},
     ]
     try:
-        # test without max tokens
+        # test without max-tokens
         response = completion(
             model="claude-instant-1", messages=messages, request_timeout=10
         )
