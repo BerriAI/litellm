@@ -879,6 +879,7 @@ async def user_api_key_auth(
 
         ## check for cache hit (In-Memory Cache)
         original_api_key = api_key  # (Patch: For DynamoDB Backwards Compatibility)
+        _user_role = None
         if api_key.startswith("sk-"):
             api_key = hash_token(token=api_key)
         valid_token: Optional[UserAPIKeyAuth] = user_api_key_cache.get_cache(  # type: ignore
@@ -1512,7 +1513,7 @@ async def user_api_key_auth(
                 ):
                     return UserAPIKeyAuth(
                         api_key=api_key,
-                        user_role="app_owner",
+                        user_role=_user_role,
                         parent_otel_span=parent_otel_span,
                         **valid_token_dict,
                     )
