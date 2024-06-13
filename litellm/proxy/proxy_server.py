@@ -879,6 +879,7 @@ async def user_api_key_auth(
 
         ## check for cache hit (In-Memory Cache)
         original_api_key = api_key  # (Patch: For DynamoDB Backwards Compatibility)
+        _user_role = None
         if api_key.startswith("sk-"):
             api_key = hash_token(token=api_key)
         valid_token: Optional[UserAPIKeyAuth] = user_api_key_cache.get_cache(  # type: ignore
@@ -1512,7 +1513,7 @@ async def user_api_key_auth(
                 ):
                     return UserAPIKeyAuth(
                         api_key=api_key,
-                        user_role="app_owner",
+                        user_role=_user_role,
                         parent_otel_span=parent_otel_span,
                         **valid_token_dict,
                     )
@@ -8857,7 +8858,7 @@ async def new_user(data: NewUserRequest):
     - organization_id: Optional[str] - specify the org a user belongs to.
     - user_email: Optional[str] - Specify a user email.
     - send_invite_email: Optional[bool] - Specify if an invite email should be sent.
-    - user_role: Optional[str] - Specify a user role - "admin", "app_owner", "app_user"
+    - user_role: Optional[str] - Specify a user role - "proxy_admin", "proxy_admin_viewer", "internal_user", "internal_user_viewer", "team", "customer". Info about each role here: `https://github.com/BerriAI/litellm/litellm/proxy/_types.py#L20`
     - max_budget: Optional[float] - Specify max budget for a given user.
     - models: Optional[list] - Model_name's a user is allowed to call. (if empty, key is allowed to call all models)
     - tpm_limit: Optional[int] - Specify tpm limit for a given user (Tokens per minute)
@@ -14734,6 +14735,22 @@ async def cache_flushall():
         raise HTTPException(
             status_code=503,
             detail=f"Service Unhealthy ({str(e)})",
+        )
+
+
+@router.get(
+    "/get/litellm_model_cost_map",
+    include_in_schema=False,
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def get_litellm_model_cost_map():
+    try:
+        _model_cost_map = litellm.model_cost
+        return _model_cost_map
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal Server Error ({str(e)})",
         )
 
 
