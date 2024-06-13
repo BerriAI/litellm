@@ -1,3 +1,5 @@
+import Image from '@theme/IdealImage';
+
 # 🚨 Alerting / Webhooks
 
 Get alerts for:
@@ -18,7 +20,7 @@ Get alerts for:
 Works across: 
 - [Slack](#quick-start)
 - [Discord](#advanced---using-discord-webhooks)
-- Microsoft Teams
+- [Microsoft Teams](#advanced---using-ms-teams-webhooks)
 
 ## Quick Start
 
@@ -150,6 +152,10 @@ curl --location 'http://0.0.0.0:4000/health/services?service=slack' \
 --header 'Authorization: Bearer sk-1234'
 ```
 
+
+**Expected Response**
+
+<Image img={require('../../img/ms_teams_alerting.png')}/>
 
 ## Advanced - Using Discord Webhooks
 
