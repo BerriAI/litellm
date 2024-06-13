@@ -110,7 +110,7 @@ class LunaryLogger:
 
             litellm_params = kwargs.get("litellm_params", {})
             optional_params = kwargs.get("optional_params", {})
-            metadata = litellm_params.get("metadata", {})
+            metadata = litellm_params.get("metadata", {}) or {}
 
             if optional_params:
                 extra = {**extra, **optional_params}
