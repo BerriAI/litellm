@@ -41,7 +41,7 @@ def redact_message_input_output_from_logging(
     # response cleaning
     # ChatCompletion Responses
     if (
-        litellm_logging_obj.stream
+        litellm_logging_obj.stream is True
         and "complete_streaming_response" in litellm_logging_obj.model_call_details
     ):
         _streaming_response = litellm_logging_obj.model_call_details[
