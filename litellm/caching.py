@@ -15,6 +15,7 @@ from openai._models import BaseModel as OpenAIObject
 from litellm._logging import verbose_logger
 from litellm.types.services import ServiceLoggerPayload, ServiceTypes
 import traceback
+from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
 
 
 def print_verbose(print_statement):
@@ -1115,6 +1116,9 @@ class S3Cache(BaseCache):
             **kwargs,
         )
 
+        self.sync_http_handler = HTTPHandler()
+        self.async_http_handler = AsyncHTTPHandler()
+
     def set_cache(self, key, value, **kwargs):
         try:
             print_verbose(f"LiteLLM SET Cache - S3. Key={key}. Value={value}")
@@ -1161,28 +1165,45 @@ class S3Cache(BaseCache):
         self.set_cache(key=key, value=value, **kwargs)
 
     def get_cache(self, key, **kwargs):
-        import boto3, botocore
-
         try:
             key = self.key_prefix + key
 
             print_verbose(f"Get S3 Cache: key: {key}")
-            # Download the data from S3
-            cached_response = self.s3_client.get_object(
-                Bucket=self.bucket_name, Key=key
-            )
 
-            if cached_response != None:
-                # cached_response is in `b{} convert it to ModelResponse
+            presigned_url = self.s3_client.generate_presigned_url(
+                "get_object",
+                Params={
+                    "Bucket": self.bucket_name,
+                    "Key": key,
+                },
+                ExpiresIn=60,
+                HttpMethod="GET",
+            )
+            verbose_logger.debug(f"S3 Cache: Presigned URL is {presigned_url}")
+
+            # Download the data from S3
+            cached_response = self.sync_http_handler.get(presigned_url)
+
+            if cached_response.status_code == 200:
                 cached_response = (
-                    cached_response["Body"].read().decode("utf-8")
-                )  # Convert bytes to string
+                    cached_response.text
+                )  # Convert to string
                 try:
                     cached_response = json.loads(
                         cached_response
                     )  # Convert string to dictionary
                 except Exception as e:
                     cached_response = ast.literal_eval(cached_response)
+            elif cached_response.status_code == 404 or cached_response.status_code == 403:
+                verbose_logger.debug(
+                    f"S3 Cache: The specified key '{key}' does not exist in the S3 bucket, returned status code: {cached_response.status_code}"
+                )
+                return None
+            else:
+                verbose_logger.error(
+                    f"S3 Cache: The specified key '{key}' returned an unexpected status code: {cached_response.status_code}"
+                )
+                return None
             if type(cached_response) is not dict:
                 cached_response = dict(cached_response)
             verbose_logger.debug(
@@ -1190,12 +1211,6 @@ class S3Cache(BaseCache):
             )
 
             return cached_response
-        except botocore.exceptions.ClientError as e:
-            if e.response["Error"]["Code"] == "NoSuchKey":
-                verbose_logger.debug(
-                    f"S3 Cache: The specified key '{key}' does not exist in the S3 bucket."
-                )
-                return None
 
         except Exception as e:
             # NON blocking - notify users S3 is throwing an exception
