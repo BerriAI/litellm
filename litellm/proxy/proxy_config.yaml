@@ -24,6 +24,7 @@ general_settings:
 litellm_settings:
   callbacks: ["otel"]
   store_audit_logs: true
+  turn_off_message_logging: true
   redact_messages_in_exceptions: True
   enforced_params:  
     - user
