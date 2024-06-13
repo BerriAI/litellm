@@ -151,8 +151,8 @@ def common_checks(
         and route != "/models"
     ):
         if global_proxy_spend > litellm.max_budget:
-            raise Exception(
-                f"ExceededBudget: LiteLLM Proxy has exceeded its budget. Current spend: {global_proxy_spend}; Max Budget: {litellm.max_budget}"
+            raise litellm.BudgetExceededError(
+                current_cost=global_proxy_spend, max_budget=litellm.max_budget
             )
     return True
 

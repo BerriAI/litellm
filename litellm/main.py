@@ -11,10 +11,10 @@ import os, openai, sys, json, inspect, uuid, datetime, threading
 from typing import Any, Literal, Union, BinaryIO
 from typing_extensions import overload
 from functools import partial
+
 import dotenv, traceback, random, asyncio, time, contextvars
 from copy import deepcopy
 import httpx
-
 import litellm
 from ._logging import verbose_logger
 from litellm import (  # type: ignore
@@ -329,12 +329,14 @@ async def acompletion(
             or custom_llm_provider == "ollama_chat"
             or custom_llm_provider == "replicate"
             or custom_llm_provider == "vertex_ai"
+            or custom_llm_provider == "vertex_ai_beta"
             or custom_llm_provider == "gemini"
             or custom_llm_provider == "sagemaker"
             or custom_llm_provider == "anthropic"
             or custom_llm_provider == "predibase"
             or custom_llm_provider == "bedrock"
             or custom_llm_provider == "databricks"
+            or custom_llm_provider == "clarifai"
             or custom_llm_provider in litellm.openai_compatible_providers
         ):  # currently implemented aiohttp calls for just azure, openai, hf, ollama, vertex ai soon all.
             init_response = await loop.run_in_executor(None, func_with_context)
@@ -1875,6 +1877,42 @@ def completion(
                 )
                 return response
             response = model_response
+        elif custom_llm_provider == "vertex_ai_beta":
+            vertex_ai_project = (
+                optional_params.pop("vertex_project", None)
+                or optional_params.pop("vertex_ai_project", None)
+                or litellm.vertex_project
+                or get_secret("VERTEXAI_PROJECT")
+            )
+            vertex_ai_location = (
+                optional_params.pop("vertex_location", None)
+                or optional_params.pop("vertex_ai_location", None)
+                or litellm.vertex_location
+                or get_secret("VERTEXAI_LOCATION")
+            )
+            vertex_credentials = (
+                optional_params.pop("vertex_credentials", None)
+                or optional_params.pop("vertex_ai_credentials", None)
+                or get_secret("VERTEXAI_CREDENTIALS")
+            )
+            new_params = deepcopy(optional_params)
+            response = vertex_chat_completion.completion(  # type: ignore
+                model=model,
+                messages=messages,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                optional_params=new_params,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                encoding=encoding,
+                vertex_location=vertex_ai_location,
+                vertex_project=vertex_ai_project,
+                vertex_credentials=vertex_credentials,
+                logging_obj=logging,
+                acompletion=acompletion,
+                timeout=timeout,
+            )
+
         elif custom_llm_provider == "vertex_ai":
             vertex_ai_project = (
                 optional_params.pop("vertex_project", None)
@@ -1893,6 +1931,7 @@ def completion(
                 or optional_params.pop("vertex_ai_credentials", None)
                 or get_secret("VERTEXAI_CREDENTIALS")
             )
+
             new_params = deepcopy(optional_params)
             if "claude-3" in model:
                 model_response = vertex_ai_anthropic.completion(
