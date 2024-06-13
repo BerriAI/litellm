@@ -427,7 +427,7 @@ const Team: React.FC<TeamProps> = ({
                             overflow: "hidden",
                           }}
                         >
-                          {team["max_budget"] ? team["max_budget"] : "No limit"}
+                          {team["max_budget"] !== null && team["max_budget"] !== undefined ? team["max_budget"] : "No limit"}
                         </TableCell>
                         <TableCell
                           style={{
