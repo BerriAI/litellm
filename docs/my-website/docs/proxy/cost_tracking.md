@@ -138,14 +138,22 @@ Navigate to the Usage Tab on the LiteLLM UI (found on https://your-proxy-endpoin
 <Image img={require('../../img/admin_ui_spend.png')} />
 
 ## API Endpoints to get Spend
-#### Getting Spend Reports - To Charge Other Teams, API Keys
+#### Getting Spend Reports - To Charge Other Teams, Customers
 
-Use the `/global/spend/report` endpoint to get daily spend per team, with a breakdown of spend per API Key, Model
+Use the `/global/spend/report` endpoint to get daily spend report per 
+- team
+- customer [this is `user` passed to `/chat/completions` request](#how-to-track-spend-with-litellm)
+
+<Tabs>
+
+<TabItem value="per team" label="Spend Per Team">
 
 ##### Example Request
 
+👉 Key Change: Specify `group_by=team`
+
 ```shell
-curl -X GET 'http://localhost:4000/global/spend/report?start_date=2024-04-01&end_date=2024-06-30' \
+curl -X GET 'http://localhost:4000/global/spend/report?start_date=2024-04-01&end_date=2024-06-30&group_by=team' \
   -H 'Authorization: Bearer sk-1234'
 ```
 
@@ -258,6 +266,69 @@ Output from script
 
 </Tabs>
 
+</TabItem>
+
+
+<TabItem value="per customer" label="Spend Per Customer">
+
+##### Example Request
+
+👉 Key Change: Specify `group_by=customer`
+
+
+```shell
+curl -X GET 'http://localhost:4000/global/spend/report?start_date=2024-04-01&end_date=2024-06-30&group_by=customer' \
+  -H 'Authorization: Bearer sk-1234'
+```
+
+##### Example Response
+
+
+```shell
+[
+    {
+        "group_by_day": "2024-04-30T00:00:00+00:00",
+        "customers": [
+            {
+                "customer": "palantir",
+                "total_spend": 0.0015265,
+                "metadata": [ # see the spend by unique(key + model)
+                    {
+                        "model": "gpt-4",
+                        "spend": 0.00123,
+                        "total_tokens": 28,
+                        "api_key": "88dc28.." # the hashed api key
+                    },
+                    {
+                        "model": "gpt-4",
+                        "spend": 0.00123,
+                        "total_tokens": 28,
+                        "api_key": "a73dc2.." # the hashed api key
+                    },
+                    {
+                        "model": "chatgpt-v-2",
+                        "spend": 0.000214,
+                        "total_tokens": 122,
+                        "api_key": "898c28.." # the hashed api key
+                    },
+                    {
+                        "model": "gpt-3.5-turbo",
+                        "spend": 0.0000825,
+                        "total_tokens": 85,
+                        "api_key": "84dc28.." # the hashed api key
+                    }
+                ]
+            }
+        ]
+    }
+]
+```
+
+
+</TabItem>
+
+</Tabs>
+
 #### Allowing Non-Proxy Admins to access `/spend` endpoints 
 
 Use this when you want non-proxy admins to access `/spend` endpoints
@@ -357,3 +428,22 @@ model_list:
 ## Custom Input/Output Pricing
 
 👉 Head to [Custom Input/Output Pricing](https://docs.litellm.ai/docs/proxy/custom_pricing) to setup custom pricing or your models
+
+## ✨ Custom k,v pairs
+
+Log specific key,value pairs as part of the metadata for a spend log
+
+:::info 
+
+Logging specific key,value pairs in spend logs metadata is an enterprise feature. [See here](./enterprise.md#tracking-spend-with-custom-metadata)
+
+:::
+
+
+## ✨ Custom Tags
+
+:::info 
+
+Tracking spend with Custom tags is an enterprise feature. [See here](./enterprise.md#tracking-spend-for-custom-tags)
+
+:::

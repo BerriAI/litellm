@@ -6,17 +6,23 @@ import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm._logging import verbose_logger
 from litellm.types.services import ServiceLoggerPayload
+from functools import wraps
 from typing import Union, Optional, TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
     from litellm.proxy.proxy_server import UserAPIKeyAuth as _UserAPIKeyAuth
+    from litellm.proxy._types import (
+        ManagementEndpointLoggingPayload as _ManagementEndpointLoggingPayload,
+    )
 
     Span = _Span
     UserAPIKeyAuth = _UserAPIKeyAuth
+    ManagementEndpointLoggingPayload = _ManagementEndpointLoggingPayload
 else:
     Span = Any
     UserAPIKeyAuth = Any
+    ManagementEndpointLoggingPayload = Any
 
 
 LITELLM_TRACER_NAME = os.getenv("OTEL_TRACER_NAME", "litellm")
@@ -247,7 +253,7 @@ class OpenTelemetry(CustomLogger):
         span.end(end_time=self._to_ns(end_time))
 
     def set_tools_attributes(self, span: Span, tools):
-        from opentelemetry.semconv.ai import SpanAttributes
+        from litellm.proxy._types import SpanAttributes
         import json
 
         if not tools:
@@ -272,7 +278,7 @@ class OpenTelemetry(CustomLogger):
             pass
 
     def set_attributes(self, span: Span, kwargs, response_obj):
-        from opentelemetry.semconv.ai import SpanAttributes
+        from litellm.proxy._types import SpanAttributes
 
         optional_params = kwargs.get("optional_params", {})
         litellm_params = kwargs.get("litellm_params", {}) or {}
@@ -407,7 +413,7 @@ class OpenTelemetry(CustomLogger):
             )
 
     def set_raw_request_attributes(self, span: Span, kwargs, response_obj):
-        from opentelemetry.semconv.ai import SpanAttributes
+        from litellm.proxy._types import SpanAttributes
 
         optional_params = kwargs.get("optional_params", {})
         litellm_params = kwargs.get("litellm_params", {}) or {}
@@ -453,6 +459,23 @@ class OpenTelemetry(CustomLogger):
 
     def _get_span_name(self, kwargs):
         return LITELLM_REQUEST_SPAN_NAME
+
+    def get_traceparent_from_header(self, headers):
+        if headers is None:
+            return None
+        _traceparent = headers.get("traceparent", None)
+        if _traceparent is None:
+            return None
+
+        from opentelemetry.trace.propagation.tracecontext import (
+            TraceContextTextMapPropagator,
+        )
+
+        verbose_logger.debug("OpenTelemetry: GOT A TRACEPARENT {}".format(_traceparent))
+        propagator = TraceContextTextMapPropagator()
+        _parent_context = propagator.extract(carrier={"traceparent": _traceparent})
+        verbose_logger.debug("OpenTelemetry: PARENT CONTEXT {}".format(_parent_context))
+        return _parent_context
 
     def _get_span_context(self, kwargs):
         from opentelemetry.trace.propagation.tracecontext import (
@@ -545,3 +568,91 @@ class OpenTelemetry(CustomLogger):
                 self.OTEL_EXPORTER,
             )
             return BatchSpanProcessor(ConsoleSpanExporter())
+
+    async def async_management_endpoint_success_hook(
+        self,
+        logging_payload: ManagementEndpointLoggingPayload,
+        parent_otel_span: Optional[Span] = None,
+    ):
+        from opentelemetry import trace
+        from datetime import datetime
+        from opentelemetry.trace import Status, StatusCode
+
+        _start_time_ns = logging_payload.start_time
+        _end_time_ns = logging_payload.end_time
+
+        start_time = logging_payload.start_time
+        end_time = logging_payload.end_time
+
+        if isinstance(start_time, float):
+            _start_time_ns = int(int(start_time) * 1e9)
+        else:
+            _start_time_ns = self._to_ns(start_time)
+
+        if isinstance(end_time, float):
+            _end_time_ns = int(int(end_time) * 1e9)
+        else:
+            _end_time_ns = self._to_ns(end_time)
+
+        if parent_otel_span is not None:
+            _span_name = logging_payload.route
+            management_endpoint_span = self.tracer.start_span(
+                name=_span_name,
+                context=trace.set_span_in_context(parent_otel_span),
+                start_time=_start_time_ns,
+            )
+
+            _request_data = logging_payload.request_data
+            if _request_data is not None:
+                for key, value in _request_data.items():
+                    management_endpoint_span.set_attribute(f"request.{key}", value)
+
+            _response = logging_payload.response
+            if _response is not None:
+                for key, value in _response.items():
+                    management_endpoint_span.set_attribute(f"response.{key}", value)
+            management_endpoint_span.set_status(Status(StatusCode.OK))
+            management_endpoint_span.end(end_time=_end_time_ns)
+
+    async def async_management_endpoint_failure_hook(
+        self,
+        logging_payload: ManagementEndpointLoggingPayload,
+        parent_otel_span: Optional[Span] = None,
+    ):
+        from opentelemetry import trace
+        from datetime import datetime
+        from opentelemetry.trace import Status, StatusCode
+
+        _start_time_ns = logging_payload.start_time
+        _end_time_ns = logging_payload.end_time
+
+        start_time = logging_payload.start_time
+        end_time = logging_payload.end_time
+
+        if isinstance(start_time, float):
+            _start_time_ns = int(int(start_time) * 1e9)
+        else:
+            _start_time_ns = self._to_ns(start_time)
+
+        if isinstance(end_time, float):
+            _end_time_ns = int(int(end_time) * 1e9)
+        else:
+            _end_time_ns = self._to_ns(end_time)
+
+        if parent_otel_span is not None:
+            _span_name = logging_payload.route
+            management_endpoint_span = self.tracer.start_span(
+                name=_span_name,
+                context=trace.set_span_in_context(parent_otel_span),
+                start_time=_start_time_ns,
+            )
+
+            _request_data = logging_payload.request_data
+            if _request_data is not None:
+                for key, value in _request_data.items():
+                    management_endpoint_span.set_attribute(f"request.{key}", value)
+
+            _exception = logging_payload.exception
+            management_endpoint_span.set_attribute(f"exception", str(_exception))
+            management_endpoint_span.set_status(Status(StatusCode.ERROR))
+            management_endpoint_span.end(end_time=_end_time_ns)

@@ -11,7 +11,7 @@ LiteLLM supports
 
 :::info
 
-Anthropic API fails requests when `max_tokens` are not passed. Due to this litellm passes `max_tokens=4096` when no `max_tokens` are passed
+Anthropic API fails requests when `max_tokens` are not passed. Due to this litellm passes `max_tokens=4096` when no `max_tokens` are passed.
 
 :::
 
@@ -229,17 +229,6 @@ assert isinstance(
 
 ```
 
-### Setting `anthropic-beta` Header in Requests
-
-Pass the the `extra_headers` param to litellm, All headers will be forwarded to Anthropic API
-
-```python
-response = completion(
-    model="anthropic/claude-3-opus-20240229",
-    messages=messages,
-    tools=tools,
-)
-```
 
 ### Forcing Anthropic Tool Use
 

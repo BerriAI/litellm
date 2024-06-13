@@ -1387,6 +1387,26 @@
         "mode": "image_generation",
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"
     },
+    "text-embedding-004": {
+        "max_tokens": 3072,
+        "max_input_tokens": 3072,
+        "output_vector_size": 768,
+        "input_cost_per_token": 0.00000000625,
+        "output_cost_per_token": 0,
+        "litellm_provider": "vertex_ai-embedding-models",
+        "mode": "embedding",
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models"
+    },
+    "text-multilingual-embedding-002": {
+        "max_tokens": 2048,
+        "max_input_tokens": 2048,
+        "output_vector_size": 768,
+        "input_cost_per_token": 0.00000000625,
+        "output_cost_per_token": 0,
+        "litellm_provider": "vertex_ai-embedding-models",
+        "mode": "embedding",
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models"
+    },
     "textembedding-gecko": {
         "max_tokens": 3072,
         "max_input_tokens": 3072,

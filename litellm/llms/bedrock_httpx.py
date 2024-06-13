@@ -51,8 +51,11 @@ from litellm.types.llms.openai import (
     ChatCompletionResponseMessage,
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
+    ChatCompletionDeltaChunk,
 )
+from litellm.caching import DualCache
 
+iam_cache = DualCache()
 
 class AmazonCohereChatConfig:
     """
@@ -324,38 +327,53 @@ class BedrockLLM(BaseLLM):
         ) = params_to_check
 
         ### CHECK STS ###
-        if (
-            aws_web_identity_token is not None
-            and aws_role_name is not None
-            and aws_session_name is not None
-        ):
-            oidc_token = get_secret(aws_web_identity_token)
+        if aws_web_identity_token is not None and aws_role_name is not None and aws_session_name is not None:
+            iam_creds_cache_key = json.dumps({
+                "aws_web_identity_token": aws_web_identity_token,
+                "aws_role_name": aws_role_name,
+                "aws_session_name": aws_session_name,
+                "aws_region_name": aws_region_name,
+            })
 
-            if oidc_token is None:
-                raise BedrockError(
-                    message="OIDC token could not be retrieved from secret manager.",
-                    status_code=401,
+            iam_creds_dict = iam_cache.get_cache(iam_creds_cache_key)
+            if iam_creds_dict is None:
+                oidc_token = get_secret(aws_web_identity_token)
+
+                if oidc_token is None:
+                    raise BedrockError(
+                        message="OIDC token could not be retrieved from secret manager.",
+                        status_code=401,
+                    )
+
+                sts_client = boto3.client(
+                    "sts",
+                    region_name=aws_region_name,
+                    endpoint_url=f"https://sts.{aws_region_name}.amazonaws.com"
                 )
 
-            sts_client = boto3.client("sts")
+                # https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRoleWithWebIdentity.html
+                # https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/sts/client/assume_role_with_web_identity.html
+                sts_response = sts_client.assume_role_with_web_identity(
+                    RoleArn=aws_role_name,
+                    RoleSessionName=aws_session_name,
+                    WebIdentityToken=oidc_token,
+                    DurationSeconds=3600,
+                )
 
-            # https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRoleWithWebIdentity.html
-            # https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/sts/client/assume_role_with_web_identity.html
-            sts_response = sts_client.assume_role_with_web_identity(
-                RoleArn=aws_role_name,
-                RoleSessionName=aws_session_name,
-                WebIdentityToken=oidc_token,
-                DurationSeconds=3600,
-            )
+                iam_creds_dict = {
+                    "aws_access_key_id": sts_response["Credentials"]["AccessKeyId"],
+                    "aws_secret_access_key": sts_response["Credentials"]["SecretAccessKey"],
+                    "aws_session_token": sts_response["Credentials"]["SessionToken"],
+                    "region_name": aws_region_name,
+                }
 
-            session = boto3.Session(
-                aws_access_key_id=sts_response["Credentials"]["AccessKeyId"],
-                aws_secret_access_key=sts_response["Credentials"]["SecretAccessKey"],
-                aws_session_token=sts_response["Credentials"]["SessionToken"],
-                region_name=aws_region_name,
-            )
+                iam_cache.set_cache(key=iam_creds_cache_key, value=json.dumps(iam_creds_dict), ttl=3600 - 60)
 
-            return session.get_credentials()
+            session = boto3.Session(**iam_creds_dict)
+
+            iam_creds = session.get_credentials()
+
+            return iam_creds
         elif aws_role_name is not None and aws_session_name is not None:
             sts_client = boto3.client(
                 "sts",
@@ -1415,38 +1433,53 @@ class BedrockConverseLLM(BaseLLM):
         ) = params_to_check
 
         ### CHECK STS ###
-        if (
-            aws_web_identity_token is not None
-            and aws_role_name is not None
-            and aws_session_name is not None
-        ):
-            oidc_token = get_secret(aws_web_identity_token)
+        if aws_web_identity_token is not None and aws_role_name is not None and aws_session_name is not None:
+            iam_creds_cache_key = json.dumps({
+                "aws_web_identity_token": aws_web_identity_token,
+                "aws_role_name": aws_role_name,
+                "aws_session_name": aws_session_name,
+                "aws_region_name": aws_region_name,
+            })
 
-            if oidc_token is None:
-                raise BedrockError(
-                    message="OIDC token could not be retrieved from secret manager.",
-                    status_code=401,
+            iam_creds_dict = iam_cache.get_cache(iam_creds_cache_key)
+            if iam_creds_dict is None:
+                oidc_token = get_secret(aws_web_identity_token)
+
+                if oidc_token is None:
+                    raise BedrockError(
+                        message="OIDC token could not be retrieved from secret manager.",
+                        status_code=401,
+                    )
+
+                sts_client = boto3.client(
+                    "sts",
+                    region_name=aws_region_name,
+                    endpoint_url=f"https://sts.{aws_region_name}.amazonaws.com"
                 )
 
-            sts_client = boto3.client("sts")
+                # https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRoleWithWebIdentity.html
+                # https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/sts/client/assume_role_with_web_identity.html
+                sts_response = sts_client.assume_role_with_web_identity(
+                    RoleArn=aws_role_name,
+                    RoleSessionName=aws_session_name,
+                    WebIdentityToken=oidc_token,
+                    DurationSeconds=3600,
+                )
 
-            # https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRoleWithWebIdentity.html
-            # https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/sts/client/assume_role_with_web_identity.html
-            sts_response = sts_client.assume_role_with_web_identity(
-                RoleArn=aws_role_name,
-                RoleSessionName=aws_session_name,
-                WebIdentityToken=oidc_token,
-                DurationSeconds=3600,
-            )
+                iam_creds_dict = {
+                    "aws_access_key_id": sts_response["Credentials"]["AccessKeyId"],
+                    "aws_secret_access_key": sts_response["Credentials"]["SecretAccessKey"],
+                    "aws_session_token": sts_response["Credentials"]["SessionToken"],
+                    "region_name": aws_region_name,
+                }
 
-            session = boto3.Session(
-                aws_access_key_id=sts_response["Credentials"]["AccessKeyId"],
-                aws_secret_access_key=sts_response["Credentials"]["SecretAccessKey"],
-                aws_session_token=sts_response["Credentials"]["SessionToken"],
-                region_name=aws_region_name,
-            )
+                iam_cache.set_cache(key=iam_creds_cache_key, value=json.dumps(iam_creds_dict), ttl=3600 - 60)
 
-            return session.get_credentials()
+            session = boto3.Session(**iam_creds_dict)
+
+            iam_creds = session.get_credentials()
+
+            return iam_creds
         elif aws_role_name is not None and aws_session_name is not None:
             sts_client = boto3.client(
                 "sts",
@@ -1859,29 +1892,59 @@ class AWSEventStreamDecoder:
         self.parser = EventStreamJSONParser()
 
     def converse_chunk_parser(self, chunk_data: dict) -> GenericStreamingChunk:
-        text = ""
-        tool_str = ""
-        is_finished = False
-        finish_reason = ""
-        usage: Optional[ConverseTokenUsageBlock] = None
-        if "delta" in chunk_data:
-            delta_obj = ContentBlockDeltaEvent(**chunk_data["delta"])
-            if "text" in delta_obj:
-                text = delta_obj["text"]
-            elif "toolUse" in delta_obj:
-                tool_str = delta_obj["toolUse"]["input"]
-        elif "stopReason" in chunk_data:
-            finish_reason = map_finish_reason(chunk_data.get("stopReason", "stop"))
-        elif "usage" in chunk_data:
-            usage = ConverseTokenUsageBlock(**chunk_data["usage"])  # type: ignore
-        response = GenericStreamingChunk(
-            text=text,
-            tool_str=tool_str,
-            is_finished=is_finished,
-            finish_reason=finish_reason,
-            usage=usage,
-        )
-        return response
+        try:
+            text = ""
+            tool_use: Optional[ChatCompletionToolCallChunk] = None
+            is_finished = False
+            finish_reason = ""
+            usage: Optional[ConverseTokenUsageBlock] = None
+
+            index = int(chunk_data.get("contentBlockIndex", 0))
+            if "start" in chunk_data:
+                start_obj = ContentBlockStartEvent(**chunk_data["start"])
+                if (
+                    start_obj is not None
+                    and "toolUse" in start_obj
+                    and start_obj["toolUse"] is not None
+                ):
+                    tool_use = {
+                        "id": start_obj["toolUse"]["toolUseId"],
+                        "type": "function",
+                        "function": {
+                            "name": start_obj["toolUse"]["name"],
+                            "arguments": "",
+                        },
+                    }
+            elif "delta" in chunk_data:
+                delta_obj = ContentBlockDeltaEvent(**chunk_data["delta"])
+                if "text" in delta_obj:
+                    text = delta_obj["text"]
+                elif "toolUse" in delta_obj:
+                    tool_use = {
+                        "id": None,
+                        "type": "function",
+                        "function": {
+                            "name": None,
+                            "arguments": delta_obj["toolUse"]["input"],
+                        },
+                    }
+            elif "stopReason" in chunk_data:
+                finish_reason = map_finish_reason(chunk_data.get("stopReason", "stop"))
+                is_finished = True
+            elif "usage" in chunk_data:
+                usage = ConverseTokenUsageBlock(**chunk_data["usage"])  # type: ignore
+
+            response = GenericStreamingChunk(
+                text=text,
+                tool_use=tool_use,
+                is_finished=is_finished,
+                finish_reason=finish_reason,
+                usage=usage,
+                index=index,
+            )
+            return response
+        except Exception as e:
+            raise Exception("Received streaming error - {}".format(str(e)))
 
     def _chunk_parser(self, chunk_data: dict) -> GenericStreamingChunk:
         text = ""
@@ -1890,12 +1953,16 @@ class AWSEventStreamDecoder:
         if "outputText" in chunk_data:
             text = chunk_data["outputText"]
         # ai21 mapping
-        if "ai21" in self.model:  # fake ai21 streaming
+        elif "ai21" in self.model:  # fake ai21 streaming
             text = chunk_data.get("completions")[0].get("data").get("text")  # type: ignore
             is_finished = True
             finish_reason = "stop"
         ######## bedrock.anthropic mappings ###############
-        elif "delta" in chunk_data:
+        elif (
+            "contentBlockIndex" in chunk_data
+            or "stopReason" in chunk_data
+            or "metrics" in chunk_data
+        ):
             return self.converse_chunk_parser(chunk_data=chunk_data)
         ######## bedrock.mistral mappings ###############
         elif "outputs" in chunk_data:
@@ -1905,7 +1972,7 @@ class AWSEventStreamDecoder:
             ):
                 text = chunk_data["outputs"][0]["text"]
             stop_reason = chunk_data.get("stop_reason", None)
-            if stop_reason != None:
+            if stop_reason is not None:
                 is_finished = True
                 finish_reason = stop_reason
         ######## bedrock.cohere mappings ###############
@@ -1926,8 +1993,9 @@ class AWSEventStreamDecoder:
             text=text,
             is_finished=is_finished,
             finish_reason=finish_reason,
-            tool_str="",
             usage=None,
+            index=0,
+            tool_use=None,
         )
 
     def iter_bytes(self, iterator: Iterator[bytes]) -> Iterator[GenericStreamingChunk]:
