@@ -251,23 +251,23 @@ response = completion(
 
 Here are some examples of models available in IBM watsonx.ai that you can use with LiteLLM:
 
-| Mode Name | Command |
-| ---------- | --------- |
-| Flan T5 XXL | `completion(model=watsonx/google/flan-t5-xxl, messages=messages)` |
-| Flan Ul2 | `completion(model=watsonx/google/flan-ul2, messages=messages)` |
-| Mt0 XXL | `completion(model=watsonx/bigscience/mt0-xxl, messages=messages)` |
-| Gpt Neox | `completion(model=watsonx/eleutherai/gpt-neox-20b, messages=messages)` |
-| Mpt 7B Instruct2 | `completion(model=watsonx/ibm/mpt-7b-instruct2, messages=messages)` |
-| Starcoder | `completion(model=watsonx/bigcode/starcoder, messages=messages)` |
-| Llama 2 70B Chat | `completion(model=watsonx/meta-llama/llama-2-70b-chat, messages=messages)` |
-| Llama 2 13B Chat | `completion(model=watsonx/meta-llama/llama-2-13b-chat, messages=messages)` |
-| Granite 13B Instruct | `completion(model=watsonx/ibm/granite-13b-instruct-v1, messages=messages)` |
-| Granite 13B Chat | `completion(model=watsonx/ibm/granite-13b-chat-v1, messages=messages)` |
-| Flan T5 XL | `completion(model=watsonx/google/flan-t5-xl, messages=messages)` |
-| Granite 13B Chat V2 | `completion(model=watsonx/ibm/granite-13b-chat-v2, messages=messages)` |
-| Granite 13B Instruct V2 | `completion(model=watsonx/ibm/granite-13b-instruct-v2, messages=messages)` |
-| Elyza Japanese Llama 2 7B Instruct | `completion(model=watsonx/elyza/elyza-japanese-llama-2-7b-instruct, messages=messages)` |
-| Mixtral 8X7B Instruct V01 Q | `completion(model=watsonx/ibm-mistralai/mixtral-8x7b-instruct-v01-q, messages=messages)` |
+| Mode Name                          | Command                                                                                  |
+|------------------------------------|------------------------------------------------------------------------------------------|
+| Flan T5 XXL                        | `completion(model=watsonx/google/flan-t5-xxl, messages=messages)`                        |
+| Flan Ul2                           | `completion(model=watsonx/google/flan-ul2, messages=messages)`                           |
+| Mt0 XXL                            | `completion(model=watsonx/bigscience/mt0-xxl, messages=messages)`                        |
+| Gpt Neox                           | `completion(model=watsonx/eleutherai/gpt-neox-20b, messages=messages)`                   |
+| Mpt 7B Instruct2                   | `completion(model=watsonx/ibm/mpt-7b-instruct2, messages=messages)`                      |
+| Starcoder                          | `completion(model=watsonx/bigcode/starcoder, messages=messages)`                         |
+| Llama 2 70B Chat                   | `completion(model=watsonx/meta-llama/llama-2-70b-chat, messages=messages)`               |
+| Llama 2 13B Chat                   | `completion(model=watsonx/meta-llama/llama-2-13b-chat, messages=messages)`               |
+| Granite 13B Instruct               | `completion(model=watsonx/ibm/granite-13b-instruct-v1, messages=messages)`               |
+| Granite 13B Chat                   | `completion(model=watsonx/ibm/granite-13b-chat-v1, messages=messages)`                   |
+| Flan T5 XL                         | `completion(model=watsonx/google/flan-t5-xl, messages=messages)`                         |
+| Granite 13B Chat V2                | `completion(model=watsonx/ibm/granite-13b-chat-v2, messages=messages)`                   |
+| Granite 13B Instruct V2            | `completion(model=watsonx/ibm/granite-13b-instruct-v2, messages=messages)`               |
+| Elyza Japanese Llama 2 7B Instruct | `completion(model=watsonx/elyza/elyza-japanese-llama-2-7b-instruct, messages=messages)`  |
+| Mixtral 8X7B Instruct V01 Q        | `completion(model=watsonx/ibm-mistralai/mixtral-8x7b-instruct-v01-q, messages=messages)` |
 
 
 For a list of all available models in watsonx.ai, see [here](https://dataplatform.cloud.ibm.com/docs/content/wsj/analyze-data/fm-models.html?context=wx&locale=en&audience=wdp).
@@ -275,10 +275,10 @@ For a list of all available models in watsonx.ai, see [here](https://dataplatfor
 
 ## Supported IBM watsonx.ai Embedding Models
 
-| Model Name           | Function Call                               |
-|----------------------|---------------------------------------------|
-| Slate 30m | `embedding(model="watsonx/ibm/slate-30m-english-rtrvr", input=input)` |
-| Slate 125m  | `embedding(model="watsonx/ibm/slate-125m-english-rtrvr", input=input)` |
+| Model Name | Function Call                                                          |
+|------------|------------------------------------------------------------------------|
+| Slate 30m  | `embedding(model="watsonx/ibm/slate-30m-english-rtrvr", input=input)`  |
+| Slate 125m | `embedding(model="watsonx/ibm/slate-125m-english-rtrvr", input=input)` |
 
 
 For a list of all available embedding models in watsonx.ai, see [here](https://dataplatform.cloud.ibm.com/docs/content/wsj/analyze-data/fm-models-embed.html?context=wx).

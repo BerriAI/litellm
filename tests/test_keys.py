@@ -12,6 +12,7 @@ sys.path.insert(
     0, os.path.abspath("../")
 )  # Adds the parent directory to the system path
 import litellm
+from litellm.proxy._types import LitellmUserRoles
 
 
 async def generate_team(
@@ -663,7 +664,7 @@ async def test_key_crossing_budget():
             response = await chat_completion(session=session, key=key)
             pytest.fail("Should have failed - Key crossed it's budget")
         except Exception as e:
-            assert "ExceededTokenBudget: Current spend for token:" in str(e)
+            assert "Budget has been exceeded!" in str(e)
 
 
 @pytest.mark.skip(reason="AWS Suspended Account")
@@ -731,7 +732,9 @@ async def test_key_delete_ui():
 
         # generate a admin UI key
         team = await generate_team(session=session)
-        admin_ui_key = await generate_user(session=session, user_role="proxy_admin")
+        admin_ui_key = await generate_user(
+            session=session, user_role=LitellmUserRoles.PROXY_ADMIN.value
+        )
         print(
             "trying to delete key=",
             key,

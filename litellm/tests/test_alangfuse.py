@@ -218,7 +218,9 @@ async def test_langfuse_logging_without_request_response(stream, langfuse_client
 
         _trace_data = trace.data
 
-        assert _trace_data[0].input == {"messages": "redacted-by-litellm"}
+        assert _trace_data[0].input == {
+            "messages": [{"content": "redacted-by-litellm", "role": "user"}]
+        }
         assert _trace_data[0].output == {
             "role": "assistant",
             "content": "redacted-by-litellm",

@@ -3,7 +3,8 @@ import json
 from enum import Enum
 import requests  # type: ignore
 import time
-from typing import Callable, Optional, Union, List, Literal
+from typing import Callable, Optional, Union, List, Literal, Any
+from pydantic import BaseModel
 from litellm.utils import ModelResponse, Usage, CustomStreamWrapper, map_finish_reason
 import litellm, uuid
 import httpx, inspect  # type: ignore
@@ -11,6 +12,12 @@ from litellm.types.llms.vertex_ai import *
 from litellm.llms.prompt_templates.factory import (
     convert_to_gemini_tool_call_result,
     convert_to_gemini_tool_call_invoke,
+)
+from litellm.types.files import (
+    get_file_mime_type_for_file_type,
+    get_file_type_from_extension,
+    is_gemini_1_5_accepted_file_type,
+    is_video_file_type,
 )
 
 
@@ -297,24 +304,31 @@ def _convert_gemini_role(role: str) -> Literal["user", "model"]:
 
 def _process_gemini_image(image_url: str) -> PartType:
     try:
+        # GCS URIs
         if "gs://" in image_url:
-            # Case 1: Images with Cloud Storage URIs
-            # The supported MIME types for images include image/png and image/jpeg.
-            part_mime = "image/png" if "png" in image_url else "image/jpeg"
-            _file_data = FileDataType(mime_type=part_mime, file_uri=image_url)
-            return PartType(file_data=_file_data)
+            # Figure out file type
+            extension_with_dot = os.path.splitext(image_url)[-1]  # Ex: ".png"
+            extension = extension_with_dot[1:]  # Ex: "png"
+
+            file_type = get_file_type_from_extension(extension)
+
+            # Validate the file type is supported by Gemini
+            if not is_gemini_1_5_accepted_file_type(file_type):
+                raise Exception(f"File type not supported by gemini - {file_type}")
+
+            mime_type = get_file_mime_type_for_file_type(file_type)
+            file_data = FileDataType(mime_type=mime_type, file_uri=image_url)
+
+            return PartType(file_data=file_data)
+
+        # Direct links
         elif "https:/" in image_url:
-            # Case 2: Images with direct links
             image = _load_image_from_url(image_url)
             _blob = BlobType(data=image.data, mime_type=image._mime_type)
             return PartType(inline_data=_blob)
-        elif ".mp4" in image_url and "gs://" in image_url:
-            # Case 3: Videos with Cloud Storage URIs
-            part_mime = "video/mp4"
-            _file_data = FileDataType(mime_type=part_mime, file_uri=image_url)
-            return PartType(file_data=_file_data)
+
+        # Base64 encoding
         elif "base64" in image_url:
-            # Case 4: Images with base64 encoding
             import base64, re
 
             # base 64 is passed as data:image/jpeg;base64,<base-64-encoded-image>
@@ -390,7 +404,7 @@ def _gemini_convert_messages_with_history(messages: list) -> List[ContentType]:
                 assistant_content.extend(_parts)
             elif messages[msg_i].get(
                 "tool_calls", []
-            ):  # support assistant tool invoke convertion
+            ):  # support assistant tool invoke conversion
                 assistant_content.extend(
                     convert_to_gemini_tool_call_invoke(messages[msg_i]["tool_calls"])
                 )
@@ -421,110 +435,17 @@ def _gemini_convert_messages_with_history(messages: list) -> List[ContentType]:
     return contents
 
 
-def _gemini_vision_convert_messages(messages: list):
-    """
-    Converts given messages for GPT-4 Vision to Gemini format.
+def _get_client_cache_key(model: str, vertex_project: str, vertex_location: str):
+    _cache_key = f"{model}-{vertex_project}-{vertex_location}"
+    return _cache_key
 
-    Args:
-        messages (list): The messages to convert. Each message can be a dictionary with a "content" key. The content can be a string or a list of elements. If it is a string, it will be concatenated to the prompt. If it is a list, each element will be processed based on its type:
-            - If the element is a dictionary with a "type" key equal to "text", its "text" value will be concatenated to the prompt.
-            - If the element is a dictionary with a "type" key equal to "image_url", its "image_url" value will be added to the list of images.
 
-    Returns:
-        tuple: A tuple containing the prompt (a string) and the processed images (a list of objects representing the images).
+def _get_client_from_cache(client_cache_key: str):
+    return litellm.in_memory_llm_clients_cache.get(client_cache_key, None)
 
-    Raises:
-        VertexAIError: If the import of the 'vertexai' module fails, indicating that 'google-cloud-aiplatform' needs to be installed.
-        Exception: If any other exception occurs during the execution of the function.
 
-    Note:
-        This function is based on the code from the 'gemini/getting-started/intro_gemini_python.ipynb' notebook in the 'generative-ai' repository on GitHub.
-        The supported MIME types for images include 'image/png' and 'image/jpeg'.
-
-    Examples:
-        >>> messages = [
-        ...     {"content": "Hello, world!"},
-        ...     {"content": [{"type": "text", "text": "This is a text message."}, {"type": "image_url", "image_url": "example.com/image.png"}]},
-        ... ]
-        >>> _gemini_vision_convert_messages(messages)
-        ('Hello, world!This is a text message.', [<Part object>, <Part object>])
-    """
-    try:
-        import vertexai
-    except:
-        raise VertexAIError(
-            status_code=400,
-            message="vertexai import failed please run `pip install google-cloud-aiplatform`",
-        )
-    try:
-        from vertexai.preview.language_models import (
-            ChatModel,
-            CodeChatModel,
-            InputOutputTextPair,
-        )
-        from vertexai.language_models import TextGenerationModel, CodeGenerationModel
-        from vertexai.preview.generative_models import (
-            GenerativeModel,
-            Part,
-            GenerationConfig,
-            Image,
-        )
-
-        # given messages for gpt-4 vision, convert them for gemini
-        # https://github.com/GoogleCloudPlatform/generative-ai/blob/main/gemini/getting-started/intro_gemini_python.ipynb
-        prompt = ""
-        images = []
-        for message in messages:
-            if isinstance(message["content"], str):
-                prompt += message["content"]
-            elif isinstance(message["content"], list):
-                # see https://docs.litellm.ai/docs/providers/openai#openai-vision-models
-                for element in message["content"]:
-                    if isinstance(element, dict):
-                        if element["type"] == "text":
-                            prompt += element["text"]
-                        elif element["type"] == "image_url":
-                            image_url = element["image_url"]["url"]
-                            images.append(image_url)
-        # processing images passed to gemini
-        processed_images = []
-        for img in images:
-            if "gs://" in img:
-                # Case 1: Images with Cloud Storage URIs
-                # The supported MIME types for images include image/png and image/jpeg.
-                part_mime = "image/png" if "png" in img else "image/jpeg"
-                google_clooud_part = Part.from_uri(img, mime_type=part_mime)
-                processed_images.append(google_clooud_part)
-            elif "https:/" in img:
-                # Case 2: Images with direct links
-                image = _load_image_from_url(img)
-                processed_images.append(image)
-            elif ".mp4" in img and "gs://" in img:
-                # Case 3: Videos with Cloud Storage URIs
-                part_mime = "video/mp4"
-                google_clooud_part = Part.from_uri(img, mime_type=part_mime)
-                processed_images.append(google_clooud_part)
-            elif "base64" in img:
-                # Case 4: Images with base64 encoding
-                import base64, re
-
-                # base 64 is passed as data:image/jpeg;base64,<base-64-encoded-image>
-                image_metadata, img_without_base_64 = img.split(",")
-
-                # read mime_type from img_without_base_64=data:image/jpeg;base64
-                # Extract MIME type using regular expression
-                mime_type_match = re.match(r"data:(.*?);base64", image_metadata)
-
-                if mime_type_match:
-                    mime_type = mime_type_match.group(1)
-                else:
-                    mime_type = "image/jpeg"
-                decoded_img = base64.b64decode(img_without_base_64)
-                processed_image = Part.from_data(data=decoded_img, mime_type=mime_type)
-                processed_images.append(processed_image)
-        return prompt, processed_images
-    except Exception as e:
-        raise e
+def _set_client_in_cache(client_cache_key: str, vertex_llm_model: Any):
+    litellm.in_memory_llm_clients_cache[client_cache_key] = vertex_llm_model
 
 
 def completion(
@@ -580,23 +501,32 @@ def completion(
         print_verbose(
             f"VERTEX AI: vertex_project={vertex_project}; vertex_location={vertex_location}"
         )
-        if vertex_credentials is not None and isinstance(vertex_credentials, str):
-            import google.oauth2.service_account
 
-            json_obj = json.loads(vertex_credentials)
+        _cache_key = _get_client_cache_key(
+            model=model, vertex_project=vertex_project, vertex_location=vertex_location
+        )
+        _vertex_llm_model_object = _get_client_from_cache(client_cache_key=_cache_key)
 
-            creds = google.oauth2.service_account.Credentials.from_service_account_info(
-                json_obj,
-                scopes=["https://www.googleapis.com/auth/cloud-platform"],
+        if _vertex_llm_model_object is None:
+            if vertex_credentials is not None and isinstance(vertex_credentials, str):
+                import google.oauth2.service_account
+
+                json_obj = json.loads(vertex_credentials)
+
+                creds = (
+                    google.oauth2.service_account.Credentials.from_service_account_info(
+                        json_obj,
+                        scopes=["https://www.googleapis.com/auth/cloud-platform"],
+                    )
+                )
+            else:
+                creds, _ = google.auth.default(quota_project_id=vertex_project)
+            print_verbose(
+                f"VERTEX AI: creds={creds}; google application credentials: {os.getenv('GOOGLE_APPLICATION_CREDENTIALS')}"
             )
-        else:
-            creds, _ = google.auth.default(quota_project_id=vertex_project)
-        print_verbose(
-            f"VERTEX AI: creds={creds}; google application credentials: {os.getenv('GOOGLE_APPLICATION_CREDENTIALS')}"
-        )
-        vertexai.init(
-            project=vertex_project, location=vertex_location, credentials=creds
-        )
+            vertexai.init(
+                project=vertex_project, location=vertex_location, credentials=creds
+            )
 
         ## Load Config
         config = litellm.VertexAIConfig.get_config()
@@ -620,9 +550,9 @@ def completion(
 
         prompt = " ".join(
             [
-                message["content"]
+                message.get("content")
                 for message in messages
-                if isinstance(message["content"], str)
+                if isinstance(message.get("content", None), str)
             ]
         )
 
@@ -639,23 +569,27 @@ def completion(
             model in litellm.vertex_language_models
             or model in litellm.vertex_vision_models
         ):
-            llm_model = GenerativeModel(model)
+            llm_model = _vertex_llm_model_object or GenerativeModel(model)
             mode = "vision"
             request_str += f"llm_model = GenerativeModel({model})\n"
         elif model in litellm.vertex_chat_models:
-            llm_model = ChatModel.from_pretrained(model)
+            llm_model = _vertex_llm_model_object or ChatModel.from_pretrained(model)
             mode = "chat"
             request_str += f"llm_model = ChatModel.from_pretrained({model})\n"
         elif model in litellm.vertex_text_models:
-            llm_model = TextGenerationModel.from_pretrained(model)
+            llm_model = _vertex_llm_model_object or TextGenerationModel.from_pretrained(
+                model
+            )
             mode = "text"
             request_str += f"llm_model = TextGenerationModel.from_pretrained({model})\n"
         elif model in litellm.vertex_code_text_models:
-            llm_model = CodeGenerationModel.from_pretrained(model)
+            llm_model = _vertex_llm_model_object or CodeGenerationModel.from_pretrained(
+                model
+            )
             mode = "text"
             request_str += f"llm_model = CodeGenerationModel.from_pretrained({model})\n"
         elif model in litellm.vertex_code_chat_models:  # vertex_code_llm_models
-            llm_model = CodeChatModel.from_pretrained(model)
+            llm_model = _vertex_llm_model_object or CodeChatModel.from_pretrained(model)
             mode = "chat"
             request_str += f"llm_model = CodeChatModel.from_pretrained({model})\n"
         elif model == "private":
@@ -1034,6 +968,15 @@ async def async_completion(
                 tools=tools,
             )
 
+            _cache_key = _get_client_cache_key(
+                model=model,
+                vertex_project=vertex_project,
+                vertex_location=vertex_location,
+            )
+            _set_client_in_cache(
+                client_cache_key=_cache_key, vertex_llm_model=llm_model
+            )
+
             if tools is not None and bool(
                 getattr(response.candidates[0].content.parts[0], "function_call", None)
             ):
@@ -1356,6 +1299,95 @@ async def async_streaming(
     return streamwrapper
 
 
+class VertexAITextEmbeddingConfig(BaseModel):
+    """
+    Reference: https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/text-embeddings-api#TextEmbeddingInput
+
+    Args:
+        auto_truncate: Optional(bool) If True, will truncate input text to fit within the model's max input length.
+        task_type: Optional(str) The type of task to be performed. The default is "RETRIEVAL_QUERY".
+        title: Optional(str) The title of the document to be embedded. (only valid with task_type=RETRIEVAL_DOCUMENT).
+    """
+
+    auto_truncate: Optional[bool] = None
+    task_type: Optional[
+        Literal[
+            "RETRIEVAL_QUERY",
+            "RETRIEVAL_DOCUMENT",
+            "SEMANTIC_SIMILARITY",
+            "CLASSIFICATION",
+            "CLUSTERING",
+            "QUESTION_ANSWERING",
+            "FACT_VERIFICATION",
+        ]
+    ] = None
+    title: Optional[str] = None
+
+    def __init__(
+        self,
+        auto_truncate: Optional[bool] = None,
+        task_type: Optional[
+            Literal[
+                "RETRIEVAL_QUERY",
+                "RETRIEVAL_DOCUMENT",
+                "SEMANTIC_SIMILARITY",
+                "CLASSIFICATION",
+                "CLUSTERING",
+                "QUESTION_ANSWERING",
+                "FACT_VERIFICATION",
+            ]
+        ] = None,
+        title: Optional[str] = None,
+    ) -> None:
+        locals_ = locals()
+        for key, value in locals_.items():
+            if key != "self" and value is not None:
+                setattr(self.__class__, key, value)
+
+    @classmethod
+    def get_config(cls):
+        return {
+            k: v
+            for k, v in cls.__dict__.items()
+            if not k.startswith("__")
+            and not isinstance(
+                v,
+                (
+                    types.FunctionType,
+                    types.BuiltinFunctionType,
+                    classmethod,
+                    staticmethod,
+                ),
+            )
+            and v is not None
+        }
+
+    def get_supported_openai_params(self):
+        return [
+            "dimensions",
+        ]
+
+    def map_openai_params(self, non_default_params: dict, optional_params: dict):
+        for param, value in non_default_params.items():
+            if param == "dimensions":
+                optional_params["output_dimensionality"] = value
+        return optional_params
+
+    def get_mapped_special_auth_params(self) -> dict:
+        """
+        Common auth params across bedrock/vertex_ai/azure/watsonx
+        """
+        return {"project": "vertex_project", "region_name": "vertex_location"}
+
+    def map_special_auth_params(self, non_default_params: dict, optional_params: dict):
+        mapped_params = self.get_mapped_special_auth_params()
+
+        for param, value in non_default_params.items():
+            if param in mapped_params:
+                optional_params[mapped_params[param]] = value
+        return optional_params
+
+
 def embedding(
     model: str,
     input: Union[list, str],
@@ -1379,7 +1411,7 @@ def embedding(
             message="vertexai import failed please run `pip install google-cloud-aiplatform`",
         )
 
-    from vertexai.language_models import TextEmbeddingModel
+    from vertexai.language_models import TextEmbeddingModel, TextEmbeddingInput
     import google.auth  # type: ignore
 
     ## Load credentials with the correct quota project ref: https://github.com/googleapis/python-aiplatform/issues/2557#issuecomment-1709284744
@@ -1410,6 +1442,16 @@ def embedding(
     if isinstance(input, str):
         input = [input]
 
+    if optional_params is not None and isinstance(optional_params, dict):
+        if optional_params.get("task_type") or optional_params.get("title"):
+            # if user passed task_type or title, cast to TextEmbeddingInput
+            _task_type = optional_params.pop("task_type", None)
+            _title = optional_params.pop("title", None)
+            input = [
+                TextEmbeddingInput(text=x, task_type=_task_type, title=_title)
+                for x in input
+            ]
+
     try:
         llm_model = TextEmbeddingModel.from_pretrained(model)
     except Exception as e:
@@ -1426,7 +1468,8 @@ def embedding(
             encoding=encoding,
         )
 
-    request_str = f"""embeddings = llm_model.get_embeddings({input})"""
+    _input_dict = {"texts": input, **optional_params}
+    request_str = f"""embeddings = llm_model.get_embeddings({_input_dict})"""
     ## LOGGING PRE-CALL
     logging_obj.pre_call(
         input=input,
@@ -1438,7 +1481,7 @@ def embedding(
     )
 
     try:
-        embeddings = llm_model.get_embeddings(input)
+        embeddings = llm_model.get_embeddings(**_input_dict)
     except Exception as e:
         raise VertexAIError(status_code=500, message=str(e))
 
@@ -1446,6 +1489,7 @@ def embedding(
     logging_obj.post_call(input=input, api_key=None, original_response=embeddings)
     ## Populate OpenAI compliant dictionary
     embedding_response = []
+    input_tokens: int = 0
     for idx, embedding in enumerate(embeddings):
         embedding_response.append(
             {
@@ -1454,14 +1498,10 @@ def embedding(
                 "embedding": embedding.values,
             }
         )
+        input_tokens += embedding.statistics.token_count
     model_response["object"] = "list"
     model_response["data"] = embedding_response
     model_response["model"] = model
-    input_tokens = 0
-
-    input_str = "".join(input)
-
-    input_tokens += len(encoding.encode(input_str))
 
     usage = Usage(
         prompt_tokens=input_tokens, completion_tokens=0, total_tokens=input_tokens
@@ -1483,7 +1523,8 @@ async def async_embedding(
     """
     Async embedding implementation
     """
-    request_str = f"""embeddings = llm_model.get_embeddings({input})"""
+    _input_dict = {"texts": input, **optional_params}
+    request_str = f"""embeddings = llm_model.get_embeddings({_input_dict})"""
     ## LOGGING PRE-CALL
     logging_obj.pre_call(
         input=input,
@@ -1495,7 +1536,7 @@ async def async_embedding(
     )
 
     try:
-        embeddings = await client.get_embeddings_async(input)
+        embeddings = await client.get_embeddings_async(**_input_dict)
     except Exception as e:
         raise VertexAIError(status_code=500, message=str(e))
 
@@ -1503,6 +1544,7 @@ async def async_embedding(
     logging_obj.post_call(input=input, api_key=None, original_response=embeddings)
     ## Populate OpenAI compliant dictionary
     embedding_response = []
+    input_tokens: int = 0
     for idx, embedding in enumerate(embeddings):
         embedding_response.append(
             {
@@ -1511,18 +1553,13 @@ async def async_embedding(
                 "embedding": embedding.values,
             }
         )
+        input_tokens += embedding.statistics.token_count
+
     model_response["object"] = "list"
     model_response["data"] = embedding_response
     model_response["model"] = model
-    input_tokens = 0
-
-    input_str = "".join(input)
-
-    input_tokens += len(encoding.encode(input_str))
-
     usage = Usage(
         prompt_tokens=input_tokens, completion_tokens=0, total_tokens=input_tokens
     )
     model_response.usage = usage
-
     return model_response

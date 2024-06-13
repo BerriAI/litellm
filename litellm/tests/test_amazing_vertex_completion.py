@@ -295,6 +295,7 @@ async def test_vertex_ai_anthropic_async_streaming():
 def test_vertex_ai():
     import random
 
+    litellm.num_retries = 3
     load_vertex_ai_credentials()
     test_models = (
         litellm.vertex_chat_models
@@ -802,6 +803,28 @@ def test_vertexai_embedding():
             model="textembedding-gecko@001",
             input=["good morning from litellm", "this is another item"],
         )
+        print(f"response:", response)
+    except litellm.RateLimitError as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+def test_vertexai_embedding_embedding_latest():
+    try:
+        load_vertex_ai_credentials()
+        litellm.set_verbose = True
+
+        response = embedding(
+            model="vertex_ai/text-embedding-004",
+            input=["hi"],
+            dimensions=1,
+            auto_truncate=True,
+            task_type="RETRIEVAL_QUERY",
+        )
+
+        assert len(response.data[0]["embedding"]) == 1
+        assert response.usage.prompt_tokens > 0
         print(f"response:", response)
     except litellm.RateLimitError as e:
         pass

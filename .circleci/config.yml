@@ -2,7 +2,7 @@ version: 4.3.4
 jobs:
   local_testing:
     docker:
-      - image: circleci/python:3.9
+      - image: cimg/python:3.11
     working_directory: ~/project
 
     steps:
@@ -44,6 +44,9 @@ jobs:
             pip install "logfire==0.29.0"
             pip install numpydoc
             pip install traceloop-sdk==0.21.1
+            pip install opentelemetry-api==1.25.0
+            pip install opentelemetry-sdk==1.25.0
+            pip install opentelemetry-exporter-otlp==1.25.0
             pip install openai
             pip install prisma            
             pip install "httpx==0.24.1"
@@ -199,6 +202,7 @@ jobs:
               -e REDIS_PORT=$REDIS_PORT \
               -e AZURE_FRANCE_API_KEY=$AZURE_FRANCE_API_KEY \
               -e AZURE_EUROPE_API_KEY=$AZURE_EUROPE_API_KEY \
+              -e MISTRAL_API_KEY=$MISTRAL_API_KEY \
               -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
               -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
               -e AWS_REGION_NAME=$AWS_REGION_NAME \

@@ -24,18 +24,24 @@ import {
   Icon,
   TextInput,
 } from "@tremor/react";
-import { userInfoCall, userUpdateUserCall } from "./networking";
+
+import { message } from "antd";
+
+import {
+  userInfoCall,
+  userUpdateUserCall,
+  getPossibleUserRoles,
+} from "./networking";
 import { Badge, BadgeDelta, Button } from "@tremor/react";
 import RequestAccess from "./request_model_access";
 import CreateUser from "./create_user_button";
-import EditUserModal  from "./edit_user";
+import EditUserModal from "./edit_user";
 import Paragraph from "antd/es/skeleton/Paragraph";
 import {
   PencilAltIcon,
   InformationCircleIcon,
   TrashIcon,
 } from "@heroicons/react/outline";
-
 
 interface ViewUserDashboardProps {
   accessToken: string | null;
@@ -63,13 +69,16 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   const [selectedItem, setSelectedItem] = useState<null | any>(null);
   const [editModalVisible, setEditModalVisible] = useState(false);
   const [selectedUser, setSelectedUser] = useState(null);
+  const [possibleUIRoles, setPossibleUIRoles] = useState<
+    Record<string, Record<string, string>>
+  >({});
   const defaultPageSize = 25;
 
   const handleEditCancel = async () => {
     setSelectedUser(null);
     setEditModalVisible(false);
   };
-  
+
   const handleEditSubmit = async (editedUser: any) => {
     console.log("inside handleEditSubmit:", editedUser);
 
@@ -77,8 +86,12 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
       return;
     }
 
-    userUpdateUserCall(accessToken, editedUser, userRole);
-
+    try {
+      await userUpdateUserCall(accessToken, editedUser, null);
+      message.success(`User ${editedUser.user_id} updated successfully`);
+    } catch (error) {
+      console.error("There was an error updating the user", error);
+    }
     if (userData) {
       const updatedUserData = userData.map((user) =>
         user.user_id === editedUser.user_id ? editedUser : user
@@ -107,6 +120,9 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
         );
         console.log("user data response:", userDataResponse);
         setUserData(userDataResponse);
+
+        const availableUserRoles = await getPossibleUserRoles(accessToken);
+        setPossibleUIRoles(availableUserRoles);
       } catch (error) {
         console.error("There was an error fetching the model data", error);
       }
@@ -159,15 +175,15 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
 
   return (
     <div style={{ width: "100%" }}>
-      <Grid className="gap-2 p-2 h-[80vh] w-full mt-8">
-        <CreateUser userID={userID} accessToken={accessToken} teams={teams} />
-        <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[80vh] mb-4">
-          <div className="mb-4 mt-1">
-            <Text>
-              These are Users on LiteLLM that created API Keys. Automatically
-              tracked by LiteLLM
-            </Text>
-          </div>
+      <Grid className="gap-2 p-2 h-[90vh] w-full mt-8">
+        <CreateUser
+          userID={userID}
+          accessToken={accessToken}
+          teams={teams}
+          possibleUIRoles={possibleUIRoles}
+        />
+        <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[90vh] mb-4">
+          <div className="mb-4 mt-1"></div>
           <TabGroup>
             <TabPanels>
               <TabPanel>
@@ -176,7 +192,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                     <TableRow>
                       <TableHeaderCell>User ID</TableHeaderCell>
                       <TableHeaderCell>User Email</TableHeaderCell>
-                      <TableHeaderCell>User Models</TableHeaderCell>
+                      <TableHeaderCell>Role</TableHeaderCell>
                       <TableHeaderCell>User Spend ($ USD)</TableHeaderCell>
                       <TableHeaderCell>User Max Budget ($ USD)</TableHeaderCell>
                       <TableHeaderCell>API Keys</TableHeaderCell>
@@ -186,16 +202,13 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                   <TableBody>
                     {userData.map((user: any) => (
                       <TableRow key={user.user_id}>
-                        <TableCell>{user.user_id}</TableCell>
-                        <TableCell>{user.user_email}</TableCell>
-
+                        <TableCell>{user.user_id || "-"}</TableCell>
+                        <TableCell>{user.user_email || "-"}</TableCell>
                         <TableCell>
-                          {user.models && user.models.length > 0
-                            ? user.models
-                            : "All Models"}
+                          {possibleUIRoles?.[user?.user_role]?.ui_label || "-"}
                         </TableCell>
                         <TableCell>
-                          {user.spend ? user.spend?.toFixed(2) : 0}
+                          {user.spend ? user.spend?.toFixed(2) : "-"}
                         </TableCell>
                         <TableCell>
                           {user.max_budget ? user.max_budget : "Unlimited"}
@@ -211,9 +224,8 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                                     user.key_aliases.filter(
                                       (key: any) => key !== null
                                     ).length
-                                    
                                   }
-                                   &nbsp;Keys
+                                  &nbsp;Keys
                                 </Badge>
                               ) : (
                                 <Badge size={"xs"} color={"gray"}>
@@ -226,29 +238,24 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                               </Badge>
                             )}
                             {/* <Text>{user.key_aliases.filter(key => key !== null).length} Keys</Text> */}
-                            </Grid>
-                          </TableCell>
+                          </Grid>
+                        </TableCell>
                         <TableCell>
-
-                        <Icon icon={InformationCircleIcon} onClick= {() => {
-                          setOpenDialogId(user.user_id)
-                          setSelectedItem(user)
-                        }}>View Keys</Icon>
-                         
-                         
-                         <Icon icon={PencilAltIcon} onClick= {() => {
-                          setSelectedUser(user)
-                          setEditModalVisible(true)
-                        }}>View Keys</Icon>
-
+                          <Icon
+                            icon={PencilAltIcon}
+                            onClick={() => {
+                              setSelectedUser(user);
+                              setEditModalVisible(true);
+                            }}
+                          >
+                            View Keys
+                          </Icon>
+                          {/* 
                         <Icon icon={TrashIcon} onClick= {() => {
                           setOpenDialogId(user.user_id)
                           setSelectedItem(user)
-                        }}>View Keys</Icon>
-
+                        }}>View Keys</Icon> */}
                         </TableCell>
-                     
-                 
                       </TableRow>
                     ))}
                   </TableBody>
@@ -282,11 +289,12 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
             </TabPanels>
           </TabGroup>
           <EditUserModal
-          visible={editModalVisible}
-          onCancel={handleEditCancel}
-          user={selectedUser}
-          onSubmit={handleEditSubmit}
-        />
+            visible={editModalVisible}
+            possibleUIRoles={possibleUIRoles}
+            onCancel={handleEditCancel}
+            user={selectedUser}
+            onSubmit={handleEditSubmit}
+          />
         </Card>
         {renderPagination()}
       </Grid>

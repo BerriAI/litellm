@@ -8,20 +8,24 @@ from typing import (
 )
 from typing_extensions import override, Required, Dict
 from pydantic import BaseModel
-
 from openai.types.beta.threads.message_content import MessageContent
 from openai.types.beta.threads.message import Message as OpenAIMessage
 from openai.types.beta.thread_create_params import (
     Message as OpenAICreateThreadParamsMessage,
 )
+from openai.lib.streaming._assistants import (
+    AssistantEventHandler,
+    AssistantStreamManager,
+    AsyncAssistantStreamManager,
+    AsyncAssistantEventHandler,
+)
 from openai.types.beta.assistant_tool_param import AssistantToolParam
 from openai.types.beta.threads.run import Run
 from openai.types.beta.assistant import Assistant
-from openai.pagination import SyncCursorPage
+from openai.pagination import SyncCursorPage, AsyncCursorPage
 from os import PathLike
 from openai.types import FileObject, Batch
 from openai._legacy_response import HttpxBinaryResponseContent
-
 from typing import TypedDict, List, Optional, Tuple, Mapping, IO
 
 FileContent = Union[IO[bytes], bytes, PathLike]
@@ -138,9 +142,43 @@ class Attachment(TypedDict, total=False):
     """The tools to add this file to."""
 
 
+class ImageFileObject(TypedDict):
+    file_id: Required[str]
+    detail: Optional[str]
+
+
+class ImageURLObject(TypedDict):
+    url: Required[str]
+    detail: Optional[str]
+
+
+class MessageContentTextObject(TypedDict):
+    type: Required[Literal["text"]]
+    text: str
+
+
+class MessageContentImageFileObject(TypedDict):
+    type: Literal["image_file"]
+    image_file: ImageFileObject
+
+
+class MessageContentImageURLObject(TypedDict):
+    type: Required[str]
+    image_url: ImageURLObject
+
+
 class MessageData(TypedDict):
     role: Literal["user", "assistant"]
-    content: str
+    content: Union[
+        str,
+        List[
+            Union[
+                MessageContentTextObject,
+                MessageContentImageFileObject,
+                MessageContentImageURLObject,
+            ]
+        ],
+    ]
     attachments: Optional[List[Attachment]]
     metadata: Optional[dict]
 
@@ -255,3 +293,33 @@ class ListBatchRequest(TypedDict, total=False):
     extra_headers: Optional[Dict[str, str]]
     extra_body: Optional[Dict[str, str]]
     timeout: Optional[float]
+
+
+class ChatCompletionToolCallFunctionChunk(TypedDict):
+    name: Optional[str]
+    arguments: str
+
+
+class ChatCompletionToolCallChunk(TypedDict):
+    id: Optional[str]
+    type: Literal["function"]
+    function: ChatCompletionToolCallFunctionChunk
+
+
+class ChatCompletionDeltaToolCallChunk(TypedDict):
+    id: str
+    type: Literal["function"]
+    function: ChatCompletionToolCallFunctionChunk
+    index: int
+
+
+class ChatCompletionDeltaChunk(TypedDict, total=False):
+    content: Optional[str]
+    tool_calls: List[ChatCompletionDeltaToolCallChunk]
+    role: str
+
+
+class ChatCompletionResponseMessage(TypedDict, total=False):
+    content: Optional[str]
+    tool_calls: List[ChatCompletionToolCallChunk]
+    role: Literal["assistant"]

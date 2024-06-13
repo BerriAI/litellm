@@ -22,6 +22,7 @@ async def generate_key(
         "text-embedding-ada-002",
         "dall-e-2",
         "fake-openai-endpoint-2",
+        "mistral-embed",
     ],
 ):
     url = "http://0.0.0.0:4000/key/generate"
@@ -103,6 +104,36 @@ async def chat_completion(session, key, model: Union[str, List] = "gpt-4"):
         return await response.json()
 
 
+async def queue_chat_completion(
+    session, key, priority: int, model: Union[str, List] = "gpt-4"
+):
+    url = "http://0.0.0.0:4000/queue/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+    }
+    data = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": "Hello!"},
+        ],
+        "priority": priority,
+    }
+
+    async with session.post(url, headers=headers, json=data) as response:
+        status = response.status
+        response_text = await response.text()
+
+        print(response_text)
+        print()
+
+        if status != 200:
+            raise Exception(f"Request did not return a 200 status code: {status}")
+
+        return response.raw_headers
+
+
 async def chat_completion_with_headers(session, key, model="gpt-4"):
     url = "http://0.0.0.0:4000/chat/completions"
     headers = {
@@ -167,14 +198,14 @@ async def completion(session, key):
         return response
 
 
-async def embeddings(session, key):
+async def embeddings(session, key, model="text-embedding-ada-002"):
     url = "http://0.0.0.0:4000/embeddings"
     headers = {
         "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
     }
     data = {
-        "model": "text-embedding-ada-002",
+        "model": model,
         "input": ["hello world"],
     }
 
@@ -377,6 +408,9 @@ async def test_embeddings():
         key_gen = await new_user(session=session)
         key_2 = key_gen["key"]
         await embeddings(session=session, key=key_2)
+
+        # embedding request with non OpenAI model
+        await embeddings(session=session, key=key, model="mistral-embed")
 
 
 @pytest.mark.asyncio

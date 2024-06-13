@@ -144,16 +144,135 @@ print(response)
 </TabItem>
 </Tabs>
 
+## Set temperature, top p, etc.
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+import os
+from litellm import completion
+
+os.environ["AWS_ACCESS_KEY_ID"] = ""
+os.environ["AWS_SECRET_ACCESS_KEY"] = ""
+os.environ["AWS_REGION_NAME"] = ""
+
+response = completion(
+  model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+  messages=[{ "content": "Hello, how are you?","role": "user"}],
+  temperature=0.7,
+  top_p=1
+)
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+**Set on yaml**
+
+```yaml
+model_list:
+  - model_name: bedrock-claude-v1
+    litellm_params:
+      model: bedrock/anthropic.claude-instant-v1
+      temperature: <your-temp>
+      top_p: <your-top-p>
+```
+
+**Set on request**
+
+```python
+
+import openai
+client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://0.0.0.0:4000"
+)
+
+# request sent to model set on litellm proxy, `litellm --model`
+response = client.chat.completions.create(model="bedrock-claude-v1", messages = [
+    {
+        "role": "user",
+        "content": "this is a test request, write a short poem"
+    }
+],
+temperature=0.7,
+top_p=1
+)
+
+print(response)
+
+```
+
+</TabItem>
+</Tabs>
+
+## Pass provider-specific params 
+
+If you pass a non-openai param to litellm, we'll assume it's provider-specific and send it as a kwarg in the request body. [See more](../completion/input.md#provider-specific-params)
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+import os
+from litellm import completion
+
+os.environ["AWS_ACCESS_KEY_ID"] = ""
+os.environ["AWS_SECRET_ACCESS_KEY"] = ""
+os.environ["AWS_REGION_NAME"] = ""
+
+response = completion(
+  model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+  messages=[{ "content": "Hello, how are you?","role": "user"}],
+  top_k=1 # 👈 PROVIDER-SPECIFIC PARAM
+)
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+**Set on yaml**
+
+```yaml
+model_list:
+  - model_name: bedrock-claude-v1
+    litellm_params:
+      model: bedrock/anthropic.claude-instant-v1
+      top_k: 1 # 👈 PROVIDER-SPECIFIC PARAM
+```
+
+**Set on request**
+
+```python
+
+import openai
+client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://0.0.0.0:4000"
+)
+
+# request sent to model set on litellm proxy, `litellm --model`
+response = client.chat.completions.create(model="bedrock-claude-v1", messages = [
+    {
+        "role": "user",
+        "content": "this is a test request, write a short poem"
+    }
+],
+temperature=0.7,
+extra_body={
+    top_k=1 # 👈 PROVIDER-SPECIFIC PARAM
+}
+)
+
+print(response)
+
+```
+
+</TabItem>
+</Tabs>
+
 ## Usage - Function Calling 
 
-:::info 
-
-Claude returns it's output as an XML Tree. [Here is how we translate it](https://github.com/BerriAI/litellm/blob/49642a5b00a53b1babc1a753426a8afcac85dbbe/litellm/llms/prompt_templates/factory.py#L734).
-
-You can see the raw response via `response._hidden_params["original_response"]`.
-
-Claude hallucinates, e.g. returning the list param `value` as `<value>\n<item>apple</item>\n<item>banana</item>\n</value>` or `<value>\n<list>\n<item>apple</item>\n<item>banana</item>\n</list>\n</value>`.
-:::
+LiteLLM uses Bedrock's Converse API for making tool calls
 
 ```python
 from litellm import completion
@@ -361,47 +480,6 @@ response = completion(
 )
 ```
 
-### Passing an external BedrockRuntime.Client as a parameter - Completion()
-Pass an external BedrockRuntime.Client object as a parameter to litellm.completion. Useful when using an AWS credentials profile, SSO session, assumed role session, or if environment variables are not available for auth.
-
-Create a client from session credentials:
-```python
-import boto3
-from litellm import completion
-
-bedrock = boto3.client(
-            service_name="bedrock-runtime",
-            region_name="us-east-1",
-            aws_access_key_id="",
-            aws_secret_access_key="",
-            aws_session_token="",
-)
-
-response = completion(
-            model="bedrock/anthropic.claude-instant-v1",
-            messages=[{ "content": "Hello, how are you?","role": "user"}],
-            aws_bedrock_client=bedrock,
-)
-```
-
-Create a client from AWS profile in `~/.aws/config`:
-```python
-import boto3
-from litellm import completion
-
-dev_session = boto3.Session(profile_name="dev-profile")
-bedrock = dev_session.client(
-            service_name="bedrock-runtime",
-            region_name="us-east-1",
-)
-
-response = completion(
-            model="bedrock/anthropic.claude-instant-v1",
-            messages=[{ "content": "Hello, how are you?","role": "user"}],
-            aws_bedrock_client=bedrock,
-)
-```
-
 ### SSO Login (AWS Profile)
 - Set `AWS_PROFILE` environment variable
 - Make bedrock completion call
@@ -463,6 +541,56 @@ response = completion(
             aws_session_name="my-test-session",
         )
 ```
+
+
+### Passing an external BedrockRuntime.Client as a parameter - Completion()
+
+:::warning
+
+This is a deprecated flow. Boto3 is not async. And boto3.client does not let us make the http call through httpx. Pass in your aws params through the method above 👆. [See Auth Code](https://github.com/BerriAI/litellm/blob/55a20c7cce99a93d36a82bf3ae90ba3baf9a7f89/litellm/llms/bedrock_httpx.py#L284) [Add new auth flow](https://github.com/BerriAI/litellm/issues)
+
+:::
+
+Pass an external BedrockRuntime.Client object as a parameter to litellm.completion. Useful when using an AWS credentials profile, SSO session, assumed role session, or if environment variables are not available for auth.
+
+Create a client from session credentials:
+```python
+import boto3
+from litellm import completion
+
+bedrock = boto3.client(
+            service_name="bedrock-runtime",
+            region_name="us-east-1",
+            aws_access_key_id="",
+            aws_secret_access_key="",
+            aws_session_token="",
+)
+
+response = completion(
+            model="bedrock/anthropic.claude-instant-v1",
+            messages=[{ "content": "Hello, how are you?","role": "user"}],
+            aws_bedrock_client=bedrock,
+)
+```
+
+Create a client from AWS profile in `~/.aws/config`:
+```python
+import boto3
+from litellm import completion
+
+dev_session = boto3.Session(profile_name="dev-profile")
+bedrock = dev_session.client(
+            service_name="bedrock-runtime",
+            region_name="us-east-1",
+)
+
+response = completion(
+            model="bedrock/anthropic.claude-instant-v1",
+            messages=[{ "content": "Hello, how are you?","role": "user"}],
+            aws_bedrock_client=bedrock,
+)
+```
+
 
 ## Provisioned throughput models
 To use provisioned throughput Bedrock models pass 
