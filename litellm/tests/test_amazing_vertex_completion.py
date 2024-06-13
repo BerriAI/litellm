@@ -924,7 +924,7 @@ async def test_gemini_pro_async_function_calling():
 def test_vertexai_embedding():
     try:
         load_vertex_ai_credentials()
-        # litellm.set_verbose=True
+        # litellm.set_verbose = True
         response = embedding(
             model="textembedding-gecko@001",
             input=["good morning from litellm", "this is another item"],
