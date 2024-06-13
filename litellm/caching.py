@@ -9,7 +9,7 @@
 
 import litellm
 import time, logging, asyncio
-import json, traceback, ast, hashlib
+import json, traceback, ast, hashlib, base64
 from typing import Optional, Literal, List, Union, Any, BinaryIO
 from openai._models import BaseModel as OpenAIObject
 from litellm._logging import verbose_logger
@@ -1130,8 +1130,10 @@ class S3Cache(BaseCache):
             if ttl is None:
                 ttl = 31536000
 
-            # All possible parameters for put_object:
-            # ACL, Body, Bucket, CacheControl, ContentDisposition, ContentEncoding, ContentLanguage, ContentLength, ContentMD5, ContentType, ChecksumAlgorithm, ChecksumCRC32, ChecksumCRC32C, ChecksumSHA1, ChecksumSHA256, Expires, GrantFullControl, GrantRead, GrantReadACP, GrantWriteACP, Key, Metadata, ServerSideEncryption, StorageClass, WebsiteRedirectLocation, SSECustomerAlgorithm, SSECustomerKey, SSECustomerKeyMD5, SSEKMSKeyId, SSEKMSEncryptionContext, BucketKeyEnabled, RequestPayer, Tagging, ObjectLockMode, ObjectLockRetainUntilDate, ObjectLockLegalHoldStatus, ExpectedBucketOwner
+            # Calculate MD5 checksum of the serialized_value
+            md5_checksum = hashlib.md5(serialized_value.encode('utf-8')).digest()
+            # Convert the MD5 checksum to a base64-encoded string
+
 
             # we need to send the signed headers too, they aren't in the presigned url query params
             cache_control = f"immutable, max-age={ttl}, s-maxage={ttl}"
@@ -1139,6 +1141,8 @@ class S3Cache(BaseCache):
             content_encoding = "utf-8"
             content_language = "en"
             content_type = "application/json"
+            content_md5 = base64.b64encode(md5_checksum).decode('utf-8')
+            content_length = len(serialized_value)
             # TODO: Add Content-MD5
             # TODO: Add gzip compression
 
@@ -1152,6 +1156,8 @@ class S3Cache(BaseCache):
                     "ContentEncoding": content_encoding,
                     "ContentLanguage": content_language,
                     "ContentType": content_type,
+                    "ContentMD5": content_md5,
+                    "ContentLength": content_length,
                 },
                 ExpiresIn=60,
                 HttpMethod="PUT",
@@ -1165,6 +1171,8 @@ class S3Cache(BaseCache):
                 "Content-Encoding": content_encoding,
                 "Content-Language": content_language,
                 "Content-Type": content_type,
+                "Content-MD5": content_md5,
+                "Content-Length": str(content_length),
             }
 
             put_response = self.sync_http_handler.put(url=presigned_url, data=serialized_value, headers=put_headers)
