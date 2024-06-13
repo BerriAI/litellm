@@ -224,6 +224,7 @@ class LiteLLMRoutes(enum.Enum):
         "/key/delete",
         "/global/spend/logs",
         "/global/predict/spend/logs",
+        "/sso/get/logout_url",
     ]
 
     management_routes: List = [  # key
