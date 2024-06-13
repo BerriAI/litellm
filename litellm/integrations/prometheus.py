@@ -74,11 +74,18 @@ class PrometheusLogger:
                 ],
             )
 
-            # Remaining Budget for Team, Key
+            # Remaining Budget for Team
             self.litellm_remaining_team_budget_metric = Gauge(
                 "litellm_remaining_team_budget_metric",
                 "Remaining budget for team",
                 labelnames=["team_id", "team_alias"],
+            )
+
+            # Remaining Budget for API Key
+            self.litellm_remaining_api_key_budget_metric = Gauge(
+                "litellm_remaining_api_key_budget_metric",
+                "Remaining budget for api key",
+                labelnames=["hashed_api_key", "api_key_alias"],
             )
 
         except Exception as e:
@@ -111,6 +118,9 @@ class PrometheusLogger:
                 "user_api_key_user_id", None
             )
             user_api_key = litellm_params.get("metadata", {}).get("user_api_key", None)
+            user_api_key_alias = litellm_params.get("metadata", {}).get(
+                "user_api_key_alias", None
+            )
             user_api_team = litellm_params.get("metadata", {}).get(
                 "user_api_key_team_id", None
             )
@@ -121,12 +131,21 @@ class PrometheusLogger:
             _team_spend = litellm_params.get("metadata", {}).get(
                 "user_api_key_team_spend", None
             )
-
             _team_max_budget = litellm_params.get("metadata", {}).get(
                 "user_api_key_team_max_budget", None
             )
             _remaining_team_budget = safe_get_remaining_budget(
                 max_budget=_team_max_budget, spend=_team_spend
+            )
+
+            _api_key_spend = litellm_params.get("metadata", {}).get(
+                "user_api_key_spend", None
+            )
+            _api_key_max_budget = litellm_params.get("metadata", {}).get(
+                "user_api_key_max_budget", None
+            )
+            _remaining_api_key_budget = safe_get_remaining_budget(
+                max_budget=_api_key_max_budget, spend=_api_key_spend
             )
 
             if response_obj is not None:
@@ -175,6 +194,10 @@ class PrometheusLogger:
             self.litellm_remaining_team_budget_metric.labels(
                 user_api_team, user_api_team_alias
             ).set(_remaining_team_budget)
+
+            self.litellm_remaining_api_key_budget_metric.labels(
+                user_api_key, user_api_key_alias
+            ).set(_remaining_api_key_budget)
 
             ### FAILURE INCREMENT ###
             if "exception" in kwargs:
