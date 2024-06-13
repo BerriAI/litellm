@@ -137,6 +137,7 @@ async def test_new_user_response(prisma_client):
             NewTeamRequest(
                 team_id=_team_id,
             ),
+            http_request=Request(scope={"type": "http"}),
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.PROXY_ADMIN,
                 api_key="sk-1234",
@@ -272,7 +273,7 @@ def test_call_with_invalid_key(prisma_client):
     except Exception as e:
         print("Got Exception", e)
         print(e.message)
-        assert "Authentication Error, Invalid token passed" in e.message
+        assert "Authentication Error, Invalid proxy server token passed" in e.message
         pass
 
 
@@ -368,6 +369,7 @@ async def test_call_with_valid_model_using_all_models(prisma_client):
         new_team_response = await new_team(
             data=team_request,
             user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+            http_request=Request(scope={"type": "http"}),
         )
         print("new_team_response", new_team_response)
         created_team_id = new_team_response["team_id"]
@@ -471,7 +473,7 @@ def test_call_with_user_over_budget(prisma_client):
         asyncio.run(test())
     except Exception as e:
         error_detail = e.message
-        assert "Authentication Error, ExceededBudget:" in error_detail
+        assert "Budget has been exceeded" in error_detail
         print(vars(e))
 
 
@@ -652,7 +654,7 @@ def test_call_with_proxy_over_budget(prisma_client):
             error_detail = e.message
         else:
             error_detail = traceback.format_exc()
-        assert "Authentication Error, ExceededBudget:" in error_detail
+        assert "Budget has been exceeded" in error_detail
         print(vars(e))
 
 
@@ -730,7 +732,7 @@ def test_call_with_user_over_budget_stream(prisma_client):
         asyncio.run(test())
     except Exception as e:
         error_detail = e.message
-        assert "Authentication Error, ExceededBudget:" in error_detail
+        assert "Budget has been exceeded" in error_detail
         print(vars(e))
 
 
@@ -827,7 +829,7 @@ def test_call_with_proxy_over_budget_stream(prisma_client):
         asyncio.run(test())
     except Exception as e:
         error_detail = e.message
-        assert "Authentication Error, ExceededBudget:" in error_detail
+        assert "Budget has been exceeded" in error_detail
         print(vars(e))
 
 
@@ -1086,6 +1088,7 @@ def test_generate_and_update_key(prisma_client):
                     api_key="sk-1234",
                     user_id="1234",
                 ),
+                http_request=Request(scope={"type": "http"}),
             )
 
             _team_2 = "ishaan-special-team_{}".format(uuid.uuid4())
@@ -1098,6 +1101,7 @@ def test_generate_and_update_key(prisma_client):
                     api_key="sk-1234",
                     user_id="1234",
                 ),
+                http_request=Request(scope={"type": "http"}),
             )
 
             request = NewUserRequest(
@@ -1175,7 +1179,6 @@ def test_generate_and_update_key(prisma_client):
         asyncio.run(test())
     except Exception as e:
         print("Got Exception", e)
-        print(e.message)
         pytest.fail(f"An exception occurred - {str(e)}")
 
 
@@ -1363,7 +1366,7 @@ def test_call_with_key_over_budget(prisma_client):
             error_detail = e.message
         else:
             error_detail = str(e)
-        assert "Authentication Error, ExceededTokenBudget:" in error_detail
+        assert "Budget has been exceeded" in error_detail
         print(vars(e))
 
 
@@ -1477,7 +1480,7 @@ def test_call_with_key_over_model_budget(prisma_client):
         # print(f"Error - {str(e)}")
         traceback.print_exc()
         error_detail = e.message
-        assert "Authentication Error, ExceededModelBudget:" in error_detail
+        assert "Budget has been exceeded!" in error_detail
         print(vars(e))
 
 
@@ -1638,7 +1641,7 @@ async def test_call_with_key_over_budget_stream(prisma_client):
     except Exception as e:
         print("Got Exception", e)
         error_detail = e.message
-        assert "Authentication Error, ExceededTokenBudget:" in error_detail
+        assert "Budget has been exceeded" in error_detail
         print(vars(e))
 
 
@@ -2051,6 +2054,7 @@ async def test_master_key_hashing(prisma_client):
                 api_key="sk-1234",
                 user_id="1234",
             ),
+            http_request=Request(scope={"type": "http"}),
         )
 
         _response = await new_user(
@@ -2184,6 +2188,7 @@ async def test_create_update_team(prisma_client):
             tpm_limit=20,
             rpm_limit=20,
         ),
+        http_request=Request(scope={"type": "http"}),
         user_api_key_dict=UserAPIKeyAuth(
             user_role=LitellmUserRoles.PROXY_ADMIN,
             api_key="sk-1234",
@@ -2233,7 +2238,10 @@ async def test_create_update_team(prisma_client):
     )
 
     # now hit team_info
-    response = await team_info(team_id=_team_id)
+    response = await team_info(
+        team_id=_team_id,
+        http_request=Request(scope={"type": "http"}),
+    )
 
     print("RESPONSE from team_info", response)
 

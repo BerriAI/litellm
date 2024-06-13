@@ -90,6 +90,7 @@ from litellm.types.llms.openai import (
     HttpxBinaryResponseContent,
 )
 from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+from litellm.proxy.management_helpers.utils import add_new_member
 from litellm.proxy.utils import (
     PrismaClient,
     DBClient,
@@ -102,7 +103,6 @@ from litellm.proxy.utils import (
     hash_token,
     html_form,
     missing_keys_html_form,
-    _read_request_body,
     _is_valid_team_configs,
     _is_user_proxy_admin,
     _get_user_role,
@@ -114,6 +114,8 @@ from litellm.proxy.utils import (
     _to_ns,
     get_error_message_str,
 )
+from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+
 from litellm import (
     CreateBatchRequest,
     RetrieveBatchRequest,
@@ -160,6 +162,10 @@ from litellm.proxy.auth.auth_checks import (
     get_user_object,
     allowed_routes_check,
     get_actual_routes,
+    log_to_opentelemetry,
+)
+from litellm.proxy.common_utils.management_endpoint_utils import (
+    management_endpoint_wrapper,
 )
 from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
 from litellm.exceptions import RejectedRequestError
@@ -368,6 +374,11 @@ from typing import Dict
 api_key_header = APIKeyHeader(
     name="Authorization", auto_error=False, description="Bearer token"
 )
+azure_api_key_header = APIKeyHeader(
+    name="API-Key",
+    auto_error=False,
+    description="Some older versions of the openai Python package will send an API-Key header with just the API key ",
+)
 user_api_base = None
 user_model = None
 user_debug = False
@@ -508,18 +519,27 @@ async def check_request_disconnection(request: Request, llm_api_call_task):
 
 
 async def user_api_key_auth(
-    request: Request, api_key: str = fastapi.Security(api_key_header)
+    request: Request,
+    api_key: str = fastapi.Security(api_key_header),
+    azure_api_key_header: str = fastapi.Security(azure_api_key_header),
 ) -> UserAPIKeyAuth:
     global master_key, prisma_client, llm_model_list, user_custom_auth, custom_db_client, general_settings, proxy_logging_obj
     try:
         if isinstance(api_key, str):
             passed_in_key = api_key
             api_key = _get_bearer_token(api_key=api_key)
+
+        elif isinstance(azure_api_key_header, str):
+            api_key = azure_api_key_header
+
         parent_otel_span: Optional[Span] = None
         if open_telemetry_logger is not None:
             parent_otel_span = open_telemetry_logger.tracer.start_span(
                 name="Received Proxy Server Request",
                 start_time=_to_ns(datetime.now()),
+                context=open_telemetry_logger.get_traceparent_from_header(
+                    headers=request.headers
+                ),
             )
         ### USER-DEFINED AUTH FUNCTION ###
         if user_custom_auth is not None:
@@ -1062,8 +1082,9 @@ async def user_api_key_auth(
 
                                 _user_id = _user.get("user_id", None)
                                 if user_current_spend > user_max_budget:
-                                    raise Exception(
-                                        f"ExceededBudget: User {_user_id} has exceeded their budget. Current spend: {user_current_spend}; Max Budget: {user_max_budget}"
+                                    raise litellm.BudgetExceededError(
+                                        current_cost=user_current_spend,
+                                        max_budget=user_max_budget,
                                     )
                     else:
                         # Token exists, not expired now check if its in budget for the user
@@ -1094,9 +1115,11 @@ async def user_api_key_auth(
                             )
 
                             if user_current_spend > user_max_budget:
-                                raise Exception(
-                                    f"ExceededBudget: User {valid_token.user_id} has exceeded their budget. Current spend: {user_current_spend}; Max Budget: {user_max_budget}"
+                                raise litellm.BudgetExceededError(
+                                    current_cost=user_current_spend,
+                                    max_budget=user_max_budget,
                                 )
+
             # Check 3. Check if user is in their team budget
             if valid_token.team_member_spend is not None:
                 if prisma_client is not None:
@@ -1130,8 +1153,9 @@ async def user_api_key_auth(
                         )
                         if team_member_budget is not None and team_member_budget > 0:
                             if valid_token.team_member_spend > team_member_budget:
-                                raise Exception(
-                                    f"ExceededBudget: Crossed spend within team. UserID: {valid_token.user_id}, in team {valid_token.team_id} has exceeded their budget. Current spend: {valid_token.team_member_spend}; Max Budget: {team_member_budget}"
+                                raise litellm.BudgetExceededError(
+                                    current_cost=valid_token.team_member_spend,
+                                    max_budget=team_member_budget,
                                 )
 
             # Check 3. If token is expired
@@ -1189,8 +1213,9 @@ async def user_api_key_auth(
                 ####################################
 
                 if valid_token.spend >= valid_token.max_budget:
-                    raise Exception(
-                        f"ExceededTokenBudget: Current spend for token: {valid_token.spend}; Max Budget for Token: {valid_token.max_budget}"
+                    raise litellm.BudgetExceededError(
+                        current_cost=valid_token.spend,
+                        max_budget=valid_token.max_budget,
                     )
 
             # Check 5. Token Model Spend is under Model budget
@@ -1226,8 +1251,9 @@ async def user_api_key_auth(
                     ):
                         current_model_spend = model_spend[0]["_sum"]["spend"]
                         current_model_budget = max_budget_per_model[current_model]
-                        raise Exception(
-                            f"ExceededModelBudget: Current spend for model: {current_model_spend}; Max Budget for Model: {current_model_budget}"
+                        raise litellm.BudgetExceededError(
+                            current_cost=current_model_spend,
+                            max_budget=current_model_budget,
                         )
 
             # Check 6. Team spend is under Team budget
@@ -1251,8 +1277,9 @@ async def user_api_key_auth(
                 )
 
                 if valid_token.team_spend >= valid_token.team_max_budget:
-                    raise Exception(
-                        f"ExceededTokenBudget: Current Team Spend: {valid_token.team_spend}; Max Budget for Team: {valid_token.team_max_budget}"
+                    raise litellm.BudgetExceededError(
+                        current_cost=valid_token.team_spend,
+                        max_budget=valid_token.team_max_budget,
                     )
 
             # Check 8: Additional Common Checks across jwt + key auth
@@ -1495,7 +1522,7 @@ async def user_api_key_auth(
                     )
         if valid_token is None:
             # No token was found when looking up in the DB
-            raise Exception("Invalid token passed")
+            raise Exception("Invalid proxy server token passed")
         if valid_token_dict is not None:
             if user_id_information is not None and _is_user_proxy_admin(
                 user_id_information
@@ -1528,6 +1555,14 @@ async def user_api_key_auth(
                 str(e)
             )
         )
+
+        # Log this exception to OTEL
+        if open_telemetry_logger is not None:
+            await open_telemetry_logger.async_post_call_failure_hook(
+                original_exception=e,
+                user_api_key_dict=UserAPIKeyAuth(parent_otel_span=parent_otel_span),
+            )
+
         verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, litellm.BudgetExceededError):
             raise ProxyException(
@@ -7803,6 +7838,10 @@ async def get_global_spend_report(
         default=None,
         description="Time till which to view spend",
     ),
+    group_by: Optional[Literal["team", "customer"]] = fastapi.Query(
+        default="team",
+        description="Group spend by internal team or customer",
+    ),
 ):
     """
     Get Daily Spend per Team, based on specific startTime and endTime. Per team, view usage by each key, model
@@ -7849,69 +7888,130 @@ async def get_global_spend_report(
                 f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
 
-        # first get data from spend logs -> SpendByModelApiKey
-        # then read data from "SpendByModelApiKey" to format the response obj
-        sql_query = """
+        if group_by == "team":
+            # first get data from spend logs -> SpendByModelApiKey
+            # then read data from "SpendByModelApiKey" to format the response obj
+            sql_query = """
 
-        WITH SpendByModelApiKey AS (
-            SELECT
-                date_trunc('day', sl."startTime") AS group_by_day,
-                COALESCE(tt.team_alias, 'Unassigned Team') AS team_name,
-                sl.model,
-                sl.api_key,
-                SUM(sl.spend) AS model_api_spend,
-                SUM(sl.total_tokens) AS model_api_tokens
-            FROM 
-                "LiteLLM_SpendLogs" sl
-            LEFT JOIN 
-                "LiteLLM_TeamTable" tt 
-            ON 
-                sl.team_id = tt.team_id
-            WHERE
-                sl."startTime" BETWEEN $1::date AND $2::date
-            GROUP BY
-                date_trunc('day', sl."startTime"),
-                tt.team_alias,
-                sl.model,
-                sl.api_key
-        )
+            WITH SpendByModelApiKey AS (
+                SELECT
+                    date_trunc('day', sl."startTime") AS group_by_day,
+                    COALESCE(tt.team_alias, 'Unassigned Team') AS team_name,
+                    sl.model,
+                    sl.api_key,
+                    SUM(sl.spend) AS model_api_spend,
+                    SUM(sl.total_tokens) AS model_api_tokens
+                FROM 
+                    "LiteLLM_SpendLogs" sl
+                LEFT JOIN 
+                    "LiteLLM_TeamTable" tt 
+                ON 
+                    sl.team_id = tt.team_id
+                WHERE
+                    sl."startTime" BETWEEN $1::date AND $2::date
+                GROUP BY
+                    date_trunc('day', sl."startTime"),
+                    tt.team_alias,
+                    sl.model,
+                    sl.api_key
+            )
+                SELECT
+                    group_by_day,
+                    jsonb_agg(jsonb_build_object(
+                        'team_name', team_name,
+                        'total_spend', total_spend,
+                        'metadata', metadata
+                    )) AS teams
+                FROM (
+                    SELECT
+                        group_by_day,
+                        team_name,
+                        SUM(model_api_spend) AS total_spend,
+                        jsonb_agg(jsonb_build_object(
+                            'model', model,
+                            'api_key', api_key,
+                            'spend', model_api_spend,
+                            'total_tokens', model_api_tokens
+                        )) AS metadata
+                    FROM 
+                        SpendByModelApiKey
+                    GROUP BY
+                        group_by_day,
+                        team_name
+                ) AS aggregated
+                GROUP BY
+                    group_by_day
+                ORDER BY
+                    group_by_day;
+                """
+
+            db_response = await prisma_client.db.query_raw(
+                sql_query, start_date_obj, end_date_obj
+            )
+            if db_response is None:
+                return []
+
+            return db_response
+
+        elif group_by == "customer":
+            sql_query = """
+
+            WITH SpendByModelApiKey AS (
+                SELECT
+                    date_trunc('day', sl."startTime") AS group_by_day,
+                    sl.end_user AS customer,
+                    sl.model,
+                    sl.api_key,
+                    SUM(sl.spend) AS model_api_spend,
+                    SUM(sl.total_tokens) AS model_api_tokens
+                FROM
+                    "LiteLLM_SpendLogs" sl
+                WHERE
+                    sl."startTime" BETWEEN $1::date AND $2::date
+                GROUP BY
+                    date_trunc('day', sl."startTime"),
+                    customer,
+                    sl.model,
+                    sl.api_key
+            )
             SELECT
                 group_by_day,
                 jsonb_agg(jsonb_build_object(
-                    'team_name', team_name,
+                    'customer', customer,
                     'total_spend', total_spend,
                     'metadata', metadata
-                )) AS teams
-            FROM (
-                SELECT
-                    group_by_day,
-                    team_name,
-                    SUM(model_api_spend) AS total_spend,
-                    jsonb_agg(jsonb_build_object(
-                        'model', model,
-                        'api_key', api_key,
-                        'spend', model_api_spend,
-                        'total_tokens', model_api_tokens
-                    )) AS metadata
-                FROM 
-                    SpendByModelApiKey
-                GROUP BY
-                    group_by_day,
-                    team_name
-            ) AS aggregated
+                )) AS customers
+            FROM
+                (
+                    SELECT
+                        group_by_day,
+                        customer,
+                        SUM(model_api_spend) AS total_spend,
+                        jsonb_agg(jsonb_build_object(
+                            'model', model,
+                            'api_key', api_key,
+                            'spend', model_api_spend,
+                            'total_tokens', model_api_tokens
+                        )) AS metadata
+                    FROM
+                        SpendByModelApiKey
+                    GROUP BY
+                        group_by_day,
+                        customer
+                ) AS aggregated
             GROUP BY
                 group_by_day
             ORDER BY
                 group_by_day;
-            """
+                """
 
-        db_response = await prisma_client.db.query_raw(
-            sql_query, start_date_obj, end_date_obj
-        )
-        if db_response is None:
-            return []
+            db_response = await prisma_client.db.query_raw(
+                sql_query, start_date_obj, end_date_obj
+            )
+            if db_response is None:
+                return []
 
-        return db_response
+            return db_response
 
     except Exception as e:
         raise HTTPException(
@@ -8097,7 +8197,9 @@ async def _get_spend_report_for_time_range(
 
         return response, spend_per_tag
     except Exception as e:
-        verbose_proxy_logger.error("Exception in _get_daily_spend_reports", e)  # noqa
+        verbose_proxy_logger.error(
+            "Exception in _get_daily_spend_reports {}".format(str(e))
+        )  # noqa
 
 
 @router.post(
@@ -8755,7 +8857,7 @@ async def new_user(data: NewUserRequest):
     - organization_id: Optional[str] - specify the org a user belongs to.
     - user_email: Optional[str] - Specify a user email.
     - send_invite_email: Optional[bool] - Specify if an invite email should be sent.
-    - user_role: Optional[str] - Specify a user role - "admin", "app_owner", "app_user"
+    - user_role: Optional[str] - Specify a user role - "proxy_admin", "proxy_admin_viewer", "internal_user", "internal_user_viewer", "team", "customer". Info about each role here: `https://github.com/BerriAI/litellm/litellm/proxy/_types.py#L20`
     - max_budget: Optional[float] - Specify max budget for a given user.
     - models: Optional[list] - Model_name's a user is allowed to call. (if empty, key is allowed to call all models)
     - tpm_limit: Optional[int] - Specify tpm limit for a given user (Tokens per minute)
@@ -8790,7 +8892,10 @@ async def new_user(data: NewUserRequest):
                     role="user",
                     user_email=data_json.get("user_email", None),
                 ),
-            )
+            ),
+            http_request=Request(
+                scope={"type": "http"},
+            ),
         )
 
     if data.send_invite_email is True:
@@ -9823,8 +9928,10 @@ async def delete_end_user(
     dependencies=[Depends(user_api_key_auth)],
     response_model=LiteLLM_TeamTable,
 )
+@management_endpoint_wrapper
 async def new_team(
     data: NewTeamRequest,
+    http_request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     litellm_changed_by: Optional[str] = Header(
         None,
@@ -10058,6 +10165,7 @@ async def create_audit_log_for_update(request_data: LiteLLM_AuditLogs):
 @router.post(
     "/team/update", tags=["team management"], dependencies=[Depends(user_api_key_auth)]
 )
+@management_endpoint_wrapper
 async def update_team(
     data: UpdateTeamRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -10163,8 +10271,10 @@ async def update_team(
     tags=["team management"],
     dependencies=[Depends(user_api_key_auth)],
 )
+@management_endpoint_wrapper
 async def team_member_add(
     data: TeamMemberAddRequest,
+    http_request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -10190,10 +10300,12 @@ async def team_member_add(
         raise HTTPException(status_code=400, detail={"error": "No team id passed in"})
 
     if data.member is None:
-        raise HTTPException(status_code=400, detail={"error": "No member passed in"})
+        raise HTTPException(
+            status_code=400, detail={"error": "No member/members passed in"}
+        )
 
-    existing_team_row = await prisma_client.get_data(  # type: ignore
-        team_id=data.team_id, table_name="team", query_type="find_unique"
+    existing_team_row = await prisma_client.db.litellm_teamtable.find_unique(
+        where={"team_id": data.team_id}
     )
     if existing_team_row is None:
         raise HTTPException(
@@ -10203,75 +10315,50 @@ async def team_member_add(
             },
         )
 
-    new_member = data.member
+    complete_team_data = LiteLLM_TeamTable(**existing_team_row.model_dump())
 
-    existing_team_row.members_with_roles.append(new_member)
+    if isinstance(data.member, Member):
+        # add to team db
+        new_member = data.member
 
-    complete_team_data = LiteLLM_TeamTable(
-        **_get_pydantic_json_dict(existing_team_row),
+        complete_team_data.members_with_roles.append(new_member)
+
+    elif isinstance(data.member, List):
+        # add to team db
+        new_members = data.member
+
+        complete_team_data.members_with_roles.extend(new_members)
+
+    # ADD MEMBER TO TEAM
+    _db_team_members = [m.model_dump() for m in complete_team_data.members_with_roles]
+    updated_team = await prisma_client.db.litellm_teamtable.update(
+        where={"team_id": data.team_id},
+        data={"members_with_roles": json.dumps(_db_team_members)},  # type: ignore
     )
 
-    team_row = await prisma_client.update_data(
-        update_key_values=complete_team_data.json(exclude_none=True),
-        data=complete_team_data.json(exclude_none=True),
-        table_name="team",
-        team_id=data.team_id,
-    )
-
-    ## ADD USER, IF NEW ##
-    user_data = {  # type: ignore
-        "teams": [team_row["team_id"]],
-        "models": team_row["data"].models,
-    }
-    if new_member.user_id is not None:
-        user_data["user_id"] = new_member.user_id  # type: ignore
-        await prisma_client.update_data(
-            user_id=new_member.user_id,
-            data=user_data,
-            update_key_values_custom_query={
-                "teams": {
-                    "push": [team_row["team_id"]],
-                }
-            },
-            table_name="user",
+    if isinstance(data.member, Member):
+        await add_new_member(
+            new_member=data.member,
+            max_budget_in_team=data.max_budget_in_team,
+            prisma_client=prisma_client,
+            user_api_key_dict=user_api_key_dict,
+            litellm_proxy_admin_name=litellm_proxy_admin_name,
+            team_id=data.team_id,
         )
-    elif new_member.user_email is not None:
-        user_data["user_id"] = str(uuid.uuid4())
-        user_data["user_email"] = new_member.user_email
-        ## user email is not unique acc. to prisma schema -> future improvement
-        ### for now: check if it exists in db, if not - insert it
-        existing_user_row = await prisma_client.get_data(
-            key_val={"user_email": new_member.user_email},
-            table_name="user",
-            query_type="find_all",
-        )
-        if existing_user_row is None or (
-            isinstance(existing_user_row, list) and len(existing_user_row) == 0
-        ):
+    elif isinstance(data.member, List):
+        tasks: List = []
+        for m in data.member:
+            await add_new_member(
+                new_member=m,
+                max_budget_in_team=data.max_budget_in_team,
+                prisma_client=prisma_client,
+                user_api_key_dict=user_api_key_dict,
+                litellm_proxy_admin_name=litellm_proxy_admin_name,
+                team_id=data.team_id,
+            )
+        await asyncio.gather(*tasks)
 
-            await prisma_client.insert_data(data=user_data, table_name="user")
-
-    # Check if trying to set a budget for team member
-    if data.max_budget_in_team is not None and new_member.user_id is not None:
-        # create a new budget item for this member
-        response = await prisma_client.db.litellm_budgettable.create(
-            data={
-                "max_budget": data.max_budget_in_team,
-                "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
-                "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
-            }
-        )
-
-        _budget_id = response.budget_id
-        await prisma_client.db.litellm_teammembership.create(
-            data={
-                "team_id": data.team_id,
-                "user_id": new_member.user_id,
-                "budget_id": _budget_id,
-            }
-        )
-
-    return team_row
+    return updated_team
 
 
 @router.post(
@@ -10279,8 +10366,10 @@ async def team_member_add(
     tags=["team management"],
     dependencies=[Depends(user_api_key_auth)],
 )
+@management_endpoint_wrapper
 async def team_member_delete(
     data: TeamMemberDeleteRequest,
+    http_request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -10384,8 +10473,10 @@ async def team_member_delete(
 @router.post(
     "/team/delete", tags=["team management"], dependencies=[Depends(user_api_key_auth)]
 )
+@management_endpoint_wrapper
 async def delete_team(
     data: DeleteTeamRequest,
+    http_request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     litellm_changed_by: Optional[str] = Header(
         None,
@@ -10469,10 +10560,12 @@ async def delete_team(
 @router.get(
     "/team/info", tags=["team management"], dependencies=[Depends(user_api_key_auth)]
 )
+@management_endpoint_wrapper
 async def team_info(
+    http_request: Request,
     team_id: str = fastapi.Query(
         default=None, description="Team ID in the request parameters"
-    )
+    ),
 ):
     """
     get info on team + related keys
@@ -10556,8 +10649,10 @@ async def team_info(
 @router.post(
     "/team/block", tags=["team management"], dependencies=[Depends(user_api_key_auth)]
 )
+@management_endpoint_wrapper
 async def block_team(
     data: BlockTeamRequest,
+    http_request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -10578,8 +10673,10 @@ async def block_team(
 @router.post(
     "/team/unblock", tags=["team management"], dependencies=[Depends(user_api_key_auth)]
 )
+@management_endpoint_wrapper
 async def unblock_team(
     data: BlockTeamRequest,
+    http_request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -10600,7 +10697,9 @@ async def unblock_team(
 @router.get(
     "/team/list", tags=["team management"], dependencies=[Depends(user_api_key_auth)]
 )
+@management_endpoint_wrapper
 async def list_team(
+    http_request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -13007,7 +13106,9 @@ async def auth_callback(request: Request):
         user_role = getattr(result, generic_user_role_attribute_name, None)
 
     if user_id is None:
-        user_id = getattr(result, "first_name", "") + getattr(result, "last_name", "")
+        _first_name = getattr(result, "first_name", "") or ""
+        _last_name = getattr(result, "last_name", "") or ""
+        user_id = _first_name + _last_name
 
     user_info = None
     user_id_models: List = []

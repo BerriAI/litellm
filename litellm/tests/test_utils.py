@@ -23,6 +23,7 @@ from litellm.utils import (
     create_pretrained_tokenizer,
     create_tokenizer,
     get_max_tokens,
+    get_supported_openai_params,
 )
 
 # Assuming your trim_messages, shorten_message_to_fit_limit, and get_token_count functions are all in a module named 'message_utils'
@@ -386,3 +387,11 @@ def test_get_max_token_unit_test():
     )  # Returns a number instead of throwing an Exception
 
     assert isinstance(max_tokens, int)
+
+
+def test_get_supported_openai_params() -> None:
+    # Mapped provider
+    assert isinstance(get_supported_openai_params("gpt-4"), list)
+
+    # Unmapped provider
+    assert get_supported_openai_params("nonexistent") is None
