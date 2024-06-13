@@ -61,6 +61,28 @@ def test_completion_clarifai_claude_2_1():
     except Exception as e:
         pytest.fail(f"Error occured: {e}")
 
+@pytest.mark.skip(reason="Account rate limited.")
+def test_completion_clarifai_openai_stream():
+    try:
+        litellm.set_verbose = False
+        messages = [
+            {
+                "role": "user",
+                "content": "Hey",
+            },
+        ]
+        response = completion(
+            model="clarifai/openai.chat-completion.gpt-4o",
+            messages=messages,
+            max_tokens=10,
+            stream=True,
+        )
+        print(response)
+        for chunk in response:
+            print(chunk)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
 
 @pytest.mark.skip(reason="Account rate limited")
 def test_completion_clarifai_mistral_large():

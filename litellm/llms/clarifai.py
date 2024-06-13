@@ -139,7 +139,6 @@ def process_response(
 
 def convert_model_to_url(model: str, api_base: str):
     user_id, app_id, model_id = model.split(".")
-    model_id = model_id.lower()
     return f"{api_base}/users/{user_id}/apps/{app_id}/models/{model_id}/outputs"
 
 
