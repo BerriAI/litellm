@@ -10181,6 +10181,7 @@ async def create_audit_log_for_update(request_data: LiteLLM_AuditLogs):
 @management_endpoint_wrapper
 async def update_team(
     data: UpdateTeamRequest,
+    http_request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     litellm_changed_by: Optional[str] = Header(
         None,
