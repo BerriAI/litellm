@@ -503,28 +503,50 @@ async def test_async_vertexai_streaming_response():
 # asyncio.run(test_async_vertexai_streaming_response())
 
 
-def test_gemini_pro_vision():
+@pytest.mark.parametrize("provider", ["vertex_ai", "vertex_ai_beta"])
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_gemini_pro_vision(provider, sync_mode):
     try:
         load_vertex_ai_credentials()
         litellm.set_verbose = True
         litellm.num_retries = 3
-        resp = litellm.completion(
-            model="vertex_ai/gemini-1.5-flash-preview-0514",
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": "Whats in this image?"},
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": "gs://cloud-samples-data/generative-ai/image/boats.jpeg"
+        if sync_mode:
+            resp = litellm.completion(
+                model="{}/gemini-1.5-flash-preview-0514".format(provider),
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "Whats in this image?"},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": "gs://cloud-samples-data/generative-ai/image/boats.jpeg"
+                                },
                             },
-                        },
-                    ],
-                }
-            ],
-        )
+                        ],
+                    }
+                ],
+            )
+        else:
+            resp = await litellm.acompletion(
+                model="{}/gemini-1.5-flash-preview-0514".format(provider),
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "Whats in this image?"},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": "gs://cloud-samples-data/generative-ai/image/boats.jpeg"
+                                },
+                            },
+                        ],
+                    }
+                ],
+            )
         print(resp)
 
         prompt_tokens = resp.usage.prompt_tokens
