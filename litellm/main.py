@@ -1875,6 +1875,42 @@ def completion(
                 )
                 return response
             response = model_response
+        elif custom_llm_provider == "vertex_ai_beta":
+            vertex_ai_project = (
+                optional_params.pop("vertex_project", None)
+                or optional_params.pop("vertex_ai_project", None)
+                or litellm.vertex_project
+                or get_secret("VERTEXAI_PROJECT")
+            )
+            vertex_ai_location = (
+                optional_params.pop("vertex_location", None)
+                or optional_params.pop("vertex_ai_location", None)
+                or litellm.vertex_location
+                or get_secret("VERTEXAI_LOCATION")
+            )
+            vertex_credentials = (
+                optional_params.pop("vertex_credentials", None)
+                or optional_params.pop("vertex_ai_credentials", None)
+                or get_secret("VERTEXAI_CREDENTIALS")
+            )
+            new_params = deepcopy(optional_params)
+            response = vertex_chat_completion.completion(  # type: ignore
+                model=model,
+                messages=messages,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                optional_params=new_params,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                encoding=encoding,
+                vertex_location=vertex_ai_location,
+                vertex_project=vertex_ai_project,
+                vertex_credentials=vertex_credentials,
+                logging_obj=logging,
+                acompletion=acompletion,
+                timeout=timeout,
+            )
+
         elif custom_llm_provider == "vertex_ai":
             vertex_ai_project = (
                 optional_params.pop("vertex_project", None)
@@ -1910,26 +1946,6 @@ def completion(
                     vertex_credentials=vertex_credentials,
                     logging_obj=logging,
                     acompletion=acompletion,
-                )
-            elif (
-                model in litellm.vertex_language_models
-                or model in litellm.vertex_vision_models
-            ):
-                model_response = vertex_chat_completion.completion(  # type: ignore
-                    model=model,
-                    messages=messages,
-                    model_response=model_response,
-                    print_verbose=print_verbose,
-                    optional_params=new_params,
-                    litellm_params=litellm_params,
-                    logger_fn=logger_fn,
-                    encoding=encoding,
-                    vertex_location=vertex_ai_location,
-                    vertex_project=vertex_ai_project,
-                    vertex_credentials=vertex_credentials,
-                    logging_obj=logging,
-                    acompletion=acompletion,
-                    timeout=timeout,
                 )
             else:
                 model_response = vertex_ai.completion(

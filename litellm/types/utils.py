@@ -1,6 +1,8 @@
 from typing import List, Optional, Union, Dict, Tuple, Literal
 from typing_extensions import TypedDict
 from enum import Enum
+from typing_extensions import override, Required, Dict
+from .llms.openai import ChatCompletionUsageBlock, ChatCompletionToolCallChunk
 
 
 class LiteLLMCommonStrings(Enum):
@@ -37,3 +39,12 @@ class ModelInfo(TypedDict):
         "completion", "embedding", "image_generation", "chat", "audio_transcription"
     ]
     supported_openai_params: Optional[List[str]]
+
+
+class GenericStreamingChunk(TypedDict):
+    text: Required[str]
+    tool_use: Optional[ChatCompletionToolCallChunk]
+    is_finished: Required[bool]
+    finish_reason: Required[str]
+    usage: Optional[ChatCompletionUsageBlock]
+    index: int

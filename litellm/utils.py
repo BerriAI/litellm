@@ -11223,6 +11223,34 @@ class CustomStreamWrapper:
                             )
                 else:
                     completion_obj["content"] = str(chunk)
+            elif self.custom_llm_provider and (
+                self.custom_llm_provider == "vertex_ai_beta"
+            ):
+                from litellm.types.utils import (
+                    GenericStreamingChunk as UtilsStreamingChunk,
+                )
+
+                if self.received_finish_reason is not None:
+                    raise StopIteration
+                response_obj: UtilsStreamingChunk = chunk
+                completion_obj["content"] = response_obj["text"]
+                if response_obj["is_finished"]:
+                    self.received_finish_reason = response_obj["finish_reason"]
+
+                if (
+                    self.stream_options
+                    and self.stream_options.get("include_usage", False) is True
+                    and response_obj["usage"] is not None
+                ):
+                    self.sent_stream_usage = True
+                    model_response.usage = litellm.Usage(
+                        prompt_tokens=response_obj["usage"]["prompt_tokens"],
+                        completion_tokens=response_obj["usage"]["completion_tokens"],
+                        total_tokens=response_obj["usage"]["total_tokens"],
+                    )
+
+                if "tool_use" in response_obj and response_obj["tool_use"] is not None:
+                    completion_obj["tool_calls"] = [response_obj["tool_use"]]
             elif self.custom_llm_provider and (self.custom_llm_provider == "vertex_ai"):
                 import proto  # type: ignore
 
@@ -11900,6 +11928,7 @@ class CustomStreamWrapper:
                 or self.custom_llm_provider == "ollama"
                 or self.custom_llm_provider == "ollama_chat"
                 or self.custom_llm_provider == "vertex_ai"
+                or self.custom_llm_provider == "vertex_ai_beta"
                 or self.custom_llm_provider == "sagemaker"
                 or self.custom_llm_provider == "gemini"
                 or self.custom_llm_provider == "replicate"
