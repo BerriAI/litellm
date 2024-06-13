@@ -16,6 +16,7 @@ from litellm.proxy._types import LiteLLM_JWTAuth, LiteLLMRoutes
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.caching import DualCache
 from datetime import datetime, timedelta
+from fastapi import Request
 
 public_key = {
     "kty": "RSA",
@@ -346,6 +347,7 @@ async def test_team_token_output(prisma_client, audience):
                 models=["gpt-3.5-turbo", "gpt-4"],
             ),
             user_api_key_dict=result,
+            http_request=Request(scope={"type": "http"}),
         )
     except Exception as e:
         pytest.fail(f"This should not fail - {str(e)}")
@@ -534,6 +536,7 @@ async def test_user_token_output(
                 models=["gpt-3.5-turbo", "gpt-4"],
             ),
             user_api_key_dict=result,
+            http_request=Request(scope={"type": "http"}),
         )
         if default_team_id:
             await new_team(
@@ -544,6 +547,7 @@ async def test_user_token_output(
                     models=["gpt-3.5-turbo", "gpt-4"],
                 ),
                 user_api_key_dict=result,
+                http_request=Request(scope={"type": "http"}),
             )
     except Exception as e:
         pytest.fail(f"This should not fail - {str(e)}")

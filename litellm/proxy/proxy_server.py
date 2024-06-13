@@ -103,7 +103,6 @@ from litellm.proxy.utils import (
     hash_token,
     html_form,
     missing_keys_html_form,
-    _read_request_body,
     _is_valid_team_configs,
     _is_user_proxy_admin,
     _get_user_role,
@@ -115,6 +114,8 @@ from litellm.proxy.utils import (
     _to_ns,
     get_error_message_str,
 )
+from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+
 from litellm import (
     CreateBatchRequest,
     RetrieveBatchRequest,
@@ -162,6 +163,9 @@ from litellm.proxy.auth.auth_checks import (
     allowed_routes_check,
     get_actual_routes,
     log_to_opentelemetry,
+)
+from litellm.proxy.common_utils.management_endpoint_utils import (
+    management_endpoint_wrapper,
 )
 from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
 from litellm.exceptions import RejectedRequestError
@@ -875,6 +879,7 @@ async def user_api_key_auth(
 
         ## check for cache hit (In-Memory Cache)
         original_api_key = api_key  # (Patch: For DynamoDB Backwards Compatibility)
+        _user_role = None
         if api_key.startswith("sk-"):
             api_key = hash_token(token=api_key)
         valid_token: Optional[UserAPIKeyAuth] = user_api_key_cache.get_cache(  # type: ignore
@@ -1078,8 +1083,9 @@ async def user_api_key_auth(
 
                                 _user_id = _user.get("user_id", None)
                                 if user_current_spend > user_max_budget:
-                                    raise Exception(
-                                        f"ExceededBudget: User {_user_id} has exceeded their budget. Current spend: {user_current_spend}; Max Budget: {user_max_budget}"
+                                    raise litellm.BudgetExceededError(
+                                        current_cost=user_current_spend,
+                                        max_budget=user_max_budget,
                                     )
                     else:
                         # Token exists, not expired now check if its in budget for the user
@@ -1110,9 +1116,11 @@ async def user_api_key_auth(
                             )
 
                             if user_current_spend > user_max_budget:
-                                raise Exception(
-                                    f"ExceededBudget: User {valid_token.user_id} has exceeded their budget. Current spend: {user_current_spend}; Max Budget: {user_max_budget}"
+                                raise litellm.BudgetExceededError(
+                                    current_cost=user_current_spend,
+                                    max_budget=user_max_budget,
                                 )
+
             # Check 3. Check if user is in their team budget
             if valid_token.team_member_spend is not None:
                 if prisma_client is not None:
@@ -1146,8 +1154,9 @@ async def user_api_key_auth(
                         )
                         if team_member_budget is not None and team_member_budget > 0:
                             if valid_token.team_member_spend > team_member_budget:
-                                raise Exception(
-                                    f"ExceededBudget: Crossed spend within team. UserID: {valid_token.user_id}, in team {valid_token.team_id} has exceeded their budget. Current spend: {valid_token.team_member_spend}; Max Budget: {team_member_budget}"
+                                raise litellm.BudgetExceededError(
+                                    current_cost=valid_token.team_member_spend,
+                                    max_budget=team_member_budget,
                                 )
 
             # Check 3. If token is expired
@@ -1205,8 +1214,9 @@ async def user_api_key_auth(
                 ####################################
 
                 if valid_token.spend >= valid_token.max_budget:
-                    raise Exception(
-                        f"ExceededTokenBudget: Current spend for token: {valid_token.spend}; Max Budget for Token: {valid_token.max_budget}"
+                    raise litellm.BudgetExceededError(
+                        current_cost=valid_token.spend,
+                        max_budget=valid_token.max_budget,
                     )
 
             # Check 5. Token Model Spend is under Model budget
@@ -1242,8 +1252,9 @@ async def user_api_key_auth(
                     ):
                         current_model_spend = model_spend[0]["_sum"]["spend"]
                         current_model_budget = max_budget_per_model[current_model]
-                        raise Exception(
-                            f"ExceededModelBudget: Current spend for model: {current_model_spend}; Max Budget for Model: {current_model_budget}"
+                        raise litellm.BudgetExceededError(
+                            current_cost=current_model_spend,
+                            max_budget=current_model_budget,
                         )
 
             # Check 6. Team spend is under Team budget
@@ -1267,8 +1278,9 @@ async def user_api_key_auth(
                 )
 
                 if valid_token.team_spend >= valid_token.team_max_budget:
-                    raise Exception(
-                        f"ExceededTokenBudget: Current Team Spend: {valid_token.team_spend}; Max Budget for Team: {valid_token.team_max_budget}"
+                    raise litellm.BudgetExceededError(
+                        current_cost=valid_token.team_spend,
+                        max_budget=valid_token.team_max_budget,
                     )
 
             # Check 8: Additional Common Checks across jwt + key auth
@@ -1501,7 +1513,7 @@ async def user_api_key_auth(
                 ):
                     return UserAPIKeyAuth(
                         api_key=api_key,
-                        user_role="app_owner",
+                        user_role=_user_role,
                         parent_otel_span=parent_otel_span,
                         **valid_token_dict,
                     )
@@ -7813,7 +7825,6 @@ async def get_global_spend_provider(
     "/global/spend/report",
     tags=["Budget & Spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
-    include_in_schema=False,
     responses={
         200: {"model": List[LiteLLM_SpendLogs]},
     },
@@ -8186,7 +8197,9 @@ async def _get_spend_report_for_time_range(
 
         return response, spend_per_tag
     except Exception as e:
-        verbose_proxy_logger.error("Exception in _get_daily_spend_reports", e)  # noqa
+        verbose_proxy_logger.error(
+            "Exception in _get_daily_spend_reports {}".format(str(e))
+        )  # noqa
 
 
 @router.post(
@@ -8844,7 +8857,7 @@ async def new_user(data: NewUserRequest):
     - organization_id: Optional[str] - specify the org a user belongs to.
     - user_email: Optional[str] - Specify a user email.
     - send_invite_email: Optional[bool] - Specify if an invite email should be sent.
-    - user_role: Optional[str] - Specify a user role - "admin", "app_owner", "app_user"
+    - user_role: Optional[str] - Specify a user role - "proxy_admin", "proxy_admin_viewer", "internal_user", "internal_user_viewer", "team", "customer". Info about each role here: `https://github.com/BerriAI/litellm/litellm/proxy/_types.py#L20`
     - max_budget: Optional[float] - Specify max budget for a given user.
     - models: Optional[list] - Model_name's a user is allowed to call. (if empty, key is allowed to call all models)
     - tpm_limit: Optional[int] - Specify tpm limit for a given user (Tokens per minute)
@@ -8879,7 +8892,10 @@ async def new_user(data: NewUserRequest):
                     role="user",
                     user_email=data_json.get("user_email", None),
                 ),
-            )
+            ),
+            http_request=Request(
+                scope={"type": "http"},
+            ),
         )
 
     if data.send_invite_email is True:
@@ -9912,8 +9928,10 @@ async def delete_end_user(
     dependencies=[Depends(user_api_key_auth)],
     response_model=LiteLLM_TeamTable,
 )
+@management_endpoint_wrapper
 async def new_team(
     data: NewTeamRequest,
+    http_request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     litellm_changed_by: Optional[str] = Header(
         None,
@@ -10147,6 +10165,7 @@ async def create_audit_log_for_update(request_data: LiteLLM_AuditLogs):
 @router.post(
     "/team/update", tags=["team management"], dependencies=[Depends(user_api_key_auth)]
 )
+@management_endpoint_wrapper
 async def update_team(
     data: UpdateTeamRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -10252,8 +10271,10 @@ async def update_team(
     tags=["team management"],
     dependencies=[Depends(user_api_key_auth)],
 )
+@management_endpoint_wrapper
 async def team_member_add(
     data: TeamMemberAddRequest,
+    http_request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -10345,8 +10366,10 @@ async def team_member_add(
     tags=["team management"],
     dependencies=[Depends(user_api_key_auth)],
 )
+@management_endpoint_wrapper
 async def team_member_delete(
     data: TeamMemberDeleteRequest,
+    http_request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -10450,8 +10473,10 @@ async def team_member_delete(
 @router.post(
     "/team/delete", tags=["team management"], dependencies=[Depends(user_api_key_auth)]
 )
+@management_endpoint_wrapper
 async def delete_team(
     data: DeleteTeamRequest,
+    http_request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     litellm_changed_by: Optional[str] = Header(
         None,
@@ -10535,10 +10560,12 @@ async def delete_team(
 @router.get(
     "/team/info", tags=["team management"], dependencies=[Depends(user_api_key_auth)]
 )
+@management_endpoint_wrapper
 async def team_info(
+    http_request: Request,
     team_id: str = fastapi.Query(
         default=None, description="Team ID in the request parameters"
-    )
+    ),
 ):
     """
     get info on team + related keys
@@ -10622,8 +10649,10 @@ async def team_info(
 @router.post(
     "/team/block", tags=["team management"], dependencies=[Depends(user_api_key_auth)]
 )
+@management_endpoint_wrapper
 async def block_team(
     data: BlockTeamRequest,
+    http_request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -10644,8 +10673,10 @@ async def block_team(
 @router.post(
     "/team/unblock", tags=["team management"], dependencies=[Depends(user_api_key_auth)]
 )
+@management_endpoint_wrapper
 async def unblock_team(
     data: BlockTeamRequest,
+    http_request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -10666,7 +10697,9 @@ async def unblock_team(
 @router.get(
     "/team/list", tags=["team management"], dependencies=[Depends(user_api_key_auth)]
 )
+@management_endpoint_wrapper
 async def list_team(
+    http_request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -14701,6 +14734,22 @@ async def cache_flushall():
         raise HTTPException(
             status_code=503,
             detail=f"Service Unhealthy ({str(e)})",
+        )
+
+
+@router.get(
+    "/get/litellm_model_cost_map",
+    include_in_schema=False,
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def get_litellm_model_cost_map():
+    try:
+        _model_cost_map = litellm.model_cost
+        return _model_cost_map
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal Server Error ({str(e)})",
         )
 
 

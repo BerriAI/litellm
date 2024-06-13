@@ -125,11 +125,12 @@ See all litellm.completion supported params [here](../completion/input.md#transl
 from litellm import completion
 import os
 ## set ENV variables
-os.environ["PREDIBASE_API_KEY"] = "predibase key"
+os.environ["DATABRICKS_API_KEY"] = "databricks key"
+os.environ["DATABRICKS_API_BASE"] = "databricks api base"
 
-# predibae llama-3 call
+# databricks dbrx call
 response = completion(
-    model="predibase/llama3-8b-instruct", 
+    model="databricks/databricks-dbrx-instruct", 
     messages = [{ "content": "Hello, how are you?","role": "user"}],
     max_tokens=20,
     temperature=0.5

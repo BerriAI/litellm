@@ -406,6 +406,7 @@ openai_compatible_providers: List = [
     "xinference",
     "together_ai",
     "fireworks_ai",
+    "azure_ai",
 ]
 
 
@@ -604,12 +605,14 @@ provider_list: List = [
     "together_ai",
     "openrouter",
     "vertex_ai",
+    "vertex_ai_beta",
     "palm",
     "gemini",
     "ai21",
     "baseten",
     "azure",
     "azure_text",
+    "azure_ai",
     "sagemaker",
     "bedrock",
     "vllm",
@@ -763,7 +766,8 @@ from .llms.gemini import GeminiConfig
 from .llms.nlp_cloud import NLPCloudConfig
 from .llms.aleph_alpha import AlephAlphaConfig
 from .llms.petals import PetalsConfig
-from .llms.vertex_ai import VertexAIConfig
+from .llms.vertex_httpx import VertexGeminiConfig
+from .llms.vertex_ai import VertexAIConfig, VertexAITextEmbeddingConfig
 from .llms.vertex_ai_anthropic import VertexAIAnthropicConfig
 from .llms.sagemaker import SagemakerConfig
 from .llms.ollama import OllamaConfig
@@ -785,7 +789,9 @@ from .llms.openai import (
     OpenAIConfig,
     OpenAITextCompletionConfig,
     MistralConfig,
+    MistralEmbeddingConfig,
     DeepInfraConfig,
+    AzureAIStudioConfig,
 )
 from .llms.azure import (
     AzureOpenAIConfig,

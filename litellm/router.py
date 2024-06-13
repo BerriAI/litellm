@@ -3618,6 +3618,7 @@ class Router:
                 except Exception:
                     model_info = None
                 # get llm provider
+                model, llm_provider = "", ""
                 try:
                     model, llm_provider, _, _ = litellm.get_llm_provider(
                         model=litellm_params.model,

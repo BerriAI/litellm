@@ -14,10 +14,9 @@ model_list:
     litellm_params:
       model: openai/*
       api_key: os.environ/OPENAI_API_KEY
-  - model_name: my-triton-model
+  - model_name: mistral-embed
     litellm_params:
-      model: triton/any"
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/triton/embeddings
+      model: mistral/mistral-embed
 
 general_settings:
   master_key: sk-1234
