@@ -1,5 +1,6 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
+import Image from '@theme/IdealImage';
 
 # 🐳 Docker, Deploying LiteLLM Proxy
 
@@ -537,7 +538,9 @@ ghcr.io/berriai/litellm-database:main-latest --config your_config.yaml
 
 ## Advanced Deployment Settings
 
-### Customization of the server root path
+### 1. Customization of the server root path (custom Proxy base url)
+
+💥 Use this when you want to serve LiteLLM on a custom base url path like `https://localhost:4000/api/v1` 
 
 :::info
 
@@ -548,9 +551,29 @@ In a Kubernetes deployment, it's possible to utilize a shared DNS to host multip
 Customize the root path to eliminate the need for employing multiple DNS configurations during deployment.
 
 👉 Set `SERVER_ROOT_PATH` in your .env and this will be set as your server root path
+```
+export SERVER_ROOT_PATH="/api/v1"
+```
 
+**Step 1. Run Proxy with `SERVER_ROOT_PATH` set in your env **
 
-### Setting SSL Certification 
+```shell
+docker run --name litellm-proxy \
+-e DATABASE_URL=postgresql://<user>:<password>@<host>:<port>/<dbname> \
+-e SERVER_ROOT_PATH="/api/v1" \
+-p 4000:4000 \
+ghcr.io/berriai/litellm-database:main-latest --config your_config.yaml
+```
+
+After running the proxy you can access it on `http://0.0.0.0:4000/api/v1/` (since we set `SERVER_ROOT_PATH="/api/v1"`)
+
+**Step 2. Verify Running on correct path**
+
+<Image img={require('../../img/custom_root_path.png')} />
+
+**That's it**, that's all you need to run the proxy on a custom root path
+
+### 2. Setting SSL Certification 
 
 Use this, If you need to set ssl certificates for your on prem litellm proxy
 
