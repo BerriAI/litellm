@@ -152,16 +152,16 @@ const Team: React.FC<TeamProps> = ({
               <InputNumber step={0.01} precision={2} width={200} />
             </Form.Item>
             <Form.Item
-                  className="mt-8"
-                  label="Reset Budget"
-                  name="budget_duration"
-                >
-                  <Select2 defaultValue={null} placeholder="n/a">
-                    <Select2.Option value="24h">daily</Select2.Option>
-                    <Select2.Option value="7d">weekly</Select2.Option>
-                    <Select2.Option value="30d">monthly</Select2.Option>
-                  </Select2>
-                </Form.Item>
+              className="mt-8"
+              label="Reset Budget"
+              name="budget_duration"
+            >
+              <Select2 defaultValue={null} placeholder="n/a">
+                <Select2.Option value="24h">daily</Select2.Option>
+                <Select2.Option value="7d">weekly</Select2.Option>
+                <Select2.Option value="30d">monthly</Select2.Option>
+              </Select2>
+            </Form.Item>
             <Form.Item label="Tokens per minute Limit (TPM)" name="tpm_limit">
               <InputNumber step={1} width={400} />
             </Form.Item>
