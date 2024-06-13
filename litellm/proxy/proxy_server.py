@@ -7825,7 +7825,6 @@ async def get_global_spend_provider(
     "/global/spend/report",
     tags=["Budget & Spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
-    include_in_schema=False,
     responses={
         200: {"model": List[LiteLLM_SpendLogs]},
     },
