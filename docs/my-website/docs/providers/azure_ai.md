@@ -3,50 +3,152 @@ import TabItem from '@theme/TabItem';
 
 # Azure AI Studio
 
-**Ensure the following:**
-1. The API Base passed ends in the `/v1/` prefix
-  example:
-  ```python
-  api_base = "https://Mistral-large-dfgfj-serverless.eastus2.inference.ai.azure.com/v1/"
-  ```
+LiteLLM supports all models on Azure AI Studio
 
-2. The `model` passed is listed in [supported models](#supported-models). You **DO NOT** Need to pass your deployment name to litellm. Example `model=azure/Mistral-large-nmefg`  
 
 ## Usage
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
 
+### ENV VAR
 ```python
-import litellm
-response = litellm.completion(
-    model="azure/command-r-plus",
-    api_base="<your-deployment-base>/v1/"
-    api_key="eskk******"
-    messages=[{"role": "user", "content": "What is the meaning of life?"}],
+import os 
+os.environ["AZURE_API_API_KEY"] = ""
+os.environ["AZURE_AI_API_BASE"] = ""
+```
+
+### Example Call
+
+```python
+from litellm import completion
+import os
+## set ENV variables
+os.environ["AZURE_API_API_KEY"] = "azure ai key"
+os.environ["AZURE_AI_API_BASE"] = "azure ai base url" # e.g.: https://Mistral-large-dfgfj-serverless.eastus2.inference.ai.azure.com/
+
+# predibase llama-3 call
+response = completion(
+    model="azure_ai/command-r-plus", 
+    messages = [{ "content": "Hello, how are you?","role": "user"}]
 )
 ```
 
 </TabItem>
 <TabItem value="proxy" label="PROXY">
 
-## Sample Usage - LiteLLM Proxy
-
 1. Add models to your config.yaml
 
   ```yaml
   model_list:
-    - model_name: mistral
-      litellm_params:
-        model: azure/mistral-large-latest
-        api_base: https://Mistral-large-dfgfj-serverless.eastus2.inference.ai.azure.com/v1/
-        api_key: JGbKodRcTp****
     - model_name: command-r-plus
       litellm_params:
-          model: azure/command-r-plus
-          api_key: os.environ/AZURE_COHERE_API_KEY
-          api_base: os.environ/AZURE_COHERE_API_BASE
+        model: azure_ai/command-r-plus
+        api_key: os.environ/AZURE_AI_API_KEY
+        api_base: os.environ/AZURE_AI_API_BASE
   ```
+
+
+
+2. Start the proxy 
+
+  ```bash
+  $ litellm --config /path/to/config.yaml --debug
+  ```
+
+3. Send Request to LiteLLM Proxy Server
+
+  <Tabs>
+
+  <TabItem value="openai" label="OpenAI Python v1.0.0+">
+
+  ```python
+  import openai
+  client = openai.OpenAI(
+      api_key="sk-1234",             # pass litellm proxy key, if you're using virtual keys
+      base_url="http://0.0.0.0:4000" # litellm-proxy-base url
+  )
+
+  response = client.chat.completions.create(
+      model="command-r-plus",
+      messages = [
+        {
+            "role": "system",
+            "content": "Be a good human!"
+        },
+        {
+            "role": "user",
+            "content": "What do you know about earth?"
+        }
+    ]
+  )
+
+  print(response)
+  ```
+
+  </TabItem>
+
+  <TabItem value="curl" label="curl">
+
+  ```shell
+  curl --location 'http://0.0.0.0:4000/chat/completions' \
+      --header 'Authorization: Bearer sk-1234' \
+      --header 'Content-Type: application/json' \
+      --data '{
+      "model": "command-r-plus",
+      "messages": [
+        {
+            "role": "system",
+            "content": "Be a good human!"
+        },
+        {
+            "role": "user",
+            "content": "What do you know about earth?"
+        }
+        ],
+  }'
+  ```
+  </TabItem>
+
+  </Tabs>
+
+
+</TabItem>
+
+</Tabs>
+
+## Passing additional params - max_tokens, temperature 
+See all litellm.completion supported params [here](../completion/input.md#translated-openai-params)
+
+```python
+# !pip install litellm
+from litellm import completion
+import os
+## set ENV variables
+os.environ["AZURE_AI_API_KEY"] = "azure ai api key"
+os.environ["AZURE_AI_API_BASE"] = "azure ai api base"
+
+# command r plus call
+response = completion(
+    model="azure_ai/command-r-plus", 
+    messages = [{ "content": "Hello, how are you?","role": "user"}],
+    max_tokens=20,
+    temperature=0.5
+)
+```
+
+**proxy**
+
+```yaml
+  model_list:
+    - model_name: command-r-plus
+      litellm_params:
+        model: azure_ai/command-r-plus
+        api_key: os.environ/AZURE_AI_API_KEY
+        api_base: os.environ/AZURE_AI_API_BASE
+        max_tokens: 20
+        temperature: 0.5
+```
 
 
 
@@ -103,9 +205,6 @@ response = litellm.completion(
 
   </Tabs>
 
-</TabItem>
-</Tabs>
-
 ## Function Calling 
 
 <Tabs>
@@ -115,8 +214,8 @@ response = litellm.completion(
 from litellm import completion
 
 # set env
-os.environ["AZURE_MISTRAL_API_KEY"] = "your-api-key"
-os.environ["AZURE_MISTRAL_API_BASE"] = "your-api-base"
+os.environ["AZURE_AI_API_KEY"] = "your-api-key"
+os.environ["AZURE_AI_API_BASE"] = "your-api-base"
 
 tools = [
     {
@@ -141,9 +240,7 @@ tools = [
 messages = [{"role": "user", "content": "What's the weather like in Boston today?"}]
 
 response = completion(
-    model="azure/mistral-large-latest",
-    api_base=os.getenv("AZURE_MISTRAL_API_BASE")
-    api_key=os.getenv("AZURE_MISTRAL_API_KEY")
+    model="azure_ai/mistral-large-latest",
     messages=messages,
     tools=tools,
     tool_choice="auto",
@@ -206,10 +303,12 @@ curl http://0.0.0.0:4000/v1/chat/completions \
 
 ## Supported Models
 
+LiteLLM supports **ALL** azure ai models. Here's a few examples:
+
 | Model Name               | Function Call                                                                                                                                                      |
 |--------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | Cohere command-r-plus | `completion(model="azure/command-r-plus", messages)` | 
-| Cohere ommand-r | `completion(model="azure/command-r", messages)` | 
+| Cohere command-r | `completion(model="azure/command-r", messages)` | 
 | mistral-large-latest | `completion(model="azure/mistral-large-latest", messages)` | 
 
 

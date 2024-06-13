@@ -34,7 +34,7 @@ opentelemetry-exporter-otlp==1.25.0
 
 ### LITELLM PACKAGE DEPENDENCIES
 python-dotenv==1.0.0 # for env 
-tiktoken==0.6.0 # for calculating usage
+tiktoken==0.7.0 # for calculating usage
 importlib-metadata==6.8.0 # for random utils
 tokenizers==0.14.0 # for calculating usage
 click==8.1.7 # for proxy cli 

@@ -16,7 +16,7 @@ from litellm.llms.prompt_templates.factory import anthropic_messages_pt
 from unittest.mock import patch, MagicMock
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
 
-# litellm.num_retries=3
+# litellm.num_retries = 3
 litellm.cache = None
 litellm.success_callback = []
 user_message = "Write a short poem about the sky"
@@ -112,6 +112,27 @@ def test_null_role_response():
         assert response.id == "chatcmpl-123"
 
         assert response.choices[0].message.role == "assistant"
+
+
+def test_completion_azure_ai_command_r():
+    try:
+        import os
+
+        litellm.set_verbose = True
+
+        os.environ["AZURE_AI_API_BASE"] = os.getenv("AZURE_COHERE_API_BASE", "")
+        os.environ["AZURE_AI_API_KEY"] = os.getenv("AZURE_COHERE_API_KEY", "")
+
+        response: litellm.ModelResponse = completion(
+            model="azure_ai/command-r-plus",
+            messages=[{"role": "user", "content": "What is the meaning of life?"}],
+        )  # type: ignore
+
+        assert "azure_ai" in response.model
+    except litellm.Timeout as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
 
 def test_completion_azure_command_r():
@@ -721,7 +742,11 @@ def test_completion_claude_3_function_plus_image():
     print(response)
 
 
-def test_completion_azure_mistral_large_function_calling():
+@pytest.mark.parametrize(
+    "provider",
+    ["azure", "azure_ai"],
+)
+def test_completion_azure_mistral_large_function_calling(provider):
     """
     This primarily tests if the 'Function()' pydantic object correctly handles argument param passed in as a dict vs. string
     """
@@ -752,8 +777,9 @@ def test_completion_azure_mistral_large_function_calling():
             "content": "What's the weather like in Boston today in Fahrenheit?",
         }
     ]
+
     response = completion(
-        model="azure/mistral-large-latest",
+        model="{}/mistral-large-latest".format(provider),
         api_base=os.getenv("AZURE_MISTRAL_API_BASE"),
         api_key=os.getenv("AZURE_MISTRAL_API_KEY"),
         messages=messages,
