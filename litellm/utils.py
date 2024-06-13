@@ -35,6 +35,9 @@ import litellm._service_logger  # for storing API inputs, outputs, and metadata
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
 from litellm.caching import DualCache
 from litellm.types.utils import CostPerToken, ProviderField, ModelInfo
+from litellm.litellm_core_utils.redact_messages import (
+    redact_message_input_output_from_logging,
+)
 
 oidc_cache = DualCache()
 
@@ -1476,7 +1479,9 @@ class Logging:
                     print_verbose(
                         f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {traceback.format_exc()}"
                     )
-            self.redact_message_input_output_from_logging(result=original_response)
+            original_response = redact_message_input_output_from_logging(
+                litellm_logging_obj=self, result=original_response
+            )
             # Input Integration Logging -> If you want to log the fact that an attempt to call the model was made
 
             callbacks = litellm.input_callback + self.dynamic_input_callbacks
@@ -1667,7 +1672,9 @@ class Logging:
             else:
                 callbacks = litellm.success_callback
 
-            self.redact_message_input_output_from_logging(result=result)
+            result = redact_message_input_output_from_logging(
+                result=result, litellm_logging_obj=self
+            )
 
             for callback in callbacks:
                 try:
@@ -2294,7 +2301,9 @@ class Logging:
         else:
             callbacks = litellm._async_success_callback
 
-        self.redact_message_input_output_from_logging(result=result)
+        result = redact_message_input_output_from_logging(
+            result=result, litellm_logging_obj=self
+        )
 
         for callback in callbacks:
             # check if callback can run for this request
@@ -2504,7 +2513,9 @@ class Logging:
 
             result = None  # result sent to all loggers, init this to None incase it's not created
 
-            self.redact_message_input_output_from_logging(result=result)
+            result = redact_message_input_output_from_logging(
+                result=result, litellm_logging_obj=self
+            )
             for callback in callbacks:
                 try:
                     if callback == "lite_debugger":
@@ -2727,41 +2738,6 @@ class Logging:
                 print_verbose(
                     f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while success logging {traceback.format_exc()}"
                 )
-
-    def redact_message_input_output_from_logging(self, result):
-        """
-        Removes messages, prompts, input, response from logging. This modifies the data in-place
-        only redacts when litellm.turn_off_message_logging == True
-        """
-        # check if user opted out of logging message/response to callbacks
-        if litellm.turn_off_message_logging is True:
-            # remove messages, prompts, input, response from logging
-            self.model_call_details["messages"] = [
-                {"role": "user", "content": "redacted-by-litellm"}
-            ]
-            self.model_call_details["prompt"] = ""
-            self.model_call_details["input"] = ""
-
-            # response cleaning
-            # ChatCompletion Responses
-            if self.stream and "complete_streaming_response" in self.model_call_details:
-                _streaming_response = self.model_call_details[
-                    "complete_streaming_response"
-                ]
-                for choice in _streaming_response.choices:
-                    if isinstance(choice, litellm.Choices):
-                        choice.message.content = "redacted-by-litellm"
-                    elif isinstance(choice, litellm.utils.StreamingChoices):
-                        choice.delta.content = "redacted-by-litellm"
-            else:
-                if result is not None:
-                    if isinstance(result, litellm.ModelResponse):
-                        if hasattr(result, "choices") and result.choices is not None:
-                            for choice in result.choices:
-                                if isinstance(choice, litellm.Choices):
-                                    choice.message.content = "redacted-by-litellm"
-                                elif isinstance(choice, litellm.utils.StreamingChoices):
-                                    choice.delta.content = "redacted-by-litellm"
 
 
 def exception_logging(
