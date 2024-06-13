@@ -14738,6 +14738,22 @@ async def cache_flushall():
         )
 
 
+@router.get(
+    "/get/litellm_model_cost_map",
+    include_in_schema=False,
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def get_litellm_model_cost_map():
+    try:
+        _model_cost_map = litellm.model_cost
+        return _model_cost_map
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal Server Error ({str(e)})",
+        )
+
+
 @router.get("/", dependencies=[Depends(user_api_key_auth)])
 async def home(request: Request):
     return "LiteLLM: RUNNING"
