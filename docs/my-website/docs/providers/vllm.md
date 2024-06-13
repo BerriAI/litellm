@@ -1,36 +1,18 @@
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
 # VLLM
 
 LiteLLM supports all models on VLLM.
 
-🚀[Code Tutorial](https://github.com/BerriAI/litellm/blob/main/cookbook/VLLM_Model_Testing.ipynb)
+# Quick Start
 
+## Usage - litellm.completion (calling vLLM endpoint)
+vLLM Provides an OpenAI compatible endpoints - here's how to call it with LiteLLM 
 
-:::info
-
-To call a HOSTED VLLM Endpoint use [these docs](./openai_compatible.md)
-
-:::
-
-### Quick Start
-```
-pip install litellm vllm
-```
-```python
-import litellm 
-
-response = litellm.completion(
-            model="vllm/facebook/opt-125m", # add a vllm prefix so litellm knows the custom_llm_provider==vllm
-            messages=messages,
-            temperature=0.2,
-            max_tokens=80)
-
-print(response)
-```
-
-### Calling hosted VLLM Server
 In order to use litellm to call a hosted vllm server add the following to your completion call
 
-* `custom_llm_provider == "openai"`
+* `model="openai/<your-vllm-model-name>"` 
 * `api_base = "your-hosted-vllm-server"`
 
 ```python
@@ -40,6 +22,93 @@ response = litellm.completion(
             model="openai/facebook/opt-125m", # pass the vllm model name
             messages=messages,
             api_base="https://hosted-vllm-api.co",
+            temperature=0.2,
+            max_tokens=80)
+
+print(response)
+```
+
+
+## Usage -  LiteLLM Proxy Server (calling vLLM endpoint)
+
+Here's how to call an OpenAI-Compatible Endpoint with the LiteLLM Proxy Server
+
+1. Modify the config.yaml 
+
+  ```yaml
+  model_list:
+    - model_name: my-model
+      litellm_params:
+        model: openai/facebook/opt-125m  # add openai/ prefix to route as OpenAI provider
+        api_base: https://hosted-vllm-api.co      # add api base for OpenAI compatible provider
+  ```
+
+2. Start the proxy 
+
+  ```bash
+  $ litellm --config /path/to/config.yaml
+  ```
+
+3. Send Request to LiteLLM Proxy Server
+
+  <Tabs>
+
+  <TabItem value="openai" label="OpenAI Python v1.0.0+">
+
+  ```python
+  import openai
+  client = openai.OpenAI(
+      api_key="sk-1234",             # pass litellm proxy key, if you're using virtual keys
+      base_url="http://0.0.0.0:4000" # litellm-proxy-base url
+  )
+
+  response = client.chat.completions.create(
+      model="my-model",
+      messages = [
+          {
+              "role": "user",
+              "content": "what llm are you"
+          }
+      ],
+  )
+
+  print(response)
+  ```
+  </TabItem>
+
+  <TabItem value="curl" label="curl">
+
+  ```shell
+  curl --location 'http://0.0.0.0:4000/chat/completions' \
+      --header 'Authorization: Bearer sk-1234' \
+      --header 'Content-Type: application/json' \
+      --data '{
+      "model": "my-model",
+      "messages": [
+          {
+          "role": "user",
+          "content": "what llm are you"
+          }
+      ],
+  }'
+  ```
+  </TabItem>
+
+  </Tabs>
+
+
+## Extras - for `vllm pip package`
+### Using - `litellm.completion`
+
+```
+pip install litellm vllm
+```
+```python
+import litellm 
+
+response = litellm.completion(
+            model="vllm/facebook/opt-125m", # add a vllm prefix so litellm knows the custom_llm_provider==vllm
+            messages=messages,
             temperature=0.2,
             max_tokens=80)
 
@@ -86,14 +155,14 @@ def default_pt(messages):
 
 #### Models we already have Prompt Templates for
 
-| Model Name | Works for Models | Function Call |
-| -------- | -------- | -------- |
-| meta-llama/Llama-2-7b-chat | All meta-llama llama2 chat models| `completion(model='vllm/meta-llama/Llama-2-7b', messages=messages, api_base="your_api_endpoint")` |
-| tiiuae/falcon-7b-instruct | All falcon instruct models | `completion(model='vllm/tiiuae/falcon-7b-instruct', messages=messages, api_base="your_api_endpoint")` |
-| mosaicml/mpt-7b-chat | All mpt chat models | `completion(model='vllm/mosaicml/mpt-7b-chat', messages=messages, api_base="your_api_endpoint")` |
-| codellama/CodeLlama-34b-Instruct-hf | All codellama instruct models | `completion(model='vllm/codellama/CodeLlama-34b-Instruct-hf', messages=messages, api_base="your_api_endpoint")` |
-| WizardLM/WizardCoder-Python-34B-V1.0 | All wizardcoder models | `completion(model='vllm/WizardLM/WizardCoder-Python-34B-V1.0', messages=messages, api_base="your_api_endpoint")` |
-| Phind/Phind-CodeLlama-34B-v2 | All phind-codellama models | `completion(model='vllm/Phind/Phind-CodeLlama-34B-v2', messages=messages, api_base="your_api_endpoint")` |
+| Model Name                           | Works for Models                  | Function Call                                                                                                    |
+|--------------------------------------|-----------------------------------|------------------------------------------------------------------------------------------------------------------|
+| meta-llama/Llama-2-7b-chat           | All meta-llama llama2 chat models | `completion(model='vllm/meta-llama/Llama-2-7b', messages=messages, api_base="your_api_endpoint")`                |
+| tiiuae/falcon-7b-instruct            | All falcon instruct models        | `completion(model='vllm/tiiuae/falcon-7b-instruct', messages=messages, api_base="your_api_endpoint")`            |
+| mosaicml/mpt-7b-chat                 | All mpt chat models               | `completion(model='vllm/mosaicml/mpt-7b-chat', messages=messages, api_base="your_api_endpoint")`                 |
+| codellama/CodeLlama-34b-Instruct-hf  | All codellama instruct models     | `completion(model='vllm/codellama/CodeLlama-34b-Instruct-hf', messages=messages, api_base="your_api_endpoint")`  |
+| WizardLM/WizardCoder-Python-34B-V1.0 | All wizardcoder models            | `completion(model='vllm/WizardLM/WizardCoder-Python-34B-V1.0', messages=messages, api_base="your_api_endpoint")` |
+| Phind/Phind-CodeLlama-34B-v2         | All phind-codellama models        | `completion(model='vllm/Phind/Phind-CodeLlama-34B-v2', messages=messages, api_base="your_api_endpoint")`         |
 
 #### Custom prompt templates
 

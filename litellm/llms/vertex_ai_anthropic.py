@@ -3,7 +3,7 @@
 import os, types
 import json
 from enum import Enum
-import requests, copy
+import requests, copy  # type: ignore
 import time, uuid
 from typing import Callable, Optional, List
 from litellm.utils import ModelResponse, Usage, map_finish_reason, CustomStreamWrapper
@@ -17,7 +17,7 @@ from .prompt_templates.factory import (
     extract_between_tags,
     parse_xml_params,
 )
-import httpx
+import httpx  # type: ignore
 
 
 class VertexAIError(Exception):
@@ -35,7 +35,7 @@ class VertexAIError(Exception):
 
 class VertexAIAnthropicConfig:
     """
-    Reference: https://docs.anthropic.com/claude/reference/messages_post
+    Reference:https://docs.anthropic.com/claude/reference/messages_post
 
     Note that the API for Claude on Vertex differs from the Anthropic API documentation in the following ways:
 

@@ -1,5 +1,5 @@
 from typing import Optional, Union, Any
-import types, requests
+import types, requests  # type: ignore
 from .base import BaseLLM
 from litellm.utils import (
     ModelResponse,

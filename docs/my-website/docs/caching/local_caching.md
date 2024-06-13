@@ -40,7 +40,7 @@ cache = Cache()
 
 cache.add_cache(cache_key="test-key", result="1234")
 
-cache.get_cache(cache_key="test-key)
+cache.get_cache(cache_key="test-key")
 ```
 
 ## Caching with Streaming 

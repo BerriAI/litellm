@@ -21,11 +21,11 @@ try:
         # contains a (known) object attribute
         object: Literal["chat.completion", "edit", "text_completion"]
 
-        def __getitem__(self, key: K) -> V:
-            ...  # pragma: no cover
+        def __getitem__(self, key: K) -> V: ...  # noqa
 
-        def get(self, key: K, default: Optional[V] = None) -> Optional[V]:
-            ...  # pragma: no cover
+        def get(  # noqa
+            self, key: K, default: Optional[V] = None
+        ) -> Optional[V]: ...  # pragma: no cover
 
     class OpenAIRequestResponseResolver:
         def __call__(
@@ -173,12 +173,11 @@ except:
 
 #### What this does ####
 #    On success, logs events to Langfuse
-import dotenv, os
+import os
 import requests
 import requests
 from datetime import datetime
 
-dotenv.load_dotenv()  # Loading env variables using dotenv
 import traceback
 
 
@@ -218,6 +217,5 @@ class WeightsBiasesLogger:
                 f"W&B Logging Logging - final response object: {response_obj}"
             )
         except:
-            # traceback.print_exc()
             print_verbose(f"W&B Logging Layer Error - {traceback.format_exc()}")
             pass

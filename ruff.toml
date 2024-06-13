@@ -1,0 +1,3 @@
+ignore = ["F405", "E402"]
+extend-select = ["E501"]
+line-length = 120

@@ -1,10 +1,8 @@
 #### What this does ####
 #    On success, logs events to Helicone
 import dotenv, os
-import requests
+import requests  # type: ignore
 import litellm
-
-dotenv.load_dotenv()  # Loading env variables using dotenv
 import traceback
 
 
@@ -114,6 +112,5 @@ class HeliconeLogger:
                 )
                 print_verbose(f"Helicone Logging - Error {response.text}")
         except:
-            # traceback.print_exc()
             print_verbose(f"Helicone Logging Error - {traceback.format_exc()}")
             pass

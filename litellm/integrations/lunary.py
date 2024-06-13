@@ -2,13 +2,9 @@
 #    On success + failure, log events to lunary.ai
 from datetime import datetime, timezone
 import traceback
-import dotenv
 import importlib
-import sys
 
 import packaging
-
-dotenv.load_dotenv()
 
 
 # convert to {completion: xx, tokens: xx}
@@ -19,12 +15,33 @@ def parse_usage(usage):
     }
 
 
+def parse_tool_calls(tool_calls):
+    if tool_calls is None:
+        return None
+
+    def clean_tool_call(tool_call):
+
+        serialized = {
+            "type": tool_call.type,
+            "id": tool_call.id,
+            "function": {
+                "name": tool_call.function.name,
+                "arguments": tool_call.function.arguments,
+            },
+        }
+
+        return serialized
+
+    return [clean_tool_call(tool_call) for tool_call in tool_calls]
+
+
 def parse_messages(input):
+
     if input is None:
         return None
 
     def clean_message(message):
-        # if is strin, return as is
+        # if is string, return as is
         if isinstance(message, str):
             return message
 
@@ -38,9 +55,7 @@ def parse_messages(input):
 
         # Only add tool_calls and function_call to res if they are set
         if message.get("tool_calls"):
-            serialized["tool_calls"] = message.get("tool_calls")
-        if message.get("function_call"):
-            serialized["function_call"] = message.get("function_call")
+            serialized["tool_calls"] = parse_tool_calls(message.get("tool_calls"))
 
         return serialized
 
@@ -62,14 +77,16 @@ class LunaryLogger:
             version = importlib.metadata.version("lunary")
             # if version < 0.1.43 then raise ImportError
             if packaging.version.Version(version) < packaging.version.Version("0.1.43"):
-                print(
+                print(  # noqa
                     "Lunary version outdated. Required: >= 0.1.43. Upgrade via 'pip install lunary --upgrade'"
                 )
                 raise ImportError
 
             self.lunary_client = lunary
         except ImportError:
-            print("Lunary not installed. Please install it using 'pip install lunary'")
+            print(  # noqa
+                "Lunary not installed. Please install it using 'pip install lunary'"
+            )  # noqa
             raise ImportError
 
     def log_event(
@@ -93,7 +110,12 @@ class LunaryLogger:
             print_verbose(f"Lunary Logging - Logging request for model {model}")
 
             litellm_params = kwargs.get("litellm_params", {})
+            optional_params = kwargs.get("optional_params", {})
             metadata = litellm_params.get("metadata", {}) or {}
+
+            if optional_params:
+                # merge into extra
+                extra = {**extra, **optional_params}
 
             tags = litellm_params.pop("tags", None) or []
 
@@ -104,7 +126,7 @@ class LunaryLogger:
 
             # keep only serializable types
             for param, value in extra.items():
-                if not isinstance(value, (str, int, bool, float)):
+                if not isinstance(value, (str, int, bool, float)) and param != "tools":
                     try:
                         extra[param] = str(value)
                     except:
@@ -140,7 +162,7 @@ class LunaryLogger:
                 metadata=metadata,
                 runtime="litellm",
                 tags=tags,
-                extra=extra,
+                params=extra,
             )
 
             self.lunary_client.track_event(
@@ -155,6 +177,5 @@ class LunaryLogger:
             )
 
         except:
-            # traceback.print_exc()
             print_verbose(f"Lunary Logging Error - {traceback.format_exc()}")
             pass

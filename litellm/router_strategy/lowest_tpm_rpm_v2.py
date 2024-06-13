@@ -1,20 +1,34 @@
 #### What this does ####
 #   identifies lowest tpm deployment
-
-import dotenv, os, requests, random
+from pydantic import BaseModel
+import random
 from typing import Optional, Union, List, Dict
-import datetime as datetime_og
-from datetime import datetime
-
-dotenv.load_dotenv()  # Loading env variables using dotenv
-import traceback, asyncio, httpx
+import traceback
+import httpx
 import litellm
 from litellm import token_counter
 from litellm.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
-from litellm._logging import verbose_router_logger
+from litellm._logging import verbose_router_logger, verbose_logger
 from litellm.utils import print_verbose, get_utc_datetime
 from litellm.types.router import RouterErrors
+
+
+class LiteLLMBase(BaseModel):
+    """
+    Implements default functions, all pydantic objects should have.
+    """
+
+    def json(self, **kwargs):
+        try:
+            return self.model_dump()  # noqa
+        except Exception as e:
+            # if using pydantic v1
+            return self.dict()
+
+
+class RoutingArgs(LiteLLMBase):
+    ttl: int = 1 * 60  # 1min (RPM/TPM expire key)
 
 
 class LowestTPMLoggingHandler_v2(CustomLogger):
@@ -35,9 +49,12 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
     logged_failure: int = 0
     default_cache_time_seconds: int = 1 * 60 * 60  # 1 hour
 
-    def __init__(self, router_cache: DualCache, model_list: list):
+    def __init__(
+        self, router_cache: DualCache, model_list: list, routing_args: dict = {}
+    ):
         self.router_cache = router_cache
         self.model_list = model_list
+        self.routing_args = RoutingArgs(**routing_args)
 
     def pre_call_check(self, deployment: Dict) -> Optional[Dict]:
         """
@@ -79,17 +96,21 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                     model=deployment.get("litellm_params", {}).get("model"),
                     response=httpx.Response(
                         status_code=429,
-                        content="{} rpm limit={}. current usage={}".format(
+                        content="{} rpm limit={}. current usage={}. id={}, model_group={}. Get the model info by calling 'router.get_model_info(id)".format(
                             RouterErrors.user_defined_ratelimit_error.value,
                             deployment_rpm,
                             local_result,
+                            model_id,
+                            deployment.get("model_name", ""),
                         ),
                         request=httpx.Request(method="tpm_rpm_limits", url="https://github.com/BerriAI/litellm"),  # type: ignore
                     ),
                 )
             else:
                 # if local result below limit, check redis ## prevent unnecessary redis checks
-                result = self.router_cache.increment_cache(key=rpm_key, value=1)
+                result = self.router_cache.increment_cache(
+                    key=rpm_key, value=1, ttl=self.routing_args.ttl
+                )
                 if result is not None and result > deployment_rpm:
                     raise litellm.RateLimitError(
                         message="Deployment over defined rpm limit={}. current usage={}".format(
@@ -168,7 +189,7 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
             else:
                 # if local result below limit, check redis ## prevent unnecessary redis checks
                 result = await self.router_cache.async_increment_cache(
-                    key=rpm_key, value=1
+                    key=rpm_key, value=1, ttl=self.routing_args.ttl
                 )
                 if result is not None and result > deployment_rpm:
                     raise litellm.RateLimitError(
@@ -229,12 +250,19 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                 # update cache
 
                 ## TPM
-                self.router_cache.increment_cache(key=tpm_key, value=total_tokens)
+                self.router_cache.increment_cache(
+                    key=tpm_key, value=total_tokens, ttl=self.routing_args.ttl
+                )
                 ### TESTING ###
                 if self.test_flag:
                     self.logged_success += 1
         except Exception as e:
-            traceback.print_exc()
+            verbose_logger.error(
+                "litellm.proxy.hooks.prompt_injection_detection.py::async_pre_call_hook(): Exception occured - {}".format(
+                    str(e)
+                )
+            )
+            verbose_logger.debug(traceback.format_exc())
             pass
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
@@ -273,14 +301,19 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
 
                 ## TPM
                 await self.router_cache.async_increment_cache(
-                    key=tpm_key, value=total_tokens
+                    key=tpm_key, value=total_tokens, ttl=self.routing_args.ttl
                 )
 
                 ### TESTING ###
                 if self.test_flag:
                     self.logged_success += 1
         except Exception as e:
-            traceback.print_exc()
+            verbose_logger.error(
+                "litellm.proxy.hooks.prompt_injection_detection.py::async_pre_call_hook(): Exception occured - {}".format(
+                    str(e)
+                )
+            )
+            verbose_logger.debug(traceback.format_exc())
             pass
 
     def _common_checks_available_deployment(

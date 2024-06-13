@@ -1,5 +1,6 @@
 import pytest
 from litellm import acompletion
+from litellm import completion
 
 
 def test_acompletion_params():
@@ -7,17 +8,29 @@ def test_acompletion_params():
     from litellm.types.completion import CompletionRequest
 
     acompletion_params_odict = inspect.signature(acompletion).parameters
-    acompletion_params = {name: param.annotation for name, param in acompletion_params_odict.items()}
-    completion_params = {field_name: field_type for field_name, field_type in CompletionRequest.__annotations__.items()}
+    completion_params_dict = inspect.signature(completion).parameters
 
-    # remove kwargs
-    acompletion_params.pop("kwargs", None)
+    acompletion_params = {
+        name: param.annotation for name, param in acompletion_params_odict.items()
+    }
+    completion_params = {
+        name: param.annotation for name, param in completion_params_dict.items()
+    }
 
     keys_acompletion = set(acompletion_params.keys())
     keys_completion = set(completion_params.keys())
 
+    print(keys_acompletion)
+    print("\n\n\n")
+    print(keys_completion)
+
+    print("diff=", keys_completion - keys_acompletion)
+
     # Assert that the parameters are the same
     if keys_acompletion != keys_completion:
-        pytest.fail("The parameters of the acompletion function and the CompletionRequest class are not the same.")
+        pytest.fail(
+            "The parameters of the litellm.acompletion function and litellm.completion are not the same."
+        )
+
 
 # test_acompletion_params()

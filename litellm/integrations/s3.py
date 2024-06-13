@@ -1,10 +1,7 @@
 #### What this does ####
 #    On success + failure, log events to Supabase
 
-import dotenv, os
-import requests
-
-dotenv.load_dotenv()  # Loading env variables using dotenv
+import os
 import traceback
 import datetime, subprocess, sys
 import litellm, uuid
@@ -183,6 +180,5 @@ class S3Logger:
             print_verbose(f"s3 Layer Logging - final response object: {response_obj}")
             return response
         except Exception as e:
-            traceback.print_exc()
             verbose_logger.debug(f"s3 Layer Error - {str(e)}\n{traceback.format_exc()}")
             pass

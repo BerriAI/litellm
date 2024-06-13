@@ -1,8 +1,6 @@
 #### What this does ####
 #    On success, logs events to Langfuse
-import dotenv, os
-
-dotenv.load_dotenv()  # Loading env variables using dotenv
+import os
 import copy
 import traceback
 from packaging.version import Version
@@ -71,6 +69,43 @@ class LangFuseLogger:
         else:
             self.upstream_langfuse = None
 
+    @staticmethod
+    def add_metadata_from_header(litellm_params: dict, metadata: dict) -> dict:
+        """
+        Adds metadata from proxy request headers to Langfuse logging if keys start with "langfuse_"
+        and overwrites litellm_params.metadata if already included.
+
+        For example if you want to append your trace to an existing `trace_id` via header, send
+        `headers: { ..., langfuse_existing_trace_id: your-existing-trace-id }` via proxy request.
+        """
+        if litellm_params is None:
+            return metadata
+
+        if litellm_params.get("proxy_server_request") is None:
+            return metadata
+
+        if metadata is None:
+            metadata = {}
+
+        proxy_headers = (
+            litellm_params.get("proxy_server_request", {}).get("headers", {}) or {}
+        )
+
+        for metadata_param_key in proxy_headers:
+            if metadata_param_key.startswith("langfuse_"):
+                trace_param_key = metadata_param_key.replace("langfuse_", "", 1)
+                if trace_param_key in metadata:
+                    verbose_logger.warning(
+                        f"Overwriting Langfuse `{trace_param_key}` from request header"
+                    )
+                else:
+                    verbose_logger.debug(
+                        f"Found Langfuse `{trace_param_key}` in request header"
+                    )
+                metadata[trace_param_key] = proxy_headers.get(metadata_param_key)
+
+        return metadata
+
     # def log_error(kwargs, response_obj, start_time, end_time):
     #     generation = trace.generation(
     #         level ="ERROR" # can be any of DEBUG, DEFAULT, WARNING or ERROR
@@ -95,9 +130,11 @@ class LangFuseLogger:
             )
 
             litellm_params = kwargs.get("litellm_params", {})
+            litellm_call_id = kwargs.get("litellm_call_id", None)
             metadata = (
                 litellm_params.get("metadata", {}) or {}
             )  # if litellm_params['metadata'] == None
+            metadata = self.add_metadata_from_header(litellm_params, metadata)
             optional_params = copy.deepcopy(kwargs.get("optional_params", {}))
 
             prompt = {"messages": kwargs.get("messages")}
@@ -163,6 +200,7 @@ class LangFuseLogger:
                     response_obj,
                     level,
                     print_verbose,
+                    litellm_call_id,
                 )
             elif response_obj is not None:
                 self._log_langfuse_v1(
@@ -182,9 +220,11 @@ class LangFuseLogger:
             verbose_logger.info(f"Langfuse Layer Logging - logging success")
 
             return {"trace_id": trace_id, "generation_id": generation_id}
-        except:
-            traceback.print_exc()
-            verbose_logger.debug(f"Langfuse Layer Error - {traceback.format_exc()}")
+        except Exception as e:
+            verbose_logger.error(
+                "Langfuse Layer Error(): Exception occured - {}".format(str(e))
+            )
+            verbose_logger.debug(traceback.format_exc())
             return {"trace_id": None, "generation_id": None}
 
     async def _async_log_event(
@@ -257,11 +297,29 @@ class LangFuseLogger:
         response_obj,
         level,
         print_verbose,
+        litellm_call_id,
     ) -> tuple:
         import langfuse
 
         try:
             tags = []
+            try:
+                metadata = copy.deepcopy(
+                    metadata
+                )  # Avoid modifying the original metadata
+            except:
+                new_metadata = {}
+                for key, value in metadata.items():
+                    if (
+                        isinstance(value, list)
+                        or isinstance(value, dict)
+                        or isinstance(value, str)
+                        or isinstance(value, int)
+                        or isinstance(value, float)
+                    ):
+                        new_metadata[key] = copy.deepcopy(value)
+                metadata = new_metadata
+
             supports_tags = Version(langfuse.version.__version__) >= Version("2.6.3")
             supports_prompt = Version(langfuse.version.__version__) >= Version("2.7.3")
             supports_costs = Version(langfuse.version.__version__) >= Version("2.7.3")
@@ -272,35 +330,8 @@ class LangFuseLogger:
             print_verbose(f"Langfuse Layer Logging - logging to langfuse v2 ")
 
             if supports_tags:
-                metadata_tags = metadata.get("tags", [])
+                metadata_tags = metadata.pop("tags", [])
                 tags = metadata_tags
-
-            trace_name = metadata.get("trace_name", None)
-            trace_id = metadata.get("trace_id", None)
-            existing_trace_id = metadata.get("existing_trace_id", None)
-            if trace_name is None and existing_trace_id is None:
-                # just log `litellm-{call_type}` as the trace name
-                ## DO NOT SET TRACE_NAME if trace-id set. this can lead to overwriting of past traces.
-                trace_name = f"litellm-{kwargs.get('call_type', 'completion')}"
-
-            if existing_trace_id is not None:
-                trace_params = {"id": existing_trace_id}
-            else:  # don't overwrite an existing trace
-                trace_params = {
-                    "name": trace_name,
-                    "input": input,
-                    "user_id": metadata.get("trace_user_id", user_id),
-                    "id": trace_id,
-                    "session_id": metadata.get("session_id", None),
-                }
-
-                if level == "ERROR":
-                    trace_params["status_message"] = output
-                else:
-                    trace_params["output"] = output
-
-            cost = kwargs.get("response_cost", None)
-            print_verbose(f"trace: {cost}")
 
             # Clean Metadata before logging - never log raw metadata
             # the raw metadata can contain circular references which leads to infinite recursion
@@ -328,6 +359,85 @@ class LangFuseLogger:
                     else:
                         clean_metadata[key] = value
 
+            session_id = clean_metadata.pop("session_id", None)
+            trace_name = clean_metadata.pop("trace_name", None)
+            trace_id = clean_metadata.pop("trace_id", litellm_call_id)
+            existing_trace_id = clean_metadata.pop("existing_trace_id", None)
+            update_trace_keys = clean_metadata.pop("update_trace_keys", [])
+            debug = clean_metadata.pop("debug_langfuse", None)
+            mask_input = clean_metadata.pop("mask_input", False)
+            mask_output = clean_metadata.pop("mask_output", False)
+
+            if trace_name is None and existing_trace_id is None:
+                # just log `litellm-{call_type}` as the trace name
+                ## DO NOT SET TRACE_NAME if trace-id set. this can lead to overwriting of past traces.
+                trace_name = f"litellm-{kwargs.get('call_type', 'completion')}"
+
+            if existing_trace_id is not None:
+                trace_params = {"id": existing_trace_id}
+
+                # Update the following keys for this trace
+                for metadata_param_key in update_trace_keys:
+                    trace_param_key = metadata_param_key.replace("trace_", "")
+                    if trace_param_key not in trace_params:
+                        updated_trace_value = clean_metadata.pop(
+                            metadata_param_key, None
+                        )
+                        if updated_trace_value is not None:
+                            trace_params[trace_param_key] = updated_trace_value
+
+                # Pop the trace specific keys that would have been popped if there were a new trace
+                for key in list(
+                    filter(lambda key: key.startswith("trace_"), clean_metadata.keys())
+                ):
+                    clean_metadata.pop(key, None)
+
+                # Special keys that are found in the function arguments and not the metadata
+                if "input" in update_trace_keys:
+                    trace_params["input"] = (
+                        input if not mask_input else "redacted-by-litellm"
+                    )
+                if "output" in update_trace_keys:
+                    trace_params["output"] = (
+                        output if not mask_output else "redacted-by-litellm"
+                    )
+            else:  # don't overwrite an existing trace
+                trace_params = {
+                    "id": trace_id,
+                    "name": trace_name,
+                    "session_id": session_id,
+                    "input": input if not mask_input else "redacted-by-litellm",
+                    "version": clean_metadata.pop(
+                        "trace_version", clean_metadata.get("version", None)
+                    ),  # If provided just version, it will applied to the trace as well, if applied a trace version it will take precedence
+                    "user_id": user_id,
+                }
+                for key in list(
+                    filter(lambda key: key.startswith("trace_"), clean_metadata.keys())
+                ):
+                    trace_params[key.replace("trace_", "")] = clean_metadata.pop(
+                        key, None
+                    )
+
+                if level == "ERROR":
+                    trace_params["status_message"] = output
+                else:
+                    trace_params["output"] = (
+                        output if not mask_output else "redacted-by-litellm"
+                    )
+
+            if debug == True or (isinstance(debug, str) and debug.lower() == "true"):
+                if "metadata" in trace_params:
+                    # log the raw_metadata in the trace
+                    trace_params["metadata"]["metadata_passed_to_litellm"] = metadata
+                else:
+                    trace_params["metadata"] = {"metadata_passed_to_litellm": metadata}
+
+            cost = kwargs.get("response_cost", None)
+            print_verbose(f"trace: {cost}")
+
+            clean_metadata["litellm_response_cost"] = cost
+
             if (
                 litellm._langfuse_default_tags is not None
                 and isinstance(litellm._langfuse_default_tags, list)
@@ -353,7 +463,6 @@ class LangFuseLogger:
                 if "cache_hit" in kwargs:
                     if kwargs["cache_hit"] is None:
                         kwargs["cache_hit"] = False
-                    tags.append(f"cache_hit:{kwargs['cache_hit']}")
                     clean_metadata["cache_hit"] = kwargs["cache_hit"]
                 if existing_trace_id is None:
                     trace_params.update({"tags": tags})
@@ -375,7 +484,6 @@ class LangFuseLogger:
                     "url": url,
                     "headers": clean_headers,
                 }
-
             trace = self.Langfuse.trace(**trace_params)
 
             generation_id = None
@@ -387,10 +495,15 @@ class LangFuseLogger:
                     "completion_tokens": response_obj["usage"]["completion_tokens"],
                     "total_cost": cost if supports_costs else None,
                 }
-            generation_name = metadata.get("generation_name", None)
+            generation_name = clean_metadata.pop("generation_name", None)
             if generation_name is None:
-                # just log `litellm-{call_type}` as the generation name
+                # if `generation_name` is None, use sensible default values
+                # If using litellm proxy user `key_alias` if not None
+                # If `key_alias` is None, just log `litellm-{call_type}` as the generation name
+                _user_api_key_alias = clean_metadata.get("user_api_key_alias", None)
                 generation_name = f"litellm-{kwargs.get('call_type', 'completion')}"
+                if _user_api_key_alias is not None:
+                    generation_name = f"litellm:{_user_api_key_alias}"
 
             if response_obj is not None and "system_fingerprint" in response_obj:
                 system_fingerprint = response_obj.get("system_fingerprint", None)
@@ -402,20 +515,43 @@ class LangFuseLogger:
 
             generation_params = {
                 "name": generation_name,
-                "id": metadata.get("generation_id", generation_id),
+                "id": clean_metadata.pop("generation_id", generation_id),
                 "start_time": start_time,
                 "end_time": end_time,
                 "model": kwargs["model"],
                 "model_parameters": optional_params,
-                "input": input,
-                "output": output,
+                "input": input if not mask_input else "redacted-by-litellm",
+                "output": output if not mask_output else "redacted-by-litellm",
                 "usage": usage,
                 "metadata": clean_metadata,
                 "level": level,
+                "version": clean_metadata.pop("version", None),
             }
 
             if supports_prompt:
-                generation_params["prompt"] = metadata.get("prompt", None)
+                user_prompt = clean_metadata.pop("prompt", None)
+                if user_prompt is None:
+                    pass
+                elif isinstance(user_prompt, dict):
+                    from langfuse.model import (
+                        TextPromptClient,
+                        ChatPromptClient,
+                        Prompt_Text,
+                        Prompt_Chat,
+                    )
+
+                    if user_prompt.get("type", "") == "chat":
+                        _prompt_chat = Prompt_Chat(**user_prompt)
+                        generation_params["prompt"] = ChatPromptClient(
+                            prompt=_prompt_chat
+                        )
+                    elif user_prompt.get("type", "") == "text":
+                        _prompt_text = Prompt_Text(**user_prompt)
+                        generation_params["prompt"] = TextPromptClient(
+                            prompt=_prompt_text
+                        )
+                else:
+                    generation_params["prompt"] = user_prompt
 
             if output is not None and isinstance(output, str) and level == "ERROR":
                 generation_params["status_message"] = output
@@ -426,7 +562,7 @@ class LangFuseLogger:
                 )
 
             generation_client = trace.generation(**generation_params)
-            
+
             return generation_client.trace_id, generation_id
         except Exception as e:
             verbose_logger.debug(f"Langfuse Layer Error - {traceback.format_exc()}")

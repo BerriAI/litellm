@@ -146,6 +146,7 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
             try:
                 assert call_type in [
                     "completion",
+                    "text_completion",
                     "embeddings",
                     "image_generation",
                     "moderation",
@@ -192,9 +193,23 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
             return data
 
         except HTTPException as e:
+
+            if (
+                e.status_code == 400
+                and isinstance(e.detail, dict)
+                and "error" in e.detail
+                and self.prompt_injection_params is not None
+                and self.prompt_injection_params.reject_as_response
+            ):
+                return e.detail["error"]
             raise e
         except Exception as e:
-            traceback.print_exc()
+            verbose_proxy_logger.error(
+                "litellm.proxy.hooks.prompt_injection_detection.py::async_pre_call_hook(): Exception occured - {}".format(
+                    str(e)
+                )
+            )
+            verbose_proxy_logger.debug(traceback.format_exc())
 
     async def async_moderation_hook(
         self,

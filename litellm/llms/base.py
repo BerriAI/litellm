@@ -1,11 +1,31 @@
 ## This is a template base class to be used for adding new LLM providers via API calls
 import litellm
-import httpx
-from typing import Optional
+import httpx, requests
+from typing import Optional, Union
+from litellm.utils import Logging
 
 
 class BaseLLM:
     _client_session: Optional[httpx.Client] = None
+
+    def process_response(
+        self,
+        model: str,
+        response: Union[requests.Response, httpx.Response],
+        model_response: litellm.utils.ModelResponse,
+        stream: bool,
+        logging_obj: Logging,
+        optional_params: dict,
+        api_key: str,
+        data: Union[dict, str],
+        messages: list,
+        print_verbose,
+        encoding,
+    ) -> Union[litellm.utils.ModelResponse, litellm.utils.CustomStreamWrapper]:
+        """
+        Helper function to process the response across sync + async completion calls
+        """
+        return model_response
 
     def create_client_session(self):
         if litellm.client_session:

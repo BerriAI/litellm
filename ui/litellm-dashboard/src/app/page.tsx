@@ -9,6 +9,8 @@ import Teams from "@/components/teams";
 import AdminPanel from "@/components/admins";
 import Settings from "@/components/settings";
 import GeneralSettings from "@/components/general_settings";
+import BudgetPanel from "@/components/budgets/budget_panel";
+import ModelHub from "@/components/model_hub";
 import APIRef from "@/components/api_ref";
 import ChatUI from "@/components/chat_ui";
 import Sidebar from "../components/leftnav";
@@ -16,12 +18,51 @@ import Usage from "../components/usage";
 import { jwtDecode } from "jwt-decode";
 import { Typography } from "antd";
 
+function formatUserRole(userRole: string) {
+  if (!userRole) {
+    return "Undefined Role";
+  }
+  console.log(`Received user role: ${userRole.toLowerCase()}`);
+  console.log(`Received user role length: ${userRole.toLowerCase().length}`);
+  switch (userRole.toLowerCase()) {
+    case "app_owner":
+      return "App Owner";
+    case "demo_app_owner":
+      return "App Owner";
+    case "app_admin":
+      return "Admin";
+    case "proxy_admin":
+      return "Admin";
+    case "proxy_admin_viewer":
+      return "Admin Viewer";
+    case "internal_user":
+      return "Internal User";
+    case "internal_viewer":
+      return "Internal Viewer";
+    case "app_user":
+      return "App User";
+    default:
+      return "Unknown Role";
+  }
+}
+
+interface ProxySettings {
+  PROXY_BASE_URL: string;
+  PROXY_LOGOUT_URL: string;
+}
+
 const CreateKeyPage = () => {
   const { Title, Paragraph } = Typography;
   const [userRole, setUserRole] = useState("");
+  const [premiumUser, setPremiumUser] = useState(false);
   const [userEmail, setUserEmail] = useState<null | string>(null);
   const [teams, setTeams] = useState<null | any[]>(null);
   const [keys, setKeys] = useState<null | any[]>(null);
+  const [proxySettings, setProxySettings] = useState<ProxySettings>({
+    PROXY_BASE_URL: "",
+    PROXY_LOGOUT_URL: "",
+  });
+
   const [showSSOBanner, setShowSSOBanner] = useState<boolean>(true);
   const searchParams = useSearchParams();
   const [modelData, setModelData] = useState<any>({ data: [] });
@@ -67,33 +108,13 @@ const CreateKeyPage = () => {
         } else {
           console.log(`User Email is not set ${decoded}`);
         }
+
+        if (decoded.premium_user) {
+          setPremiumUser(decoded.premium_user);
+        }
       }
     }
   }, [token]);
-
-  function formatUserRole(userRole: string) {
-    if (!userRole) {
-      return "Undefined Role";
-    }
-    console.log(`Received user role: ${userRole.toLowerCase()}`);
-    console.log(`Received user role length: ${userRole.toLowerCase().length}`);
-    switch (userRole.toLowerCase()) {
-      case "app_owner":
-        return "App Owner";
-      case "demo_app_owner":
-        return "App Owner";
-      case "app_admin":
-        return "Admin";
-      case "proxy_admin":
-        return "Admin";
-      case "proxy_admin_viewer":
-        return "Admin Viewer";
-      case "app_user":
-        return "App User";
-      default:
-        return "Unknown Role";
-    }
-  }
 
   return (
     <Suspense fallback={<div>Loading...</div>}>
@@ -103,17 +124,19 @@ const CreateKeyPage = () => {
           userRole={userRole}
           userEmail={userEmail}
           showSSOBanner={showSSOBanner}
+          premiumUser={premiumUser}
+          setProxySettings={setProxySettings}
+          proxySettings={proxySettings}
         />
         <div className="flex flex-1 overflow-auto">
           <div className="mt-8">
-          <Sidebar
-            setPage={setPage}
-            userRole={userRole}
-            defaultSelectedKey={null}
-          />
-
+            <Sidebar
+              setPage={setPage}
+              userRole={userRole}
+              defaultSelectedKey={null}
+            />
           </div>
-        
+
           {page == "api-keys" ? (
             <UserDashboard
               userID={userID}
@@ -125,15 +148,19 @@ const CreateKeyPage = () => {
               setUserEmail={setUserEmail}
               setTeams={setTeams}
               setKeys={setKeys}
+              setProxySettings={setProxySettings}
+              proxySettings={proxySettings}
             />
           ) : page == "models" ? (
             <ModelDashboard
               userID={userID}
               userRole={userRole}
               token={token}
+              keys={keys}
               accessToken={accessToken}
               modelData={modelData}
               setModelData={setModelData}
+              premiumUser={premiumUser}
             />
           ) : page == "llm-playground" ? (
             <ChatUI
@@ -169,26 +196,39 @@ const CreateKeyPage = () => {
               showSSOBanner={showSSOBanner}
             />
           ) : page == "api_ref" ? (
-              <APIRef/>
+            <APIRef 
+            proxySettings={proxySettings}
+            />
           ) : page == "settings" ? (
             <Settings
               userID={userID}
               userRole={userRole}
               accessToken={accessToken}
+              premiumUser={premiumUser}
             />
-          )  : page == "general-settings" ? (
-              <GeneralSettings
-                userID={userID}
-                userRole={userRole}
-                accessToken={accessToken}
-                modelData={modelData}
-              />
+          ) : page == "budgets" ? (
+            <BudgetPanel accessToken={accessToken} />
+          ) : page == "general-settings" ? (
+            <GeneralSettings
+              userID={userID}
+              userRole={userRole}
+              accessToken={accessToken}
+              modelData={modelData}
+            />
+          ) : page == "model-hub" ? (
+            <ModelHub
+              accessToken={accessToken}
+              publicPage={false}
+              premiumUser={premiumUser}
+            />
           ) : (
             <Usage
               userID={userID}
               userRole={userRole}
               token={token}
               accessToken={accessToken}
+              keys={keys}
+              premiumUser={premiumUser}
             />
           )}
         </div>

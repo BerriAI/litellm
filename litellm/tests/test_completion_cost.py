@@ -5,6 +5,7 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import time
+from typing import Optional
 import litellm
 from litellm import (
     get_max_tokens,
@@ -12,7 +13,92 @@ from litellm import (
     open_ai_chat_completion_models,
     TranscriptionResponse,
 )
-import pytest
+from litellm.utils import CustomLogger
+import pytest, asyncio
+
+
+class CustomLoggingHandler(CustomLogger):
+    response_cost: Optional[float] = None
+
+    def __init__(self):
+        super().__init__()
+
+    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.response_cost = kwargs["response_cost"]
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        print(f"kwargs - {kwargs}")
+        print(f"kwargs response cost - {kwargs.get('response_cost')}")
+        self.response_cost = kwargs["response_cost"]
+
+        print(f"response_cost: {self.response_cost} ")
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_custom_pricing(sync_mode):
+    new_handler = CustomLoggingHandler()
+    litellm.callbacks = [new_handler]
+    if sync_mode:
+        response = litellm.completion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Hey!"}],
+            mock_response="What do you want?",
+            input_cost_per_token=0.0,
+            output_cost_per_token=0.0,
+        )
+        time.sleep(5)
+    else:
+        response = await litellm.acompletion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Hey!"}],
+            mock_response="What do you want?",
+            input_cost_per_token=0.0,
+            output_cost_per_token=0.0,
+        )
+
+        await asyncio.sleep(5)
+
+    print(f"new_handler.response_cost: {new_handler.response_cost}")
+    assert new_handler.response_cost is not None
+
+    assert new_handler.response_cost == 0
+
+
+def test_custom_pricing_as_completion_cost_param():
+    from litellm import ModelResponse, Choices, Message
+    from litellm.utils import Usage
+
+    resp = ModelResponse(
+        id="chatcmpl-e41836bb-bb8b-4df2-8e70-8f3e160155ac",
+        choices=[
+            Choices(
+                finish_reason=None,
+                index=0,
+                message=Message(
+                    content=" Sure! Here is a short poem about the sky:\n\nA canvas of blue, a",
+                    role="assistant",
+                ),
+            )
+        ],
+        created=1700775391,
+        model="ft:gpt-3.5-turbo:my-org:custom_suffix:id",
+        object="chat.completion",
+        system_fingerprint=None,
+        usage=Usage(prompt_tokens=21, completion_tokens=17, total_tokens=38),
+    )
+
+    cost = litellm.completion_cost(
+        completion_response=resp,
+        custom_cost_per_token={
+            "input_cost_per_token": 1000,
+            "output_cost_per_token": 20,
+        },
+    )
+
+    expected_cost = 1000 * 21 + 17 * 20
+
+    assert round(cost, 5) == round(expected_cost, 5)
 
 
 def test_get_gpt3_tokens():
@@ -231,14 +317,17 @@ def test_cost_bedrock_pricing():
     assert cost == predicted_cost
 
 
-@pytest.mark.skip(reason="AWS disabled our access")
 def test_cost_bedrock_pricing_actual_calls():
     litellm.set_verbose = True
     model = "anthropic.claude-instant-v1"
     messages = [{"role": "user", "content": "Hey, how's it going?"}]
-    response = litellm.completion(model=model, messages=messages)
-    assert response._hidden_params["region_name"] is not None
+    response = litellm.completion(
+        model=model, messages=messages, mock_response="hello cool one"
+    )
+
+    print("response", response)
     cost = litellm.completion_cost(
+        model="bedrock/anthropic.claude-instant-v1",
         completion_response=response,
         messages=[{"role": "user", "content": "Hey, how's it going?"}],
     )
@@ -381,3 +470,98 @@ def test_replicate_llama3_cost_tracking():
         5,
     )
     assert cost == expected_cost
+
+
+@pytest.mark.parametrize("is_streaming", [True, False])  #
+def test_groq_response_cost_tracking(is_streaming):
+    from litellm.utils import (
+        ModelResponse,
+        Choices,
+        Message,
+        Usage,
+        CallTypes,
+        StreamingChoices,
+        Delta,
+    )
+
+    response = ModelResponse(
+        id="chatcmpl-876cce24-e520-4cf8-8649-562a9be11c02",
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(
+                    content="Hi! I'm an AI, so I don't have emotions or feelings like humans do, but I'm functioning properly and ready to help with any questions or topics you'd like to discuss! How can I assist you today?",
+                    role="assistant",
+                ),
+            )
+        ],
+        created=1717519830,
+        model="llama3-70b-8192",
+        object="chat.completion",
+        system_fingerprint="fp_c1a4bcec29",
+        usage=Usage(completion_tokens=46, prompt_tokens=17, total_tokens=63),
+    )
+    response._hidden_params["custom_llm_provider"] = "groq"
+    print(response)
+
+    response_cost = litellm.response_cost_calculator(
+        response_object=response,
+        model="groq/llama3-70b-8192",
+        custom_llm_provider="groq",
+        call_type=CallTypes.acompletion.value,
+        optional_params={},
+    )
+
+    assert isinstance(response_cost, float)
+    assert response_cost > 0.0
+
+    print(f"response_cost: {response_cost}")
+
+
+def test_together_ai_qwen_completion_cost():
+    input_kwargs = {
+        "completion_response": litellm.ModelResponse(
+            **{
+                "id": "890db0c33c4ef94b-SJC",
+                "choices": [
+                    {
+                        "finish_reason": "eos",
+                        "index": 0,
+                        "message": {
+                            "content": "I am Qwen, a large language model created by Alibaba Cloud.",
+                            "role": "assistant",
+                        },
+                    }
+                ],
+                "created": 1717900130,
+                "model": "together_ai/qwen/Qwen2-72B-Instruct",
+                "object": "chat.completion",
+                "system_fingerprint": None,
+                "usage": {
+                    "completion_tokens": 15,
+                    "prompt_tokens": 23,
+                    "total_tokens": 38,
+                },
+            }
+        ),
+        "model": "qwen/Qwen2-72B-Instruct",
+        "prompt": "",
+        "messages": [],
+        "completion": "",
+        "total_time": 0.0,
+        "call_type": "completion",
+        "custom_llm_provider": "together_ai",
+        "region_name": None,
+        "size": None,
+        "quality": None,
+        "n": None,
+        "custom_cost_per_token": None,
+        "custom_cost_per_second": None,
+    }
+
+    response = litellm.cost_calculator.get_model_params_and_category(
+        model_name="qwen/Qwen2-72B-Instruct"
+    )
+
+    assert response == "together-ai-41.1b-80b"

@@ -1,6 +1,9 @@
 # Enterprise Proxy Util Endpoints
+from typing import Optional, List
 from litellm._logging import verbose_logger
+from litellm.proxy.proxy_server import PrismaClient, HTTPException
 import collections
+from datetime import datetime
 
 
 async def get_spend_by_tags(start_date=None, end_date=None, prisma_client=None):
@@ -18,26 +21,82 @@ async def get_spend_by_tags(start_date=None, end_date=None, prisma_client=None):
     return response
 
 
-async def ui_get_spend_by_tags(start_date=None, end_date=None, prisma_client=None):
-    response = await prisma_client.db.query_raw(
+async def ui_get_spend_by_tags(
+    start_date: str,
+    end_date: str,
+    prisma_client: Optional[PrismaClient] = None,
+    tags_str: Optional[str] = None,
+):
+    """
+    Should cover 2 cases:
+    1. When user is getting spend for all_tags. "all_tags" in tags_list
+    2. When user is getting spend for specific tags.
+    """
+
+    # tags_str is a list of strings csv of tags
+    # tags_str = tag1,tag2,tag3
+    # convert to list if it's not None
+    tags_list: Optional[List[str]] = None
+    if tags_str is not None and len(tags_str) > 0:
+        tags_list = tags_str.split(",")
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail={"error": "No db connected"})
+
+    response = None
+    if tags_list is None or (isinstance(tags_list, list) and "all-tags" in tags_list):
+        # Get spend for all tags
+        sql_query = """
+            SELECT
+            jsonb_array_elements_text(request_tags) AS individual_request_tag,
+            DATE(s."startTime") AS spend_date,
+            COUNT(*) AS log_count,
+            SUM(spend) AS total_spend
+            FROM "LiteLLM_SpendLogs" s
+            WHERE
+                DATE(s."startTime") >= $1::date
+                AND DATE(s."startTime") <= $2::date
+            GROUP BY individual_request_tag, spend_date
+            ORDER BY total_spend DESC;
         """
-        SELECT
-        jsonb_array_elements_text(request_tags) AS individual_request_tag,
-        DATE(s."startTime") AS spend_date,
-        COUNT(*) AS log_count,
-        SUM(spend) AS total_spend
-        FROM "LiteLLM_SpendLogs" s
-        WHERE s."startTime" >= current_date - interval '30 days'
-        GROUP BY individual_request_tag, spend_date
-        ORDER BY spend_date;
+        response = await prisma_client.db.query_raw(
+            sql_query,
+            start_date,
+            end_date,
+        )
+    else:
+        # filter by tags list
+        sql_query = """
+            SELECT
+                individual_request_tag,
+                COUNT(*) AS log_count,
+                SUM(spend) AS total_spend
+            FROM (
+                SELECT
+                    jsonb_array_elements_text(request_tags) AS individual_request_tag,
+                    DATE(s."startTime") AS spend_date,
+                    spend
+                FROM "LiteLLM_SpendLogs" s
+                WHERE
+                    DATE(s."startTime") >= $1::date
+                    AND DATE(s."startTime") <= $2::date
+            ) AS subquery
+            WHERE individual_request_tag = ANY($3::text[])
+            GROUP BY individual_request_tag
+            ORDER BY total_spend DESC;
         """
-    )
+        response = await prisma_client.db.query_raw(
+            sql_query,
+            start_date,
+            end_date,
+            tags_list,
+        )
 
     # print("tags - spend")
     # print(response)
     # Bar Chart 1 - Spend per tag - Top 10 tags by spend
-    total_spend_per_tag = collections.defaultdict(float)
-    total_requests_per_tag = collections.defaultdict(int)
+    total_spend_per_tag: collections.defaultdict = collections.defaultdict(float)
+    total_requests_per_tag: collections.defaultdict = collections.defaultdict(int)
     for row in response:
         tag_name = row["individual_request_tag"]
         tag_spend = row["total_spend"]
@@ -49,15 +108,18 @@ async def ui_get_spend_by_tags(start_date=None, end_date=None, prisma_client=Non
     # convert to ui format
     ui_tags = []
     for tag in sorted_tags:
+        current_spend = tag[1]
+        if current_spend is not None and isinstance(current_spend, float):
+            current_spend = round(current_spend, 4)
         ui_tags.append(
             {
                 "name": tag[0],
-                "value": tag[1],
+                "spend": current_spend,
                 "log_count": total_requests_per_tag[tag[0]],
             }
         )
 
-    return {"top_10_tags": ui_tags}
+    return {"spend_per_tag": ui_tags}
 
 
 async def view_spend_logs_from_clickhouse(
@@ -291,7 +353,7 @@ def _create_clickhouse_aggregate_tables(client=None, table_names=[]):
 
 
 def _forecast_daily_cost(data: list):
-    import requests
+    import requests  # type: ignore
     from datetime import datetime, timedelta
 
     if len(data) == 0:

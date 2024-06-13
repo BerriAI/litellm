@@ -3,14 +3,11 @@
 #### What this does ####
 #    On success, logs events to Promptlayer
 import dotenv, os
-import requests
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.caching import DualCache
 
 from typing import Literal, Union
-
-dotenv.load_dotenv()  # Loading env variables using dotenv
 import traceback
 
 
@@ -19,8 +16,6 @@ import traceback
 
 import dotenv, os
 import requests
-
-dotenv.load_dotenv()  # Loading env variables using dotenv
 import traceback
 import datetime, subprocess, sys
 import litellm, uuid
@@ -302,6 +297,5 @@ class ClickhouseLogger:
             # make request to endpoint with payload
             verbose_logger.debug(f"Clickhouse Logger - final response = {response}")
         except Exception as e:
-            traceback.print_exc()
             verbose_logger.debug(f"Clickhouse - {str(e)}\n{traceback.format_exc()}")
             pass

@@ -1,0 +1,15 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/0.1.2-preview/CreateUIDefinition.MultiVm.json#",
+    "handler": "Microsoft.Azure.CreateUIDef",
+    "version": "0.1.2-preview",
+    "parameters": {
+        "config": {
+            "isWizard": false,
+            "basics": { }
+        },
+        "basics": [ ],
+        "steps": [ ],
+        "outputs": { },
+        "resourceTypes": [ ]
+    }
+}

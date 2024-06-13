@@ -3,33 +3,43 @@ import TabItem from '@theme/TabItem';
 
 # ⚡ Best Practices for Production
 
-Expected Performance in Production
+## 1. Use this config.yaml
+Use this config.yaml in production (with your own LLMs)
 
-1 LiteLLM Uvicorn Worker on Kubernetes
-
-| Description | Value |
-|--------------|-------|
-| Avg latency | `50ms` |
-| Median latency | `51ms` |
-| `/chat/completions` Requests/second | `35` |
-| `/chat/completions` Requests/minute | `2100` |
-| `/chat/completions` Requests/hour | `126K` |
-
-
-## 1. Switch off Debug Logging
-
-Remove `set_verbose: True` from your config.yaml
 ```yaml
+model_list:
+  - model_name: fake-openai-endpoint
+    litellm_params:
+      model: openai/fake
+      api_key: fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+
+general_settings:
+  master_key: sk-1234      # enter your own master key, ensure it starts with 'sk-'
+  alerting: ["slack"]      # Setup slack alerting - get alerts on LLM exceptions, Budget Alerts, Slow LLM Responses
+  proxy_batch_write_at: 60 # Batch write spend updates every 60s
+
 litellm_settings:
-  set_verbose: True
+  set_verbose: False      # Switch off Debug Logging, ensure your logs do not have any debugging on
+  json_logs: true         # Get debug logs in json format
 ```
 
-You should only see the following level of details in logs on the proxy server
+Set slack webhook url in your env
 ```shell
-# INFO:     192.168.2.205:11774 - "POST /chat/completions HTTP/1.1" 200 OK
-# INFO:     192.168.2.205:34717 - "POST /chat/completions HTTP/1.1" 200 OK
-# INFO:     192.168.2.205:29734 - "POST /chat/completions HTTP/1.1" 200 OK
+export SLACK_WEBHOOK_URL="https://hooks.slack.com/services/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"
 ```
+
+Turn off FASTAPI's default info logs
+```bash
+export LITELLM_LOG="ERROR"
+```
+
+:::info
+
+Need Help or want dedicated support ? Talk to a founder [here]: (https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+
+:::
+
 
 ## 2. On Kubernetes - Use 1 Uvicorn worker [Suggested CMD]
 
@@ -40,21 +50,12 @@ Use this Docker `CMD`. This will start the proxy with 1 Uvicorn Async Worker
 CMD ["--port", "4000", "--config", "./proxy_server_config.yaml"]
 ```
 
-## 3. Batch write spend updates every 60s
 
-The default proxy batch write is 10s. This is to make it easy to see spend when debugging locally. 
+## 3. Use Redis 'port','host', 'password'. NOT 'redis_url'
 
-In production, we recommend using a longer interval period of 60s. This reduces the number of connections used to make DB writes. 
+If you decide to use Redis, DO NOT use 'redis_url'. We recommend usig redis port, host, and password params. 
 
-```yaml
-general_settings:
-  master_key: sk-1234
-  proxy_batch_write_at: 60 # 👈 Frequency of batch writing logs to server (in seconds)
-```
-
-## 4. use Redis 'port','host', 'password'. NOT 'redis_url'
-
-When connecting to Redis use redis port, host, and password params. Not 'redis_url'. We've seen a 80 RPS difference between these 2 approaches when using the async redis client. 
+`redis_url`is 80 RPS slower
 
 This is still something we're investigating. Keep track of it [here](https://github.com/BerriAI/litellm/issues/3188)
 
@@ -69,103 +70,37 @@ router_settings:
   redis_password: os.environ/REDIS_PASSWORD
 ```
 
-## 5. Switch off resetting budgets
+## 4. Disable 'load_dotenv'
 
-Add this to your config.yaml. (Only spend per Key, User and Team will be tracked - spend per API Call will not be written to the LiteLLM Database)
-```yaml
-general_settings:
-  disable_reset_budget: true
-```
+Set `export LITELLM_MODE="PRODUCTION"`
 
-## 6. Move spend logs to separate server (BETA)
+This disables the load_dotenv() functionality, which will automatically load your environment credentials from the local `.env`. 
 
-Writing each spend log to the db can slow down your proxy. In testing we saw a 70% improvement in median response time, by moving writing spend logs to a separate server. 
+## Extras
+### Expected Performance in Production
 
-👉 [LiteLLM Spend Logs Server](https://github.com/BerriAI/litellm/tree/main/litellm-js/spend-logs)
+1 LiteLLM Uvicorn Worker on Kubernetes
 
-
-**Spend Logs**  
-This is a log of the key, tokens, model, and latency for each call on the proxy. 
-
-[**Full Payload**](https://github.com/BerriAI/litellm/blob/8c9623a6bc4ad9da0a2dac64249a60ed8da719e8/litellm/proxy/utils.py#L1769)
-
-
-**1. Start the spend logs server**
-
-```bash
-docker run -p 3000:3000 \
-  -e DATABASE_URL="postgres://.." \
-  ghcr.io/berriai/litellm-spend_logs:main-latest
-
-# RUNNING on http://0.0.0.0:3000
-```
-
-**2. Connect to proxy**
+| Description | Value |
+|--------------|-------|
+| Avg latency | `50ms` |
+| Median latency | `51ms` |
+| `/chat/completions` Requests/second | `35` |
+| `/chat/completions` Requests/minute | `2100` |
+| `/chat/completions` Requests/hour | `126K` |
 
 
-Example litellm_config.yaml
+### Verifying Debugging logs are off
 
-```yaml
-model_list:
-- model_name: fake-openai-endpoint
-  litellm_params:
-    model: openai/my-fake-model
-    api_key: my-fake-key
-    api_base: https://exampleopenaiendpoint-production.up.railway.app/
-
-general_settings:
-  master_key: sk-1234
-  proxy_batch_write_at: 5 # 👈 Frequency of batch writing logs to server (in seconds)
-```
-
-Add `SPEND_LOGS_URL` as an environment variable when starting the proxy 
-
-```bash
-docker run \
-    -v $(pwd)/litellm_config.yaml:/app/config.yaml \
-    -e DATABASE_URL="postgresql://.." \
-    -e SPEND_LOGS_URL="http://host.docker.internal:3000" \ # 👈 KEY CHANGE
-    -p 4000:4000 \
-    ghcr.io/berriai/litellm:main-latest \
-    --config /app/config.yaml --detailed_debug
-
-# Running on http://0.0.0.0:4000
-```
-
-**3. Test Proxy!**
-
-
-```bash
-curl --location 'http://0.0.0.0:4000/v1/chat/completions' \
---header 'Content-Type: application/json' \
---header 'Authorization: Bearer sk-1234' \
---data '{
-    "model": "fake-openai-endpoint", 
-    "messages": [
-        {"role": "system", "content": "Be helpful"},
-        {"role": "user", "content": "What do you know?"}
-    ]
-}'
-```
-
-In your LiteLLM Spend Logs Server, you should see
-
-**Expected Response**
-
-```
-Received and stored 1 logs. Total logs in memory: 1
-...
-Flushed 1 log to the DB.
+You should only see the following level of details in logs on the proxy server
+```shell
+# INFO:     192.168.2.205:11774 - "POST /chat/completions HTTP/1.1" 200 OK
+# INFO:     192.168.2.205:34717 - "POST /chat/completions HTTP/1.1" 200 OK
+# INFO:     192.168.2.205:29734 - "POST /chat/completions HTTP/1.1" 200 OK
 ```
 
 
-### Machine Specification
-
-A t2.micro should be sufficient to handle 1k logs / minute on this server. 
-
-This consumes at max 120MB, and <0.1 vCPU. 
-
-## Machine Specifications to Deploy LiteLLM
+### Machine Specifications to Deploy LiteLLM
 
 | Service | Spec | CPUs | Memory | Architecture | Version|
 | --- | --- | --- | --- | --- | --- | 
@@ -173,7 +108,7 @@ This consumes at max 120MB, and <0.1 vCPU.
 | Redis Cache | - | - | - | - | 7.0+ Redis Engine|
 
 
-## Reference Kubernetes Deployment YAML
+### Reference Kubernetes Deployment YAML
 
 Reference Kubernetes `deployment.yaml` that was load tested by us
 

@@ -2,9 +2,7 @@
 #    On success + failure, log events to Supabase
 
 import dotenv, os
-import requests
-
-dotenv.load_dotenv()  # Loading env variables using dotenv
+import requests  # type: ignore
 import traceback
 import datetime, subprocess, sys
 import litellm
@@ -112,6 +110,5 @@ class Supabase:
                 )
 
         except:
-            # traceback.print_exc()
             print_verbose(f"Supabase Logging Error - {traceback.format_exc()}")
             pass

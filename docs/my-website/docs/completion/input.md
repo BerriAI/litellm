@@ -37,38 +37,36 @@ print(response) # ["max_tokens", "tools", "tool_choice", "stream"]
 
 This is a list of openai params we translate across providers.
 
-This list is constantly being updated.
+Use `litellm.get_supported_openai_params()` for an updated list of params for each model + provider 
 
-| Provider | temperature | max_tokens | top_p | stream | stop | n | presence_penalty | frequency_penalty | functions | function_call | logit_bias | user | response_format | seed | tools | tool_choice | logprobs | top_logprobs | extra_headers | 
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|--|
-|Anthropic| ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |  |   |
-|OpenAI| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |✅ | ✅ | ✅ | ✅ |✅ | ✅ | ✅ | ✅ | ✅ |
-|Azure OpenAI| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |✅ | ✅ | ✅ | ✅ |✅ | ✅ |  |  | ✅ |
+| Provider | temperature | max_tokens | top_p | stream | stream_options | stop | n | presence_penalty | frequency_penalty | functions | function_call | logit_bias | user | response_format | seed | tools | tool_choice | logprobs | top_logprobs | extra_headers |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+|Anthropic| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |  |  |  |✅ | ✅ | ✅ | ✅ | ✅ |  |  | ✅ |
+|OpenAI| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |✅ | ✅ | ✅ | ✅ |✅ | ✅ | ✅ | ✅ | ✅ |
+|Azure OpenAI| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |✅ | ✅ | ✅ | ✅ |✅ | ✅ |  |  | ✅ |
 |Replicate | ✅ | ✅ | ✅ | ✅ | ✅ | |  |   |  |   |
-|Anyscale | ✅ | ✅ | ✅ | ✅ |
+|Anyscale | ✅ | ✅ | ✅ | ✅ | ✅ |
 |Cohere| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |   |   |
-|Huggingface| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |    |
-|Openrouter| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-|AI21| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |   |
-|VertexAI| ✅ | ✅ |  | ✅ |  |  |  |  |  |   |
-|Bedrock| ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |  |   |
-|Sagemaker| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |  |   |
+|Huggingface| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |   |    |
+|Openrouter| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | | | | | ✅ | | | | |
+|AI21| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |
+|VertexAI| ✅ | ✅ |  | ✅ | ✅ |  |  |  |  |   | | | | | ✅ | | |
+|Bedrock| ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |  |   | | | | | ✅ (for anthropic) | |
+|Sagemaker| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |
 |TogetherAI| ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |  |   | ✅ |
-|AlephAlpha| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |   |  |   |
-|Palm| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |  |   |
-|NLP Cloud| ✅ | ✅ | ✅ | ✅ | ✅ | |  |  |  |   |
-|Petals| ✅ | ✅ |  | ✅ | |  |   |  |  |   |
-|Ollama| ✅ | ✅ | ✅ | ✅ | ✅ |  |   | ✅ |  |   |
-
+|AlephAlpha| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |   |  |   |
+|Palm| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |
+|NLP Cloud| ✅ | ✅ | ✅ | ✅ | ✅ | | |  |  |   |
+|Petals| ✅ | ✅ |  | ✅ | ✅ | |  |   |  |   |
+|Ollama| ✅ | ✅ | ✅ | ✅ | ✅ |  |   | ✅ |  |   | | | ✅ | | |
+|Databricks| ✅ | ✅ | ✅ | ✅ | ✅ |  |   | |  |   | | | | | |
+|ClarifAI| ✅ | ✅ | |✅ | ✅ |  |   | |  |   | | | | | |
 :::note
 
 By default, LiteLLM raises an exception if the openai param being passed in isn't supported. 
 
-To drop the param instead, set `litellm.drop_params = True`.
+To drop the param instead, set `litellm.drop_params = True` or `completion(..drop_params=True)`.
 
-**For function calling:**
-
-Add to prompt for non-openai models, set: `litellm.add_function_to_prompt = True`. 
 ::: 
 
 ## Input Params
@@ -83,8 +81,9 @@ def completion(
     top_p: Optional[float] = None,
     n: Optional[int] = None,
     stream: Optional[bool] = None,
+    stream_options: Optional[dict] = None,
     stop=None,
-    max_tokens: Optional[float] = None,
+    max_tokens: Optional[int] = None,
     presence_penalty: Optional[float] = None,
     frequency_penalty: Optional[float] = None,
     logit_bias: Optional[dict] = None,
@@ -138,6 +137,10 @@ def completion(
 - `n`: *integer or null (optional)* - The number of chat completion choices to generate for each input message.
 
 - `stream`: *boolean or null (optional)* - If set to true, it sends partial message deltas. Tokens will be sent as they become available, with the stream terminated by a [DONE] message.
+
+- `stream_options` *dict or null (optional)* - Options for streaming response. Only set this when you set `stream: true`
+
+    - `include_usage` *boolean (optional)* - If set, an additional chunk will be streamed before the data: [DONE] message. The usage field on this chunk shows the token usage statistics for the entire request, and the choices field will always be an empty array. All other chunks will also include a usage field, but with a null value. 
 
 - `stop`: *string/ array/ null (optional)* - Up to 4 sequences where the API will stop generating further tokens.
 

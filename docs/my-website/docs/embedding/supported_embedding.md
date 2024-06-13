@@ -320,8 +320,6 @@ from litellm import embedding
 litellm.vertex_project = "hardy-device-38811" # Your Project ID
 litellm.vertex_location = "us-central1"  # proj location
 
-
-os.environ['VOYAGE_API_KEY'] = ""
 response = embedding(
     model="vertex_ai/textembedding-gecko",
     input=["good morning from litellm"],

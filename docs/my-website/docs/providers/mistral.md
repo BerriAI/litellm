@@ -42,16 +42,17 @@ for chunk in response:
 
 
 ## Supported Models
-All models listed here https://docs.mistral.ai/platform/endpoints are supported. We actively maintain the list of models, pricing, token window, etc. [here](https://github.com/BerriAI/litellm/blob/c1b25538277206b9f00de5254d80d6a83bb19a29/model_prices_and_context_window.json).
+All models listed here https://docs.mistral.ai/platform/endpoints are supported. We actively maintain the list of models, pricing, token window, etc. [here](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json).
 
-| Model Name               | Function Call                                                                                                                                                      |
-|--------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| mistral-tiny | `completion(model="mistral/mistral-tiny", messages)` | 
-| mistral-small | `completion(model="mistral/mistral-small", messages)` | 
-| mistral-medium | `completion(model="mistral/mistral-medium", messages)` | 
-| mistral-large-latest | `completion(model="mistral/mistral-large-latest", messages)` | 
-| open-mixtral-8x22b | `completion(model="mistral/open-mixtral-8x22b", messages)` | 
-
+| Model Name     | Function Call                                                |
+|----------------|--------------------------------------------------------------|
+| Mistral Small  | `completion(model="mistral/mistral-small-latest", messages)` |
+| Mistral Medium | `completion(model="mistral/mistral-medium-latest", messages)`|
+| Mistral Large  | `completion(model="mistral/mistral-large-latest", messages)` |
+| Mistral 7B     | `completion(model="mistral/open-mistral-7b", messages)`      |
+| Mixtral 8x7B   | `completion(model="mistral/open-mixtral-8x7b", messages)`    |
+| Mixtral 8x22B  | `completion(model="mistral/open-mixtral-8x22b", messages)`   |
+| Codestral      | `completion(model="mistral/codestral-latest", messages)`     |
 
 ## Function Calling 
 
@@ -116,6 +117,6 @@ All models listed here https://docs.mistral.ai/platform/endpoints are supported
 
 | Model Name               | Function Call                                                                                                                                                      |
 |--------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| mistral-embed | `embedding(model="mistral/mistral-embed", input)` | 
+| Mistral Embeddings | `embedding(model="mistral/mistral-embed", input)` | 
 
 

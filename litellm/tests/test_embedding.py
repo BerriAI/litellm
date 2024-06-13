@@ -494,6 +494,8 @@ def test_watsonx_embeddings():
         )
         print(f"response: {response}")
         assert isinstance(response.usage, litellm.Usage)
+    except litellm.RateLimitError as e:
+        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -512,6 +514,54 @@ def test_voyage_embeddings():
             input=["good morning from litellm"],
         )
         print(f"response: {response}")
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.asyncio
+async def test_triton_embeddings():
+    try:
+        litellm.set_verbose = True
+        response = await litellm.aembedding(
+            model="triton/my-triton-model",
+            api_base="https://exampleopenaiendpoint-production.up.railway.app/triton/embeddings",
+            input=["good morning from litellm"],
+        )
+        print(f"response: {response}")
+
+        # stubbed endpoint is setup to return this
+        assert response.data[0]["embedding"] == [0.1, 0.2, 0.3]
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_databricks_embeddings(sync_mode):
+    try:
+        litellm.set_verbose = True
+        litellm.drop_params = True
+
+        if sync_mode:
+            response = litellm.embedding(
+                model="databricks/databricks-bge-large-en",
+                input=["good morning from litellm"],
+                instruction="Represent this sentence for searching relevant passages:",
+            )
+        else:
+            response = await litellm.aembedding(
+                model="databricks/databricks-bge-large-en",
+                input=["good morning from litellm"],
+                instruction="Represent this sentence for searching relevant passages:",
+            )
+
+        print(f"response: {response}")
+
+        openai.types.CreateEmbeddingResponse.model_validate(
+            response.model_dump(), strict=True
+        )
+        # stubbed endpoint is setup to return this
+        # assert response.data[0]["embedding"] == [0.1, 0.2, 0.3]
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 

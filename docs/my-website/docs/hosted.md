@@ -47,3 +47,12 @@ Pricing is based on usage. We can figure out a price that works for your team, o
 <Image img={require('../img/litellm_hosted_ui_router.png')} />
 
 #### [**🚨 Schedule Call**](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+
+## Feature List 
+
+- Easy way to add/remove models
+- 100% uptime even when models are added/removed
+- custom callback webhooks
+- your domain name with HTTPS
+- Ability to create/delete User API keys
+- Reasonable set monthly cost

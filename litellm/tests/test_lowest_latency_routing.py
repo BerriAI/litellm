@@ -2,12 +2,12 @@
 #    This tests the router's ability to pick deployment with lowest latency
 
 import sys, os, asyncio, time, random
-from datetime import datetime
+from datetime import datetime, timedelta
 import traceback
 from dotenv import load_dotenv
 
 load_dotenv()
-import os
+import os, copy
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -16,8 +16,99 @@ import pytest
 from litellm import Router
 from litellm.router_strategy.lowest_latency import LowestLatencyLoggingHandler
 from litellm.caching import DualCache
+import litellm
 
 ### UNIT TESTS FOR LATENCY ROUTING ###
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_latency_memory_leak(sync_mode):
+    """
+    Test to make sure there's no memory leak caused by lowest latency routing
+
+    - make 10 calls -> check memory
+    - make 11th call -> no change in memory
+    """
+    test_cache = DualCache()
+    model_list = []
+    lowest_latency_logger = LowestLatencyLoggingHandler(
+        router_cache=test_cache, model_list=model_list
+    )
+    model_group = "gpt-3.5-turbo"
+    deployment_id = "1234"
+    kwargs = {
+        "litellm_params": {
+            "metadata": {
+                "model_group": "gpt-3.5-turbo",
+                "deployment": "azure/chatgpt-v-2",
+            },
+            "model_info": {"id": deployment_id},
+        }
+    }
+    start_time = time.time()
+    response_obj = {"usage": {"total_tokens": 50}}
+    time.sleep(5)
+    end_time = time.time()
+    for _ in range(10):
+        if sync_mode:
+            lowest_latency_logger.log_success_event(
+                response_obj=response_obj,
+                kwargs=kwargs,
+                start_time=start_time,
+                end_time=end_time,
+            )
+        else:
+            await lowest_latency_logger.async_log_success_event(
+                response_obj=response_obj,
+                kwargs=kwargs,
+                start_time=start_time,
+                end_time=end_time,
+            )
+    latency_key = f"{model_group}_map"
+    cache_value = copy.deepcopy(
+        test_cache.get_cache(key=latency_key)
+    )  # MAKE SURE NO MEMORY LEAK IN CACHING OBJECT
+
+    if sync_mode:
+        lowest_latency_logger.log_success_event(
+            response_obj=response_obj,
+            kwargs=kwargs,
+            start_time=start_time,
+            end_time=end_time,
+        )
+    else:
+        await lowest_latency_logger.async_log_success_event(
+            response_obj=response_obj,
+            kwargs=kwargs,
+            start_time=start_time,
+            end_time=end_time,
+        )
+    new_cache_value = test_cache.get_cache(key=latency_key)
+    # Assert that the size of the cache doesn't grow unreasonably
+    assert get_size(new_cache_value) <= get_size(
+        cache_value
+    ), f"Memory leak detected in function call! new_cache size={get_size(new_cache_value)}, old cache size={get_size(cache_value)}"
+
+
+def get_size(obj, seen=None):
+    # From https://goshippo.com/blog/measure-real-size-any-python-object/
+    # Recursively finds size of objects
+    size = sys.getsizeof(obj)
+    if seen is None:
+        seen = set()
+    obj_id = id(obj)
+    if obj_id in seen:
+        return 0
+    seen.add(obj_id)
+    if isinstance(obj, dict):
+        size += sum([get_size(v, seen) for v in obj.values()])
+        size += sum([get_size(k, seen) for k in obj.keys()])
+    elif hasattr(obj, "__dict__"):
+        size += get_size(obj.__dict__, seen)
+    elif hasattr(obj, "__iter__") and not isinstance(obj, (str, bytes, bytearray)):
+        size += sum([get_size(i, seen) for i in obj])
+    return size
 
 
 def test_latency_updated():
@@ -184,7 +275,7 @@ async def _deploy(lowest_latency_logger, deployment_id, tokens_used, duration):
     }
     start_time = time.time()
     response_obj = {"usage": {"total_tokens": tokens_used}}
-    time.sleep(duration)
+    await asyncio.sleep(duration)
     end_time = time.time()
     lowest_latency_logger.log_success_event(
         response_obj=response_obj,
@@ -234,6 +325,7 @@ def test_get_available_endpoints_tpm_rpm_check_async(ans_rpm):
     d1 = [(lowest_latency_logger, "1234", 50, 0.01)] * non_ans_rpm
     d2 = [(lowest_latency_logger, "5678", 50, 0.01)] * non_ans_rpm
     asyncio.run(_gather_deploy([*d1, *d2]))
+    time.sleep(3)
     ## CHECK WHAT'S SELECTED ##
     d_ans = lowest_latency_logger.get_available_deployments(
         model_group=model_group, healthy_deployments=model_list
@@ -615,7 +707,7 @@ async def test_lowest_latency_routing_first_pick():
     )  # type: ignore
 
     deployments = {}
-    for _ in range(5):
+    for _ in range(10):
         response = await router.acompletion(
             model="azure-model", messages=[{"role": "user", "content": "hello"}]
         )
@@ -723,3 +815,143 @@ async def test_lowest_latency_routing_buffer(buffer):
         assert len(selected_deployments.keys()) == 1
     else:
         assert len(selected_deployments.keys()) == 2
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_lowest_latency_routing_time_to_first_token(sync_mode):
+    """
+    If a deployment has
+    - a fast time to first token
+    - slow latency/output token
+
+    test if:
+    - for streaming, the deployment with fastest time to first token is picked
+    - for non-streaming, fastest overall deployment is picked
+    """
+    model_list = [
+        {
+            "model_name": "azure-model",
+            "litellm_params": {
+                "model": "azure/gpt-turbo",
+                "api_key": "os.environ/AZURE_FRANCE_API_KEY",
+                "api_base": "https://openai-france-1234.openai.azure.com",
+            },
+            "model_info": {"id": 1},
+        },
+        {
+            "model_name": "azure-model",
+            "litellm_params": {
+                "model": "azure/gpt-35-turbo",
+                "api_key": "os.environ/AZURE_EUROPE_API_KEY",
+                "api_base": "https://my-endpoint-europe-berri-992.openai.azure.com",
+            },
+            "model_info": {"id": 2},
+        },
+    ]
+    router = Router(
+        model_list=model_list,
+        routing_strategy="latency-based-routing",
+        set_verbose=False,
+        num_retries=3,
+    )  # type: ignore
+    ## DEPLOYMENT 1 ##
+    deployment_id = 1
+    start_time = datetime.now()
+    one_second_later = start_time + timedelta(seconds=1)
+
+    # Compute 3 seconds after the current time
+    three_seconds_later = start_time + timedelta(seconds=3)
+    four_seconds_later = start_time + timedelta(seconds=4)
+
+    kwargs = {
+        "litellm_params": {
+            "metadata": {
+                "model_group": "azure-model",
+            },
+            "model_info": {"id": 1},
+        },
+        "stream": True,
+        "completion_start_time": one_second_later,
+    }
+
+    response_obj = litellm.ModelResponse(
+        usage=litellm.Usage(completion_tokens=50, total_tokens=50)
+    )
+    end_time = four_seconds_later
+
+    if sync_mode:
+        router.lowestlatency_logger.log_success_event(
+            response_obj=response_obj,
+            kwargs=kwargs,
+            start_time=start_time,
+            end_time=end_time,
+        )
+    else:
+        await router.lowestlatency_logger.async_log_success_event(
+            response_obj=response_obj,
+            kwargs=kwargs,
+            start_time=start_time,
+            end_time=end_time,
+        )
+    ## DEPLOYMENT 2 ##
+    deployment_id = 2
+    kwargs = {
+        "litellm_params": {
+            "metadata": {
+                "model_group": "azure-model",
+            },
+            "model_info": {"id": 2},
+        },
+        "stream": True,
+        "completion_start_time": three_seconds_later,
+    }
+    response_obj = litellm.ModelResponse(
+        usage=litellm.Usage(completion_tokens=50, total_tokens=50)
+    )
+    end_time = three_seconds_later
+    if sync_mode:
+        router.lowestlatency_logger.log_success_event(
+            response_obj=response_obj,
+            kwargs=kwargs,
+            start_time=start_time,
+            end_time=end_time,
+        )
+    else:
+        await router.lowestlatency_logger.async_log_success_event(
+            response_obj=response_obj,
+            kwargs=kwargs,
+            start_time=start_time,
+            end_time=end_time,
+        )
+
+    """
+    TESTING
+
+    - expect deployment 1 to be picked for streaming
+    - expect deployment 2 to be picked for non-streaming
+    """
+    # print(router.lowesttpm_logger.get_available_deployments(model_group="azure-model"))
+    selected_deployments = {}
+    for _ in range(3):
+        print(router.get_available_deployment(model="azure-model"))
+        ## for non-streaming
+        selected_deployments[
+            router.get_available_deployment(model="azure-model")["model_info"]["id"]
+        ] = 1
+
+    assert len(selected_deployments.keys()) == 1
+    assert "2" in list(selected_deployments.keys())
+
+    selected_deployments = {}
+    for _ in range(50):
+        print(router.get_available_deployment(model="azure-model"))
+        ## for non-streaming
+        selected_deployments[
+            router.get_available_deployment(
+                model="azure-model", request_kwargs={"stream": True}
+            )["model_info"]["id"]
+        ] = 1
+
+    assert len(selected_deployments.keys()) == 1
+    assert "1" in list(selected_deployments.keys())

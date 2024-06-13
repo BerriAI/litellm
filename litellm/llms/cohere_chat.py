@@ -1,12 +1,12 @@
 import os, types
 import json
 from enum import Enum
-import requests
+import requests  # type: ignore
 import time, traceback
 from typing import Callable, Optional
 from litellm.utils import ModelResponse, Choices, Message, Usage
 import litellm
-import httpx
+import httpx  # type: ignore
 from .prompt_templates.factory import cohere_message_pt
 
 
@@ -112,6 +112,7 @@ class CohereChatConfig:
 
 def validate_environment(api_key):
     headers = {
+        "Request-Source":"unspecified:litellm",
         "accept": "application/json",
         "content-type": "application/json",
     }

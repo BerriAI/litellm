@@ -21,6 +21,11 @@ This is done by adding the "huggingface/" prefix to `model`, example `completion
 <Tabs>
 <TabItem value="tgi" label="Text-generation-interface (TGI)">
 
+By default, LiteLLM will assume a huggingface call follows the TGI format.
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
 ```python
 import os 
 from litellm import completion 
@@ -41,7 +46,56 @@ print(response)
 ```
 
 </TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Add models to your config.yaml
+
+  ```yaml
+  model_list:
+    - model_name: wizard-coder
+      litellm_params:
+        model: huggingface/WizardLM/WizardCoder-Python-34B-V1.0
+        api_key: os.environ/HUGGINGFACE_API_KEY
+        api_base: "https://my-endpoint.endpoints.huggingface.cloud"
+  ```
+
+
+
+2. Start the proxy 
+
+  ```bash
+  $ litellm --config /path/to/config.yaml --debug
+  ```
+
+3. Test it!
+
+  ```shell
+  curl --location 'http://0.0.0.0:4000/chat/completions' \
+      --header 'Authorization: Bearer sk-1234' \
+      --header 'Content-Type: application/json' \
+      --data '{
+      "model": "wizard-coder",
+      "messages": [
+        {
+            "role": "user",
+            "content": "I like you!"
+        }
+        ],
+  }'
+  ```
+
+
+</TabItem> 
+</Tabs>
+</TabItem>
 <TabItem value="conv" label="Conversational-task (BlenderBot, etc.)">
+
+Append `conversational` to the model name 
+
+e.g. `huggingface/conversational/<model-name>`
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
 
 ```python
 import os 
@@ -54,7 +108,7 @@ messages = [{ "content": "There's a llama in my garden 😱 What should I do?","
 
 # e.g. Call 'facebook/blenderbot-400M-distill' hosted on HF Inference endpoints
 response = completion(
-  model="huggingface/facebook/blenderbot-400M-distill", 
+  model="huggingface/conversational/facebook/blenderbot-400M-distill", 
   messages=messages, 
   api_base="https://my-endpoint.huggingface.cloud"
 )
@@ -62,7 +116,123 @@ response = completion(
 print(response)
 ```
 </TabItem>
-<TabItem value="none" label="Non TGI/Conversational-task LLMs">
+<TabItem value="proxy" label="PROXY">
+
+1. Add models to your config.yaml
+
+  ```yaml
+  model_list:
+    - model_name: blenderbot
+      litellm_params:
+        model: huggingface/conversational/facebook/blenderbot-400M-distill
+        api_key: os.environ/HUGGINGFACE_API_KEY
+        api_base: "https://my-endpoint.endpoints.huggingface.cloud"
+  ```
+
+
+
+2. Start the proxy 
+
+  ```bash
+  $ litellm --config /path/to/config.yaml --debug
+  ```
+
+3. Test it!
+
+  ```shell
+  curl --location 'http://0.0.0.0:4000/chat/completions' \
+      --header 'Authorization: Bearer sk-1234' \
+      --header 'Content-Type: application/json' \
+      --data '{
+      "model": "blenderbot",
+      "messages": [
+        {
+            "role": "user",
+            "content": "I like you!"
+        }
+        ],
+  }'
+  ```
+
+
+</TabItem> 
+</Tabs>
+</TabItem>
+<TabItem value="classification" label="Text Classification">
+
+Append `text-classification` to the model name 
+
+e.g. `huggingface/text-classification/<model-name>`
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+import os 
+from litellm import completion 
+
+# [OPTIONAL] set env var
+os.environ["HUGGINGFACE_API_KEY"] = "huggingface_api_key" 
+
+messages = [{ "content": "I like you, I love you!","role": "user"}]
+
+# e.g. Call 'shahrukhx01/question-vs-statement-classifier' hosted on HF Inference endpoints
+response = completion(
+  model="huggingface/text-classification/shahrukhx01/question-vs-statement-classifier", 
+  messages=messages,
+  api_base="https://my-endpoint.endpoints.huggingface.cloud",
+)
+
+print(response)
+```
+</TabItem> 
+<TabItem value="proxy" label="PROXY">
+
+1. Add models to your config.yaml
+
+  ```yaml
+  model_list:
+    - model_name: bert-classifier
+      litellm_params:
+        model: huggingface/text-classification/shahrukhx01/question-vs-statement-classifier
+        api_key: os.environ/HUGGINGFACE_API_KEY
+        api_base: "https://my-endpoint.endpoints.huggingface.cloud"
+  ```
+
+
+
+2. Start the proxy 
+
+  ```bash
+  $ litellm --config /path/to/config.yaml --debug
+  ```
+
+3. Test it!
+
+  ```shell
+  curl --location 'http://0.0.0.0:4000/chat/completions' \
+      --header 'Authorization: Bearer sk-1234' \
+      --header 'Content-Type: application/json' \
+      --data '{
+      "model": "bert-classifier",
+      "messages": [
+        {
+            "role": "user",
+            "content": "I like you!"
+        }
+        ],
+  }'
+  ```
+
+
+</TabItem> 
+</Tabs>
+</TabItem>
+<TabItem value="none" label="Text Generation (NOT TGI)">
+
+Append `text-generation` to the model name 
+
+e.g. `huggingface/text-generation/<model-name>`
 
 ```python
 import os 
@@ -75,7 +245,7 @@ messages = [{ "content": "There's a llama in my garden 😱 What should I do?","
 
 # e.g. Call 'roneneldan/TinyStories-3M' hosted on HF Inference endpoints
 response = completion(
-  model="huggingface/roneneldan/TinyStories-3M", 
+  model="huggingface/text-generation/roneneldan/TinyStories-3M", 
   messages=messages,
   api_base="https://p69xlsj6rpno5drq.us-east-1.aws.endpoints.huggingface.cloud",
 )

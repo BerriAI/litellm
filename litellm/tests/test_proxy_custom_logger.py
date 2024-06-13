@@ -10,7 +10,7 @@ import os, io, asyncio
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-import pytest
+import pytest, time
 import litellm
 from litellm import embedding, completion, completion_cost, Timeout
 from litellm import RateLimitError
@@ -117,6 +117,7 @@ def test_embedding(client):
             "input_cost_per_token": 0.002,
             "mode": "embedding",
             "id": "hello",
+            "db_model": False,
         }
         result = response.json()
         print(f"Received response: {result}")
@@ -158,7 +159,7 @@ def test_chat_completion(client):
         response = client.post("/chat/completions", json=test_data, headers=headers)
         print("made request", response.status_code, response.text)
         print("LiteLLM Callbacks", litellm.callbacks)
-        asyncio.sleep(1)  # sleep while waiting for callback to run
+        time.sleep(1)  # sleep while waiting for callback to run
 
         print(
             "my_custom_logger in /chat/completions",
@@ -191,6 +192,7 @@ def test_chat_completion(client):
             "id": "gm",
             "input_cost_per_token": 0.0002,
             "mode": "chat",
+            "db_model": False,
         }
         assert proxy_server_request_object == {
             "url": "http://testserver/chat/completions",

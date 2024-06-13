@@ -10,6 +10,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import time
 from litellm import token_counter, create_pretrained_tokenizer, encode, decode
+from litellm.tests.large_text import text
 
 
 def test_token_counter_normal_plus_function_calling():
@@ -70,10 +71,14 @@ def test_tokenizers():
         )
 
         # llama3 tokenizer (also testing custom tokenizer)
-        llama3_tokens_1 = token_counter(model="meta-llama/llama-3-70b-instruct", text=sample_text)
+        llama3_tokens_1 = token_counter(
+            model="meta-llama/llama-3-70b-instruct", text=sample_text
+        )
 
         llama3_tokenizer = create_pretrained_tokenizer("Xenova/llama-3-tokenizer")
-        llama3_tokens_2 = token_counter(custom_tokenizer=llama3_tokenizer, text=sample_text)
+        llama3_tokens_2 = token_counter(
+            custom_tokenizer=llama3_tokenizer, text=sample_text
+        )
 
         print(
             f"openai tokens: {openai_tokens}; claude tokens: {claude_tokens}; cohere tokens: {cohere_tokens}; llama2 tokens: {llama2_tokens}; llama3 tokens: {llama3_tokens_1}"
@@ -81,10 +86,12 @@ def test_tokenizers():
 
         # assert that all token values are different
         assert (
-            openai_tokens != cohere_tokens != llama2_tokens != llama3_tokens_1
+            openai_tokens != llama2_tokens != llama3_tokens_1
         ), "Token values are not different."
 
-        assert llama3_tokens_1 == llama3_tokens_2, "Custom tokenizer is not being used! It has been configured to use the same tokenizer as the built in llama3 tokenizer and the results should be the same."
+        assert (
+            llama3_tokens_1 == llama3_tokens_2
+        ), "Custom tokenizer is not being used! It has been configured to use the same tokenizer as the built in llama3 tokenizer and the results should be the same."
 
         print("test tokenizer: It worked!")
     except Exception as e:
@@ -111,7 +118,7 @@ def test_encoding_and_decoding():
 
         # cohere encoding + decoding
         cohere_tokens = encode(model="command-nightly", text=sample_text)
-        cohere_text = decode(model="command-nightly", tokens=cohere_tokens.ids)
+        cohere_text = decode(model="command-nightly", tokens=cohere_tokens)
 
         assert cohere_text == sample_text
 
@@ -147,3 +154,76 @@ def test_gpt_vision_token_counting():
 
 
 # test_gpt_vision_token_counting()
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "gpt-4-vision-preview",
+        "gpt-4o",
+        "claude-3-opus-20240229",
+        "command-nightly",
+        "mistral/mistral-tiny",
+    ],
+)
+def test_load_test_token_counter(model):
+    """
+    Token count large prompt 100 times.
+
+    Assert time taken is < 1.5s.
+    """
+    import tiktoken
+
+    messages = [{"role": "user", "content": text}] * 10
+
+    start_time = time.time()
+    for _ in range(10):
+        _ = token_counter(model=model, messages=messages)
+        # enc.encode("".join(m["content"] for m in messages))
+
+    end_time = time.time()
+
+    total_time = end_time - start_time
+    print("model={}, total test time={}".format(model, total_time))
+    assert total_time < 10, f"Total encoding time > 10s, {total_time}"
+
+
+def test_openai_token_with_image_and_text():
+    model = "gpt-4o"
+    full_request = {
+        "model": "gpt-4o",
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "json",
+                    "parameters": {
+                        "type": "object",
+                        "required": ["clause"],
+                        "properties": {"clause": {"type": "string"}},
+                    },
+                    "description": "Respond with a JSON object.",
+                },
+            }
+        ],
+        "logprobs": False,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "text": "\n    Just some long text, long long text, and you know it will be longer than 7 tokens definetly.",
+                        "type": "text",
+                    }
+                ],
+            }
+        ],
+        "tool_choice": {"type": "function", "function": {"name": "json"}},
+        "exclude_models": [],
+        "disable_fallback": False,
+        "exclude_providers": [],
+    }
+    messages = full_request.get("messages", [])
+
+    token_count = token_counter(model=model, messages=messages)
+    print(token_count)

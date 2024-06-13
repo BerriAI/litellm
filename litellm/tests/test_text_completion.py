@@ -3990,6 +3990,27 @@ def test_async_text_completion():
     asyncio.run(test_get_response())
 
 
+@pytest.mark.skip(reason="Tgai endpoints are unstable")
+def test_async_text_completion_together_ai():
+    litellm.set_verbose = True
+    print("test_async_text_completion")
+
+    async def test_get_response():
+        try:
+            response = await litellm.atext_completion(
+                model="together_ai/codellama/CodeLlama-13b-Instruct-hf",
+                prompt="good morning",
+                max_tokens=10,
+            )
+            print(f"response: {response}")
+        except litellm.Timeout as e:
+            print(e)
+        except Exception as e:
+            pytest.fail("An unexpected error occurred")
+
+    asyncio.run(test_get_response())
+
+
 # test_async_text_completion()
 
 

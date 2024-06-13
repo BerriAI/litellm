@@ -34,14 +34,15 @@ class MyCustomHandler(CustomLogger):
         self.response_cost = 0
 
     def log_pre_api_call(self, model, messages, kwargs):
-        print(f"Pre-API Call")
+        print("Pre-API Call")
+        traceback.print_stack()
         self.data_sent_to_api = kwargs["additional_args"].get("complete_input_dict", {})
 
     def log_post_api_call(self, kwargs, response_obj, start_time, end_time):
-        print(f"Post-API Call")
+        print("Post-API Call")
 
     def log_stream_event(self, kwargs, response_obj, start_time, end_time):
-        print(f"On Stream")
+        print("On Stream")
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
         print(f"On Success")
@@ -90,10 +91,10 @@ class TmpFunction:
         print(f"ON ASYNC LOGGING")
         self.async_success = True
         print(
-            f'kwargs.get("complete_streaming_response"): {kwargs.get("complete_streaming_response")}'
+            f'kwargs.get("async_complete_streaming_response"): {kwargs.get("async_complete_streaming_response")}'
         )
         self.complete_streaming_response_in_callback = kwargs.get(
-            "complete_streaming_response"
+            "async_complete_streaming_response"
         )
 
 
@@ -115,6 +116,10 @@ async def test_async_chat_openai_stream():
             print(complete_streaming_response)
 
         complete_streaming_response = complete_streaming_response.strip("'")
+
+        await asyncio.sleep(3)
+
+        # problematic line
         response1 = tmp_function.complete_streaming_response_in_callback["choices"][0][
             "message"
         ]["content"]
@@ -368,6 +373,7 @@ async def test_async_custom_handler_embedding_optional_param():
     Tests if the openai optional params for embedding - user + encoding_format,
     are logged
     """
+    litellm.set_verbose = True
     customHandler_optional_params = MyCustomHandler()
     litellm.callbacks = [customHandler_optional_params]
     response = await litellm.aembedding(
@@ -433,8 +439,9 @@ async def test_cost_tracking_with_caching():
         max_tokens=40,
         temperature=0.2,
         caching=True,
+        mock_response="Hey, i'm doing well!",
     )
-    await asyncio.sleep(1)  # success callback is async
+    await asyncio.sleep(3)  # success callback is async
     response_cost = customHandler_optional_params.response_cost
     assert response_cost > 0
     response2 = await litellm.acompletion(

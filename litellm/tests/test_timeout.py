@@ -10,7 +10,37 @@ sys.path.insert(
 import time
 import litellm
 import openai
-import pytest, uuid
+import pytest, uuid, httpx
+
+
+@pytest.mark.parametrize(
+    "model, provider",
+    [
+        ("gpt-3.5-turbo", "openai"),
+        ("anthropic.claude-instant-v1", "bedrock"),
+        ("azure/chatgpt-v-2", "azure"),
+    ],
+)
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_httpx_timeout(model, provider, sync_mode):
+    """
+    Test if setting httpx.timeout works for completion calls
+    """
+    timeout_val = httpx.Timeout(10.0, connect=60.0)
+
+    messages = [{"role": "user", "content": "Hey, how's it going?"}]
+
+    if sync_mode:
+        response = litellm.completion(
+            model=model, messages=messages, timeout=timeout_val
+        )
+    else:
+        response = await litellm.acompletion(
+            model=model, messages=messages, timeout=timeout_val
+        )
+
+    print(f"response: {response}")
 
 
 def test_timeout():

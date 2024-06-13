@@ -3,9 +3,7 @@
 #    On success, log events to Prometheus
 
 import dotenv, os
-import requests
-
-dotenv.load_dotenv()  # Loading env variables using dotenv
+import requests  # type: ignore
 import traceback
 import datetime, subprocess, sys
 import litellm, uuid
@@ -19,7 +17,6 @@ class PrometheusLogger:
         **kwargs,
     ):
         try:
-            print(f"in init prometheus metrics")
             from prometheus_client import Counter
 
             self.litellm_llm_api_failed_requests_metric = Counter(
@@ -112,8 +109,8 @@ class PrometheusLogger:
                     end_user_id, user_api_key, model, user_api_team, user_id
                 ).inc()
         except Exception as e:
-            traceback.print_exc()
-            verbose_logger.debug(
-                f"prometheus Layer Error - {str(e)}\n{traceback.format_exc()}"
+            verbose_logger.error(
+                "prometheus Layer Error(): Exception occured - {}".format(str(e))
             )
+            verbose_logger.debug(traceback.format_exc())
             pass

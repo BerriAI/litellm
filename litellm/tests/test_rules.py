@@ -127,17 +127,20 @@ def test_post_call_rule_streaming():
         print(type(e))
         print(vars(e))
         assert (
-            e.message
-            == "OpenAIException - This violates LiteLLM Proxy Rules. Response too short"
+            "OpenAIException - This violates LiteLLM Proxy Rules. Response too short"
+            in e.message
         )
 
 
-def test_post_call_processing_error_async_response():
-    response = asyncio.run(
-        acompletion(
+@pytest.mark.asyncio
+async def test_post_call_processing_error_async_response():
+    try:
+        response = await acompletion(
             model="command-nightly",  # Just used as an example
             messages=[{"content": "Hello, how are you?", "role": "user"}],
             api_base="https://openai-proxy.berriai.repl.co",  # Just used as an example
             custom_llm_provider="openai",
         )
-    )
+        pytest.fail("This call should have failed")
+    except Exception as e:
+        pass

@@ -19,6 +19,67 @@ import os, httpx
 load_dotenv()
 
 
+def test_router_sensitive_keys():
+    try:
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "gpt-3.5-turbo",  # openai model name
+                    "litellm_params": {  # params for litellm completion/embedding call
+                        "model": "azure/chatgpt-v-2",
+                        "api_key": "special-key",
+                    },
+                    "model_info": {"id": 12345},
+                },
+            ],
+        )
+    except Exception as e:
+        print(f"error msg - {str(e)}")
+        assert "special-key" not in str(e)
+
+
+def test_router_order():
+    """
+    Asserts for 2 models in a model group, model with order=1 always called first
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                    "mock_response": "Hello world",
+                    "order": 1,
+                },
+                "model_info": {"id": "1"},
+            },
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_key": "bad-key",
+                    "mock_response": Exception("this is a bad key"),
+                    "order": 2,
+                },
+                "model_info": {"id": "2"},
+            },
+        ],
+        num_retries=0,
+        allowed_fails=0,
+        enable_pre_call_checks=True,
+    )
+
+    for _ in range(100):
+        response = router.completion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+        )
+
+        assert isinstance(response, litellm.ModelResponse)
+        assert response._hidden_params["model_id"] == "1"
+
+
 @pytest.mark.parametrize("num_retries", [None, 2])
 @pytest.mark.parametrize("max_retries", [None, 4])
 def test_router_num_retries_init(num_retries, max_retries):
@@ -134,10 +195,12 @@ async def test_router_retries(sync_mode):
             messages=[{"role": "user", "content": "Hey, how's it going?"}],
         )
     else:
-        await router.acompletion(
+        response = await router.acompletion(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "Hey, how's it going?"}],
         )
+
+        print(response.choices[0].message)
 
 
 @pytest.mark.parametrize(
@@ -687,6 +750,93 @@ def test_router_context_window_check_pre_call_check_out_group():
         pytest.fail(f"Got unexpected exception on router! - {str(e)}")
 
 
+def test_filter_invalid_params_pre_call_check():
+    """
+    - gpt-3.5-turbo supports 'response_object'
+    - gpt-3.5-turbo-16k doesn't support 'response_object'
+
+    run pre-call check -> assert returned list doesn't include gpt-3.5-turbo-16k
+    """
+    try:
+        model_list = [
+            {
+                "model_name": "gpt-3.5-turbo",  # openai model name
+                "litellm_params": {  # params for litellm completion/embedding call
+                    "model": "gpt-3.5-turbo",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                },
+            },
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo-16k",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                },
+            },
+        ]
+
+        router = Router(model_list=model_list, set_verbose=True, enable_pre_call_checks=True, num_retries=0)  # type: ignore
+
+        filtered_deployments = router._pre_call_checks(
+            model="gpt-3.5-turbo",
+            healthy_deployments=model_list,
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+            request_kwargs={"response_format": {"type": "json_object"}},
+        )
+        assert len(filtered_deployments) == 1
+    except Exception as e:
+        pytest.fail(f"Got unexpected exception on router! - {str(e)}")
+
+
+@pytest.mark.parametrize("allowed_model_region", ["eu", None])
+def test_router_region_pre_call_check(allowed_model_region):
+    """
+    If region based routing set
+    - check if only model in allowed region is allowed by '_pre_call_checks'
+    """
+    model_list = [
+        {
+            "model_name": "gpt-3.5-turbo",  # openai model name
+            "litellm_params": {  # params for litellm completion/embedding call
+                "model": "azure/chatgpt-v-2",
+                "api_key": os.getenv("AZURE_API_KEY"),
+                "api_version": os.getenv("AZURE_API_VERSION"),
+                "api_base": os.getenv("AZURE_API_BASE"),
+                "base_model": "azure/gpt-35-turbo",
+                "region_name": "eu",
+            },
+            "model_info": {"id": "1"},
+        },
+        {
+            "model_name": "gpt-3.5-turbo-large",  # openai model name
+            "litellm_params": {  # params for litellm completion/embedding call
+                "model": "gpt-3.5-turbo-1106",
+                "api_key": os.getenv("OPENAI_API_KEY"),
+            },
+            "model_info": {"id": "2"},
+        },
+    ]
+
+    router = Router(model_list=model_list, enable_pre_call_checks=True)
+
+    _healthy_deployments = router._pre_call_checks(
+        model="gpt-3.5-turbo",
+        healthy_deployments=model_list,
+        messages=[{"role": "user", "content": "Hey!"}],
+        request_kwargs={"allowed_model_region": allowed_model_region},
+    )
+
+    if allowed_model_region is None:
+        assert len(_healthy_deployments) == 2
+    else:
+        assert len(_healthy_deployments) == 1, "No models selected as healthy"
+        assert (
+            _healthy_deployments[0]["model_info"]["id"] == "1"
+        ), "Incorrect model id picked. Got id={}, expected id=1".format(
+            _healthy_deployments[0]["model_info"]["id"]
+        )
+
+
 ### FUNCTION CALLING
 
 
@@ -1123,6 +1273,21 @@ def test_openai_completion_on_router():
 
 
 # test_openai_completion_on_router()
+
+
+def test_model_group_info():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "command-r-plus",
+                "litellm_params": {"model": "cohere.command-r-plus-v1:0"},
+            }
+        ]
+    )
+
+    response = router.get_model_group_info(model_group="command-r-plus")
+
+    assert response is not None
 
 
 def test_consistent_model_id():
