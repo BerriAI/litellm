@@ -3,6 +3,7 @@ from unittest import mock
 
 from dotenv import load_dotenv
 import copy
+from datetime import datetime
 
 load_dotenv()
 import os
@@ -395,3 +396,52 @@ def test_get_supported_openai_params() -> None:
 
     # Unmapped provider
     assert get_supported_openai_params("nonexistent") is None
+
+
+def test_redact_msgs_from_logs():
+    """
+    Tests that turn_off_message_logging does not modify the response_obj
+
+    On the proxy some users were seeing the redaction impact client side responses
+    """
+    from litellm.litellm_core_utils.redact_messages import (
+        redact_message_input_output_from_logging,
+    )
+    from litellm.utils import Logging
+
+    litellm.turn_off_message_logging = True
+
+    response_obj = litellm.ModelResponse(
+        choices=[
+            {
+                "finish_reason": "stop",
+                "index": 0,
+                "message": {
+                    "content": "I'm LLaMA, an AI assistant developed by Meta AI that can understand and respond to human input in a conversational manner.",
+                    "role": "assistant",
+                },
+            }
+        ]
+    )
+
+    _redacted_response_obj = redact_message_input_output_from_logging(
+        result=response_obj,
+        litellm_logging_obj=Logging(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type="acompletion",
+            litellm_call_id="1234",
+            start_time=datetime.now(),
+            function_id="1234",
+        ),
+    )
+
+    # Assert the response_obj content is NOT modified
+    assert (
+        response_obj.choices[0].message.content
+        == "I'm LLaMA, an AI assistant developed by Meta AI that can understand and respond to human input in a conversational manner."
+    )
+
+    litellm.turn_off_message_logging = False
+    print("Test passed")
