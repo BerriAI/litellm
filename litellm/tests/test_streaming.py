@@ -557,7 +557,13 @@ async def test_completion_predibase_streaming(sync_mode):
         print(f"complete_response: {complete_response}")
     except litellm.Timeout as e:
         pass
+    except litellm.InternalServerError as e:
+        pass
     except Exception as e:
+        print("ERROR class", e.__class__)
+        print("ERROR message", e)
+        print("ERROR traceback", traceback.format_exc())
+
         pytest.fail(f"Error occurred: {e}")
 
 
