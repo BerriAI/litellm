@@ -183,6 +183,7 @@ const sidebars = {
       label: "Logging & Observability",
       items: [
         "debugging/local_debugging",
+        "observability/raw_request_response",
         "observability/callbacks",
         "observability/custom_callback",
         "observability/langfuse_integration",
@@ -256,6 +257,7 @@ const sidebars = {
             "projects/GPT Migrate",
             "projects/YiVal",
             "projects/LiteLLM Proxy",
+            "projects/llm_cord",
           ],
         },
       ],

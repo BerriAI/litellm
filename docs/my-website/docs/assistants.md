@@ -150,7 +150,7 @@ $ litellm --config /path/to/config.yaml
 ```bash
 curl "http://0.0.0.0:4000/v1/assistants?order=desc&limit=20" \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-1234" \
+  -H "Authorization: Bearer sk-1234"
 ```
 
 **Create a Thread**
@@ -160,6 +160,14 @@ curl http://0.0.0.0:4000/v1/threads \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-1234" \
   -d ''
+```
+
+**Get a Thread**
+
+```bash
+curl http://0.0.0.0:4000/v1/threads/{thread_id} \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234"
 ```
 
 **Add Messages to the Thread**

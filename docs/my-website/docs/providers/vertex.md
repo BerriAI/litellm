@@ -449,6 +449,54 @@ print(response)
 </TabItem>
 </Tabs>
 
+## Usage - Function Calling 
+
+LiteLLM supports Function Calling for Vertex AI gemini models. 
+
+```python
+from litellm import completion
+import os
+# set env
+os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = ".."
+os.environ["VERTEX_AI_PROJECT"] = ".."
+os.environ["VERTEX_AI_LOCATION"] = ".."
+
+tools = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_current_weather",
+            "description": "Get the current weather in a given location",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location": {
+                        "type": "string",
+                        "description": "The city and state, e.g. San Francisco, CA",
+                    },
+                    "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                },
+                "required": ["location"],
+            },
+        },
+    }
+]
+messages = [{"role": "user", "content": "What's the weather like in Boston today?"}]
+
+response = completion(
+    model="vertex_ai/gemini-pro-vision",
+    messages=messages,
+    tools=tools,
+)
+# Add any assertions, here to check response args
+print(response)
+assert isinstance(response.choices[0].message.tool_calls[0].function.name, str)
+assert isinstance(
+    response.choices[0].message.tool_calls[0].function.arguments, str
+)
+
+```
+
 
 ## Chat Models
 | Model Name       | Function Call                        |
@@ -500,6 +548,8 @@ All models listed [here](https://github.com/BerriAI/litellm/blob/57f37f743886a02
 
 | Model Name               | Function Call                                                                                                                                                      |
 |--------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| text-embedding-004 | `embedding(model="vertex_ai/text-embedding-004", input)` | 
+| text-multilingual-embedding-002 | `embedding(model="vertex_ai/text-multilingual-embedding-002", input)` | 
 | textembedding-gecko | `embedding(model="vertex_ai/textembedding-gecko", input)` | 
 | textembedding-gecko-multilingual | `embedding(model="vertex_ai/textembedding-gecko-multilingual", input)` | 
 | textembedding-gecko-multilingual@001 | `embedding(model="vertex_ai/textembedding-gecko-multilingual@001", input)` | 
@@ -507,6 +557,29 @@ All models listed [here](https://github.com/BerriAI/litellm/blob/57f37f743886a02
 | textembedding-gecko@003 | `embedding(model="vertex_ai/textembedding-gecko@003", input)` | 
 | text-embedding-preview-0409 | `embedding(model="vertex_ai/text-embedding-preview-0409", input)` |
 | text-multilingual-embedding-preview-0409 | `embedding(model="vertex_ai/text-multilingual-embedding-preview-0409", input)` | 
+
+### Advanced Use `task_type` and `title` (Vertex Specific Params)
+
+👉 `task_type` and `title` are vertex specific params
+
+LiteLLM Supported Vertex Specific Params
+
+```python
+auto_truncate: Optional[bool] = None
+task_type: Optional[Literal["RETRIEVAL_QUERY","RETRIEVAL_DOCUMENT", "SEMANTIC_SIMILARITY", "CLASSIFICATION", "CLUSTERING", "QUESTION_ANSWERING", "FACT_VERIFICATION"]] = None
+title: Optional[str] = None # The title of the document to be embedded. (only valid with task_type=RETRIEVAL_DOCUMENT).
+```
+
+**Example Usage with LiteLLM**
+```python
+response = litellm.embedding(
+    model="vertex_ai/text-embedding-004",
+    input=["good morning from litellm", "gm"]
+    task_type = "RETRIEVAL_DOCUMENT",
+    dimensions=1,
+    auto_truncate=True,
+)
+```
 
 ## Image Generation Models
 

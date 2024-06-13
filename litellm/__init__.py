@@ -60,6 +60,7 @@ _async_failure_callback: List[Callable] = (
 pre_call_rules: List[Callable] = []
 post_call_rules: List[Callable] = []
 turn_off_message_logging: Optional[bool] = False
+log_raw_request_response: bool = False
 redact_messages_in_exceptions: Optional[bool] = False
 store_audit_logs = False  # Enterprise feature, allow users to see audit logs
 ## end of callbacks #############
@@ -407,6 +408,7 @@ openai_compatible_providers: List = [
     "together_ai",
     "fireworks_ai",
     "friendliai",
+    "azure_ai",
 ]
 
 
@@ -611,6 +613,7 @@ provider_list: List = [
     "baseten",
     "azure",
     "azure_text",
+    "azure_ai",
     "sagemaker",
     "bedrock",
     "vllm",
@@ -765,7 +768,7 @@ from .llms.gemini import GeminiConfig
 from .llms.nlp_cloud import NLPCloudConfig
 from .llms.aleph_alpha import AlephAlphaConfig
 from .llms.petals import PetalsConfig
-from .llms.vertex_ai import VertexAIConfig
+from .llms.vertex_ai import VertexAIConfig, VertexAITextEmbeddingConfig
 from .llms.vertex_ai_anthropic import VertexAIAnthropicConfig
 from .llms.sagemaker import SagemakerConfig
 from .llms.ollama import OllamaConfig
@@ -787,6 +790,7 @@ from .llms.openai import (
     OpenAIConfig,
     OpenAITextCompletionConfig,
     MistralConfig,
+    MistralEmbeddingConfig,
     DeepInfraConfig,
 )
 from .llms.azure import (
