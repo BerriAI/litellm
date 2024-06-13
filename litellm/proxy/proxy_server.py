@@ -7052,6 +7052,7 @@ async def info_key_fn(
     "/spend/keys",
     tags=["Budget & Spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
 )
 async def spend_key_fn():
     """
@@ -7084,6 +7085,7 @@ async def spend_key_fn():
     "/spend/users",
     tags=["Budget & Spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
 )
 async def spend_user_fn(
     user_id: Optional[str] = fastapi.Query(
@@ -7214,6 +7216,7 @@ async def view_spend_tags(
     responses={
         200: {"model": List[LiteLLM_SpendLogs]},
     },
+    include_in_schema=False,
 )
 async def get_global_activity(
     start_date: Optional[str] = fastapi.Query(
@@ -7317,6 +7320,7 @@ async def get_global_activity(
     responses={
         200: {"model": List[LiteLLM_SpendLogs]},
     },
+    include_in_schema=False,
 )
 async def get_global_activity_model(
     start_date: Optional[str] = fastapi.Query(
@@ -7463,6 +7467,7 @@ async def get_global_activity_model(
     responses={
         200: {"model": List[LiteLLM_SpendLogs]},
     },
+    include_in_schema=False,
 )
 async def get_global_activity_exceptions_per_deployment(
     model_group: str = fastapi.Query(
@@ -7615,6 +7620,7 @@ async def get_global_activity_exceptions_per_deployment(
     responses={
         200: {"model": List[LiteLLM_SpendLogs]},
     },
+    include_in_schema=False,
 )
 async def get_global_activity_exceptions(
     model_group: str = fastapi.Query(
@@ -8524,6 +8530,7 @@ async def global_spend_reset():
     "/global/spend/logs",
     tags=["Budget & Spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
 )
 async def global_spend_logs(
     api_key: str = fastapi.Query(
@@ -8569,6 +8576,7 @@ async def global_spend_logs(
     "/global/spend",
     tags=["Budget & Spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
 )
 async def global_spend():
     """
@@ -8595,6 +8603,7 @@ async def global_spend():
     "/global/spend/keys",
     tags=["Budget & Spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
 )
 async def global_spend_keys(
     limit: int = fastapi.Query(
@@ -8622,6 +8631,7 @@ async def global_spend_keys(
     "/global/spend/teams",
     tags=["Budget & Spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
 )
 async def global_spend_per_team():
     """
@@ -8746,6 +8756,7 @@ async def global_view_all_end_users():
     "/global/spend/end_users",
     tags=["Budget & Spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
 )
 async def global_spend_end_users(data: Optional[GlobalEndUsersSpend] = None):
     """
@@ -8798,6 +8809,7 @@ LIMIT 100
     "/global/spend/models",
     tags=["Budget & Spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
 )
 async def global_spend_models(
     limit: int = fastapi.Query(
@@ -8826,6 +8838,7 @@ async def global_spend_models(
     "/global/predict/spend/logs",
     tags=["Budget & Spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
 )
 async def global_predict_spend_logs(request: Request):
     from enterprise.utils import _forecast_daily_cost
@@ -12217,6 +12230,7 @@ async def alerting_settings(
     "/queue/chat/completions",
     tags=["experimental"],
     dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
 )
 async def async_queue_request(
     request: Request,
@@ -12328,18 +12342,10 @@ async def async_queue_request(
         )
 
 
-@router.get(
-    "/ollama_logs", dependencies=[Depends(user_api_key_auth)], tags=["experimental"]
-)
-async def retrieve_server_log(request: Request):
-    filepath = os.path.expanduser("~/.ollama/logs/server.log")
-    return FileResponse(filepath)
-
-
 #### LOGIN ENDPOINTS ####
 
 
-@app.get("/sso/key/generate", tags=["experimental"])
+@app.get("/sso/key/generate", tags=["experimental"], include_in_schema=False)
 async def google_login(request: Request):
     """
     Create Proxy API Keys using Google Workspace SSO. Requires setting PROXY_BASE_URL in .env
@@ -12933,7 +12939,7 @@ def get_image():
         return FileResponse(logo_path, media_type="image/jpeg")
 
 
-@app.get("/sso/callback", tags=["experimental"])
+@app.get("/sso/callback", tags=["experimental"], include_in_schema=False)
 async def auth_callback(request: Request):
     """Verify login"""
     global general_settings, ui_access_mode, premium_user
@@ -13238,6 +13244,7 @@ async def auth_callback(request: Request):
     tags=["Invite Links"],
     dependencies=[Depends(user_api_key_auth)],
     response_model=InvitationModel,
+    include_in_schema=False,
 )
 async def new_invitation(
     data: InvitationNew, user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth)
@@ -13302,6 +13309,7 @@ async def new_invitation(
     tags=["Invite Links"],
     dependencies=[Depends(user_api_key_auth)],
     response_model=InvitationModel,
+    include_in_schema=False,
 )
 async def invitation_info(
     invitation_id: str, user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth)
@@ -13353,6 +13361,7 @@ async def invitation_info(
     tags=["Invite Links"],
     dependencies=[Depends(user_api_key_auth)],
     response_model=InvitationModel,
+    include_in_schema=False,
 )
 async def invitation_update(
     data: InvitationUpdate,
@@ -13413,6 +13422,7 @@ async def invitation_update(
     tags=["Invite Links"],
     dependencies=[Depends(user_api_key_auth)],
     response_model=InvitationModel,
+    include_in_schema=False,
 )
 async def invitation_delete(
     data: InvitationDelete,
@@ -13465,6 +13475,7 @@ async def invitation_delete(
     "/config/update",
     tags=["config.yaml"],
     dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
 )
 async def update_config(config_info: ConfigYAML):
     """
@@ -13622,6 +13633,7 @@ Keep it more precise, to prevent overwrite other values unintentially
     "/config/field/update",
     tags=["config.yaml"],
     dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
 )
 async def update_config_general_settings(
     data: ConfigFieldUpdate,
@@ -13700,6 +13712,7 @@ async def update_config_general_settings(
     tags=["config.yaml"],
     dependencies=[Depends(user_api_key_auth)],
     response_model=ConfigFieldInfo,
+    include_in_schema=False,
 )
 async def get_config_general_settings(
     field_name: str,
@@ -13760,6 +13773,7 @@ async def get_config_general_settings(
     "/config/list",
     tags=["config.yaml"],
     dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
 )
 async def get_config_list(
     config_type: Literal["general_settings"],
@@ -13836,6 +13850,7 @@ async def get_config_list(
     "/config/field/delete",
     tags=["config.yaml"],
     dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
 )
 async def delete_config_general_settings(
     data: ConfigFieldDelete,
@@ -14091,6 +14106,7 @@ async def get_config():
     "/config/yaml",
     tags=["config.yaml"],
     dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
 )
 async def config_yaml_endpoint(config_info: ConfigYAML):
     """
