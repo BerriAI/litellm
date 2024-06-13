@@ -1137,13 +1137,15 @@ class TranscriptionResponse(OpenAIObject):
 def print_verbose(
     print_statement,
     logger_only: bool = False,
-    log_level: Literal["DEBUG", "INFO"] = "DEBUG",
+    log_level: Literal["DEBUG", "INFO", "ERROR"] = "DEBUG",
 ):
     try:
         if log_level == "DEBUG":
             verbose_logger.debug(print_statement)
         elif log_level == "INFO":
             verbose_logger.info(print_statement)
+        elif log_level == "ERROR":
+            verbose_logger.error(print_statement)
         if litellm.set_verbose == True and logger_only == False:
             print(print_statement)  # noqa
     except:
@@ -1627,6 +1629,12 @@ class Logging:
                             end_time=end_time,
                         )
                     except Exception as e:
+                        print_verbose(
+                            "LiteLLM.LoggingError: [Non-Blocking] Exception occurred while building complete streaming response in success logging {}\n{}".format(
+                                str(e), traceback.format_exc()
+                            ),
+                            log_level="ERROR",
+                        )
                         complete_streaming_response = None
                 else:
                     self.sync_streaming_chunks.append(result)
@@ -2217,7 +2225,10 @@ class Logging:
                         capture_exception(e)
         except:
             print_verbose(
-                f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while success logging {traceback.format_exc()}"
+                "LiteLLM.LoggingError: [Non-Blocking] Exception occurred while success logging {}\n{}".format(
+                    str(e), traceback.format_exc()
+                ),
+                log_level="ERROR",
             )
             pass
 
@@ -2227,7 +2238,7 @@ class Logging:
         """
         Implementing async callbacks, to handle asyncio event loop issues when custom integrations need to use async functions.
         """
-        print_verbose(f"Logging Details LiteLLM-Async Success Call")
+        print_verbose("Logging Details LiteLLM-Async Success Call")
         start_time, end_time, result = self._success_handler_helper_fn(
             start_time=start_time, end_time=end_time, result=result, cache_hit=cache_hit
         )
@@ -2246,7 +2257,10 @@ class Logging:
                     )
                 except Exception as e:
                     print_verbose(
-                        f"Error occurred building stream chunk: {traceback.format_exc()}"
+                        "Error occurred building stream chunk in success logging: {}\n{}".format(
+                            str(e), traceback.format_exc()
+                        ),
+                        log_level="ERROR",
                     )
                     complete_streaming_response = None
             else:
@@ -2257,7 +2271,7 @@ class Logging:
                 complete_streaming_response
             )
             try:
-                if self.model_call_details.get("cache_hit", False) == True:
+                if self.model_call_details.get("cache_hit", False) is True:
                     self.model_call_details["response_cost"] = 0.0
                 else:
                     # check if base_model set on azure
@@ -2273,8 +2287,8 @@ class Logging:
                     f"Model={self.model}; cost={self.model_call_details['response_cost']}"
                 )
             except litellm.NotFoundError as e:
-                verbose_logger.debug(
-                    f"Model={self.model} not found in completion cost map."
+                verbose_logger.error(
+                    f"Model={self.model} not found in completion cost map. Setting 'response_cost' to None"
                 )
                 self.model_call_details["response_cost"] = None
 
