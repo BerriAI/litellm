@@ -15,6 +15,11 @@ Get alerts for:
 - **Spend** Weekly & Monthly spend per Team, Tag
 
 
+Works across: 
+- [Slack](#quick-start)
+- [Discord](#advanced---using-discord-webhooks)
+- Microsoft Teams
+
 ## Quick Start
 
 Set up a slack alert channel to receive alerts from proxy.
@@ -108,6 +113,44 @@ AlertType = Literal[
 ```
 
 
+## Advanced - Using MS Teams Webhooks
+
+MS Teams provides a slack compatible webhook url that you can use for alerting
+
+##### Quick Start
+
+1. [Get a webhook url](https://learn.microsoft.com/en-us/microsoftteams/platform/webhooks-and-connectors/how-to/add-incoming-webhook?tabs=newteams%2Cdotnet#create-an-incoming-webhook) for your Microsoft Teams channel 
+
+2. Add it to your .env
+
+```bash
+SLACK_WEBHOOK_URL="https://berriai.webhook.office.com/webhookb2/...6901/IncomingWebhook/b55fa0c2a48647be8e6effedcd540266/e04b1092-4a3e-44a2-ab6b-29a0a4854d1d"
+```
+
+3. Add it to your litellm config 
+
+```yaml
+model_list: 
+    model_name: "azure-model"
+    litellm_params:
+        model: "azure/gpt-35-turbo"
+        api_key: "my-bad-key" # 👈 bad key
+
+general_settings: 
+    alerting: ["slack"]
+    alerting_threshold: 300 # sends alerts if requests hang for 5min+ and responses take 5min+ 
+```
+
+4. Run health check!
+
+Call the proxy `/health/services` endpoint to test if your alerting connection is correctly setup.
+
+```bash
+curl --location 'http://0.0.0.0:4000/health/services?service=slack' \
+--header 'Authorization: Bearer sk-1234'
+```
+
+
 ## Advanced - Using Discord Webhooks
 
 Discord provides a slack compatible webhook url that you can use for alerting
@@ -139,7 +182,6 @@ environment_variables:
     SLACK_WEBHOOK_URL: "https://discord.com/api/webhooks/1240030362193760286/cTLWt5ATn1gKmcy_982rl5xmYHsrM1IWJdmCL1AyOmU9JdQXazrp8L1_PYgUtgxj8x4f/slack"
 ```
 
-That's it ! You're ready to go !
 
 ## Advanced - [BETA] Webhooks for Budget Alerts
 
