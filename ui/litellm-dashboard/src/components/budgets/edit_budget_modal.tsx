@@ -18,18 +18,21 @@ import {
   message,
 } from "antd";
 import { budgetCreateCall } from "../networking";
+import { budgetItem } from "./budget_panel";
 
 interface BudgetModalProps {
   isModalVisible: boolean;
   accessToken: string | null;
   setIsModalVisible: React.Dispatch<React.SetStateAction<boolean>>;
   setBudgetList: React.Dispatch<React.SetStateAction<any[]>>;
+  existingBudget: budgetItem
 }
-const BudgetModal: React.FC<BudgetModalProps> = ({
+const EditBudgetModal: React.FC<BudgetModalProps> = ({
   isModalVisible,
   accessToken,
   setIsModalVisible,
   setBudgetList,
+  existingBudget
 }) => {
   const [form] = Form.useForm();
   const handleOk = () => {
@@ -64,7 +67,7 @@ const BudgetModal: React.FC<BudgetModalProps> = ({
 
   return (
     <Modal
-      title="Create Budget"
+      title="Edit Budget"
       visible={isModalVisible}
       width={800}
       footer={null}
@@ -77,6 +80,7 @@ const BudgetModal: React.FC<BudgetModalProps> = ({
         labelCol={{ span: 8 }}
         wrapperCol={{ span: 16 }}
         labelAlign="left"
+        initialValues={existingBudget}
       >
         <>
           <Form.Item
@@ -131,11 +135,11 @@ const BudgetModal: React.FC<BudgetModalProps> = ({
         </>
 
         <div style={{ textAlign: "right", marginTop: "10px" }}>
-          <Button2 htmlType="submit">Create Budget</Button2>
+          <Button2 htmlType="submit">Edit Budget</Button2>
         </div>
       </Form>
     </Modal>
   );
 };
 
-export default BudgetModal;
+export default EditBudgetModal;
