@@ -93,7 +93,7 @@ class _ENTERPRISE_BannedKeywords(CustomLogger):
             response.choices[0], litellm.utils.Choices
         ):
             for word in self.banned_keywords_list:
-                self.test_violation(test_str=response.choices[0].message.content)
+                self.test_violation(test_str=response.choices[0].message.content or "")
 
     async def async_post_call_streaming_hook(
         self,

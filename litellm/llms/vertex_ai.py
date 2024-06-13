@@ -617,7 +617,7 @@ def completion(
             llm_model = None
 
         # NOTE: async prediction and streaming under "private" mode isn't supported by aiplatform right now
-        if acompletion == True:
+        if acompletion is True:
             data = {
                 "llm_model": llm_model,
                 "mode": mode,
@@ -649,7 +649,7 @@ def completion(
             tools = optional_params.pop("tools", None)
             content = _gemini_convert_messages_with_history(messages=messages)
             stream = optional_params.pop("stream", False)
-            if stream == True:
+            if stream is True:
                 request_str += f"response = llm_model.generate_content({content}, generation_config=GenerationConfig(**{optional_params}), safety_settings={safety_settings}, stream={stream})\n"
                 logging_obj.pre_call(
                     input=prompt,
