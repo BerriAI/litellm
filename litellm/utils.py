@@ -518,15 +518,18 @@ class Choices(OpenAIObject):
         self,
         finish_reason=None,
         index=0,
-        message=None,
+        message: Optional[Union[Message, dict]] = None,
         logprobs=None,
         enhancements=None,
         **params,
     ):
         super(Choices, self).__init__(**params)
-        self.finish_reason = (
-            map_finish_reason(finish_reason) or "stop"
-        )  # set finish_reason for all responses
+        if finish_reason is not None:
+            self.finish_reason = map_finish_reason(
+                finish_reason
+            )  # set finish_reason for all responses
+        else:
+            self.finish_reason = "stop"
         self.index = index
         if message is None:
             self.message = Message()
@@ -2822,7 +2825,9 @@ class Rules:
                     raise litellm.APIResponseValidationError(message="LLM Response failed post-call-rule check", llm_provider="", model=model)  # type: ignore
         return True
 
-    def post_call_rules(self, input: str, model: str):
+    def post_call_rules(self, input: Optional[str], model: str) -> bool:
+        if input is None:
+            return True
         for rule in litellm.post_call_rules:
             if callable(rule):
                 decision = rule(input)
@@ -3101,9 +3106,9 @@ def client(original_function):
                         pass
                     else:
                         if isinstance(original_response, ModelResponse):
-                            model_response = original_response["choices"][0]["message"][
-                                "content"
-                            ]
+                            model_response = original_response.choices[
+                                0
+                            ].message.content
                             ### POST-CALL RULES ###
                             rules_obj.post_call_rules(input=model_response, model=model)
         except Exception as e:
@@ -5403,6 +5408,16 @@ def get_optional_params(
 
         print_verbose(
             f"(end) INSIDE THE VERTEX AI OPTIONAL PARAM BLOCK - optional_params: {optional_params}"
+        )
+    elif custom_llm_provider == "vertex_ai_beta":
+        supported_params = get_supported_openai_params(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+        _check_valid_arg(supported_params=supported_params)
+        optional_params = litellm.VertexGeminiConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
         )
     elif (
         custom_llm_provider == "vertex_ai" and model in litellm.vertex_anthropic_models
@@ -11258,6 +11273,34 @@ class CustomStreamWrapper:
                             )
                 else:
                     completion_obj["content"] = str(chunk)
+            elif self.custom_llm_provider and (
+                self.custom_llm_provider == "vertex_ai_beta"
+            ):
+                from litellm.types.utils import (
+                    GenericStreamingChunk as UtilsStreamingChunk,
+                )
+
+                if self.received_finish_reason is not None:
+                    raise StopIteration
+                response_obj: UtilsStreamingChunk = chunk
+                completion_obj["content"] = response_obj["text"]
+                if response_obj["is_finished"]:
+                    self.received_finish_reason = response_obj["finish_reason"]
+
+                if (
+                    self.stream_options
+                    and self.stream_options.get("include_usage", False) is True
+                    and response_obj["usage"] is not None
+                ):
+                    self.sent_stream_usage = True
+                    model_response.usage = litellm.Usage(
+                        prompt_tokens=response_obj["usage"]["prompt_tokens"],
+                        completion_tokens=response_obj["usage"]["completion_tokens"],
+                        total_tokens=response_obj["usage"]["total_tokens"],
+                    )
+
+                if "tool_use" in response_obj and response_obj["tool_use"] is not None:
+                    completion_obj["tool_calls"] = [response_obj["tool_use"]]
             elif self.custom_llm_provider and (self.custom_llm_provider == "vertex_ai"):
                 import proto  # type: ignore
 
@@ -11935,6 +11978,7 @@ class CustomStreamWrapper:
                 or self.custom_llm_provider == "ollama"
                 or self.custom_llm_provider == "ollama_chat"
                 or self.custom_llm_provider == "vertex_ai"
+                or self.custom_llm_provider == "vertex_ai_beta"
                 or self.custom_llm_provider == "sagemaker"
                 or self.custom_llm_provider == "gemini"
                 or self.custom_llm_provider == "replicate"
