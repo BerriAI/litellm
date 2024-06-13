@@ -2,28 +2,29 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Managing Team Budgets
+# Setting Team Budgets
 
 Track spend, set budgets for your Internal Team
 
 ## Setting Monthly Team Budgets
 
 ### 1. Create a team 
-with `max_budget` and `budget_duration` 
+- Set `max_budget=000000001` ($ value the team is allowed to spend)
+- Set `budget_duration="1d"` (How frequently the budget should update)
 
 <Tabs>
 <TabItem value="api" label="API">
 
-Set `max_budget` and `budget_duration`
+Create and new team and set `max_budget` and `budget_duration`
 ```shell
-curl --location 'http://0.0.0.0:4000/team/new' \
-     --header 'Authorization: Bearer sk-1234' \
-     --header 'Content-Type: application/json' \
-     --data '{
-         "team_alias": "QA Prod Bot",
-         "max_budget": 0.000000001,
-         "budget_duration": "1d"
-     }'   
+curl -X POST 'http://0.0.0.0:4000/team/new' \
+     -H 'Authorization: Bearer sk-1234' \
+     -H 'Content-Type: application/json' \
+     -d '{
+            "team_alias": "QA Prod Bot", 
+            "max_budget": 0.000000001, 
+            "budget_duration": "1d"
+        }' 
 ```
 
 Response
@@ -41,15 +42,29 @@ Response
 </TabItem>
 </Tabs>
 
+
+Possible values for `budget_duration`
+
+| `budget_duration` | When Budget will reset |
+| --- | --- |
+| `budget_duration="1s"` | every 1 second |
+| `budget_duration="1m"` | every 1 min |
+| `budget_duration="1h"` | every 1 hour |
+| `budget_duration="1d"` | every 1 day |
+| `budget_duration="30d"` | every 30 days |
+
+
 ### 2. Create a key for the `team`
 
+Create a key for `team_id="de35b29e-6ca8-4f47-b804-2b79d07aa99a"` from Step 1 
+
+💡 **The Budget for Team="QA Prod Bot" budget will apply to this team**
+
 ```shell
-curl --location 'http://0.0.0.0:4000/key/generate' \
-     --header 'Authorization: Bearer sk-1234' \
-     --header 'Content-Type: application/json' \
-     --data '{
-         "team_id": "de35b29e-6ca8-4f47-b804-2b79d07aa99a"
-     }'
+curl -X POST 'http://0.0.0.0:4000/key/generate' \
+     -H 'Authorization: Bearer sk-1234' \
+     -H 'Content-Type: application/json' \
+     -d '{"team_id": "de35b29e-6ca8-4f47-b804-2b79d07aa99a"}'
 ```
 
 Response
@@ -61,21 +76,20 @@ Response
 
 ### 3. Test It
 
-Run this Request twice
+Use the key from step 2 and run this Request twice
 ```shell
-curl --location 'http://0.0.0.0:4000/chat/completions' \
---header 'Authorization: Bearer sk-mso-JSykEGri86KyOvgxBw' \
---header 'Content-Type: application/json' \
---data ' {
-      "model": "llama3",
-      "messages": [
-        {
-          "role": "user",
-          "content": "hi"
-        }
-      ],
-    }
-'
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+     -H 'Authorization: Bearer sk-mso-JSykEGri86KyOvgxBw' \
+     -H 'Content-Type: application/json' \
+     -d ' {
+           "model": "llama3",
+           "messages": [
+             {
+               "role": "user",
+               "content": "hi"
+             }
+           ]
+         }'
 ```
 
 On the 2nd response - expect to see the following exception
@@ -91,8 +105,22 @@ On the 2nd response - expect to see the following exception
 }
 ```
 
+## Advanced
 
-### 4. Prometheus metrics for `remaining_budget`
+### Prometheus metrics for `remaining_budget`
+
+You'll need the following in your proxy config.yaml
+
+```yaml
+litellm_settings:
+  success_callback: ["prometheus"]
+  failure_callback: ["prometheus"]
+```
+
+Expect to see this metric on prometheus to track the Remaining Budget for the team
+
+```shell
+litellm_remaining_team_budget_metric{team_alias="QA Prod Bot",team_id="de35b29e-6ca8-4f47-b804-2b79d07aa99a"} 9.699999999999992e-06
+```
 
 
-## Updating Team Budgets
