@@ -49,6 +49,24 @@ class PartType(TypedDict, total=False):
     function_response: FunctionResponse
 
 
+class HttpxFunctionCall(TypedDict):
+    name: str
+    args: dict
+
+
+class HttpxPartType(TypedDict, total=False):
+    text: str
+    inline_data: BlobType
+    file_data: FileDataType
+    functionCall: HttpxFunctionCall
+    function_response: FunctionResponse
+
+
+class HttpxContentType(TypedDict, total=False):
+    role: Literal["user", "model"]
+    parts: Required[List[HttpxPartType]]
+
+
 class ContentType(TypedDict, total=False):
     role: Literal["user", "model"]
     parts: Required[List[PartType]]
@@ -128,11 +146,19 @@ class GenerationConfig(TypedDict, total=False):
     response_mime_type: Literal["text/plain", "application/json"]
 
 
+class Tools(TypedDict):
+    function_declarations: List[FunctionDeclaration]
+
+
+class ToolConfig(TypedDict):
+    functionCallingConfig: FunctionCallingConfig
+
+
 class RequestBody(TypedDict, total=False):
     contents: Required[List[ContentType]]
     system_instruction: SystemInstructions
-    tools: FunctionDeclaration
-    tool_config: FunctionCallingConfig
+    tools: Tools
+    toolConfig: ToolConfig
     safety_settings: SafetSettingsConfig
     generation_config: GenerationConfig
 
@@ -176,7 +202,7 @@ class GroundingMetadata(TypedDict, total=False):
 
 class Candidates(TypedDict, total=False):
     index: int
-    content: ContentType
+    content: HttpxContentType
     finishReason: Literal[
         "FINISH_REASON_UNSPECIFIED",
         "STOP",

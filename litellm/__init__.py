@@ -767,6 +767,7 @@ from .llms.nlp_cloud import NLPCloudConfig
 from .llms.aleph_alpha import AlephAlphaConfig
 from .llms.petals import PetalsConfig
 from .llms.vertex_ai import VertexAIConfig
+from .llms.vertex_httpx import VertexGeminiConfig
 from .llms.vertex_ai_anthropic import VertexAIAnthropicConfig
 from .llms.sagemaker import SagemakerConfig
 from .llms.ollama import OllamaConfig
