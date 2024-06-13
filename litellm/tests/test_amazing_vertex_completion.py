@@ -615,8 +615,9 @@ def test_gemini_pro_vision_base64():
             pytest.fail(f"An exception occurred - {str(e)}")
 
 
+@pytest.mark.skip(reason="exhausted vertex quota. need to refactor to mock the call")
 @pytest.mark.parametrize("provider", ["vertex_ai_beta"])  # "vertex_ai",
-@pytest.mark.parametrize("sync_mode", [True, False])  # "vertex_ai",
+@pytest.mark.parametrize("sync_mode", [True])  # "vertex_ai",
 @pytest.mark.asyncio
 async def test_gemini_pro_function_calling_httpx(provider, sync_mode):
     try:
@@ -656,7 +657,7 @@ async def test_gemini_pro_function_calling_httpx(provider, sync_mode):
         ]
 
         data = {
-            "model": "{}/gemini-1.5-pro-preview-0514".format(provider),
+            "model": "{}/gemini-1.5-pro".format(provider),
             "messages": messages,
             "tools": tools,
             "tool_choice": "required",
@@ -681,6 +682,7 @@ async def test_gemini_pro_function_calling_httpx(provider, sync_mode):
             pytest.fail("An unexpected exception occurred - {}".format(str(e)))
 
 
+@pytest.mark.skip(reason="exhausted vertex quota. need to refactor to mock the call")
 @pytest.mark.parametrize("provider", ["vertex_ai_beta"])  # "vertex_ai",
 @pytest.mark.asyncio
 async def test_gemini_pro_json_schema_httpx(provider):
@@ -713,7 +715,8 @@ async def test_gemini_pro_json_schema_httpx(provider):
     assert isinstance(response_json, dict) or isinstance(response_json, list)
 
 
-@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.skip(reason="exhausted vertex quota. need to refactor to mock the call")
+@pytest.mark.parametrize("sync_mode", [True])
 @pytest.mark.parametrize("provider", ["vertex_ai"])
 @pytest.mark.asyncio
 async def test_gemini_pro_function_calling(provider, sync_mode):
