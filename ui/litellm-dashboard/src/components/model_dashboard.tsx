@@ -1248,6 +1248,10 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
       return "claude-3-opus";
     } else if (selectedProvider == Providers.Google_AI_Studio) {
       return "gemini-pro";
+    } else if (selectedProvider == Providers.Azure_AI_Studio) {
+      return "azure_ai/command-r-plus";
+    } else if (selectedProvider == Providers.Azure) {
+      return "azure/my-deployment";
     } else {
       return "gpt-3.5-turbo";
     }
