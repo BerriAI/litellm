@@ -1,10 +1,13 @@
 # Clarifai
 Anthropic, OpenAI, Mistral, Llama and Gemini LLMs are Supported on Clarifai. 
 
+:::warning 
+
+Streaming is not yet supported on using clarifai and litellm. Tracking support here: https://github.com/BerriAI/litellm/issues/4162
+
+:::
+
 ## Pre-Requisites
-
-`pip install clarifai`
-
 `pip install litellm`
 
 ## Required Environment Variables
@@ -12,6 +15,7 @@ To obtain your Clarifai Personal access token follow this [link](https://docs.cl
 
 ```python
 os.environ["CLARIFAI_API_KEY"] = "YOUR_CLARIFAI_PAT"  # CLARIFAI_PAT
+
 ```
 
 ## Usage
@@ -68,7 +72,7 @@ Example  Usage - Note: liteLLM supports all models deployed on Clarifai
 | clarifai/meta.Llama-2.codeLlama-70b-Python   | `completion('clarifai/meta.Llama-2.codeLlama-70b-Python', messages)`| 
 | clarifai/meta.Llama-2.codeLlama-70b-Instruct | `completion('clarifai/meta.Llama-2.codeLlama-70b-Instruct', messages)` |   
 
-## Mistal LLMs
+## Mistral LLMs
 | Model Name                                  | Function Call                                                         |
 |---------------------------------------------|------------------------------------------------------------------------|
 | clarifai/mistralai.completion.mixtral-8x22B            | `completion('clarifai/mistralai.completion.mixtral-8x22B', messages)`               |
