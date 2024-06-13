@@ -323,3 +323,9 @@ class ChatCompletionResponseMessage(TypedDict, total=False):
     content: Optional[str]
     tool_calls: List[ChatCompletionToolCallChunk]
     role: Literal["assistant"]
+
+
+class ChatCompletionUsageBlock(TypedDict):
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
