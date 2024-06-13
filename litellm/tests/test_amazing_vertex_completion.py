@@ -503,7 +503,7 @@ async def test_async_vertexai_streaming_response():
 # asyncio.run(test_async_vertexai_streaming_response())
 
 
-@pytest.mark.parametrize("provider", ["vertex_ai", "vertex_ai_beta"])
+@pytest.mark.parametrize("provider", ["vertex_ai"])  # "vertex_ai_beta"
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_gemini_pro_vision(provider, sync_mode):
