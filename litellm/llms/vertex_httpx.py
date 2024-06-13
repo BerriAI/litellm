@@ -23,6 +23,7 @@ from litellm.types.llms.vertex_ai import (
     FunctionDeclaration,
     Tools,
     ToolConfig,
+    GenerationConfig,
 )
 from litellm.llms.vertex_ai import _gemini_convert_messages_with_history
 from litellm.types.utils import GenericStreamingChunk
@@ -609,12 +610,17 @@ class VertexLLM(BaseLLM):
         content = _gemini_convert_messages_with_history(messages=messages)
         tools: Optional[Tools] = optional_params.pop("tools", None)
         tool_choice: Optional[ToolConfig] = optional_params.pop("tool_choice", None)
-
+        generation_config: Optional[GenerationConfig] = GenerationConfig(
+            **optional_params
+        )
         data = RequestBody(system_instruction=system_instructions, contents=content)
         if tools is not None:
             data["tools"] = tools
         if tool_choice is not None:
             data["toolConfig"] = tool_choice
+        if generation_config is not None:
+            data["generationConfig"] = generation_config
+
         headers = {
             "Content-Type": "application/json; charset=utf-8",
             "Authorization": f"Bearer {auth_header}",

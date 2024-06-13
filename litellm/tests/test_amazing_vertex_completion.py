@@ -681,6 +681,38 @@ async def test_gemini_pro_function_calling_httpx(provider, sync_mode):
             pytest.fail("An unexpected exception occurred - {}".format(str(e)))
 
 
+@pytest.mark.parametrize("provider", ["vertex_ai_beta"])  # "vertex_ai",
+@pytest.mark.asyncio
+async def test_gemini_pro_json_schema_httpx(provider):
+    load_vertex_ai_credentials()
+    litellm.set_verbose = True
+    messages = [
+        {
+            "role": "user",
+            "content": """
+    List 5 popular cookie recipes.
+
+    Using this JSON schema:
+
+        Recipe = {"recipe_name": str}
+
+    Return a `list[Recipe]`
+            """,
+        }
+    ]
+
+    response = completion(
+        model="vertex_ai_beta/gemini-1.5-flash-preview-0514",
+        messages=messages,
+        response_format={"type": "json_object"},
+    )
+
+    assert response.choices[0].message.content is not None
+    response_json = json.loads(response.choices[0].message.content)
+
+    assert isinstance(response_json, dict) or isinstance(response_json, list)
+
+
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.parametrize("provider", ["vertex_ai"])
 @pytest.mark.asyncio

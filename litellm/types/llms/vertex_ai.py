@@ -159,8 +159,8 @@ class RequestBody(TypedDict, total=False):
     system_instruction: SystemInstructions
     tools: Tools
     toolConfig: ToolConfig
-    safety_settings: SafetSettingsConfig
-    generation_config: GenerationConfig
+    safetySettings: SafetSettingsConfig
+    generationConfig: GenerationConfig
 
 
 class SafetyRatings(TypedDict):
