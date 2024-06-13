@@ -109,6 +109,10 @@ async def add_litellm_data_to_request(
     data["metadata"]["user_api_key_team_max_budget"] = user_api_key_dict.team_max_budget
     data["metadata"]["user_api_key_team_spend"] = user_api_key_dict.team_spend
 
+    # API Key spend, budget - used by prometheus.py
+    data["metadata"]["user_api_key_spend"] = user_api_key_dict.spend
+    data["metadata"]["user_api_key_max_budget"] = user_api_key_dict.max_budget
+
     data["metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
     _headers = dict(request.headers)
     _headers.pop(
