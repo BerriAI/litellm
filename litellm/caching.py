@@ -1127,39 +1127,60 @@ class S3Cache(BaseCache):
             serialized_value = json.dumps(value)
             key = self.key_prefix + key
 
-            if ttl is not None:
-                cache_control = f"immutable, max-age={ttl}, s-maxage={ttl}"
-                import datetime
+            if ttl is None:
+                ttl = 31536000
 
-                # Calculate expiration time
-                expiration_time = datetime.datetime.now() + ttl
+            # All possible parameters for put_object:
+            # ACL, Body, Bucket, CacheControl, ContentDisposition, ContentEncoding, ContentLanguage, ContentLength, ContentMD5, ContentType, ChecksumAlgorithm, ChecksumCRC32, ChecksumCRC32C, ChecksumSHA1, ChecksumSHA256, Expires, GrantFullControl, GrantRead, GrantReadACP, GrantWriteACP, Key, Metadata, ServerSideEncryption, StorageClass, WebsiteRedirectLocation, SSECustomerAlgorithm, SSECustomerKey, SSECustomerKeyMD5, SSEKMSKeyId, SSEKMSEncryptionContext, BucketKeyEnabled, RequestPayer, Tagging, ObjectLockMode, ObjectLockRetainUntilDate, ObjectLockLegalHoldStatus, ExpectedBucketOwner
 
-                # Upload the data to S3 with the calculated expiration time
-                self.s3_client.put_object(
-                    Bucket=self.bucket_name,
-                    Key=key,
-                    Body=serialized_value,
-                    Expires=expiration_time,
-                    CacheControl=cache_control,
-                    ContentType="application/json",
-                    ContentLanguage="en",
-                    ContentDisposition=f'inline; filename="{key}.json"',
+            # we need to send the signed headers too, they aren't in the presigned url query params
+            cache_control = f"immutable, max-age={ttl}, s-maxage={ttl}"
+            content_disposition = f'inline; filename="{key}.json"'
+            content_encoding = "utf-8"
+            content_language = "en"
+            content_type = "application/json"
+            # TODO: Add Content-MD5
+            # TODO: Add gzip compression
+
+            presigned_url = self.s3_client.generate_presigned_url(
+                "put_object",
+                Params={
+                    "Bucket": self.bucket_name,
+                    "Key": key,
+                    "CacheControl": cache_control,
+                    "ContentDisposition": content_disposition,
+                    "ContentEncoding": content_encoding,
+                    "ContentLanguage": content_language,
+                    "ContentType": content_type,
+                },
+                ExpiresIn=60,
+                HttpMethod="PUT",
+            )
+
+            verbose_logger.debug(f"S3 Cache: Presigned URL is {presigned_url}")
+
+            put_headers = {
+                "Cache-Control": cache_control,
+                "Content-Disposition": content_disposition,
+                "Content-Encoding": content_encoding,
+                "Content-Language": content_language,
+                "Content-Type": content_type,
+            }
+
+            put_response = self.sync_http_handler.put(url=presigned_url, data=serialized_value, headers=put_headers)
+
+            if put_response.status_code == 200:
+                verbose_logger.debug(
+                    f"S3 Cache: Successfully set cache for key '{key}' in S3 bucket"
                 )
             else:
-                cache_control = "immutable, max-age=31536000, s-maxage=31536000"
-                # Upload the data to S3 without specifying Expires
-                self.s3_client.put_object(
-                    Bucket=self.bucket_name,
-                    Key=key,
-                    Body=serialized_value,
-                    CacheControl=cache_control,
-                    ContentType="application/json",
-                    ContentLanguage="en",
-                    ContentDisposition=f'inline; filename="{key}.json"',
+                verbose_logger.error(
+                    f"S3 Cache: Failed to set cache for key '{key}' in S3 bucket, returned status code: {put_response.status_code}"
                 )
+
         except Exception as e:
             # NON blocking - notify users S3 is throwing an exception
-            print_verbose(f"S3 Caching: set_cache() - Got exception from S3: {e}")
+            verbose_logger.error(f"S3 Caching: set_cache() - Got exception from S3: {e}")
 
     async def async_set_cache(self, key, value, **kwargs):
         self.set_cache(key=key, value=value, **kwargs)
