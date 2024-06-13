@@ -1,3 +1,7 @@
+# What is this?
+## httpx client for vertex ai calls
+## Initial implementation - covers gemini + image gen calls
+from functools import partial
 import os, types
 import json
 from enum import Enum
@@ -17,6 +21,86 @@ from litellm.types.llms.vertex_ai import (
     GenerateContentResponseBody,
 )
 from litellm.llms.vertex_ai import _gemini_convert_messages_with_history
+from litellm.types.utils import GenericStreamingChunk
+from litellm.types.llms.openai import (
+    ChatCompletionUsageBlock,
+    ChatCompletionToolCallChunk,
+    ChatCompletionToolCallFunctionChunk,
+)
+
+
+class VertexGeminiConfig:
+    def __init__(self) -> None:
+        pass
+
+    def supports_system_message(self) -> bool:
+        """
+        Not all gemini models support system instructions
+        """
+        return True
+
+
+async def make_call(
+    client: Optional[AsyncHTTPHandler],
+    api_base: str,
+    headers: dict,
+    data: str,
+    model: str,
+    messages: list,
+    logging_obj,
+):
+    if client is None:
+        client = AsyncHTTPHandler()  # Create a new client if none provided
+
+    response = await client.post(api_base, headers=headers, data=data, stream=True)
+
+    if response.status_code != 200:
+        raise VertexAIError(status_code=response.status_code, message=response.text)
+
+    completion_stream = ModelResponseIterator(
+        streaming_response=response.aiter_bytes(chunk_size=2056)
+    )
+    # LOGGING
+    logging_obj.post_call(
+        input=messages,
+        api_key="",
+        original_response="first stream response received",
+        additional_args={"complete_input_dict": data},
+    )
+
+    return completion_stream
+
+
+def make_sync_call(
+    client: Optional[HTTPHandler],
+    api_base: str,
+    headers: dict,
+    data: str,
+    model: str,
+    messages: list,
+    logging_obj,
+):
+    if client is None:
+        client = HTTPHandler()  # Create a new client if none provided
+
+    response = client.post(api_base, headers=headers, data=data, stream=True)
+
+    if response.status_code != 200:
+        raise VertexAIError(status_code=response.status_code, message=response.read())
+
+    completion_stream = ModelResponseIterator(
+        streaming_response=response.iter_bytes(chunk_size=2056)
+    )
+
+    # LOGGING
+    logging_obj.post_call(
+        input=messages,
+        api_key="",
+        original_response="first stream response received",
+        additional_args={"complete_input_dict": data},
+    )
+
+    return completion_stream
 
 
 class VertexAIError(Exception):
@@ -46,7 +130,6 @@ class VertexLLM(BaseLLM):
         model: str,
         response: httpx.Response,
         model_response: ModelResponse,
-        stream: bool,
         logging_obj: litellm.utils.Logging,
         optional_params: dict,
         api_key: str,
@@ -77,7 +160,7 @@ class VertexLLM(BaseLLM):
                 status_code=422,
             )
 
-        model_response.choices = []
+        model_response.choices = []  # type: ignore
 
         ## GET MODEL ##
         model_response.model = model
@@ -190,6 +273,16 @@ class VertexLLM(BaseLLM):
 
         return self._credentials.token, self.project_id
 
+    async def async_streaming(
+        self,
+    ):
+        pass
+
+    async def async_completion(
+        self,
+    ):
+        pass
+
     def completion(
         self,
         model: str,
@@ -214,7 +307,7 @@ class VertexLLM(BaseLLM):
             credentials=vertex_credentials, project_id=vertex_project
         )
         vertex_location = self.get_vertex_region(vertex_region=vertex_location)
-        stream = optional_params.pop("stream", None)
+        stream: Optional[bool] = optional_params.pop("stream", None)  # type: ignore
 
         ### SET RUNTIME ENDPOINT ###
         url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:generateContent"
@@ -251,6 +344,26 @@ class VertexLLM(BaseLLM):
             },
         )
 
+        ## SYNC STREAMING CALL ##
+        if stream is not None and stream is True:
+            streaming_response = CustomStreamWrapper(
+                completion_stream=None,
+                make_call=partial(
+                    make_sync_call,
+                    client=None,
+                    api_base=url,
+                    headers=headers,  # type: ignore
+                    data=json.dumps(data),
+                    model=model,
+                    messages=messages,
+                    logging_obj=logging_obj,
+                ),
+                model=model,
+                custom_llm_provider="bedrock",
+                logging_obj=logging_obj,
+            )
+
+            return streaming_response
         ## COMPLETION CALL ##
         if client is None or isinstance(client, AsyncHTTPHandler):
             _params = {}
@@ -274,7 +387,6 @@ class VertexLLM(BaseLLM):
             model=model,
             response=response,
             model_response=model_response,
-            stream=stream,
             logging_obj=logging_obj,
             optional_params=optional_params,
             api_key="",
@@ -421,3 +533,84 @@ class VertexLLM(BaseLLM):
         model_response.data = _response_data
 
         return model_response
+
+
+class ModelResponseIterator:
+    def __init__(self, streaming_response):
+        self.streaming_response = streaming_response
+        self.response_iterator = iter(self.streaming_response)
+
+    def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
+        try:
+            processed_chunk = GenerateContentResponseBody(**chunk)  # type: ignore
+            text = ""
+            tool_use: Optional[ChatCompletionToolCallChunk] = None
+            is_finished = False
+            finish_reason = ""
+            usage: Optional[ChatCompletionUsageBlock] = None
+
+            gemini_chunk = processed_chunk["candidates"][0]
+
+            if (
+                "content" in gemini_chunk
+                and "text" in gemini_chunk["content"]["parts"][0]
+            ):
+                text = gemini_chunk["content"]["parts"][0]["text"]
+
+            if "finishReason" in gemini_chunk:
+                finish_reason = map_finish_reason(
+                    finish_reason=gemini_chunk["finishReason"]
+                )
+                is_finished = True
+
+            if "usageMetadata" in processed_chunk:
+                usage = ChatCompletionUsageBlock(
+                    prompt_tokens=processed_chunk["usageMetadata"]["promptTokenCount"],
+                    completion_tokens=processed_chunk["usageMetadata"][
+                        "candidatesTokenCount"
+                    ],
+                    total_tokens=processed_chunk["usageMetadata"]["totalTokenCount"],
+                )
+
+            returned_chunk = GenericStreamingChunk(
+                text=text,
+                tool_use=tool_use,
+                is_finished=is_finished,
+                finish_reason=finish_reason,
+                usage=usage,
+                index=0,
+            )
+            return returned_chunk
+        except json.JSONDecodeError:
+            raise ValueError(f"Failed to decode JSON from chunk: {chunk}")
+
+    # Sync iterator
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        try:
+            chunk = next(self.response_iterator)
+            chunk = chunk.decode()
+            json_chunk = json.loads(chunk)
+            return self.chunk_parser(chunk=json_chunk)
+        except StopIteration:
+            raise StopIteration
+        except ValueError as e:
+            raise RuntimeError(f"Error parsing chunk: {e}")
+
+    # Async iterator
+    def __aiter__(self):
+        self.async_response_iterator = self.streaming_response.__aiter__()
+        return self
+
+    async def __anext__(self):
+        try:
+            chunk = await self.async_response_iterator.__anext__()
+            chunk = chunk.decode()
+            json_chunk = json.loads(chunk)
+            return self.chunk_parser(chunk=json_chunk)
+        except StopAsyncIteration:
+            raise StopAsyncIteration
+        except ValueError as e:
+            raise RuntimeError(f"Error parsing chunk: {e}")

@@ -605,6 +605,7 @@ provider_list: List = [
     "together_ai",
     "openrouter",
     "vertex_ai",
+    "vertex_ai_beta",
     "palm",
     "gemini",
     "ai21",
