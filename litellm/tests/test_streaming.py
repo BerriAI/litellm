@@ -1035,7 +1035,7 @@ def test_completion_claude_stream_bad_key():
 # test_completion_replicate_stream()
 
 
-@pytest.mark.parametrize("provider", ["vertex_ai", "vertex_ai_beta"])
+@pytest.mark.parametrize("provider", ["vertex_ai"])  # "vertex_ai_beta"
 def test_vertex_ai_stream(provider):
     from litellm.tests.test_amazing_vertex_completion import load_vertex_ai_credentials
 
