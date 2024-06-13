@@ -329,6 +329,7 @@ async def acompletion(
             or custom_llm_provider == "ollama_chat"
             or custom_llm_provider == "replicate"
             or custom_llm_provider == "vertex_ai"
+            or custom_llm_provider == "vertex_ai_beta"
             or custom_llm_provider == "gemini"
             or custom_llm_provider == "sagemaker"
             or custom_llm_provider == "anthropic"
