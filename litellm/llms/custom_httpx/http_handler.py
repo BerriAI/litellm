@@ -5,8 +5,6 @@ from typing import Optional, Union, Mapping, Any
 # https://www.python-httpx.org/advanced/timeouts
 _DEFAULT_TIMEOUT = httpx.Timeout(timeout=5.0, connect=5.0)
 
-_DEFAULT_CONNECTION_RETRIES = 2  # retries if error connecting to api
-
 
 class AsyncHTTPHandler:
     def __init__(
@@ -95,22 +93,21 @@ class AsyncHTTPHandler:
             response = await self.client.send(req, stream=stream)
             response.raise_for_status()
             return response
-        except httpx.ConnectError:
+        except httpx.RemoteProtocolError:
             # Retry the request with a new session if there is a connection error
             new_client = self.create_client(timeout=self.timeout, concurrent_limit=1)
-            for _ in range(_DEFAULT_CONNECTION_RETRIES):
-                try:
-                    return await self.single_connection_post_request(
-                        url=url,
-                        client=new_client,
-                        data=data,
-                        json=json,
-                        params=params,
-                        headers=headers,
-                        stream=stream,
-                    )
-                except httpx.ConnectError:
-                    pass
+            try:
+                return await self.single_connection_post_request(
+                    url=url,
+                    client=new_client,
+                    data=data,
+                    json=json,
+                    params=params,
+                    headers=headers,
+                    stream=stream,
+                )
+            finally:
+                await new_client.aclose()
         except httpx.HTTPStatusError as e:
             raise e
         except Exception as e:
