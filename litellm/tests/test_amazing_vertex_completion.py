@@ -615,9 +615,76 @@ def test_gemini_pro_vision_base64():
             pytest.fail(f"An exception occurred - {str(e)}")
 
 
-@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("provider", ["vertex_ai_beta"])  # "vertex_ai",
+@pytest.mark.parametrize("sync_mode", [True, False])  # "vertex_ai",
 @pytest.mark.asyncio
-async def test_gemini_pro_function_calling(sync_mode):
+async def test_gemini_pro_function_calling_httpx(provider, sync_mode):
+    try:
+        load_vertex_ai_credentials()
+        litellm.set_verbose = True
+
+        messages = [
+            {
+                "role": "system",
+                "content": "Your name is Litellm Bot, you are a helpful assistant",
+            },
+            # User asks for their name and weather in San Francisco
+            {
+                "role": "user",
+                "content": "Hello, what is your name and can you tell me the weather?",
+            },
+        ]
+
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get the current weather in a given location",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "location": {
+                                "type": "string",
+                                "description": "The city and state, e.g. San Francisco, CA",
+                            }
+                        },
+                        "required": ["location"],
+                    },
+                },
+            }
+        ]
+
+        data = {
+            "model": "{}/gemini-1.5-pro-preview-0514".format(provider),
+            "messages": messages,
+            "tools": tools,
+            "tool_choice": "required",
+        }
+        if sync_mode:
+            response = litellm.completion(**data)
+        else:
+            response = await litellm.acompletion(**data)
+
+        print(f"response: {response}")
+
+        assert response.choices[0].message.tool_calls[0].function.arguments is not None
+        assert isinstance(
+            response.choices[0].message.tool_calls[0].function.arguments, str
+        )
+    except litellm.RateLimitError as e:
+        pass
+    except Exception as e:
+        if "429 Quota exceeded" in str(e):
+            pass
+        else:
+            pytest.fail("An unexpected exception occurred - {}".format(str(e)))
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("provider", ["vertex_ai"])
+@pytest.mark.asyncio
+async def test_gemini_pro_function_calling(provider, sync_mode):
     try:
         load_vertex_ai_credentials()
         litellm.set_verbose = True
@@ -679,7 +746,7 @@ async def test_gemini_pro_function_calling(sync_mode):
         ]
 
         data = {
-            "model": "vertex_ai/gemini-1.5-pro-preview-0514",
+            "model": "{}/gemini-1.5-pro-preview-0514".format(provider),
             "messages": messages,
             "tools": tools,
         }
