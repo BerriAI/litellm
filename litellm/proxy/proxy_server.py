@@ -6644,7 +6644,7 @@ async def generate_key_fn(
 
         # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
         if litellm.store_audit_logs is True:
-            _updated_values = json.dumps(response)
+            _updated_values = json.dumps(response, default=str)
             asyncio.create_task(
                 create_audit_log_for_update(
                     request_data=LiteLLM_AuditLogs(
@@ -6749,10 +6749,10 @@ async def update_key_fn(
 
         # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
         if litellm.store_audit_logs is True:
-            _updated_values = json.dumps(data_json)
+            _updated_values = json.dumps(data_json, default=str)
 
             _before_value = existing_key_row.json(exclude_none=True)
-            _before_value = json.dumps(_before_value)
+            _before_value = json.dumps(_before_value, default=str)
 
             asyncio.create_task(
                 create_audit_log_for_update(
@@ -6848,7 +6848,7 @@ async def delete_key_fn(
                 )
 
                 key_row = key_row.json(exclude_none=True)
-                _key_row = json.dumps(key_row)
+                _key_row = json.dumps(key_row, default=str)
 
                 asyncio.create_task(
                     create_audit_log_for_update(
@@ -9964,6 +9964,7 @@ async def new_team(
     - tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for this team - all keys with this team_id will have at max this TPM limit
     - rpm_limit: Optional[int] - The RPM (Requests Per Minute) limit for this team - all keys associated with this team_id will have at max this RPM limit
     - max_budget: Optional[float] - The maximum budget allocated to the team - all keys for this team_id will have at max this max_budget
+    - budget_duration: Optional[str] - The budget duration for this team - Example "1s", "1d", "1m", "1y"
     - models: Optional[list] - A list of models associated with the team - all keys for this team_id will have at most, these models. If empty, assumes all models are allowed.
     - blocked: bool - Flag indicating if the team is blocked or not - will stop all calls from keys with this team_id.
 
@@ -10117,7 +10118,8 @@ async def new_team(
     # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
     if litellm.store_audit_logs is True:
         _updated_values = complete_team_data.json(exclude_none=True)
-        _updated_values = json.dumps(_updated_values)
+
+        _updated_values = json.dumps(_updated_values, default=str)
 
         asyncio.create_task(
             create_audit_log_for_update(
@@ -10256,8 +10258,8 @@ async def update_team(
     # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
     if litellm.store_audit_logs is True:
         _before_value = existing_team_row.json(exclude_none=True)
-        _before_value = json.dumps(_before_value)
-        _after_value: str = json.dumps(updated_kv)
+        _before_value = json.dumps(_before_value, default=str)
+        _after_value: str = json.dumps(updated_kv, default=str)
 
         asyncio.create_task(
             create_audit_log_for_update(
