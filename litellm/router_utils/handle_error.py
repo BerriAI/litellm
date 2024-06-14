@@ -26,6 +26,12 @@ async def send_llm_exception_alert(
     Returns:
         None
     """
+    if litellm_router_instance is None:
+        return
+
+    if not hasattr(litellm_router_instance, "slack_alerting_logger"):
+        return
+
     if litellm_router_instance.slack_alerting_logger is None:
         return
 
