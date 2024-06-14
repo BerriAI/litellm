@@ -2115,6 +2115,16 @@ def _extract_from_regex(duration: str) -> Tuple[int, str]:
     return value, unit
 
 
+def get_last_day_of_month(year, month):
+    # Handle December case
+    if month == 12:
+        return 31
+    # Next month is January, so subtract a day from March 1st
+    next_month = datetime(year=year, month=month + 1, day=1)
+    last_day_of_month = (next_month - timedelta(days=1)).day
+    return last_day_of_month
+
+
 def _duration_in_seconds(duration: str) -> int:
     """
     Parameters:
@@ -2141,13 +2151,29 @@ def _duration_in_seconds(duration: str) -> int:
         now = time.time()
         current_time = datetime.fromtimestamp(now)
 
-        # Calculate the first day of the next month
         if current_time.month == 12:
-            next_month = datetime(year=current_time.year + 1, month=1, day=1)
+            target_year = current_time.year + 1
+            target_month = 1
         else:
-            next_month = datetime(
-                year=current_time.year, month=current_time.month + value, day=1
-            )
+            target_year = current_time.year
+            target_month = current_time.month + value
+
+        # Determine the day to set for next month
+        target_day = current_time.day
+        last_day_of_target_month = get_last_day_of_month(target_year, target_month)
+
+        if target_day > last_day_of_target_month:
+            target_day = last_day_of_target_month
+
+        next_month = datetime(
+            year=target_year,
+            month=target_month,
+            day=target_day,
+            hour=current_time.hour,
+            minute=current_time.minute,
+            second=current_time.second,
+            microsecond=current_time.microsecond,
+        )
 
         # Calculate the duration until the first day of the next month
         duration_until_next_month = next_month - current_time
