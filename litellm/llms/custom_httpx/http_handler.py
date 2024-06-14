@@ -12,6 +12,15 @@ class AsyncHTTPHandler:
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         concurrent_limit=1000,
     ):
+        self.timeout = timeout
+        self.client = self.create_client(
+            timeout=timeout, concurrent_limit=concurrent_limit
+        )
+
+    def create_client(
+        self, timeout: Optional[Union[float, httpx.Timeout]], concurrent_limit: int
+    ) -> httpx.AsyncClient:
+
         async_proxy_mounts = None
         # Check if the HTTP_PROXY and HTTPS_PROXY environment variables are set and use them accordingly.
         http_proxy = os.getenv("HTTP_PROXY", None)
@@ -39,7 +48,8 @@ class AsyncHTTPHandler:
         if timeout is None:
             timeout = _DEFAULT_TIMEOUT
         # Create a client with a connection pool
-        self.client = httpx.AsyncClient(
+
+        return httpx.AsyncClient(
             timeout=timeout,
             limits=httpx.Limits(
                 max_connections=concurrent_limit,
@@ -83,10 +93,47 @@ class AsyncHTTPHandler:
             response = await self.client.send(req, stream=stream)
             response.raise_for_status()
             return response
+        except httpx.RemoteProtocolError:
+            # Retry the request with a new session if there is a connection error
+            new_client = self.create_client(timeout=self.timeout, concurrent_limit=1)
+            try:
+                return await self.single_connection_post_request(
+                    url=url,
+                    client=new_client,
+                    data=data,
+                    json=json,
+                    params=params,
+                    headers=headers,
+                    stream=stream,
+                )
+            finally:
+                await new_client.aclose()
         except httpx.HTTPStatusError as e:
             raise e
         except Exception as e:
             raise e
+
+    async def single_connection_post_request(
+        self,
+        url: str,
+        client: httpx.AsyncClient,
+        data: Optional[Union[dict, str]] = None,  # type: ignore
+        json: Optional[dict] = None,
+        params: Optional[dict] = None,
+        headers: Optional[dict] = None,
+        stream: bool = False,
+    ):
+        """
+        Making POST request for a single connection client.
+
+        Used for retrying connection client errors.
+        """
+        req = client.build_request(
+            "POST", url, data=data, json=json, params=params, headers=headers  # type: ignore
+        )
+        response = await client.send(req, stream=stream)
+        response.raise_for_status()
+        return response
 
     def __del__(self) -> None:
         try:
