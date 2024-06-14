@@ -368,7 +368,9 @@ async def acompletion(
         return response
     except Exception as e:
         verbose_logger.error(
-            "litellm.acompletion(): Exception occured - {}".format(str(e))
+            "litellm.acompletion(): Exception occured - {}\n{}".format(
+                str(e), traceback.format_exc()
+            )
         )
         verbose_logger.debug(traceback.format_exc())
         custom_llm_provider = custom_llm_provider or "openai"
