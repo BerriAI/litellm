@@ -2217,6 +2217,7 @@ async def test_create_update_team(prisma_client):
             tpm_limit=30,
             rpm_limit=30,
         ),
+        http_request=Request(scope={"type": "http"}),
         user_api_key_dict=UserAPIKeyAuth(
             user_role=LitellmUserRoles.PROXY_ADMIN,
             api_key="sk-1234",
