@@ -79,10 +79,6 @@ async def add_litellm_data_to_request(
                     data["cache"][k] = v
 
     verbose_proxy_logger.debug("receiving data: %s", data)
-    # users can pass in 'user' param to /chat/completions. Don't override it
-    if data.get("user", None) is None and user_api_key_dict.user_id is not None:
-        # if users are using user_api_key_auth, set `user` in `data`
-        data["user"] = user_api_key_dict.user_id
 
     if "metadata" not in data:
         data["metadata"] = {}
@@ -108,6 +104,15 @@ async def add_litellm_data_to_request(
     data["metadata"]["user_api_key_team_alias"] = getattr(
         user_api_key_dict, "team_alias", None
     )
+
+    # Team spend, budget - used by prometheus.py
+    data["metadata"]["user_api_key_team_max_budget"] = user_api_key_dict.team_max_budget
+    data["metadata"]["user_api_key_team_spend"] = user_api_key_dict.team_spend
+
+    # API Key spend, budget - used by prometheus.py
+    data["metadata"]["user_api_key_spend"] = user_api_key_dict.spend
+    data["metadata"]["user_api_key_max_budget"] = user_api_key_dict.max_budget
+
     data["metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
     _headers = dict(request.headers)
     _headers.pop(

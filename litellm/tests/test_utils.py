@@ -3,6 +3,7 @@ from unittest import mock
 
 from dotenv import load_dotenv
 import copy
+from datetime import datetime
 
 load_dotenv()
 import os
@@ -25,6 +26,7 @@ from litellm.utils import (
     get_max_tokens,
     get_supported_openai_params,
 )
+from litellm.proxy.utils import _duration_in_seconds, _extract_from_regex
 
 # Assuming your trim_messages, shorten_message_to_fit_limit, and get_token_count functions are all in a module named 'message_utils'
 
@@ -395,3 +397,89 @@ def test_get_supported_openai_params() -> None:
 
     # Unmapped provider
     assert get_supported_openai_params("nonexistent") is None
+
+
+def test_redact_msgs_from_logs():
+    """
+    Tests that turn_off_message_logging does not modify the response_obj
+
+    On the proxy some users were seeing the redaction impact client side responses
+    """
+    from litellm.litellm_core_utils.redact_messages import (
+        redact_message_input_output_from_logging,
+    )
+    from litellm.utils import Logging
+
+    litellm.turn_off_message_logging = True
+
+    response_obj = litellm.ModelResponse(
+        choices=[
+            {
+                "finish_reason": "stop",
+                "index": 0,
+                "message": {
+                    "content": "I'm LLaMA, an AI assistant developed by Meta AI that can understand and respond to human input in a conversational manner.",
+                    "role": "assistant",
+                },
+            }
+        ]
+    )
+
+    _redacted_response_obj = redact_message_input_output_from_logging(
+        result=response_obj,
+        litellm_logging_obj=Logging(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type="acompletion",
+            litellm_call_id="1234",
+            start_time=datetime.now(),
+            function_id="1234",
+        ),
+    )
+
+    # Assert the response_obj content is NOT modified
+    assert (
+        response_obj.choices[0].message.content
+        == "I'm LLaMA, an AI assistant developed by Meta AI that can understand and respond to human input in a conversational manner."
+    )
+
+    litellm.turn_off_message_logging = False
+    print("Test passed")
+
+
+@pytest.mark.parametrize(
+    "duration, unit",
+    [("7s", "s"), ("7m", "m"), ("7h", "h"), ("7d", "d"), ("7mo", "mo")],
+)
+def test_extract_from_regex(duration, unit):
+    value, _unit = _extract_from_regex(duration=duration)
+
+    assert value == 7
+    assert _unit == unit
+
+
+def test_duration_in_seconds():
+    """
+    Test if duration int is correctly calculated for different str
+    """
+    import time
+
+    now = time.time()
+    current_time = datetime.fromtimestamp(now)
+    print("current_time={}".format(current_time))
+    # Calculate the first day of the next month
+    if current_time.month == 12:
+        next_month = datetime(year=current_time.year + 1, month=1, day=1)
+    else:
+        next_month = datetime(
+            year=current_time.year, month=current_time.month + 1, day=1
+        )
+    print("next_month={}".format(next_month))
+    # Calculate the duration until the first day of the next month
+    duration_until_next_month = next_month - current_time
+    expected_duration = int(duration_until_next_month.total_seconds())
+
+    value = _duration_in_seconds(duration="1mo")
+
+    assert value - expected_duration < 2

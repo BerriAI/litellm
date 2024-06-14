@@ -14,17 +14,18 @@ model_list:
     litellm_params:
       model: openai/*
       api_key: os.environ/OPENAI_API_KEY
-  - model_name: my-triton-model
+  - model_name: mistral-embed
     litellm_params:
-      model: triton/any"
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/triton/embeddings
+      model: mistral/mistral-embed
 
 general_settings:
   master_key: sk-1234
 
 litellm_settings:
-  callbacks: ["otel"]
+  success_callback: ["prometheus"]
+  failure_callback: ["prometheus"]
   store_audit_logs: true
+  turn_off_message_logging: true
   redact_messages_in_exceptions: True
   enforced_params:  
     - user

@@ -220,13 +220,13 @@ def test_completion_bedrock_claude_sts_oidc_auth():
     aws_web_identity_token = "oidc/circleci_v2/"
     aws_region_name = os.environ["AWS_REGION_NAME"]
     # aws_role_name = os.environ["AWS_TEMP_ROLE_NAME"]
-    # TODO: This is using David's IAM role, we should use Litellm's IAM role eventually
+    # TODO: This is using ai.moda's IAM role, we should use LiteLLM's IAM role eventually
     aws_role_name = "arn:aws:iam::335785316107:role/litellm-github-unit-tests-circleci"
 
     try:
         litellm.set_verbose = True
 
-        response = completion(
+        response_1 = completion(
             model="bedrock/anthropic.claude-3-haiku-20240307-v1:0",
             messages=messages,
             max_tokens=10,
@@ -236,8 +236,40 @@ def test_completion_bedrock_claude_sts_oidc_auth():
             aws_role_name=aws_role_name,
             aws_session_name="my-test-session",
         )
-        # Add any assertions here to check the response
-        print(response)
+        print(response_1)
+        assert len(response_1.choices) > 0
+        assert len(response_1.choices[0].message.content) > 0
+
+        # This second call is to verify that the cache isn't breaking anything
+        response_2 = completion(
+            model="bedrock/anthropic.claude-3-haiku-20240307-v1:0",
+            messages=messages,
+            max_tokens=5,
+            temperature=0.2,
+            aws_region_name=aws_region_name,
+            aws_web_identity_token=aws_web_identity_token,
+            aws_role_name=aws_role_name,
+            aws_session_name="my-test-session",
+        )
+        print(response_2)
+        assert len(response_2.choices) > 0
+        assert len(response_2.choices[0].message.content) > 0
+
+        # This third call is to verify that the cache isn't used for a different region
+        response_3 = completion(
+            model="bedrock/anthropic.claude-3-haiku-20240307-v1:0",
+            messages=messages,
+            max_tokens=6,
+            temperature=0.3,
+            aws_region_name="us-east-1",
+            aws_web_identity_token=aws_web_identity_token,
+            aws_role_name=aws_role_name,
+            aws_session_name="my-test-session",
+        )
+        print(response_3)
+        assert len(response_3.choices) > 0
+        assert len(response_3.choices[0].message.content) > 0
+
     except RateLimitError:
         pass
     except Exception as e:
@@ -255,7 +287,7 @@ def test_completion_bedrock_httpx_command_r_sts_oidc_auth():
     aws_web_identity_token = "oidc/circleci_v2/"
     aws_region_name = os.environ["AWS_REGION_NAME"]
     # aws_role_name = os.environ["AWS_TEMP_ROLE_NAME"]
-    # TODO: This is using David's IAM role, we should use Litellm's IAM role eventually
+    # TODO: This is using ai.moda's IAM role, we should use LiteLLM's IAM role eventually
     aws_role_name = "arn:aws:iam::335785316107:role/litellm-github-unit-tests-circleci"
 
     try:
