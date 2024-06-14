@@ -455,6 +455,7 @@ class ProxyLogging:
             formatted_message += f"\n\nProxy URL: `{_proxy_base_url}`"
 
         extra_kwargs = {}
+        alerting_metadata = {}
         if request_data is not None:
             _url = self.slack_alerting_instance._add_langfuse_trace_id_to_alert(
                 request_data=request_data
@@ -462,7 +463,12 @@ class ProxyLogging:
             if _url is not None:
                 extra_kwargs["🪢 Langfuse Trace"] = _url
                 formatted_message += "\n\n🪢 Langfuse Trace: {}".format(_url)
-
+            if (
+                "metadata" in request_data
+                and request_data["metadata"].get("alerting_metadata", None) is not None
+                and isinstance(request_data["metadata"]["alerting_metadata"], dict)
+            ):
+                alerting_metadata = request_data["metadata"]["alerting_metadata"]
         for client in self.alerting:
             if client == "slack":
                 await self.slack_alerting_instance.send_alert(
@@ -470,6 +476,7 @@ class ProxyLogging:
                     level=level,
                     alert_type=alert_type,
                     user_info=None,
+                    alerting_metadata=alerting_metadata,
                     **extra_kwargs,
                 )
             elif client == "sentry":
@@ -510,7 +517,7 @@ class ProxyLogging:
         )
 
         if hasattr(self, "service_logging_obj"):
-            self.service_logging_obj.async_service_failure_hook(
+            await self.service_logging_obj.async_service_failure_hook(
                 service=ServiceTypes.DB,
                 duration=duration,
                 error=error_message,
