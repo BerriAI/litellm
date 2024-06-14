@@ -3347,6 +3347,24 @@
         "litellm_provider": "deepinfra",
         "mode": "chat"
     },
+    "deepinfra/meta-llama/Meta-Llama-3-8B-Instruct": {
+        "max_tokens": 8191,
+        "max_input_tokens": 8191,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.00000008,
+        "output_cost_per_token": 0.00000008,
+        "litellm_provider": "deepinfra",
+        "mode": "chat"
+    },
+    "deepinfra/meta-llama/Meta-Llama-3-70B-Instruct": {
+        "max_tokens": 8191,
+        "max_input_tokens": 8191,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.00000059,
+        "output_cost_per_token": 0.00000079,
+        "litellm_provider": "deepinfra",
+        "mode": "chat"
+    },
     "deepinfra/01-ai/Yi-34B-200K": {
         "max_tokens": 4096,
         "max_input_tokens": 200000,

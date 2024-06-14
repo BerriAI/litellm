@@ -32,25 +32,25 @@ def management_endpoint_wrapper(func):
 
                 if open_telemetry_logger is not None:
                     _http_request: Request = kwargs.get("http_request")
+                    if _http_request:
+                        _route = _http_request.url.path
+                        _request_body: dict = await _read_request_body(
+                            request=_http_request
+                        )
+                        _response = dict(result) if result is not None else None
 
-                    _route = _http_request.url.path
-                    _request_body: dict = await _read_request_body(
-                        request=_http_request
-                    )
-                    _response = dict(result) if result is not None else None
+                        logging_payload = ManagementEndpointLoggingPayload(
+                            route=_route,
+                            request_data=_request_body,
+                            response=_response,
+                            start_time=start_time,
+                            end_time=end_time,
+                        )
 
-                    logging_payload = ManagementEndpointLoggingPayload(
-                        route=_route,
-                        request_data=_request_body,
-                        response=_response,
-                        start_time=start_time,
-                        end_time=end_time,
-                    )
-
-                    await open_telemetry_logger.async_management_endpoint_success_hook(
-                        logging_payload=logging_payload,
-                        parent_otel_span=parent_otel_span,
-                    )
+                        await open_telemetry_logger.async_management_endpoint_success_hook(
+                            logging_payload=logging_payload,
+                            parent_otel_span=parent_otel_span,
+                        )
 
             return result
         except Exception as e:
@@ -67,23 +67,24 @@ def management_endpoint_wrapper(func):
 
                 if open_telemetry_logger is not None:
                     _http_request: Request = kwargs.get("http_request")
-                    _route = _http_request.url.path
-                    _request_body: dict = await _read_request_body(
-                        request=_http_request
-                    )
-                    logging_payload = ManagementEndpointLoggingPayload(
-                        route=_route,
-                        request_data=_request_body,
-                        response=None,
-                        start_time=start_time,
-                        end_time=end_time,
-                        exception=e,
-                    )
+                    if _http_request:
+                        _route = _http_request.url.path
+                        _request_body: dict = await _read_request_body(
+                            request=_http_request
+                        )
+                        logging_payload = ManagementEndpointLoggingPayload(
+                            route=_route,
+                            request_data=_request_body,
+                            response=None,
+                            start_time=start_time,
+                            end_time=end_time,
+                            exception=e,
+                        )
 
-                    await open_telemetry_logger.async_management_endpoint_failure_hook(
-                        logging_payload=logging_payload,
-                        parent_otel_span=parent_otel_span,
-                    )
+                        await open_telemetry_logger.async_management_endpoint_failure_hook(
+                            logging_payload=logging_payload,
+                            parent_otel_span=parent_otel_span,
+                        )
 
             raise e
 

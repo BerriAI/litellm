@@ -1,4 +1,4 @@
-# Grafana, Prometheus metrics [BETA]
+# 📈 Prometheus metrics [BETA]
 
 LiteLLM Exposes a `/metrics` endpoint for Prometheus to Poll
 
@@ -53,6 +53,13 @@ http://localhost:4000/metrics
 | `litellm_spend_metric`                | Total Spend, per `"user", "key", "model", "team", "end-user"`                 |
 | `litellm_total_tokens`         | input + output tokens per `"user", "key", "model", "team", "end-user"`     |
 | `litellm_llm_api_failed_requests_metric`   | Number of failed LLM API requests per `"user", "key", "model", "team", "end-user"`    |
+
+### Budget Metrics
+| Metric Name          | Description                          |
+|----------------------|--------------------------------------|
+| `litellm_remaining_team_budget_metric`             | Remaining Budget for Team (A team created on LiteLLM) |
+| `litellm_remaining_api_key_budget_metric`                | Remaining Budget for API Key (A key Created on LiteLLM)|
+
 
 ## Monitor System Health
 

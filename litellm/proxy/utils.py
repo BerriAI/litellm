@@ -1,4 +1,4 @@
-from typing import Optional, List, Any, Literal, Union, TYPE_CHECKING
+from typing import Optional, List, Any, Literal, Union, TYPE_CHECKING, Tuple
 import os
 import subprocess
 import hashlib
@@ -2103,13 +2103,31 @@ def get_logging_payload(
         raise e
 
 
-def _duration_in_seconds(duration: str):
-    match = re.match(r"(\d+)([smhd]?)", duration)
+def _extract_from_regex(duration: str) -> Tuple[int, str]:
+    match = re.match(r"(\d+)(mo|[smhd]?)", duration)
+
     if not match:
         raise ValueError("Invalid duration format")
 
     value, unit = match.groups()
     value = int(value)
+
+    return value, unit
+
+
+def _duration_in_seconds(duration: str) -> int:
+    """
+    Parameters:
+    - duration:
+        - "<number>s" - seconds
+        - "<number>m" - minutes
+        - "<number>h" - hours
+        - "<number>d" - days
+        - "<number>mo" - months
+
+    Returns time in seconds till when budget needs to be reset
+    """
+    value, unit = _extract_from_regex(duration=duration)
 
     if unit == "s":
         return value
@@ -2119,6 +2137,22 @@ def _duration_in_seconds(duration: str):
         return value * 3600
     elif unit == "d":
         return value * 86400
+    elif unit == "mo":
+        now = time.time()
+        current_time = datetime.fromtimestamp(now)
+
+        # Calculate the first day of the next month
+        if current_time.month == 12:
+            next_month = datetime(year=current_time.year + 1, month=1, day=1)
+        else:
+            next_month = datetime(
+                year=current_time.year, month=current_time.month + value, day=1
+            )
+
+        # Calculate the duration until the first day of the next month
+        duration_until_next_month = next_month - current_time
+        return int(duration_until_next_month.total_seconds())
+
     else:
         raise ValueError("Unsupported duration unit")
 

@@ -73,7 +73,7 @@ token: Optional[str] = (
 )
 telemetry = True
 max_tokens = 256  # OpenAI Defaults
-drop_params = False
+drop_params = bool(os.getenv("LITELLM_DROP_PARAMS", False))
 modify_params = False
 retry = True
 ### AUTH ###
@@ -605,6 +605,7 @@ provider_list: List = [
     "together_ai",
     "openrouter",
     "vertex_ai",
+    "vertex_ai_beta",
     "palm",
     "gemini",
     "ai21",
@@ -765,7 +766,8 @@ from .llms.gemini import GeminiConfig
 from .llms.nlp_cloud import NLPCloudConfig
 from .llms.aleph_alpha import AlephAlphaConfig
 from .llms.petals import PetalsConfig
-from .llms.vertex_ai import VertexAIConfig
+from .llms.vertex_httpx import VertexGeminiConfig
+from .llms.vertex_ai import VertexAIConfig, VertexAITextEmbeddingConfig
 from .llms.vertex_ai_anthropic import VertexAIAnthropicConfig
 from .llms.sagemaker import SagemakerConfig
 from .llms.ollama import OllamaConfig
@@ -787,7 +789,9 @@ from .llms.openai import (
     OpenAIConfig,
     OpenAITextCompletionConfig,
     MistralConfig,
+    MistralEmbeddingConfig,
     DeepInfraConfig,
+    AzureAIStudioConfig,
 )
 from .llms.azure import (
     AzureOpenAIConfig,

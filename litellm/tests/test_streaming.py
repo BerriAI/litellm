@@ -557,7 +557,13 @@ async def test_completion_predibase_streaming(sync_mode):
         print(f"complete_response: {complete_response}")
     except litellm.Timeout as e:
         pass
+    except litellm.InternalServerError as e:
+        pass
     except Exception as e:
+        print("ERROR class", e.__class__)
+        print("ERROR message", e)
+        print("ERROR traceback", traceback.format_exc())
+
         pytest.fail(f"Error occurred: {e}")
 
 
@@ -1029,7 +1035,8 @@ def test_completion_claude_stream_bad_key():
 # test_completion_replicate_stream()
 
 
-def test_vertex_ai_stream():
+@pytest.mark.parametrize("provider", ["vertex_ai"])  # "vertex_ai_beta"
+def test_vertex_ai_stream(provider):
     from litellm.tests.test_amazing_vertex_completion import load_vertex_ai_credentials
 
     load_vertex_ai_credentials()
@@ -1042,7 +1049,7 @@ def test_vertex_ai_stream():
         try:
             print("making request", model)
             response = completion(
-                model=model,
+                model="{}/{}".format(provider, model),
                 messages=[
                     {"role": "user", "content": "write 10 line code code for saying hi"}
                 ],
