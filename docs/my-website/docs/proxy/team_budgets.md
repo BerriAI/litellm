@@ -46,7 +46,7 @@ Possible values for `budget_duration`
 | `budget_duration="1m"` | every 1 min |
 | `budget_duration="1h"` | every 1 hour |
 | `budget_duration="1d"` | every 1 day |
-| `budget_duration="30d"` | every 30 days |
+| `budget_duration="1mo"` | start of every month |
 
 
 ### 2. Create a key for the `team`
