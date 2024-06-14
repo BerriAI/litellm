@@ -8420,7 +8420,7 @@ def exception_type(
                 extra_information = _add_key_name_and_team_to_alert(
                     request_info=extra_information, metadata=_metadata
                 )
-            except:
+            except Exception:
                 # DO NOT LET this Block raising the original exception
                 pass
 
@@ -9956,6 +9956,9 @@ def exception_type(
                 response=original_exception.response,
             )
         else:  # ensure generic errors always return APIConnectionError=
+            """
+            For unmapped exceptions - raise the exception with traceback - https://github.com/BerriAI/litellm/issues/4201
+            """
             exception_mapping_worked = True
             if hasattr(original_exception, "request"):
                 raise APIConnectionError(
@@ -9966,7 +9969,9 @@ def exception_type(
                 )
             else:
                 raise APIConnectionError(
-                    message=f"{str(original_exception)}",
+                    message="{}\n{}".format(
+                        str(original_exception), traceback.format_exc()
+                    ),
                     llm_provider=custom_llm_provider,
                     model=model,
                     request=httpx.Request(
@@ -9992,7 +9997,15 @@ def exception_type(
         if exception_mapping_worked:
             raise e
         else:
-            raise original_exception
+            raise APIConnectionError(
+                message="{}\n{}".format(original_exception, traceback.format_exc()),
+                llm_provider="",
+                model="",
+                request=httpx.Request(
+                    method="POST",
+                    url="https://www.litellm.ai/",
+                ),
+            )
 
 
 def get_or_generate_uuid():
