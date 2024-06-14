@@ -26,7 +26,7 @@ class AuthenticationError(openai.AuthenticationError):  # type: ignore
         num_retries: Optional[int] = None,
     ):
         self.status_code = 401
-        self.message = message
+        self.message = "litellm.AuthenticationError: {}".format(message)
         self.llm_provider = llm_provider
         self.model = model
         self.litellm_debug_info = litellm_debug_info
@@ -72,7 +72,7 @@ class NotFoundError(openai.NotFoundError):  # type: ignore
         num_retries: Optional[int] = None,
     ):
         self.status_code = 404
-        self.message = message
+        self.message = "litellm.NotFoundError: {}".format(message)
         self.model = model
         self.llm_provider = llm_provider
         self.litellm_debug_info = litellm_debug_info
@@ -117,7 +117,7 @@ class BadRequestError(openai.BadRequestError):  # type: ignore
         num_retries: Optional[int] = None,
     ):
         self.status_code = 400
-        self.message = message
+        self.message = "litellm.BadRequestError: {}".format(message)
         self.model = model
         self.llm_provider = llm_provider
         self.litellm_debug_info = litellm_debug_info
@@ -162,7 +162,7 @@ class UnprocessableEntityError(openai.UnprocessableEntityError):  # type: ignore
         num_retries: Optional[int] = None,
     ):
         self.status_code = 422
-        self.message = message
+        self.message = "litellm.UnprocessableEntityError: {}".format(message)
         self.model = model
         self.llm_provider = llm_provider
         self.litellm_debug_info = litellm_debug_info
@@ -204,7 +204,7 @@ class Timeout(openai.APITimeoutError):  # type: ignore
             request=request
         )  # Call the base class constructor with the parameters it needs
         self.status_code = 408
-        self.message = message
+        self.message = "litellm.Timeout: {}".format(message)
         self.model = model
         self.llm_provider = llm_provider
         self.litellm_debug_info = litellm_debug_info
@@ -241,7 +241,7 @@ class PermissionDeniedError(openai.PermissionDeniedError):  # type:ignore
         num_retries: Optional[int] = None,
     ):
         self.status_code = 403
-        self.message = message
+        self.message = "litellm.PermissionDeniedError: {}".format(message)
         self.llm_provider = llm_provider
         self.model = model
         self.litellm_debug_info = litellm_debug_info
@@ -280,7 +280,7 @@ class RateLimitError(openai.RateLimitError):  # type: ignore
         num_retries: Optional[int] = None,
     ):
         self.status_code = 429
-        self.message = message
+        self.message = "litellm.RateLimitError: {}".format(message)
         self.llm_provider = llm_provider
         self.model = model
         self.litellm_debug_info = litellm_debug_info
@@ -328,7 +328,7 @@ class ContextWindowExceededError(BadRequestError):  # type: ignore
         litellm_debug_info: Optional[str] = None,
     ):
         self.status_code = 400
-        self.message = message
+        self.message = "litellm.ContextWindowExceededError: {}".format(message)
         self.model = model
         self.llm_provider = llm_provider
         self.litellm_debug_info = litellm_debug_info
@@ -368,7 +368,7 @@ class RejectedRequestError(BadRequestError):  # type: ignore
         litellm_debug_info: Optional[str] = None,
     ):
         self.status_code = 400
-        self.message = message
+        self.message = "litellm.RejectedRequestError: {}".format(message)
         self.model = model
         self.llm_provider = llm_provider
         self.litellm_debug_info = litellm_debug_info
@@ -411,7 +411,7 @@ class ContentPolicyViolationError(BadRequestError):  # type: ignore
         litellm_debug_info: Optional[str] = None,
     ):
         self.status_code = 400
-        self.message = message
+        self.message = "litellm.ContentPolicyViolationError: {}".format(message)
         self.model = model
         self.llm_provider = llm_provider
         self.litellm_debug_info = litellm_debug_info
@@ -452,7 +452,7 @@ class ServiceUnavailableError(openai.APIStatusError):  # type: ignore
         num_retries: Optional[int] = None,
     ):
         self.status_code = 503
-        self.message = message
+        self.message = "litellm.ServiceUnavailableError: {}".format(message)
         self.llm_provider = llm_provider
         self.model = model
         self.litellm_debug_info = litellm_debug_info
@@ -501,7 +501,7 @@ class InternalServerError(openai.InternalServerError):  # type: ignore
         num_retries: Optional[int] = None,
     ):
         self.status_code = 500
-        self.message = message
+        self.message = "litellm.InternalServerError: {}".format(message)
         self.llm_provider = llm_provider
         self.model = model
         self.litellm_debug_info = litellm_debug_info
@@ -552,7 +552,7 @@ class APIError(openai.APIError):  # type: ignore
         num_retries: Optional[int] = None,
     ):
         self.status_code = status_code
-        self.message = message
+        self.message = "litellm.APIError: {}".format(message)
         self.llm_provider = llm_provider
         self.model = model
         self.litellm_debug_info = litellm_debug_info
@@ -589,7 +589,7 @@ class APIConnectionError(openai.APIConnectionError):  # type: ignore
         max_retries: Optional[int] = None,
         num_retries: Optional[int] = None,
     ):
-        self.message = message
+        self.message = "litellm.APIConnectionError: {}".format(message)
         self.llm_provider = llm_provider
         self.model = model
         self.status_code = 500
@@ -626,7 +626,7 @@ class APIResponseValidationError(openai.APIResponseValidationError):  # type: ig
         max_retries: Optional[int] = None,
         num_retries: Optional[int] = None,
     ):
-        self.message = message
+        self.message = "litellm.APIResponseValidationError: {}".format(message)
         self.llm_provider = llm_provider
         self.model = model
         request = httpx.Request(method="POST", url="https://api.openai.com/v1")
