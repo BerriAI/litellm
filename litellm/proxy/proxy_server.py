@@ -11449,7 +11449,7 @@ async def model_info_v2(
     for _model in all_models:
         # provided model_info in config.yaml
         model_info = _model.get("model_info", {})
-        if debug == True:
+        if debug is True:
             _openai_client = "None"
             if llm_router is not None:
                 _openai_client = (
@@ -11474,7 +11474,7 @@ async def model_info_v2(
             litellm_model = litellm_params.get("model", None)
             try:
                 litellm_model_info = litellm.get_model_info(model=litellm_model)
-            except:
+            except Exception:
                 litellm_model_info = {}
         # 3rd pass on the model, try seeing if we can find model but without the "/" in model cost map
         if litellm_model_info == {}:
@@ -11485,8 +11485,10 @@ async def model_info_v2(
             if len(split_model) > 0:
                 litellm_model = split_model[-1]
             try:
-                litellm_model_info = litellm.get_model_info(model=litellm_model)
-            except:
+                litellm_model_info = litellm.get_model_info(
+                    model=litellm_model, custom_llm_provider=split_model[0]
+                )
+            except Exception:
                 litellm_model_info = {}
         for k, v in litellm_model_info.items():
             if k not in model_info:
@@ -11997,7 +11999,9 @@ async def model_info_v1(
             if len(split_model) > 0:
                 litellm_model = split_model[-1]
             try:
-                litellm_model_info = litellm.get_model_info(model=litellm_model)
+                litellm_model_info = litellm.get_model_info(
+                    model=litellm_model, custom_llm_provider=split_model[0]
+                )
             except:
                 litellm_model_info = {}
         for k, v in litellm_model_info.items():
