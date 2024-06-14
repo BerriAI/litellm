@@ -227,7 +227,9 @@ async def test_send_alert(slack_alerting):
         slack_alerting.async_http_handler, "post", new=AsyncMock()
     ) as mock_post:
         mock_post.return_value.status_code = 200
-        await slack_alerting.send_alert("Test message", "Low", "budget_alerts")
+        await slack_alerting.send_alert(
+            "Test message", "Low", "budget_alerts", alerting_metadata={}
+        )
         mock_post.assert_awaited_once()
 
 
@@ -286,7 +288,7 @@ async def test_daily_reports_completion(slack_alerting):
         await asyncio.sleep(3)
         response_val = await slack_alerting.send_daily_reports(router=router)
 
-        assert response_val == True
+        assert response_val is True
 
         mock_send_alert.assert_awaited_once()
 
@@ -311,7 +313,7 @@ async def test_daily_reports_completion(slack_alerting):
         await asyncio.sleep(3)
         response_val = await slack_alerting.send_daily_reports(router=router)
 
-        assert response_val == True
+        assert response_val is True
 
         mock_send_alert.assert_awaited()
 
