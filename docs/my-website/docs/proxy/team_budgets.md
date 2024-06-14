@@ -12,8 +12,6 @@ Track spend, set budgets for your Internal Team
 - Set `max_budget=000000001` ($ value the team is allowed to spend)
 - Set `budget_duration="1d"` (How frequently the budget should update)
 
-<Tabs>
-<TabItem value="api" label="API">
 
 Create a new team and set `max_budget` and `budget_duration`
 ```shell
@@ -37,10 +35,7 @@ Response
  "budget_reset_at": "2024-06-14T22:48:36.594000Z"
 }  
 ```
-</TabItem>
-<TabItem value="ui" label="UI">
-</TabItem>
-</Tabs>
+
 
 
 Possible values for `budget_duration`
