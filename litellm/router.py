@@ -1106,6 +1106,14 @@ class Router:
 
             return response
         except Exception as e:
+            asyncio.create_task(
+                send_llm_exception_alert(
+                    litellm_router_instance=self,
+                    request_kwargs=kwargs,
+                    error_traceback_str=traceback.format_exc(),
+                    original_exception=e,
+                )
+            )
             raise e
 
     async def _aimage_generation(self, prompt: str, model: str, **kwargs):
@@ -1230,6 +1238,14 @@ class Router:
 
             return response
         except Exception as e:
+            asyncio.create_task(
+                send_llm_exception_alert(
+                    litellm_router_instance=self,
+                    request_kwargs=kwargs,
+                    error_traceback_str=traceback.format_exc(),
+                    original_exception=e,
+                )
+            )
             raise e
 
     async def _atranscription(self, file: BinaryIO, model: str, **kwargs):
@@ -1396,6 +1412,14 @@ class Router:
 
             return response
         except Exception as e:
+            asyncio.create_task(
+                send_llm_exception_alert(
+                    litellm_router_instance=self,
+                    request_kwargs=kwargs,
+                    error_traceback_str=traceback.format_exc(),
+                    original_exception=e,
+                )
+            )
             raise e
 
     async def amoderation(self, model: str, input: str, **kwargs):
@@ -1411,6 +1435,14 @@ class Router:
 
             return response
         except Exception as e:
+            asyncio.create_task(
+                send_llm_exception_alert(
+                    litellm_router_instance=self,
+                    request_kwargs=kwargs,
+                    error_traceback_str=traceback.format_exc(),
+                    original_exception=e,
+                )
+            )
             raise e
 
     async def _amoderation(self, model: str, input: str, **kwargs):
@@ -1555,6 +1587,14 @@ class Router:
 
             return response
         except Exception as e:
+            asyncio.create_task(
+                send_llm_exception_alert(
+                    litellm_router_instance=self,
+                    request_kwargs=kwargs,
+                    error_traceback_str=traceback.format_exc(),
+                    original_exception=e,
+                )
+            )
             raise e
 
     async def _atext_completion(self, model: str, prompt: str, **kwargs):
@@ -1750,6 +1790,14 @@ class Router:
             response = await self.async_function_with_fallbacks(**kwargs)
             return response
         except Exception as e:
+            asyncio.create_task(
+                send_llm_exception_alert(
+                    litellm_router_instance=self,
+                    request_kwargs=kwargs,
+                    error_traceback_str=traceback.format_exc(),
+                    original_exception=e,
+                )
+            )
             raise e
 
     async def _aembedding(self, input: Union[str, List], model: str, **kwargs):
