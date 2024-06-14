@@ -66,6 +66,7 @@ from litellm.types.llms.openai import (
 )
 from litellm.scheduler import Scheduler, FlowItem
 from typing import Iterable
+from litellm.router_utils.handle_error import send_llm_exception_alert
 
 
 class Router:
@@ -576,6 +577,14 @@ class Router:
 
             return response
         except Exception as e:
+            asyncio.create_task(
+                send_llm_exception_alert(
+                    litellm_router_instance=self,
+                    request_kwargs=kwargs,
+                    error_traceback_str=traceback.format_exc(),
+                    original_exception=e,
+                )
+            )
             raise e
 
     async def _acompletion(
@@ -4569,6 +4578,8 @@ class Router:
             alerting=["slack"],
             default_webhook_url=router_alerting_config.webhook_url,
         )
+
+        self.slack_alerting_logger = _slack_alerting_logger
 
         litellm.callbacks.append(_slack_alerting_logger)
         litellm.success_callback.append(

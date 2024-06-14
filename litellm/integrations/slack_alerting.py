@@ -1453,7 +1453,7 @@ Model Info:
             pass
         else:
             verbose_proxy_logger.debug(
-                "Error sending slack alert. Error=", response.text
+                "Error sending slack alert. Error={}".format(response.text)
             )
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
