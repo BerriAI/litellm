@@ -221,6 +221,50 @@ async def async_completion(
     )
     return model_response
 
+async def async_stream(
+    model: str,
+    prompt: str,
+    api_base: str,
+    custom_prompt_dict: dict,
+    model_response: ModelResponse,
+    print_verbose: Callable,
+    encoding,
+    api_key,
+    logging_obj,
+    data=None,
+    optional_params=None,
+    litellm_params=None,
+    logger_fn=None,
+    headers={},
+):
+
+    async_handler = AsyncHTTPHandler(timeout=httpx.Timeout(timeout=600.0, connect=5.0))
+    response = await async_handler.post(
+        url=model, headers=headers, data=json.dumps(data)
+    )
+
+    logging_obj.post_call(
+        input=prompt,
+        api_key=api_key,
+        original_response=response.text,
+        additional_args={"complete_input_dict": data},
+    )
+    ## RESPONSE OBJECT
+    try:
+        completion_response = response.iter_lines()
+    except Exception:
+        raise ClarifaiError(
+            message=response.text, status_code=response.status_code, url=model
+        )
+    
+    stream_response = CustomStreamWrapper(
+            completion_stream=completion_response,
+            model=model,
+            custom_llm_provider="clarifai",
+            logging_obj=logging_obj,
+        )
+    return stream_response
+
 
 def completion(
     model: str,
@@ -281,22 +325,40 @@ def completion(
         },
     )
     if acompletion == True:
-        return async_completion(
-            model=model,
-            prompt=prompt,
-            api_base=api_base,
-            custom_prompt_dict=custom_prompt_dict,
-            model_response=model_response,
-            print_verbose=print_verbose,
-            encoding=encoding,
-            api_key=api_key,
-            logging_obj=logging_obj,
-            data=data,
-            optional_params=optional_params,
-            litellm_params=litellm_params,
-            logger_fn=logger_fn,
-            headers=headers,
-        )
+        if "stream" in optional_params and optional_params["stream"] == True:
+            return async_stream(
+                model=model,
+                prompt=prompt,
+                api_base=api_base,
+                custom_prompt_dict=custom_prompt_dict,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                encoding=encoding,
+                api_key=api_key,
+                logging_obj=logging_obj,
+                data=data,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                headers=headers,
+            )
+        else:
+            return async_completion(
+                model=model,
+                prompt=prompt,
+                api_base=api_base,
+                custom_prompt_dict=custom_prompt_dict,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                encoding=encoding,
+                api_key=api_key,
+                logging_obj=logging_obj,
+                data=data,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                headers=headers,
+            )
     else:
         ## COMPLETION CALL
         response = requests.post(
