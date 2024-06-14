@@ -26,6 +26,7 @@ from litellm.utils import (
     get_max_tokens,
     get_supported_openai_params,
 )
+from litellm.proxy.utils import _duration_in_seconds, _extract_from_regex
 
 # Assuming your trim_messages, shorten_message_to_fit_limit, and get_token_count functions are all in a module named 'message_utils'
 
@@ -445,3 +446,40 @@ def test_redact_msgs_from_logs():
 
     litellm.turn_off_message_logging = False
     print("Test passed")
+
+
+@pytest.mark.parametrize(
+    "duration, unit",
+    [("7s", "s"), ("7m", "m"), ("7h", "h"), ("7d", "d"), ("7mo", "mo")],
+)
+def test_extract_from_regex(duration, unit):
+    value, _unit = _extract_from_regex(duration=duration)
+
+    assert value == 7
+    assert _unit == unit
+
+
+def test_duration_in_seconds():
+    """
+    Test if duration int is correctly calculated for different str
+    """
+    import time
+
+    now = time.time()
+    current_time = datetime.fromtimestamp(now)
+    print("current_time={}".format(current_time))
+    # Calculate the first day of the next month
+    if current_time.month == 12:
+        next_month = datetime(year=current_time.year + 1, month=1, day=1)
+    else:
+        next_month = datetime(
+            year=current_time.year, month=current_time.month + 1, day=1
+        )
+    print("next_month={}".format(next_month))
+    # Calculate the duration until the first day of the next month
+    duration_until_next_month = next_month - current_time
+    expected_duration = int(duration_until_next_month.total_seconds())
+
+    value = _duration_in_seconds(duration="1mo")
+
+    assert value - expected_duration < 2
