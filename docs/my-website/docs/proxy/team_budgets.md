@@ -2,7 +2,7 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Setting Team Budgets
+# 💰 Setting Team Budgets
 
 Track spend, set budgets for your Internal Team
 
@@ -15,7 +15,7 @@ Track spend, set budgets for your Internal Team
 <Tabs>
 <TabItem value="api" label="API">
 
-Create and new team and set `max_budget` and `budget_duration`
+Create a new team and set `max_budget` and `budget_duration`
 ```shell
 curl -X POST 'http://0.0.0.0:4000/team/new' \
      -H 'Authorization: Bearer sk-1234' \
@@ -108,6 +108,8 @@ On the 2nd response - expect to see the following exception
 ## Advanced
 
 ### Prometheus metrics for `remaining_budget`
+
+[More info about Prometheus metrics here](https://docs.litellm.ai/docs/proxy/prometheus)
 
 You'll need the following in your proxy config.yaml
 
