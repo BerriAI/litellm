@@ -1531,7 +1531,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                             <pre className="text-xs">
                               {model.input_cost
                                 ? model.input_cost
-                                : model.litellm_params.input_cost_per_token
+                                : model.litellm_params.input_cost_per_token != null && model.litellm_params.input_cost_per_token != undefined
                                   ? (
                                       Number(
                                         model.litellm_params
