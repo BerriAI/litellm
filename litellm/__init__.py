@@ -75,6 +75,7 @@ telemetry = True
 max_tokens = 256  # OpenAI Defaults
 drop_params = bool(os.getenv("LITELLM_DROP_PARAMS", False))
 modify_params = False
+disable_message_merge = False
 retry = True
 ### AUTH ###
 api_key: Optional[str] = None
