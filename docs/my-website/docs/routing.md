@@ -798,6 +798,9 @@ There are 3 types of fallbacks:
 - `fallbacks`: For all remaining errors - e.g. litellm.RateLimitError
 
 **Content Policy Violation Fallback**
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
 ```python
 from litellm import Router 
 
@@ -830,8 +833,31 @@ response = router.completion(
 	messages=[{"role": "user", "content": "Hey, how's it going?"}],
 )
 ```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+In your proxy config.yaml just add this line 👇
+
+```yaml
+router_settings:
+	content_policy_fallbacks=[{"claude-2": ["my-fallback-model"]}]
+```
+
+Start proxy 
+
+```bash
+litellm --config /path/to/config.yaml
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+</TabItem>
+</Tabs>
 
 **Context Window Exceeded Fallback**
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
 
 ```python
 from litellm import Router 
@@ -865,8 +891,32 @@ response = router.completion(
 	messages=[{"role": "user", "content": "Hey, how's it going?"}],
 )
 ```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+In your proxy config.yaml just add this line 👇
+
+```yaml
+router_settings:
+	context_window_fallbacks=[{"claude-2": ["my-fallback-model"]}]
+```
+
+Start proxy 
+
+```bash
+litellm --config /path/to/config.yaml
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+</TabItem>
+</Tabs>
 
 **Regular Fallbacks**
+
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
 
 ```python
 from litellm import Router 
@@ -900,6 +950,26 @@ response = router.completion(
 	messages=[{"role": "user", "content": "Hey, how's it going?"}],
 )
 ```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+In your proxy config.yaml just add this line 👇
+
+```yaml
+router_settings:
+	fallbacks=[{"claude-2": ["my-fallback-model"]}]
+```
+
+Start proxy 
+
+```bash
+litellm --config /path/to/config.yaml
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+</TabItem>
+</Tabs>
 
 ### Caching
 
