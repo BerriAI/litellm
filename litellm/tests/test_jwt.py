@@ -14,7 +14,7 @@ sys.path.insert(
 import pytest
 from litellm.proxy._types import LiteLLM_JWTAuth, LiteLLMRoutes
 from litellm.proxy.auth.handle_jwt import JWTHandler
-from litellm.proxy.team_endpoints import new_team
+from litellm.proxy.management_endpoints.team_endpoints import new_team
 from litellm.caching import DualCache
 from datetime import datetime, timedelta
 from fastapi import Request
