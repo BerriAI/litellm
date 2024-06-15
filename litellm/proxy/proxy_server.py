@@ -167,7 +167,8 @@ from litellm.integrations.slack_alerting import SlackAlertingArgs, SlackAlerting
 from litellm.scheduler import Scheduler, FlowItem, DefaultPriorities
 
 ## Import All Misc routes here ##
-from caching_routes import router as caching_router
+from litellm.proxy.caching_routes import router as caching_router
+from litellm.proxy.team_endpoints import router as team_router
 
 try:
     from litellm._version import version
@@ -12782,4 +12783,5 @@ def cleanup_router_config_variables():
 
 
 app.include_router(router)
+app.include_router(team_router)
 app.include_router(caching_router)
