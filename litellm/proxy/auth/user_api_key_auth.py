@@ -48,23 +48,6 @@ from litellm.proxy.auth.auth_checks import (
     log_to_opentelemetry,
 )
 
-from litellm.proxy.proxy_server import (
-    litellm_proxy_admin_name,
-    common_checks,
-    master_key,
-    prisma_client,
-    llm_model_list,
-    user_custom_auth,
-    custom_db_client,
-    general_settings,
-    proxy_logging_obj,
-    open_telemetry_logger,
-    user_api_key_cache,
-    jwt_handler,
-    allowed_routes_check,
-    get_actual_routes,
-)
-
 from litellm.proxy.utils import _to_ns
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 
@@ -94,6 +77,23 @@ async def user_api_key_auth(
     api_key: str = fastapi.Security(api_key_header),
     azure_api_key_header: str = fastapi.Security(azure_api_key_header),
 ) -> UserAPIKeyAuth:
+
+    from litellm.proxy.proxy_server import (
+        litellm_proxy_admin_name,
+        common_checks,
+        master_key,
+        prisma_client,
+        llm_model_list,
+        user_custom_auth,
+        custom_db_client,
+        general_settings,
+        proxy_logging_obj,
+        open_telemetry_logger,
+        user_api_key_cache,
+        jwt_handler,
+        allowed_routes_check,
+        get_actual_routes,
+    )
 
     try:
         if isinstance(api_key, str):
