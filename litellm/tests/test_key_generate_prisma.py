@@ -1779,7 +1779,7 @@ async def test_upperbound_key_params(prisma_client):
 
 
 def test_get_bearer_token():
-    from litellm.proxy.proxy_server import _get_bearer_token
+    from litellm.proxy.auth.user_api_key_auth import _get_bearer_token
 
     # Test valid Bearer token
     api_key = "Bearer valid_token"
@@ -2309,3 +2309,4 @@ async def test_enforced_params(prisma_client):
             "Authentication Error, BadRequest please pass param=[metadata][generation_name] in request body"
             in e.message
         )
+    general_settings.pop("enforced_params")

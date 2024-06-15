@@ -2754,47 +2754,6 @@ def _is_valid_team_configs(team_id=None, team_config=None, request_data=None):
     return
 
 
-def _is_user_proxy_admin(user_id_information: Optional[list]):
-    if user_id_information is None:
-        return False
-
-    if len(user_id_information) == 0 or user_id_information[0] is None:
-        return False
-
-    _user = user_id_information[0]
-    if (
-        _user.get("user_role", None) is not None
-        and _user.get("user_role") == LitellmUserRoles.PROXY_ADMIN.value
-    ):
-        return True
-
-    # if user_id_information contains litellm-proxy-budget
-    # get first user_id that is not litellm-proxy-budget
-    for user in user_id_information:
-        if user.get("user_id") != "litellm-proxy-budget":
-            _user = user
-            break
-
-    if (
-        _user.get("user_role", None) is not None
-        and _user.get("user_role") == LitellmUserRoles.PROXY_ADMIN.value
-    ):
-        return True
-
-    return False
-
-
-def _get_user_role(user_id_information: Optional[list]):
-    if user_id_information is None:
-        return None
-
-    if len(user_id_information) == 0 or user_id_information[0] is None:
-        return None
-
-    _user = user_id_information[0]
-    return _user.get("user_role")
-
-
 def encrypt_value(value: str, master_key: str):
     import hashlib
     import nacl.secret
