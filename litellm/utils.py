@@ -6,6 +6,9 @@
 # +-----------------------------------------------+
 #
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
+
+# What is this?
+## Generic utils.py file. Problem-specific utils (e.g. 'cost calculation), should all be in `litellm_core_utils/`.
 import sys, re, binascii, struct
 import litellm
 import dotenv, json, traceback, threading, base64, ast
