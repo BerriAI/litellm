@@ -168,9 +168,11 @@ from litellm.scheduler import Scheduler, FlowItem, DefaultPriorities
 
 ## Import All Misc routes here ##
 from litellm.proxy.caching_routes import router as caching_router
-from litellm.proxy.team_endpoints import router as team_router
-from litellm.proxy.spend_management_endpoints import router as spend_management_router
-from litellm.proxy.health_endpoints import router as health_router
+from litellm.proxy.management_endpoints.team_endpoints import router as team_router
+from litellm.proxy.spend_reporting_endpoints.spend_management_endpoints import (
+    router as spend_management_router,
+)
+from litellm.proxy.health_endpoints.health_endpoints import router as health_router
 
 try:
     from litellm._version import version
@@ -5748,7 +5750,7 @@ async def new_user(data: NewUserRequest):
     # Admin UI Logic
     # if team_id passed add this user to the team
     if data_json.get("team_id", None) is not None:
-        from litellm.proxy.team_endpoints import team_member_add
+        from litellm.proxy.management_endpoints.team_endpoints import team_member_add
 
         await team_member_add(
             data=TeamMemberAddRequest(

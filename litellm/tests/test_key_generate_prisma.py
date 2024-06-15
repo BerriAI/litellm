@@ -57,8 +57,12 @@ from litellm.proxy.proxy_server import (
     model_list,
     LitellmUserRoles,
 )
-from litellm.proxy.team_endpoints import team_info, new_team, update_team
-from litellm.proxy.spend_management_endpoints import (
+from litellm.proxy.management_endpoints.team_endpoints import (
+    team_info,
+    new_team,
+    update_team,
+)
+from litellm.proxy.spend_reporting_endpoints.spend_management_endpoints import (
     spend_user_fn,
     spend_key_fn,
     view_spend_logs,
