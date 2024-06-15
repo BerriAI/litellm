@@ -63,4 +63,7 @@ def redact_message_input_output_from_logging(
                         elif isinstance(choice, litellm.utils.StreamingChoices):
                             choice.delta.content = "redacted-by-litellm"
 
-    return _result
+                return _result
+
+    # by default return result
+    return result
