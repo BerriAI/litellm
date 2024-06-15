@@ -698,7 +698,7 @@ class SlackAlerting(CustomLogger):
             return
         if "budget_alerts" not in self.alert_types:
             return
-        _id: str = "default_id"  # used for caching
+        _id: Optional[str] = "default_id"  # used for caching
         user_info_json = user_info.model_dump(exclude_none=True)
         for k, v in user_info_json.items():
             user_info_str = "\n{}: {}\n".format(k, v)

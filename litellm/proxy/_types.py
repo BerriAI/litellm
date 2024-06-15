@@ -1358,7 +1358,7 @@ class CallInfo(LiteLLMBase):
 
     spend: float
     max_budget: Optional[float] = None
-    token: str = Field(description="Hashed value of that key")
+    token: Optional[str] = Field(default=None, description="Hashed value of that key")
     customer_id: Optional[str] = None
     user_id: Optional[str] = None
     team_id: Optional[str] = None
@@ -1575,3 +1575,37 @@ class ManagementEndpointLoggingPayload(LiteLLMBase):
     exception: Optional[Any] = None
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
+
+
+class ProxyException(Exception):
+    # NOTE: DO NOT MODIFY THIS
+    # This is used to map exactly to OPENAI Exceptions
+    def __init__(
+        self,
+        message: str,
+        type: str,
+        param: Optional[str],
+        code: Optional[int],
+    ):
+        self.message = message
+        self.type = type
+        self.param = param
+        self.code = code
+
+        # rules for proxyExceptions
+        # Litellm router.py returns "No healthy deployment available" when there are no deployments available
+        # Should map to 429 errors https://github.com/BerriAI/litellm/issues/2487
+        if (
+            "No healthy deployment available" in self.message
+            or "No deployments available" in self.message
+        ):
+            self.code = 429
+
+    def to_dict(self) -> dict:
+        """Converts the ProxyException instance to a dictionary."""
+        return {
+            "message": self.message,
+            "type": self.type,
+            "param": self.param,
+            "code": self.code,
+        }
