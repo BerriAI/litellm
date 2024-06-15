@@ -32,6 +32,7 @@ from dataclasses import (
 )
 import os
 import litellm._service_logger  # for storing API inputs, outputs, and metadata
+import litellm.litellm_core_utils
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
 from litellm.caching import DualCache
@@ -90,29 +91,7 @@ from .types.llms.openai import (
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionDeltaToolCallChunk,
 )
-from .integrations.traceloop import TraceloopLogger
-from .integrations.athina import AthinaLogger
-from .integrations.helicone import HeliconeLogger
-from .integrations.aispend import AISpendLogger
-from .integrations.berrispend import BerriSpendLogger
-from .integrations.supabase import Supabase
-from .integrations.lunary import LunaryLogger
-from .integrations.prompt_layer import PromptLayerLogger
-from .integrations.langsmith import LangsmithLogger
-from .integrations.logfire_logger import LogfireLogger, LogfireLevel
-from .integrations.weights_biases import WeightsBiasesLogger
-from .integrations.custom_logger import CustomLogger
-from .integrations.langfuse import LangFuseLogger
-from .integrations.openmeter import OpenMeterLogger
-from .integrations.lago import LagoLogger
-from .integrations.datadog import DataDogLogger
-from .integrations.prometheus import PrometheusLogger
-from .integrations.prometheus_services import PrometheusServicesLogger
-from .integrations.dynamodb import DyanmoDBLogger
-from .integrations.s3 import S3Logger
-from .integrations.clickhouse import ClickhouseLogger
-from .integrations.greenscale import GreenscaleLogger
-from .integrations.litedebugger import LiteDebugger
+
 from .proxy._types import KeyManagementSystem
 from openai import OpenAIError as OriginalError
 from .caching import S3Cache, RedisSemanticCache, RedisCache
@@ -390,7 +369,9 @@ def function_setup(
                     + litellm.failure_callback
                 )
             )
-            set_callbacks(callback_list=callback_list, function_id=function_id)
+            litellm.litellm_core_utils.litellm_logging.set_callbacks(
+                callback_list=callback_list, function_id=function_id
+            )
         ## ASYNC CALLBACKS
         if len(litellm.input_callback) > 0:
             removed_async_items = []
@@ -693,7 +674,7 @@ def client(original_function):
                 )
                 if previous_models is not None:
                     if litellm.num_retries_per_request <= len(previous_models):
-                        raise Exception(f"Max retries per request hit!")
+                        raise Exception("Max retries per request hit!")
 
             # [OPTIONAL] CHECK CACHE
             print_verbose(
@@ -4785,117 +4766,6 @@ def validate_environment(model: Optional[str] = None) -> dict:
             else:
                 missing_keys.append("NLP_CLOUD_API_KEY")
     return {"keys_in_environment": keys_in_environment, "missing_keys": missing_keys}
-
-
-def set_callbacks(callback_list, function_id=None):
-    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, athinaLogger, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, lunaryLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, langsmithLogger, logfireLogger, dynamoLogger, s3Logger, dataDogLogger, prometheusLogger, greenscaleLogger, openMeterLogger
-
-    try:
-        for callback in callback_list:
-            print_verbose(f"init callback list: {callback}")
-            if callback == "sentry":
-                try:
-                    import sentry_sdk
-                except ImportError:
-                    print_verbose("Package 'sentry_sdk' is missing. Installing it...")
-                    subprocess.check_call(
-                        [sys.executable, "-m", "pip", "install", "sentry_sdk"]
-                    )
-                    import sentry_sdk
-                sentry_sdk_instance = sentry_sdk
-                sentry_trace_rate = (
-                    os.environ.get("SENTRY_API_TRACE_RATE")
-                    if "SENTRY_API_TRACE_RATE" in os.environ
-                    else "1.0"
-                )
-                sentry_sdk_instance.init(
-                    dsn=os.environ.get("SENTRY_DSN"),
-                    traces_sample_rate=float(sentry_trace_rate),
-                )
-                capture_exception = sentry_sdk_instance.capture_exception
-                add_breadcrumb = sentry_sdk_instance.add_breadcrumb
-            elif callback == "posthog":
-                try:
-                    from posthog import Posthog
-                except ImportError:
-                    print_verbose("Package 'posthog' is missing. Installing it...")
-                    subprocess.check_call(
-                        [sys.executable, "-m", "pip", "install", "posthog"]
-                    )
-                    from posthog import Posthog
-                posthog = Posthog(
-                    project_api_key=os.environ.get("POSTHOG_API_KEY"),
-                    host=os.environ.get("POSTHOG_API_URL"),
-                )
-            elif callback == "slack":
-                try:
-                    from slack_bolt import App
-                except ImportError:
-                    print_verbose("Package 'slack_bolt' is missing. Installing it...")
-                    subprocess.check_call(
-                        [sys.executable, "-m", "pip", "install", "slack_bolt"]
-                    )
-                    from slack_bolt import App
-                slack_app = App(
-                    token=os.environ.get("SLACK_API_TOKEN"),
-                    signing_secret=os.environ.get("SLACK_API_SECRET"),
-                )
-                alerts_channel = os.environ["SLACK_API_CHANNEL"]
-                print_verbose(f"Initialized Slack App: {slack_app}")
-            elif callback == "traceloop":
-                traceloopLogger = TraceloopLogger()
-            elif callback == "athina":
-                athinaLogger = AthinaLogger()
-                print_verbose("Initialized Athina Logger")
-            elif callback == "helicone":
-                heliconeLogger = HeliconeLogger()
-            elif callback == "lunary":
-                lunaryLogger = LunaryLogger()
-            elif callback == "promptlayer":
-                promptLayerLogger = PromptLayerLogger()
-            elif callback == "langfuse":
-                langFuseLogger = LangFuseLogger()
-            elif callback == "openmeter":
-                openMeterLogger = OpenMeterLogger()
-            elif callback == "datadog":
-                dataDogLogger = DataDogLogger()
-            elif callback == "prometheus":
-                if prometheusLogger is None:
-                    prometheusLogger = PrometheusLogger()
-            elif callback == "dynamodb":
-                dynamoLogger = DyanmoDBLogger()
-            elif callback == "s3":
-                s3Logger = S3Logger()
-            elif callback == "wandb":
-                weightsBiasesLogger = WeightsBiasesLogger()
-            elif callback == "langsmith":
-                langsmithLogger = LangsmithLogger()
-            elif callback == "logfire":
-                logfireLogger = LogfireLogger()
-            elif callback == "aispend":
-                aispendLogger = AISpendLogger()
-            elif callback == "berrispend":
-                berrispendLogger = BerriSpendLogger()
-            elif callback == "supabase":
-                print_verbose(f"instantiating supabase")
-                supabaseClient = Supabase()
-            elif callback == "greenscale":
-                greenscaleLogger = GreenscaleLogger()
-                print_verbose("Initialized Greenscale Logger")
-            elif callback == "lite_debugger":
-                print_verbose(f"instantiating lite_debugger")
-                if function_id:
-                    liteDebuggerClient = LiteDebugger(email=function_id)
-                elif litellm.token:
-                    liteDebuggerClient = LiteDebugger(email=litellm.token)
-                elif litellm.email:
-                    liteDebuggerClient = LiteDebugger(email=litellm.email)
-                else:
-                    liteDebuggerClient = LiteDebugger(email=str(uuid.uuid4()))
-            elif callable(callback):
-                customLogger = CustomLogger()
-    except Exception as e:
-        raise e
 
 
 async def convert_to_streaming_response_async(response_object: Optional[dict] = None):
