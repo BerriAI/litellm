@@ -16,7 +16,7 @@ from litellm.llms.prompt_templates.factory import anthropic_messages_pt
 from unittest.mock import patch, MagicMock
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
 
-# litellm.num_retries=3
+# litellm.num_retries = 3
 litellm.cache = None
 litellm.success_callback = []
 user_message = "Write a short poem about the sky"
