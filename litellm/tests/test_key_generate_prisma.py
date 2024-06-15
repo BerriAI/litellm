@@ -2309,3 +2309,4 @@ async def test_enforced_params(prisma_client):
             "Authentication Error, BadRequest please pass param=[metadata][generation_name] in request body"
             in e.message
         )
+    general_settings.pop("enforced_params")
