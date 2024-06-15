@@ -8915,7 +8915,7 @@ async def new_user(data: NewUserRequest):
                 ),
             ),
             http_request=Request(
-                scope={"type": "http"},
+                scope={"type": "http", "path": "/user/new"},
             ),
         )
 
