@@ -1269,6 +1269,8 @@ async def user_api_key_auth(
                     spend=valid_token.team_spend,
                     max_budget=valid_token.team_max_budget,
                     user_id=valid_token.user_id,
+                    team_id=valid_token.team_id,
+                    team_alias=valid_token.team_alias,
                 )
                 asyncio.create_task(
                     proxy_logging_obj.budget_alerts(
@@ -8913,7 +8915,7 @@ async def new_user(data: NewUserRequest):
                 ),
             ),
             http_request=Request(
-                scope={"type": "http"},
+                scope={"type": "http", "path": "/user/new"},
             ),
         )
 
