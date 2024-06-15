@@ -1,3 +1,12 @@
+"""
+This file handles authentication for the LiteLLM Proxy.
+
+it checks if the user passed a valid API Key to the LiteLLM Proxy
+
+Returns a UserAPIKeyAuth object if the API key is valid
+
+"""
+
 import json
 from datetime import datetime, timedelta, timezone
 from typing import Optional
