@@ -32,8 +32,7 @@ from dataclasses import (
 )
 import os
 import litellm._service_logger  # for storing API inputs, outputs, and metadata
-import litellm.litellm_core_utils
-import litellm.litellm_core_utils.litellm_logging
+from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
 from litellm.caching import DualCache
 from litellm.types.utils import (
