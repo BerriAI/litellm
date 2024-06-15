@@ -798,6 +798,13 @@ There are 3 types of fallbacks:
 - `fallbacks`: For all remaining errors - e.g. litellm.RateLimitError
 
 **Content Policy Violation Fallback**
+
+Key change: 
+
+```python
+content_policy_fallbacks=[{"claude-2": ["my-fallback-model"]}]
+```
+
 <Tabs>
 <TabItem value="sdk" label="SDK">
 
@@ -855,6 +862,12 @@ litellm --config /path/to/config.yaml
 </Tabs>
 
 **Context Window Exceeded Fallback**
+
+Key change: 
+
+```python
+context_window_fallbacks=[{"claude-2": ["my-fallback-model"]}]
+```
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
@@ -914,6 +927,11 @@ litellm --config /path/to/config.yaml
 
 **Regular Fallbacks**
 
+Key change: 
+
+```python
+fallbacks=[{"claude-2": ["my-fallback-model"]}]
+```
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
