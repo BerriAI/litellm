@@ -1,16 +1,19 @@
 #### What this tests ####
 #    This tests the the acompletion function #
 
-import sys, os
-import pytest
+import asyncio
+import logging
+import os
+import sys
 import traceback
-import asyncio, logging
+
+import pytest
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import litellm
-from litellm import completion, acompletion, acreate
+from litellm import acompletion, acreate, completion
 
 litellm.num_retries = 3
 

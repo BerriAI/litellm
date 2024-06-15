@@ -1,12 +1,13 @@
-import sys
-import os
 import json
+import os
+import sys
 import time
 
 import logfire
-import litellm
 import pytest
-from logfire.testing import TestExporter, SimpleSpanProcessor
+from logfire.testing import SimpleSpanProcessor, TestExporter
+
+import litellm
 
 sys.path.insert(0, os.path.abspath("../.."))
 

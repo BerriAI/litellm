@@ -1,11 +1,15 @@
-import click
-import subprocess, traceback, json
-import os, sys
-import random
-from datetime import datetime
 import importlib
-from dotenv import load_dotenv
+import json
+import os
+import random
+import subprocess
+import sys
+import traceback
 import urllib.parse as urlparse
+from datetime import datetime
+
+import click
+from dotenv import load_dotenv
 
 sys.path.append(os.getcwd())
 
@@ -14,9 +18,8 @@ config_filename = "litellm.secrets"
 litellm_mode = os.getenv("LITELLM_MODE", "DEV")  # "PRODUCTION", "DEV"
 if litellm_mode == "DEV":
     load_dotenv()
-from importlib import resources
 import shutil
-
+from importlib import resources
 
 telemetry = None
 
@@ -229,25 +232,17 @@ def run_server(
 ):
     args = locals()
     if local:
-        from proxy_server import app, save_worker_config, ProxyConfig
+        from proxy_server import ProxyConfig, app, save_worker_config
     else:
         try:
-            from .proxy_server import (
-                app,
-                save_worker_config,
-                ProxyConfig,
-            )
+            from .proxy_server import ProxyConfig, app, save_worker_config
         except ImportError as e:
             if "litellm[proxy]" in str(e):
                 # user is missing a proxy dependency, ask them to pip install litellm[proxy]
                 raise e
             else:
                 # this is just a local/relative import error, user git cloned litellm
-                from proxy_server import (
-                    app,
-                    save_worker_config,
-                    ProxyConfig,
-                )
+                from proxy_server import ProxyConfig, app, save_worker_config
     if version == True:
         pkg_version = importlib.metadata.version("litellm")
         click.echo(f"\nLiteLLM: Current Version = {pkg_version}\n")
@@ -255,7 +250,10 @@ def run_server(
     if model and "ollama" in model and api_base is None:
         run_ollama_serve()
     if test_async is True:
-        import requests, concurrent, time  # type: ignore
+        import concurrent
+        import time
+
+        import requests  # type: ignore
 
         api_base = f"http://{host}:{port}"
 
@@ -421,7 +419,9 @@ def run_server(
             read from there and save it to os.env['DATABASE_URL']
             """
             try:
-                import yaml, asyncio  # type: ignore
+                import asyncio
+
+                import yaml  # type: ignore
             except:
                 raise ImportError(
                     "yaml needs to be imported. Run - `pip install 'litellm[proxy]'`"
@@ -518,8 +518,8 @@ def run_server(
         if port == 4000 and is_port_in_use(port):
             port = random.randint(1024, 49152)
 
-        from litellm.proxy.proxy_server import app
         import litellm
+        from litellm.proxy.proxy_server import app
 
         if run_gunicorn == False:
             if ssl_certfile_path is not None and ssl_keyfile_path is not None:

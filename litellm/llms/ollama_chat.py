@@ -1,15 +1,17 @@
-from itertools import chain
-import requests
-import types
-import time
 import json
-import uuid
+import time
 import traceback
+import types
+import uuid
+from itertools import chain
 from typing import Optional
-from litellm import verbose_logger
-import litellm
-import httpx
+
 import aiohttp
+import httpx
+import requests
+
+import litellm
+from litellm import verbose_logger
 
 
 class OllamaError(Exception):

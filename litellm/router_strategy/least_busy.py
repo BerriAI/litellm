@@ -6,9 +6,14 @@
 #   - use litellm.success + failure callbacks to log when a request completed
 #   - in get_available_deployment, for a given model group name -> pick based on traffic
 
-import dotenv, os, requests, random  # type: ignore
-from typing import Optional
+import os
+import random
 import traceback
+from typing import Optional
+
+import dotenv  # type: ignore
+import requests
+
 from litellm.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 

@@ -1,21 +1,28 @@
 #### What this tests ####
 #    This tests the router's ability to pick deployment with lowest cost
 
-import sys, os, asyncio, time, random
-from datetime import datetime
+import asyncio
+import os
+import random
+import sys
+import time
 import traceback
+from datetime import datetime
+
 from dotenv import load_dotenv
 
 load_dotenv()
-import os, copy
+import copy
+import os
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import pytest
+
 from litellm import Router
-from litellm.router_strategy.lowest_cost import LowestCostLoggingHandler
 from litellm.caching import DualCache
+from litellm.router_strategy.lowest_cost import LowestCostLoggingHandler
 
 ### UNIT TESTS FOR cost ROUTING ###
 
@@ -51,8 +58,9 @@ async def test_get_available_deployments():
 
 @pytest.mark.asyncio
 async def test_get_available_deployments_custom_price():
-    from litellm._logging import verbose_router_logger
     import logging
+
+    from litellm._logging import verbose_router_logger
 
     verbose_router_logger.setLevel(logging.DEBUG)
     test_cache = DualCache()
@@ -164,8 +172,9 @@ async def test_get_available_endpoints_tpm_rpm_check_async(ans_rpm):
 
     assert that only the valid model is returned
     """
-    from litellm._logging import verbose_router_logger
     import logging
+
+    from litellm._logging import verbose_router_logger
 
     verbose_router_logger.setLevel(logging.DEBUG)
     test_cache = DualCache()

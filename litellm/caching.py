@@ -7,14 +7,20 @@
 #
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
-import litellm
-import time, logging, asyncio
-import json, traceback, ast, hashlib
-from typing import Optional, Literal, List, Union, Any, BinaryIO
+import ast
+import asyncio
+import hashlib
+import json
+import logging
+import time
+import traceback
+from typing import Any, BinaryIO, List, Literal, Optional, Union
+
 from openai._models import BaseModel as OpenAIObject
+
+import litellm
 from litellm._logging import verbose_logger
 from litellm.types.services import ServiceLoggerPayload, ServiceTypes
-import traceback
 
 
 def print_verbose(print_statement):
@@ -147,9 +153,11 @@ class RedisCache(BaseCache):
         namespace: Optional[str] = None,
         **kwargs,
     ):
-        from ._redis import get_redis_client, get_redis_connection_pool
-        from litellm._service_logger import ServiceLogging
         import redis
+
+        from litellm._service_logger import ServiceLogging
+
+        from ._redis import get_redis_client, get_redis_connection_pool
 
         redis_kwargs = {}
         if host is not None:
@@ -886,11 +894,10 @@ class RedisSemanticCache(BaseCache):
 
     def get_cache(self, key, **kwargs):
         print_verbose(f"sync redis semantic-cache get_cache, kwargs: {kwargs}")
-        from redisvl.query import VectorQuery
         import numpy as np
+        from redisvl.query import VectorQuery
 
         # query
-
         # get the messages
         messages = kwargs["messages"]
         prompt = "".join(message["content"] for message in messages)
@@ -943,7 +950,8 @@ class RedisSemanticCache(BaseCache):
 
     async def async_set_cache(self, key, value, **kwargs):
         import numpy as np
-        from litellm.proxy.proxy_server import llm_router, llm_model_list
+
+        from litellm.proxy.proxy_server import llm_model_list, llm_router
 
         try:
             await self.index.acreate(overwrite=False)  # don't overwrite existing index
@@ -998,12 +1006,12 @@ class RedisSemanticCache(BaseCache):
 
     async def async_get_cache(self, key, **kwargs):
         print_verbose(f"async redis semantic-cache get_cache, kwargs: {kwargs}")
-        from redisvl.query import VectorQuery
         import numpy as np
-        from litellm.proxy.proxy_server import llm_router, llm_model_list
+        from redisvl.query import VectorQuery
+
+        from litellm.proxy.proxy_server import llm_model_list, llm_router
 
         # query
-
         # get the messages
         messages = kwargs["messages"]
         prompt = "".join(message["content"] for message in messages)
@@ -1161,7 +1169,8 @@ class S3Cache(BaseCache):
         self.set_cache(key=key, value=value, **kwargs)
 
     def get_cache(self, key, **kwargs):
-        import boto3, botocore
+        import boto3
+        import botocore
 
         try:
             key = self.key_prefix + key

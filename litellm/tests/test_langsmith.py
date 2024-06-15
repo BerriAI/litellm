@@ -1,11 +1,11 @@
-import sys
-import os
 import io
+import os
+import sys
 
 sys.path.insert(0, os.path.abspath("../.."))
 
-from litellm import completion
 import litellm
+from litellm import completion
 
 litellm.success_callback = ["langsmith"]
 litellm.set_verbose = True

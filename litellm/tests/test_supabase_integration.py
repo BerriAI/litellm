@@ -1,14 +1,16 @@
 #### What this tests ####
 #    This tests if logging to the supabase integration actually works
-import sys, os
+import os
+import sys
 import traceback
+
 import pytest
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import litellm
-from litellm import embedding, completion
+from litellm import completion, embedding
 
 litellm.input_callback = ["supabase"]
 litellm.success_callback = ["supabase"]

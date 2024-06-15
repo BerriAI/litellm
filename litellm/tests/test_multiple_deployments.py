@@ -1,13 +1,15 @@
 #### What this tests ####
 #    This tests error handling + logging (esp. for sentry breadcrumbs)
 
-import sys, os
+import os
+import sys
 import traceback
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import pytest
+
 import litellm
 from litellm import completion
 

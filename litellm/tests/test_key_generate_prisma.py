@@ -19,70 +19,77 @@
 # function to call to generate key - async def new_user(data: NewUserRequest):
 # function to validate a request - async def user_auth(request: Request):
 
-import sys, os
-import traceback, uuid
+import os
+import sys
+import traceback
+import uuid
+from datetime import datetime
+
 from dotenv import load_dotenv
 from fastapi import Request
 from fastapi.routing import APIRoute
-from datetime import datetime
 
 load_dotenv()
-import os, io, time
+import io
+import os
+import time
 
 # this file is to test litellm/proxy
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-import pytest, logging, asyncio
-import litellm, asyncio
+import asyncio
+import logging
+
+import pytest
+
+import litellm
+from litellm._logging import verbose_proxy_logger
 from litellm.proxy.proxy_server import (
-    new_user,
-    generate_key_fn,
-    user_api_key_auth,
-    user_update,
-    delete_key_fn,
-    info_key_fn,
-    update_key_fn,
-    generate_key_fn,
-    generate_key_helper_fn,
-    spend_user_fn,
-    spend_key_fn,
-    view_spend_logs,
-    user_info,
-    team_info,
-    info_key_fn,
-    new_team,
-    update_team,
+    LitellmUserRoles,
+    audio_transcriptions,
     chat_completion,
     completion,
+    delete_key_fn,
     embeddings,
+    generate_key_fn,
+    generate_key_helper_fn,
     image_generation,
-    audio_transcriptions,
-    moderations,
+    info_key_fn,
     model_list,
-    LitellmUserRoles,
+    moderations,
+    new_team,
+    new_user,
+    spend_key_fn,
+    spend_user_fn,
+    team_info,
+    update_key_fn,
+    update_team,
+    user_api_key_auth,
+    user_info,
+    user_update,
+    view_spend_logs,
 )
 from litellm.proxy.utils import PrismaClient, ProxyLogging, hash_token, update_spend
-from litellm._logging import verbose_proxy_logger
 
 verbose_proxy_logger.setLevel(level=logging.DEBUG)
 
+from starlette.datastructures import URL
+
+from litellm.caching import DualCache
 from litellm.proxy._types import (
-    NewUserRequest,
-    GenerateKeyRequest,
     DynamoDBArgs,
-    KeyRequest,
-    UpdateKeyRequest,
     GenerateKeyRequest,
+    KeyRequest,
+    LiteLLM_UpperboundKeyGenerateParams,
     NewTeamRequest,
+    NewUserRequest,
+    UpdateKeyRequest,
     UpdateTeamRequest,
     UserAPIKeyAuth,
-    LiteLLM_UpperboundKeyGenerateParams,
 )
 from litellm.proxy.utils import DBClient
-from starlette.datastructures import URL
-from litellm.caching import DualCache
 
 proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
 
@@ -429,10 +436,10 @@ def test_call_with_user_over_budget(prisma_client):
             print("result from user auth with new key", result)
 
             # update spend using track_cost callback, make 2nd request, it should fail
+            from litellm import Choices, Message, ModelResponse, Usage
             from litellm.proxy.proxy_server import (
                 _PROXY_track_cost_callback as track_cost_callback,
             )
-            from litellm import ModelResponse, Choices, Message, Usage
 
             resp = ModelResponse(
                 id="chatcmpl-e41836bb-bb8b-4df2-8e70-8f3e160155ac",
@@ -516,10 +523,10 @@ def test_call_with_end_user_over_budget(prisma_client):
             request.body = return_body
 
             # update spend using track_cost callback, make 2nd request, it should fail
+            from litellm import Choices, Message, ModelResponse, Usage
             from litellm.proxy.proxy_server import (
                 _PROXY_track_cost_callback as track_cost_callback,
             )
-            from litellm import ModelResponse, Choices, Message, Usage
 
             resp = ModelResponse(
                 id="chatcmpl-e41836bb-bb8b-4df2-8e70-8f3e160155ac",
@@ -606,10 +613,10 @@ def test_call_with_proxy_over_budget(prisma_client):
             print("result from user auth with new key", result)
 
             # update spend using track_cost callback, make 2nd request, it should fail
+            from litellm import Choices, Message, ModelResponse, Usage
             from litellm.proxy.proxy_server import (
                 _PROXY_track_cost_callback as track_cost_callback,
             )
-            from litellm import ModelResponse, Choices, Message, Usage
 
             resp = ModelResponse(
                 id="chatcmpl-e41836bb-bb8b-4df2-8e70-8f3e160155ac",
@@ -662,8 +669,9 @@ def test_call_with_user_over_budget_stream(prisma_client):
     # 6. Make a call with a key over budget, expect to fail
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
-    from litellm._logging import verbose_proxy_logger
     import logging
+
+    from litellm._logging import verbose_proxy_logger
 
     litellm.set_verbose = True
     verbose_proxy_logger.setLevel(logging.DEBUG)
@@ -687,10 +695,10 @@ def test_call_with_user_over_budget_stream(prisma_client):
             print("result from user auth with new key", result)
 
             # update spend using track_cost callback, make 2nd request, it should fail
+            from litellm import Choices, Message, ModelResponse, Usage
             from litellm.proxy.proxy_server import (
                 _PROXY_track_cost_callback as track_cost_callback,
             )
-            from litellm import ModelResponse, Choices, Message, Usage
 
             resp = ModelResponse(
                 id="chatcmpl-e41836bb-bb8b-4df2-8e70-8f3e160155ac",
@@ -754,8 +762,9 @@ def test_call_with_proxy_over_budget_stream(prisma_client):
     )
     setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
 
-    from litellm._logging import verbose_proxy_logger
     import logging
+
+    from litellm._logging import verbose_proxy_logger
 
     litellm.set_verbose = True
     verbose_proxy_logger.setLevel(logging.DEBUG)
@@ -784,10 +793,10 @@ def test_call_with_proxy_over_budget_stream(prisma_client):
             print("result from user auth with new key", result)
 
             # update spend using track_cost callback, make 2nd request, it should fail
+            from litellm import Choices, Message, ModelResponse, Usage
             from litellm.proxy.proxy_server import (
                 _PROXY_track_cost_callback as track_cost_callback,
             )
-            from litellm import ModelResponse, Choices, Message, Usage
 
             resp = ModelResponse(
                 id="chatcmpl-e41836bb-bb8b-4df2-8e70-8f3e160155ac",
@@ -1290,14 +1299,15 @@ def test_call_with_key_over_budget(prisma_client):
             print("result from user auth with new key", result)
 
             # update spend using track_cost callback, make 2nd request, it should fail
+            from litellm import Choices, Message, ModelResponse, Usage
+            from litellm.caching import Cache
             from litellm.proxy.proxy_server import (
                 _PROXY_track_cost_callback as track_cost_callback,
             )
-            from litellm import ModelResponse, Choices, Message, Usage
-            from litellm.caching import Cache
 
             litellm.cache = Cache()
-            import time, uuid
+            import time
+            import uuid
 
             request_id = f"chatcmpl-e41836bb-bb8b-4df2-8e70-8f3e160155ac{uuid.uuid4()}"
 
@@ -1407,14 +1417,15 @@ def test_call_with_key_over_model_budget(prisma_client):
             print("result from user auth with new key", result)
 
             # update spend using track_cost callback, make 2nd request, it should fail
+            from litellm import Choices, Message, ModelResponse, Usage
+            from litellm.caching import Cache
             from litellm.proxy.proxy_server import (
                 _PROXY_track_cost_callback as track_cost_callback,
             )
-            from litellm import ModelResponse, Choices, Message, Usage
-            from litellm.caching import Cache
 
             litellm.cache = Cache()
-            import time, uuid
+            import time
+            import uuid
 
             request_id = f"chatcmpl-{uuid.uuid4()}"
 
@@ -1507,11 +1518,13 @@ async def test_call_with_key_never_over_budget(prisma_client):
         print("result from user auth with new key: {result}")
 
         # update spend using track_cost callback, make 2nd request, it should fail
+        import time
+        import uuid
+
+        from litellm import Choices, Message, ModelResponse, Usage
         from litellm.proxy.proxy_server import (
             _PROXY_track_cost_callback as track_cost_callback,
         )
-        from litellm import ModelResponse, Choices, Message, Usage
-        import time, uuid
 
         request_id = f"chatcmpl-{uuid.uuid4()}"
 
@@ -1565,8 +1578,9 @@ async def test_call_with_key_over_budget_stream(prisma_client):
     # 14. Make a call with a key over budget, expect to fail
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
-    from litellm._logging import verbose_proxy_logger
     import logging
+
+    from litellm._logging import verbose_proxy_logger
 
     litellm.set_verbose = True
     verbose_proxy_logger.setLevel(logging.DEBUG)
@@ -1588,11 +1602,13 @@ async def test_call_with_key_over_budget_stream(prisma_client):
         print("result from user auth with new key", result)
 
         # update spend using track_cost callback, make 2nd request, it should fail
+        import time
+        import uuid
+
+        from litellm import Choices, Message, ModelResponse, Usage
         from litellm.proxy.proxy_server import (
             _PROXY_track_cost_callback as track_cost_callback,
         )
-        from litellm import ModelResponse, Choices, Message, Usage
-        import time, uuid
 
         request_id = f"chatcmpl-e41836bb-bb8b-4df2-8e70-8f3e160155ac{uuid.uuid4()}"
         resp = ModelResponse(
@@ -1936,12 +1952,12 @@ async def test_key_with_no_permissions(prisma_client):
 
 
 async def track_cost_callback_helper_fn(generated_key: str, user_id: str):
-    from litellm import ModelResponse, Choices, Message, Usage
+    import uuid
+
+    from litellm import Choices, Message, ModelResponse, Usage
     from litellm.proxy.proxy_server import (
         _PROXY_track_cost_callback as track_cost_callback,
     )
-
-    import uuid
 
     request_id = f"chatcmpl-e41836bb-bb8b-4df2-8e70-8f3e160155ac{uuid.uuid4()}"
     resp = ModelResponse(
@@ -1987,8 +2003,10 @@ async def test_proxy_load_test_db(prisma_client):
     """
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    import logging
+    import time
+
     from litellm._logging import verbose_proxy_logger
-    import logging, time
 
     litellm.set_verbose = True
     verbose_proxy_logger.setLevel(logging.DEBUG)

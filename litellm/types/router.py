@@ -2,12 +2,14 @@
 litellm.Router Types - includes RouterConfig, UpdateRouterConfig, ModelInfo etc
 """
 
-from typing import List, Optional, Union, Dict, Tuple, Literal, TypedDict
-import uuid
+import datetime
 import enum
+import uuid
+from typing import Dict, List, Literal, Optional, Tuple, TypedDict, Union
+
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
-import datetime
+
 from .completion import CompletionRequest
 from .embedding import EmbeddingRequest
 

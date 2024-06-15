@@ -1,13 +1,18 @@
-import os, types, traceback
 import json
-import requests
+import os
 import time
+import traceback
+import types
 from typing import Callable, Optional
-from litellm.utils import ModelResponse, Usage, Choices, Message, CustomStreamWrapper
-import litellm
+
 import httpx
+import requests
+
+import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from .prompt_templates.factory import prompt_factory, custom_prompt
+from litellm.utils import Choices, CustomStreamWrapper, Message, ModelResponse, Usage
+
+from .prompt_templates.factory import custom_prompt, prompt_factory
 
 
 class ClarifaiError(Exception):

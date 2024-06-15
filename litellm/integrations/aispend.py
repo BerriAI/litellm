@@ -1,8 +1,10 @@
 #### What this does ####
 #    On success + failure, log events to aispend.io
-import dotenv, os
-import traceback
 import datetime
+import os
+import traceback
+
+import dotenv
 
 model_cost = {
     "gpt-3.5-turbo": {

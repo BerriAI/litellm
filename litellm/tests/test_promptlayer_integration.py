@@ -1,15 +1,15 @@
-import sys
-import os
 import io
+import os
+import sys
 
 sys.path.insert(0, os.path.abspath("../.."))
 
-from litellm import completion
-import litellm
+import time
 
 import pytest
 
-import time
+import litellm
+from litellm import completion
 
 # def test_promptlayer_logging():
 #     try:
@@ -99,6 +99,7 @@ def test_promptlayer_logging_with_metadata_tags():
         assert "Prompt Layer Logging: success" in output
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
 
 # def test_chat_openai():
 #     try:

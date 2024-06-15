@@ -1,6 +1,8 @@
-import logging, os, json
-from logging import Formatter
+import json
+import logging
+import os
 import traceback
+from logging import Formatter
 
 set_verbose = False
 json_logs = bool(os.getenv("JSON_LOGS", False))

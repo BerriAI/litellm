@@ -2,16 +2,17 @@
 #    This tests setting provider specific configs across providers
 # There are 2 types of tests - changing config dynamically or by setting class variables
 
-import sys, os
+import os
+import sys
 import traceback
+
 import pytest
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import litellm
-from litellm import completion
-from litellm import RateLimitError
+from litellm import RateLimitError, completion
 
 #  Huggingface - Expensive to deploy models and keep them running. Maybe we can try doing this via baseten??
 # def hf_test_completion_tgi():

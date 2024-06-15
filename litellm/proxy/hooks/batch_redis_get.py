@@ -3,14 +3,17 @@
 ## This reduces the number of REDIS GET requests made during high-traffic by the proxy.
 ### [BETA] this is in Beta. And might change.
 
-from typing import Optional, Literal
-import litellm
-from litellm.caching import DualCache, RedisCache, InMemoryCache
-from litellm.proxy._types import UserAPIKeyAuth
-from litellm.integrations.custom_logger import CustomLogger
-from litellm._logging import verbose_proxy_logger
+import json
+import traceback
+from typing import Literal, Optional
+
 from fastapi import HTTPException
-import json, traceback
+
+import litellm
+from litellm._logging import verbose_proxy_logger
+from litellm.caching import DualCache, InMemoryCache, RedisCache
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.proxy._types import UserAPIKeyAuth
 
 
 class _PROXY_BatchRedisRequests(CustomLogger):

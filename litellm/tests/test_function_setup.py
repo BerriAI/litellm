@@ -1,18 +1,24 @@
 # What is this?
 ## Unit tests for the 'function_setup()' function
-import sys, os
+import os
+import sys
 import traceback
+
 from dotenv import load_dotenv
 
 load_dotenv()
-import os, io
+import io
+import os
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the, system path
-import pytest, uuid
-from litellm.utils import function_setup, Rules
+import uuid
 from datetime import datetime
+
+import pytest
+
+from litellm.utils import Rules, function_setup
 
 
 def test_empty_content():

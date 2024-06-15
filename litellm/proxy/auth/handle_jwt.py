@@ -6,18 +6,20 @@ Currently only supports admin.
 JWT token must have 'litellm_proxy_admin' in scope. 
 """
 
-import jwt
 import json
 import os
-from litellm.caching import DualCache
-from litellm._logging import verbose_proxy_logger
-from litellm.proxy._types import LiteLLM_JWTAuth, LiteLLM_UserTable
-from litellm.proxy.utils import PrismaClient
-from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
 from typing import Optional
+
+import jwt
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
+
+from litellm._logging import verbose_proxy_logger
+from litellm.caching import DualCache
+from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
+from litellm.proxy._types import LiteLLM_JWTAuth, LiteLLM_UserTable
+from litellm.proxy.utils import PrismaClient
 
 
 class JWTHandler:

@@ -2,13 +2,19 @@
 #### What this does ####
 #    On success, log events to Prometheus
 
-import dotenv, os
-import requests  # type: ignore
+import datetime
+import os
+import subprocess
+import sys
 import traceback
-import datetime, subprocess, sys
-import litellm, uuid
-from litellm._logging import print_verbose, verbose_logger
+import uuid
 from typing import Optional, Union
+
+import dotenv
+import requests  # type: ignore
+
+import litellm
+from litellm._logging import print_verbose, verbose_logger
 
 
 class PrometheusLogger:

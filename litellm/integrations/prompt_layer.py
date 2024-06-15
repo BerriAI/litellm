@@ -1,9 +1,11 @@
 #### What this does ####
 #    On success, logs events to Promptlayer
-import dotenv, os
+import os
+import traceback
+
+import dotenv
 import requests  # type: ignore
 from pydantic import BaseModel
-import traceback
 
 
 class PromptLayerLogger:

@@ -1,12 +1,14 @@
-import types
-import traceback
 import copy
 import time
+import traceback
+import types
 from typing import Callable, Optional
-from litellm.utils import ModelResponse, Choices, Message, Usage
-import litellm
+
 import httpx
+
+import litellm
 from litellm import verbose_logger
+from litellm.utils import Choices, Message, ModelResponse, Usage
 
 
 class PalmError(Exception):

@@ -1,13 +1,18 @@
 # What is this?
 ## On Success events log cost to Lago - https://github.com/BerriAI/litellm/issues/3639
 
-import dotenv, os, json
+import json
+import os
+import traceback
+import uuid
+from typing import Literal, Optional
+
+import dotenv
+import httpx
+
 import litellm
-import traceback, httpx
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-import uuid
-from typing import Optional, Literal
 
 
 def get_utc_datetime():

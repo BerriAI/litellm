@@ -7,11 +7,16 @@
 #
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
-import os, json, time
+import json
+import os
+import threading
+import time
+from typing import Literal, Optional, Union
+
+import requests  # type: ignore
+
 import litellm
 from litellm.utils import ModelResponse
-import requests, threading  # type: ignore
-from typing import Optional, Union, Literal
 
 
 class BudgetManager:

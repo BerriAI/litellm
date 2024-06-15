@@ -1,7 +1,8 @@
 #### What this tests ####
 #    This tests mock request calls to litellm
 
-import sys, os
+import os
+import sys
 import traceback
 
 sys.path.insert(

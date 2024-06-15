@@ -8,9 +8,10 @@ Requires:
 * `pip install boto3>=1.28.57`
 """
 
-import litellm
 import os
 from typing import Optional
+
+import litellm
 from litellm.proxy._types import KeyManagementSystem
 
 

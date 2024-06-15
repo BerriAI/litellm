@@ -1,11 +1,13 @@
 #### What this does ####
 #    On success, logs events to Langsmith
-import dotenv, os  # type: ignore
-import requests  # type: ignore
-from datetime import datetime
-import traceback
 import asyncio
+import os
+import traceback
 import types
+from datetime import datetime
+
+import dotenv  # type: ignore
+import requests  # type: ignore
 from pydantic import BaseModel  # type: ignore
 
 
@@ -52,9 +54,10 @@ class LangsmithLogger:
             print_verbose(
                 f"Langsmith Logging - Enters logging function for model {kwargs}"
             )
-            import requests
             import datetime
             from datetime import timezone
+
+            import requests
 
             try:
                 start_time = kwargs["start_time"].astimezone(timezone.utc).isoformat()

@@ -1,20 +1,25 @@
 #### What this tests ####
 #    This tests if get_optional_params works as expected
-import sys, os, time, inspect, asyncio, traceback
+import asyncio
+import inspect
+import os
+import sys
+import time
+import traceback
+
 import pytest
 
 sys.path.insert(0, os.path.abspath("../.."))
+from unittest.mock import MagicMock, patch
+
 import litellm
-from litellm.utils import get_optional_params_embeddings, get_optional_params
-from litellm.llms.prompt_templates.factory import (
-    map_system_message_pt,
-)
-from unittest.mock import patch, MagicMock
+from litellm.llms.prompt_templates.factory import map_system_message_pt
 from litellm.types.completion import (
-    ChatCompletionUserMessageParam,
-    ChatCompletionSystemMessageParam,
     ChatCompletionMessageParam,
+    ChatCompletionSystemMessageParam,
+    ChatCompletionUserMessageParam,
 )
+from litellm.utils import get_optional_params, get_optional_params_embeddings
 
 ## get_optional_params_embeddings
 ### Models: OpenAI, Azure, Bedrock

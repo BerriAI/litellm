@@ -1,7 +1,8 @@
-import requests  # type: ignore
 import json
 import traceback
 from datetime import datetime, timezone
+
+import requests  # type: ignore
 
 
 class GreenscaleLogger:

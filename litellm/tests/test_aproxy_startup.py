@@ -1,26 +1,34 @@
 # What this tests
 ## This tests the proxy server startup
-import sys, os, json
+import json
+import os
+import sys
 import traceback
+
 from dotenv import load_dotenv
 
 load_dotenv()
-import os, io
+import io
+import os
 
 # this file is to test litellm/proxy
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-import pytest, logging, asyncio
+import asyncio
+import logging
+
+import pytest
+
 import litellm
 from litellm.proxy.proxy_server import (
+    initialize,
+    llm_model_list,
     router,
     save_worker_config,
-    initialize,
-    startup_event,
-    llm_model_list,
     shutdown_event,
+    startup_event,
 )
 
 
@@ -33,8 +41,9 @@ def test_proxy_gunicorn_startup_direct_config():
     Test both approaches
     """
     try:
-        from litellm._logging import verbose_proxy_logger, verbose_router_logger
         import logging
+
+        from litellm._logging import verbose_proxy_logger, verbose_router_logger
 
         # unset set DATABASE_URL in env for this test
         # set prisma client to None
@@ -62,8 +71,9 @@ def test_proxy_gunicorn_startup_direct_config():
 
 def test_proxy_gunicorn_startup_config_dict():
     try:
-        from litellm._logging import verbose_proxy_logger, verbose_router_logger
         import logging
+
+        from litellm._logging import verbose_proxy_logger, verbose_router_logger
 
         verbose_proxy_logger.setLevel(level=logging.DEBUG)
         verbose_router_logger.setLevel(level=logging.DEBUG)

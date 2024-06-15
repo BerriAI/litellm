@@ -7,8 +7,11 @@ Requires:
 * `os.environ["GOOGLE_APPLICATION_CREDENTIALS"], os.environ["GOOGLE_KMS_RESOURCE_NAME"]`
 * `pip install google-cloud-kms`
 """
-import litellm, os
+
+import os
 from typing import Optional
+
+import litellm
 from litellm.proxy._types import KeyManagementSystem
 
 

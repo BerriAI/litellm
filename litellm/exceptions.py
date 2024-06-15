@@ -9,9 +9,10 @@
 
 ## LiteLLM versions of the OpenAI Exception Types
 
-import openai
-import httpx
 from typing import Optional
+
+import httpx
+import openai
 
 
 class AuthenticationError(openai.AuthenticationError):  # type: ignore

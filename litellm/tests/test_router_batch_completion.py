@@ -1,20 +1,28 @@
 #### What this tests ####
 # This tests litellm router with batch completion
 
-import sys, os, time, openai
-import traceback, asyncio
+import asyncio
+import os
+import sys
+import time
+import traceback
+
+import openai
 import pytest
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
+import os
+from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
+
+import httpx
+from dotenv import load_dotenv
+
 import litellm
 from litellm import Router
 from litellm.router import Deployment, LiteLLM_Params, ModelInfo
-from concurrent.futures import ThreadPoolExecutor
-from collections import defaultdict
-from dotenv import load_dotenv
-import os, httpx
 
 load_dotenv()
 

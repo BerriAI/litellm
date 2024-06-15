@@ -1,61 +1,68 @@
 # What is this?
 ## Initial implementation of calling bedrock via httpx client (allows for async calls).
 ## V1 - covers cohere + anthropic claude-3 support
-from functools import partial
-import os, types
+import copy
 import json
-from enum import Enum
-import requests, copy  # type: ignore
+import os
 import time
+import types
+import urllib.parse
+import uuid
+from enum import Enum
+from functools import partial
 from typing import (
+    Any,
+    AsyncIterator,
     Callable,
-    Optional,
+    Iterator,
     List,
     Literal,
-    Union,
-    Any,
-    TypedDict,
+    Optional,
     Tuple,
-    Iterator,
-    AsyncIterator,
+    TypedDict,
+    Union,
 )
-from litellm.utils import (
-    ModelResponse,
-    Usage,
-    map_finish_reason,
-    CustomStreamWrapper,
-    Message,
-    Choices,
-    get_secret,
-    Logging,
-)
-import litellm, uuid
-from .prompt_templates.factory import (
-    prompt_factory,
-    custom_prompt,
-    cohere_message_pt,
-    construct_tool_use_system_prompt,
-    extract_between_tags,
-    parse_xml_params,
-    contains_tag,
-    _bedrock_converse_messages_pt,
-    _bedrock_tools_pt,
-)
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from .base import BaseLLM
+
 import httpx  # type: ignore
-from .bedrock import BedrockError, convert_messages_to_prompt, ModelResponseIterator
+import requests  # type: ignore
+
+import litellm
+from litellm.caching import DualCache
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.llms.bedrock import *
-import urllib.parse
 from litellm.types.llms.openai import (
+    ChatCompletionDeltaChunk,
     ChatCompletionResponseMessage,
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
-    ChatCompletionDeltaChunk,
 )
-from litellm.caching import DualCache
+from litellm.utils import (
+    Choices,
+    CustomStreamWrapper,
+    Logging,
+    Message,
+    ModelResponse,
+    Usage,
+    get_secret,
+    map_finish_reason,
+)
+
+from .base import BaseLLM
+from .bedrock import BedrockError, ModelResponseIterator, convert_messages_to_prompt
+from .prompt_templates.factory import (
+    _bedrock_converse_messages_pt,
+    _bedrock_tools_pt,
+    cohere_message_pt,
+    construct_tool_use_system_prompt,
+    contains_tag,
+    custom_prompt,
+    extract_between_tags,
+    parse_xml_params,
+    prompt_factory,
+)
 
 iam_cache = DualCache()
+
 
 class AmazonCohereChatConfig:
     """
@@ -327,13 +334,19 @@ class BedrockLLM(BaseLLM):
         ) = params_to_check
 
         ### CHECK STS ###
-        if aws_web_identity_token is not None and aws_role_name is not None and aws_session_name is not None:
-            iam_creds_cache_key = json.dumps({
-                "aws_web_identity_token": aws_web_identity_token,
-                "aws_role_name": aws_role_name,
-                "aws_session_name": aws_session_name,
-                "aws_region_name": aws_region_name,
-            })
+        if (
+            aws_web_identity_token is not None
+            and aws_role_name is not None
+            and aws_session_name is not None
+        ):
+            iam_creds_cache_key = json.dumps(
+                {
+                    "aws_web_identity_token": aws_web_identity_token,
+                    "aws_role_name": aws_role_name,
+                    "aws_session_name": aws_session_name,
+                    "aws_region_name": aws_region_name,
+                }
+            )
 
             iam_creds_dict = iam_cache.get_cache(iam_creds_cache_key)
             if iam_creds_dict is None:
@@ -348,7 +361,7 @@ class BedrockLLM(BaseLLM):
                 sts_client = boto3.client(
                     "sts",
                     region_name=aws_region_name,
-                    endpoint_url=f"https://sts.{aws_region_name}.amazonaws.com"
+                    endpoint_url=f"https://sts.{aws_region_name}.amazonaws.com",
                 )
 
                 # https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRoleWithWebIdentity.html
@@ -362,12 +375,18 @@ class BedrockLLM(BaseLLM):
 
                 iam_creds_dict = {
                     "aws_access_key_id": sts_response["Credentials"]["AccessKeyId"],
-                    "aws_secret_access_key": sts_response["Credentials"]["SecretAccessKey"],
+                    "aws_secret_access_key": sts_response["Credentials"][
+                        "SecretAccessKey"
+                    ],
                     "aws_session_token": sts_response["Credentials"]["SessionToken"],
                     "region_name": aws_region_name,
                 }
 
-                iam_cache.set_cache(key=iam_creds_cache_key, value=json.dumps(iam_creds_dict), ttl=3600 - 60)
+                iam_cache.set_cache(
+                    key=iam_creds_cache_key,
+                    value=json.dumps(iam_creds_dict),
+                    ttl=3600 - 60,
+                )
 
             session = boto3.Session(**iam_creds_dict)
 
@@ -687,7 +706,6 @@ class BedrockLLM(BaseLLM):
     ) -> Union[ModelResponse, CustomStreamWrapper]:
         try:
             import boto3
-
             from botocore.auth import SigV4Auth
             from botocore.awsrequest import AWSRequest
             from botocore.credentials import Credentials
@@ -1433,13 +1451,19 @@ class BedrockConverseLLM(BaseLLM):
         ) = params_to_check
 
         ### CHECK STS ###
-        if aws_web_identity_token is not None and aws_role_name is not None and aws_session_name is not None:
-            iam_creds_cache_key = json.dumps({
-                "aws_web_identity_token": aws_web_identity_token,
-                "aws_role_name": aws_role_name,
-                "aws_session_name": aws_session_name,
-                "aws_region_name": aws_region_name,
-            })
+        if (
+            aws_web_identity_token is not None
+            and aws_role_name is not None
+            and aws_session_name is not None
+        ):
+            iam_creds_cache_key = json.dumps(
+                {
+                    "aws_web_identity_token": aws_web_identity_token,
+                    "aws_role_name": aws_role_name,
+                    "aws_session_name": aws_session_name,
+                    "aws_region_name": aws_region_name,
+                }
+            )
 
             iam_creds_dict = iam_cache.get_cache(iam_creds_cache_key)
             if iam_creds_dict is None:
@@ -1454,7 +1478,7 @@ class BedrockConverseLLM(BaseLLM):
                 sts_client = boto3.client(
                     "sts",
                     region_name=aws_region_name,
-                    endpoint_url=f"https://sts.{aws_region_name}.amazonaws.com"
+                    endpoint_url=f"https://sts.{aws_region_name}.amazonaws.com",
                 )
 
                 # https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRoleWithWebIdentity.html
@@ -1468,12 +1492,18 @@ class BedrockConverseLLM(BaseLLM):
 
                 iam_creds_dict = {
                     "aws_access_key_id": sts_response["Credentials"]["AccessKeyId"],
-                    "aws_secret_access_key": sts_response["Credentials"]["SecretAccessKey"],
+                    "aws_secret_access_key": sts_response["Credentials"][
+                        "SecretAccessKey"
+                    ],
                     "aws_session_token": sts_response["Credentials"]["SessionToken"],
                     "region_name": aws_region_name,
                 }
 
-                iam_cache.set_cache(key=iam_creds_cache_key, value=json.dumps(iam_creds_dict), ttl=3600 - 60)
+                iam_cache.set_cache(
+                    key=iam_creds_cache_key,
+                    value=json.dumps(iam_creds_dict),
+                    ttl=3600 - 60,
+                )
 
             session = boto3.Session(**iam_creds_dict)
 
@@ -1621,7 +1651,6 @@ class BedrockConverseLLM(BaseLLM):
     ):
         try:
             import boto3
-
             from botocore.auth import SigV4Auth
             from botocore.awsrequest import AWSRequest
             from botocore.credentials import Credentials
@@ -1875,8 +1904,8 @@ class BedrockConverseLLM(BaseLLM):
 
 
 def get_response_stream_shape():
-    from botocore.model import ServiceModel
     from botocore.loaders import Loader
+    from botocore.model import ServiceModel
 
     loader = Loader()
     bedrock_service_dict = loader.load_service_model("bedrock-runtime", "service-2")

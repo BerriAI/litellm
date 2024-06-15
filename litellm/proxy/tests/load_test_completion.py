@@ -1,12 +1,13 @@
-import time
 import asyncio
 import os
-from openai import AsyncOpenAI, AsyncAzureOpenAI
-import uuid
+import time
 import traceback
-from large_text import text
-from dotenv import load_dotenv
+import uuid
 from statistics import mean, median
+
+from dotenv import load_dotenv
+from large_text import text
+from openai import AsyncAzureOpenAI, AsyncOpenAI
 
 litellm_client = AsyncOpenAI(base_url="http://0.0.0.0:4000/", api_key="sk-1234")
 

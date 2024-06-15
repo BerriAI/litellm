@@ -1,6 +1,8 @@
-import uuid, enum
-from pydantic import BaseModel, Field
+import enum
+import uuid
 from typing import Optional
+
+from pydantic import BaseModel, Field
 
 
 class ServiceTypes(str, enum.Enum):

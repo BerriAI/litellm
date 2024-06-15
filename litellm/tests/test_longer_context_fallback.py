@@ -1,8 +1,10 @@
 #### What this tests ####
 #    This tests context fallback dict
 
-import sys, os
+import os
+import sys
 import traceback
+
 import pytest
 
 sys.path.insert(

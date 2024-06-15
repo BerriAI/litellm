@@ -1,8 +1,14 @@
 #### What this tests ####
 #    Unit tests for JWT-Auth
 
-import sys, os, asyncio, time, random, uuid
+import asyncio
+import os
+import random
+import sys
+import time
 import traceback
+import uuid
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -11,12 +17,14 @@ import os
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
+from datetime import datetime, timedelta
+
 import pytest
+from fastapi import Request
+
+from litellm.caching import DualCache
 from litellm.proxy._types import LiteLLM_JWTAuth, LiteLLMRoutes
 from litellm.proxy.auth.handle_jwt import JWTHandler
-from litellm.caching import DualCache
-from datetime import datetime, timedelta
-from fastapi import Request
 
 public_key = {
     "kty": "RSA",
@@ -88,10 +96,12 @@ async def test_valid_invalid_token(audience):
     - valid token
     - invalid token
     """
-    import jwt, json
+    import json
+
+    import jwt
+    from cryptography.hazmat.backends import default_backend
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric import rsa
-    from cryptography.hazmat.backends import default_backend
 
     os.environ.pop("JWT_AUDIENCE", None)
     if audience:
@@ -190,8 +200,8 @@ async def test_valid_invalid_token(audience):
 @pytest.fixture
 def prisma_client():
     import litellm
-    from litellm.proxy.utils import PrismaClient, ProxyLogging
     from litellm.proxy.proxy_cli import append_query_params
+    from litellm.proxy.utils import PrismaClient, ProxyLogging
 
     proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
 
@@ -212,16 +222,19 @@ def prisma_client():
 @pytest.mark.parametrize("audience", [None, "litellm-proxy"])
 @pytest.mark.asyncio
 async def test_team_token_output(prisma_client, audience):
-    import jwt, json
+    import json
+    import uuid
+
+    import jwt
+    from cryptography.hazmat.backends import default_backend
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric import rsa
-    from cryptography.hazmat.backends import default_backend
     from fastapi import Request
     from starlette.datastructures import URL
-    from litellm.proxy.proxy_server import user_api_key_auth, new_team
-    from litellm.proxy._types import NewTeamRequest, UserAPIKeyAuth
+
     import litellm
-    import uuid
+    from litellm.proxy._types import NewTeamRequest, UserAPIKeyAuth
+    from litellm.proxy.proxy_server import new_team, user_api_key_auth
 
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     await litellm.proxy.proxy_server.prisma_client.connect()
@@ -391,21 +404,24 @@ async def test_user_token_output(
     - create user
     - retry -> it should pass now
     """
-    import jwt, json
+    import json
+    import uuid
+
+    import jwt
+    from cryptography.hazmat.backends import default_backend
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric import rsa
-    from cryptography.hazmat.backends import default_backend
     from fastapi import Request
     from starlette.datastructures import URL
+
+    import litellm
+    from litellm.proxy._types import NewTeamRequest, NewUserRequest, UserAPIKeyAuth
     from litellm.proxy.proxy_server import (
-        user_api_key_auth,
         new_team,
         new_user,
+        user_api_key_auth,
         user_info,
     )
-    from litellm.proxy._types import NewTeamRequest, UserAPIKeyAuth, NewUserRequest
-    import litellm
-    import uuid
 
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     await litellm.proxy.proxy_server.prisma_client.connect()
@@ -617,16 +633,19 @@ async def test_allowed_routes_admin(prisma_client, audience):
     - iterate through allowed endpoints
     - check if admin passes user_api_key_auth for them
     """
-    import jwt, json
+    import json
+    import uuid
+
+    import jwt
+    from cryptography.hazmat.backends import default_backend
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric import rsa
-    from cryptography.hazmat.backends import default_backend
     from fastapi import Request
     from starlette.datastructures import URL
-    from litellm.proxy.proxy_server import user_api_key_auth, new_team
-    from litellm.proxy._types import NewTeamRequest, UserAPIKeyAuth
+
     import litellm
-    import uuid
+    from litellm.proxy._types import NewTeamRequest, UserAPIKeyAuth
+    from litellm.proxy.proxy_server import new_team, user_api_key_auth
 
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     await litellm.proxy.proxy_server.prisma_client.connect()

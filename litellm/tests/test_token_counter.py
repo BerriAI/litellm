@@ -1,15 +1,18 @@
 #### What this tests ####
 #    This tests litellm.token_counter() function
 
-import sys, os
+import os
+import sys
 import traceback
+
 import pytest
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import time
-from litellm import token_counter, create_pretrained_tokenizer, encode, decode
+
+from litellm import create_pretrained_tokenizer, decode, encode, token_counter
 from litellm.tests.large_text import text
 
 

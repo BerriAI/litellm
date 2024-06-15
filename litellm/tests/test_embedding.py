@@ -1,8 +1,10 @@
-import sys, os
+import os
+import sys
 import traceback
+
+import openai
 import pytest
 from dotenv import load_dotenv
-import openai
 
 load_dotenv()
 
@@ -10,7 +12,7 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import litellm
-from litellm import embedding, completion, completion_cost
+from litellm import completion, completion_cost, embedding
 
 litellm.set_verbose = False
 

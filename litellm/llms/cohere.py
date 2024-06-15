@@ -1,12 +1,16 @@
-import os, types
 import json
+import os
+import time
+import traceback
+import types
 from enum import Enum
-import requests  # type: ignore
-import time, traceback
 from typing import Callable, Optional
-from litellm.utils import ModelResponse, Choices, Message, Usage
-import litellm
+
 import httpx  # type: ignore
+import requests  # type: ignore
+
+import litellm
+from litellm.utils import Choices, Message, ModelResponse, Usage
 
 
 class CohereError(Exception):
@@ -117,7 +121,7 @@ class CohereConfig:
 
 def validate_environment(api_key):
     headers = {
-        "Request-Source":"unspecified:litellm",
+        "Request-Source": "unspecified:litellm",
         "accept": "application/json",
         "content-type": "application/json",
     }

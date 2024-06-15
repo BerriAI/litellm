@@ -1,5 +1,5 @@
-from litellm.integrations.custom_logger import CustomLogger
 import litellm
+from litellm.integrations.custom_logger import CustomLogger
 
 
 # This file includes the custom callbacks for LiteLLM Proxy

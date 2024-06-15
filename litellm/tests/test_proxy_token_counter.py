@@ -2,32 +2,38 @@
 # 1. Generate a Key, and use it to make a call
 
 
-import sys, os
+import os
+import sys
 import traceback
-from dotenv import load_dotenv
-from fastapi import Request
 from datetime import datetime
 
+from dotenv import load_dotenv
+from fastapi import Request
+
 load_dotenv()
-import os, io, time
+import io
+import os
+import time
 
 # this file is to test litellm/proxy
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-import pytest, logging, asyncio
-import litellm, asyncio
+import asyncio
+import logging
+
+import pytest
+
+import litellm
+from litellm._logging import verbose_proxy_logger
 from litellm.proxy.proxy_server import token_counter
 from litellm.proxy.utils import PrismaClient, ProxyLogging, hash_token, update_spend
-from litellm._logging import verbose_proxy_logger
 
 verbose_proxy_logger.setLevel(level=logging.DEBUG)
 
-from litellm.proxy._types import TokenCountRequest, TokenCountResponse
-
-
 from litellm import Router
+from litellm.proxy._types import TokenCountRequest, TokenCountResponse
 
 
 @pytest.mark.asyncio

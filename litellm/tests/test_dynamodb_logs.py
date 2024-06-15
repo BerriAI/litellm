@@ -1,17 +1,20 @@
-import sys
+import asyncio
+import io
 import os
-import io, asyncio
+import sys
 
 # import logging
 # logging.basicConfig(level=logging.DEBUG)
 sys.path.insert(0, os.path.abspath("../.."))
 
-from litellm import completion
 import litellm
+from litellm import completion
 
 litellm.num_retries = 3
 
-import time, random
+import random
+import time
+
 import pytest
 
 

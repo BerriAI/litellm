@@ -1,22 +1,22 @@
+import asyncio
 import copy
 import json
-import sys
-import os
-import asyncio
-
 import logging
+import os
+import sys
 from unittest.mock import MagicMock, patch
 
 logging.basicConfig(level=logging.DEBUG)
 sys.path.insert(0, os.path.abspath("../.."))
 
-from litellm import completion
 import litellm
+from litellm import completion
 
 litellm.num_retries = 3
 litellm.success_callback = ["langfuse"]
 os.environ["LANGFUSE_DEBUG"] = "True"
 import time
+
 import pytest
 
 
@@ -550,7 +550,9 @@ def test_aaalangfuse_existing_trace_id():
     Assert no changes to the trace
     """
     # Test - if the logs were sent to the correct team on langfuse
-    import litellm, datetime
+    import datetime
+
+    import litellm
     from litellm.integrations.langfuse import LangFuseLogger
 
     langfuse_Logger = LangFuseLogger(

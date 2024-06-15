@@ -1,6 +1,9 @@
 def add_new_model():
+    import json
+    import uuid
+
+    import requests
     import streamlit as st
-    import json, requests, uuid
 
     model_name = st.text_input(
         "Model Name - user-facing model name", placeholder="gpt-3.5-turbo"
@@ -67,8 +70,8 @@ def add_new_model():
 
 
 def list_models():
-    import streamlit as st
     import requests
+    import streamlit as st
 
     # Check if the necessary configuration is available
     if (
@@ -103,8 +106,11 @@ def list_models():
 
 
 def create_key():
+    import json
+    import uuid
+
+    import requests
     import streamlit as st
-    import json, requests, uuid
 
     if (
         st.session_state.get("api_url", None) is not None

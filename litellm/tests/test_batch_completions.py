@@ -1,22 +1,25 @@
 #### What this tests ####
 #    This tests calling batch_completions by running 100 messages together
 
-import sys, os
+import os
+import sys
 import traceback
+
 import pytest
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 from openai import APITimeoutError as Timeout
+
 import litellm
 
 litellm.num_retries = 0
 from litellm import (
     batch_completion,
     batch_completion_models,
-    completion,
     batch_completion_models_all_responses,
+    completion,
 )
 
 # litellm.set_verbose=True

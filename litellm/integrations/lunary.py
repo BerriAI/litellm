@@ -1,8 +1,8 @@
 #### What this does ####
 #    On success + failure, log events to lunary.ai
-from datetime import datetime, timezone
-import traceback
 import importlib
+import traceback
+from datetime import datetime, timezone
 
 import packaging
 

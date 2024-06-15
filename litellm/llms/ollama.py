@@ -1,13 +1,21 @@
-from itertools import chain
-import requests, types, time  # type: ignore
-import json, uuid
+import asyncio
+import json
+import time
 import traceback
-from typing import Optional, List
+import types
+import uuid
+from itertools import chain
+from typing import List, Optional
+
+import aiohttp
+import httpx  # type: ignore
+import requests  # type: ignore
+
 import litellm
-from litellm.types.utils import ProviderField
-import httpx, aiohttp, asyncio  # type: ignore
-from .prompt_templates.factory import prompt_factory, custom_prompt
 from litellm import verbose_logger
+from litellm.types.utils import ProviderField
+
+from .prompt_templates.factory import custom_prompt, prompt_factory
 
 
 class OllamaError(Exception):
@@ -126,7 +134,7 @@ class OllamaConfig:
             )
             and v is not None
         }
-    
+
     def get_required_params(self) -> List[ProviderField]:
         """For a given provider, return it's required fields with a description"""
         return [
@@ -137,7 +145,6 @@ class OllamaConfig:
                 field_value="http://10.10.11.249:11434",
             )
         ]
-
 
     def get_supported_openai_params(
         self,
@@ -157,7 +164,8 @@ class OllamaConfig:
 # ollama wants plain base64 jpeg/png files as images.  strip any leading dataURI
 # and convert to jpeg if necessary.
 def _convert_image(image):
-    import base64, io
+    import base64
+    import io
 
     try:
         from PIL import Image

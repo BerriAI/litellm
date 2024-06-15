@@ -1,20 +1,31 @@
 # @pytest.mark.skip(reason="AWS Suspended Account")
-import sys, os
+import os
+import sys
 import traceback
+
 from dotenv import load_dotenv
 
 load_dotenv()
-import os, io
+import io
+import os
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
+from unittest.mock import AsyncMock, Mock, patch
+
 import pytest
+
 import litellm
-from litellm import embedding, completion, completion_cost, Timeout, ModelResponse
-from litellm import RateLimitError
-from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
-from unittest.mock import patch, AsyncMock, Mock
+from litellm import (
+    ModelResponse,
+    RateLimitError,
+    Timeout,
+    completion,
+    completion_cost,
+    embedding,
+)
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
 # litellm.num_retries = 3
 litellm.cache = None
@@ -481,7 +492,10 @@ def test_completion_claude_3_base64():
 def test_provisioned_throughput():
     try:
         litellm.set_verbose = True
-        import botocore, json, io
+        import io
+        import json
+
+        import botocore
         import botocore.session
         from botocore.stub import Stubber
 
@@ -537,7 +551,6 @@ def test_completion_bedrock_mistral_completion_auth():
     # aws_access_key_id = os.environ["AWS_ACCESS_KEY_ID"]
     # aws_secret_access_key = os.environ["AWS_SECRET_ACCESS_KEY"]
     # aws_region_name = os.environ["AWS_REGION_NAME"]
-
     # os.environ.pop("AWS_ACCESS_KEY_ID", None)
     # os.environ.pop("AWS_SECRET_ACCESS_KEY", None)
     # os.environ.pop("AWS_REGION_NAME", None)

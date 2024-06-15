@@ -1,16 +1,22 @@
 # this tests if the router is initialized correctly
-import sys, os, time
-import traceback, asyncio
+import asyncio
+import os
+import sys
+import time
+import traceback
+
 import pytest
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
+from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
+
+from dotenv import load_dotenv
+
 import litellm
 from litellm import Router
-from concurrent.futures import ThreadPoolExecutor
-from collections import defaultdict
-from dotenv import load_dotenv
 
 load_dotenv()
 
@@ -24,6 +30,7 @@ load_dotenv()
 def test_init_clients():
     litellm.set_verbose = True
     import logging
+
     from litellm._logging import verbose_router_logger
 
     verbose_router_logger.setLevel(logging.DEBUG)
@@ -489,6 +496,7 @@ def test_init_clients_azure_command_r_plus():
     # For azure/command-r-plus we need to use openai.OpenAI because of how the Azure provider requires requests being sent
     litellm.set_verbose = True
     import logging
+
     from litellm._logging import verbose_router_logger
 
     verbose_router_logger.setLevel(logging.DEBUG)

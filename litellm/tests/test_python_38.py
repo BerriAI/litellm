@@ -1,7 +1,11 @@
-import sys, os, time
-import traceback, asyncio
-import pytest
+import asyncio
+import os
 import subprocess
+import sys
+import time
+import traceback
+
+import pytest
 
 sys.path.insert(
     0, os.path.abspath("../..")

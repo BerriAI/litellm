@@ -1,22 +1,29 @@
 #### What this tests ####
 #    This tests the router's ability to pick deployment with lowest latency
 
-import sys, os, asyncio, time, random
-from datetime import datetime, timedelta
+import asyncio
+import os
+import random
+import sys
+import time
 import traceback
+from datetime import datetime, timedelta
+
 from dotenv import load_dotenv
 
 load_dotenv()
-import os, copy
+import copy
+import os
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import pytest
-from litellm import Router
-from litellm.router_strategy.lowest_latency import LowestLatencyLoggingHandler
-from litellm.caching import DualCache
+
 import litellm
+from litellm import Router
+from litellm.caching import DualCache
+from litellm.router_strategy.lowest_latency import LowestLatencyLoggingHandler
 
 ### UNIT TESTS FOR LATENCY ROUTING ###
 

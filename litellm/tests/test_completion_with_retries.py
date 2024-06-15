@@ -1,5 +1,7 @@
-import sys, os
+import os
+import sys
 import traceback
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -8,16 +10,18 @@ import os
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-import pytest
 import openai
+import pytest
+
 import litellm
-from litellm import completion_with_retries, completion
 from litellm import (
     AuthenticationError,
     BadRequestError,
+    OpenAIError,
     RateLimitError,
     ServiceUnavailableError,
-    OpenAIError,
+    completion,
+    completion_with_retries,
 )
 
 user_message = "Hello, whats the weather in San Francisco??"

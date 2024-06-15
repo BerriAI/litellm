@@ -1,16 +1,23 @@
-import sys, os, time
-import traceback, asyncio
+import asyncio
+import os
+import sys
+import time
+import traceback
+
 import pytest
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 
-import litellm, asyncio, logging
+import asyncio
+import logging
+
+import litellm
 from litellm import Router
 
 # this tests debug logs from litellm router and litellm proxy server
-from litellm._logging import verbose_router_logger, verbose_logger, verbose_proxy_logger
+from litellm._logging import verbose_logger, verbose_proxy_logger, verbose_router_logger
 
 
 # this tests debug logs from litellm router and litellm proxy server

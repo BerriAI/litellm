@@ -6,38 +6,49 @@
 # +-----------------------------------------------+
 #
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
-import sys, re, binascii, struct
-import litellm
-import dotenv, json, traceback, threading, base64, ast
-import subprocess, os
-from os.path import abspath, join, dirname
-import litellm, openai
-import itertools
-import random, uuid, requests  # type: ignore
-from functools import wraps, lru_cache
-import datetime, time
-import tiktoken
-import uuid
-from pydantic import BaseModel, ConfigDict
-import aiohttp
-import textwrap
-import logging
-import asyncio, httpx, inspect
-from inspect import iscoroutine
+import ast
+import asyncio
+import base64
+import binascii
 import copy
-from tokenizers import Tokenizer
-from dataclasses import (
-    dataclass,
-    field,
-)
+import datetime
+import inspect
+import itertools
+import json
+import logging
 import os
+import random  # type: ignore
+import re
+import struct
+import subprocess
+import sys
+import textwrap
+import threading
+import time
+import traceback
+import uuid
+from dataclasses import dataclass, field
+from functools import lru_cache, wraps
+from inspect import iscoroutine
+from os.path import abspath, dirname, join
+
+import aiohttp
+import dotenv
+import httpx
+import openai
+import requests
+import tiktoken
+from pydantic import BaseModel, ConfigDict
+from tokenizers import Tokenizer
+
+import litellm
 import litellm._service_logger  # for storing API inputs, outputs, and metadata
-from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
 from litellm.caching import DualCache
-from litellm.types.utils import CostPerToken, ProviderField, ModelInfo
 from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_logging,
 )
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.types.utils import CostPerToken, ModelInfo, ProviderField
 
 oidc_cache = DualCache()
 
@@ -64,56 +75,58 @@ with resources.open_text("litellm.llms.tokenizers", "anthropic_tokenizer.json") 
 # Convert to str (if necessary)
 claude_json_str = json.dumps(json_data)
 import importlib.metadata
-from ._logging import verbose_logger
-from .types.router import LiteLLM_Params
-from .types.llms.openai import (
-    ChatCompletionToolCallChunk,
-    ChatCompletionToolCallFunctionChunk,
-    ChatCompletionDeltaToolCallChunk,
-)
-from .integrations.traceloop import TraceloopLogger
-from .integrations.athina import AthinaLogger
-from .integrations.helicone import HeliconeLogger
-from .integrations.aispend import AISpendLogger
-from .integrations.berrispend import BerriSpendLogger
-from .integrations.supabase import Supabase
-from .integrations.lunary import LunaryLogger
-from .integrations.prompt_layer import PromptLayerLogger
-from .integrations.langsmith import LangsmithLogger
-from .integrations.logfire_logger import LogfireLogger, LogfireLevel
-from .integrations.weights_biases import WeightsBiasesLogger
-from .integrations.custom_logger import CustomLogger
-from .integrations.langfuse import LangFuseLogger
-from .integrations.openmeter import OpenMeterLogger
-from .integrations.lago import LagoLogger
-from .integrations.datadog import DataDogLogger
-from .integrations.prometheus import PrometheusLogger
-from .integrations.prometheus_services import PrometheusServicesLogger
-from .integrations.dynamodb import DyanmoDBLogger
-from .integrations.s3 import S3Logger
-from .integrations.clickhouse import ClickhouseLogger
-from .integrations.greenscale import GreenscaleLogger
-from .integrations.litedebugger import LiteDebugger
-from .proxy._types import KeyManagementSystem
+
 from openai import OpenAIError as OriginalError
 from openai._models import BaseModel as OpenAIObject
-from .caching import S3Cache, RedisSemanticCache, RedisCache
+
+from ._logging import verbose_logger
+from .caching import RedisCache, RedisSemanticCache, S3Cache
 from .exceptions import (
-    AuthenticationError,
-    BadRequestError,
-    NotFoundError,
-    RateLimitError,
-    ServiceUnavailableError,
-    OpenAIError,
-    PermissionDeniedError,
-    ContextWindowExceededError,
-    ContentPolicyViolationError,
-    Timeout,
     APIConnectionError,
     APIError,
+    AuthenticationError,
+    BadRequestError,
     BudgetExceededError,
+    ContentPolicyViolationError,
+    ContextWindowExceededError,
+    NotFoundError,
+    OpenAIError,
+    PermissionDeniedError,
+    RateLimitError,
+    ServiceUnavailableError,
+    Timeout,
     UnprocessableEntityError,
 )
+from .integrations.aispend import AISpendLogger
+from .integrations.athina import AthinaLogger
+from .integrations.berrispend import BerriSpendLogger
+from .integrations.clickhouse import ClickhouseLogger
+from .integrations.custom_logger import CustomLogger
+from .integrations.datadog import DataDogLogger
+from .integrations.dynamodb import DyanmoDBLogger
+from .integrations.greenscale import GreenscaleLogger
+from .integrations.helicone import HeliconeLogger
+from .integrations.lago import LagoLogger
+from .integrations.langfuse import LangFuseLogger
+from .integrations.langsmith import LangsmithLogger
+from .integrations.litedebugger import LiteDebugger
+from .integrations.logfire_logger import LogfireLevel, LogfireLogger
+from .integrations.lunary import LunaryLogger
+from .integrations.openmeter import OpenMeterLogger
+from .integrations.prometheus import PrometheusLogger
+from .integrations.prometheus_services import PrometheusServicesLogger
+from .integrations.prompt_layer import PromptLayerLogger
+from .integrations.s3 import S3Logger
+from .integrations.supabase import Supabase
+from .integrations.traceloop import TraceloopLogger
+from .integrations.weights_biases import WeightsBiasesLogger
+from .proxy._types import KeyManagementSystem
+from .types.llms.openai import (
+    ChatCompletionDeltaToolCallChunk,
+    ChatCompletionToolCallChunk,
+    ChatCompletionToolCallFunctionChunk,
+)
+from .types.router import LiteLLM_Params
 
 try:
     from .proxy.enterprise.enterprise_callbacks.generic_api_callback import (
@@ -122,21 +135,22 @@ try:
 except Exception as e:
     verbose_logger.debug(f"Exception import enterprise features {str(e)}")
 
+from concurrent.futures import ThreadPoolExecutor
 from typing import (
-    cast,
-    List,
-    Dict,
-    Union,
-    Optional,
-    Literal,
     Any,
     BinaryIO,
-    Iterable,
-    Tuple,
     Callable,
+    Dict,
+    Iterable,
+    List,
+    Literal,
+    Optional,
+    Tuple,
+    Union,
+    cast,
 )
+
 from .caching import Cache
-from concurrent.futures import ThreadPoolExecutor
 
 ####### ENVIRONMENT VARIABLES ####################
 # Adjust to your specific application needs / system capabilities.
@@ -7115,8 +7129,9 @@ def function_to_dict(input_function):  # noqa: C901
     # Get function name and docstring
     try:
         import inspect
-        from numpydoc.docscrape import NumpyDocString
         from ast import literal_eval
+
+        from numpydoc.docscrape import NumpyDocString
     except Exception as e:
         raise e
 
@@ -8077,7 +8092,7 @@ def prompt_token_calculator(model, messages):
             import anthropic
         except:
             Exception("Anthropic import failed please run `pip install anthropic`")
-        from anthropic import Anthropic, HUMAN_PROMPT, AI_PROMPT
+        from anthropic import AI_PROMPT, HUMAN_PROMPT, Anthropic
 
         anthropic = Anthropic()
         num_tokens = anthropic.count_tokens(text)

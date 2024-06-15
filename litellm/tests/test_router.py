@@ -1,20 +1,28 @@
 #### What this tests ####
 # This tests litellm router
 
-import sys, os, time, openai
-import traceback, asyncio
+import asyncio
+import os
+import sys
+import time
+import traceback
+
+import openai
 import pytest
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
+import os
+from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
+
+import httpx
+from dotenv import load_dotenv
+
 import litellm
 from litellm import Router
 from litellm.router import Deployment, LiteLLM_Params, ModelInfo
-from concurrent.futures import ThreadPoolExecutor
-from collections import defaultdict
-from dotenv import load_dotenv
-import os, httpx
 
 load_dotenv()
 
@@ -527,8 +535,9 @@ def test_router_context_window_fallback():
     - Send a 5k prompt
     - Assert it works
     """
-    from large_text import text
     import os
+
+    from large_text import text
 
     litellm.set_verbose = False
 
@@ -577,8 +586,9 @@ async def test_async_router_context_window_fallback():
     - Send a 5k prompt
     - Assert it works
     """
-    from large_text import text
     import os
+
+    from large_text import text
 
     litellm.set_verbose = False
 
@@ -660,8 +670,9 @@ def test_router_context_window_check_pre_call_check_in_group():
     - Send a 5k prompt
     - Assert it works
     """
-    from large_text import text
     import os
+
+    from large_text import text
 
     litellm.set_verbose = False
 
@@ -708,8 +719,9 @@ def test_router_context_window_check_pre_call_check_out_group():
     - Send a 5k prompt
     - Assert it works
     """
-    from large_text import text
     import os
+
+    from large_text import text
 
     litellm.set_verbose = False
 
@@ -1536,8 +1548,9 @@ def test_router_anthropic_key_dynamic():
 
 def test_router_timeout():
     litellm.set_verbose = True
-    from litellm._logging import verbose_logger
     import logging
+
+    from litellm._logging import verbose_logger
 
     verbose_logger.setLevel(logging.DEBUG)
     model_list = [

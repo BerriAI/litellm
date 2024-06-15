@@ -1,13 +1,20 @@
 ### What this tests ####
 ## This test asserts the type of data passed into each method of the custom callback handler
-import sys, os, time, inspect, asyncio, traceback
+import asyncio
+import inspect
+import os
+import sys
+import time
+import traceback
 from datetime import datetime
+
 import pytest
 
 sys.path.insert(0, os.path.abspath("../.."))
-from typing import Optional, Literal, List
-from litellm import Router, Cache
+from typing import List, Literal, Optional
+
 import litellm
+from litellm import Cache, Router
 from litellm.integrations.custom_logger import CustomLogger
 
 # Test Scenarios (test across completion, streaming, embedding)
@@ -602,14 +609,18 @@ async def test_async_completion_azure_caching():
     router = Router(model_list=model_list)  # type: ignore
     response1 = await router.acompletion(
         model="gpt-3.5-turbo",
-        messages=[{"role": "user", "content": f"Hi 👋 - i'm async azure {unique_time}"}],
+        messages=[
+            {"role": "user", "content": f"Hi 👋 - i'm async azure {unique_time}"}
+        ],
         caching=True,
     )
     await asyncio.sleep(1)
     print(f"customHandler_caching.states pre-cache hit: {customHandler_caching.states}")
     response2 = await router.acompletion(
         model="gpt-3.5-turbo",
-        messages=[{"role": "user", "content": f"Hi 👋 - i'm async azure {unique_time}"}],
+        messages=[
+            {"role": "user", "content": f"Hi 👋 - i'm async azure {unique_time}"}
+        ],
         caching=True,
     )
     await asyncio.sleep(1)  # success callbacks are done in parallel

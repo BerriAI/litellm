@@ -1,32 +1,37 @@
+from os import PathLike
 from typing import (
-    Optional,
-    Union,
+    IO,
     Any,
     BinaryIO,
-    Literal,
     Iterable,
+    List,
+    Literal,
+    Mapping,
+    Optional,
+    Tuple,
+    TypedDict,
+    Union,
 )
-from typing_extensions import override, Required, Dict
-from pydantic import BaseModel
-from openai.types.beta.threads.message_content import MessageContent
-from openai.types.beta.threads.message import Message as OpenAIMessage
-from openai.types.beta.thread_create_params import (
-    Message as OpenAICreateThreadParamsMessage,
-)
+
+from openai._legacy_response import HttpxBinaryResponseContent
 from openai.lib.streaming._assistants import (
     AssistantEventHandler,
     AssistantStreamManager,
-    AsyncAssistantStreamManager,
     AsyncAssistantEventHandler,
+    AsyncAssistantStreamManager,
 )
-from openai.types.beta.assistant_tool_param import AssistantToolParam
-from openai.types.beta.threads.run import Run
+from openai.pagination import AsyncCursorPage, SyncCursorPage
+from openai.types import Batch, FileObject
 from openai.types.beta.assistant import Assistant
-from openai.pagination import SyncCursorPage, AsyncCursorPage
-from os import PathLike
-from openai.types import FileObject, Batch
-from openai._legacy_response import HttpxBinaryResponseContent
-from typing import TypedDict, List, Optional, Tuple, Mapping, IO
+from openai.types.beta.assistant_tool_param import AssistantToolParam
+from openai.types.beta.thread_create_params import (
+    Message as OpenAICreateThreadParamsMessage,
+)
+from openai.types.beta.threads.message import Message as OpenAIMessage
+from openai.types.beta.threads.message_content import MessageContent
+from openai.types.beta.threads.run import Run
+from pydantic import BaseModel
+from typing_extensions import Dict, Required, override
 
 FileContent = Union[IO[bytes], bytes, PathLike]
 

@@ -1,29 +1,34 @@
-import sys, os
+import os
+import sys
 import traceback
+
 from dotenv import load_dotenv
 
 load_dotenv()
-import os, io
+import io
+import os
 
 # this file is to test litellm/proxy
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-import pytest, asyncio
-import litellm
-from litellm import embedding, completion, completion_cost, Timeout
-from litellm import RateLimitError
+import asyncio
+
+import pytest
+from fastapi import FastAPI
 
 # test /chat/completion request to the proxy
 from fastapi.testclient import TestClient
-from fastapi import FastAPI
-from litellm.proxy.proxy_server import (
+
+import litellm
+from litellm import RateLimitError, Timeout, completion, completion_cost, embedding
+from litellm.proxy.proxy_server import (  # Replace with the actual module where your FastAPI router is defined
+    ProxyConfig,
+    initialize,
     router,
     save_worker_config,
-    initialize,
-    ProxyConfig,
-)  # Replace with the actual module where your FastAPI router is defined
+)
 
 
 # Here you create a fixture that will be used by your tests

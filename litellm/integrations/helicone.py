@@ -1,9 +1,12 @@
 #### What this does ####
 #    On success, logs events to Helicone
-import dotenv, os
-import requests  # type: ignore
-import litellm
+import os
 import traceback
+
+import dotenv
+import requests  # type: ignore
+
+import litellm
 
 
 class HeliconeLogger:
@@ -16,7 +19,7 @@ class HeliconeLogger:
         self.key = os.getenv("HELICONE_API_KEY")
 
     def claude_mapping(self, model, messages, response_obj):
-        from anthropic import HUMAN_PROMPT, AI_PROMPT
+        from anthropic import AI_PROMPT, HUMAN_PROMPT
 
         prompt = f"{HUMAN_PROMPT}"
         for message in messages:

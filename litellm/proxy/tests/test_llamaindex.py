@@ -1,12 +1,13 @@
-import os, dotenv
+import os
 
+import dotenv
 from dotenv import load_dotenv
 
 load_dotenv()
 
-from llama_index.llms import AzureOpenAI
+from llama_index import ServiceContext, SimpleDirectoryReader, VectorStoreIndex
 from llama_index.embeddings import AzureOpenAIEmbedding
-from llama_index import VectorStoreIndex, SimpleDirectoryReader, ServiceContext
+from llama_index.llms import AzureOpenAI
 
 llm = AzureOpenAI(
     engine="azure-gpt-3.5",

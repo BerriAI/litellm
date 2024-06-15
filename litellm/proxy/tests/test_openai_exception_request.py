@@ -1,4 +1,7 @@
-import openai, httpx, os
+import os
+
+import httpx
+import openai
 from dotenv import load_dotenv
 
 load_dotenv()

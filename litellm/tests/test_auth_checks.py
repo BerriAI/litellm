@@ -1,8 +1,14 @@
 # What is this?
 ## Tests if 'get_end_user_object' works as expected
 
-import sys, os, asyncio, time, random, uuid
+import asyncio
+import os
+import random
+import sys
+import time
 import traceback
+import uuid
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -11,10 +17,12 @@ import os
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-import pytest, litellm
-from litellm.proxy.auth.auth_checks import get_end_user_object
+import pytest
+
+import litellm
 from litellm.caching import DualCache
-from litellm.proxy._types import LiteLLM_EndUserTable, LiteLLM_BudgetTable
+from litellm.proxy._types import LiteLLM_BudgetTable, LiteLLM_EndUserTable
+from litellm.proxy.auth.auth_checks import get_end_user_object
 from litellm.proxy.utils import PrismaClient
 
 

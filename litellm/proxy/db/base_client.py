@@ -1,4 +1,4 @@
-from typing import Any, Literal, List
+from typing import Any, List, Literal
 
 
 class CustomDB:

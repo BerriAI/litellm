@@ -8,21 +8,22 @@ Run checks for:
 2. If user is in budget 
 3. If end_user ('user' passed to /chat/completions, /embeddings endpoint) is in budget 
 """
+from datetime import datetime
+from typing import TYPE_CHECKING, Any, Literal, Optional
+
+import litellm
+from litellm.caching import DualCache
 from litellm.proxy._types import (
-    LiteLLM_UserTable,
     LiteLLM_EndUserTable,
     LiteLLM_JWTAuth,
-    LiteLLM_TeamTable,
-    LiteLLMRoutes,
     LiteLLM_OrganizationTable,
+    LiteLLM_TeamTable,
+    LiteLLM_UserTable,
+    LiteLLMRoutes,
     LitellmUserRoles,
 )
-from typing import Optional, Literal, TYPE_CHECKING, Any
 from litellm.proxy.utils import PrismaClient, ProxyLogging, log_to_opentelemetry
-from litellm.caching import DualCache
-import litellm
 from litellm.types.services import ServiceLoggerPayload, ServiceTypes
-from datetime import datetime
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -110,7 +111,7 @@ def common_checks(
         # Enterprise ONLY Feature
         # we already validate if user is premium_user when reading the config
         # Add an extra premium_usercheck here too, just incase
-        from litellm.proxy.proxy_server import premium_user, CommonProxyErrors
+        from litellm.proxy.proxy_server import CommonProxyErrors, premium_user
 
         if premium_user is not True:
             raise ValueError(

@@ -1,14 +1,15 @@
-import sys
-import os
 import io
+import os
+import sys
 
 sys.path.insert(0, os.path.abspath("../.."))
 
-from litellm import completion
-import litellm
+import time
+
 import pytest
 
-import time
+import litellm
+from litellm import completion
 
 
 @pytest.mark.skip(reason="beta test - this is a new feature")

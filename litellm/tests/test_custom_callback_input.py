@@ -1,14 +1,22 @@
 ### What this tests ####
 ## This test asserts the type of data passed into each method of the custom callback handler
-import sys, os, time, inspect, asyncio, traceback
+import asyncio
+import inspect
+import os
+import sys
+import time
+import traceback
+import uuid
 from datetime import datetime
-import pytest, uuid
+
+import pytest
 from pydantic import BaseModel
 
 sys.path.insert(0, os.path.abspath("../.."))
-from typing import Optional, Literal, List, Union
-from litellm import completion, embedding, Cache
+from typing import List, Literal, Optional, Union
+
 import litellm
+from litellm import Cache, completion, embedding
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.utils import LiteLLMCommonStrings
 

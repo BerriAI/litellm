@@ -1,9 +1,10 @@
 # What is this?
 ## Common checks for /v1/models and `/model/info`
 from typing import List, Optional
-from litellm.proxy._types import UserAPIKeyAuth, SpecialModelNames
-from litellm.utils import get_valid_models
+
 from litellm._logging import verbose_proxy_logger
+from litellm.proxy._types import SpecialModelNames, UserAPIKeyAuth
+from litellm.utils import get_valid_models
 
 
 def get_key_models(

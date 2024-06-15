@@ -1,11 +1,16 @@
-import os, types, traceback
 import json
+import os
+import time  # type: ignore
+import traceback
+import types
 from enum import Enum
-import requests  # type: ignore
-import time, httpx  # type: ignore
 from typing import Callable, Optional
-from litellm.utils import ModelResponse, Choices, Message
+
+import httpx
+import requests  # type: ignore
+
 import litellm
+from litellm.utils import Choices, Message, ModelResponse
 
 
 class AI21Error(Exception):

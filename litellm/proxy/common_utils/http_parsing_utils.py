@@ -1,6 +1,8 @@
+import ast
+import json
 from typing import Optional
+
 from fastapi import Request
-import ast, json
 
 
 async def _read_request_body(request: Optional[Request]) -> dict:

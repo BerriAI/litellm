@@ -1,27 +1,32 @@
 #### What this does ####
 #    Class for sending Slack Alerts #
-import dotenv, os, traceback
-from litellm.proxy._types import UserAPIKeyAuth, CallInfo, AlertType
-from litellm._logging import verbose_logger, verbose_proxy_logger
-import litellm, threading
-from typing import List, Literal, Any, Union, Optional, Dict, Set
-from litellm.caching import DualCache
-import asyncio, time
-import aiohttp
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+import asyncio
 import datetime
-from pydantic import BaseModel, Field
-from enum import Enum
-from datetime import datetime as dt, timedelta, timezone
-from litellm.integrations.custom_logger import CustomLogger
-from litellm.proxy._types import WebhookEvent
+import os
 import random
-from typing import TypedDict
-from openai import APIError
-from .email_templates.templates import *
+import threading
+import time
+import traceback
+from datetime import datetime as dt
+from datetime import timedelta, timezone
+from enum import Enum
+from typing import Any, Dict, List, Literal, Optional, Set, TypedDict, Union
 
+import aiohttp
+import dotenv
+from openai import APIError
+from pydantic import BaseModel, Field
+
+import litellm
 import litellm.types
+from litellm._logging import verbose_logger, verbose_proxy_logger
+from litellm.caching import DualCache
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.proxy._types import AlertType, CallInfo, UserAPIKeyAuth, WebhookEvent
 from litellm.types.router import LiteLLM_Params
+
+from .email_templates.templates import *
 
 
 class BaseOutageModel(TypedDict):
@@ -1231,8 +1236,7 @@ Model Info:
         email_logo_url: Optional[str] = None,
         email_support_contact: Optional[str] = None,
     ):
-        from litellm.proxy.proxy_server import premium_user
-        from litellm.proxy.proxy_server import CommonProxyErrors
+        from litellm.proxy.proxy_server import CommonProxyErrors, premium_user
 
         if premium_user is not True:
             if email_logo_url is not None or email_support_contact is not None:
@@ -1352,8 +1356,8 @@ Model Info:
 
         Returns -> True if sent, False if not.
         """
-        from litellm.proxy.utils import send_email
         from litellm.proxy.proxy_server import premium_user, prisma_client
+        from litellm.proxy.utils import send_email
 
         email_logo_url = os.getenv(
             "SMTP_SENDER_LOGO", os.getenv("EMAIL_LOGO_URL", None)
@@ -1462,8 +1466,8 @@ Model Info:
         if alert_type not in self.alert_types:
             return
 
-        from datetime import datetime
         import json
+        from datetime import datetime
 
         # Get the current timestamp
         current_time = datetime.now().strftime("%H:%M:%S")

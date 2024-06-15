@@ -1,6 +1,9 @@
-import sys, os, uuid
+import os
+import sys
 import time
 import traceback
+import uuid
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -9,12 +12,15 @@ import os
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-import pytest
-import litellm
-from litellm import embedding, completion, aembedding
-from litellm.caching import Cache
+import asyncio
+import hashlib
 import random
-import hashlib, asyncio
+
+import pytest
+
+import litellm
+from litellm import aembedding, completion, embedding
+from litellm.caching import Cache
 
 # litellm.set_verbose=True
 
@@ -656,6 +662,7 @@ def test_redis_cache_completion():
     assert response1.created == response2.created
     assert response1.choices[0].message.content == response2.choices[0].message.content
 
+
 # test_redis_cache_completion()
 
 
@@ -877,6 +884,7 @@ async def test_redis_cache_acompletion_stream_bedrock():
         print(e)
         raise e
 
+
 def test_disk_cache_completion():
     litellm.set_verbose = False
 
@@ -925,7 +933,7 @@ def test_disk_cache_completion():
     litellm.success_callback = []
     litellm._async_success_callback = []
 
-    # 1 & 2 should be exactly the same 
+    # 1 & 2 should be exactly the same
     # 1 & 3 should be different, since input params are diff
     if (
         response1["choices"][0]["message"]["content"]

@@ -1,10 +1,15 @@
 #### What this does ####
 #    On success + failure, log events to Supabase
 
-import dotenv, os
-import requests  # type: ignore
+import datetime
+import os
+import subprocess
+import sys
 import traceback
-import datetime, subprocess, sys
+
+import dotenv
+import requests  # type: ignore
+
 import litellm
 
 

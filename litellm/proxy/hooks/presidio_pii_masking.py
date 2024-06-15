@@ -8,21 +8,26 @@
 #  Tell us how we can improve! - Krrish & Ishaan
 
 
+import asyncio
+import json
+import traceback
+import uuid
 from typing import Optional, Union
-import litellm, traceback, uuid, json  # noqa: E401
-from litellm.caching import DualCache
-from litellm.proxy._types import UserAPIKeyAuth
-from litellm.integrations.custom_logger import CustomLogger
+
+import aiohttp
 from fastapi import HTTPException
+
+import litellm  # noqa: E401
 from litellm._logging import verbose_proxy_logger
+from litellm.caching import DualCache
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.utils import (
-    ModelResponse,
     EmbeddingResponse,
     ImageResponse,
+    ModelResponse,
     StreamingChoices,
 )
-import aiohttp
-import asyncio
 
 
 class _OPTIONAL_PresidioPIIMasking(CustomLogger):

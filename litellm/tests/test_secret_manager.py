@@ -1,6 +1,9 @@
-import sys, os, uuid
+import os
+import sys
 import time
 import traceback
+import uuid
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -10,6 +13,7 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import pytest
+
 from litellm import get_secret
 from litellm.proxy.secret_managers.aws_secret_manager import load_aws_secret_manager
 

@@ -1,12 +1,22 @@
 #### What this tests ####
 #    This adds perf testing to the router, to ensure it's never > 50ms slower than the azure-openai sdk.
-import sys, os, time, inspect, asyncio, traceback
+import asyncio
+import inspect
+import os
+import sys
+import time
+import traceback
 from datetime import datetime
+
 import pytest
 
 sys.path.insert(0, os.path.abspath("../.."))
-import openai, litellm, uuid
+import uuid
+
+import openai
 from openai import AsyncAzureOpenAI
+
+import litellm
 
 client = AsyncAzureOpenAI(
     api_key=os.getenv("AZURE_API_KEY"),

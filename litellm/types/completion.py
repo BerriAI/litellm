@@ -1,7 +1,6 @@
-from typing import List, Optional, Union, Iterable
+from typing import Iterable, List, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, validator
-
 from typing_extensions import Literal, Required, TypedDict
 
 

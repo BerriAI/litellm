@@ -1,8 +1,10 @@
 #### What this tests ####
 #    This tests calling batch_completions by running 100 messages together
 
-import sys, os
+import os
+import sys
 import traceback
+
 import pytest
 
 sys.path.insert(

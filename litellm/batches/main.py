@@ -10,29 +10,31 @@ https://platform.openai.com/docs/api-reference/batch
 
 """
 
-import os
 import asyncio
-from functools import partial
 import contextvars
-from typing import Literal, Optional, Dict, Coroutine, Any, Union
+import os
+from functools import partial
+from typing import Any, Coroutine, Dict, Literal, Optional, Union
+
 import httpx
 
 import litellm
 from litellm import client
 from litellm.utils import supports_httpx_timeout
-from ..types.router import *
+
 from ..llms.openai import OpenAIBatchesAPI, OpenAIFilesAPI
 from ..types.llms.openai import (
-    CreateBatchRequest,
-    RetrieveBatchRequest,
-    CancelBatchRequest,
-    CreateFileRequest,
-    FileTypes,
-    FileObject,
     Batch,
+    CancelBatchRequest,
+    CreateBatchRequest,
+    CreateFileRequest,
     FileContentRequest,
+    FileObject,
+    FileTypes,
     HttpxBinaryResponseContent,
+    RetrieveBatchRequest,
 )
+from ..types.router import *
 
 ####### ENVIRONMENT VARIABLES ###################
 openai_batches_instance = OpenAIBatchesAPI()

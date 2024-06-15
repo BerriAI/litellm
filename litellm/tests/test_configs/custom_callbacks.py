@@ -1,6 +1,7 @@
-from litellm.integrations.custom_logger import CustomLogger
 import inspect
+
 import litellm
+from litellm.integrations.custom_logger import CustomLogger
 
 
 class testCustomCallbackProxy(CustomLogger):

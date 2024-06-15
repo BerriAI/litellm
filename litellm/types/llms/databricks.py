@@ -1,15 +1,16 @@
-from typing import TypedDict, Any, Union, Optional
 import json
-from typing_extensions import (
-    Self,
-    Protocol,
-    TypeGuard,
-    override,
-    get_origin,
-    runtime_checkable,
-    Required,
-)
+from typing import Any, Optional, TypedDict, Union
+
 from pydantic import BaseModel
+from typing_extensions import (
+    Protocol,
+    Required,
+    Self,
+    TypeGuard,
+    get_origin,
+    override,
+    runtime_checkable,
+)
 
 
 class GenericStreamingChunk(TypedDict, total=False):

@@ -1,6 +1,7 @@
-import requests
-import time
 import os
+import time
+
+import requests
 from dotenv import load_dotenv
 
 load_dotenv()

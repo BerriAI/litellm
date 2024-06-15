@@ -1,8 +1,11 @@
 #### What this tests ####
 #  Allow the user to map the function to the prompt, if the model doesn't support function calling
 
-import sys, os, pytest
+import os
+import sys
 import traceback
+
+import pytest
 
 sys.path.insert(
     0, os.path.abspath("../..")

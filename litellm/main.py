@@ -7,107 +7,125 @@
 #
 #  Thank you ! We ❤️ you! - Krrish & Ishaan
 
-import os, openai, sys, json, inspect, uuid, datetime, threading
-from typing import Any, Literal, Union, BinaryIO
-from typing_extensions import overload
-from functools import partial
-
-import dotenv, traceback, random, asyncio, time, contextvars
+import asyncio
+import contextvars
+import datetime
+import inspect
+import json
+import os
+import random
+import sys
+import threading
+import time
+import traceback
+import uuid
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
-import httpx
-import litellm
-from ._logging import verbose_logger
-from litellm import (  # type: ignore
-    client,
-    exception_type,
-    get_optional_params,
-    get_litellm_params,
-    Logging,
+from functools import partial
+from typing import (
+    Any,
+    BinaryIO,
+    Callable,
+    Dict,
+    List,
+    Literal,
+    Mapping,
+    Optional,
+    Union,
 )
+
+import dotenv
+import httpx
+import openai
+import tiktoken
+from typing_extensions import overload
+
+import litellm
+from litellm import exception_type  # type: ignore
+from litellm import Logging, client, get_litellm_params, get_optional_params
 from litellm.utils import (
-    get_secret,
     CustomStreamWrapper,
-    read_config_args,
-    completion_with_fallbacks,
-    get_llm_provider,
-    get_api_key,
-    mock_completion_streaming_obj,
+    Usage,
     async_mock_completion_streaming_obj,
+    completion_with_fallbacks,
     convert_to_model_response_object,
-    token_counter,
     create_pretrained_tokenizer,
     create_tokenizer,
-    Usage,
+    get_api_key,
+    get_llm_provider,
     get_optional_params_embeddings,
     get_optional_params_image_gen,
+    get_secret,
+    mock_completion_streaming_obj,
+    read_config_args,
     supports_httpx_timeout,
+    token_counter,
 )
+
+from ._logging import verbose_logger
+from .caching import disable_cache, enable_cache, update_cache
 from .llms import (
-    anthropic_text,
-    together_ai,
     ai21,
-    sagemaker,
-    bedrock,
-    triton,
-    huggingface_restapi,
-    replicate,
     aleph_alpha,
-    nlp_cloud,
+    anthropic_text,
     baseten,
-    vllm,
-    ollama,
-    ollama_chat,
-    cloudflare,
+    bedrock,
     clarifai,
+    cloudflare,
     cohere,
     cohere_chat,
-    petals,
+    gemini,
+    huggingface_restapi,
+    maritalk,
+    nlp_cloud,
+    ollama,
+    ollama_chat,
     oobabooga,
     openrouter,
     palm,
-    gemini,
+    petals,
+    replicate,
+    sagemaker,
+    together_ai,
+    triton,
     vertex_ai,
     vertex_ai_anthropic,
-    maritalk,
+    vllm,
     watsonx,
 )
-from .llms.openai import OpenAIChatCompletion, OpenAITextCompletion
-from .llms.azure import AzureChatCompletion
-from .llms.databricks import DatabricksChatCompletion
-from .llms.azure_text import AzureTextCompletion
 from .llms.anthropic import AnthropicChatCompletion
 from .llms.anthropic_text import AnthropicTextCompletion
+from .llms.azure import AzureChatCompletion
+from .llms.azure_text import AzureTextCompletion
+from .llms.bedrock_httpx import BedrockConverseLLM, BedrockLLM
+from .llms.databricks import DatabricksChatCompletion
 from .llms.huggingface_restapi import Huggingface
+from .llms.openai import OpenAIChatCompletion, OpenAITextCompletion
 from .llms.predibase import PredibaseChatCompletion
-from .llms.bedrock_httpx import BedrockLLM, BedrockConverseLLM
-from .llms.vertex_httpx import VertexLLM
-from .llms.triton import TritonChatCompletion
 from .llms.prompt_templates.factory import (
-    prompt_factory,
     custom_prompt,
     function_call_prompt,
     map_system_message_pt,
+    prompt_factory,
 )
-import tiktoken
-from concurrent.futures import ThreadPoolExecutor
-from typing import Callable, List, Optional, Dict, Union, Mapping
-from .caching import enable_cache, disable_cache, update_cache
+from .llms.triton import TritonChatCompletion
+from .llms.vertex_httpx import VertexLLM
 from .types.llms.openai import HttpxBinaryResponseContent
 
 encoding = tiktoken.get_encoding("cl100k_base")
 from litellm.utils import (
-    get_secret,
+    Choices,
     CustomStreamWrapper,
-    TextCompletionStreamWrapper,
-    ModelResponse,
-    TextCompletionResponse,
-    TextChoices,
     EmbeddingResponse,
     ImageResponse,
-    read_config_args,
-    Choices,
     Message,
+    ModelResponse,
+    TextChoices,
+    TextCompletionResponse,
+    TextCompletionStreamWrapper,
     TranscriptionResponse,
+    get_secret,
+    read_config_args,
 )
 
 ####### ENVIRONMENT VARIABLES ###################

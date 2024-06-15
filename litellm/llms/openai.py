@@ -1,34 +1,41 @@
+import hashlib
+import json
+import time
+import traceback
+import types
 from typing import (
-    Optional,
-    Union,
     Any,
     BinaryIO,
-    Literal,
+    Callable,
+    Coroutine,
     Iterable,
+    Literal,
+    Optional,
+    Union,
 )
-import hashlib
-from typing_extensions import override, overload
-from pydantic import BaseModel
-import types, time, json, traceback
+
 import httpx
-from .base import BaseLLM
-from litellm.utils import (
-    ModelResponse,
-    Choices,
-    Message,
-    CustomStreamWrapper,
-    convert_to_model_response_object,
-    Usage,
-    TranscriptionResponse,
-    TextCompletionResponse,
-)
-from typing import Callable, Optional, Coroutine
-import litellm
-from .prompt_templates.factory import prompt_factory, custom_prompt
-from openai import OpenAI, AsyncOpenAI
-from ..types.llms.openai import *
 import openai
+from openai import AsyncOpenAI, OpenAI
+from pydantic import BaseModel
+from typing_extensions import overload, override
+
+import litellm
 from litellm.types.utils import ProviderField
+from litellm.utils import (
+    Choices,
+    CustomStreamWrapper,
+    Message,
+    ModelResponse,
+    TextCompletionResponse,
+    TranscriptionResponse,
+    Usage,
+    convert_to_model_response_object,
+)
+
+from ..types.llms.openai import *
+from .base import BaseLLM
+from .prompt_templates.factory import custom_prompt, prompt_factory
 
 
 class OpenAIError(Exception):

@@ -1,12 +1,16 @@
-import os, types
 import json
-from enum import Enum
-import requests  # type: ignore
+import os
 import time
+import types
+from enum import Enum
 from typing import Callable, Optional
+
+import requests  # type: ignore
+
 import litellm
 from litellm.utils import ModelResponse, Usage
-from .prompt_templates.factory import prompt_factory, custom_prompt
+
+from .prompt_templates.factory import custom_prompt, prompt_factory
 
 
 class PetalsError(Exception):
@@ -151,8 +155,8 @@ def completion(
     else:
         try:
             import torch
-            from transformers import AutoTokenizer
             from petals import AutoDistributedModelForCausalLM  # type: ignore
+            from transformers import AutoTokenizer
         except:
             raise Exception(
                 "Importing torch, transformers, petals failed\nTry pip installing petals \npip install git+https://github.com/bigscience-workshop/petals"

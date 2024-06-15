@@ -1,5 +1,6 @@
-import openai
 import asyncio
+
+import openai
 
 
 async def async_request(client, model, input_data):

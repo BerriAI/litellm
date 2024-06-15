@@ -1,23 +1,29 @@
 # What is this?
 ## Handler file for calling claude-3 on vertex ai
-import os, types
+import copy
 import json
+import os
+import time
+import types
+import uuid
 from enum import Enum
-import requests, copy  # type: ignore
-import time, uuid
-from typing import Callable, Optional, List
-from litellm.utils import ModelResponse, Usage, map_finish_reason, CustomStreamWrapper
+from typing import Callable, List, Optional
+
+import httpx  # type: ignore
+import requests  # type: ignore
+
 import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.utils import CustomStreamWrapper, ModelResponse, Usage, map_finish_reason
+
 from .prompt_templates.factory import (
-    contains_tag,
-    prompt_factory,
-    custom_prompt,
     construct_tool_use_system_prompt,
+    contains_tag,
+    custom_prompt,
     extract_between_tags,
     parse_xml_params,
+    prompt_factory,
 )
-import httpx  # type: ignore
 
 
 class VertexAIError(Exception):

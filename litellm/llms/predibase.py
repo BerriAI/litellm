@@ -1,27 +1,32 @@
 # What is this?
 ## Controller file for Predibase Integration - https://predibase.com/
 
-from functools import partial
-import os, types
-import traceback
+import copy
 import json
-from enum import Enum
-import requests, copy  # type: ignore
+import os
 import time
-from typing import Callable, Optional, List, Literal, Union
+import traceback
+import types
+from enum import Enum
+from functools import partial
+from typing import Callable, List, Literal, Optional, Union
+
+import httpx  # type: ignore
+import requests  # type: ignore
+
+import litellm
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.utils import (
+    Choices,
+    CustomStreamWrapper,
+    Message,
     ModelResponse,
     Usage,
     map_finish_reason,
-    CustomStreamWrapper,
-    Message,
-    Choices,
 )
-import litellm
-from .prompt_templates.factory import prompt_factory, custom_prompt
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
 from .base import BaseLLM
-import httpx  # type: ignore
+from .prompt_templates.factory import custom_prompt, prompt_factory
 
 
 class PredibaseError(Exception):

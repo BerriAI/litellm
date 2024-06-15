@@ -1,6 +1,7 @@
-import sys
+import asyncio
+import io
 import os
-import io, asyncio
+import sys
 
 # import logging
 # logging.basicConfig(level=logging.DEBUG)
@@ -8,14 +9,17 @@ sys.path.insert(0, os.path.abspath("../.."))
 print("Modified sys.path:", sys.path)
 
 
-from litellm import completion
-import litellm
-from litellm._logging import verbose_logger
 import logging
+
+import litellm
+from litellm import completion
+from litellm._logging import verbose_logger
 
 litellm.num_retries = 3
 
-import time, random
+import random
+import time
+
 import pytest
 
 

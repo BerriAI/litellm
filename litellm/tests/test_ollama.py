@@ -1,20 +1,25 @@
 import asyncio
-import sys, os
+import os
+import sys
 import traceback
+
 from dotenv import load_dotenv
 
 load_dotenv()
-import os, io
+import io
+import os
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-import pytest
-import litellm
 from unittest import mock
 
+import pytest
+
+import litellm
+
 ## for ollama we can't test making the completion call
-from litellm.utils import EmbeddingResponse, get_optional_params, get_llm_provider
+from litellm.utils import EmbeddingResponse, get_llm_provider, get_optional_params
 
 
 def test_get_ollama_params():
@@ -48,20 +53,30 @@ def test_get_ollama_model():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+
 # test_get_ollama_model()
-        
+
+
 def test_ollama_json_mode():
-    # assert that format: json gets passed as is to ollama 
+    # assert that format: json gets passed as is to ollama
     try:
-        converted_params = get_optional_params(custom_llm_provider="ollama", model="llama2", format = "json", temperature=0.5)
+        converted_params = get_optional_params(
+            custom_llm_provider="ollama", model="llama2", format="json", temperature=0.5
+        )
         print("Converted params", converted_params)
-        assert converted_params == {'temperature': 0.5, 'format': 'json'}, f"{converted_params} != {'temperature': 0.5, 'format': 'json'}"
+        assert converted_params == {
+            "temperature": 0.5,
+            "format": "json",
+        }, f"{converted_params} != {'temperature': 0.5, 'format': 'json'}"
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
 # test_ollama_json_mode()
 
 
 mock_ollama_embedding_response = EmbeddingResponse(model="ollama/nomic-embed-text")
+
 
 @mock.patch(
     "litellm.llms.ollama.ollama_embeddings",
@@ -70,7 +85,9 @@ mock_ollama_embedding_response = EmbeddingResponse(model="ollama/nomic-embed-tex
 def test_ollama_embeddings(mock_embeddings):
     # assert that ollama_embeddings is called with the right parameters
     try:
-        embeddings = litellm.embedding(model="ollama/nomic-embed-text", input=["hello world"])
+        embeddings = litellm.embedding(
+            model="ollama/nomic-embed-text", input=["hello world"]
+        )
         print(embeddings)
         mock_embeddings.assert_called_once_with(
             api_base="http://localhost:11434",
@@ -83,7 +100,10 @@ def test_ollama_embeddings(mock_embeddings):
         )
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
 # test_ollama_embeddings()
+
 
 @mock.patch(
     "litellm.llms.ollama.ollama_aembeddings",
@@ -92,7 +112,9 @@ def test_ollama_embeddings(mock_embeddings):
 def test_ollama_aembeddings(mock_aembeddings):
     # assert that ollama_aembeddings is called with the right parameters
     try:
-        embeddings = asyncio.run(litellm.aembedding(model="ollama/nomic-embed-text", input=["hello world"]))
+        embeddings = asyncio.run(
+            litellm.aembedding(model="ollama/nomic-embed-text", input=["hello world"])
+        )
         print(embeddings)
         mock_aembeddings.assert_called_once_with(
             api_base="http://localhost:11434",
@@ -105,4 +127,6 @@ def test_ollama_aembeddings(mock_aembeddings):
         )
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
 # test_ollama_aembeddings()

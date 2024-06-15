@@ -1,9 +1,11 @@
 from datetime import datetime
 from functools import wraps
-from litellm.proxy._types import UserAPIKeyAuth, ManagementEndpointLoggingPayload
-from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
-from litellm._logging import verbose_logger
+
 from fastapi import Request
+
+from litellm._logging import verbose_logger
+from litellm.proxy._types import ManagementEndpointLoggingPayload, UserAPIKeyAuth
+from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 
 
 def management_endpoint_wrapper(func):

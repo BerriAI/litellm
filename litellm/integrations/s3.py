@@ -1,10 +1,14 @@
 #### What this does ####
 #    On success + failure, log events to Supabase
 
+import datetime
 import os
+import subprocess
+import sys
 import traceback
-import datetime, subprocess, sys
-import litellm, uuid
+import uuid
+
+import litellm
 from litellm._logging import print_verbose, verbose_logger
 
 

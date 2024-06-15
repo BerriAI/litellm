@@ -2,25 +2,30 @@
 import warnings
 
 warnings.filterwarnings("ignore", message=".*conflict with protected namespace.*")
+import os
+
 ### INIT VARIABLES ###
-import threading, requests, os
-from typing import Callable, List, Optional, Dict, Union, Any, Literal
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.caching import Cache
+import threading
+from typing import Any, Callable, Dict, List, Literal, Optional, Union
+
+import dotenv
+import httpx
+import requests
+
 from litellm._logging import (
-    set_verbose,
     _turn_on_debug,
-    verbose_logger,
-    json_logs,
     _turn_on_json,
+    json_logs,
+    set_verbose,
+    verbose_logger,
 )
+from litellm.caching import Cache
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.proxy._types import (
-    KeyManagementSystem,
     KeyManagementSettings,
+    KeyManagementSystem,
     LiteLLM_UpperboundKeyGenerateParams,
 )
-import httpx
-import dotenv
 
 litellm_mode = os.getenv("LITELLM_MODE", "DEV")  # "PRODUCTION", "DEV"
 if litellm_mode == "DEV":
@@ -713,118 +718,117 @@ all_embedding_models = (
 ####### IMAGE GENERATION MODELS ###################
 openai_image_generation_models = ["dall-e-2", "dall-e-3"]
 
+from .assistants.main import *
+from .batches.main import *
+from .budget_manager import BudgetManager
+from .cost_calculator import completion_cost, response_cost_calculator
+from .exceptions import (
+    LITELLM_EXCEPTION_TYPES,
+    APIConnectionError,
+    APIError,
+    APIResponseValidationError,
+    AuthenticationError,
+    BadRequestError,
+    BudgetExceededError,
+    ContentPolicyViolationError,
+    ContextWindowExceededError,
+    InternalServerError,
+    InvalidRequestError,
+    NotFoundError,
+    OpenAIError,
+    RateLimitError,
+    ServiceUnavailableError,
+    Timeout,
+    UnprocessableEntityError,
+)
+from .integrations import *
+from .llms.ai21 import AI21Config
+from .llms.aleph_alpha import AlephAlphaConfig
+from .llms.anthropic import AnthropicConfig
+from .llms.anthropic_text import AnthropicTextConfig
+from .llms.azure import (
+    AzureOpenAIAssistantsAPIConfig,
+    AzureOpenAIConfig,
+    AzureOpenAIError,
+)
+from .llms.bedrock import (
+    AmazonAI21Config,
+    AmazonAnthropicClaude3Config,
+    AmazonAnthropicConfig,
+    AmazonBedrockGlobalConfig,
+    AmazonCohereConfig,
+    AmazonLlamaConfig,
+    AmazonMistralConfig,
+    AmazonStabilityConfig,
+    AmazonTitanConfig,
+)
+from .llms.bedrock_httpx import AmazonCohereChatConfig, AmazonConverseConfig
+from .llms.clarifai import ClarifaiConfig
+from .llms.cloudflare import CloudflareConfig
+from .llms.cohere import CohereConfig
+from .llms.databricks import DatabricksConfig, DatabricksEmbeddingConfig
+from .llms.gemini import GeminiConfig
+from .llms.huggingface_restapi import HuggingfaceConfig
+from .llms.maritalk import MaritTalkConfig
+from .llms.nlp_cloud import NLPCloudConfig
+from .llms.ollama import OllamaConfig
+from .llms.ollama_chat import OllamaChatConfig
+from .llms.openai import (
+    AzureAIStudioConfig,
+    DeepInfraConfig,
+    MistralConfig,
+    MistralEmbeddingConfig,
+    OpenAIConfig,
+    OpenAITextCompletionConfig,
+)
+from .llms.palm import PalmConfig
+from .llms.petals import PetalsConfig
+from .llms.predibase import PredibaseConfig
+from .llms.replicate import ReplicateConfig
+from .llms.sagemaker import SagemakerConfig
+from .llms.together_ai import TogetherAIConfig
+from .llms.vertex_ai import VertexAIConfig, VertexAITextEmbeddingConfig
+from .llms.vertex_ai_anthropic import VertexAIAnthropicConfig
+from .llms.vertex_httpx import VertexGeminiConfig
+from .llms.watsonx import IBMWatsonXAIConfig
+from .main import *  # type: ignore
+from .proxy.proxy_cli import run_server
+from .router import Router
+from .scheduler import *
 from .timeout import timeout
-from .cost_calculator import completion_cost
 from .utils import (
+    ImageObject,
+    ImageResponse,
+    Logging,
+    ModelResponse,
+    _calculate_retry_after,
+    _should_retry,
+    acreate,
+    check_valid_key,
     client,
-    exception_type,
-    get_optional_params,
-    modify_integration,
-    token_counter,
+    cost_per_token,
     create_pretrained_tokenizer,
     create_tokenizer,
-    cost_per_token,
+    decode,
+    encode,
+    exception_type,
+    get_api_base,
+    get_first_chars_messages,
+    get_litellm_params,
+    get_llm_provider,
+    get_max_tokens,
+    get_model_info,
+    get_model_list,
+    get_optional_params,
+    get_provider_fields,
+    get_secret,
+    get_supported_openai_params,
+    modify_integration,
+    register_model,
+    register_prompt_template,
     supports_function_calling,
     supports_parallel_function_calling,
     supports_vision,
-    get_litellm_params,
-    Logging,
-    acreate,
-    get_model_list,
-    get_max_tokens,
-    get_model_info,
-    register_prompt_template,
+    token_counter,
     validate_environment,
-    check_valid_key,
-    get_llm_provider,
-    register_model,
-    encode,
-    decode,
-    _calculate_retry_after,
-    _should_retry,
-    get_secret,
-    get_supported_openai_params,
-    get_api_base,
-    get_first_chars_messages,
-    ModelResponse,
-    ImageResponse,
-    ImageObject,
-    get_provider_fields,
 )
-from .llms.huggingface_restapi import HuggingfaceConfig
-from .llms.anthropic import AnthropicConfig
-from .llms.databricks import DatabricksConfig, DatabricksEmbeddingConfig
-from .llms.predibase import PredibaseConfig
-from .llms.anthropic_text import AnthropicTextConfig
-from .llms.replicate import ReplicateConfig
-from .llms.cohere import CohereConfig
-from .llms.clarifai import ClarifaiConfig
-from .llms.ai21 import AI21Config
-from .llms.together_ai import TogetherAIConfig
-from .llms.cloudflare import CloudflareConfig
-from .llms.palm import PalmConfig
-from .llms.gemini import GeminiConfig
-from .llms.nlp_cloud import NLPCloudConfig
-from .llms.aleph_alpha import AlephAlphaConfig
-from .llms.petals import PetalsConfig
-from .llms.vertex_httpx import VertexGeminiConfig
-from .llms.vertex_ai import VertexAIConfig, VertexAITextEmbeddingConfig
-from .llms.vertex_ai_anthropic import VertexAIAnthropicConfig
-from .llms.sagemaker import SagemakerConfig
-from .llms.ollama import OllamaConfig
-from .llms.ollama_chat import OllamaChatConfig
-from .llms.maritalk import MaritTalkConfig
-from .llms.bedrock_httpx import AmazonCohereChatConfig, AmazonConverseConfig
-from .llms.bedrock import (
-    AmazonTitanConfig,
-    AmazonAI21Config,
-    AmazonAnthropicConfig,
-    AmazonAnthropicClaude3Config,
-    AmazonCohereConfig,
-    AmazonLlamaConfig,
-    AmazonStabilityConfig,
-    AmazonMistralConfig,
-    AmazonBedrockGlobalConfig,
-)
-from .llms.openai import (
-    OpenAIConfig,
-    OpenAITextCompletionConfig,
-    MistralConfig,
-    MistralEmbeddingConfig,
-    DeepInfraConfig,
-    AzureAIStudioConfig,
-)
-from .llms.azure import (
-    AzureOpenAIConfig,
-    AzureOpenAIError,
-    AzureOpenAIAssistantsAPIConfig,
-)
-from .llms.watsonx import IBMWatsonXAIConfig
-from .main import *  # type: ignore
-from .integrations import *
-from .exceptions import (
-    AuthenticationError,
-    InvalidRequestError,
-    BadRequestError,
-    NotFoundError,
-    RateLimitError,
-    ServiceUnavailableError,
-    OpenAIError,
-    ContextWindowExceededError,
-    ContentPolicyViolationError,
-    BudgetExceededError,
-    APIError,
-    Timeout,
-    APIConnectionError,
-    APIResponseValidationError,
-    UnprocessableEntityError,
-    InternalServerError,
-    LITELLM_EXCEPTION_TYPES,
-)
-from .budget_manager import BudgetManager
-from .proxy.proxy_cli import run_server
-from .router import Router
-from .assistants.main import *
-from .batches.main import *
-from .scheduler import *
-from .cost_calculator import response_cost_calculator

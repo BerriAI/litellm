@@ -1,10 +1,11 @@
 import pytest
-from litellm import acompletion
-from litellm import completion
+
+from litellm import acompletion, completion
 
 
 def test_acompletion_params():
     import inspect
+
     from litellm.types.completion import CompletionRequest
 
     acompletion_params_odict = inspect.signature(acompletion).parameters

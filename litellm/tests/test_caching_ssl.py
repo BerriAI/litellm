@@ -1,9 +1,11 @@
 #### What this tests ####
 #    This tests using caching w/ litellm which requires SSL=True
 
-import sys, os
+import os
+import sys
 import time
 import traceback
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -13,8 +15,9 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import pytest
+
 import litellm
-from litellm import embedding, completion, Router
+from litellm import Router, completion, embedding
 from litellm.caching import Cache
 
 messages = [{"role": "user", "content": f"who is ishaan {time.time()}"}]

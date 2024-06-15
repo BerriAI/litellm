@@ -1,17 +1,20 @@
-import os, types
+import inspect
 import json
-from enum import Enum
-import requests  # type: ignore
+import os
 import time
-from typing import Callable, Optional, Union, List, Literal, Any
+import types
+import uuid
+from enum import Enum
+from typing import Any, Callable, List, Literal, Optional, Union
+
+import httpx  # type: ignore
+import requests  # type: ignore
 from pydantic import BaseModel
-from litellm.utils import ModelResponse, Usage, CustomStreamWrapper, map_finish_reason
-import litellm, uuid
-import httpx, inspect  # type: ignore
-from litellm.types.llms.vertex_ai import *
+
+import litellm
 from litellm.llms.prompt_templates.factory import (
-    convert_to_gemini_tool_call_result,
     convert_to_gemini_tool_call_invoke,
+    convert_to_gemini_tool_call_result,
 )
 from litellm.types.files import (
     get_file_mime_type_for_file_type,
@@ -19,6 +22,8 @@ from litellm.types.files import (
     is_gemini_1_5_accepted_file_type,
     is_video_file_type,
 )
+from litellm.types.llms.vertex_ai import *
+from litellm.utils import CustomStreamWrapper, ModelResponse, Usage, map_finish_reason
 
 
 class VertexAIError(Exception):
@@ -284,10 +289,10 @@ def _load_image_from_url(image_url: str):
         Image: The loaded image.
     """
     from vertexai.preview.generative_models import (
-        GenerativeModel,
-        Part,
         GenerationConfig,
+        GenerativeModel,
         Image,
+        Part,
     )
 
     image_bytes = _get_image_bytes_from_url(image_url)
@@ -329,7 +334,8 @@ def _process_gemini_image(image_url: str) -> PartType:
 
         # Base64 encoding
         elif "base64" in image_url:
-            import base64, re
+            import base64
+            import re
 
             # base 64 is passed as data:image/jpeg;base64,<base-64-encoded-image>
             image_metadata, img_without_base_64 = image_url.split(",")
@@ -479,23 +485,25 @@ def completion(
             message="""Upgrade vertex ai. Run `pip install "google-cloud-aiplatform>=1.38"`""",
         )
     try:
+        import google.auth  # type: ignore
+        import proto  # type: ignore
+        from google.cloud import aiplatform  # type: ignore
+        from google.cloud.aiplatform_v1beta1.types import (
+            content as gapic_content_types,  # type: ignore
+        )
+        from google.protobuf import json_format  # type: ignore
+        from google.protobuf.struct_pb2 import Value  # type: ignore
+        from vertexai.language_models import CodeGenerationModel, TextGenerationModel
+        from vertexai.preview.generative_models import (
+            GenerationConfig,
+            GenerativeModel,
+            Part,
+        )
         from vertexai.preview.language_models import (
             ChatModel,
             CodeChatModel,
             InputOutputTextPair,
         )
-        from vertexai.language_models import TextGenerationModel, CodeGenerationModel
-        from vertexai.preview.generative_models import (
-            GenerativeModel,
-            Part,
-            GenerationConfig,
-        )
-        from google.cloud import aiplatform  # type: ignore
-        from google.protobuf import json_format  # type: ignore
-        from google.protobuf.struct_pb2 import Value  # type: ignore
-        from google.cloud.aiplatform_v1beta1.types import content as gapic_content_types  # type: ignore
-        import google.auth  # type: ignore
-        import proto  # type: ignore
 
         ## Load credentials with the correct quota project ref: https://github.com/googleapis/python-aiplatform/issues/2557#issuecomment-1709284744
         print_verbose(
@@ -1411,8 +1419,8 @@ def embedding(
             message="vertexai import failed please run `pip install google-cloud-aiplatform`",
         )
 
-    from vertexai.language_models import TextEmbeddingModel, TextEmbeddingInput
     import google.auth  # type: ignore
+    from vertexai.language_models import TextEmbeddingInput, TextEmbeddingModel
 
     ## Load credentials with the correct quota project ref: https://github.com/googleapis/python-aiplatform/issues/2557#issuecomment-1709284744
     try:

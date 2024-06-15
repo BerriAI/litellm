@@ -1,19 +1,25 @@
-import sys, os
+import os
+import sys
 import traceback
+
 from dotenv import load_dotenv
 
 load_dotenv()
-import os, io
+import io
+import os
 
 # this file is to test litellm/proxy
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-import pytest, logging, asyncio
+import asyncio
+import logging
+
+import pytest
+
 import litellm
-from litellm import embedding, completion, completion_cost, Timeout
-from litellm import RateLimitError
+from litellm import RateLimitError, Timeout, completion, completion_cost, embedding
 
 # Configure logging
 logging.basicConfig(
@@ -21,15 +27,18 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
 )
 
+import os
+
+from fastapi import FastAPI
+
 # test /chat/completion request to the proxy
 from fastapi.testclient import TestClient
-from fastapi import FastAPI
-import os
-from litellm.proxy.proxy_server import (
+
+from litellm.proxy.proxy_server import (  # Replace with the actual module where your FastAPI router is defined
+    initialize,
     router,
     save_worker_config,
-    initialize,
-)  # Replace with the actual module where your FastAPI router is defined
+)
 
 # Your bearer token
 token = "sk-1234"
@@ -56,8 +65,8 @@ def client_no_auth():
 def test_chat_completion(client_no_auth):
     global headers
 
-    from litellm.types.router import RouterConfig, ModelConfig
     from litellm.types.completion import CompletionRequest
+    from litellm.types.router import ModelConfig, RouterConfig
 
     user_config = RouterConfig(
         model_list=[

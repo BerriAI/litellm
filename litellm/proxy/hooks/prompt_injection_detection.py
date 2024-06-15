@@ -7,18 +7,21 @@
 ## Reject a call if it contains a prompt injection attack.
 
 
-from typing import Optional, Literal
-import litellm
-from litellm.caching import DualCache
-from litellm.proxy._types import UserAPIKeyAuth, LiteLLMPromptInjectionParams
-from litellm.integrations.custom_logger import CustomLogger
-from litellm._logging import verbose_proxy_logger
-from litellm.utils import get_formatted_prompt
-from litellm.llms.prompt_templates.factory import prompt_injection_detection_default_pt
-from fastapi import HTTPException
-import json, traceback, re
+import json
+import re
+import traceback
 from difflib import SequenceMatcher
-from typing import List
+from typing import List, Literal, Optional
+
+from fastapi import HTTPException
+
+import litellm
+from litellm._logging import verbose_proxy_logger
+from litellm.caching import DualCache
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.llms.prompt_templates.factory import prompt_injection_detection_default_pt
+from litellm.proxy._types import LiteLLMPromptInjectionParams, UserAPIKeyAuth
+from litellm.utils import get_formatted_prompt
 
 
 class _OPTIONAL_PromptInjectionDetection(CustomLogger):

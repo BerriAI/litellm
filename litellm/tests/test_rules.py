@@ -1,14 +1,18 @@
 #### What this tests ####
 #    This tests setting rules before / after making llm api calls
-import sys, os, time
-import traceback, asyncio
+import asyncio
+import os
+import sys
+import time
+import traceback
+
 import pytest
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import litellm
-from litellm import completion, acompletion
+from litellm import acompletion, completion
 
 
 def my_pre_call_rule(input: str):

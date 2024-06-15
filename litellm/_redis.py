@@ -7,12 +7,16 @@
 #
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
+import inspect
+
 # s/o [@Frank Colson](https://www.linkedin.com/in/frank-colson-422b9b183/) for this redis implementation
 import os
-import inspect
-import redis, litellm  # type: ignore
-import redis.asyncio as async_redis  # type: ignore
 from typing import List, Optional
+
+import redis  # type: ignore
+import redis.asyncio as async_redis  # type: ignore
+
+import litellm
 
 
 def _get_redis_kwargs():

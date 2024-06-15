@@ -1,27 +1,33 @@
 # What is this?
 ## Unit Tests for OpenAI Assistants API
-import sys, os, json
+import json
+import os
+import sys
 import traceback
+
 from dotenv import load_dotenv
 
 load_dotenv()
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-import pytest, logging, asyncio
+import asyncio
+import logging
+
+import pytest
+from typing_extensions import override
+
 import litellm
 from litellm import create_thread, get_thread
 from litellm.llms.openai import (
-    OpenAIAssistantsAPI,
-    MessageData,
-    Thread,
-    OpenAIMessage as Message,
-    AsyncCursorPage,
-    SyncCursorPage,
     AssistantEventHandler,
     AsyncAssistantEventHandler,
+    AsyncCursorPage,
+    MessageData,
+    OpenAIAssistantsAPI,
 )
-from typing_extensions import override
+from litellm.llms.openai import OpenAIMessage as Message
+from litellm.llms.openai import SyncCursorPage, Thread
 
 """
 V0 Scope:

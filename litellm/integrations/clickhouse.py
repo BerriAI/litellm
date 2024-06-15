@@ -2,24 +2,24 @@
 
 #### What this does ####
 #    On success, logs events to Promptlayer
-import dotenv, os
-
-from litellm.proxy._types import UserAPIKeyAuth
-from litellm.caching import DualCache
-
-from typing import Literal, Union
+import datetime
+import os
+import subprocess
+import sys
 import traceback
+import uuid
+from typing import Literal, Union
 
+import dotenv
+import requests
+
+import litellm
+from litellm._logging import print_verbose, verbose_logger
+from litellm.caching import DualCache
+from litellm.proxy._types import UserAPIKeyAuth
 
 #### What this does ####
 #    On success + failure, log events to Supabase
-
-import dotenv, os
-import requests
-import traceback
-import datetime, subprocess, sys
-import litellm, uuid
-from litellm._logging import print_verbose, verbose_logger
 
 
 def create_client():
@@ -228,8 +228,10 @@ def _start_clickhouse():
 
         # RUN Enterprise Clickhouse Setup
         # TLDR: For Enterprise - we create views / aggregate tables for low latency reporting APIs
-        from litellm.proxy.enterprise.utils import _create_clickhouse_aggregate_tables
-        from litellm.proxy.enterprise.utils import _create_clickhouse_material_views
+        from litellm.proxy.enterprise.utils import (
+            _create_clickhouse_aggregate_tables,
+            _create_clickhouse_material_views,
+        )
 
         _create_clickhouse_aggregate_tables(client=client, table_names=table_names)
         _create_clickhouse_material_views(client=client, table_names=table_names)

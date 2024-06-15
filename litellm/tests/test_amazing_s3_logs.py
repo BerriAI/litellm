@@ -1,17 +1,20 @@
-import sys
+import asyncio
+import io
 import os
-import io, asyncio
+import sys
 
 # import logging
 # logging.basicConfig(level=logging.DEBUG)
 sys.path.insert(0, os.path.abspath("../.."))
 
-from litellm import completion
 import litellm
+from litellm import completion
 
 litellm.num_retries = 3
 
-import time, random
+import random
+import time
+
 import pytest
 
 
@@ -202,8 +205,9 @@ def test_s3_logging_r2():
         #     type="s3", s3_bucket_name="litellm-r2-bucket", s3_region_name="us-west-2"
         # )
         litellm.set_verbose = True
-        from litellm._logging import verbose_logger
         import logging
+
+        from litellm._logging import verbose_logger
 
         verbose_logger.setLevel(level=logging.DEBUG)
 

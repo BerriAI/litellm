@@ -1,8 +1,13 @@
 # What is this?
 ## Unit test for azure content safety
-import sys, os, asyncio, time, random
-from datetime import datetime
+import asyncio
+import os
+import random
+import sys
+import time
 import traceback
+from datetime import datetime
+
 from dotenv import load_dotenv
 from fastapi import HTTPException
 
@@ -13,11 +18,12 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import pytest
+
 import litellm
 from litellm import Router, mock_completion
-from litellm.proxy.utils import ProxyLogging
-from litellm.proxy._types import UserAPIKeyAuth
 from litellm.caching import DualCache
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.utils import ProxyLogging
 
 
 @pytest.mark.asyncio

@@ -1,14 +1,18 @@
 #### What this tests ####
 #    This tests if ahealth_check() actually works
 
-import sys, os
+import os
+import sys
 import traceback
+
 import pytest
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-import litellm, asyncio
+import asyncio
+
+import litellm
 
 
 @pytest.mark.asyncio

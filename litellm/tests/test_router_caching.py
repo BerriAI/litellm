@@ -1,7 +1,11 @@
 #### What this tests ####
 #    This tests caching on the router
-import sys, os, time
-import traceback, asyncio
+import asyncio
+import os
+import sys
+import time
+import traceback
+
 import pytest
 
 sys.path.insert(

@@ -1,11 +1,16 @@
 #### What this tests ####
 #    This tests streaming for the completion endpoint
 
-import sys, os, asyncio
+import asyncio
+import os
+import sys
+import time
 import traceback
-import time, pytest, uuid
-from pydantic import BaseModel
+import uuid
 from typing import Tuple
+
+import pytest
+from pydantic import BaseModel
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -15,12 +20,12 @@ from dotenv import load_dotenv
 load_dotenv()
 import litellm
 from litellm import (
-    completion,
-    acompletion,
     AuthenticationError,
     BadRequestError,
-    RateLimitError,
     ModelResponse,
+    RateLimitError,
+    acompletion,
+    completion,
 )
 
 litellm.logging = False
@@ -1644,9 +1649,8 @@ def test_sagemaker_weird_response():
     When the stream ends, flush any remaining holding chunks.
     """
     try:
-        from litellm.llms.sagemaker import TokenIterator
         import json
-        import json
+
         from litellm.llms.sagemaker import TokenIterator
 
         chunk = """<s>[INST] Hey, how's it going? [/INST],
@@ -2631,9 +2635,10 @@ def test_success_callback_streaming():
 
 # test_success_callback_streaming()
 
+from typing import List, Optional
+
 #### STREAMING + FUNCTION CALLING ###
 from pydantic import BaseModel
-from typing import List, Optional
 
 
 class Function(BaseModel):

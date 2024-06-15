@@ -1,11 +1,13 @@
 #### What this does ####
 #    On success, logs events to Langfuse
-import os
 import copy
+import os
 import traceback
+
 from packaging.version import Version
-from litellm._logging import verbose_logger
+
 import litellm
+from litellm._logging import verbose_logger
 
 
 class LangFuseLogger:
@@ -14,8 +16,8 @@ class LangFuseLogger:
         self, langfuse_public_key=None, langfuse_secret=None, flush_interval=1
     ):
         try:
-            from langfuse import Langfuse
             import langfuse
+            from langfuse import Langfuse
         except Exception as e:
             raise Exception(
                 f"\033[91mLangfuse not installed, try running 'pip install langfuse' to fix this error: {e}\n{traceback.format_exc()}\033[0m"
@@ -251,7 +253,7 @@ class LangFuseLogger:
         input,
         response_obj,
     ):
-        from langfuse.model import CreateTrace, CreateGeneration
+        from langfuse.model import CreateGeneration, CreateTrace
 
         verbose_logger.warning(
             "Please upgrade langfuse to v2.0.0 or higher: https://github.com/langfuse/langfuse-python/releases/tag/v2.0.1"
@@ -538,10 +540,10 @@ class LangFuseLogger:
                     pass
                 elif isinstance(user_prompt, dict):
                     from langfuse.model import (
-                        TextPromptClient,
                         ChatPromptClient,
-                        Prompt_Text,
                         Prompt_Chat,
+                        Prompt_Text,
+                        TextPromptClient,
                     )
 
                     if user_prompt.get("type", "") == "chat":

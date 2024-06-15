@@ -1,20 +1,23 @@
 # What this tests?
 ## This tests the litellm support for the openai /generations endpoint
 
-import sys, os
-import traceback
-from dotenv import load_dotenv
 import logging
+import os
+import sys
+import traceback
+
+from dotenv import load_dotenv
 
 logging.basicConfig(level=logging.DEBUG)
 load_dotenv()
-import os
 import asyncio
+import os
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import pytest
+
 import litellm
 
 

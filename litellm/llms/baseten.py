@@ -1,9 +1,11 @@
-import os
 import json
-from enum import Enum
-import requests  # type: ignore
+import os
 import time
+from enum import Enum
 from typing import Callable
+
+import requests  # type: ignore
+
 from litellm.utils import ModelResponse, Usage
 
 

@@ -1,7 +1,8 @@
 import json
 import logging
-from logging import Formatter
 import os
+from logging import Formatter
+
 from litellm import json_logs
 
 # Set default log level to INFO

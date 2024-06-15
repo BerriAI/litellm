@@ -1,4 +1,6 @@
-import sys, os, traceback
+import os
+import sys
+import traceback
 
 # this file is to test litellm/proxy
 
@@ -6,9 +8,10 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 
-from litellm.integrations.custom_logger import CustomLogger
-import litellm
 import inspect
+
+import litellm
+from litellm.integrations.custom_logger import CustomLogger
 
 
 # This file includes the custom callbacks for LiteLLM Proxy

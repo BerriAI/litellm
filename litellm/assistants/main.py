@@ -1,19 +1,24 @@
 # What is this?
 ## Main file for assistants API logic
-from typing import Iterable
+import asyncio
+import contextvars
+import os
 from functools import partial
-import os, asyncio, contextvars
+from typing import Iterable
+
+from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
+
 import litellm
-from openai import OpenAI, AsyncOpenAI, AzureOpenAI, AsyncAzureOpenAI
 from litellm import client
 from litellm.utils import (
-    supports_httpx_timeout,
     exception_type,
     get_llm_provider,
     get_secret,
+    supports_httpx_timeout,
 )
-from ..llms.openai import OpenAIAssistantsAPI
+
 from ..llms.azure import AzureAssistantsAPI
+from ..llms.openai import OpenAIAssistantsAPI
 from ..types.llms.openai import *
 from ..types.router import *
 from .utils import get_optional_params_add_message

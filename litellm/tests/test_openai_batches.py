@@ -1,21 +1,25 @@
 # What is this?
 ## Unit Tests for OpenAI Batches API
-import sys, os, json
-import traceback
 import asyncio
+import json
+import os
+import sys
+import traceback
+
 from dotenv import load_dotenv
 
 load_dotenv()
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-import pytest, logging, asyncio
-import litellm
-from litellm import (
-    create_batch,
-    create_file,
-)
+import asyncio
+import logging
 import time
+
+import pytest
+
+import litellm
+from litellm import create_batch, create_file
 
 
 def test_create_batch():

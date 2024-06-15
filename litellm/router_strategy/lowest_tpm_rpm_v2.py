@@ -1,17 +1,19 @@
 #### What this does ####
 #   identifies lowest tpm deployment
-from pydantic import BaseModel
 import random
-from typing import Optional, Union, List, Dict
 import traceback
+from typing import Dict, List, Optional, Union
+
 import httpx
+from pydantic import BaseModel
+
 import litellm
 from litellm import token_counter
+from litellm._logging import verbose_logger, verbose_router_logger
 from litellm.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
-from litellm._logging import verbose_router_logger, verbose_logger
-from litellm.utils import print_verbose, get_utc_datetime
 from litellm.types.router import RouterErrors
+from litellm.utils import get_utc_datetime, print_verbose
 
 
 class LiteLLMBase(BaseModel):

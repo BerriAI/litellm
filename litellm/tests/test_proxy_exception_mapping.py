@@ -1,25 +1,31 @@
 # test that the proxy actually does exception mapping to the OpenAI format
 
-import sys, os
-from unittest import mock
 import json
+import os
+import sys
+from unittest import mock
+
 from dotenv import load_dotenv
 
 load_dotenv()
-import os, io, asyncio
+import asyncio
+import io
+import os
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
+import openai
 import pytest
-import litellm, openai
-from fastapi.testclient import TestClient
 from fastapi import Response
-from litellm.proxy.proxy_server import (
+from fastapi.testclient import TestClient
+
+import litellm
+from litellm.proxy.proxy_server import (  # Replace with the actual module where your FastAPI router is defined
+    initialize,
     router,
     save_worker_config,
-    initialize,
-)  # Replace with the actual module where your FastAPI router is defined
+)
 
 invalid_authentication_error_response = Response(
     status_code=401,

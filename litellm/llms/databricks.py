@@ -1,26 +1,31 @@
 # What is this?
 ## Handler file for databricks API https://docs.databricks.com/en/machine-learning/foundation-models/api-reference.html#chat-request
-from functools import partial
-import os, types
+import copy
 import json
-from enum import Enum
-import requests, copy  # type: ignore
+import os
 import time
-from typing import Callable, Optional, List, Union, Tuple, Literal
+import types
+from enum import Enum
+from functools import partial
+from typing import Callable, List, Literal, Optional, Tuple, Union
+
+import httpx  # type: ignore
+import requests  # type: ignore
+
+import litellm
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.types.llms.databricks import GenericStreamingChunk
+from litellm.types.utils import ProviderField
 from litellm.utils import (
+    CustomStreamWrapper,
+    EmbeddingResponse,
     ModelResponse,
     Usage,
     map_finish_reason,
-    CustomStreamWrapper,
-    EmbeddingResponse,
 )
-import litellm
-from .prompt_templates.factory import prompt_factory, custom_prompt
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+
 from .base import BaseLLM
-import httpx  # type: ignore
-from litellm.types.llms.databricks import GenericStreamingChunk
-from litellm.types.utils import ProviderField
+from .prompt_templates.factory import custom_prompt, prompt_factory
 
 
 class DatabricksError(Exception):

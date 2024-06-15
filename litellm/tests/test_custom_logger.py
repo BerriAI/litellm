@@ -1,11 +1,17 @@
 ### What this tests ####
-import sys, os, time, inspect, asyncio, traceback
+import asyncio
+import inspect
+import os
+import sys
+import time
+import traceback
+
 import pytest
 
 sys.path.insert(0, os.path.abspath("../.."))
 
-from litellm import completion, embedding
 import litellm
+from litellm import completion, embedding
 from litellm.integrations.custom_logger import CustomLogger
 
 
@@ -457,10 +463,10 @@ async def test_cost_tracking_with_caching():
 
 
 def test_redis_cache_completion_stream():
-    from litellm import Cache
-
     # Important Test - This tests if we can add to streaming cache, when custom callbacks are set
     import random
+
+    from litellm import Cache
 
     try:
         print("\nrunning test_redis_cache_completion_stream")

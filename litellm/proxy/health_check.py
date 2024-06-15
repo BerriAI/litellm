@@ -1,13 +1,12 @@
 # This file runs a health check for the LLM, used on litellm/proxy
 
 import asyncio
+import logging
 import random
 from typing import Optional
 
 import litellm
-import logging
 from litellm._logging import print_verbose
-
 
 logger = logging.getLogger(__name__)
 

@@ -1,36 +1,41 @@
-import sys, os
+import os
+import sys
 import traceback
-from dotenv import load_dotenv
-from fastapi import Request
 from datetime import datetime
 
+from dotenv import load_dotenv
+from fastapi import Request
+
 load_dotenv()
-import os, io, time
+import io
+import os
+import time
 
 # this file is to test litellm/proxy
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-import pytest, logging, asyncio
-import litellm, asyncio
-from litellm.proxy.proxy_server import add_new_model, update_model, LitellmUserRoles
+import asyncio
+import logging
+
+import pytest
+
+import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.proxy.proxy_server import LitellmUserRoles, add_new_model, update_model
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 
 verbose_proxy_logger.setLevel(level=logging.DEBUG)
-from litellm.proxy.utils import DBClient
 from litellm.caching import DualCache
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.utils import DBClient
 from litellm.router import (
     Deployment,
-    updateDeployment,
     LiteLLM_Params,
     ModelInfo,
+    updateDeployment,
     updateLiteLLMParams,
-)
-
-from litellm.proxy._types import (
-    UserAPIKeyAuth,
 )
 
 proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
@@ -70,8 +75,9 @@ async def test_add_new_model(prisma_client):
     setattr(litellm.proxy.proxy_server, "store_model_in_db", True)
 
     await litellm.proxy.proxy_server.prisma_client.connect()
-    from litellm.proxy.proxy_server import user_api_key_cache
     import uuid
+
+    from litellm.proxy.proxy_server import user_api_key_cache
 
     _new_model_id = f"local-test-{uuid.uuid4().hex}"
 
@@ -119,8 +125,9 @@ async def test_add_update_model(prisma_client):
     setattr(litellm.proxy.proxy_server, "store_model_in_db", True)
 
     await litellm.proxy.proxy_server.prisma_client.connect()
-    from litellm.proxy.proxy_server import user_api_key_cache
     import uuid
+
+    from litellm.proxy.proxy_server import user_api_key_cache
 
     _new_model_id = f"local-test-{uuid.uuid4().hex}"
 

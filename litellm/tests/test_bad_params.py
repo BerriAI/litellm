@@ -2,17 +2,18 @@
 #    This tests chaos monkeys - if random parts of the system are broken / things aren't sent correctly - what happens.
 #    Expect to add more edge cases to this over time.
 
-import sys, os
+import os
+import sys
 import traceback
+
 import pytest
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import litellm
-from litellm import embedding, completion
+from litellm import completion, embedding
 from litellm.utils import Message
-
 
 # litellm.set_verbose = True
 user_message = "Hello, how are you?"

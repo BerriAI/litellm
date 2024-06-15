@@ -1,10 +1,12 @@
-from litellm import verbose_logger
-import litellm
-from litellm.caching import DualCache
-from litellm.proxy._types import UserAPIKeyAuth
-from litellm.integrations.custom_logger import CustomLogger
-from fastapi import HTTPException
 import traceback
+
+from fastapi import HTTPException
+
+import litellm
+from litellm import verbose_logger
+from litellm.caching import DualCache
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.proxy._types import UserAPIKeyAuth
 
 
 class _PROXY_MaxBudgetLimiter(CustomLogger):

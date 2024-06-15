@@ -1,26 +1,31 @@
-import sys, os
+import asyncio
+import logging
+import os
+import sys
 import traceback
+
 from dotenv import load_dotenv
-import asyncio, logging
 
 load_dotenv()
-import os, io
+import io
+import os
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import pytest
+
 import litellm
 from litellm import (
-    embedding,
-    completion,
+    ModelResponse,
+    RateLimitError,
+    Timeout,
     acompletion,
     acreate,
+    completion,
     completion_cost,
-    Timeout,
-    ModelResponse,
+    embedding,
 )
-from litellm import RateLimitError
 
 # litellm.num_retries = 3
 litellm.cache = None

@@ -2,11 +2,13 @@
 # sys.path.insert(
 #     0, os.path.abspath("../")
 # )  # Adds the parent directory to the system path
-from fastapi import FastAPI, Request, status, HTTPException, Depends
+import uuid
+
+from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.security import OAuth2PasswordBearer
-from fastapi.middleware.cors import CORSMiddleware
-import uuid
+
 import litellm
 
 app = FastAPI()

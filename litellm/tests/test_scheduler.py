@@ -1,17 +1,22 @@
 # What is this?
 ## Unit tests for the Scheduler.py (workload prioritization scheduler)
 
-import sys, os, time, openai, uuid
-import traceback, asyncio
-import pytest
+import asyncio
+import os
+import sys
+import time
+import traceback
+import uuid
 from typing import List
+
+import openai
+import pytest
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-from litellm import Router
+from litellm import ModelResponse, Router
 from litellm.scheduler import FlowItem, Scheduler
-from litellm import ModelResponse
 
 
 @pytest.mark.asyncio

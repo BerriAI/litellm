@@ -174,11 +174,10 @@ except:
 #### What this does ####
 #    On success, logs events to Langfuse
 import os
-import requests
-import requests
+import traceback
 from datetime import datetime
 
-import traceback
+import requests
 
 
 class WeightsBiasesLogger:

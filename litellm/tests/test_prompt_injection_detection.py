@@ -1,9 +1,14 @@
 # What is this
 ## Unit tests for the Prompt Injection Detection logic
 
-import sys, os, asyncio, time, random
-from datetime import datetime
+import asyncio
+import os
+import random
+import sys
+import time
 import traceback
+from datetime import datetime
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -13,14 +18,15 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import pytest
+
 import litellm
+from litellm import Router, mock_completion
+from litellm.caching import DualCache
+from litellm.proxy._types import LiteLLMPromptInjectionParams, UserAPIKeyAuth
 from litellm.proxy.hooks.prompt_injection_detection import (
     _OPTIONAL_PromptInjectionDetection,
 )
-from litellm import Router, mock_completion
 from litellm.proxy.utils import ProxyLogging
-from litellm.proxy._types import UserAPIKeyAuth, LiteLLMPromptInjectionParams
-from litellm.caching import DualCache
 
 
 @pytest.mark.asyncio

@@ -1,17 +1,22 @@
 ## Uses the huggingface text generation inference API
-import os, copy, types
-import json
-from enum import Enum
-import httpx, requests
-from .base import BaseLLM
-import time
-import litellm
-from typing import Callable, Dict, List, Any, Literal, Tuple
-from litellm.utils import ModelResponse, Choices, Message, CustomStreamWrapper, Usage
-from typing import Optional
-from .prompt_templates.factory import prompt_factory, custom_prompt
-from litellm.types.completion import ChatCompletionMessageToolCallParam
+import copy
 import enum
+import json
+import os
+import time
+import types
+from enum import Enum
+from typing import Any, Callable, Dict, List, Literal, Optional, Tuple
+
+import httpx
+import requests
+
+import litellm
+from litellm.types.completion import ChatCompletionMessageToolCallParam
+from litellm.utils import Choices, CustomStreamWrapper, Message, ModelResponse, Usage
+
+from .base import BaseLLM
+from .prompt_templates.factory import custom_prompt, prompt_factory
 
 
 class HuggingfaceError(Exception):

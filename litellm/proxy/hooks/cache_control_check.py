@@ -1,13 +1,15 @@
 # What this does?
 ## Checks if key is allowed to use the cache controls passed in to the completion() call
 
+import traceback
+
+from fastapi import HTTPException
+
 import litellm
 from litellm import verbose_logger
 from litellm.caching import DualCache
-from litellm.proxy._types import UserAPIKeyAuth
 from litellm.integrations.custom_logger import CustomLogger
-from fastapi import HTTPException
-import traceback
+from litellm.proxy._types import UserAPIKeyAuth
 
 
 class _PROXY_CacheControlCheck(CustomLogger):

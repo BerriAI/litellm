@@ -1,7 +1,8 @@
 #### What this tests ####
 #    This tests if prompts are being correctly formatted
-import sys
 import os
+import sys
+
 import pytest
 
 sys.path.insert(0, os.path.abspath("../.."))
@@ -10,12 +11,12 @@ sys.path.insert(0, os.path.abspath("../.."))
 import litellm
 from litellm import completion
 from litellm.llms.prompt_templates.factory import (
-    anthropic_pt,
+    _bedrock_tools_pt,
     anthropic_messages_pt,
+    anthropic_pt,
     claude_2_1_pt,
     llama_2_chat_pt,
     prompt_factory,
-    _bedrock_tools_pt,
 )
 
 

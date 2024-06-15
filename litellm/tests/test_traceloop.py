@@ -1,10 +1,12 @@
-import sys
 import os
+import sys
 import time
+
 import pytest
-import litellm
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from traceloop.sdk import Traceloop
+
+import litellm
 
 sys.path.insert(0, os.path.abspath("../.."))
 

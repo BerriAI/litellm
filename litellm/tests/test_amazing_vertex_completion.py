@@ -1,22 +1,34 @@
-import sys, os
+import os
+import sys
 import traceback
+
 from dotenv import load_dotenv
 
 load_dotenv()
-import os, io
+import io
+import os
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-import pytest, asyncio
-import litellm
-from litellm import embedding, completion, completion_cost, Timeout, acompletion
-from litellm import RateLimitError
-from litellm.tests.test_streaming import streaming_format_tests
+import asyncio
 import json
 import os
 import tempfile
+
+import pytest
+
+import litellm
+from litellm import (
+    RateLimitError,
+    Timeout,
+    acompletion,
+    completion,
+    completion_cost,
+    embedding,
+)
 from litellm.llms.vertex_ai import _gemini_convert_messages_with_history
+from litellm.tests.test_streaming import streaming_format_tests
 
 litellm.num_retries = 3
 litellm.cache = None

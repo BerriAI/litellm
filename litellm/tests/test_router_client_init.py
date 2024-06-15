@@ -1,10 +1,15 @@
 #### What this tests ####
 #    This tests client initialization + reinitialization on the router
 
+import asyncio
+import os
+
 #### What this tests ####
 #    This tests caching on the router
-import sys, os, time
-import traceback, asyncio
+import sys
+import time
+import traceback
+
 import pytest
 
 sys.path.insert(

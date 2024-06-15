@@ -1,21 +1,22 @@
 # What is this?
 ## File for 'response_cost' calculation in Logging
-from typing import Optional, Union, Literal, List
+from typing import List, Literal, Optional, Union
+
+import litellm
 import litellm._logging
+from litellm import verbose_logger
 from litellm.utils import (
-    ModelResponse,
+    CallTypes,
+    CostPerToken,
     EmbeddingResponse,
     ImageResponse,
-    TranscriptionResponse,
+    ModelResponse,
     TextCompletionResponse,
-    CallTypes,
+    TranscriptionResponse,
     cost_per_token,
     print_verbose,
-    CostPerToken,
     token_counter,
 )
-import litellm
-from litellm import verbose_logger
 
 
 # Extract the number of billion parameters from the model name

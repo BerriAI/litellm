@@ -2,9 +2,14 @@
 ## This tests the blocked user pre call hook for the proxy server
 
 
-import sys, os, asyncio, time, random
-from datetime import datetime
+import asyncio
+import os
+import random
+import sys
+import time
 import traceback
+from datetime import datetime
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -14,14 +19,15 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import pytest
+
 import litellm
+from litellm import Router, mock_completion
+from litellm.caching import DualCache
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.enterprise.enterprise_hooks.banned_keywords import (
     _ENTERPRISE_BannedKeywords,
 )
-from litellm import Router, mock_completion
 from litellm.proxy.utils import ProxyLogging, hash_token
-from litellm.proxy._types import UserAPIKeyAuth
-from litellm.caching import DualCache
 
 
 @pytest.mark.asyncio

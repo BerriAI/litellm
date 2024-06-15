@@ -1,16 +1,19 @@
 #### What this does ####
 #    On success + failure, log events to Logfire
 
-import dotenv, os
+import os
+
+import dotenv
 
 dotenv.load_dotenv()  # Loading env variables using dotenv
 import traceback
 import uuid
-from litellm._logging import print_verbose, verbose_logger
-
 from enum import Enum
 from typing import Any, Dict, NamedTuple
+
 from typing_extensions import LiteralString
+
+from litellm._logging import print_verbose, verbose_logger
 
 
 class SpanConfig(NamedTuple):

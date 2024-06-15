@@ -1,38 +1,44 @@
 # What is this?
 ## httpx client for vertex ai calls
 ## Initial implementation - covers gemini + image gen calls
-from functools import partial
-import os, types
+import inspect
 import json
-from enum import Enum
-import requests  # type: ignore
+import os
 import time
-from typing import Callable, Optional, Union, List, Any, Tuple
-from litellm.utils import ModelResponse, Usage, CustomStreamWrapper, map_finish_reason
-import litellm, uuid
-import httpx, inspect  # type: ignore
+import types
+import uuid
+from enum import Enum
+from functools import partial
+from typing import Any, Callable, List, Optional, Tuple, Union
+
+import httpx  # type: ignore
+import requests  # type: ignore
+
+import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from .base import BaseLLM
-from litellm.types.llms.vertex_ai import (
-    ContentType,
-    SystemInstructions,
-    PartType,
-    RequestBody,
-    GenerateContentResponseBody,
-    FunctionCallingConfig,
-    FunctionDeclaration,
-    Tools,
-    ToolConfig,
-    GenerationConfig,
-)
 from litellm.llms.vertex_ai import _gemini_convert_messages_with_history
-from litellm.types.utils import GenericStreamingChunk
 from litellm.types.llms.openai import (
-    ChatCompletionUsageBlock,
+    ChatCompletionResponseMessage,
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
-    ChatCompletionResponseMessage,
+    ChatCompletionUsageBlock,
 )
+from litellm.types.llms.vertex_ai import (
+    ContentType,
+    FunctionCallingConfig,
+    FunctionDeclaration,
+    GenerateContentResponseBody,
+    GenerationConfig,
+    PartType,
+    RequestBody,
+    SystemInstructions,
+    ToolConfig,
+    Tools,
+)
+from litellm.types.utils import GenericStreamingChunk
+from litellm.utils import CustomStreamWrapper, ModelResponse, Usage, map_finish_reason
+
+from .base import BaseLLM
 
 
 class VertexGeminiConfig:
@@ -411,9 +417,11 @@ class VertexLLM(BaseLLM):
     def load_auth(
         self, credentials: Optional[str], project_id: Optional[str]
     ) -> Tuple[Any, str]:
-        from google.auth.transport.requests import Request  # type: ignore[import-untyped]
-        from google.auth.credentials import Credentials  # type: ignore[import-untyped]
         import google.auth as google_auth
+        from google.auth.credentials import Credentials  # type: ignore[import-untyped]
+        from google.auth.transport.requests import (  # type: ignore[import-untyped]
+            Request,
+        )
 
         if credentials is not None and isinstance(credentials, str):
             import google.oauth2.service_account
@@ -446,7 +454,9 @@ class VertexLLM(BaseLLM):
         return creds, project_id
 
     def refresh_auth(self, credentials: Any) -> None:
-        from google.auth.transport.requests import Request  # type: ignore[import-untyped]
+        from google.auth.transport.requests import (  # type: ignore[import-untyped]
+            Request,
+        )
 
         credentials.refresh(Request())
 

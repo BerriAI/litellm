@@ -1,6 +1,6 @@
 from enum import Enum
 from types import MappingProxyType
-from typing import List, Set, Mapping
+from typing import List, Mapping, Set
 
 """
 Base Enums/Consts
