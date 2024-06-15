@@ -107,9 +107,9 @@ async def send_team_budget_alert(webhook_event: WebhookEvent) -> bool:
         )
 
     email_html_content = f"""
-    <img src="{email_logo_url}" alt="LiteLLM Logo" width="150" height="50" /> <br/>
+    <img src="{email_logo_url}" alt="LiteLLM Logo" width="150" height="50" /> <br/><br/><br/>
 
-    Budget Crossed for Team {team_alias} <br/>
+    Budget Crossed for Team <b> {team_alias} </b> <br/> <br/>
 
     Your Teams LLM API usage has crossed it's <b> budget of ${max_budget} </b>, current spend is <b>${webhook_event.spend}</b><br /> <br />
 
@@ -123,7 +123,7 @@ async def send_team_budget_alert(webhook_event: WebhookEvent) -> bool:
 
     email_event = {
         "to": recipient_emails_str,
-        "subject": f"LiteLLM: {event_name}",
+        "subject": f"LiteLLM {event_name} for Team {team_alias}",
         "html": email_html_content,
     }
 
