@@ -1297,7 +1297,9 @@ Model Info:
             verbose_proxy_logger.error("Error sending email alert %s", str(e))
             return False
 
-    async def send_email_alert_using_smtp(self, webhook_event: WebhookEvent) -> bool:
+    async def send_email_alert_using_smtp(
+        self, webhook_event: WebhookEvent, alert_type: str
+    ) -> bool:
         """
         Sends structured Email alert to an SMTP server
 
@@ -1306,7 +1308,6 @@ Model Info:
         Returns -> True if sent, False if not.
         """
         from litellm.proxy.utils import send_email
-
         from litellm.proxy.proxy_server import premium_user, prisma_client
 
         email_logo_url = os.getenv(
@@ -1361,6 +1362,10 @@ Model Info:
             html=email_event["html"],
         )
 
+        from litellm.integrations.email_alerting import send_team_budget_alert
+
+        await send_team_budget_alert(webhook_event=webhook_event)
+
         return False
 
     async def send_alert(
@@ -1401,7 +1406,9 @@ Model Info:
             and user_info is not None
         ):
             # only send budget alerts over Email
-            await self.send_email_alert_using_smtp(webhook_event=user_info)
+            await self.send_email_alert_using_smtp(
+                webhook_event=user_info, alert_type=alert_type
+            )
 
         if "slack" not in self.alerting:
             return
@@ -1440,7 +1447,7 @@ Model Info:
             slack_webhook_url = os.getenv("SLACK_WEBHOOK_URL", None)
 
         if slack_webhook_url is None:
-            raise Exception("Missing SLACK_WEBHOOK_URL from environment")
+            raise ValueError("Missing SLACK_WEBHOOK_URL from environment")
         payload = {"text": formatted_message}
         headers = {"Content-type": "application/json"}
 
@@ -1453,7 +1460,7 @@ Model Info:
             pass
         else:
             verbose_proxy_logger.debug(
-                "Error sending slack alert. Error=", response.text
+                "Error sending slack alert. Error={}".format(response.text)
             )
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
