@@ -42,6 +42,10 @@ from .prompt_templates.factory import (
     _bedrock_tools_pt,
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.litellm_core_utils.get_httpx_clients import (
+    _get_async_httpx_client,
+    _get_httpx_client,
+)
 from .base import BaseLLM
 import httpx  # type: ignore
 from .bedrock import BedrockError, convert_messages_to_prompt, ModelResponseIterator
@@ -56,6 +60,7 @@ from litellm.types.llms.openai import (
 from litellm.caching import DualCache
 
 iam_cache = DualCache()
+
 
 class AmazonCohereChatConfig:
     """
@@ -167,7 +172,7 @@ async def make_call(
     logging_obj,
 ):
     if client is None:
-        client = AsyncHTTPHandler()  # Create a new client if none provided
+        client = _get_async_httpx_client()  # Create a new client if none provided
 
     response = await client.post(api_base, headers=headers, data=data, stream=True)
 
@@ -198,7 +203,7 @@ def make_sync_call(
     logging_obj,
 ):
     if client is None:
-        client = HTTPHandler()  # Create a new client if none provided
+        client = _get_httpx_client()  # Create a new client if none provided
 
     response = client.post(api_base, headers=headers, data=data, stream=True)
 
@@ -327,13 +332,19 @@ class BedrockLLM(BaseLLM):
         ) = params_to_check
 
         ### CHECK STS ###
-        if aws_web_identity_token is not None and aws_role_name is not None and aws_session_name is not None:
-            iam_creds_cache_key = json.dumps({
-                "aws_web_identity_token": aws_web_identity_token,
-                "aws_role_name": aws_role_name,
-                "aws_session_name": aws_session_name,
-                "aws_region_name": aws_region_name,
-            })
+        if (
+            aws_web_identity_token is not None
+            and aws_role_name is not None
+            and aws_session_name is not None
+        ):
+            iam_creds_cache_key = json.dumps(
+                {
+                    "aws_web_identity_token": aws_web_identity_token,
+                    "aws_role_name": aws_role_name,
+                    "aws_session_name": aws_session_name,
+                    "aws_region_name": aws_region_name,
+                }
+            )
 
             iam_creds_dict = iam_cache.get_cache(iam_creds_cache_key)
             if iam_creds_dict is None:
@@ -348,7 +359,7 @@ class BedrockLLM(BaseLLM):
                 sts_client = boto3.client(
                     "sts",
                     region_name=aws_region_name,
-                    endpoint_url=f"https://sts.{aws_region_name}.amazonaws.com"
+                    endpoint_url=f"https://sts.{aws_region_name}.amazonaws.com",
                 )
 
                 # https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRoleWithWebIdentity.html
@@ -362,12 +373,18 @@ class BedrockLLM(BaseLLM):
 
                 iam_creds_dict = {
                     "aws_access_key_id": sts_response["Credentials"]["AccessKeyId"],
-                    "aws_secret_access_key": sts_response["Credentials"]["SecretAccessKey"],
+                    "aws_secret_access_key": sts_response["Credentials"][
+                        "SecretAccessKey"
+                    ],
                     "aws_session_token": sts_response["Credentials"]["SessionToken"],
                     "region_name": aws_region_name,
                 }
 
-                iam_cache.set_cache(key=iam_creds_cache_key, value=json.dumps(iam_creds_dict), ttl=3600 - 60)
+                iam_cache.set_cache(
+                    key=iam_creds_cache_key,
+                    value=json.dumps(iam_creds_dict),
+                    ttl=3600 - 60,
+                )
 
             session = boto3.Session(**iam_creds_dict)
 
@@ -976,7 +993,7 @@ class BedrockLLM(BaseLLM):
                 if isinstance(timeout, float) or isinstance(timeout, int):
                     timeout = httpx.Timeout(timeout)
                 _params["timeout"] = timeout
-            self.client = HTTPHandler(**_params)  # type: ignore
+            self.client = _get_httpx_client(**_params)  # type: ignore
         else:
             self.client = client
         if (stream is not None and stream == True) and provider != "ai21":
@@ -1058,7 +1075,7 @@ class BedrockLLM(BaseLLM):
                 if isinstance(timeout, float) or isinstance(timeout, int):
                     timeout = httpx.Timeout(timeout)
                 _params["timeout"] = timeout
-            client = AsyncHTTPHandler(**_params)  # type: ignore
+            client = _get_async_httpx_client(_params)  # type: ignore
         else:
             client = client  # type: ignore
 
@@ -1433,13 +1450,19 @@ class BedrockConverseLLM(BaseLLM):
         ) = params_to_check
 
         ### CHECK STS ###
-        if aws_web_identity_token is not None and aws_role_name is not None and aws_session_name is not None:
-            iam_creds_cache_key = json.dumps({
-                "aws_web_identity_token": aws_web_identity_token,
-                "aws_role_name": aws_role_name,
-                "aws_session_name": aws_session_name,
-                "aws_region_name": aws_region_name,
-            })
+        if (
+            aws_web_identity_token is not None
+            and aws_role_name is not None
+            and aws_session_name is not None
+        ):
+            iam_creds_cache_key = json.dumps(
+                {
+                    "aws_web_identity_token": aws_web_identity_token,
+                    "aws_role_name": aws_role_name,
+                    "aws_session_name": aws_session_name,
+                    "aws_region_name": aws_region_name,
+                }
+            )
 
             iam_creds_dict = iam_cache.get_cache(iam_creds_cache_key)
             if iam_creds_dict is None:
@@ -1454,7 +1477,7 @@ class BedrockConverseLLM(BaseLLM):
                 sts_client = boto3.client(
                     "sts",
                     region_name=aws_region_name,
-                    endpoint_url=f"https://sts.{aws_region_name}.amazonaws.com"
+                    endpoint_url=f"https://sts.{aws_region_name}.amazonaws.com",
                 )
 
                 # https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRoleWithWebIdentity.html
@@ -1468,12 +1491,18 @@ class BedrockConverseLLM(BaseLLM):
 
                 iam_creds_dict = {
                     "aws_access_key_id": sts_response["Credentials"]["AccessKeyId"],
-                    "aws_secret_access_key": sts_response["Credentials"]["SecretAccessKey"],
+                    "aws_secret_access_key": sts_response["Credentials"][
+                        "SecretAccessKey"
+                    ],
                     "aws_session_token": sts_response["Credentials"]["SessionToken"],
                     "region_name": aws_region_name,
                 }
 
-                iam_cache.set_cache(key=iam_creds_cache_key, value=json.dumps(iam_creds_dict), ttl=3600 - 60)
+                iam_cache.set_cache(
+                    key=iam_creds_cache_key,
+                    value=json.dumps(iam_creds_dict),
+                    ttl=3600 - 60,
+                )
 
             session = boto3.Session(**iam_creds_dict)
 
@@ -1575,7 +1604,7 @@ class BedrockConverseLLM(BaseLLM):
                 if isinstance(timeout, float) or isinstance(timeout, int):
                     timeout = httpx.Timeout(timeout)
                 _params["timeout"] = timeout
-            client = AsyncHTTPHandler(**_params)  # type: ignore
+            client = _get_async_httpx_client(**_params)  # type: ignore
         else:
             client = client  # type: ignore
 
@@ -1847,7 +1876,7 @@ class BedrockConverseLLM(BaseLLM):
                 if isinstance(timeout, float) or isinstance(timeout, int):
                     timeout = httpx.Timeout(timeout)
                 _params["timeout"] = timeout
-            client = HTTPHandler(**_params)  # type: ignore
+            client = _get_httpx_client(**_params)  # type: ignore
         else:
             client = client
         try:
