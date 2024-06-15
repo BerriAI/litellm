@@ -26,6 +26,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       -
+        name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.commit_hash }}
+      -
         name: Set up QEMU
         uses: docker/setup-qemu-action@v3
       -
@@ -41,12 +46,14 @@ jobs:
         name: Build and push
         uses: docker/build-push-action@v5
         with:
+          context: .
           push: true
           tags: litellm/litellm:${{ github.event.inputs.tag || 'latest' }} 
       -
         name: Build and push litellm-database image
         uses: docker/build-push-action@v5
         with:
+          context: .
           push: true
           file: Dockerfile.database
           tags: litellm/litellm-database:${{ github.event.inputs.tag || 'latest' }}
@@ -54,6 +61,7 @@ jobs:
         name: Build and push litellm-spend-logs image
         uses: docker/build-push-action@v5
         with:
+          context: .
           push: true
           file: ./litellm-js/spend-logs/Dockerfile
           tags: litellm/litellm-spend_logs:${{ github.event.inputs.tag || 'latest' }}
@@ -68,6 +76,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.commit_hash }}
       # Uses the `docker/login-action` action to log in to the Container registry registry using the account and password that will publish the packages. Once published, the packages are scoped to the account defined here.
       - name: Log in to the Container registry
         uses: docker/login-action@65b78e6e13532edd9afa3aa52ac7964289d1a9c1
@@ -92,7 +102,7 @@ jobs:
       - name: Build and push Docker image
         uses: docker/build-push-action@4976231911ebf5f32aad765192d35f942aa48cb8
         with:
-          context: https://github.com/BerriAI/litellm.git#${{ github.event.inputs.commit_hash}}
+          context: .
           push: true
           tags: ${{ steps.meta.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}, ${{ steps.meta.outputs.tags }}-${{ github.event.inputs.release_type }} # if a tag is provided, use that, otherwise use the release tag, and if neither is available, use 'latest'
           labels: ${{ steps.meta.outputs.labels }}
@@ -106,6 +116,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.commit_hash }}
 
       - name: Log in to the Container registry
         uses: docker/login-action@65b78e6e13532edd9afa3aa52ac7964289d1a9c1
@@ -128,7 +140,7 @@ jobs:
       - name: Build and push Database Docker image
         uses: docker/build-push-action@f2a1d5e99d037542a71f64918e516c093c6f3fc4
         with:
-          context: https://github.com/BerriAI/litellm.git#${{ github.event.inputs.commit_hash}}
+          context: .
           file: Dockerfile.database
           push: true
           tags: ${{ steps.meta-database.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}, ${{ steps.meta-database.outputs.tags }}-${{ github.event.inputs.release_type }} 
@@ -143,6 +155,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.commit_hash }}
 
       - name: Log in to the Container registry
         uses: docker/login-action@65b78e6e13532edd9afa3aa52ac7964289d1a9c1
@@ -165,7 +179,7 @@ jobs:
       - name: Build and push Database Docker image
         uses: docker/build-push-action@f2a1d5e99d037542a71f64918e516c093c6f3fc4
         with:
-          context: https://github.com/BerriAI/litellm.git#${{ github.event.inputs.commit_hash}}
+          context: .
           file: ./litellm-js/spend-logs/Dockerfile
           push: true
           tags: ${{ steps.meta-spend-logs.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}, ${{ steps.meta-spend-logs.outputs.tags }}-${{ github.event.inputs.release_type }}
@@ -176,6 +190,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.commit_hash }}
 
       - name: Log in to the Container registry
         uses: docker/login-action@65b78e6e13532edd9afa3aa52ac7964289d1a9c1
