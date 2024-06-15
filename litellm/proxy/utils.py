@@ -12,6 +12,8 @@ import litellm
 import backoff
 import traceback
 from pydantic import BaseModel
+import litellm.litellm_core_utils
+import litellm.litellm_core_utils.litellm_logging
 from litellm.proxy._types import (
     UserAPIKeyAuth,
     DynamoDBArgs,
@@ -331,7 +333,9 @@ class ProxyLogging:
             return data
         except Exception as e:
             if "litellm_logging_obj" in data:
-                logging_obj: litellm.utils.Logging = data["litellm_logging_obj"]
+                logging_obj: litellm.litellm_core_utils.litellm_logging.Logging = data[
+                    "litellm_logging_obj"
+                ]
 
                 ## ASYNC FAILURE HANDLER ##
                 error_message = ""
