@@ -41,8 +41,9 @@ from .prompt_templates.factory import (
     _bedrock_converse_messages_pt,
     _bedrock_tools_pt,
 )
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.litellm_core_utils.get_httpx_clients import (
+from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
+    HTTPHandler,
     _get_async_httpx_client,
     _get_httpx_client,
 )
