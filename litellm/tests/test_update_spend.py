@@ -34,11 +34,13 @@ from litellm.proxy.proxy_server import (
     update_key_fn,
     generate_key_fn,
     generate_key_helper_fn,
+    user_info,
+    block_user,
+)
+from litellm.proxy.spend_management_endpoints import (
     spend_user_fn,
     spend_key_fn,
     view_spend_logs,
-    user_info,
-    block_user,
 )
 from litellm.proxy.utils import PrismaClient, ProxyLogging, hash_token, update_spend
 from litellm._logging import verbose_proxy_logger
