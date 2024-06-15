@@ -15,8 +15,8 @@
   },
   "dependencies": {
     "@docusaurus/core": "3.1.1",
-    "@docusaurus/plugin-google-gtag": "^3.1.1",
-    "@docusaurus/plugin-ideal-image": "^3.1.1",
+    "@docusaurus/plugin-google-gtag": "3.1.1",
+    "@docusaurus/plugin-ideal-image": "3.1.1",
     "@docusaurus/preset-classic": "3.1.1",
     "@mdx-js/react": "^1.6.22",
     "clsx": "^1.2.1",
