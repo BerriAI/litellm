@@ -324,7 +324,7 @@ class ContextWindowExceededError(BadRequestError):  # type: ignore
         message,
         model,
         llm_provider,
-        response: httpx.Response,
+        response: Optional[httpx.Response] = None,
         litellm_debug_info: Optional[str] = None,
     ):
         self.status_code = 400
@@ -332,11 +332,13 @@ class ContextWindowExceededError(BadRequestError):  # type: ignore
         self.model = model
         self.llm_provider = llm_provider
         self.litellm_debug_info = litellm_debug_info
+        request = httpx.Request(method="POST", url="https://api.openai.com/v1")
+        self.response = response or httpx.Response(status_code=400, request=request)
         super().__init__(
             message=self.message,
             model=self.model,  # type: ignore
             llm_provider=self.llm_provider,  # type: ignore
-            response=response,
+            response=self.response,
             litellm_debug_info=self.litellm_debug_info,
         )  # Call the base class constructor with the parameters it needs
 
@@ -407,7 +409,7 @@ class ContentPolicyViolationError(BadRequestError):  # type: ignore
         message,
         model,
         llm_provider,
-        response: httpx.Response,
+        response: Optional[httpx.Response] = None,
         litellm_debug_info: Optional[str] = None,
     ):
         self.status_code = 400
@@ -415,11 +417,13 @@ class ContentPolicyViolationError(BadRequestError):  # type: ignore
         self.model = model
         self.llm_provider = llm_provider
         self.litellm_debug_info = litellm_debug_info
+        request = httpx.Request(method="POST", url="https://api.openai.com/v1")
+        self.response = response or httpx.Response(status_code=500, request=request)
         super().__init__(
             message=self.message,
             model=self.model,  # type: ignore
             llm_provider=self.llm_provider,  # type: ignore
-            response=response,
+            response=self.response,
             litellm_debug_info=self.litellm_debug_info,
         )  # Call the base class constructor with the parameters it needs
 
