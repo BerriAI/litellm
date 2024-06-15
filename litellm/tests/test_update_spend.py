@@ -31,7 +31,7 @@ from litellm.proxy.proxy_server import (
     user_info,
     block_user,
 )
-from litellm.proxy.spend_management_endpoints import (
+from litellm.proxy.spend_reporting_endpoints.spend_management_endpoints import (
     spend_user_fn,
     spend_key_fn,
     view_spend_logs,
