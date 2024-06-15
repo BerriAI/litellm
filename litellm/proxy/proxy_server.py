@@ -11503,7 +11503,8 @@ async def login(request: Request):
     if secrets.compare_digest(username, ui_username) and secrets.compare_digest(
         password, ui_password
     ):
-        user_role = "app_owner"
+        # Non SSO -> If user is using UI_USERNAME and UI_PASSWORD they are Proxy admin
+        user_role = LitellmUserRoles.PROXY_ADMIN
         user_id = username
         key_user_id = user_id
         if (
@@ -11511,7 +11512,6 @@ async def login(request: Request):
             and os.environ["PROXY_ADMIN_ID"] == user_id
         ) or user_id == "admin":
             # checks if user is admin
-            user_role = "app_admin"
             key_user_id = os.getenv("PROXY_ADMIN_ID", "default_user_id")
 
         # Admin is Authe'd in - generate key for the UI to access Proxy
@@ -11520,7 +11520,7 @@ async def login(request: Request):
         await user_update(
             data=UpdateUserRequest(
                 user_id=key_user_id,
-                user_role=LitellmUserRoles.PROXY_ADMIN,
+                user_role=user_role,
             )
         )
         if os.getenv("DATABASE_URL") is not None:
@@ -11548,7 +11548,7 @@ async def login(request: Request):
                 "user_id": user_id,
                 "key": key,
                 "user_email": user_id,
-                "user_role": "app_admin",  # this is the path without sso - we can assume only admins will use this
+                "user_role": user_role,  # this is the path without sso - we can assume only admins will use this
                 "login_method": "username_password",
                 "premium_user": premium_user,
             },
@@ -11558,8 +11558,15 @@ async def login(request: Request):
         litellm_dashboard_ui += "?userID=" + user_id + "&token=" + jwt_token
         return RedirectResponse(url=litellm_dashboard_ui, status_code=303)
     elif _user_row is not None:
+        """
+        When sharing invite links
+
+        -> if the user has no role in the DB assume they are only a viewer
+        """
         user_id = getattr(_user_row, "user_id", "unknown")
-        user_role = getattr(_user_row, "user_role", "unknown")
+        user_role = getattr(
+            _user_row, "user_role", LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
+        )
         user_email = getattr(_user_row, "user_email", "unknown")
         _password = getattr(_user_row, "password", "unknown")
 
