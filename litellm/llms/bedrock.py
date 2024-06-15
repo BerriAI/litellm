@@ -8,7 +8,7 @@ from litellm.utils import (
     get_secret,
 )
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
-from litellm.types.utils import ImageResponse, ModelResponse, Usage
+from litellm.types.utils import ImageResponse, ModelResponse, Usage, ModelResponseChunk
 from .prompt_templates.factory import (
     prompt_factory,
     custom_prompt,
@@ -1075,7 +1075,7 @@ def completion(
                         f"INSIDE BEDROCK STREAMING TOOL CALLING CONDITION BLOCK"
                     )
                     # return an iterator
-                    streaming_model_response = ModelResponse(stream=True)
+                    streaming_model_response = ModelResponseChunk()
                     streaming_model_response.choices[0].finish_reason = (
                         model_response.choices[0].finish_reason
                     )

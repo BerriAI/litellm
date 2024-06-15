@@ -468,30 +468,45 @@ class StreamingChoices(OpenAIObject):
         setattr(self, key, value)
 
 
-class ModelResponse(OpenAIObject):
+class ModelResponseChunk(OpenAIObject):
     id: str
-    """A unique identifier for the completion."""
+    """A unique identifier for the chat completion. Each chunk has the same ID."""
 
-    choices: List[Union[Choices, StreamingChoices]]
-    """The list of completion choices the model generated for the input prompt."""
+    choices: List[StreamingChoices]
+    """A list of chat completion choices.
+
+    Can contain more than one elements if `n` is greater than 1. Can also be empty
+    for the last chunk if you set `stream_options: {"include_usage": true}`.
+    """
 
     created: int
-    """The Unix timestamp (in seconds) of when the completion was created."""
+    """The Unix timestamp (in seconds) of when the chat completion was created.
 
-    model: Optional[str] = None
-    """The model used for completion."""
+    Each chunk has the same timestamp.
+    """
 
-    object: str
-    """The object type, which is always "text_completion" """
+    model: str
+    """The model to generate the completion."""
+
+    object: Literal["chat.completion.chunk"]
+    """The object type, which is always `chat.completion.chunk`."""
 
     system_fingerprint: Optional[str] = None
-    """This fingerprint represents the backend configuration that the model runs with.
-
+    """
+    This fingerprint represents the backend configuration that the model runs with.
     Can be used in conjunction with the `seed` request parameter to understand when
     backend changes have been made that might impact determinism.
     """
 
-    _hidden_params: dict = {}
+    usage: Optional[Usage] = None
+    """
+    An optional field that will only be present when you set
+    `stream_options: {"include_usage": true}` in your request. When present, it
+    contains a null value except for the last chunk which contains the token usage
+    statistics for the entire request.
+    """
+
+    _hidden_params: HiddenParams = HiddenParams()
 
     def __init__(
         self,
@@ -502,38 +517,21 @@ class ModelResponse(OpenAIObject):
         object=None,
         system_fingerprint=None,
         usage=None,
-        stream=None,
-        stream_options=None,
-        response_ms=None,
         hidden_params=None,
         **params,
     ):
-        if stream is not None and stream is True:
-            object = "chat.completion.chunk"
-            if choices is not None and isinstance(choices, list):
-                new_choices = []
-                for choice in choices:
-                    if isinstance(choice, StreamingChoices):
-                        _new_choice = choice
-                    elif isinstance(choice, dict):
-                        _new_choice = StreamingChoices(**choice)
-                    new_choices.append(_new_choice)
-                choices = new_choices
-            else:
-                choices = [StreamingChoices()]
+        object = "chat.completion.chunk"
+        if choices is not None and isinstance(choices, list):
+            new_choices = []
+            for choice in choices:
+                if isinstance(choice, StreamingChoices):
+                    _new_choice = choice
+                elif isinstance(choice, dict):
+                    _new_choice = StreamingChoices(**choice)
+                new_choices.append(_new_choice)
+            choices = new_choices
         else:
-            object = "chat.completion"
-            if choices is not None and isinstance(choices, list):
-                new_choices = []
-                for choice in choices:
-                    if isinstance(choice, Choices):
-                        _new_choice = choice
-                    elif isinstance(choice, dict):
-                        _new_choice = Choices(**choice)
-                    new_choices.append(_new_choice)
-                choices = new_choices
-            else:
-                choices = [Choices()]
+            choices = [StreamingChoices()]
         if id is None:
             id = _generate_id()
         else:
@@ -548,10 +546,127 @@ class ModelResponse(OpenAIObject):
                 usage = Usage(**usage)
             else:
                 usage = usage
-        elif stream is None or stream is False:
-            usage = Usage()
-        if hidden_params:
-            self._hidden_params = hidden_params
+        if hidden_params is not None:
+            if isinstance(hidden_params, dict):
+                self._hidden_params = HiddenParams(**hidden_params)
+            else:
+                self._hidden_params = hidden_params
+
+        init_values = {
+            "id": id,
+            "choices": choices,
+            "created": created,
+            "model": model,
+            "object": object,
+            "system_fingerprint": system_fingerprint,
+        }
+
+        if usage is not None:
+            init_values["usage"] = usage
+
+        super().__init__(
+            **init_values,
+            **params,
+        )
+
+    def __contains__(self, key):
+        # Define custom behavior for the 'in' operator
+        return hasattr(self, key)
+
+    def get(self, key, default=None):
+        # Custom .get() method to access attributes with a default value if the attribute doesn't exist
+        return getattr(self, key, default)
+
+    def __getitem__(self, key):
+        # Allow dictionary-style access to attributes
+        return getattr(self, key)
+
+    def __setitem__(self, key, value):
+        # Allow dictionary-style assignment of attributes
+        setattr(self, key, value)
+
+    def json(self, **kwargs):
+        try:
+            return self.model_dump()  # noqa
+        except:
+            # if using pydantic v1
+            return self.dict()
+
+
+class ModelResponse(OpenAIObject):
+    id: str
+    """A unique identifier for the chat completion."""
+
+    choices: List[Choices]
+    """A list of chat completion choices.
+
+    Can be more than one if `n` is greater than 1.
+    """
+
+    created: int
+    """The Unix timestamp (in seconds) of when the chat completion was created."""
+
+    model: str
+    """The model used for the chat completion."""
+
+    object: Literal["chat.completion"]
+    """The object type, which is always `chat.completion`."""
+
+    system_fingerprint: Optional[str] = None
+    """This fingerprint represents the backend configuration that the model runs with.
+
+    Can be used in conjunction with the `seed` request parameter to understand when
+    backend changes have been made that might impact determinism.
+    """
+
+    usage: Optional[Usage] = None
+    """Usage statistics for the completion request."""
+
+    _hidden_params: HiddenParams = HiddenParams()
+
+    def __init__(
+        self,
+        id=None,
+        choices=None,
+        created=None,
+        model=None,
+        object=None,
+        system_fingerprint=None,
+        usage=None,
+        hidden_params=None,
+        **params,
+    ):
+        object = "chat.completion"
+        if choices is not None and isinstance(choices, list):
+            new_choices = []
+            for choice in choices:
+                if isinstance(choice, Choices):
+                    _new_choice = choice
+                elif isinstance(choice, dict):
+                    _new_choice = Choices(**choice)
+                new_choices.append(_new_choice)
+            choices = new_choices
+        else:
+            choices = [Choices()]
+        if id is None:
+            id = _generate_id()
+        else:
+            id = id
+        if created is None:
+            created = int(time.time())
+        else:
+            created = created
+        model = model
+        if usage is not None:
+            if isinstance(usage, dict):
+                usage = Usage(**usage)
+            else:
+                usage = usage
+        if hidden_params is not None:
+            if isinstance(hidden_params, dict):
+                self._hidden_params = HiddenParams(**hidden_params)
+            else:
+                self._hidden_params = hidden_params
 
         init_values = {
             "id": id,

@@ -54,6 +54,8 @@ from litellm.types.utils import (
     StreamingChoices,
     Embedding,
     TextChoices,
+    ModelResponseChunk,
+    HiddenParams,
 )
 from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_logging,
@@ -4984,7 +4986,7 @@ def convert_to_model_response_object(
                     ).total_seconds() * 1000
 
             if hidden_params is not None:
-                model_response_object._hidden_params = hidden_params
+                model_response_object._hidden_params = HiddenParams(**hidden_params)
 
             return model_response_object
         elif response_type == "embedding" and (
@@ -7305,7 +7307,7 @@ class CustomStreamWrapper:
         self._hidden_params = {
             "model_id": (_model_info.get("id", None))
         }  # returned as x-litellm-model-id response header in proxy
-        self.response_id = None
+        self.response_id: Optional[str] = None
         self.logging_loop = None
         self.rules = Rules()
         self.stream_options = stream_options or getattr(
@@ -8155,7 +8157,7 @@ class CustomStreamWrapper:
             verbose_logger.debug(traceback.format_exc())
             return ""
 
-    def model_response_creator(self):
+    def model_response_creator(self) -> ModelResponseChunk:
         _model = self.model
         _received_llm_provider = self.custom_llm_provider
         _logging_obj_llm_provider = self.logging_obj.model_call_details.get("custom_llm_provider", None)  # type: ignore
@@ -8164,18 +8166,17 @@ class CustomStreamWrapper:
             and _received_llm_provider != _logging_obj_llm_provider
         ):
             _model = "{}/{}".format(_logging_obj_llm_provider, _model)
-        model_response = ModelResponse(
-            stream=True, model=_model, stream_options=self.stream_options
+        model_response = ModelResponseChunk(
+            model=_model,
+            id=self.response_id,
+            system_fingerprint=self.system_fingerprint,
+            _hidden_params={
+                "custom_llm_provider": _logging_obj_llm_provider,
+                "created_at": time.time(),
+            },
+            choices=[StreamingChoices(finish_reason=None)],
         )
-        if self.response_id is not None:
-            model_response.id = self.response_id
-        else:
-            self.response_id = model_response.id
-        if self.system_fingerprint is not None:
-            model_response.system_fingerprint = self.system_fingerprint
-        model_response._hidden_params["custom_llm_provider"] = _logging_obj_llm_provider
-        model_response._hidden_params["created_at"] = time.time()
-        model_response.choices = [StreamingChoices(finish_reason=None)]
+
         return model_response
 
     def is_delta_empty(self, delta: Delta) -> bool:
@@ -8188,12 +8189,12 @@ class CustomStreamWrapper:
             is_empty = False
         return is_empty
 
-    def chunk_creator(self, chunk):
+    def chunk_creator(self, chunk) -> Optional[ModelResponseChunk]:
         model_response = self.model_response_creator()
-        response_obj = {}
+        response_obj: Any = {}
         try:
             # return this for all models
-            completion_obj = {"content": ""}
+            completion_obj: Dict[Any, Any] = {"content": ""}
             if self.custom_llm_provider and self.custom_llm_provider == "anthropic":
                 response_obj = self.handle_anthropic_chunk(chunk)
                 completion_obj["content"] = response_obj["text"]
@@ -8297,7 +8298,7 @@ class CustomStreamWrapper:
 
                 if self.received_finish_reason is not None:
                     raise StopIteration
-                response_obj: UtilsStreamingChunk = chunk
+                response_obj = chunk
                 completion_obj["content"] = response_obj["text"]
                 if response_obj["is_finished"]:
                     self.received_finish_reason = response_obj["finish_reason"]
@@ -8315,24 +8316,21 @@ class CustomStreamWrapper:
                     )
 
                 if "tool_use" in response_obj and response_obj["tool_use"] is not None:
-                    completion_obj["tool_calls"] = [response_obj["tool_use"]]
+                    completion_obj["tool_calls"] = [response_obj["tool_use"]]  # type: ignore
             elif self.custom_llm_provider and (self.custom_llm_provider == "vertex_ai"):
                 import proto  # type: ignore
 
                 if self.model.startswith("claude-3"):
                     response_obj = self.handle_vertexai_anthropic_chunk(chunk=chunk)
                     if response_obj is None:
-                        return
+                        return None
                     completion_obj["content"] = response_obj["text"]
-                    setattr(model_response, "usage", Usage())
+                    _usage = Usage()
                     if response_obj.get("prompt_tokens", None) is not None:
-                        model_response.usage.prompt_tokens = response_obj[
-                            "prompt_tokens"
-                        ]
+                        _usage.prompt_tokens = response_obj["prompt_tokens"]
                     if response_obj.get("completion_tokens", None) is not None:
-                        model_response.usage.completion_tokens = response_obj[
-                            "completion_tokens"
-                        ]
+                        _usage.completion_tokens = response_obj["completion_tokens"]
+                    model_response.usage = _usage
                     if hasattr(model_response.usage, "prompt_tokens"):
                         model_response.usage.total_tokens = (
                             getattr(model_response.usage, "total_tokens", 0)
@@ -8351,6 +8349,7 @@ class CustomStreamWrapper:
                         try:
                             completion_obj["content"] = chunk.text
                         except Exception as e:
+                            _original_exception = e
                             if "Part has no text." in str(e):
                                 ## check for function calling
                                 function_call = (
@@ -8388,11 +8387,12 @@ class CustomStreamWrapper:
                                     ],
                                 )
                                 _streaming_response = StreamingChoices(delta=_delta_obj)
-                                _model_response = ModelResponse(stream=True)
-                                _model_response.choices = [_streaming_response]
+                                _model_response = ModelResponseChunk(
+                                    choices=[_streaming_response]
+                                )
                                 response_obj = {"original_chunk": _model_response}
                             else:
-                                raise e
+                                raise _original_exception
                         if (
                             hasattr(chunk.candidates[0], "finish_reason")
                             and chunk.candidates[0].finish_reason.name
@@ -8416,7 +8416,7 @@ class CustomStreamWrapper:
             elif self.custom_llm_provider == "cohere_chat":
                 response_obj = self.handle_cohere_chat_chunk(chunk)
                 if response_obj is None:
-                    return
+                    return None
                 completion_obj["content"] = response_obj["text"]
                 if response_obj["is_finished"]:
                     self.received_finish_reason = response_obj["finish_reason"]
@@ -8425,28 +8425,31 @@ class CustomStreamWrapper:
 
                 if self.received_finish_reason is not None:
                     raise StopIteration
-                response_obj: GenericStreamingChunk = chunk
-                completion_obj["content"] = response_obj["text"]
-                if response_obj["is_finished"]:
-                    self.received_finish_reason = response_obj["finish_reason"]
+                _response_obj: GenericStreamingChunk = chunk
+                completion_obj["content"] = _response_obj["text"]
+                if _response_obj["is_finished"]:
+                    self.received_finish_reason = _response_obj["finish_reason"]
 
                 if (
                     self.stream_options
                     and self.stream_options.get("include_usage", False) is True
-                    and response_obj["usage"] is not None
+                    and _response_obj["usage"] is not None
                 ):
                     self.sent_stream_usage = True
                     model_response.usage = litellm.Usage(
-                        prompt_tokens=response_obj["usage"]["inputTokens"],
-                        completion_tokens=response_obj["usage"]["outputTokens"],
-                        total_tokens=response_obj["usage"]["totalTokens"],
+                        prompt_tokens=_response_obj["usage"]["inputTokens"],
+                        completion_tokens=_response_obj["usage"]["outputTokens"],
+                        total_tokens=_response_obj["usage"]["totalTokens"],
                     )
 
-                if "tool_use" in response_obj and response_obj["tool_use"] is not None:
-                    completion_obj["tool_calls"] = [response_obj["tool_use"]]
+                if (
+                    "tool_use" in _response_obj
+                    and _response_obj["tool_use"] is not None
+                ):
+                    completion_obj["tool_calls"] = [_response_obj["tool_use"]]
 
             elif self.custom_llm_provider == "sagemaker":
-                print_verbose(f"ENTERS SAGEMAKER STREAMING for chunk {chunk}")
+                verbose_logger.debug(f"ENTERS SAGEMAKER STREAMING for chunk {chunk}")
                 response_obj = self.handle_sagemaker_stream(chunk)
                 completion_obj["content"] = response_obj["text"]
                 if response_obj["is_finished"]:
@@ -8560,7 +8563,7 @@ class CustomStreamWrapper:
                         self.model = chunk.model
                 response_obj = self.handle_openai_chat_completion_chunk(chunk)
                 if response_obj is None:
-                    return
+                    return None
                 completion_obj["content"] = response_obj["text"]
                 print_verbose(f"completion obj content: {completion_obj['content']}")
                 if response_obj["is_finished"]:
@@ -8695,7 +8698,7 @@ class CustomStreamWrapper:
                         and self.stream_options["include_usage"] is True
                     ):
                         return model_response
-                    return
+                    return None
             print_verbose(
                 f"model_response.choices[0].delta: {model_response.choices[0].delta}; completion_obj: {completion_obj}"
             )
@@ -8758,7 +8761,7 @@ class CustomStreamWrapper:
                             print_verbose(f"choices in streaming: {choices}")
                             model_response.choices = choices
                         else:
-                            return
+                            return None
                         model_response.system_fingerprint = (
                             original_chunk.system_fingerprint
                         )
@@ -8787,7 +8790,7 @@ class CustomStreamWrapper:
                     print_verbose(f"returning model_response: {model_response}")
                     return model_response
                 else:
-                    return
+                    return None
             elif self.received_finish_reason is not None:
                 if self.sent_last_chunk is True:
                     raise StopIteration
@@ -8822,12 +8825,11 @@ class CustomStreamWrapper:
                     self.sent_first_chunk = True
                 return model_response
             else:
-                return
+                return None
         except StopIteration:
             raise StopIteration
         except Exception as e:
-            traceback_exception = traceback.format_exc()
-            e.message = str(e)
+            setattr(e, "message", str(e))
             raise exception_type(
                 model=self.model,
                 custom_llm_provider=self.custom_llm_provider,
@@ -8898,7 +8900,9 @@ class CustomStreamWrapper:
                     print_verbose(
                         f"PROCESSED CHUNK PRE CHUNK CREATOR: {chunk}; custom_llm_provider: {self.custom_llm_provider}"
                     )
-                    response: Optional[ModelResponse] = self.chunk_creator(chunk=chunk)
+                    response: Optional[ModelResponseChunk] = self.chunk_creator(
+                        chunk=chunk
+                    )
                     print_verbose(f"PROCESSED CHUNK POST CHUNK CREATOR: {response}")
 
                     if response is None:
@@ -8917,11 +8921,11 @@ class CustomStreamWrapper:
                     self.chunks.append(response)
                     return response
         except StopIteration:
-            if self.sent_last_chunk == True:
+            if self.sent_last_chunk is True:
                 if (
-                    self.sent_stream_usage == False
+                    self.sent_stream_usage is False
                     and self.stream_options is not None
-                    and self.stream_options.get("include_usage", False) == True
+                    and self.stream_options.get("include_usage", False) is True
                 ):
                     # send the final chunk with stream options
                     complete_streaming_response = litellm.stream_chunk_builder(

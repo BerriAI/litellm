@@ -25,6 +25,7 @@ from litellm.utils import (
     CustomStreamWrapper,
     get_secret,
 )
+from litellm.types.utils import ModelResponseChunk
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.types.utils import Message, Choices
@@ -514,7 +515,7 @@ class BedrockLLM(BaseLLM):
                             f"INSIDE BEDROCK STREAMING TOOL CALLING CONDITION BLOCK"
                         )
                         # return an iterator
-                        streaming_model_response = ModelResponse(stream=True)
+                        streaming_model_response = ModelResponseChunk()
                         streaming_model_response.choices[0].finish_reason = getattr(
                             model_response.choices[0], "finish_reason", "stop"
                         )
@@ -618,7 +619,7 @@ class BedrockLLM(BaseLLM):
             )
 
         if stream and provider == "ai21":
-            streaming_model_response = ModelResponse(stream=True)
+            streaming_model_response = ModelResponseChunk()
             streaming_model_response.choices[0].finish_reason = model_response.choices[  # type: ignore
                 0
             ].finish_reason
