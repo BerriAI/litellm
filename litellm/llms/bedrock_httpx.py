@@ -22,13 +22,12 @@ from typing import (
 from litellm.utils import (
     ModelResponse,
     Usage,
-    map_finish_reason,
     CustomStreamWrapper,
-    Message,
-    Choices,
     get_secret,
-    Logging,
 )
+from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.types.utils import Message, Choices
 import litellm, uuid
 from .prompt_templates.factory import (
     prompt_factory,
@@ -56,6 +55,7 @@ from litellm.types.llms.openai import (
 from litellm.caching import DualCache
 
 iam_cache = DualCache()
+
 
 class AmazonCohereChatConfig:
     """
@@ -327,13 +327,19 @@ class BedrockLLM(BaseLLM):
         ) = params_to_check
 
         ### CHECK STS ###
-        if aws_web_identity_token is not None and aws_role_name is not None and aws_session_name is not None:
-            iam_creds_cache_key = json.dumps({
-                "aws_web_identity_token": aws_web_identity_token,
-                "aws_role_name": aws_role_name,
-                "aws_session_name": aws_session_name,
-                "aws_region_name": aws_region_name,
-            })
+        if (
+            aws_web_identity_token is not None
+            and aws_role_name is not None
+            and aws_session_name is not None
+        ):
+            iam_creds_cache_key = json.dumps(
+                {
+                    "aws_web_identity_token": aws_web_identity_token,
+                    "aws_role_name": aws_role_name,
+                    "aws_session_name": aws_session_name,
+                    "aws_region_name": aws_region_name,
+                }
+            )
 
             iam_creds_dict = iam_cache.get_cache(iam_creds_cache_key)
             if iam_creds_dict is None:
@@ -348,7 +354,7 @@ class BedrockLLM(BaseLLM):
                 sts_client = boto3.client(
                     "sts",
                     region_name=aws_region_name,
-                    endpoint_url=f"https://sts.{aws_region_name}.amazonaws.com"
+                    endpoint_url=f"https://sts.{aws_region_name}.amazonaws.com",
                 )
 
                 # https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRoleWithWebIdentity.html
@@ -362,12 +368,18 @@ class BedrockLLM(BaseLLM):
 
                 iam_creds_dict = {
                     "aws_access_key_id": sts_response["Credentials"]["AccessKeyId"],
-                    "aws_secret_access_key": sts_response["Credentials"]["SecretAccessKey"],
+                    "aws_secret_access_key": sts_response["Credentials"][
+                        "SecretAccessKey"
+                    ],
                     "aws_session_token": sts_response["Credentials"]["SessionToken"],
                     "region_name": aws_region_name,
                 }
 
-                iam_cache.set_cache(key=iam_creds_cache_key, value=json.dumps(iam_creds_dict), ttl=3600 - 60)
+                iam_cache.set_cache(
+                    key=iam_creds_cache_key,
+                    value=json.dumps(iam_creds_dict),
+                    ttl=3600 - 60,
+                )
 
             session = boto3.Session(**iam_creds_dict)
 
@@ -1433,13 +1445,19 @@ class BedrockConverseLLM(BaseLLM):
         ) = params_to_check
 
         ### CHECK STS ###
-        if aws_web_identity_token is not None and aws_role_name is not None and aws_session_name is not None:
-            iam_creds_cache_key = json.dumps({
-                "aws_web_identity_token": aws_web_identity_token,
-                "aws_role_name": aws_role_name,
-                "aws_session_name": aws_session_name,
-                "aws_region_name": aws_region_name,
-            })
+        if (
+            aws_web_identity_token is not None
+            and aws_role_name is not None
+            and aws_session_name is not None
+        ):
+            iam_creds_cache_key = json.dumps(
+                {
+                    "aws_web_identity_token": aws_web_identity_token,
+                    "aws_role_name": aws_role_name,
+                    "aws_session_name": aws_session_name,
+                    "aws_region_name": aws_region_name,
+                }
+            )
 
             iam_creds_dict = iam_cache.get_cache(iam_creds_cache_key)
             if iam_creds_dict is None:
@@ -1454,7 +1472,7 @@ class BedrockConverseLLM(BaseLLM):
                 sts_client = boto3.client(
                     "sts",
                     region_name=aws_region_name,
-                    endpoint_url=f"https://sts.{aws_region_name}.amazonaws.com"
+                    endpoint_url=f"https://sts.{aws_region_name}.amazonaws.com",
                 )
 
                 # https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRoleWithWebIdentity.html
@@ -1468,12 +1486,18 @@ class BedrockConverseLLM(BaseLLM):
 
                 iam_creds_dict = {
                     "aws_access_key_id": sts_response["Credentials"]["AccessKeyId"],
-                    "aws_secret_access_key": sts_response["Credentials"]["SecretAccessKey"],
+                    "aws_secret_access_key": sts_response["Credentials"][
+                        "SecretAccessKey"
+                    ],
                     "aws_session_token": sts_response["Credentials"]["SessionToken"],
                     "region_name": aws_region_name,
                 }
 
-                iam_cache.set_cache(key=iam_creds_cache_key, value=json.dumps(iam_creds_dict), ttl=3600 - 60)
+                iam_cache.set_cache(
+                    key=iam_creds_cache_key,
+                    value=json.dumps(iam_creds_dict),
+                    ttl=3600 - 60,
+                )
 
             session = boto3.Session(**iam_creds_dict)
 
