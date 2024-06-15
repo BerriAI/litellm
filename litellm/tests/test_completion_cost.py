@@ -13,7 +13,7 @@ from litellm import (
     open_ai_chat_completion_models,
     TranscriptionResponse,
 )
-from litellm.utils import CustomLogger
+from litellm.litellm_core_utils.litellm_logging import CustomLogger
 import pytest, asyncio
 
 
