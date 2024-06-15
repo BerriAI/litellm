@@ -723,12 +723,10 @@ from .utils import (
     token_counter,
     create_pretrained_tokenizer,
     create_tokenizer,
-    cost_per_token,
     supports_function_calling,
     supports_parallel_function_calling,
     supports_vision,
     get_litellm_params,
-    Logging,
     acreate,
     get_model_list,
     get_max_tokens,
@@ -748,9 +746,10 @@ from .utils import (
     get_first_chars_messages,
     ModelResponse,
     ImageResponse,
-    ImageObject,
     get_provider_fields,
 )
+
+from .types.utils import ImageObject
 from .llms.huggingface_restapi import HuggingfaceConfig
 from .llms.anthropic import AnthropicConfig
 from .llms.databricks import DatabricksConfig, DatabricksEmbeddingConfig
@@ -827,4 +826,5 @@ from .router import Router
 from .assistants.main import *
 from .batches.main import *
 from .scheduler import *
-from .cost_calculator import response_cost_calculator
+from .cost_calculator import response_cost_calculator, cost_per_token
+from litellm.litellm_core_utils.litellm_logging import Logging
