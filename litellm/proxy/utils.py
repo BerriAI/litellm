@@ -12,6 +12,8 @@ import litellm
 import backoff
 import traceback
 from pydantic import BaseModel
+import litellm.litellm_core_utils
+import litellm.litellm_core_utils.litellm_logging
 from litellm.proxy._types import (
     UserAPIKeyAuth,
     DynamoDBArgs,
@@ -266,7 +268,9 @@ class ProxyLogging:
                     + litellm.failure_callback
                 )
             )
-            litellm.utils.set_callbacks(callback_list=callback_list)
+            litellm.litellm_core_utils.litellm_logging.set_callbacks(
+                callback_list=callback_list
+            )
 
     # The actual implementation of the function
     async def pre_call_hook(
@@ -331,7 +335,9 @@ class ProxyLogging:
             return data
         except Exception as e:
             if "litellm_logging_obj" in data:
-                logging_obj: litellm.utils.Logging = data["litellm_logging_obj"]
+                logging_obj: litellm.litellm_core_utils.litellm_logging.Logging = data[
+                    "litellm_logging_obj"
+                ]
 
                 ## ASYNC FAILURE HANDLER ##
                 error_message = ""

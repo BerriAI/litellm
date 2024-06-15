@@ -24,10 +24,10 @@ repos:
         language: system
         types: [python]
         files: ^litellm/
-    # -   id: check-file-length
-    #     name: Check file length
-    #     entry: python check_file_length.py
-    #     args: ["10000"]  # set your desired maximum number of lines
-    #     language: python
-    #     files: litellm/.*\.py
-    #     exclude: ^litellm/tests/
+    -   id: check-file-length
+        name: Check file length
+        entry: python check_file_length.py
+        args: ["10000"]  # set your desired maximum number of lines
+        language: python
+        files: litellm/.*\.py
+        exclude: ^litellm/tests/

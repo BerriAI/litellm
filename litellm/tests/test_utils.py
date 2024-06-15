@@ -412,7 +412,7 @@ def test_redact_msgs_from_logs():
     from litellm.litellm_core_utils.redact_messages import (
         redact_message_input_output_from_logging,
     )
-    from litellm.utils import Logging
+    from litellm.litellm_core_utils.litellm_logging import Logging
 
     litellm.turn_off_message_logging = True
 

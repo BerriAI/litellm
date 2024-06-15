@@ -6,7 +6,8 @@ from enum import Enum
 import requests, copy  # type: ignore
 import time, uuid
 from typing import Callable, Optional, List
-from litellm.utils import ModelResponse, Usage, map_finish_reason, CustomStreamWrapper
+from litellm.utils import ModelResponse, Usage, CustomStreamWrapper
+from litellm.litellm_core_utils.core_helpers import map_finish_reason
 import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from .prompt_templates.factory import (
