@@ -250,6 +250,9 @@ app = FastAPI(
 )
 
 
+print("Test print litelm proxy server")  # noqa
+
+
 ### CUSTOM API DOCS [ENTERPRISE FEATURE] ###
 # Custom OpenAPI schema generator to include only selected routes
 def custom_openapi():
