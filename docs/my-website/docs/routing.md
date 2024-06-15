@@ -790,83 +790,115 @@ If the error is a context window exceeded error, fall back to a larger model gro
 
 Fallbacks are done in-order - ["gpt-3.5-turbo, "gpt-4", "gpt-4-32k"], will do 'gpt-3.5-turbo' first, then 'gpt-4', etc.
 
-You can also set 'default_fallbacks', in case a specific model group is misconfigured / bad.
+You can also set `default_fallbacks`, in case a specific model group is misconfigured / bad.
+
+There are 3 types of fallbacks: 
+- `content_policy_fallbacks`: For litellm.ContentPolicyViolationError - LiteLLM maps content policy violation errors across providers [**See Code**](https://github.com/BerriAI/litellm/blob/89a43c872a1e3084519fb9de159bf52f5447c6c4/litellm/utils.py#L8495C27-L8495C54)
+- `context_window_fallbacks`: For litellm.ContextWindowExceededErrors - LiteLLM maps context window error messages across providers [**See Code**](https://github.com/BerriAI/litellm/blob/89a43c872a1e3084519fb9de159bf52f5447c6c4/litellm/utils.py#L8469)
+- `fallbacks`: For all remaining errors - e.g. litellm.RateLimitError
+
+**Content Policy Violation Fallback**
+```python
+from litellm import Router 
+
+router = Router(
+	model_list=[
+		{
+			"model_name": "claude-2",
+			"litellm_params": {
+				"model": "claude-2",
+				"api_key": "",
+				"mock_response": Exception("content filtering policy"),
+			},
+		},
+		{
+			"model_name": "my-fallback-model",
+			"litellm_params": {
+				"model": "claude-2",
+				"api_key": "",
+				"mock_response": "This works!",
+			},
+		},
+	],
+	content_policy_fallbacks=[{"claude-2": ["my-fallback-model"]}], # 👈 KEY CHANGE
+	# fallbacks=[..], # [OPTIONAL]
+	# context_window_fallbacks=[..], # [OPTIONAL]
+)
+
+response = router.completion(
+	model="claude-2",
+	messages=[{"role": "user", "content": "Hey, how's it going?"}],
+)
+```
+
+**Context Window Exceeded Fallback**
 
 ```python
-from litellm import Router
+from litellm import Router 
 
-model_list = [
-    { # list of model deployments 
-		"model_name": "azure/gpt-3.5-turbo", # openai model name 
-		"litellm_params": { # params for litellm completion/embedding call 
-			"model": "azure/chatgpt-v-2", 
-			"api_key": "bad-key",
-			"api_version": os.getenv("AZURE_API_VERSION"),
-			"api_base": os.getenv("AZURE_API_BASE")
+router = Router(
+	model_list=[
+		{
+			"model_name": "claude-2",
+			"litellm_params": {
+				"model": "claude-2",
+				"api_key": "",
+				"mock_response": Exception("prompt is too long"),
+			},
 		},
-		"tpm": 240000,
-		"rpm": 1800
-	}, 
-    { # list of model deployments 
-		"model_name": "azure/gpt-3.5-turbo-context-fallback", # openai model name 
-		"litellm_params": { # params for litellm completion/embedding call 
-			"model": "azure/chatgpt-v-2", 
-			"api_key": "bad-key",
-			"api_version": os.getenv("AZURE_API_VERSION"),
-			"api_base": os.getenv("AZURE_API_BASE")
+		{
+			"model_name": "my-fallback-model",
+			"litellm_params": {
+				"model": "claude-2",
+				"api_key": "",
+				"mock_response": "This works!",
+			},
 		},
-		"tpm": 240000,
-		"rpm": 1800
-	}, 
-	{
-		"model_name": "azure/gpt-3.5-turbo", # openai model name 
-		"litellm_params": { # params for litellm completion/embedding call 
-			"model": "azure/chatgpt-functioncalling", 
-			"api_key": "bad-key",
-			"api_version": os.getenv("AZURE_API_VERSION"),
-			"api_base": os.getenv("AZURE_API_BASE")
+	],
+	context_window_fallbacks=[{"claude-2": ["my-fallback-model"]}], # 👈 KEY CHANGE
+	# fallbacks=[..], # [OPTIONAL]
+	# content_policy_fallbacks=[..], # [OPTIONAL]
+)
+
+response = router.completion(
+	model="claude-2",
+	messages=[{"role": "user", "content": "Hey, how's it going?"}],
+)
+```
+
+**Regular Fallbacks**
+
+```python
+from litellm import Router 
+
+router = Router(
+	model_list=[
+		{
+			"model_name": "claude-2",
+			"litellm_params": {
+				"model": "claude-2",
+				"api_key": "",
+				"mock_response": Exception("this is a rate limit error"),
+			},
 		},
-		"tpm": 240000,
-		"rpm": 1800
-	}, 
-	{
-		"model_name": "gpt-3.5-turbo", # openai model name 
-		"litellm_params": { # params for litellm completion/embedding call 
-			"model": "gpt-3.5-turbo", 
-			"api_key": os.getenv("OPENAI_API_KEY"),
+		{
+			"model_name": "my-fallback-model",
+			"litellm_params": {
+				"model": "claude-2",
+				"api_key": "",
+				"mock_response": "This works!",
+			},
 		},
-		"tpm": 1000000,
-		"rpm": 9000
-	},
-    {
-		"model_name": "gpt-3.5-turbo-16k", # openai model name 
-		"litellm_params": { # params for litellm completion/embedding call 
-			"model": "gpt-3.5-turbo-16k", 
-			"api_key": os.getenv("OPENAI_API_KEY"),
-		},
-		"tpm": 1000000,
-		"rpm": 9000
-	}
-]
+	],
+	fallbacks=[{"claude-2": ["my-fallback-model"]}], # 👈 KEY CHANGE
+	# context_window_fallbacks=[..], # [OPTIONAL]
+	# content_policy_fallbacks=[..], # [OPTIONAL]
+)
 
-
-router = Router(model_list=model_list, 
-                fallbacks=[{"azure/gpt-3.5-turbo": ["gpt-3.5-turbo"]}], 
-				default_fallbacks=["gpt-3.5-turbo-16k"],
-                context_window_fallbacks=[{"azure/gpt-3.5-turbo-context-fallback": ["gpt-3.5-turbo-16k"]}, {"gpt-3.5-turbo": ["gpt-3.5-turbo-16k"]}],
-                set_verbose=True)
-
-
-user_message = "Hello, whats the weather in San Francisco??"
-messages = [{"content": user_message, "role": "user"}]
-
-# normal fallback call 
-response = router.completion(model="azure/gpt-3.5-turbo", messages=messages)
-
-# context window fallback call
-response = router.completion(model="azure/gpt-3.5-turbo-context-fallback", messages=messages)
-
-print(f"response: {response}")
+response = router.completion(
+	model="claude-2",
+	messages=[{"role": "user", "content": "Hey, how's it going?"}],
+)
 ```
 
 ### Caching
