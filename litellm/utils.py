@@ -8171,11 +8171,17 @@ class CustomStreamWrapper:
             model=_model,
             id=self.response_id,
             system_fingerprint=self.system_fingerprint,
-            _hidden_params={
+            choices=[StreamingChoices(finish_reason=None)],
+        )
+
+        if self.response_id is None:
+            self.response_id = model_response.id
+
+        model_response._hidden_params = HiddenParams(
+            **{
                 "custom_llm_provider": _logging_obj_llm_provider,
                 "created_at": time.time(),
             },
-            choices=[StreamingChoices(finish_reason=None)],
         )
 
         return model_response
@@ -8743,6 +8749,7 @@ class CustomStreamWrapper:
                     if original_chunk:
                         model_response.id = original_chunk.id
                         self.response_id = original_chunk.id
+
                         if len(original_chunk.choices) > 0:
                             choices = []
                             for idx, choice in enumerate(original_chunk.choices):

@@ -56,13 +56,15 @@ first_openai_chunk_example = {
 
 def validate_first_format(chunk):
     # write a test to make sure chunk follows the same format as first_openai_chunk_example
-    assert isinstance(chunk, ModelResponse), "Chunk should be a dictionary."
+    assert isinstance(
+        chunk, litellm.ModelResponseChunk
+    ), "Chunk should be a dictionary."
     assert isinstance(chunk["id"], str), "'id' should be a string."
     assert isinstance(chunk["object"], str), "'object' should be a string."
     assert isinstance(chunk["created"], int), "'created' should be an integer."
     assert isinstance(chunk["model"], str), "'model' should be a string."
     assert isinstance(chunk["choices"], list), "'choices' should be a list."
-    assert not hasattr(chunk, "usage"), "Chunk cannot contain usage"
+    assert chunk.usage is None, "Chunk usage has to be None"
 
     for choice in chunk["choices"]:
         assert isinstance(choice["index"], int), "'index' should be an integer."
@@ -86,13 +88,15 @@ second_openai_chunk_example = {
 
 
 def validate_second_format(chunk):
-    assert isinstance(chunk, ModelResponse), "Chunk should be a dictionary."
+    assert isinstance(
+        chunk, litellm.ModelResponseChunk
+    ), "Chunk should be a dictionary."
     assert isinstance(chunk["id"], str), "'id' should be a string."
     assert isinstance(chunk["object"], str), "'object' should be a string."
     assert isinstance(chunk["created"], int), "'created' should be an integer."
     assert isinstance(chunk["model"], str), "'model' should be a string."
     assert isinstance(chunk["choices"], list), "'choices' should be a list."
-    assert not hasattr(chunk, "usage"), "Chunk cannot contain usage"
+    assert chunk.usage is None, "Chunk usage has to be None"
 
     for choice in chunk["choices"]:
         assert isinstance(choice["index"], int), "'index' should be an integer."
@@ -124,13 +128,15 @@ def validate_last_format(chunk):
     """
     Ensure last chunk has no remaining content or tools
     """
-    assert isinstance(chunk, ModelResponse), "Chunk should be a dictionary."
+    assert isinstance(
+        chunk, litellm.ModelResponseChunk
+    ), "Chunk should be a dictionary."
     assert isinstance(chunk["id"], str), "'id' should be a string."
     assert isinstance(chunk["object"], str), "'object' should be a string."
     assert isinstance(chunk["created"], int), "'created' should be an integer."
     assert isinstance(chunk["model"], str), "'model' should be a string."
     assert isinstance(chunk["choices"], list), "'choices' should be a list."
-    assert not hasattr(chunk, "usage"), "Chunk cannot contain usage"
+    assert chunk.usage is None, "Chunk usage has to be None"
 
     for choice in chunk["choices"]:
         assert isinstance(choice["index"], int), "'index' should be an integer."
@@ -1153,7 +1159,7 @@ async def test_completion_databricks_streaming(sync_mode):
     model_name = "databricks/databricks-dbrx-instruct"
     try:
         if sync_mode:
-            final_chunk: Optional[litellm.ModelResponse] = None
+            final_chunk: Optional[litellm.ModelResponseChunk] = None
             response: litellm.CustomStreamWrapper = completion(  # type: ignore
                 model=model_name,
                 messages=messages,
@@ -1446,7 +1452,7 @@ async def test_parallel_streaming_requests(sync_mode, model):
             num_finish_reason = 0
             async for chunk in response:
                 print(f"type of chunk: {type(chunk)}")
-                if isinstance(chunk, ModelResponse):
+                if isinstance(chunk, litellm.ModelResponseChunk):
                     print(f"OUTSIDE CHUNK: {chunk.choices[0]}")
                     if chunk.choices[0].finish_reason is not None:
                         num_finish_reason += 1
@@ -1518,7 +1524,7 @@ def test_completion_replicate_stream_bad_key():
 
 def test_completion_bedrock_claude_stream():
     try:
-        litellm.set_verbose = False
+        litellm.set_verbose = True
         response = completion(
             model="bedrock/anthropic.claude-instant-v1",
             messages=[
@@ -2392,7 +2398,7 @@ first_openai_function_call_example = {
 
 
 def validate_first_function_call_chunk_structure(item):
-    if not (isinstance(item, dict) or isinstance(item, litellm.ModelResponse)):
+    if not (isinstance(item, dict) or isinstance(item, litellm.ModelResponseChunk)):
         raise Exception(f"Incorrect format, type of item: {type(item)}")
 
     required_keys = {"id", "object", "created", "model", "choices"}
@@ -2499,7 +2505,7 @@ final_function_call_chunk_example = {
 
 
 def validate_final_function_call_chunk_structure(data):
-    if not (isinstance(data, dict) or isinstance(data, litellm.ModelResponse)):
+    if not (isinstance(data, dict) or isinstance(data, litellm.ModelResponseChunk)):
         raise Exception("Incorrect format")
 
     required_keys = {"id", "object", "created", "model", "choices"}
@@ -2670,7 +2676,7 @@ class Chunk(BaseModel):
     choices: List[Choices]
 
 
-def validate_first_streaming_function_calling_chunk(chunk: ModelResponse):
+def validate_first_streaming_function_calling_chunk(chunk: litellm.ModelResponseChunk):
     chunk_instance = Chunk(**chunk.model_dump())
 
 
@@ -2763,7 +2769,7 @@ class Chunk2(BaseModel):
 # }
 
 
-def validate_second_streaming_function_calling_chunk(chunk: ModelResponse):
+def validate_second_streaming_function_calling_chunk(chunk: litellm.ModelResponseChunk):
     chunk_instance = Chunk2(**chunk.model_dump())
 
 
@@ -2790,7 +2796,7 @@ class Chunk3(BaseModel):
     choices: List[Choices3]
 
 
-def validate_final_streaming_function_calling_chunk(chunk: ModelResponse):
+def validate_final_streaming_function_calling_chunk(chunk: litellm.ModelResponseChunk):
     chunk_instance = Chunk3(**chunk.model_dump())
 
 
@@ -3139,7 +3145,7 @@ def test_unit_test_custom_stream_wrapper():
             {"index": 0, "delta": {"content": "How are you?"}, "finish_reason": "stop"}
         ],
     }
-    chunk = litellm.ModelResponse(**chunk, stream=True)
+    chunk = litellm.ModelResponseChunk(**chunk)
 
     completion_stream = ModelResponseIterator(model_response=chunk)
 
@@ -3373,7 +3379,7 @@ def test_aamazing_unit_test_custom_stream_wrapper_n():
 
     chunk_list = []
     for chunk in chunks:
-        new_chunk = litellm.ModelResponse(stream=True, id=chunk["id"])
+        new_chunk = litellm.ModelResponseChunk(id=chunk["id"], model=chunk["model"])
         if "choices" in chunk and isinstance(chunk["choices"], list):
             print("INSIDE CHUNK CHOICES!")
             new_choices = []

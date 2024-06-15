@@ -506,7 +506,7 @@ class ModelResponseChunk(OpenAIObject):
     statistics for the entire request.
     """
 
-    _hidden_params: HiddenParams = HiddenParams()
+    _hidden_params: Optional[HiddenParams] = None
 
     def __init__(
         self,

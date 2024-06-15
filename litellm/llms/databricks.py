@@ -131,14 +131,14 @@ class DatabricksConfig:
                     "finish_reason": finish_reason,
                 }
             chunk_data_dict = json.loads(chunk_data)
-            str_line = litellm.ModelResponse(**chunk_data_dict, stream=True)
+            str_line = litellm.ModelResponseChunk(**chunk_data_dict)
 
             if len(str_line.choices) > 0:
                 if (
-                    str_line.choices[0].delta is not None  # type: ignore
-                    and str_line.choices[0].delta.content is not None  # type: ignore
+                    str_line.choices[0].delta is not None
+                    and str_line.choices[0].delta.content is not None
                 ):
-                    text = str_line.choices[0].delta.content  # type: ignore
+                    text = str_line.choices[0].delta.content
                 else:  # function/tool calling chunk - when content is None. in this case we just return the original chunk from openai
                     original_chunk = str_line
                 if str_line.choices[0].finish_reason:
