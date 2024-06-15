@@ -50,10 +50,7 @@ from litellm.proxy.proxy_server import (
     spend_key_fn,
     view_spend_logs,
     user_info,
-    team_info,
     info_key_fn,
-    new_team,
-    update_team,
     chat_completion,
     completion,
     embeddings,
@@ -63,6 +60,8 @@ from litellm.proxy.proxy_server import (
     model_list,
     LitellmUserRoles,
 )
+
+from litellm.proxy.team_endpoints import team_info, new_team, update_team
 from litellm.proxy.utils import PrismaClient, ProxyLogging, hash_token, update_spend
 from litellm._logging import verbose_proxy_logger
 
