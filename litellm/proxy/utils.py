@@ -1960,6 +1960,9 @@ async def send_email(receiver_email, subject, html):
     email_message["From"] = sender_email
     email_message["To"] = receiver_email
     email_message["Subject"] = subject
+    verbose_proxy_logger.debug(
+        "sending email from %s to %s", sender_email, receiver_email
+    )
 
     # Attach the body to the email
     email_message.attach(MIMEText(html, "html"))
