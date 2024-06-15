@@ -237,7 +237,10 @@ def completion(
             if vertex_credentials is not None and isinstance(vertex_credentials, str):
                 import google.oauth2.service_account
 
-                json_obj = json.load(open(vertex_credentials))
+                try:
+                    json_obj = json.loads(vertex_credentials)
+                except json.JSONDecodeError:
+                    json_obj = json.load(open(vertex_credentials))
 
                 creds = (
                     google.oauth2.service_account.Credentials.from_service_account_info(
