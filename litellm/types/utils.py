@@ -8,6 +8,7 @@ from openai._models import BaseModel as OpenAIObject
 from pydantic import ConfigDict
 import uuid
 import json
+import time
 
 
 def _generate_id():  # private helper function

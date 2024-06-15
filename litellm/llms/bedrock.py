@@ -7,7 +7,7 @@ import litellm
 from litellm.utils import (
     get_secret,
 )
-from litellm.litellm_core_utils.model_response_helpers import map_finish_reason
+from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.types.utils import ImageResponse, ModelResponse, Usage
 from .prompt_templates.factory import (
     prompt_factory,
