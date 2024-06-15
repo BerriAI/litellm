@@ -788,7 +788,13 @@ class SlackAlerting(CustomLogger):
         response_cost: Optional[float],
         max_budget: Optional[float],
     ):
-        if end_user_id is not None and token is not None and response_cost is not None:
+        if (
+            self.alerting is not None
+            and "webhook" in self.alerting
+            and end_user_id is not None
+            and token is not None
+            and response_cost is not None
+        ):
             # log customer spend
             event = WebhookEvent(
                 spend=response_cost,
@@ -1195,6 +1201,9 @@ Model Info:
         Currently only implemented for budget alerts
 
         Returns -> True if sent, False if not.
+
+        Raises Exception
+            - if WEBHOOK_URL is not set
         """
 
         webhook_url = os.getenv("WEBHOOK_URL", None)
