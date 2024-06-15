@@ -1072,10 +1072,10 @@ def completion(
                     )
                 if _is_function_call == True and stream is not None and stream == True:
                     print_verbose(
-                        f"INSIDE BEDROCK STREAMING TOOL CALLING CONDITION BLOCK"
+                        "INSIDE BEDROCK STREAMING TOOL CALLING CONDITION BLOCK"
                     )
                     # return an iterator
-                    streaming_model_response = ModelResponseChunk()
+                    streaming_model_response = ModelResponseChunk(model=model)
                     streaming_model_response.choices[0].finish_reason = (
                         model_response.choices[0].finish_reason
                     )

@@ -510,10 +510,10 @@ class ModelResponseChunk(OpenAIObject):
 
     def __init__(
         self,
+        model: str,
         id=None,
         choices=None,
         created=None,
-        model=None,
         object=None,
         system_fingerprint=None,
         usage=None,
@@ -540,7 +540,6 @@ class ModelResponseChunk(OpenAIObject):
             created = int(time.time())
         else:
             created = created
-        model = model
         if usage is not None:
             if isinstance(usage, dict):
                 usage = Usage(**usage)
@@ -626,10 +625,10 @@ class ModelResponse(OpenAIObject):
 
     def __init__(
         self,
+        model: str,
         id=None,
         choices=None,
         created=None,
-        model=None,
         object=None,
         system_fingerprint=None,
         usage=None,

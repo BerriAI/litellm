@@ -108,6 +108,7 @@ from litellm.utils import (
     Choices,
     Message,
     TranscriptionResponse,
+    ModelResponseChunk,
 )
 
 ####### ENVIRONMENT VARIABLES ###################
@@ -447,7 +448,7 @@ def mock_completion(
         if time_delay is not None:
             time.sleep(time_delay)
 
-        model_response = ModelResponse(stream=stream)
+        model_response = ModelResponse(model=model)
         if stream is True:
             # don't try to access stream object,
             if kwargs.get("acompletion", False) == True:
@@ -459,8 +460,9 @@ def mock_completion(
                     custom_llm_provider="openai",
                     logging_obj=logging,
                 )
+            model_response_chunk = ModelResponseChunk(model=model)
             response = mock_completion_streaming_obj(
-                model_response, mock_response=mock_response, model=model
+                model_response_chunk, mock_response=mock_response, model=model
             )
             return response
 
@@ -732,7 +734,7 @@ def completion(
             model = litellm.model_alias_map[
                 model
             ]  # update the model to the actual value if an alias has been passed in
-        model_response = ModelResponse()
+        model_response = ModelResponse(model=model)
         setattr(model_response, "usage", litellm.Usage())
         if (
             kwargs.get("azure", False) == True
@@ -4543,7 +4545,9 @@ def config_completion(**kwargs):
         )
 
 
-def stream_chunk_builder_text_completion(chunks: list, messages: Optional[List] = None):
+def stream_chunk_builder_text_completion(
+    chunks: list, messages: Optional[List] = None
+) -> TextCompletionResponse:
     id = chunks[0]["id"]
     object = chunks[0]["object"]
     created = chunks[0]["created"]
@@ -4610,13 +4614,13 @@ def stream_chunk_builder_text_completion(chunks: list, messages: Optional[List] 
     response["usage"]["total_tokens"] = (
         response["usage"]["prompt_tokens"] + response["usage"]["completion_tokens"]
     )
-    return response
+    return TextCompletionResponse(**response)
 
 
 def stream_chunk_builder(
     chunks: list, messages: Optional[list] = None, start_time=None, end_time=None
 ) -> Union[ModelResponse, TextCompletionResponse]:
-    model_response = litellm.ModelResponse()
+
     ### SORT CHUNKS BASED ON CREATED ORDER ##
     print_verbose("Goes into checking if chunk has hiddden created at param")
     if chunks[0]._hidden_params.get("created_at", None):
@@ -4627,14 +4631,16 @@ def stream_chunk_builder(
         )
         print_verbose("Chunks sorted")
 
-    # set hidden params from chunk to model_response
-    if model_response is not None and hasattr(model_response, "_hidden_params"):
-        model_response._hidden_params = chunks[0].get("_hidden_params", {})
     id = chunks[0]["id"]
     object = chunks[0]["object"]
     created = chunks[0]["created"]
     model = chunks[0]["model"]
     system_fingerprint = chunks[0].get("system_fingerprint", None)
+
+    model_response = litellm.ModelResponse(model=model)
+
+    # set hidden params from chunk to model_response
+    model_response._hidden_params = chunks[0].get("_hidden_params", {})
 
     if isinstance(
         chunks[0]["choices"][0], litellm.utils.TextChoices

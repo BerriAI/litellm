@@ -171,7 +171,7 @@ def batch_completions(
 
     final_outputs = []
     for output in outputs:
-        model_response = ModelResponse()
+        model_response = ModelResponse(model=model)
         ## RESPONSE OBJECT
         model_response["choices"][0]["message"]["content"] = output.outputs[0].text
 

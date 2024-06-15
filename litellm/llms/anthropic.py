@@ -267,7 +267,7 @@ class AnthropicChatCompletion(BaseLLM):
 
         print_verbose("INSIDE ANTHROPIC STREAMING TOOL CALLING CONDITION BLOCK")
         # return an iterator
-        streaming_model_response = ModelResponseChunk()
+        streaming_model_response = ModelResponseChunk(model=model)
         streaming_model_response.choices[0].finish_reason = model_response.choices[  # type: ignore
             0
         ].finish_reason

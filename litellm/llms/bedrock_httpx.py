@@ -512,10 +512,10 @@ class BedrockLLM(BaseLLM):
                         and stream == True
                     ):
                         print_verbose(
-                            f"INSIDE BEDROCK STREAMING TOOL CALLING CONDITION BLOCK"
+                            "INSIDE BEDROCK STREAMING TOOL CALLING CONDITION BLOCK"
                         )
                         # return an iterator
-                        streaming_model_response = ModelResponseChunk()
+                        streaming_model_response = ModelResponseChunk(model=model)
                         streaming_model_response.choices[0].finish_reason = getattr(
                             model_response.choices[0], "finish_reason", "stop"
                         )
@@ -619,7 +619,7 @@ class BedrockLLM(BaseLLM):
             )
 
         if stream and provider == "ai21":
-            streaming_model_response = ModelResponseChunk()
+            streaming_model_response = ModelResponseChunk(model=model)
             streaming_model_response.choices[0].finish_reason = model_response.choices[  # type: ignore
                 0
             ].finish_reason

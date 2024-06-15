@@ -750,7 +750,7 @@ from .utils import (
     get_provider_fields,
 )
 
-from .types.utils import ImageObject
+from .types.utils import ImageObject, ModelResponseChunk
 from .llms.huggingface_restapi import HuggingfaceConfig
 from .llms.anthropic import AnthropicConfig
 from .llms.databricks import DatabricksConfig, DatabricksEmbeddingConfig

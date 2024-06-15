@@ -1269,8 +1269,6 @@ async def user_api_key_auth(
                     spend=valid_token.team_spend,
                     max_budget=valid_token.team_max_budget,
                     user_id=valid_token.user_id,
-                    team_id=valid_token.team_id,
-                    team_alias=valid_token.team_alias,
                 )
                 asyncio.create_task(
                     proxy_logging_obj.budget_alerts(
@@ -4090,7 +4088,8 @@ async def startup_event():
         )  # random interval, so multiple workers avoid batch writing at the same time
 
         ### RESET BUDGET ###
-        if general_settings.get("disable_reset_budget", False) == False:
+        interval = 1
+        if general_settings.get("disable_reset_budget", False) is False:
             scheduler.add_job(
                 reset_budget, "interval", seconds=interval, args=[prisma_client]
             )
@@ -4414,12 +4413,12 @@ async def chat_completion(
             original_exception=e,
             request_data=_data,
         )
-        _chat_response = litellm.ModelResponse()
+        _chat_response = litellm.ModelResponse(model=_data["model"])
         _chat_response.choices[0].message.content = e.message  # type: ignore
 
         if data.get("stream", None) is not None and data["stream"] == True:
             _iterator = litellm.utils.ModelResponseIterator(
-                model_response=_chat_response, convert_to_delta=True
+                model_response=_chat_response
             )
             _streaming_response = litellm.CustomStreamWrapper(
                 completion_stream=_iterator,
@@ -4636,8 +4635,12 @@ async def completion(
             original_exception=e,
             request_data=_data,
         )
-        if _data.get("stream", None) is not None and _data["stream"] == True:
-            _chat_response = litellm.ModelResponse()
+        if (
+            _data.get("stream", None) is not None
+            and _data["stream"] is True
+            and _data.get("model", None) is not None
+        ):
+            _chat_response = litellm.ModelResponse(model=_data["model"])
             _usage = litellm.Usage(
                 prompt_tokens=0,
                 completion_tokens=0,
@@ -4646,7 +4649,7 @@ async def completion(
             _chat_response.usage = _usage  # type: ignore
             _chat_response.choices[0].message.content = e.message  # type: ignore
             _iterator = litellm.utils.ModelResponseIterator(
-                model_response=_chat_response, convert_to_delta=True
+                model_response=_chat_response
             )
             _streaming_response = litellm.TextCompletionStreamWrapper(
                 completion_stream=_iterator,
@@ -8915,7 +8918,7 @@ async def new_user(data: NewUserRequest):
                 ),
             ),
             http_request=Request(
-                scope={"type": "http", "path": "/user/new"},
+                scope={"type": "http"},
             ),
         )
 

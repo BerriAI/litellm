@@ -4789,7 +4789,7 @@ async def convert_to_streaming_response_async(response_object: Optional[dict] = 
     if response_object is None:
         raise Exception("Error in response object format")
 
-    model_response_object = ModelResponse(stream=True)
+    model_response_object = ModelResponseChunk(model=response_object["model"])
 
     if model_response_object is None:
         raise Exception("Error in response creating model response object")
@@ -4861,7 +4861,7 @@ def convert_to_streaming_response(response_object: Optional[dict] = None):
     if response_object is None:
         raise Exception("Error in response object format")
 
-    model_response_object = ModelResponse(stream=True)
+    model_response_object = ModelResponseChunk(model=response_object["model"])
     choice_list = []
     for idx, choice in enumerate(response_object["choices"]):
         delta = Delta(
@@ -8388,7 +8388,7 @@ class CustomStreamWrapper:
                                 )
                                 _streaming_response = StreamingChoices(delta=_delta_obj)
                                 _model_response = ModelResponseChunk(
-                                    choices=[_streaming_response]
+                                    choices=[_streaming_response], model=self.model
                                 )
                                 response_obj = {"original_chunk": _model_response}
                             else:
@@ -9727,20 +9727,17 @@ def _add_key_name_and_team_to_alert(request_info: str, metadata: dict) -> str:
 
 
 class ModelResponseIterator:
-    def __init__(self, model_response: ModelResponse, convert_to_delta: bool = False):
-        if convert_to_delta == True:
-            self.model_response = ModelResponse(stream=True)
-            _delta = self.model_response.choices[0].delta  # type: ignore
-            _delta.content = model_response.choices[0].message.content  # type: ignore
-        else:
-            self.model_response = model_response
+    def __init__(self, model_response: ModelResponse):
+        self.model_response = ModelResponseChunk(model=model_response.model)
+        _delta = self.model_response.choices[0].delta  # type: ignore
+        _delta.content = model_response.choices[0].message.content  # type: ignore
         self.is_done = False
 
     # Sync iterator
     def __iter__(self):
         return self
 
-    def __next__(self):
+    def __next__(self) -> ModelResponseChunk:
         if self.is_done:
             raise StopIteration
         self.is_done = True
@@ -9750,7 +9747,7 @@ class ModelResponseIterator:
     def __aiter__(self):
         return self
 
-    async def __anext__(self):
+    async def __anext__(self) -> ModelResponseChunk:
         if self.is_done:
             raise StopAsyncIteration
         self.is_done = True
