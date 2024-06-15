@@ -22,13 +22,12 @@ from typing import (
 from litellm.utils import (
     ModelResponse,
     Usage,
-    map_finish_reason,
     CustomStreamWrapper,
-    Message,
-    Choices,
     get_secret,
-    Logging,
 )
+from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.types.utils import Message, Choices
 import litellm, uuid
 from .prompt_templates.factory import (
     prompt_factory,

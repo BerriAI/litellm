@@ -12,7 +12,9 @@ from typing import TYPE_CHECKING, Any
 import litellm
 
 if TYPE_CHECKING:
-    from litellm.utils import Logging as _LiteLLMLoggingObject
+    from litellm.litellm_core_utils.litellm_logging import (
+        Logging as _LiteLLMLoggingObject,
+    )
 
     LiteLLMLoggingObject = _LiteLLMLoggingObject
 else:

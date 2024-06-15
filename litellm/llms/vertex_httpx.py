@@ -8,7 +8,10 @@ from enum import Enum
 import requests  # type: ignore
 import time
 from typing import Callable, Optional, Union, List, Any, Tuple
-from litellm.utils import ModelResponse, Usage, CustomStreamWrapper, map_finish_reason
+import litellm.litellm_core_utils
+import litellm.litellm_core_utils.litellm_logging
+from litellm.utils import ModelResponse, Usage, CustomStreamWrapper
+from litellm.litellm_core_utils.core_helpers import map_finish_reason
 import litellm, uuid
 import httpx, inspect  # type: ignore
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -320,7 +323,7 @@ class VertexLLM(BaseLLM):
         model: str,
         response: httpx.Response,
         model_response: ModelResponse,
-        logging_obj: litellm.utils.Logging,
+        logging_obj: litellm.litellm_core_utils.litellm_logging.Logging,
         optional_params: dict,
         api_key: str,
         data: Union[dict, str],
