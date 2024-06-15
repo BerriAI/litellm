@@ -3436,6 +3436,7 @@ def client(original_function):
                     isinstance(e, litellm.exceptions.ContextWindowExceededError)
                     and context_window_fallback_dict
                     and model in context_window_fallback_dict
+                    and not _is_litellm_router_call
                 ):
                     if len(args) > 0:
                         args[0] = context_window_fallback_dict[model]
@@ -8637,32 +8638,33 @@ def exception_type(
                         ),
                     )
             elif custom_llm_provider == "anthropic":  # one of the anthropics
-                if hasattr(original_exception, "message"):
-                    if (
-                        "prompt is too long" in original_exception.message
-                        or "prompt: length" in original_exception.message
-                    ):
-                        exception_mapping_worked = True
-                        raise ContextWindowExceededError(
-                            message=original_exception.message,
-                            model=model,
-                            llm_provider="anthropic",
-                            response=original_exception.response,
-                        )
-                    if "Invalid API Key" in original_exception.message:
-                        exception_mapping_worked = True
-                        raise AuthenticationError(
-                            message=original_exception.message,
-                            model=model,
-                            llm_provider="anthropic",
-                            response=original_exception.response,
-                        )
+                if "prompt is too long" in error_str or "prompt: length" in error_str:
+                    exception_mapping_worked = True
+                    raise ContextWindowExceededError(
+                        message=error_str,
+                        model=model,
+                        llm_provider="anthropic",
+                    )
+                if "Invalid API Key" in error_str:
+                    exception_mapping_worked = True
+                    raise AuthenticationError(
+                        message=error_str,
+                        model=model,
+                        llm_provider="anthropic",
+                    )
+                if "content filtering policy" in error_str:
+                    exception_mapping_worked = True
+                    raise ContentPolicyViolationError(
+                        message=error_str,
+                        model=model,
+                        llm_provider="anthropic",
+                    )
                 if hasattr(original_exception, "status_code"):
                     print_verbose(f"status_code: {original_exception.status_code}")
                     if original_exception.status_code == 401:
                         exception_mapping_worked = True
                         raise AuthenticationError(
-                            message=f"AnthropicException - {original_exception.message}",
+                            message=f"AnthropicException - {error_str}",
                             llm_provider="anthropic",
                             model=model,
                             response=original_exception.response,
@@ -8673,7 +8675,7 @@ def exception_type(
                     ):
                         exception_mapping_worked = True
                         raise BadRequestError(
-                            message=f"AnthropicException - {original_exception.message}",
+                            message=f"AnthropicException - {error_str}",
                             model=model,
                             llm_provider="anthropic",
                             response=original_exception.response,
@@ -8681,14 +8683,14 @@ def exception_type(
                     elif original_exception.status_code == 408:
                         exception_mapping_worked = True
                         raise Timeout(
-                            message=f"AnthropicException - {original_exception.message}",
+                            message=f"AnthropicException - {error_str}",
                             model=model,
                             llm_provider="anthropic",
                         )
                     elif original_exception.status_code == 429:
                         exception_mapping_worked = True
                         raise RateLimitError(
-                            message=f"AnthropicException - {original_exception.message}",
+                            message=f"AnthropicException - {error_str}",
                             llm_provider="anthropic",
                             model=model,
                             response=original_exception.response,
@@ -8697,7 +8699,7 @@ def exception_type(
                         exception_mapping_worked = True
                         raise APIError(
                             status_code=500,
-                            message=f"AnthropicException - {original_exception.message}. Handle with `litellm.APIError`.",
+                            message=f"AnthropicException - {error_str}. Handle with `litellm.APIError`.",
                             llm_provider="anthropic",
                             model=model,
                             request=original_exception.request,
