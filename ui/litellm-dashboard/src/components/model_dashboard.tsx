@@ -2080,6 +2080,24 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                 </Card>
               </Col>
             </Grid>
+            <Grid numItems={1} className="gap-2 w-full mt-2">
+            <Card>
+
+            <Title>All Exceptions for {selectedModelGroup}</Title>
+             
+            <BarChart
+                    className="h-60"
+                    data={modelExceptions}
+                    index="model"
+                    categories={allExceptions}
+                    stack={true}
+                    
+                    yAxisWidth={30}
+              /> 
+                          </Card>
+      
+            </Grid>
+
 
             <Grid numItems={1} className="gap-2 w-full mt-2">
                 <Card>
@@ -2098,15 +2116,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                   </Col>
                   <Col>
 
-                {/* <BarChart
-                    className="h-40"
-                    data={modelExceptions}
-                    index="model"
-                    categories={allExceptions}
-                    stack={true}
-                    yAxisWidth={30}
-              /> */}
-      
+               
 
                 </Col>
 
