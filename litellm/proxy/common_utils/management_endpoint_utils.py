@@ -26,12 +26,12 @@ def management_endpoint_wrapper(func):
             user_api_key_dict: UserAPIKeyAuth = (
                 kwargs.get("user_api_key_dict") or UserAPIKeyAuth()
             )
+            _http_request: Request = kwargs.get("http_request")
             parent_otel_span = user_api_key_dict.parent_otel_span
             if parent_otel_span is not None:
                 from litellm.proxy.proxy_server import open_telemetry_logger
 
                 if open_telemetry_logger is not None:
-                    _http_request: Request = kwargs.get("http_request")
                     if _http_request:
                         _route = _http_request.url.path
                         _request_body: dict = await _read_request_body(
@@ -51,6 +51,22 @@ def management_endpoint_wrapper(func):
                             logging_payload=logging_payload,
                             parent_otel_span=parent_otel_span,
                         )
+            if _http_request:
+                _route = _http_request.url.path
+                # Flush user_api_key cache if this was an update/delete call to /key, /team, or /user
+                if _route in [
+                    "/key/update",
+                    "/key/delete",
+                    "/team/update",
+                    "/team/delete",
+                    "/user/update",
+                    "/user/delete",
+                    "/customer/update",
+                    "/customer/delete",
+                ]:
+                    from litellm.proxy.proxy_server import user_api_key_cache
+
+                    user_api_key_cache.flush_cache()
 
             return result
         except Exception as e:
