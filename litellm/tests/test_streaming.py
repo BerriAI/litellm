@@ -377,7 +377,7 @@ def test_completion_azure_stream_content_filter_no_delta():
 
         chunk_list = []
         for chunk in chunks:
-            new_chunk = litellm.ModelResponse(stream=True, id=chunk["id"])
+            new_chunk = litellm.ModelResponseChunk(id=chunk["id"], model=chunk["model"])
             if "choices" in chunk and isinstance(chunk["choices"], list):
                 new_choices = []
                 for choice in chunk["choices"]:
