@@ -74,7 +74,6 @@ def _openai_mock_response(*args, **kwargs) -> litellm.ModelResponse:
         "id": "chatcmpl-123",
         "object": "chat.completion",
         "created": 1677652288,
-        "model": "gpt-3.5-turbo-0125",
         "system_fingerprint": "fp_44709d6fcb",
         "choices": [
             {
@@ -89,7 +88,7 @@ def _openai_mock_response(*args, **kwargs) -> litellm.ModelResponse:
         ],
         "usage": {"prompt_tokens": 9, "completion_tokens": 12, "total_tokens": 21},
     }
-    return litellm.ModelResponse(**_data)
+    return litellm.ModelResponse(model="gpt-3.5-turbo-0125", **_data)
 
 
 def test_null_role_response():
