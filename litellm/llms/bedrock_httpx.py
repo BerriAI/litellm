@@ -993,7 +993,7 @@ class BedrockLLM(BaseLLM):
                 if isinstance(timeout, float) or isinstance(timeout, int):
                     timeout = httpx.Timeout(timeout)
                 _params["timeout"] = timeout
-            self.client = _get_httpx_client(**_params)  # type: ignore
+            self.client = _get_httpx_client(_params)  # type: ignore
         else:
             self.client = client
         if (stream is not None and stream == True) and provider != "ai21":
@@ -1604,7 +1604,7 @@ class BedrockConverseLLM(BaseLLM):
                 if isinstance(timeout, float) or isinstance(timeout, int):
                     timeout = httpx.Timeout(timeout)
                 _params["timeout"] = timeout
-            client = _get_async_httpx_client(**_params)  # type: ignore
+            client = _get_async_httpx_client(_params)  # type: ignore
         else:
             client = client  # type: ignore
 
@@ -1876,7 +1876,7 @@ class BedrockConverseLLM(BaseLLM):
                 if isinstance(timeout, float) or isinstance(timeout, int):
                     timeout = httpx.Timeout(timeout)
                 _params["timeout"] = timeout
-            client = _get_httpx_client(**_params)  # type: ignore
+            client = _get_httpx_client(_params)  # type: ignore
         else:
             client = client
         try:
