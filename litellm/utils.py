@@ -727,7 +727,7 @@ def client(original_function):
                             ):
                                 cached_result = convert_to_model_response_object(
                                     response_object=cached_result,
-                                    model_response_object=ModelResponse(),
+                                    model_response_object=ModelResponse(model=model),
                                     stream=kwargs.get("stream", False),
                                 )
 
@@ -1097,7 +1097,7 @@ def client(original_function):
                             else:
                                 cached_result = convert_to_model_response_object(
                                     response_object=cached_result,
-                                    model_response_object=ModelResponse(),
+                                    model_response_object=ModelResponse(model=model),
                                 )
                         if (
                             call_type == CallTypes.atext_completion.value
@@ -4961,6 +4961,7 @@ def convert_to_model_response_object(
             model_response_object.choices = choice_list
 
             if "usage" in response_object and response_object["usage"] is not None:
+                model_response_object.usage = Usage()
                 model_response_object.usage.completion_tokens = response_object["usage"].get("completion_tokens", 0)  # type: ignore
                 model_response_object.usage.prompt_tokens = response_object["usage"].get("prompt_tokens", 0)  # type: ignore
                 model_response_object.usage.total_tokens = response_object["usage"].get("total_tokens", 0)  # type: ignore

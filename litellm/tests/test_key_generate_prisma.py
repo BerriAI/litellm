@@ -719,7 +719,7 @@ def test_call_with_user_over_budget_stream(prisma_client):
                     },
                     "response_cost": 0.00002,
                 },
-                completion_response=ModelResponse(),
+                completion_response=ModelResponse(model="gpt-35-turbo"),
                 start_time=datetime.now(),
                 end_time=datetime.now(),
             )
@@ -816,7 +816,7 @@ def test_call_with_proxy_over_budget_stream(prisma_client):
                     },
                     "response_cost": 0.00002,
                 },
-                completion_response=ModelResponse(),
+                completion_response=ModelResponse(model="gpt-35-turbo"),
                 start_time=datetime.now(),
                 end_time=datetime.now(),
             )

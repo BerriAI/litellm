@@ -357,7 +357,7 @@ async def acompletion(
             ):
                 response = litellm.OpenAITextCompletionConfig().convert_to_chat_model_response_object(
                     response_object=response,
-                    model_response_object=litellm.ModelResponse(),
+                    model_response_object=litellm.ModelResponse(model=model),
                 )
         else:
             # Call the synchronous function using run_in_executor

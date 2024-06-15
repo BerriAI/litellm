@@ -69,6 +69,7 @@ from ..integrations.s3 import S3Logger
 from ..integrations.clickhouse import ClickhouseLogger
 from ..integrations.greenscale import GreenscaleLogger
 from ..integrations.litedebugger import LiteDebugger
+from ..caching import DualCache, S3Cache, RedisSemanticCache, RedisCache
 
 
 class Logging:
