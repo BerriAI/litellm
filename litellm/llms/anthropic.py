@@ -8,8 +8,11 @@ from typing import Callable, Optional, List, Union
 from litellm.utils import ModelResponse, Usage, map_finish_reason, CustomStreamWrapper
 import litellm
 from .prompt_templates.factory import prompt_factory, custom_prompt
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from litellm.litellm_core_utils.get_httpx_clients import _get_async_httpx_client
+from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
+    _get_async_httpx_client,
+    _get_httpx_client,
+)
 from .base import BaseLLM
 import httpx  # type: ignore
 from litellm.types.llms.anthropic import AnthropicMessagesToolChoice
