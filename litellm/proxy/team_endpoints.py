@@ -32,10 +32,7 @@ from litellm.proxy.management_helpers.utils import (
     management_endpoint_wrapper,
 )
 
-router = APIRouter(
-    prefix="/team",
-    tags=["team management"],
-)
+router = APIRouter()
 
 
 #### TEAM MANAGEMENT ####

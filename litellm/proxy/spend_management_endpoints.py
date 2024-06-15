@@ -9,10 +9,7 @@ from fastapi import Depends, Request, APIRouter, Header, status
 from fastapi import HTTPException
 from litellm.proxy._types import *
 
-router = APIRouter(
-    prefix="/spend",
-    tags=["Budget & Spend Tracking"],
-)
+router = APIRouter()
 
 
 @router.get(
