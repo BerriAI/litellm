@@ -3,7 +3,7 @@ from typing_extensions import TypedDict
 from enum import Enum
 from typing_extensions import override, Required, Dict
 from .llms.openai import ChatCompletionUsageBlock, ChatCompletionToolCallChunk
-from ..litellm_core_utils.model_response_helpers import map_finish_reason
+from ..litellm_core_utils.core_helpers import map_finish_reason
 from openai._models import BaseModel as OpenAIObject
 from pydantic import ConfigDict
 import uuid
