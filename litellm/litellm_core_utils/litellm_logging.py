@@ -16,8 +16,10 @@ import copy
 from litellm.integrations.custom_logger import CustomLogger
 import json
 import time
-from litellm.utils import (
+from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_logging,
+)
+from litellm.utils import (
     _get_base_model_from_metadata,
     supabaseClient,
     liteDebuggerClient,
