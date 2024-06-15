@@ -38,16 +38,9 @@ import pytest, logging, asyncio
 import litellm, asyncio
 from litellm.proxy.proxy_server import (
     new_user,
-    generate_key_fn,
     user_api_key_auth,
     user_update,
-    delete_key_fn,
-    info_key_fn,
-    update_key_fn,
-    generate_key_fn,
-    generate_key_helper_fn,
     user_info,
-    info_key_fn,
     chat_completion,
     completion,
     embeddings,
@@ -56,6 +49,13 @@ from litellm.proxy.proxy_server import (
     moderations,
     model_list,
     LitellmUserRoles,
+)
+from litellm.proxy.management_endpoints.key_management_endpoints import (
+    delete_key_fn,
+    info_key_fn,
+    update_key_fn,
+    generate_key_fn,
+    generate_key_helper_fn,
 )
 from litellm.proxy.management_endpoints.team_endpoints import (
     team_info,
