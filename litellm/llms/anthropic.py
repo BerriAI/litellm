@@ -9,6 +9,7 @@ from litellm.utils import ModelResponse, Usage, map_finish_reason, CustomStreamW
 import litellm
 from .prompt_templates.factory import prompt_factory, custom_prompt
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.litellm_core_utils.get_httpx_clients import _get_async_httpx_client
 from .base import BaseLLM
 import httpx  # type: ignore
 from litellm.types.llms.anthropic import AnthropicMessagesToolChoice
@@ -159,22 +160,6 @@ def validate_environment(api_key, user_headers):
     if user_headers is not None and isinstance(user_headers, dict):
         headers = {**headers, **user_headers}
     return headers
-
-
-def _get_async_httpx_client() -> AsyncHTTPHandler:
-    """
-    Retrieves the async HTTP client from the cache
-    If not present, creates a new client
-
-    Caches the new client and returns it.
-    """
-    _cache_key_name = "anthropic_async_httpx_client"
-    if _cache_key_name in litellm.in_memory_llm_clients_cache:
-        return litellm.in_memory_llm_clients_cache[_cache_key_name]
-
-    _new_client = AsyncHTTPHandler(timeout=httpx.Timeout(timeout=600.0, connect=5.0))
-    litellm.in_memory_llm_clients_cache[_cache_key_name] = _new_client
-    return _new_client
 
 
 async def make_call(
