@@ -1333,7 +1333,9 @@ Model Info:
             verbose_proxy_logger.error("Error sending email alert %s", str(e))
             return False
 
-    async def send_email_alert_using_smtp(self, webhook_event: WebhookEvent) -> bool:
+    async def send_email_alert_using_smtp(
+        self, webhook_event: WebhookEvent, alert_type: str
+    ) -> bool:
         """
         Sends structured Email alert to an SMTP server
 
@@ -1342,7 +1344,6 @@ Model Info:
         Returns -> True if sent, False if not.
         """
         from litellm.proxy.utils import send_email
-
         from litellm.proxy.proxy_server import premium_user, prisma_client
 
         email_logo_url = os.getenv(
@@ -1396,6 +1397,10 @@ Model Info:
             subject=email_event["subject"],
             html=email_event["html"],
         )
+        if webhook_event.event_group == "team":
+            from litellm.integrations.email_alerting import send_team_budget_alert
+
+            await send_team_budget_alert(webhook_event=webhook_event)
 
         return False
 
@@ -1438,7 +1443,9 @@ Model Info:
             and user_info is not None
         ):
             # only send budget alerts over Email
-            await self.send_email_alert_using_smtp(webhook_event=user_info)
+            await self.send_email_alert_using_smtp(
+                webhook_event=user_info, alert_type=alert_type
+            )
 
         if "slack" not in self.alerting:
             return
@@ -1480,7 +1487,7 @@ Model Info:
             slack_webhook_url = os.getenv("SLACK_WEBHOOK_URL", None)
 
         if slack_webhook_url is None:
-            raise Exception("Missing SLACK_WEBHOOK_URL from environment")
+            raise ValueError("Missing SLACK_WEBHOOK_URL from environment")
         payload = {"text": formatted_message}
         headers = {"Content-type": "application/json"}
 
