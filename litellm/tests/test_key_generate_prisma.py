@@ -46,9 +46,6 @@ from litellm.proxy.proxy_server import (
     update_key_fn,
     generate_key_fn,
     generate_key_helper_fn,
-    spend_user_fn,
-    spend_key_fn,
-    view_spend_logs,
     user_info,
     info_key_fn,
     chat_completion,
@@ -60,8 +57,12 @@ from litellm.proxy.proxy_server import (
     model_list,
     LitellmUserRoles,
 )
-
 from litellm.proxy.team_endpoints import team_info, new_team, update_team
+from litellm.proxy.spend_management_endpoints import (
+    spend_user_fn,
+    spend_key_fn,
+    view_spend_logs,
+)
 from litellm.proxy.utils import PrismaClient, ProxyLogging, hash_token, update_spend
 from litellm._logging import verbose_proxy_logger
 
