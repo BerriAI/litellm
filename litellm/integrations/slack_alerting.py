@@ -1361,10 +1361,10 @@ Model Info:
             subject=email_event["subject"],
             html=email_event["html"],
         )
+        if webhook_event.event_group == "team":
+            from litellm.integrations.email_alerting import send_team_budget_alert
 
-        from litellm.integrations.email_alerting import send_team_budget_alert
-
-        await send_team_budget_alert(webhook_event=webhook_event)
+            await send_team_budget_alert(webhook_event=webhook_event)
 
         return False
 
