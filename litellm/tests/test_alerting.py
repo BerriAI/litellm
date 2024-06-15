@@ -162,6 +162,29 @@ async def test_response_taking_too_long_callback(slack_alerting):
         mock_send_alert.assert_awaited_once()
 
 
+@pytest.mark.asyncio
+async def test_alerting_metadata(slack_alerting):
+    """
+    Test alerting_metadata is propogated correctly for response taking too long
+    """
+    start_time = datetime.now()
+    end_time = start_time + timedelta(seconds=301)
+    kwargs = {
+        "model": "test_model",
+        "messages": "test_messages",
+        "litellm_params": {"metadata": {"alerting_metadata": {"hello": "world"}}},
+    }
+    with patch.object(slack_alerting, "send_alert", new=AsyncMock()) as mock_send_alert:
+
+        ## RESPONSE TAKING TOO LONG
+        await slack_alerting.response_taking_too_long_callback(
+            kwargs, None, start_time, end_time
+        )
+        mock_send_alert.assert_awaited_once()
+
+        assert "hello" in mock_send_alert.call_args[1]["alerting_metadata"]
+
+
 # Test for budget crossed
 @pytest.mark.asyncio
 async def test_budget_alerts_crossed(slack_alerting):
@@ -207,7 +230,9 @@ async def test_send_alert(slack_alerting):
         slack_alerting.async_http_handler, "post", new=AsyncMock()
     ) as mock_post:
         mock_post.return_value.status_code = 200
-        await slack_alerting.send_alert("Test message", "Low", "budget_alerts")
+        await slack_alerting.send_alert(
+            "Test message", "Low", "budget_alerts", alerting_metadata={}
+        )
         mock_post.assert_awaited_once()
 
 
@@ -266,7 +291,7 @@ async def test_daily_reports_completion(slack_alerting):
         await asyncio.sleep(3)
         response_val = await slack_alerting.send_daily_reports(router=router)
 
-        assert response_val == True
+        assert response_val is True
 
         mock_send_alert.assert_awaited_once()
 
@@ -291,7 +316,7 @@ async def test_daily_reports_completion(slack_alerting):
         await asyncio.sleep(3)
         response_val = await slack_alerting.send_daily_reports(router=router)
 
-        assert response_val == True
+        assert response_val is True
 
         mock_send_alert.assert_awaited()
 
