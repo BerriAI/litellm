@@ -14,10 +14,10 @@
     "write-heading-ids": "docusaurus write-heading-ids"
   },
   "dependencies": {
-    "@docusaurus/core": "2.4.1",
-    "@docusaurus/plugin-google-gtag": "^2.4.1",
-    "@docusaurus/plugin-ideal-image": "^2.4.1",
-    "@docusaurus/preset-classic": "2.4.1",
+    "@docusaurus/core": "3.1.1",
+    "@docusaurus/plugin-google-gtag": "^3.1.1",
+    "@docusaurus/plugin-ideal-image": "^3.1.1",
+    "@docusaurus/preset-classic": "3.1.1",
     "@mdx-js/react": "^1.6.22",
     "clsx": "^1.2.1",
     "docusaurus": "^1.14.7",
