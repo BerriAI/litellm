@@ -10688,7 +10688,11 @@ async def get_routes():
 
 
 #### TEST ENDPOINTS ####
-@router.get("/token/generate", dependencies=[Depends(user_api_key_auth)])
+@router.get(
+    "/token/generate",
+    dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
+)
 async def token_generate():
     """
     Test endpoint. Admin-only access. Meant for generating admin tokens with specific claims and testing if they work for creating keys, etc.
