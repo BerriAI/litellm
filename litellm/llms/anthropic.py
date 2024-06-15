@@ -161,6 +161,22 @@ def validate_environment(api_key, user_headers):
     return headers
 
 
+def _get_async_httpx_client() -> AsyncHTTPHandler:
+    """
+    Retrieves the async HTTP client from the cache
+    If not present, creates a new client
+
+    Caches the new client and returns it.
+    """
+    _cache_key_name = "anthropic_async_httpx_client"
+    if _cache_key_name in litellm.in_memory_llm_clients_cache:
+        return litellm.in_memory_llm_clients_cache[_cache_key_name]
+
+    _new_client = AsyncHTTPHandler(timeout=httpx.Timeout(timeout=600.0, connect=5.0))
+    litellm.in_memory_llm_clients_cache[_cache_key_name] = _new_client
+    return _new_client
+
+
 async def make_call(
     client: Optional[AsyncHTTPHandler],
     api_base: str,
@@ -171,7 +187,7 @@ async def make_call(
     logging_obj,
 ):
     if client is None:
-        client = AsyncHTTPHandler()  # Create a new client if none provided
+        client = _get_async_httpx_client()  # Create a new client if none provided
 
     response = await client.post(api_base, headers=headers, data=data, stream=True)
 
@@ -463,9 +479,7 @@ class AnthropicChatCompletion(BaseLLM):
         logger_fn=None,
         headers={},
     ) -> Union[ModelResponse, CustomStreamWrapper]:
-        async_handler = AsyncHTTPHandler(
-            timeout=httpx.Timeout(timeout=600.0, connect=5.0)
-        )
+        async_handler = _get_async_httpx_client()
         response = await async_handler.post(api_base, headers=headers, json=data)
         if stream and _is_function_call:
             return self.process_streaming_response(
