@@ -1,3 +1,5 @@
+import Image from '@theme/IdealImage';
+
 # Promptlayer Tutorial
 
 Promptlayer is a platform for prompt engineers. Log OpenAI requests. Search usage history. Track performance. Visually manage prompt templates.

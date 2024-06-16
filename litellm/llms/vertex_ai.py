@@ -5,7 +5,8 @@ import requests  # type: ignore
 import time
 from typing import Callable, Optional, Union, List, Literal, Any
 from pydantic import BaseModel
-from litellm.utils import ModelResponse, Usage, CustomStreamWrapper, map_finish_reason
+from litellm.utils import ModelResponse, Usage, CustomStreamWrapper
+from litellm.litellm_core_utils.core_helpers import map_finish_reason
 import litellm, uuid
 import httpx, inspect  # type: ignore
 from litellm.types.llms.vertex_ai import *

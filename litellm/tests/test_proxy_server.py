@@ -26,7 +26,7 @@ logging.basicConfig(
 from fastapi.testclient import TestClient
 from fastapi import FastAPI
 from litellm.proxy.proxy_server import (
-    router,
+    app,
     save_worker_config,
     initialize,
 )  # Replace with the actual module where your FastAPI router is defined
@@ -119,9 +119,6 @@ def client_no_auth(fake_env_vars):
     config_fp = f"{filepath}/test_configs/test_config_no_auth.yaml"
     # initialize can get run in parallel, it sets specific variables for the fast api app, sinc eit gets run in parallel different tests use the wrong variables
     asyncio.run(initialize(config=config_fp, debug=True))
-    app = FastAPI()
-    app.include_router(router)  # Include your router in the test app
-
     return TestClient(app)
 
 
@@ -426,6 +423,10 @@ def test_add_new_model(client_no_auth):
 def test_health(client_no_auth):
     global headers
     import time
+    from litellm._logging import verbose_logger, verbose_proxy_logger
+    import logging
+
+    verbose_proxy_logger.setLevel(logging.DEBUG)
 
     try:
         response = client_no_auth.get("/health")
