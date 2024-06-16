@@ -845,7 +845,7 @@ async def test_gemini_pro_function_calling_streaming(sync_mode):
 
             for chunk in response:
                 chunks.append(chunk)
-                assert isinstance(chunk, litellm.ModelResponse)
+                assert isinstance(chunk, litellm.ModelResponseChunk)
         else:
             response = await litellm.acompletion(**data)
             print(f"completion: {response}")
