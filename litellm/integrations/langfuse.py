@@ -167,7 +167,7 @@ class LangFuseLogger:
                 or isinstance(response_obj, litellm.EmbeddingResponse)
             ):
                 input = prompt
-                output = response_obj["data"]
+                output = None
             elif response_obj is not None and isinstance(
                 response_obj, litellm.ModelResponse
             ):
