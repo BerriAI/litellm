@@ -669,7 +669,7 @@ Once the stack is created, get the DatabaseURL of the Database resource, copy th
 #### 3. Connect to the EC2 Instance and deploy litellm on the EC2 container
 From the EC2 console, connect to the instance created by the stack (e.g., using SSH).
 
-Run the following command, replacing <database_url> with the value you copied in step 2
+Run the following command, replacing `<database_url>` with the value you copied in step 2
 
 ```shell
 docker run --name litellm-proxy \

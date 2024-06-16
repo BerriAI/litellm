@@ -5,12 +5,10 @@ import time, uuid
 from typing import Callable, Optional, Any, Union, List
 import litellm
 from litellm.utils import (
-    ModelResponse,
     get_secret,
-    Usage,
-    ImageResponse,
-    map_finish_reason,
 )
+from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.types.utils import ImageResponse, ModelResponse, Usage
 from .prompt_templates.factory import (
     prompt_factory,
     custom_prompt,
@@ -633,7 +631,11 @@ def init_bedrock_client(
         config = boto3.session.Config()
 
     ### CHECK STS ###
-    if aws_web_identity_token is not None and aws_role_name is not None and aws_session_name is not None:
+    if (
+        aws_web_identity_token is not None
+        and aws_role_name is not None
+        and aws_session_name is not None
+    ):
         oidc_token = get_secret(aws_web_identity_token)
 
         if oidc_token is None:
@@ -642,9 +644,7 @@ def init_bedrock_client(
                 status_code=401,
             )
 
-        sts_client = boto3.client(
-            "sts"
-        )
+        sts_client = boto3.client("sts")
 
         # https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRoleWithWebIdentity.html
         # https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/sts/client/assume_role_with_web_identity.html

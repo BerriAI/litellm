@@ -25,6 +25,9 @@ import pytest
 from litellm.router import AlertingConfig, Router
 from litellm.proxy._types import CallInfo
 from openai import APIError
+from litellm.router import AlertingConfig
+import litellm
+import os
 
 
 @pytest.mark.parametrize(
@@ -159,6 +162,29 @@ async def test_response_taking_too_long_callback(slack_alerting):
         mock_send_alert.assert_awaited_once()
 
 
+@pytest.mark.asyncio
+async def test_alerting_metadata(slack_alerting):
+    """
+    Test alerting_metadata is propogated correctly for response taking too long
+    """
+    start_time = datetime.now()
+    end_time = start_time + timedelta(seconds=301)
+    kwargs = {
+        "model": "test_model",
+        "messages": "test_messages",
+        "litellm_params": {"metadata": {"alerting_metadata": {"hello": "world"}}},
+    }
+    with patch.object(slack_alerting, "send_alert", new=AsyncMock()) as mock_send_alert:
+
+        ## RESPONSE TAKING TOO LONG
+        await slack_alerting.response_taking_too_long_callback(
+            kwargs, None, start_time, end_time
+        )
+        mock_send_alert.assert_awaited_once()
+
+        assert "hello" in mock_send_alert.call_args[1]["alerting_metadata"]
+
+
 # Test for budget crossed
 @pytest.mark.asyncio
 async def test_budget_alerts_crossed(slack_alerting):
@@ -204,7 +230,9 @@ async def test_send_alert(slack_alerting):
         slack_alerting.async_http_handler, "post", new=AsyncMock()
     ) as mock_post:
         mock_post.return_value.status_code = 200
-        await slack_alerting.send_alert("Test message", "Low", "budget_alerts")
+        await slack_alerting.send_alert(
+            "Test message", "Low", "budget_alerts", alerting_metadata={}
+        )
         mock_post.assert_awaited_once()
 
 
@@ -263,7 +291,7 @@ async def test_daily_reports_completion(slack_alerting):
         await asyncio.sleep(3)
         response_val = await slack_alerting.send_daily_reports(router=router)
 
-        assert response_val == True
+        assert response_val is True
 
         mock_send_alert.assert_awaited_once()
 
@@ -288,7 +316,7 @@ async def test_daily_reports_completion(slack_alerting):
         await asyncio.sleep(3)
         response_val = await slack_alerting.send_daily_reports(router=router)
 
-        assert response_val == True
+        assert response_val is True
 
         mock_send_alert.assert_awaited()
 
@@ -743,3 +771,37 @@ async def test_region_outage_alerting_called(
             mock_send_alert.assert_called_once()
         else:
             mock_send_alert.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.skip(reason="test only needs to run locally ")
+async def test_alerting():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "bad_key",
+                },
+            }
+        ],
+        debug_level="DEBUG",
+        set_verbose=True,
+        alerting_config=AlertingConfig(
+            alerting_threshold=10,  # threshold for slow / hanging llm responses (in seconds). Defaults to 300 seconds
+            webhook_url=os.getenv(
+                "SLACK_WEBHOOK_URL"
+            ),  # webhook you want to send alerts to
+        ),
+    )
+    try:
+        await router.acompletion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+        )
+
+    except:
+        pass
+    finally:
+        await asyncio.sleep(3)
