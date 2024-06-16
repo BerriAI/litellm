@@ -12,7 +12,9 @@ from typing import TYPE_CHECKING, Any
 import litellm
 
 if TYPE_CHECKING:
-    from litellm.utils import Logging as _LiteLLMLoggingObject
+    from litellm.litellm_core_utils.litellm_logging import (
+        Logging as _LiteLLMLoggingObject,
+    )
 
     LiteLLMLoggingObject = _LiteLLMLoggingObject
 else:
@@ -30,7 +32,6 @@ def redact_message_input_output_from_logging(
     if litellm.turn_off_message_logging is not True:
         return result
 
-    _result = copy.deepcopy(result)
     # remove messages, prompts, input, response from logging
     litellm_logging_obj.model_call_details["messages"] = [
         {"role": "user", "content": "redacted-by-litellm"}
@@ -53,8 +54,10 @@ def redact_message_input_output_from_logging(
             elif isinstance(choice, litellm.utils.StreamingChoices):
                 choice.delta.content = "redacted-by-litellm"
     else:
-        if _result is not None:
-            if isinstance(_result, litellm.ModelResponse):
+        if result is not None:
+            if isinstance(result, litellm.ModelResponse):
+                # only deep copy litellm.ModelResponse
+                _result = copy.deepcopy(result)
                 if hasattr(_result, "choices") and _result.choices is not None:
                     for choice in _result.choices:
                         if isinstance(choice, litellm.Choices):
@@ -62,4 +65,7 @@ def redact_message_input_output_from_logging(
                         elif isinstance(choice, litellm.utils.StreamingChoices):
                             choice.delta.content = "redacted-by-litellm"
 
-    return _result
+                return _result
+
+    # by default return result
+    return result

@@ -12,6 +12,8 @@ import litellm
 import backoff
 import traceback
 from pydantic import BaseModel
+import litellm.litellm_core_utils
+import litellm.litellm_core_utils.litellm_logging
 from litellm.proxy._types import (
     UserAPIKeyAuth,
     DynamoDBArgs,
@@ -266,7 +268,9 @@ class ProxyLogging:
                     + litellm.failure_callback
                 )
             )
-            litellm.utils.set_callbacks(callback_list=callback_list)
+            litellm.litellm_core_utils.litellm_logging.set_callbacks(
+                callback_list=callback_list
+            )
 
     # The actual implementation of the function
     async def pre_call_hook(
@@ -331,7 +335,9 @@ class ProxyLogging:
             return data
         except Exception as e:
             if "litellm_logging_obj" in data:
-                logging_obj: litellm.utils.Logging = data["litellm_logging_obj"]
+                logging_obj: litellm.litellm_core_utils.litellm_logging.Logging = data[
+                    "litellm_logging_obj"
+                ]
 
                 ## ASYNC FAILURE HANDLER ##
                 error_message = ""
@@ -455,6 +461,7 @@ class ProxyLogging:
             formatted_message += f"\n\nProxy URL: `{_proxy_base_url}`"
 
         extra_kwargs = {}
+        alerting_metadata = {}
         if request_data is not None:
             _url = self.slack_alerting_instance._add_langfuse_trace_id_to_alert(
                 request_data=request_data
@@ -462,7 +469,12 @@ class ProxyLogging:
             if _url is not None:
                 extra_kwargs["🪢 Langfuse Trace"] = _url
                 formatted_message += "\n\n🪢 Langfuse Trace: {}".format(_url)
-
+            if (
+                "metadata" in request_data
+                and request_data["metadata"].get("alerting_metadata", None) is not None
+                and isinstance(request_data["metadata"]["alerting_metadata"], dict)
+            ):
+                alerting_metadata = request_data["metadata"]["alerting_metadata"]
         for client in self.alerting:
             if client == "slack":
                 await self.slack_alerting_instance.send_alert(
@@ -470,6 +482,7 @@ class ProxyLogging:
                     level=level,
                     alert_type=alert_type,
                     user_info=None,
+                    alerting_metadata=alerting_metadata,
                     **extra_kwargs,
                 )
             elif client == "sentry":
@@ -510,7 +523,7 @@ class ProxyLogging:
         )
 
         if hasattr(self, "service_logging_obj"):
-            self.service_logging_obj.async_service_failure_hook(
+            await self.service_logging_obj.async_service_failure_hook(
                 service=ServiceTypes.DB,
                 duration=duration,
                 error=error_message,
@@ -1960,6 +1973,9 @@ async def send_email(receiver_email, subject, html):
     email_message["From"] = sender_email
     email_message["To"] = receiver_email
     email_message["Subject"] = subject
+    verbose_proxy_logger.debug(
+        "sending email from %s to %s", sender_email, receiver_email
+    )
 
     # Attach the body to the email
     email_message.attach(MIMEText(html, "html"))
@@ -2115,6 +2131,16 @@ def _extract_from_regex(duration: str) -> Tuple[int, str]:
     return value, unit
 
 
+def get_last_day_of_month(year, month):
+    # Handle December case
+    if month == 12:
+        return 31
+    # Next month is January, so subtract a day from March 1st
+    next_month = datetime(year=year, month=month + 1, day=1)
+    last_day_of_month = (next_month - timedelta(days=1)).day
+    return last_day_of_month
+
+
 def _duration_in_seconds(duration: str) -> int:
     """
     Parameters:
@@ -2141,13 +2167,29 @@ def _duration_in_seconds(duration: str) -> int:
         now = time.time()
         current_time = datetime.fromtimestamp(now)
 
-        # Calculate the first day of the next month
         if current_time.month == 12:
-            next_month = datetime(year=current_time.year + 1, month=1, day=1)
+            target_year = current_time.year + 1
+            target_month = 1
         else:
-            next_month = datetime(
-                year=current_time.year, month=current_time.month + value, day=1
-            )
+            target_year = current_time.year
+            target_month = current_time.month + value
+
+        # Determine the day to set for next month
+        target_day = current_time.day
+        last_day_of_target_month = get_last_day_of_month(target_year, target_month)
+
+        if target_day > last_day_of_target_month:
+            target_day = last_day_of_target_month
+
+        next_month = datetime(
+            year=target_year,
+            month=target_month,
+            day=target_day,
+            hour=current_time.hour,
+            minute=current_time.minute,
+            second=current_time.second,
+            microsecond=current_time.microsecond,
+        )
 
         # Calculate the duration until the first day of the next month
         duration_until_next_month = next_month - current_time
@@ -2716,47 +2758,6 @@ def _is_valid_team_configs(team_id=None, team_config=None, request_data=None):
                 f"Invalid model for team {team_id}: {model_in_request}.  Valid models for team are: {valid_models}\n"
             )
     return
-
-
-def _is_user_proxy_admin(user_id_information: Optional[list]):
-    if user_id_information is None:
-        return False
-
-    if len(user_id_information) == 0 or user_id_information[0] is None:
-        return False
-
-    _user = user_id_information[0]
-    if (
-        _user.get("user_role", None) is not None
-        and _user.get("user_role") == LitellmUserRoles.PROXY_ADMIN.value
-    ):
-        return True
-
-    # if user_id_information contains litellm-proxy-budget
-    # get first user_id that is not litellm-proxy-budget
-    for user in user_id_information:
-        if user.get("user_id") != "litellm-proxy-budget":
-            _user = user
-            break
-
-    if (
-        _user.get("user_role", None) is not None
-        and _user.get("user_role") == LitellmUserRoles.PROXY_ADMIN.value
-    ):
-        return True
-
-    return False
-
-
-def _get_user_role(user_id_information: Optional[list]):
-    if user_id_information is None:
-        return None
-
-    if len(user_id_information) == 0 or user_id_information[0] is None:
-        return None
-
-    _user = user_id_information[0]
-    return _user.get("user_role")
 
 
 def encrypt_value(value: str, master_key: str):
