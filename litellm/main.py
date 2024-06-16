@@ -4811,4 +4811,5 @@ def stream_chunk_builder(
         model_response_object=model_response,
         start_time=start_time,
         end_time=end_time,
+        custom_model_name=False,
     )

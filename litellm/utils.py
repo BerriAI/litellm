@@ -729,6 +729,7 @@ def client(original_function):
                                     response_object=cached_result,
                                     model_response_object=ModelResponse(model=model),
                                     stream=kwargs.get("stream", False),
+                                    custom_model_name=False,
                                 )
 
                                 if kwargs.get("stream", False) is True:
@@ -744,6 +745,7 @@ def client(original_function):
                                 cached_result = convert_to_model_response_object(
                                     response_object=cached_result,
                                     response_type="embedding",
+                                    custom_model_name=False,
                                 )
 
                             # LOG SUCCESS
@@ -1098,6 +1100,7 @@ def client(original_function):
                                 cached_result = convert_to_model_response_object(
                                     response_object=cached_result,
                                     model_response_object=ModelResponse(model=model),
+                                    custom_model_name=False,
                                 )
                         if (
                             call_type == CallTypes.atext_completion.value
@@ -1122,6 +1125,7 @@ def client(original_function):
                                 response_object=cached_result,
                                 model_response_object=EmbeddingResponse(),
                                 response_type="embedding",
+                                custom_model_name=False,
                             )
                         elif call_type == CallTypes.atranscription.value and isinstance(
                             cached_result, dict
@@ -1135,6 +1139,7 @@ def client(original_function):
                                 model_response_object=TranscriptionResponse(),
                                 response_type="audio_transcription",
                                 hidden_params=hidden_params,
+                                custom_model_name=False,
                             )
                         if kwargs.get("stream", False) == False:
                             # LOG SUCCESS
@@ -4908,6 +4913,7 @@ def convert_to_streaming_response(response_object: Optional[dict] = None):
 
 
 def convert_to_model_response_object(
+    custom_model_name: bool,
     response_object: Optional[dict] = None,
     model_response_object: Optional[
         Union[ModelResponse, EmbeddingResponse, ImageResponse, TranscriptionResponse]
@@ -4920,6 +4926,11 @@ def convert_to_model_response_object(
     end_time=None,
     hidden_params: Optional[dict] = None,
 ):
+    """
+    Returns the model response object in the correct litellm response object type
+    Parameters:
+    - custom_model_name: bool - whether to respect the existing model name in 'model_response_object' or not. (True for OpenAI/Custom Openai models. False for Azure models)
+    """
     received_args = locals()
     try:
         if response_type == "completion" and (
@@ -4928,7 +4939,7 @@ def convert_to_model_response_object(
         ):
             if response_object is None or model_response_object is None:
                 raise Exception("Error in response object format")
-            if stream == True:
+            if stream is True:
                 # for returning cached responses, we need to yield a generator
                 return convert_to_streaming_response(response_object=response_object)
             choice_list = []
@@ -4977,7 +4988,9 @@ def convert_to_model_response_object(
                     "system_fingerprint"
                 ]
 
-            if "model" in response_object and model_response_object.model is None:
+            if (
+                "model" in response_object and custom_model_name is False
+            ):  # if model received and custom model name not set
                 model_response_object.model = response_object["model"]
 
             if start_time is not None and end_time is not None:

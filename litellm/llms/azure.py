@@ -313,7 +313,9 @@ def select_azure_base_url_or_endpoint(azure_client_params: dict):
 def get_azure_ad_token_from_oidc(azure_ad_token: str):
     azure_client_id = os.getenv("AZURE_CLIENT_ID", None)
     azure_tenant_id = os.getenv("AZURE_TENANT_ID", None)
-    azure_authority_host = os.getenv("AZURE_AUTHORITY_HOST", "https://login.microsoftonline.com")
+    azure_authority_host = os.getenv(
+        "AZURE_AUTHORITY_HOST", "https://login.microsoftonline.com"
+    )
 
     if azure_client_id is None or azure_tenant_id is None:
         raise AzureOpenAIError(
@@ -329,12 +331,14 @@ def get_azure_ad_token_from_oidc(azure_ad_token: str):
             message="OIDC token could not be retrieved from secret manager.",
         )
 
-    azure_ad_token_cache_key = json.dumps({
-        "azure_client_id": azure_client_id,
-        "azure_tenant_id": azure_tenant_id,
-        "azure_authority_host": azure_authority_host,
-        "oidc_token": oidc_token,
-    })
+    azure_ad_token_cache_key = json.dumps(
+        {
+            "azure_client_id": azure_client_id,
+            "azure_tenant_id": azure_tenant_id,
+            "azure_authority_host": azure_authority_host,
+            "oidc_token": oidc_token,
+        }
+    )
 
     azure_ad_token_access_token = azure_ad_cache.get_cache(azure_ad_token_cache_key)
     if azure_ad_token_access_token is not None:
@@ -371,7 +375,11 @@ def get_azure_ad_token_from_oidc(azure_ad_token: str):
             status_code=422, message="Azure AD Token expires_in not returned"
         )
 
-    azure_ad_cache.set_cache(key=azure_ad_token_cache_key, value=azure_ad_token_access_token, ttl=azure_ad_token_expires_in)
+    azure_ad_cache.set_cache(
+        key=azure_ad_token_cache_key,
+        value=azure_ad_token_access_token,
+        ttl=azure_ad_token_expires_in,
+    )
 
     return azure_ad_token_access_token
 
@@ -564,6 +572,7 @@ class AzureChatCompletion(BaseLLM):
                 return convert_to_model_response_object(
                     response_object=stringified_response,
                     model_response_object=model_response,
+                    custom_model_name=False,
                 )
         except AzureOpenAIError as e:
             exception_mapping_worked = True
@@ -641,6 +650,7 @@ class AzureChatCompletion(BaseLLM):
             return convert_to_model_response_object(
                 response_object=response.model_dump(),
                 model_response_object=model_response,
+                custom_model_name=False,
             )
         except AzureOpenAIError as e:
             exception_mapping_worked = True
@@ -811,6 +821,7 @@ class AzureChatCompletion(BaseLLM):
                 response_object=stringified_response,
                 model_response_object=model_response,
                 response_type="embedding",
+                custom_model_name=False,
             )
         except Exception as e:
             ## LOGGING
@@ -903,7 +914,12 @@ class AzureChatCompletion(BaseLLM):
                 original_response=response,
             )
 
-            return convert_to_model_response_object(response_object=response.model_dump(), model_response_object=model_response, response_type="embedding")  # type: ignore
+            return convert_to_model_response_object(
+                response_object=response.model_dump(),  # type: ignore
+                model_response_object=model_response,
+                response_type="embedding",
+                custom_model_name=False,
+            )  # type: ignore
         except AzureOpenAIError as e:
             exception_mapping_worked = True
             raise e
@@ -959,6 +975,7 @@ class AzureChatCompletion(BaseLLM):
                 response_object=stringified_response,
                 model_response_object=model_response,
                 response_type="image_generation",
+                custom_model_name=False,
             )
         except Exception as e:
             ## LOGGING
@@ -1026,7 +1043,7 @@ class AzureChatCompletion(BaseLLM):
                     azure_ad_token = get_azure_ad_token_from_oidc(azure_ad_token)
                 azure_client_params["azure_ad_token"] = azure_ad_token
 
-            if aimg_generation == True:
+            if aimg_generation is True:
                 response = self.aimage_generation(data=data, input=input, logging_obj=logging_obj, model_response=model_response, api_key=api_key, client=client, azure_client_params=azure_client_params, timeout=timeout)  # type: ignore
                 return response
 
@@ -1060,7 +1077,12 @@ class AzureChatCompletion(BaseLLM):
                 original_response=response,
             )
             # return response
-            return convert_to_model_response_object(response_object=response.model_dump(), model_response_object=model_response, response_type="image_generation")  # type: ignore
+            return convert_to_model_response_object(
+                response_object=response.model_dump(),  # type: ignore
+                model_response_object=model_response,
+                response_type="image_generation",
+                custom_model_name=False,
+            )  # type: ignore
         except AzureOpenAIError as e:
             exception_mapping_worked = True
             raise e
@@ -1151,7 +1173,13 @@ class AzureChatCompletion(BaseLLM):
             original_response=stringified_response,
         )
         hidden_params = {"model": "whisper-1", "custom_llm_provider": "azure"}
-        final_response = convert_to_model_response_object(response_object=stringified_response, model_response_object=model_response, hidden_params=hidden_params, response_type="audio_transcription")  # type: ignore
+        final_response = convert_to_model_response_object(
+            response_object=stringified_response,
+            model_response_object=model_response,
+            hidden_params=hidden_params,
+            response_type="audio_transcription",
+            custom_model_name=False,
+        )  # type: ignore
         return final_response
 
     async def async_audio_transcriptions(
@@ -1212,7 +1240,13 @@ class AzureChatCompletion(BaseLLM):
                 original_response=stringified_response,
             )
             hidden_params = {"model": "whisper-1", "custom_llm_provider": "azure"}
-            response = convert_to_model_response_object(response_object=stringified_response, model_response_object=model_response, hidden_params=hidden_params, response_type="audio_transcription")  # type: ignore
+            response = convert_to_model_response_object(
+                response_object=stringified_response,
+                model_response_object=model_response,
+                hidden_params=hidden_params,
+                response_type="audio_transcription",
+                custom_model_name=False,
+            )  # type: ignore
             return response
         except Exception as e:
             ## LOGGING

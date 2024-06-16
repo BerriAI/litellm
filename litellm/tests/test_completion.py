@@ -3299,6 +3299,7 @@ def test_mistral_anyscale_stream():
 
 
 #### Test A121 ###################
+@pytest.mark.skip(reason="trial ended")
 def test_completion_ai21():
     print("running ai21 j2light test")
     litellm.set_verbose = True
