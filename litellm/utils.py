@@ -2359,6 +2359,7 @@ def get_optional_params(
             and custom_llm_provider != "together_ai"
             and custom_llm_provider != "groq"
             and custom_llm_provider != "deepseek"
+            and custom_llm_provider != "codestral"
             and custom_llm_provider != "mistral"
             and custom_llm_provider != "anthropic"
             and custom_llm_provider != "cohere_chat"
@@ -3007,6 +3008,28 @@ def get_optional_params(
             optional_params["response_format"] = response_format
         if seed is not None:
             optional_params["seed"] = seed
+    elif custom_llm_provider == "codestral":
+        # supported_params = get_supported_openai_params(
+        #     model=model, custom_llm_provider=custom_llm_provider
+        # )
+        # _check_valid_arg(supported_params=supported_params)
+        # optional_params = litellm.DeepInfraConfig().map_openai_params(
+        #     non_default_params=non_default_params,
+        #     optional_params=optional_params,
+        #     model=model,
+        # )
+        pass
+    elif custom_llm_provider == "text-completion-codestral":
+        # supported_params = get_supported_openai_params(
+        #     model=model, custom_llm_provider=custom_llm_provider
+        # )
+        # _check_valid_arg(supported_params=supported_params)
+        # optional_params = litellm.DeepInfraConfig().map_openai_params(
+        #     non_default_params=non_default_params,
+        #     optional_params=optional_params,
+        #     model=model,
+        # )
+        pass
 
     elif custom_llm_provider == "deepseek":
         supported_params = get_supported_openai_params(
@@ -3867,6 +3890,14 @@ def get_llm_provider(
                 # groq is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.groq.com/openai/v1
                 api_base = "https://api.groq.com/openai/v1"
                 dynamic_api_key = get_secret("GROQ_API_KEY")
+            elif custom_llm_provider == "codestral":
+                # codestral is openai compatible, we just need to set this to custom_openai and have the api_base be https://codestral.mistral.ai/v1/chat/completions
+                api_base = "https://codestral.mistral.ai/v1/chat/completions"
+                dynamic_api_key = get_secret("CODESTRAL_API_KEY")
+            elif custom_llm_provider == "text-completion-codestral":
+                # codestral is openai compatible, we just need to set this to custom_openai and have the api_base be https://codestral.mistral.ai/v1/chat/completions
+                api_base = "https://codestral.mistral.ai/v1/fim/completions"
+                dynamic_api_key = get_secret("CODESTRAL_API_KEY")
             elif custom_llm_provider == "deepseek":
                 # deepseek is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.deepseek.com/v1
                 api_base = "https://api.deepseek.com/v1"
@@ -3959,6 +3990,12 @@ def get_llm_provider(
                     elif endpoint == "api.groq.com/openai/v1":
                         custom_llm_provider = "groq"
                         dynamic_api_key = get_secret("GROQ_API_KEY")
+                    elif endpoint == "https://codestral.mistral.ai/v1/chat/completions":
+                        custom_llm_provider = "codestral"
+                        dynamic_api_key = get_secret("CODESTRAL_API_KEY")
+                    elif endpoint == "https://codestral.mistral.ai/v1/fim/completions":
+                        custom_llm_provider = "text-completion-codestral"
+                        dynamic_api_key = get_secret("CODESTRAL_API_KEY")
                     elif endpoint == "api.deepseek.com/v1":
                         custom_llm_provider = "deepseek"
                         dynamic_api_key = get_secret("DEEPSEEK_API_KEY")
@@ -4639,6 +4676,14 @@ def validate_environment(model: Optional[str] = None) -> dict:
                 missing_keys.append("GEMINI_API_KEY")
         elif custom_llm_provider == "groq":
             if "GROQ_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("GROQ_API_KEY")
+        elif (
+            custom_llm_provider == "codestral"
+            or custom_llm_provider == "text-completion-codestral"
+        ):
+            if "CODESTRAL_API_KEY" in os.environ:
                 keys_in_environment = True
             else:
                 missing_keys.append("GROQ_API_KEY")
