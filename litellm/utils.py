@@ -4286,8 +4286,10 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
                 split_model, custom_llm_provider, _, _ = get_llm_provider(model=model)
             except:
                 pass
+            combined_model_name = model
         else:
             split_model = model
+            combined_model_name = "{}/{}".format(custom_llm_provider, model)
         #########################
 
         supported_openai_params = litellm.get_supported_openai_params(
@@ -4305,33 +4307,58 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
             }
         else:
             """
-            Check if:
-            1. 'model' in litellm.model_cost. Checks "groq/llama3-8b-8192" in  litellm.model_cost
-            2. 'split_model' in litellm.model_cost. Checks "llama3-8b-8192" in litellm.model_cost
+            Check if: (in order of specificity)
+            1. 'custom_llm_provider/model' in litellm.model_cost. Checks "groq/llama3-8b-8192" if model="llama3-8b-8192" and custom_llm_provider="groq"
+            2. 'model' in litellm.model_cost. Checks "groq/llama3-8b-8192" in  litellm.model_cost if model="groq/llama3-8b-8192" and custom_llm_provider=None
+            3. 'split_model' in litellm.model_cost. Checks "llama3-8b-8192" in litellm.model_cost if model="groq/llama3-8b-8192"
             """
-            if model in litellm.model_cost:
+            if combined_model_name in litellm.model_cost:
+                _model_info = litellm.model_cost[combined_model_name]
+                _model_info["supported_openai_params"] = supported_openai_params
+                if (
+                    "litellm_provider" in _model_info
+                    and _model_info["litellm_provider"] != custom_llm_provider
+                ):
+                    if custom_llm_provider == "vertex_ai" and _model_info[
+                        "litellm_provider"
+                    ].startswith("vertex_ai"):
+                        pass
+                    else:
+                        raise Exception
+                return _model_info
+            elif model in litellm.model_cost:
                 _model_info = litellm.model_cost[model]
                 _model_info["supported_openai_params"] = supported_openai_params
                 if (
                     "litellm_provider" in _model_info
                     and _model_info["litellm_provider"] != custom_llm_provider
                 ):
-                    raise Exception
+                    if custom_llm_provider == "vertex_ai" and _model_info[
+                        "litellm_provider"
+                    ].startswith("vertex_ai"):
+                        pass
+                    else:
+                        raise Exception
                 return _model_info
-            if split_model in litellm.model_cost:
+            elif split_model in litellm.model_cost:
                 _model_info = litellm.model_cost[split_model]
                 _model_info["supported_openai_params"] = supported_openai_params
                 if (
                     "litellm_provider" in _model_info
                     and _model_info["litellm_provider"] != custom_llm_provider
                 ):
-                    raise Exception
+                    if custom_llm_provider == "vertex_ai" and _model_info[
+                        "litellm_provider"
+                    ].startswith("vertex_ai"):
+                        pass
+                    else:
+                        raise Exception
                 return _model_info
             else:
                 raise ValueError(
                     "This model isn't mapped yet. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
                 )
-    except:
+    except Exception:
         raise Exception(
             "This model isn't mapped yet. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
         )
