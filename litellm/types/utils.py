@@ -1,14 +1,15 @@
-from typing import List, Optional, Union, Dict, Tuple, Literal
-from typing_extensions import TypedDict
-from enum import Enum
-from typing_extensions import override, Required, Dict
-from .llms.openai import ChatCompletionUsageBlock, ChatCompletionToolCallChunk
-from ..litellm_core_utils.core_helpers import map_finish_reason
-from openai._models import BaseModel as OpenAIObject
-from pydantic import ConfigDict
-import uuid
 import json
 import time
+import uuid
+from enum import Enum
+from typing import Dict, List, Literal, Optional, Tuple, Union
+
+from openai._models import BaseModel as OpenAIObject
+from pydantic import ConfigDict
+from typing_extensions import Dict, Required, TypedDict, override
+
+from ..litellm_core_utils.core_helpers import map_finish_reason
+from .llms.openai import ChatCompletionToolCallChunk, ChatCompletionUsageBlock
 
 
 def _generate_id():  # private helper function
@@ -34,21 +35,31 @@ class ProviderField(TypedDict):
     field_value: str
 
 
-class ModelInfo(TypedDict):
+class ModelInfo(TypedDict, total=False):
     """
     Model info for a given model, this is information found in litellm.model_prices_and_context_window.json
     """
 
-    max_tokens: Optional[int]
-    max_input_tokens: Optional[int]
-    max_output_tokens: Optional[int]
-    input_cost_per_token: float
-    output_cost_per_token: float
-    litellm_provider: str
-    mode: Literal[
-        "completion", "embedding", "image_generation", "chat", "audio_transcription"
+    max_tokens: Required[Optional[int]]
+    max_input_tokens: Required[Optional[int]]
+    max_output_tokens: Required[Optional[int]]
+    input_cost_per_token: Required[float]
+    input_cost_per_token_above_128k_tokens: Optional[float]
+    input_cost_per_image: Optional[float]
+    input_cost_per_audio_per_second: Optional[float]
+    input_cost_per_video_per_second: Optional[float]
+    output_cost_per_token: Required[float]
+    output_cost_per_token_above_128k_tokens: Optional[float]
+    output_cost_per_image: Optional[float]
+    output_cost_per_video_per_second: Optional[float]
+    output_cost_per_audio_per_second: Optional[float]
+    litellm_provider: Required[str]
+    mode: Required[
+        Literal[
+            "completion", "embedding", "image_generation", "chat", "audio_transcription"
+        ]
     ]
-    supported_openai_params: Optional[List[str]]
+    supported_openai_params: Required[Optional[List[str]]]
 
 
 class GenericStreamingChunk(TypedDict):
