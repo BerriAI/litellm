@@ -4100,6 +4100,9 @@ async def test_completion_codestral_fim_api():
         # Add any assertions here to check the response
         print(response)
 
+        assert response.choices[0].text is not None
+        assert len(response.choices[0].text) > 0
+
         # cost = litellm.completion_cost(completion_response=response)
         # print("cost to make mistral completion=", cost)
         # assert cost > 0.0

@@ -257,7 +257,7 @@ class CodestralTextCompletion(BaseLLM):
             original_response=response.text,
             additional_args={"complete_input_dict": data},
         )
-        print_verbose(f"raw model_response: {response.text}")
+        print_verbose(f"codestral api: raw model_response: {response.text}")
         ## RESPONSE OBJECT
         if response.status_code != 200:
             raise TextCompletionCodestralError(
@@ -269,7 +269,44 @@ class CodestralTextCompletion(BaseLLM):
         except:
             raise TextCompletionCodestralError(message=response.text, status_code=422)
 
-        _response = litellm.TextCompletionResponse(**completion_response)
+        _original_choices = completion_response.get("choices", [])
+        _choices: List[litellm.utils.TextChoices] = []
+        for choice in _original_choices:
+            # This is what 1 choice looks like from codestral API
+            # {
+            #     "index": 0,
+            #     "message": {
+            #     "role": "assistant",
+            #     "content": "\n assert is_odd(1)\n assert",
+            #     "tool_calls": null
+            #     },
+            #     "finish_reason": "length",
+            #     "logprobs": null
+            #     }
+            _finish_reason = None
+            _index = 0
+            _text = None
+            _logprobs = None
+
+            _choice_message = choice.get("message", {})
+            _choice = litellm.utils.TextChoices(
+                finish_reason=choice.get("finish_reason"),
+                index=choice.get("index"),
+                text=_choice_message.get("content"),
+                logprobs=choice.get("logprobs"),
+            )
+
+            _choices.append(_choice)
+
+        _response = litellm.TextCompletionResponse(
+            id=completion_response.get("id"),
+            choices=_choices,
+            created=completion_response.get("created"),
+            model=completion_response.get("model"),
+            usage=completion_response.get("usage"),
+            stream=False,
+            object=completion_response.get("object"),
+        )
         return _response
 
     def completion(

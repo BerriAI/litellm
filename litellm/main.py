@@ -355,9 +355,10 @@ async def acompletion(
             else:
                 response = init_response  # type: ignore
 
-            if custom_llm_provider == "text-completion-openai" and isinstance(
-                response, TextCompletionResponse
-            ):
+            if (
+                custom_llm_provider == "text-completion-openai"
+                or custom_llm_provider == "text-completion-codestral"
+            ) and isinstance(response, TextCompletionResponse):
                 response = litellm.OpenAITextCompletionConfig().convert_to_chat_model_response_object(
                     response_object=response,
                     model_response_object=litellm.ModelResponse(),
@@ -3458,7 +3459,9 @@ def embedding(
 
 ###### Text Completion ################
 @client
-async def atext_completion(*args, **kwargs):
+async def atext_completion(
+    *args, **kwargs
+) -> Union[TextCompletionResponse, TextCompletionStreamWrapper]:
     """
     Implemented to handle async streaming for the text completion endpoint
     """
