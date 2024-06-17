@@ -14,6 +14,7 @@ sys.path.insert(
 import pytest
 from litellm.proxy._types import LiteLLM_JWTAuth, LiteLLMRoutes
 from litellm.proxy.auth.handle_jwt import JWTHandler
+from litellm.proxy.management_endpoints.team_endpoints import new_team
 from litellm.caching import DualCache
 from datetime import datetime, timedelta
 from fastapi import Request
@@ -218,7 +219,7 @@ async def test_team_token_output(prisma_client, audience):
     from cryptography.hazmat.backends import default_backend
     from fastapi import Request
     from starlette.datastructures import URL
-    from litellm.proxy.proxy_server import user_api_key_auth, new_team
+    from litellm.proxy.proxy_server import user_api_key_auth
     from litellm.proxy._types import NewTeamRequest, UserAPIKeyAuth
     import litellm
     import uuid
@@ -399,7 +400,6 @@ async def test_user_token_output(
     from starlette.datastructures import URL
     from litellm.proxy.proxy_server import (
         user_api_key_auth,
-        new_team,
         new_user,
         user_info,
     )
@@ -623,7 +623,7 @@ async def test_allowed_routes_admin(prisma_client, audience):
     from cryptography.hazmat.backends import default_backend
     from fastapi import Request
     from starlette.datastructures import URL
-    from litellm.proxy.proxy_server import user_api_key_auth, new_team
+    from litellm.proxy.proxy_server import user_api_key_auth
     from litellm.proxy._types import NewTeamRequest, UserAPIKeyAuth
     import litellm
     import uuid

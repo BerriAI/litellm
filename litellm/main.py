@@ -368,7 +368,9 @@ async def acompletion(
         return response
     except Exception as e:
         verbose_logger.error(
-            "litellm.acompletion(): Exception occured - {}".format(str(e))
+            "litellm.acompletion(): Exception occured - {}\n{}".format(
+                str(e), traceback.format_exc()
+            )
         )
         verbose_logger.debug(traceback.format_exc())
         custom_llm_provider = custom_llm_provider or "openai"
@@ -399,6 +401,7 @@ def mock_completion(
     stream: Optional[bool] = False,
     mock_response: Union[str, Exception] = "This is a mock request",
     logging=None,
+    custom_llm_provider=None,
     **kwargs,
 ):
     """
@@ -436,7 +439,7 @@ def mock_completion(
             raise litellm.APIError(
                 status_code=getattr(mock_response, "status_code", 500),  # type: ignore
                 message=getattr(mock_response, "text", str(mock_response)),
-                llm_provider=getattr(mock_response, "llm_provider", "openai"),  # type: ignore
+                llm_provider=getattr(mock_response, "llm_provider", custom_llm_provider or "openai"),  # type: ignore
                 model=model,  # type: ignore
                 request=httpx.Request(method="POST", url="https://api.openai.com/v1/"),
             )
@@ -905,6 +908,7 @@ def completion(
                 logging=logging,
                 acompletion=acompletion,
                 mock_delay=kwargs.get("mock_delay", None),
+                custom_llm_provider=custom_llm_provider,
             )
         if custom_llm_provider == "azure":
             # azure configs

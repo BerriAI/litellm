@@ -1358,10 +1358,11 @@ class CallInfo(LiteLLMBase):
 
     spend: float
     max_budget: Optional[float] = None
-    token: str = Field(description="Hashed value of that key")
+    token: Optional[str] = Field(default=None, description="Hashed value of that key")
     customer_id: Optional[str] = None
     user_id: Optional[str] = None
     team_id: Optional[str] = None
+    team_alias: Optional[str] = None
     user_email: Optional[str] = None
     key_alias: Optional[str] = None
     projected_exceeded_date: Optional[str] = None
@@ -1574,3 +1575,44 @@ class ManagementEndpointLoggingPayload(LiteLLMBase):
     exception: Optional[Any] = None
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
+
+
+class ProxyException(Exception):
+    # NOTE: DO NOT MODIFY THIS
+    # This is used to map exactly to OPENAI Exceptions
+    def __init__(
+        self,
+        message: str,
+        type: str,
+        param: Optional[str],
+        code: Optional[int],
+    ):
+        self.message = message
+        self.type = type
+        self.param = param
+        self.code = code
+
+        # rules for proxyExceptions
+        # Litellm router.py returns "No healthy deployment available" when there are no deployments available
+        # Should map to 429 errors https://github.com/BerriAI/litellm/issues/2487
+        if (
+            "No healthy deployment available" in self.message
+            or "No deployments available" in self.message
+        ):
+            self.code = 429
+
+    def to_dict(self) -> dict:
+        """Converts the ProxyException instance to a dictionary."""
+        return {
+            "message": self.message,
+            "type": self.type,
+            "param": self.param,
+            "code": self.code,
+        }
+
+
+class CommonProxyErrors(enum.Enum):
+    db_not_connected_error = "DB not connected"
+    no_llm_router = "No models configured on proxy"
+    not_allowed_access = "Admin-only endpoint. Not allowed to access this."
+    not_premium_user = "You must be a LiteLLM Enterprise user to use this feature. If you have a license please set `LITELLM_LICENSE` in your env. If you want to obtain a license meet with us here: https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat"

@@ -2,7 +2,7 @@
 import litellm
 import httpx, requests
 from typing import Optional, Union
-from litellm.utils import Logging
+from litellm.litellm_core_utils.litellm_logging import Logging
 
 
 class BaseLLM:

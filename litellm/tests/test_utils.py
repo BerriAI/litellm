@@ -3,6 +3,7 @@ from unittest import mock
 
 from dotenv import load_dotenv
 import copy
+from datetime import datetime
 
 load_dotenv()
 import os
@@ -24,6 +25,11 @@ from litellm.utils import (
     create_tokenizer,
     get_max_tokens,
     get_supported_openai_params,
+)
+from litellm.proxy.utils import (
+    _duration_in_seconds,
+    _extract_from_regex,
+    get_last_day_of_month,
 )
 
 # Assuming your trim_messages, shorten_message_to_fit_limit, and get_token_count functions are all in a module named 'message_utils'
@@ -395,3 +401,105 @@ def test_get_supported_openai_params() -> None:
 
     # Unmapped provider
     assert get_supported_openai_params("nonexistent") is None
+
+
+def test_redact_msgs_from_logs():
+    """
+    Tests that turn_off_message_logging does not modify the response_obj
+
+    On the proxy some users were seeing the redaction impact client side responses
+    """
+    from litellm.litellm_core_utils.redact_messages import (
+        redact_message_input_output_from_logging,
+    )
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    litellm.turn_off_message_logging = True
+
+    response_obj = litellm.ModelResponse(
+        choices=[
+            {
+                "finish_reason": "stop",
+                "index": 0,
+                "message": {
+                    "content": "I'm LLaMA, an AI assistant developed by Meta AI that can understand and respond to human input in a conversational manner.",
+                    "role": "assistant",
+                },
+            }
+        ]
+    )
+
+    _redacted_response_obj = redact_message_input_output_from_logging(
+        result=response_obj,
+        litellm_logging_obj=Logging(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type="acompletion",
+            litellm_call_id="1234",
+            start_time=datetime.now(),
+            function_id="1234",
+        ),
+    )
+
+    # Assert the response_obj content is NOT modified
+    assert (
+        response_obj.choices[0].message.content
+        == "I'm LLaMA, an AI assistant developed by Meta AI that can understand and respond to human input in a conversational manner."
+    )
+
+    litellm.turn_off_message_logging = False
+    print("Test passed")
+
+
+@pytest.mark.parametrize(
+    "duration, unit",
+    [("7s", "s"), ("7m", "m"), ("7h", "h"), ("7d", "d"), ("7mo", "mo")],
+)
+def test_extract_from_regex(duration, unit):
+    value, _unit = _extract_from_regex(duration=duration)
+
+    assert value == 7
+    assert _unit == unit
+
+
+def test_duration_in_seconds():
+    """
+    Test if duration int is correctly calculated for different str
+    """
+    import time
+
+    now = time.time()
+    current_time = datetime.fromtimestamp(now)
+
+    if current_time.month == 12:
+        target_year = current_time.year + 1
+        target_month = 1
+    else:
+        target_year = current_time.year
+        target_month = current_time.month + 1
+
+    # Determine the day to set for next month
+    target_day = current_time.day
+    last_day_of_target_month = get_last_day_of_month(target_year, target_month)
+
+    if target_day > last_day_of_target_month:
+        target_day = last_day_of_target_month
+
+    next_month = datetime(
+        year=target_year,
+        month=target_month,
+        day=target_day,
+        hour=current_time.hour,
+        minute=current_time.minute,
+        second=current_time.second,
+        microsecond=current_time.microsecond,
+    )
+
+    # Calculate the duration until the first day of the next month
+    duration_until_next_month = next_month - current_time
+    expected_duration = int(duration_until_next_month.total_seconds())
+
+    value = _duration_in_seconds(duration="1mo")
+
+    assert value - expected_duration < 2
