@@ -1,56 +1,53 @@
-from typing import Optional, List, Any, Literal, Union, TYPE_CHECKING, Tuple
-import os
-import subprocess
-import hashlib
-import importlib
 import asyncio
 import copy
+import hashlib
+import importlib
 import json
-import httpx
+import os
+import re
+import smtplib
+import subprocess
 import time
-import litellm
-import backoff
 import traceback
+from datetime import datetime, timedelta
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from functools import wraps
+from typing import TYPE_CHECKING, Any, List, Literal, Optional, Tuple, Union
+
+import backoff
+import httpx
+from fastapi import HTTPException, Request, status
 from pydantic import BaseModel
+from typing_extensions import overload
+
+import litellm
 import litellm.litellm_core_utils
 import litellm.litellm_core_utils.litellm_logging
+from litellm import EmbeddingResponse, ImageResponse, ModelResponse
+from litellm._logging import verbose_proxy_logger
+from litellm._service_logger import ServiceLogging, ServiceTypes
+from litellm.caching import DualCache, RedisCache
+from litellm.exceptions import RejectedRequestError
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.slack_alerting import SlackAlerting
+from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
 from litellm.proxy._types import (
-    UserAPIKeyAuth,
+    AlertType,
+    CallInfo,
     DynamoDBArgs,
     LiteLLM_VerificationTokenView,
-    CallInfo,
-    AlertType,
-    ResetTeamBudgetRequest,
     LitellmUserRoles,
+    ResetTeamBudgetRequest,
     SpendLogsMetadata,
     SpendLogsPayload,
+    UserAPIKeyAuth,
 )
-from litellm.caching import DualCache, RedisCache
-from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
+from litellm.proxy.hooks.cache_control_check import _PROXY_CacheControlCheck
+from litellm.proxy.hooks.max_budget_limiter import _PROXY_MaxBudgetLimiter
 from litellm.proxy.hooks.parallel_request_limiter import (
     _PROXY_MaxParallelRequestsHandler,
 )
-from litellm.exceptions import RejectedRequestError
-from litellm._service_logger import ServiceLogging, ServiceTypes
-from litellm import (
-    ModelResponse,
-    EmbeddingResponse,
-    ImageResponse,
-)
-from litellm.proxy.hooks.max_budget_limiter import _PROXY_MaxBudgetLimiter
-from litellm.proxy.hooks.cache_control_check import _PROXY_CacheControlCheck
-from litellm.integrations.custom_logger import CustomLogger
-from litellm._logging import verbose_proxy_logger
-from fastapi import HTTPException, status
-import smtplib
-import re
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-from datetime import datetime, timedelta
-from litellm.integrations.slack_alerting import SlackAlerting
-from typing_extensions import overload
-from functools import wraps
-from fastapi import Request
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -244,7 +241,9 @@ class ProxyLogging:
         )
         for callback in litellm.callbacks:
             if isinstance(callback, str):
-                callback = litellm.utils._init_custom_logger_compatible_class(callback)
+                callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(
+                    callback
+                )
             if callback not in litellm.input_callback:
                 litellm.input_callback.append(callback)
             if callback not in litellm.success_callback:
@@ -1957,8 +1956,7 @@ async def send_email(receiver_email, subject, html):
     sender_email,
     """
     ## SERVER SETUP ##
-    from litellm.proxy.proxy_server import premium_user
-    from litellm.proxy.proxy_server import CommonProxyErrors
+    from litellm.proxy.proxy_server import CommonProxyErrors, premium_user
 
     smtp_host = os.getenv("SMTP_HOST")
     smtp_port = int(os.getenv("SMTP_PORT", "587"))  # default to port 587
@@ -2008,8 +2006,9 @@ def hash_token(token: str):
 def get_logging_payload(
     kwargs, response_obj, start_time, end_time, end_user_id: Optional[str]
 ) -> SpendLogsPayload:
-    from litellm.proxy._types import LiteLLM_SpendLogs
     from pydantic import Json
+
+    from litellm.proxy._types import LiteLLM_SpendLogs
 
     verbose_proxy_logger.debug(
         f"SpendTable: get_logging_payload - kwargs: {kwargs}\n\n"
@@ -2762,6 +2761,7 @@ def _is_valid_team_configs(team_id=None, team_config=None, request_data=None):
 
 def encrypt_value(value: str, master_key: str):
     import hashlib
+
     import nacl.secret
     import nacl.utils
 
@@ -2782,6 +2782,7 @@ def encrypt_value(value: str, master_key: str):
 
 def decrypt_value(value: bytes, master_key: str) -> str:
     import hashlib
+
     import nacl.secret
     import nacl.utils
 
