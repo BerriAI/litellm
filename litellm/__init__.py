@@ -338,6 +338,7 @@ bedrock_models: List = []
 deepinfra_models: List = []
 perplexity_models: List = []
 watsonx_models: List = []
+gemini_models: List = []
 for key, value in model_cost.items():
     if value.get("litellm_provider") == "openai":
         open_ai_chat_completion_models.append(key)
@@ -384,7 +385,8 @@ for key, value in model_cost.items():
         perplexity_models.append(key)
     elif value.get("litellm_provider") == "watsonx":
         watsonx_models.append(key)
-
+    elif value.get("litellm_provider") == "gemini":
+        gemini_models.append(key)
 # known openai compatible endpoints - we'll eventually move this list to the model_prices_and_context_window.json dictionary
 openai_compatible_endpoints: List = [
     "api.perplexity.ai",
@@ -591,6 +593,7 @@ model_list = (
     + maritalk_models
     + vertex_language_models
     + watsonx_models
+    + gemini_models
 )
 
 provider_list: List = [
@@ -663,6 +666,7 @@ models_by_provider: dict = {
     "perplexity": perplexity_models,
     "maritalk": maritalk_models,
     "watsonx": watsonx_models,
+    "gemini": gemini_models,
 }
 
 # mapping for those models which have larger equivalents
