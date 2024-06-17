@@ -3308,6 +3308,7 @@ def test_mistral_anyscale_stream():
 
 
 #### Test A121 ###################
+@pytest.mark.skip(reason="Local test")
 def test_completion_ai21():
     print("running ai21 j2light test")
     litellm.set_verbose = True
@@ -3545,6 +3546,7 @@ def test_unified_auth_params(provider, model, project, region_name, token):
         assert value in translated_optional_params
 
 
+@pytest.mark.skip(reason="Local test")
 @pytest.mark.asyncio
 async def test_acompletion_watsonx():
     litellm.set_verbose = True
@@ -3565,6 +3567,7 @@ async def test_acompletion_watsonx():
         pytest.fail(f"Error occurred: {e}")
 
 
+@pytest.mark.skip(reason="Local test")
 @pytest.mark.asyncio
 async def test_acompletion_stream_watsonx():
     litellm.set_verbose = True
