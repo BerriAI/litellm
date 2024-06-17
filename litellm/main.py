@@ -1049,7 +1049,6 @@ def completion(
             or custom_llm_provider == "perplexity"
             or custom_llm_provider == "groq"
             or custom_llm_provider == "codestral"
-            or custom_llm_provider == "text-completion-codestral"
             or custom_llm_provider == "deepseek"
             or custom_llm_provider == "anyscale"
             or custom_llm_provider == "mistral"
@@ -3711,6 +3710,7 @@ def text_completion(
             custom_llm_provider == "openai"
             or custom_llm_provider == "azure"
             or custom_llm_provider == "azure_text"
+            or custom_llm_provider == "text-completion-codestral"
             or custom_llm_provider == "text-completion-openai"
         )
         and isinstance(prompt, list)
