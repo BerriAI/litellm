@@ -795,11 +795,11 @@ from .llms.openai import (
     OpenAIConfig,
     OpenAITextCompletionConfig,
     MistralConfig,
-    MistralTextCompletionConfig,
     MistralEmbeddingConfig,
     DeepInfraConfig,
     AzureAIStudioConfig,
 )
+from .llms.text_completion_codestral import MistralTextCompletionConfig
 from .llms.azure import (
     AzureOpenAIConfig,
     AzureOpenAIError,

@@ -82,6 +82,7 @@ from .llms.predibase import PredibaseChatCompletion
 from .llms.bedrock_httpx import BedrockLLM, BedrockConverseLLM
 from .llms.vertex_httpx import VertexLLM
 from .llms.triton import TritonChatCompletion
+from .llms.text_completion_codestral import CodestralTextCompletion
 from .llms.prompt_templates.factory import (
     prompt_factory,
     custom_prompt,
@@ -120,6 +121,7 @@ azure_chat_completions = AzureChatCompletion()
 azure_text_completions = AzureTextCompletion()
 huggingface = Huggingface()
 predibase_chat_completions = PredibaseChatCompletion()
+codestral_text_completions = CodestralTextCompletion()
 triton_chat_completions = TritonChatCompletion()
 bedrock_chat_completion = BedrockLLM()
 bedrock_converse_chat_completion = BedrockConverseLLM()
@@ -2024,6 +2026,46 @@ def completion(
                 custom_prompt_dict=custom_prompt_dict,
                 api_key=api_key,
                 tenant_id=tenant_id,
+                timeout=timeout,
+            )
+
+            if (
+                "stream" in optional_params
+                and optional_params["stream"] is True
+                and acompletion is False
+            ):
+                return _model_response
+            response = _model_response
+        elif custom_llm_provider == "text-completion-codestral":
+
+            api_base = (
+                api_base
+                or optional_params.pop("api_base", None)
+                or optional_params.pop("base_url", None)
+                or litellm.api_base
+                or "https://codestral.mistral.ai/v1/fim/completions"
+            )
+
+            api_key = api_key or litellm.api_key or get_secret("CODESTRAL_API_KEY")
+
+            text_completion_model_response = litellm.TextCompletionResponse(
+                stream=stream
+            )
+
+            _model_response = codestral_text_completions.completion(  # type: ignore
+                model=model,
+                messages=messages,
+                model_response=text_completion_model_response,
+                print_verbose=print_verbose,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                encoding=encoding,
+                logging_obj=logging,
+                acompletion=acompletion,
+                api_base=api_base,
+                custom_prompt_dict=custom_prompt_dict,
+                api_key=api_key,
                 timeout=timeout,
             )
 
