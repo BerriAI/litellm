@@ -177,6 +177,7 @@ def create_async_task(**completion_kwargs):
     """
     completion_args = {
         "model": "azure/chatgpt-v-2",
+        "api_version": "2024-02-01",
         "messages": [{"role": "user", "content": "This is a test"}],
         "max_tokens": 5,
         "temperature": 0.7,
