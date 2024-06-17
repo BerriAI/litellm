@@ -4076,3 +4076,21 @@ async def test_async_text_completion_chat_model_stream():
 
 
 # asyncio.run(test_async_text_completion_chat_model_stream())
+
+
+@pytest.mark.asyncio
+async def test_completion_codestral_fim_api():
+    try:
+        litellm.set_verbose = True
+        response = await litellm.atext_completion(
+            model="text-completion-codestral/codestral-2405",
+            prompt="def is_odd(n): \n return n % 2 == 1 \ndef test_is_odd():",
+        )
+        # Add any assertions here to check the response
+        print(response)
+
+        # cost = litellm.completion_cost(completion_response=response)
+        # print("cost to make mistral completion=", cost)
+        # assert cost > 0.0
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
