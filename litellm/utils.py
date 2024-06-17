@@ -7,59 +7,71 @@
 #
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
+import ast
+import asyncio
+import base64
+import binascii
+import copy
+import datetime
+import inspect
+import itertools
+import json
+import logging
+import os
+import random  # type: ignore
+import re
+import struct
+import subprocess
+
 # What is this?
 ## Generic utils.py file. Problem-specific utils (e.g. 'cost calculation), should all be in `litellm_core_utils/`.
-import sys, re, binascii, struct
-import litellm
-import dotenv, json, traceback, threading, base64, ast
-import subprocess, os
-from os.path import abspath, join, dirname
-import litellm, openai
-import itertools
-import random, uuid, requests  # type: ignore
-from functools import wraps, lru_cache
-import datetime, time
-import tiktoken
-import uuid
-from pydantic import BaseModel
-import aiohttp
+import sys
 import textwrap
-import logging
-import asyncio, httpx, inspect
+import threading
+import time
+import traceback
+import uuid
+from dataclasses import dataclass, field
+from functools import lru_cache, wraps
 from inspect import iscoroutine
-import copy
+from os.path import abspath, dirname, join
+
+import aiohttp
+import dotenv
+import httpx
+import openai
+import requests
+import tiktoken
+from pydantic import BaseModel
 from tokenizers import Tokenizer
-from dataclasses import (
-    dataclass,
-    field,
-)
-import os
+
+import litellm
 import litellm._service_logger  # for storing API inputs, outputs, and metadata
 import litellm.litellm_core_utils
-from litellm.litellm_core_utils.core_helpers import map_finish_reason
-from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
 from litellm.caching import DualCache
-from litellm.types.utils import (
-    CostPerToken,
-    ProviderField,
-    ModelInfo,
-    CallTypes,
-    ModelResponse,
-    EmbeddingResponse,
-    ImageResponse,
-    TranscriptionResponse,
-    TextCompletionResponse,
-    ChatCompletionDeltaToolCall,
-    Message,
-    Delta,
-    Choices,
-    Usage,
-    StreamingChoices,
-    Embedding,
-    TextChoices,
-)
+from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_logging,
+)
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.types.utils import (
+    CallTypes,
+    ChatCompletionDeltaToolCall,
+    Choices,
+    CostPerToken,
+    Delta,
+    Embedding,
+    EmbeddingResponse,
+    ImageResponse,
+    Message,
+    ModelInfo,
+    ModelResponse,
+    ProviderField,
+    StreamingChoices,
+    TextChoices,
+    TextCompletionResponse,
+    TranscriptionResponse,
+    Usage,
 )
 
 oidc_cache = DualCache()
@@ -87,33 +99,34 @@ with resources.open_text("litellm.llms.tokenizers", "anthropic_tokenizer.json") 
 # Convert to str (if necessary)
 claude_json_str = json.dumps(json_data)
 import importlib.metadata
-from ._logging import verbose_logger
-from .types.router import LiteLLM_Params
-from .types.llms.openai import (
-    ChatCompletionToolCallChunk,
-    ChatCompletionToolCallFunctionChunk,
-    ChatCompletionDeltaToolCallChunk,
-)
 
-from .proxy._types import KeyManagementSystem
 from openai import OpenAIError as OriginalError
-from .caching import S3Cache, RedisSemanticCache, RedisCache
+
+from ._logging import verbose_logger
+from .caching import RedisCache, RedisSemanticCache, S3Cache
 from .exceptions import (
-    AuthenticationError,
-    BadRequestError,
-    NotFoundError,
-    RateLimitError,
-    ServiceUnavailableError,
-    OpenAIError,
-    PermissionDeniedError,
-    ContextWindowExceededError,
-    ContentPolicyViolationError,
-    Timeout,
     APIConnectionError,
     APIError,
+    AuthenticationError,
+    BadRequestError,
     BudgetExceededError,
+    ContentPolicyViolationError,
+    ContextWindowExceededError,
+    NotFoundError,
+    OpenAIError,
+    PermissionDeniedError,
+    RateLimitError,
+    ServiceUnavailableError,
+    Timeout,
     UnprocessableEntityError,
 )
+from .proxy._types import KeyManagementSystem
+from .types.llms.openai import (
+    ChatCompletionDeltaToolCallChunk,
+    ChatCompletionToolCallChunk,
+    ChatCompletionToolCallFunctionChunk,
+)
+from .types.router import LiteLLM_Params
 
 try:
     from .proxy.enterprise.enterprise_callbacks.generic_api_callback import (
@@ -122,21 +135,22 @@ try:
 except Exception as e:
     verbose_logger.debug(f"Exception import enterprise features {str(e)}")
 
+from concurrent.futures import ThreadPoolExecutor
 from typing import (
-    cast,
-    List,
-    Dict,
-    Union,
-    Optional,
-    Literal,
     Any,
     BinaryIO,
-    Iterable,
-    Tuple,
     Callable,
+    Dict,
+    Iterable,
+    List,
+    Literal,
+    Optional,
+    Tuple,
+    Union,
+    cast,
 )
+
 from .caching import Cache
-from concurrent.futures import ThreadPoolExecutor
 
 ####### ENVIRONMENT VARIABLES ####################
 # Adjust to your specific application needs / system capabilities.
@@ -4373,8 +4387,9 @@ def function_to_dict(input_function):  # noqa: C901
     # Get function name and docstring
     try:
         import inspect
-        from numpydoc.docscrape import NumpyDocString
         from ast import literal_eval
+
+        from numpydoc.docscrape import NumpyDocString
     except Exception as e:
         raise e
 
@@ -5077,7 +5092,7 @@ def prompt_token_calculator(model, messages):
             import anthropic
         except:
             Exception("Anthropic import failed please run `pip install anthropic`")
-        from anthropic import Anthropic, HUMAN_PROMPT, AI_PROMPT
+        from anthropic import AI_PROMPT, HUMAN_PROMPT, Anthropic
 
         anthropic = Anthropic()
         num_tokens = anthropic.count_tokens(text)
@@ -6839,7 +6854,7 @@ def exception_type(
                         llm_provider="azure",
                         model=model,
                         litellm_debug_info=extra_information,
-                        response=original_exception.response,
+                        response=getattr(original_exception, "response", None),
                     )
                 elif "invalid_request_error" in error_str:
                     exception_mapping_worked = True
@@ -6848,7 +6863,7 @@ def exception_type(
                         llm_provider="azure",
                         model=model,
                         litellm_debug_info=extra_information,
-                        response=original_exception.response,
+                        response=getattr(original_exception, "response", None),
                     )
                 elif (
                     "The api_key client option must be set either by passing api_key to the client or by setting"
@@ -6955,7 +6970,7 @@ def exception_type(
                 message=f"{exception_provider} BadRequestError : This can happen due to missing AZURE_API_VERSION: {str(original_exception)}",
                 model=model,
                 llm_provider=custom_llm_provider,
-                response=original_exception.response,
+                response=getattr(original_exception, "response", None),
             )
         else:  # ensure generic errors always return APIConnectionError=
             """
