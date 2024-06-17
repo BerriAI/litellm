@@ -1,20 +1,24 @@
 # What is this?
 ## File for 'response_cost' calculation in Logging
-from typing import Optional, Union, Literal, List, Tuple
+from typing import List, Literal, Optional, Tuple, Union
+
+import litellm
 import litellm._logging
+from litellm import verbose_logger
+from litellm.litellm_core_utils.llm_cost_calc.google import (
+    cost_per_token as google_cost_per_token,
+)
 from litellm.utils import (
-    ModelResponse,
+    CallTypes,
+    CostPerToken,
     EmbeddingResponse,
     ImageResponse,
-    TranscriptionResponse,
+    ModelResponse,
     TextCompletionResponse,
-    CallTypes,
+    TranscriptionResponse,
     print_verbose,
-    CostPerToken,
     token_counter,
 )
-import litellm
-from litellm import verbose_logger
 
 
 def _cost_per_token_custom_pricing_helper(
@@ -42,10 +46,10 @@ def _cost_per_token_custom_pricing_helper(
 
 def cost_per_token(
     model: str = "",
-    prompt_tokens=0,
-    completion_tokens=0,
+    prompt_tokens: float = 0,
+    completion_tokens: float = 0,
     response_time_ms=None,
-    custom_llm_provider=None,
+    custom_llm_provider: Optional[str] = None,
     region_name=None,
     ### CUSTOM PRICING ###
     custom_cost_per_token: Optional[CostPerToken] = None,
@@ -66,6 +70,7 @@ def cost_per_token(
     Returns:
         tuple: A tuple containing the cost in USD dollars for prompt tokens and completion tokens, respectively.
     """
+    args = locals()
     if model is None:
         raise Exception("Invalid arg. Model cannot be none.")
     ## CUSTOM PRICING ##
@@ -94,7 +99,8 @@ def cost_per_token(
                 model_with_provider_and_region in model_cost_ref
             ):  # use region based pricing, if it's available
                 model_with_provider = model_with_provider_and_region
-
+    else:
+        _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model)
     model_without_prefix = model
     model_parts = model.split("/")
     if len(model_parts) > 1:
@@ -120,7 +126,14 @@ def cost_per_token(
 
     # see this https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models
     print_verbose(f"Looking up model={model} in model_cost_map")
-    if model in model_cost_ref:
+    if custom_llm_provider == "vertex_ai" or custom_llm_provider == "gemini":
+        return google_cost_per_token(
+            model=model_without_prefix,
+            custom_llm_provider=custom_llm_provider,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+        )
+    elif model in model_cost_ref:
         print_verbose(f"Success: model={model} in model_cost_map")
         print_verbose(
             f"prompt_tokens={prompt_tokens}; completion_tokens={completion_tokens}"
