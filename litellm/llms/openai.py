@@ -208,6 +208,85 @@ class MistralEmbeddingConfig:
         return optional_params
 
 
+class MistralTextCompletionConfig:
+    """
+    Reference: https://docs.mistral.ai/api/#operation/createFIMCompletion
+    """
+
+    suffix: Optional[str] = None
+    temperature: Optional[int] = None
+    top_p: Optional[float] = None
+    max_tokens: Optional[int] = None
+    min_tokens: Optional[int] = None
+    stream: Optional[bool] = None
+    random_seed: Optional[int] = None
+    stop: Optional[str] = None
+
+    def __init__(
+        self,
+        suffix: Optional[str] = None,
+        temperature: Optional[int] = None,
+        top_p: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        min_tokens: Optional[int] = None,
+        stream: Optional[bool] = None,
+        random_seed: Optional[int] = None,
+        stop: Optional[str] = None,
+    ) -> None:
+        locals_ = locals().copy()
+        for key, value in locals_.items():
+            if key != "self" and value is not None:
+                setattr(self.__class__, key, value)
+
+    @classmethod
+    def get_config(cls):
+        return {
+            k: v
+            for k, v in cls.__dict__.items()
+            if not k.startswith("__")
+            and not isinstance(
+                v,
+                (
+                    types.FunctionType,
+                    types.BuiltinFunctionType,
+                    classmethod,
+                    staticmethod,
+                ),
+            )
+            and v is not None
+        }
+
+    def get_supported_openai_params(self):
+        return [
+            "suffix",
+            "temperature",
+            "top_p",
+            "max_tokens",
+            "stream",
+            "seed",
+            "stop",
+        ]
+
+    def map_openai_params(self, non_default_params: dict, optional_params: dict):
+        for param, value in non_default_params.items():
+            if param == "suffix":
+                optional_params["suffix"] = value
+            if param == "temperature":
+                optional_params["temperature"] = value
+            if param == "top_p":
+                optional_params["top_p"] = value
+            if param == "max_tokens":
+                optional_params["max_tokens"] = value
+            if param == "stream" and value == True:
+                optional_params["stream"] = value
+            if param == "stop":
+                optional_params["stop"] = value
+            if param == "seed":
+                optional_params["extra_body"] = {"random_seed": value}
+
+        return optional_params
+
+
 class AzureAIStudioConfig:
     def get_required_params(self) -> List[ProviderField]:
         """For a given provider, return it's required fields with a description"""
