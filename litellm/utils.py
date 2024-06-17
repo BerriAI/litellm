@@ -2968,7 +2968,7 @@ def get_optional_params(
             optional_params["stream"] = stream
         if max_tokens:
             optional_params["max_tokens"] = max_tokens
-    elif custom_llm_provider == "mistral":
+    elif custom_llm_provider == "mistral" or custom_llm_provider == "codestral":
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider
         )
@@ -2976,6 +2976,15 @@ def get_optional_params(
         optional_params = litellm.MistralConfig().map_openai_params(
             non_default_params=non_default_params, optional_params=optional_params
         )
+    elif custom_llm_provider == "text-completion-codestral":
+        supported_params = get_supported_openai_params(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+        _check_valid_arg(supported_params=supported_params)
+        optional_params = litellm.MistralTextCompletionConfig().map_openai_params(
+            non_default_params=non_default_params, optional_params=optional_params
+        )
+
     elif custom_llm_provider == "databricks":
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider
@@ -3649,11 +3658,14 @@ def get_supported_openai_params(
             "tool_choice",
             "max_retries",
         ]
-    elif custom_llm_provider == "mistral":
+    elif custom_llm_provider == "mistral" or custom_llm_provider == "codestral":
+        # mistal and codestral api have the exact same params
         if request_type == "chat_completion":
             return litellm.MistralConfig().get_supported_openai_params()
         elif request_type == "embeddings":
             return litellm.MistralEmbeddingConfig().get_supported_openai_params()
+    elif custom_llm_provider == "text-completion-codestral":
+        return litellm.MistralTextCompletionConfig().get_supported_openai_params()
     elif custom_llm_provider == "replicate":
         return [
             "stream",
