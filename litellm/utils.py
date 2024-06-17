@@ -3891,12 +3891,12 @@ def get_llm_provider(
                 api_base = "https://api.groq.com/openai/v1"
                 dynamic_api_key = get_secret("GROQ_API_KEY")
             elif custom_llm_provider == "codestral":
-                # codestral is openai compatible, we just need to set this to custom_openai and have the api_base be https://codestral.mistral.ai/v1/chat/completions
-                api_base = "https://codestral.mistral.ai/v1/chat/completions"
+                # codestral is openai compatible, we just need to set this to custom_openai and have the api_base be https://codestral.mistral.ai/v1
+                api_base = "https://codestral.mistral.ai/v1"
                 dynamic_api_key = get_secret("CODESTRAL_API_KEY")
             elif custom_llm_provider == "text-completion-codestral":
-                # codestral is openai compatible, we just need to set this to custom_openai and have the api_base be https://codestral.mistral.ai/v1/chat/completions
-                api_base = "https://codestral.mistral.ai/v1/fim/completions"
+                # codestral is openai compatible, we just need to set this to custom_openai and have the api_base be https://codestral.mistral.ai/v1
+                api_base = "https://codestral.mistral.ai/v1"
                 dynamic_api_key = get_secret("CODESTRAL_API_KEY")
             elif custom_llm_provider == "deepseek":
                 # deepseek is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.deepseek.com/v1
@@ -3990,10 +3990,10 @@ def get_llm_provider(
                     elif endpoint == "api.groq.com/openai/v1":
                         custom_llm_provider = "groq"
                         dynamic_api_key = get_secret("GROQ_API_KEY")
-                    elif endpoint == "https://codestral.mistral.ai/v1/chat/completions":
+                    elif endpoint == "https://codestral.mistral.ai/v1":
                         custom_llm_provider = "codestral"
                         dynamic_api_key = get_secret("CODESTRAL_API_KEY")
-                    elif endpoint == "https://codestral.mistral.ai/v1/fim/completions":
+                    elif endpoint == "https://codestral.mistral.ai/v1":
                         custom_llm_provider = "text-completion-codestral"
                         dynamic_api_key = get_secret("CODESTRAL_API_KEY")
                     elif endpoint == "api.deepseek.com/v1":
