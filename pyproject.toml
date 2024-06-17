@@ -71,6 +71,9 @@ extra_proxy = [
     "pynacl"
 ]
 
+[tool.isort]
+profile = "black"
+
 [tool.poetry.scripts]
 litellm = 'litellm:run_server'
 
