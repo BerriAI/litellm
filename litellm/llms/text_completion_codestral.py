@@ -17,6 +17,7 @@ from litellm.utils import (
     Choices,
 )
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.types.llms.databricks import GenericStreamingChunk
 import litellm
 from .prompt_templates.factory import prompt_factory, custom_prompt
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -159,6 +160,39 @@ class MistralTextCompletionConfig:
                 optional_params["min_tokens"] = value
 
         return optional_params
+
+    def _chunk_parser(self, chunk_data: str) -> GenericStreamingChunk:
+        text = ""
+        is_finished = False
+        finish_reason = None
+        logprobs = None
+
+        chunk_data = chunk_data.replace("data:", "")
+        chunk_data = chunk_data.strip()
+        if len(chunk_data) == 0 or chunk_data == "[DONE]":
+            return {
+                "text": "",
+                "is_finished": is_finished,
+                "finish_reason": finish_reason,
+            }
+        chunk_data_dict = json.loads(chunk_data)
+        original_chunk = litellm.ModelResponse(**chunk_data_dict, stream=True)
+        _choices = chunk_data_dict.get("choices", []) or []
+        _choice = _choices[0]
+        text = _choice.get("delta", {}).get("content", "")
+
+        if _choice.get("finish_reason") is not None:
+            is_finished = True
+            finish_reason = _choice.get("finish_reason")
+            logprobs = _choice.get("logprobs")
+
+        return GenericStreamingChunk(
+            text=text,
+            original_chunk=original_chunk,
+            is_finished=is_finished,
+            finish_reason=finish_reason,
+            logprobs=logprobs,
+        )
 
 
 class CodestralTextCompletion(BaseLLM):
@@ -452,7 +486,7 @@ class CodestralTextCompletion(BaseLLM):
                 logging_obj=logging_obj,
             ),
             model=model,
-            custom_llm_provider="codestral",
+            custom_llm_provider="text-completion-codestral",
             logging_obj=logging_obj,
         )
         return streamwrapper
