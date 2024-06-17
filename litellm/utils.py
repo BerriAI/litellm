@@ -3017,29 +3017,6 @@ def get_optional_params(
             optional_params["response_format"] = response_format
         if seed is not None:
             optional_params["seed"] = seed
-    elif custom_llm_provider == "codestral":
-        # supported_params = get_supported_openai_params(
-        #     model=model, custom_llm_provider=custom_llm_provider
-        # )
-        # _check_valid_arg(supported_params=supported_params)
-        # optional_params = litellm.DeepInfraConfig().map_openai_params(
-        #     non_default_params=non_default_params,
-        #     optional_params=optional_params,
-        #     model=model,
-        # )
-        pass
-    elif custom_llm_provider == "text-completion-codestral":
-        # supported_params = get_supported_openai_params(
-        #     model=model, custom_llm_provider=custom_llm_provider
-        # )
-        # _check_valid_arg(supported_params=supported_params)
-        # optional_params = litellm.DeepInfraConfig().map_openai_params(
-        #     non_default_params=non_default_params,
-        #     optional_params=optional_params,
-        #     model=model,
-        # )
-        pass
-
     elif custom_llm_provider == "deepseek":
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider
@@ -3903,10 +3880,6 @@ def get_llm_provider(
                 api_base = "https://api.groq.com/openai/v1"
                 dynamic_api_key = get_secret("GROQ_API_KEY")
             elif custom_llm_provider == "codestral":
-                # codestral is openai compatible, we just need to set this to custom_openai and have the api_base be https://codestral.mistral.ai/v1
-                api_base = "https://codestral.mistral.ai/v1"
-                dynamic_api_key = get_secret("CODESTRAL_API_KEY")
-            elif custom_llm_provider == "text-completion-codestral":
                 # codestral is openai compatible, we just need to set this to custom_openai and have the api_base be https://codestral.mistral.ai/v1
                 api_base = "https://codestral.mistral.ai/v1"
                 dynamic_api_key = get_secret("CODESTRAL_API_KEY")
