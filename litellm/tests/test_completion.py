@@ -823,13 +823,17 @@ async def test_completion_codestral_chat_api():
         litellm.set_verbose = True
         response = await litellm.acompletion(
             model="codestral/codestral-latest",
-            max_tokens=5,
             messages=[
                 {
                     "role": "user",
                     "content": "Hey, how's it going?",
                 }
             ],
+            temperature=0.0,
+            top_p=1,
+            max_tokens=10,
+            safe_prompt=False,
+            seed=12,
         )
         # Add any assertions here to-check the response
         print(response)
