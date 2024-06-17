@@ -23,7 +23,7 @@ Official Mistral API Docs: https://docs.mistral.ai/api/#operation/createFIMCompl
 <Tabs>
 <TabItem value="no-streaming" label="No Streaming">
 
-### Sample Usage
+#### Sample Usage
 
 ```python
 import os
@@ -73,7 +73,7 @@ response = await litellm.atext_completion(
 </TabItem>
 <TabItem value="stream" label="Streaming">
 
-### Sample Usage - Streaming
+#### Sample Usage - Streaming
 
 ```python
 import os
@@ -140,7 +140,7 @@ Official Mistral API Docs: https://docs.mistral.ai/api/#operation/createChatComp
 <Tabs>
 <TabItem value="no-streaming" label="No Streaming">
 
-### Sample Usage
+#### Sample Usage
 
 ```python
 import os
@@ -196,7 +196,7 @@ response = await litellm.acompletion(
 </TabItem>
 <TabItem value="stream" label="Streaming">
 
-### Sample Usage - Streaming
+#### Sample Usage - Streaming
 
 ```python
 import os
