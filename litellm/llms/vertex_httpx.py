@@ -1,41 +1,47 @@
 # What is this?
 ## httpx client for vertex ai calls
 ## Initial implementation - covers gemini + image gen calls
-from functools import partial
-import os, types
+import inspect
 import json
-from enum import Enum
-import requests  # type: ignore
+import os
 import time
-from typing import Callable, Optional, Union, List, Any, Tuple
+import types
+import uuid
+from enum import Enum
+from functools import partial
+from typing import Any, Callable, List, Literal, Optional, Tuple, Union
+
+import httpx  # type: ignore
+import requests  # type: ignore
+
+import litellm
 import litellm.litellm_core_utils
 import litellm.litellm_core_utils.litellm_logging
-from litellm.utils import ModelResponse, Usage, CustomStreamWrapper
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
-import litellm, uuid
-import httpx, inspect  # type: ignore
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from .base import BaseLLM
-from litellm.types.llms.vertex_ai import (
-    ContentType,
-    SystemInstructions,
-    PartType,
-    RequestBody,
-    GenerateContentResponseBody,
-    FunctionCallingConfig,
-    FunctionDeclaration,
-    Tools,
-    ToolConfig,
-    GenerationConfig,
-)
 from litellm.llms.vertex_ai import _gemini_convert_messages_with_history
-from litellm.types.utils import GenericStreamingChunk
 from litellm.types.llms.openai import (
-    ChatCompletionUsageBlock,
+    ChatCompletionResponseMessage,
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
-    ChatCompletionResponseMessage,
+    ChatCompletionUsageBlock,
 )
+from litellm.types.llms.vertex_ai import (
+    ContentType,
+    FunctionCallingConfig,
+    FunctionDeclaration,
+    GenerateContentResponseBody,
+    GenerationConfig,
+    PartType,
+    RequestBody,
+    SystemInstructions,
+    ToolConfig,
+    Tools,
+)
+from litellm.types.utils import GenericStreamingChunk
+from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
+
+from .base import BaseLLM
 
 
 class VertexGeminiConfig:
@@ -414,9 +420,11 @@ class VertexLLM(BaseLLM):
     def load_auth(
         self, credentials: Optional[str], project_id: Optional[str]
     ) -> Tuple[Any, str]:
-        from google.auth.transport.requests import Request  # type: ignore[import-untyped]
-        from google.auth.credentials import Credentials  # type: ignore[import-untyped]
         import google.auth as google_auth
+        from google.auth.credentials import Credentials  # type: ignore[import-untyped]
+        from google.auth.transport.requests import (
+            Request,  # type: ignore[import-untyped]
+        )
 
         if credentials is not None and isinstance(credentials, str):
             import google.oauth2.service_account
@@ -449,7 +457,9 @@ class VertexLLM(BaseLLM):
         return creds, project_id
 
     def refresh_auth(self, credentials: Any) -> None:
-        from google.auth.transport.requests import Request  # type: ignore[import-untyped]
+        from google.auth.transport.requests import (
+            Request,  # type: ignore[import-untyped]
+        )
 
         credentials.refresh(Request())
 
@@ -481,6 +491,50 @@ class VertexLLM(BaseLLM):
             raise RuntimeError("Could not resolve API token from the environment")
 
         return self._credentials.token, self.project_id
+
+    def _get_token_and_url(
+        self,
+        model: str,
+        gemini_api_key: Optional[str],
+        vertex_project: Optional[str],
+        vertex_location: Optional[str],
+        vertex_credentials: Optional[str],
+        stream: Optional[bool],
+        custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
+    ) -> Tuple[Optional[str], str]:
+        """
+        Internal function. Returns the token and url for the call.
+
+        Handles logic if it's google ai studio vs. vertex ai.
+
+        Returns
+            token, url
+        """
+        if custom_llm_provider == "gemini":
+            _gemini_model_name = "models/{}".format(model)
+            auth_header = None
+            endpoint = "generateContent"
+            if stream is True:
+                endpoint = "streamGenerateContent"
+
+            url = (
+                "https://generativelanguage.googleapis.com/v1beta/{}:{}?key={}".format(
+                    _gemini_model_name, endpoint, gemini_api_key
+                )
+            )
+        else:
+            auth_header, vertex_project = self._ensure_access_token(
+                credentials=vertex_credentials, project_id=vertex_project
+            )
+            vertex_location = self.get_vertex_region(vertex_region=vertex_location)
+
+            ### SET RUNTIME ENDPOINT ###
+            endpoint = "generateContent"
+            if stream is True:
+                endpoint = "streamGenerateContent"
+            url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}"
+
+        return auth_header, url
 
     async def async_streaming(
         self,
@@ -574,6 +628,9 @@ class VertexLLM(BaseLLM):
         messages: list,
         model_response: ModelResponse,
         print_verbose: Callable,
+        custom_llm_provider: Literal[
+            "vertex_ai", "vertex_ai_beta", "gemini"
+        ],  # if it's vertex_ai or gemini (google ai studio)
         encoding,
         logging_obj,
         optional_params: dict,
@@ -582,20 +639,23 @@ class VertexLLM(BaseLLM):
         vertex_project: Optional[str],
         vertex_location: Optional[str],
         vertex_credentials: Optional[str],
+        gemini_api_key: Optional[str],
         litellm_params=None,
         logger_fn=None,
         extra_headers: Optional[dict] = None,
         client: Optional[Union[AsyncHTTPHandler, HTTPHandler]] = None,
     ) -> Union[ModelResponse, CustomStreamWrapper]:
-
-        auth_header, vertex_project = self._ensure_access_token(
-            credentials=vertex_credentials, project_id=vertex_project
-        )
-        vertex_location = self.get_vertex_region(vertex_region=vertex_location)
         stream: Optional[bool] = optional_params.pop("stream", None)  # type: ignore
 
-        ### SET RUNTIME ENDPOINT ###
-        url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:generateContent"
+        auth_header, url = self._get_token_and_url(
+            model=model,
+            gemini_api_key=gemini_api_key,
+            vertex_project=vertex_project,
+            vertex_location=vertex_location,
+            vertex_credentials=vertex_credentials,
+            stream=stream,
+            custom_llm_provider=custom_llm_provider,
+        )
 
         ## TRANSFORMATION ##
         # Separate system prompt from rest of message
@@ -609,14 +669,16 @@ class VertexLLM(BaseLLM):
         if len(system_prompt_indices) > 0:
             for idx in reversed(system_prompt_indices):
                 messages.pop(idx)
-        system_instructions = SystemInstructions(parts=system_content_blocks)
         content = _gemini_convert_messages_with_history(messages=messages)
         tools: Optional[Tools] = optional_params.pop("tools", None)
         tool_choice: Optional[ToolConfig] = optional_params.pop("tool_choice", None)
         generation_config: Optional[GenerationConfig] = GenerationConfig(
             **optional_params
         )
-        data = RequestBody(system_instruction=system_instructions, contents=content)
+        data = RequestBody(contents=content)
+        if len(system_content_blocks) > 0:
+            system_instructions = SystemInstructions(parts=system_content_blocks)
+            data["system_instruction"] = system_instructions
         if tools is not None:
             data["tools"] = tools
         if tool_choice is not None:
@@ -626,8 +688,9 @@ class VertexLLM(BaseLLM):
 
         headers = {
             "Content-Type": "application/json; charset=utf-8",
-            "Authorization": f"Bearer {auth_header}",
         }
+        if auth_header is not None:
+            headers["Authorization"] = f"Bearer {auth_header}"
 
         ## LOGGING
         logging_obj.pre_call(
