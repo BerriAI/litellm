@@ -7182,14 +7182,11 @@ def get_secret(
                     b64_flag = _is_base64(encrypted_secret)
                     if b64_flag == True:  # if passed in as encoded b64 string
                         encrypted_secret = base64.b64decode(encrypted_secret)
-                    if not isinstance(encrypted_secret, bytes):
-                        # If it's not, assume it's a string and encode it to bytes
-                        ciphertext = eval(
-                            encrypted_secret.encode()
-                        )  # assuming encrypted_secret is something like - b'\n$\x00D\xac\xb4/t)07\xe5\xf6..'
-                    else:
                         ciphertext = encrypted_secret
-
+                    else:
+                        raise ValueError(
+                            f"Google KMS requires the encrypted secret to be encoded in base64"
+                        )#fix for this vulnerability https://huntr.com/bounties/ae623c2f-b64b-4245-9ed4-f13a0a5824ce
                     response = client.decrypt(
                         request={
                             "name": litellm._google_kms_resource_name,
