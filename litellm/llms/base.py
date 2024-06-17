@@ -27,6 +27,25 @@ class BaseLLM:
         """
         return model_response
 
+    def process_text_completion_response(
+        self,
+        model: str,
+        response: Union[requests.Response, httpx.Response],
+        model_response: litellm.utils.TextCompletionResponse,
+        stream: bool,
+        logging_obj: Logging,
+        optional_params: dict,
+        api_key: str,
+        data: Union[dict, str],
+        messages: list,
+        print_verbose,
+        encoding,
+    ) -> Union[litellm.utils.TextCompletionResponse, litellm.utils.CustomStreamWrapper]:
+        """
+        Helper function to process the response across sync + async completion calls
+        """
+        return model_response
+
     def create_client_session(self):
         if litellm.client_session:
             _client_session = litellm.client_session

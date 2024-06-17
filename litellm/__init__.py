@@ -393,6 +393,8 @@ openai_compatible_endpoints: List = [
     "api.endpoints.anyscale.com/v1",
     "api.deepinfra.com/v1/openai",
     "api.mistral.ai/v1",
+    "codestral.mistral.ai/v1/chat/completions",
+    "codestral.mistral.ai/v1/fim/completions",
     "api.groq.com/openai/v1",
     "api.deepseek.com/v1",
     "api.together.xyz/v1",
@@ -403,6 +405,7 @@ openai_compatible_providers: List = [
     "anyscale",
     "mistral",
     "groq",
+    "codestral",
     "deepseek",
     "deepinfra",
     "perplexity",
@@ -630,6 +633,8 @@ provider_list: List = [
     "anyscale",
     "mistral",
     "groq",
+    "codestral",
+    "text-completion-codestral",
     "deepseek",
     "maritalk",
     "voyage",
@@ -798,6 +803,7 @@ from .llms.openai import (
     DeepInfraConfig,
     AzureAIStudioConfig,
 )
+from .llms.text_completion_codestral import MistralTextCompletionConfig
 from .llms.azure import (
     AzureOpenAIConfig,
     AzureOpenAIError,
