@@ -1,74 +1,76 @@
 # What is this?
 ## Common Utility file for Logging handler
 # Logging function -> log the exact model details + what's being sent | Non-Blocking
-from litellm.types.utils import CallTypes
-from typing import Optional
+import copy
 import datetime
+import json
+import os
+import subprocess
+import sys
+import time
+import traceback
+import uuid
+from typing import Callable, Optional
+
+import litellm
 from litellm import (
-    verbose_logger,
     json_logs,
     log_raw_request_response,
     turn_off_message_logging,
+    verbose_logger,
 )
-import traceback
-import litellm
-import copy
-import sys
-import uuid
-import os
 from litellm.integrations.custom_logger import CustomLogger
-import json
-import time
 from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_logging,
 )
-from litellm.utils import (
-    _get_base_model_from_metadata,
-    supabaseClient,
-    liteDebuggerClient,
-    promptLayerLogger,
-    weightsBiasesLogger,
-    langsmithLogger,
-    logfireLogger,
-    capture_exception,
-    add_breadcrumb,
-    lunaryLogger,
-    prometheusLogger,
-    print_verbose,
-    customLogger,
-    prompt_token_calculator,
-)
 from litellm.types.utils import (
-    ModelResponse,
+    CallTypes,
     EmbeddingResponse,
     ImageResponse,
-    TranscriptionResponse,
+    ModelResponse,
     TextCompletionResponse,
+    TranscriptionResponse,
 )
-import subprocess
-from ..integrations.traceloop import TraceloopLogger
-from ..integrations.athina import AthinaLogger
-from ..integrations.helicone import HeliconeLogger
+from litellm.utils import (
+    _get_base_model_from_metadata,
+    add_breadcrumb,
+    capture_exception,
+    customLogger,
+    langsmithLogger,
+    liteDebuggerClient,
+    logfireLogger,
+    lunaryLogger,
+    print_verbose,
+    prometheusLogger,
+    prompt_token_calculator,
+    promptLayerLogger,
+    supabaseClient,
+    weightsBiasesLogger,
+)
+
 from ..integrations.aispend import AISpendLogger
+from ..integrations.athina import AthinaLogger
 from ..integrations.berrispend import BerriSpendLogger
-from ..integrations.supabase import Supabase
-from ..integrations.lunary import LunaryLogger
-from ..integrations.prompt_layer import PromptLayerLogger
-from ..integrations.langsmith import LangsmithLogger
-from ..integrations.logfire_logger import LogfireLogger, LogfireLevel
-from ..integrations.weights_biases import WeightsBiasesLogger
+from ..integrations.clickhouse import ClickhouseLogger
 from ..integrations.custom_logger import CustomLogger
-from ..integrations.langfuse import LangFuseLogger
-from ..integrations.openmeter import OpenMeterLogger
-from ..integrations.lago import LagoLogger
 from ..integrations.datadog import DataDogLogger
+from ..integrations.dynamodb import DyanmoDBLogger
+from ..integrations.greenscale import GreenscaleLogger
+from ..integrations.helicone import HeliconeLogger
+from ..integrations.lago import LagoLogger
+from ..integrations.langfuse import LangFuseLogger
+from ..integrations.langsmith import LangsmithLogger
+from ..integrations.litedebugger import LiteDebugger
+from ..integrations.logfire_logger import LogfireLevel, LogfireLogger
+from ..integrations.lunary import LunaryLogger
+from ..integrations.openmeter import OpenMeterLogger
 from ..integrations.prometheus import PrometheusLogger
 from ..integrations.prometheus_services import PrometheusServicesLogger
-from ..integrations.dynamodb import DyanmoDBLogger
+from ..integrations.prompt_layer import PromptLayerLogger
 from ..integrations.s3 import S3Logger
-from ..integrations.clickhouse import ClickhouseLogger
-from ..integrations.greenscale import GreenscaleLogger
-from ..integrations.litedebugger import LiteDebugger
+from ..integrations.supabase import Supabase
+from ..integrations.traceloop import TraceloopLogger
+from ..integrations.weights_biases import WeightsBiasesLogger
 
 
 class Logging:
@@ -1778,3 +1780,12 @@ def set_callbacks(callback_list, function_id=None):
                 customLogger = CustomLogger()
     except Exception as e:
         raise e
+
+
+def _init_custom_logger_compatible_class(
+    logging_integration: litellm._custom_logger_compatible_callbacks_literal,
+) -> Callable:
+    if logging_integration == "lago":
+        return LagoLogger()  # type: ignore
+    elif logging_integration == "openmeter":
+        return OpenMeterLogger()  # type: ignore

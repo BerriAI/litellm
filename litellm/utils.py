@@ -327,15 +327,6 @@ class Rules:
         return True
 
 
-def _init_custom_logger_compatible_class(
-    logging_integration: litellm._custom_logger_compatible_callbacks_literal,
-) -> Callable:
-    if logging_integration == "lago":
-        return LagoLogger()  # type: ignore
-    elif logging_integration == "openmeter":
-        return OpenMeterLogger()  # type: ignore
-
-
 ####### CLIENT ###################
 # make it easy to log if completion/embedding runs succeeded or failed + see what happened | Non-Blocking
 def function_setup(
@@ -353,7 +344,9 @@ def function_setup(
             for callback in litellm.callbacks:
                 # check if callback is a string - e.g. "lago", "openmeter"
                 if isinstance(callback, str):
-                    callback = _init_custom_logger_compatible_class(callback)
+                    callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(
+                        callback
+                    )
                     if any(
                         isinstance(cb, type(callback))
                         for cb in litellm._async_success_callback
