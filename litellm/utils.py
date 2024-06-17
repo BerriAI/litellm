@@ -6972,7 +6972,9 @@ def exception_type(
             exception_mapping_worked = True
             if hasattr(original_exception, "request"):
                 raise APIConnectionError(
-                    message=f"{str(original_exception)}",
+                    message="{}\n{}".format(
+                        str(original_exception), traceback.format_exc()
+                    ),
                     llm_provider=custom_llm_provider,
                     model=model,
                     request=original_exception.request,
@@ -7186,7 +7188,7 @@ def get_secret(
                     else:
                         raise ValueError(
                             f"Google KMS requires the encrypted secret to be encoded in base64"
-                        )#fix for this vulnerability https://huntr.com/bounties/ae623c2f-b64b-4245-9ed4-f13a0a5824ce
+                        )  # fix for this vulnerability https://huntr.com/bounties/ae623c2f-b64b-4245-9ed4-f13a0a5824ce
                     response = client.decrypt(
                         request={
                             "name": litellm._google_kms_resource_name,

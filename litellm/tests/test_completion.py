@@ -1,20 +1,26 @@
-import sys, os, json
+import json
+import os
+import sys
 import traceback
+
 from dotenv import load_dotenv
 
 load_dotenv()
-import os, io
+import io
+import os
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
+import os
+from unittest.mock import MagicMock, patch
+
 import pytest
+
 import litellm
-from litellm import embedding, completion, completion_cost, Timeout
-from litellm import RateLimitError
+from litellm import RateLimitError, Timeout, completion, completion_cost, embedding
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.prompt_templates.factory import anthropic_messages_pt
-from unittest.mock import patch, MagicMock
-from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
 
 # litellm.num_retries =3
 litellm.cache = None
@@ -1472,7 +1478,9 @@ def test_ollama_image():
     data is untouched.
     """
 
-    import io, base64
+    import base64
+    import io
+
     from PIL import Image
 
     def mock_post(url, **kwargs):
