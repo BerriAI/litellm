@@ -4076,3 +4076,72 @@ async def test_async_text_completion_chat_model_stream():
 
 
 # asyncio.run(test_async_text_completion_chat_model_stream())
+
+
+@pytest.mark.asyncio
+async def test_completion_codestral_fim_api():
+    try:
+        litellm.set_verbose = True
+        from litellm._logging import verbose_logger
+        import logging
+
+        verbose_logger.setLevel(level=logging.DEBUG)
+        response = await litellm.atext_completion(
+            model="text-completion-codestral/codestral-2405",
+            prompt="def is_odd(n): \n return n % 2 == 1 \ndef test_is_odd():",
+            suffix="return True",
+            temperature=0,
+            top_p=1,
+            max_tokens=10,
+            min_tokens=10,
+            seed=10,
+            stop=["return"],
+        )
+        # Add any assertions here to check the response
+        print(response)
+
+        assert response.choices[0].text is not None
+        assert len(response.choices[0].text) > 0
+
+        # cost = litellm.completion_cost(completion_response=response)
+        # print("cost to make mistral completion=", cost)
+        # assert cost > 0.0
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.asyncio
+async def test_completion_codestral_fim_api_stream():
+    try:
+        from litellm._logging import verbose_logger
+        import logging
+
+        litellm.set_verbose = False
+
+        # verbose_logger.setLevel(level=logging.DEBUG)
+        response = await litellm.atext_completion(
+            model="text-completion-codestral/codestral-2405",
+            prompt="def is_odd(n): \n return n % 2 == 1 \ndef test_is_odd():",
+            suffix="return True",
+            temperature=0,
+            top_p=1,
+            stream=True,
+            seed=10,
+            stop=["return"],
+        )
+
+        full_response = ""
+        # Add any assertions here to check the response
+        async for chunk in response:
+            print(chunk)
+            full_response += chunk.get("choices")[0].get("text") or ""
+
+        print("full_response", full_response)
+
+        assert len(full_response) > 2  # we at least have a few chars in response :)
+
+        # cost = litellm.completion_cost(completion_response=response)
+        # print("cost to make mistral completion=", cost)
+        # assert cost > 0.0
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
