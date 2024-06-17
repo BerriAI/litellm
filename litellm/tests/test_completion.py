@@ -3459,6 +3459,7 @@ def test_completion_palm_stream():
         pytest.fail(f"Error occurred: {e}")
 
 
+@pytest.mark.skip(reason="Account deleted by IBM.")
 def test_completion_watsonx():
     litellm.set_verbose = True
     model_name = "watsonx/ibm/granite-13b-chat-v2"
@@ -3479,6 +3480,7 @@ def test_completion_watsonx():
         pytest.fail(f"Error occurred: {e}")
 
 
+@pytest.mark.skip(reason="Skip test. account deleted.")
 def test_completion_stream_watsonx():
     litellm.set_verbose = True
     model_name = "watsonx/ibm/granite-13b-chat-v2"
