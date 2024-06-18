@@ -3,7 +3,7 @@ https://groq.com/
 
 :::tip
 
-**We support ALL Groq models, just set `groq/` as a prefix when sending litellm requests**
+**We support ALL Groq models, just set `model=groq/<any-model-on-groq>` as a prefix when sending litellm requests**
 
 :::
 
