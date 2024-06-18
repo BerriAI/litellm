@@ -284,13 +284,19 @@ const Settings: React.FC<SettingsPageProps> = ({
       }
     });
 
+    let litellm_settings: Record<string, string[]> = {};
+
     let payload = {
       environment_variables: env_vars,
-      litellm_settings: {
-        success_callback: [new_callback],
-      },
     }
 
+    if (new_callback == "otel") {
+      litellm_settings.callbacks = ["otel"]
+    } else {
+      litellm_settings.success_callbacks = [new_callback]
+    }
+
+    payload.litellm_settings = litellm_settings
 
     try {
       let newCallback = await setCallbacksCall(accessToken, payload);
