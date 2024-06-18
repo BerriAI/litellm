@@ -14,10 +14,14 @@ join our [discord](https://discord.gg/wuPM9dRgDw)
 
 ## Pre-Requisites
 
-Ensure you have run `pip install logfire` for this integration
+Ensure you have installed the following packages to use this integration
 
 ```shell
-pip install logfire litellm
+pip install litellm
+
+pip install opentelemetry-api==1.25.0
+pip install opentelemetry-sdk==1.25.0
+pip install opentelemetry-exporter-otlp==1.25.0
 ```
 
 ## Quick Start
