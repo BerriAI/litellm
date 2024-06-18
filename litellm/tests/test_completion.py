@@ -697,7 +697,7 @@ def test_completion_claude_3_base64():
 @pytest.mark.parametrize(
     "model", ["gemini/gemini-1.5-flash"]  # "claude-3-sonnet-20240229",
 )
-def test_completion_claude_3_function_plus_image(model):
+def test_completion_function_plus_image(model):
     litellm.set_verbose = True
 
     image_content = [
