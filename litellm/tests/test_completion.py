@@ -823,6 +823,34 @@ def test_completion_mistral_api():
         pytest.fail(f"Error occurred: {e}")
 
 
+@pytest.mark.asyncio
+async def test_completion_codestral_chat_api():
+    try:
+        litellm.set_verbose = True
+        response = await litellm.acompletion(
+            model="codestral/codestral-latest",
+            messages=[
+                {
+                    "role": "user",
+                    "content": "Hey, how's it going?",
+                }
+            ],
+            temperature=0.0,
+            top_p=1,
+            max_tokens=10,
+            safe_prompt=False,
+            seed=12,
+        )
+        # Add any assertions here to-check the response
+        print(response)
+
+        # cost = litellm.completion_cost(completion_response=response)
+        # print("cost to make mistral completion=", cost)
+        # assert cost > 0.0
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
 def test_completion_mistral_api_mistral_large_function_call():
     litellm.set_verbose = True
     tools = [
