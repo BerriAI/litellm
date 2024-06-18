@@ -64,6 +64,7 @@ from ..integrations.litedebugger import LiteDebugger
 from ..integrations.logfire_logger import LogfireLevel, LogfireLogger
 from ..integrations.lunary import LunaryLogger
 from ..integrations.openmeter import OpenMeterLogger
+from ..integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
 from ..integrations.prometheus import PrometheusLogger
 from ..integrations.prometheus_services import PrometheusServicesLogger
 from ..integrations.prompt_layer import PromptLayerLogger
@@ -663,32 +664,6 @@ class Logging:
                             start_time=start_time,
                             end_time=end_time,
                             print_verbose=print_verbose,
-                        )
-                    if callback == "logfire":
-                        global logfireLogger
-                        verbose_logger.debug("reaches logfire for success logging!")
-                        kwargs = {}
-                        for k, v in self.model_call_details.items():
-                            if (
-                                k != "original_response"
-                            ):  # copy.deepcopy raises errors as this could be a coroutine
-                                kwargs[k] = v
-
-                        # this only logs streaming once, complete_streaming_response exists i.e when stream ends
-                        if self.stream:
-                            if "complete_streaming_response" not in kwargs:
-                                continue
-                            else:
-                                print_verbose("reaches logfire for streaming logging!")
-                                result = kwargs["complete_streaming_response"]
-
-                        logfireLogger.log_event(
-                            kwargs=self.model_call_details,
-                            response_obj=result,
-                            start_time=start_time,
-                            end_time=end_time,
-                            print_verbose=print_verbose,
-                            level=LogfireLevel.INFO.value,
                         )
 
                     if callback == "lunary":
@@ -1594,24 +1569,6 @@ class Logging:
                             print_verbose=print_verbose,
                         )
 
-                    if callback == "logfire":
-                        verbose_logger.debug("reaches logfire for failure logging!")
-                        kwargs = {}
-                        for k, v in self.model_call_details.items():
-                            if (
-                                k != "original_response"
-                            ):  # copy.deepcopy raises errors as this could be a coroutine
-                                kwargs[k] = v
-                        kwargs["exception"] = exception
-
-                        logfireLogger.log_event(
-                            kwargs=kwargs,
-                            response_obj=result,
-                            start_time=start_time,
-                            end_time=end_time,
-                            level=LogfireLevel.ERROR.value,
-                            print_verbose=print_verbose,
-                        )
                 except Exception as e:
                     print_verbose(
                         f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while failure logging with integrations {str(e)}"
@@ -1754,8 +1711,6 @@ def set_callbacks(callback_list, function_id=None):
                 weightsBiasesLogger = WeightsBiasesLogger()
             elif callback == "langsmith":
                 langsmithLogger = LangsmithLogger()
-            elif callback == "logfire":
-                logfireLogger = LogfireLogger()
             elif callback == "aispend":
                 aispendLogger = AISpendLogger()
             elif callback == "berrispend":
@@ -1789,3 +1744,10 @@ def _init_custom_logger_compatible_class(
         return LagoLogger()  # type: ignore
     elif logging_integration == "openmeter":
         return OpenMeterLogger()  # type: ignore
+    elif logging_integration == "logfire":
+        otel_config = OpenTelemetryConfig(
+            exporter="otlp_http",
+            endpoint="https://logfire-api.pydantic.dev/v1/traces",
+            headers=f"Authorization={os.getenv('LOGFIRE_TOKEN')}",
+        )
+        return OpenTelemetry(config=otel_config)  # type: ignore
