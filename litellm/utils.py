@@ -2646,7 +2646,7 @@ def get_optional_params(
         if presence_penalty is not None:
             optional_params["presencePenalty"] = {"scale": presence_penalty}
     elif (
-        custom_llm_provider == "palm" or custom_llm_provider == "gemini"
+        custom_llm_provider == "palm"
     ):  # https://developers.generativeai.google/tutorials/curl_quickstart
         ## check if unsupported param passed in
         supported_params = get_supported_openai_params(
@@ -2693,7 +2693,7 @@ def get_optional_params(
         print_verbose(
             f"(end) INSIDE THE VERTEX AI OPTIONAL PARAM BLOCK - optional_params: {optional_params}"
         )
-    elif custom_llm_provider == "vertex_ai_beta":
+    elif custom_llm_provider == "vertex_ai_beta" or custom_llm_provider == "gemini":
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider
         )
@@ -3716,7 +3716,7 @@ def get_supported_openai_params(
         elif request_type == "embeddings":
             return litellm.DatabricksEmbeddingConfig().get_supported_openai_params()
     elif custom_llm_provider == "palm" or custom_llm_provider == "gemini":
-        return ["temperature", "top_p", "stream", "n", "stop", "max_tokens"]
+        return litellm.VertexAIConfig().get_supported_openai_params()
     elif custom_llm_provider == "vertex_ai":
         if request_type == "chat_completion":
             return litellm.VertexAIConfig().get_supported_openai_params()

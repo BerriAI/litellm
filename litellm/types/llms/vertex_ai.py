@@ -1,15 +1,16 @@
-from typing import TypedDict, Any, Union, Optional, List, Literal, Dict
 import json
-from typing_extensions import (
-    Self,
-    Protocol,
-    TypeGuard,
-    override,
-    get_origin,
-    runtime_checkable,
-    Required,
-)
 from enum import Enum
+from typing import Any, Dict, List, Literal, Optional, TypedDict, Union
+
+from typing_extensions import (
+    Protocol,
+    Required,
+    Self,
+    TypeGuard,
+    get_origin,
+    override,
+    runtime_checkable,
+)
 
 
 class Field(TypedDict):
@@ -38,7 +39,7 @@ class FileDataType(TypedDict):
 
 class BlobType(TypedDict):
     mime_type: Required[str]
-    data: Required[bytes]
+    data: Required[str]
 
 
 class PartType(TypedDict, total=False):
