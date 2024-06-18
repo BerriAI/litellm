@@ -528,7 +528,7 @@ class ModelResponse(OpenAIObject):
         response_ms=None,
         hidden_params=None,
         **params,
-    ):
+    ) -> None:
         if stream is not None and stream is True:
             object = "chat.completion.chunk"
             if choices is not None and isinstance(choices, list):
