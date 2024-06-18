@@ -6297,6 +6297,7 @@ def exception_type(
                     )
                 elif (
                     "429 Quota exceeded" in error_str
+                    or "Quota exceeded for" in error_str
                     or "IndexError: list index out of range" in error_str
                     or "429 Unable to submit request because the service is temporarily out of capacity."
                     in error_str
@@ -6336,6 +6337,22 @@ def exception_type(
                                 request=httpx.Request(
                                     method="POST",
                                     url="https://cloud.google.com/vertex-ai/",
+                                ),
+                            ),
+                        )
+
+                    if original_exception.status_code == 429:
+                        exception_mapping_worked = True
+                        raise RateLimitError(
+                            message=f"litellm.RateLimitError: VertexAIException - {error_str}",
+                            model=model,
+                            llm_provider="vertex_ai",
+                            litellm_debug_info=extra_information,
+                            response=httpx.Response(
+                                status_code=429,
+                                request=httpx.Request(
+                                    method="POST",
+                                    url=" https://cloud.google.com/vertex-ai/",
                                 ),
                             ),
                         )
