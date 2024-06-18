@@ -251,7 +251,8 @@ async def async_stream(
     )
     ## RESPONSE OBJECT
     try:
-        completion_response = response.iter_lines()
+        completion_response = response.aiter_lines()
+
     except Exception:
         raise ClarifaiError(
             message=response.text, status_code=response.status_code, url=model

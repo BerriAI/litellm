@@ -11986,6 +11986,7 @@ class CustomStreamWrapper:
                 or self.custom_llm_provider == "predibase"
                 or self.custom_llm_provider == "databricks"
                 or self.custom_llm_provider == "bedrock"
+                or self.custom_llm_provider == "clarifai"
                 or self.custom_llm_provider in litellm.openai_compatible_endpoints
             ):
                 async for chunk in self.completion_stream:
