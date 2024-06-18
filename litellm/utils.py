@@ -4376,7 +4376,27 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
                         pass
                     else:
                         raise Exception
-                return _model_info
+                return ModelInfo(
+                    max_tokens=_model_info.get("max_tokens", None),
+                    max_input_tokens=_model_info.get("max_input_tokens", None),
+                    max_output_tokens=_model_info.get("max_output_tokens", None),
+                    input_cost_per_token=_model_info.get("input_cost_per_token", 0),
+                    input_cost_per_token_above_128k_tokens=_model_info.get(
+                        "input_cost_per_token_above_128k_tokens", None
+                    ),
+                    output_cost_per_token=_model_info.get("output_cost_per_token", 0),
+                    output_cost_per_token_above_128k_tokens=_model_info.get(
+                        "output_cost_per_token_above_128k_tokens", None
+                    ),
+                    litellm_provider=_model_info.get(
+                        "litellm_provider", custom_llm_provider
+                    ),
+                    mode=_model_info.get("mode"),
+                    supported_openai_params=supported_openai_params,
+                    supports_system_messages=_model_info.get(
+                        "supports_system_messages", None
+                    ),
+                )
             elif model in litellm.model_cost:
                 _model_info = litellm.model_cost[model]
                 _model_info["supported_openai_params"] = supported_openai_params
@@ -4395,7 +4415,13 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
                     max_input_tokens=_model_info.get("max_input_tokens", None),
                     max_output_tokens=_model_info.get("max_output_tokens", None),
                     input_cost_per_token=_model_info.get("input_cost_per_token", 0),
+                    input_cost_per_token_above_128k_tokens=_model_info.get(
+                        "input_cost_per_token_above_128k_tokens", None
+                    ),
                     output_cost_per_token=_model_info.get("output_cost_per_token", 0),
+                    output_cost_per_token_above_128k_tokens=_model_info.get(
+                        "output_cost_per_token_above_128k_tokens", None
+                    ),
                     litellm_provider=_model_info.get(
                         "litellm_provider", custom_llm_provider
                     ),
@@ -4405,7 +4431,6 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
                         "supports_system_messages", None
                     ),
                 )
-                return _model_info
             elif split_model in litellm.model_cost:
                 _model_info = litellm.model_cost[split_model]
                 _model_info["supported_openai_params"] = supported_openai_params
@@ -4424,7 +4449,13 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
                     max_input_tokens=_model_info.get("max_input_tokens", None),
                     max_output_tokens=_model_info.get("max_output_tokens", None),
                     input_cost_per_token=_model_info.get("input_cost_per_token", 0),
+                    input_cost_per_token_above_128k_tokens=_model_info.get(
+                        "input_cost_per_token_above_128k_tokens", None
+                    ),
                     output_cost_per_token=_model_info.get("output_cost_per_token", 0),
+                    output_cost_per_token_above_128k_tokens=_model_info.get(
+                        "output_cost_per_token_above_128k_tokens", None
+                    ),
                     litellm_provider=_model_info.get(
                         "litellm_provider", custom_llm_provider
                     ),
