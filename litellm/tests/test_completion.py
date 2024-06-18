@@ -3355,17 +3355,54 @@ def test_completion_ai21():
 # test_completion_ai21()
 # test_completion_ai21()
 ## test deep infra
-def test_completion_deep_infra():
+@pytest.mark.parametrize("drop_params", [True, False])
+def test_completion_deep_infra(drop_params):
     litellm.set_verbose = False
     model_name = "deepinfra/meta-llama/Llama-2-70b-chat-hf"
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                    },
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+    messages = [
+        {
+            "role": "user",
+            "content": "What's the weather like in Boston today in Fahrenheit?",
+        }
+    ]
     try:
         response = completion(
-            model=model_name, messages=messages, temperature=0, max_tokens=10
+            model=model_name,
+            messages=messages,
+            temperature=0,
+            max_tokens=10,
+            tools=tools,
+            tool_choice={
+                "type": "function",
+                "function": {"name": "get_current_weather"},
+            },
+            drop_params=drop_params,
         )
         # Add any assertions here to check the response
         print(response)
     except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
+        if drop_params is True:
+            pytest.fail(f"Error occurred: {e}")
 
 
 # test_completion_deep_infra()
