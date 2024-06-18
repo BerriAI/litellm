@@ -180,6 +180,7 @@ jobs:
             pip install numpydoc
             pip install prisma            
             pip install fastapi            
+            pip install ijson            
             pip install "httpx==0.24.1"
             pip install "gunicorn==21.2.0"
             pip install "anyio==3.7.1"
