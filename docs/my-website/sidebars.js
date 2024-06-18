@@ -223,8 +223,8 @@ const sidebars = {
     },
     {
       type: "category",
-      label: "LangChain, LlamaIndex Integration",
-      items: ["langchain/langchain"],
+      label: "LangChain, LlamaIndex, Instructor Integration",
+      items: ["langchain/langchain", "tutorials/instructor"],
     },
     {
       type: "category",
