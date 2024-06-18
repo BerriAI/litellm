@@ -200,7 +200,7 @@ def test_trimming_with_model_cost_max_input_tokens(model):
     )
 
 
-def test_get_valid_models():
+def test_aget_valid_models():
     old_environ = os.environ
     os.environ = {"OPENAI_API_KEY": "temp"}  # mock set only openai key in environ
 
@@ -226,6 +226,9 @@ def test_get_valid_models():
 
     print(valid_models)
     assert valid_models == expected_models
+
+    # reset replicate env key
+    os.environ = old_environ
 
 
 # test_get_valid_models()
