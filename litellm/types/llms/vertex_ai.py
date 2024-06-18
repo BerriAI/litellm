@@ -1,15 +1,16 @@
-from typing import TypedDict, Any, Union, Optional, List, Literal, Dict
 import json
-from typing_extensions import (
-    Self,
-    Protocol,
-    TypeGuard,
-    override,
-    get_origin,
-    runtime_checkable,
-    Required,
-)
 from enum import Enum
+from typing import Any, Dict, List, Literal, Optional, TypedDict, Union
+
+from typing_extensions import (
+    Protocol,
+    Required,
+    Self,
+    TypeGuard,
+    get_origin,
+    override,
+    runtime_checkable,
+)
 
 
 class Field(TypedDict):
@@ -159,7 +160,7 @@ class RequestBody(TypedDict, total=False):
     system_instruction: SystemInstructions
     tools: Tools
     toolConfig: ToolConfig
-    safetySettings: SafetSettingsConfig
+    safetySettings: List[SafetSettingsConfig]
     generationConfig: GenerationConfig
 
 
@@ -214,7 +215,7 @@ class Candidates(TypedDict, total=False):
         "PROHIBITED_CONTENT",
         "SPII",
     ]
-    safetyRatings: SafetyRatings
+    safetyRatings: List[SafetyRatings]
     citationMetadata: CitationMetadata
     groundingMetadata: GroundingMetadata
     finishMessage: str

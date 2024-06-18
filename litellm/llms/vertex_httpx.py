@@ -36,6 +36,7 @@ from litellm.types.llms.vertex_ai import (
     GenerationConfig,
     PartType,
     RequestBody,
+    SafetSettingsConfig,
     SystemInstructions,
     ToolConfig,
     Tools,
@@ -686,6 +687,9 @@ class VertexLLM(BaseLLM):
         content = _gemini_convert_messages_with_history(messages=messages)
         tools: Optional[Tools] = optional_params.pop("tools", None)
         tool_choice: Optional[ToolConfig] = optional_params.pop("tool_choice", None)
+        safety_settings: Optional[List[SafetSettingsConfig]] = optional_params.pop(
+            "safety_settings", None
+        )  # type: ignore
         generation_config: Optional[GenerationConfig] = GenerationConfig(
             **optional_params
         )
@@ -697,6 +701,8 @@ class VertexLLM(BaseLLM):
             data["tools"] = tools
         if tool_choice is not None:
             data["toolConfig"] = tool_choice
+        if safety_settings is not None:
+            data["safetySettings"] = safety_settings
         if generation_config is not None:
             data["generationConfig"] = generation_config
 
