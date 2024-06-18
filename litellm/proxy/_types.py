@@ -1,13 +1,17 @@
-from pydantic import BaseModel, Extra, Field, model_validator, Json, ConfigDict
-from dataclasses import fields
 import enum
-from typing import Optional, List, Union, Dict, Literal, Any, TypedDict, TYPE_CHECKING
+import json
+import os
+import sys
+import uuid
+from dataclasses import fields
 from datetime import datetime
-import uuid, json, sys, os
-from litellm.types.router import UpdateRouterConfig
-from litellm.types.utils import ProviderField
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, TypedDict, Union
+
+from pydantic import BaseModel, ConfigDict, Extra, Field, Json, model_validator
 from typing_extensions import Annotated
 
+from litellm.types.router import UpdateRouterConfig
+from litellm.types.utils import ProviderField
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -283,12 +287,16 @@ class LiteLLMRoutes(enum.Enum):
         "/metrics",
     ]
 
-    internal_user_routes: List = [
-        "/key/generate",
-        "/key/update",
-        "/key/delete",
-        "/key/info",
-    ] + spend_tracking_routes
+    internal_user_routes: List = (
+        [
+            "/key/generate",
+            "/key/update",
+            "/key/delete",
+            "/key/info",
+        ]
+        + spend_tracking_routes
+        + sso_only_routes
+    )
 
 
 # class LiteLLMAllowedRoutes(LiteLLMBase):
