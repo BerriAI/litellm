@@ -12,6 +12,8 @@ import os
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
+
+import os
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -3335,6 +3337,7 @@ def test_mistral_anyscale_stream():
 
 
 #### Test A121 ###################
+@pytest.mark.skip(reason="Local test")
 def test_completion_ai21():
     print("running ai21 j2light test")
     litellm.set_verbose = True
@@ -3390,10 +3393,21 @@ def test_completion_deep_infra_mistral():
 
 
 # Gemini tests
-def test_completion_gemini():
+@pytest.mark.parametrize(
+    "model",
+    [
+        # "gemini-1.0-pro",
+        "gemini-1.5-pro",
+        # "gemini-1.5-flash",
+    ],
+)
+def test_completion_gemini(model):
     litellm.set_verbose = True
-    model_name = "gemini/gemini-1.5-pro-latest"
-    messages = [{"role": "user", "content": "Hey, how's it going?"}]
+    model_name = "gemini/{}".format(model)
+    messages = [
+        {"role": "system", "content": "Be a good bot!"},
+        {"role": "user", "content": "Hey, how's it going?"},
+    ]
     try:
         response = completion(model=model_name, messages=messages)
         # Add any assertions,here to check the response
@@ -3485,7 +3499,7 @@ def test_completion_palm_stream():
         pytest.fail(f"Error occurred: {e}")
 
 
-@pytest.mark.skip(reason="IBM closed account.")
+@pytest.mark.skip(reason="Account deleted by IBM.")
 def test_completion_watsonx():
     litellm.set_verbose = True
     model_name = "watsonx/ibm/granite-13b-chat-v2"
@@ -3506,7 +3520,7 @@ def test_completion_watsonx():
         pytest.fail(f"Error occurred: {e}")
 
 
-@pytest.mark.skip(reason="IBM closed account.")
+@pytest.mark.skip(reason="Skip test. account deleted.")
 def test_completion_stream_watsonx():
     litellm.set_verbose = True
     model_name = "watsonx/ibm/granite-13b-chat-v2"
@@ -3574,7 +3588,7 @@ def test_unified_auth_params(provider, model, project, region_name, token):
         assert value in translated_optional_params
 
 
-@pytest.mark.skip(reason="IBM closed account.")
+@pytest.mark.skip(reason="Local test")
 @pytest.mark.asyncio
 async def test_acompletion_watsonx():
     litellm.set_verbose = True
@@ -3595,7 +3609,7 @@ async def test_acompletion_watsonx():
         pytest.fail(f"Error occurred: {e}")
 
 
-@pytest.mark.skip(reason="IBM closed account.")
+@pytest.mark.skip(reason="Local test")
 @pytest.mark.asyncio
 async def test_acompletion_stream_watsonx():
     litellm.set_verbose = True
