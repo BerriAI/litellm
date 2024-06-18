@@ -1056,8 +1056,6 @@ def test_gemini_pro_vision_async():
             print(resp)
 
         asyncio.run(test())
-
-        assert False
     except litellm.RateLimitError:
         pass
     except Exception as e:
