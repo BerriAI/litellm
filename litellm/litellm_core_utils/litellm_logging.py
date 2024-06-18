@@ -667,6 +667,33 @@ class Logging:
                             print_verbose=print_verbose,
                         )
 
+                    if callback == "logfire":
+                        global logfireLogger
+                        verbose_logger.debug("reaches logfire for success logging!")
+                        kwargs = {}
+                        for k, v in self.model_call_details.items():
+                            if (
+                                k != "original_response"
+                            ):  # copy.deepcopy raises errors as this could be a coroutine
+                                kwargs[k] = v
+
+                        # this only logs streaming once, complete_streaming_response exists i.e when stream ends
+                        if self.stream:
+                            if "complete_streaming_response" not in kwargs:
+                                continue
+                            else:
+                                print_verbose("reaches logfire for streaming logging!")
+                                result = kwargs["complete_streaming_response"]
+
+                        logfireLogger.log_event(
+                            kwargs=self.model_call_details,
+                            response_obj=result,
+                            start_time=start_time,
+                            end_time=end_time,
+                            print_verbose=print_verbose,
+                            level=LogfireLevel.INFO.value,
+                        )
+
                     if callback == "lunary":
                         print_verbose("reaches lunary for logging!")
                         model = self.model
@@ -1446,6 +1473,25 @@ class Logging:
                             end_time=end_time,
                             print_verbose=print_verbose,
                         )
+
+                    if callback == "logfire":
+                        verbose_logger.debug("reaches logfire for failure logging!")
+                        kwargs = {}
+                        for k, v in self.model_call_details.items():
+                            if (
+                                k != "original_response"
+                            ):  # copy.deepcopy raises errors as this could be a coroutine
+                                kwargs[k] = v
+                        kwargs["exception"] = exception
+
+                        logfireLogger.log_event(
+                            kwargs=kwargs,
+                            response_obj=result,
+                            start_time=start_time,
+                            end_time=end_time,
+                            level=LogfireLevel.ERROR.value,
+                            print_verbose=print_verbose,
+                        )
                     if callback == "sentry":
                         print_verbose("sending exception to sentry")
                         if capture_exception:
@@ -1712,6 +1758,8 @@ def set_callbacks(callback_list, function_id=None):
                 weightsBiasesLogger = WeightsBiasesLogger()
             elif callback == "langsmith":
                 langsmithLogger = LangsmithLogger()
+            elif callback == "logfire":
+                logfireLogger = LogfireLogger()
             elif callback == "aispend":
                 aispendLogger = AISpendLogger()
             elif callback == "berrispend":
