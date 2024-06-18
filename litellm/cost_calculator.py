@@ -1,5 +1,6 @@
 # What is this?
 ## File for 'response_cost' calculation in Logging
+import time
 from typing import List, Literal, Optional, Tuple, Union
 
 import litellm
