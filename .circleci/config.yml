@@ -127,6 +127,7 @@ jobs:
             pip install jinja2
             pip install tokenizers
             pip install openai
+            pip install ijson
       - run:
           name: Run tests
           command: |
