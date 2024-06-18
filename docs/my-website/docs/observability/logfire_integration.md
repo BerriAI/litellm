@@ -29,8 +29,7 @@ pip install opentelemetry-exporter-otlp==1.25.0
 Get your Logfire token from [Logfire](https://logfire.pydantic.dev/)
 
 ```python
-litellm.success_callback = ["logfire"]
-litellm.failure_callback = ["logfire"] # logs errors to logfire
+litellm.callbacks = ["logfire"]
 ```
 
 ```python
