@@ -3412,8 +3412,6 @@ def test_completion_gemini(model):
         # Add any assertions,here to check the response
         print(response)
         assert response.choices[0]["index"] == 0
-
-        assert False
     except litellm.APIError as e:
         pass
     except Exception as e:
