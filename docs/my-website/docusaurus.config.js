@@ -138,8 +138,8 @@ const config = {
             title: 'Docs',
             items: [
               {
-                label: 'Tutorial',
-                to: '/docs/index',
+                label: 'Getting Started',
+                to: 'https://docs.litellm.ai/docs/',
               },
             ],
           },
