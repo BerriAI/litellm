@@ -1,6 +1,6 @@
 import Image from '@theme/IdealImage';
 
-# Langfuse - Logging LLM Input/Output
+# 🔥 Langfuse - Logging LLM Input/Output
 
 LangFuse is open Source Observability & Analytics for LLM Apps
 Detailed production traces and a granular view on quality, cost and latency

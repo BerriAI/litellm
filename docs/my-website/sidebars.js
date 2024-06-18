@@ -172,10 +172,8 @@ const sidebars = {
     "proxy/custom_pricing",
     "routing",
     "scheduler",
-    "rules",
     "set_keys",
     "budget_manager",
-    "contributing",
     "secret",
     "completion/token_usage",
     "load_test",
@@ -183,11 +181,11 @@ const sidebars = {
       type: "category",
       label: "Logging & Observability",
       items: [
+        "observability/langfuse_integration",
+        "observability/logfire_integration",
         "debugging/local_debugging",
         "observability/raw_request_response",
-        "observability/callbacks",
         "observability/custom_callback",
-        "observability/langfuse_integration",
         "observability/sentry",
         "observability/lago",
         "observability/openmeter",
@@ -233,6 +231,8 @@ const sidebars = {
       label: "Extras",
       items: [
         "extras/contributing",
+        "contributing",
+        "rules",
         "proxy_server",
         {
           type: "category",

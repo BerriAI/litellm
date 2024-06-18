@@ -340,6 +340,7 @@ def function_setup(
     try:
         global callback_list, add_breadcrumb, user_logger_fn, Logging
         function_id = kwargs["id"] if "id" in kwargs else None
+
         if len(litellm.callbacks) > 0:
             for callback in litellm.callbacks:
                 # check if callback is a string - e.g. "lago", "openmeter"
