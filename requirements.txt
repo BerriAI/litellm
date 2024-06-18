@@ -27,7 +27,7 @@ pyjwt[crypto]==2.8.0
 python-multipart==0.0.9 # admin UI
 Pillow==10.3.0
 azure-ai-contentsafety==1.0.0 # for azure content safety
-azure-identity==1.15.0 # for azure content safety
+azure-identity==1.16.1 # for azure content safety
 opentelemetry-api==1.25.0
 opentelemetry-sdk==1.25.0
 opentelemetry-exporter-otlp==1.25.0
@@ -43,5 +43,6 @@ certifi==2023.7.22 # [TODO] clean up
 aiohttp==3.9.0 # for network calls
 aioboto3==12.3.0 # for async sagemaker calls
 tenacity==8.2.3  # for retrying requests, when litellm.num_retries set
-pydantic==2.7.1 # openai req. 
+pydantic==2.7.1 # proxy + openai req.
+ijson==3.2.3 # for google ai studio streaming
 ####

@@ -73,14 +73,14 @@ model_list:
       api_key: my-fake-key
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
       stream_timeout: 0.001
-      rpm: 100
+      rpm: 1000
   - model_name: fake-openai-endpoint-3
     litellm_params:
       model: openai/my-fake-model-2
       api_key: my-fake-key
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
       stream_timeout: 0.001
-      rpm: 100
+      rpm: 1000
   - model_name: "*"
     litellm_params:
       model: openai/*

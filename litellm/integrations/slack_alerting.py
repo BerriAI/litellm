@@ -330,6 +330,7 @@ class SlackAlerting(CustomLogger):
             messages = "Message not logged. litellm.redact_messages_in_exceptions=True"
         request_info = f"\nRequest Model: `{model}`\nAPI Base: `{api_base}`\nMessages: `{messages}`"
         slow_message = f"`Responses are slow - {round(time_difference_float,2)}s response time > Alerting threshold: {self.alerting_threshold}s`"
+        alerting_metadata: dict = {}
         if time_difference_float > self.alerting_threshold:
             # add deployment latencies to alert
             if (
@@ -337,7 +338,7 @@ class SlackAlerting(CustomLogger):
                 and "litellm_params" in kwargs
                 and "metadata" in kwargs["litellm_params"]
             ):
-                _metadata = kwargs["litellm_params"]["metadata"]
+                _metadata: dict = kwargs["litellm_params"]["metadata"]
                 request_info = litellm.utils._add_key_name_and_team_to_alert(
                     request_info=request_info, metadata=_metadata
                 )
@@ -349,10 +350,14 @@ class SlackAlerting(CustomLogger):
                     request_info += (
                         f"\nAvailable Deployment Latencies\n{_deployment_latency_map}"
                     )
+
+                if "alerting_metadata" in _metadata:
+                    alerting_metadata = _metadata["alerting_metadata"]
             await self.send_alert(
                 message=slow_message + request_info,
                 level="Low",
                 alert_type="llm_too_slow",
+                alerting_metadata=alerting_metadata,
             )
 
     async def async_update_daily_reports(
@@ -540,7 +545,12 @@ class SlackAlerting(CustomLogger):
         message += f"\n\nNext Run is at: `{time.time() + self.alerting_args.daily_report_frequency}`s"
 
         # send alert
-        await self.send_alert(message=message, level="Low", alert_type="daily_reports")
+        await self.send_alert(
+            message=message,
+            level="Low",
+            alert_type="daily_reports",
+            alerting_metadata={},
+        )
 
         return True
 
@@ -582,6 +592,7 @@ class SlackAlerting(CustomLogger):
             await asyncio.sleep(
                 self.alerting_threshold
             )  # Set it to 5 minutes - i'd imagine this might be different for streaming, non-streaming, non-completion (embedding + img) requests
+            alerting_metadata: dict = {}
             if (
                 request_data is not None
                 and request_data.get("litellm_status", "") != "success"
@@ -606,7 +617,7 @@ class SlackAlerting(CustomLogger):
                 ):
                     # In hanging requests sometime it has not made it to the point where the deployment is passed to the `request_data``
                     # in that case we fallback to the api base set in the request metadata
-                    _metadata = request_data["metadata"]
+                    _metadata: dict = request_data["metadata"]
                     _api_base = _metadata.get("api_base", "")
 
                     request_info = litellm.utils._add_key_name_and_team_to_alert(
@@ -615,6 +626,9 @@ class SlackAlerting(CustomLogger):
 
                     if _api_base is None:
                         _api_base = ""
+
+                    if "alerting_metadata" in _metadata:
+                        alerting_metadata = _metadata["alerting_metadata"]
                     request_info += f"\nAPI Base: `{_api_base}`"
                 # only alert hanging responses if they have not been marked as success
                 alerting_message = (
@@ -640,6 +654,7 @@ class SlackAlerting(CustomLogger):
                     message=alerting_message + request_info,
                     level="Medium",
                     alert_type="llm_requests_hanging",
+                    alerting_metadata=alerting_metadata,
                 )
 
     async def failed_tracking_alert(self, error_message: str):
@@ -650,7 +665,10 @@ class SlackAlerting(CustomLogger):
         result = await _cache.async_get_cache(key=_cache_key)
         if result is None:
             await self.send_alert(
-                message=message, level="High", alert_type="budget_alerts"
+                message=message,
+                level="High",
+                alert_type="budget_alerts",
+                alerting_metadata={},
             )
             await _cache.async_set_cache(
                 key=_cache_key,
@@ -680,7 +698,7 @@ class SlackAlerting(CustomLogger):
             return
         if "budget_alerts" not in self.alert_types:
             return
-        _id: str = "default_id"  # used for caching
+        _id: Optional[str] = "default_id"  # used for caching
         user_info_json = user_info.model_dump(exclude_none=True)
         for k, v in user_info_json.items():
             user_info_str = "\n{}: {}\n".format(k, v)
@@ -751,6 +769,7 @@ class SlackAlerting(CustomLogger):
                     level="High",
                     alert_type="budget_alerts",
                     user_info=webhook_event,
+                    alerting_metadata={},
                 )
                 await _cache.async_set_cache(
                     key=_cache_key,
@@ -769,7 +788,13 @@ class SlackAlerting(CustomLogger):
         response_cost: Optional[float],
         max_budget: Optional[float],
     ):
-        if end_user_id is not None and token is not None and response_cost is not None:
+        if (
+            self.alerting is not None
+            and "webhook" in self.alerting
+            and end_user_id is not None
+            and token is not None
+            and response_cost is not None
+        ):
             # log customer spend
             event = WebhookEvent(
                 spend=response_cost,
@@ -941,7 +966,10 @@ class SlackAlerting(CustomLogger):
             )
             # send minor alert
             await self.send_alert(
-                message=msg, level="Medium", alert_type="outage_alerts"
+                message=msg,
+                level="Medium",
+                alert_type="outage_alerts",
+                alerting_metadata={},
             )
             # set to true
             outage_value["minor_alert_sent"] = True
@@ -963,7 +991,12 @@ class SlackAlerting(CustomLogger):
             )
 
             # send minor alert
-            await self.send_alert(message=msg, level="High", alert_type="outage_alerts")
+            await self.send_alert(
+                message=msg,
+                level="High",
+                alert_type="outage_alerts",
+                alerting_metadata={},
+            )
             # set to true
             outage_value["major_alert_sent"] = True
 
@@ -1062,7 +1095,10 @@ class SlackAlerting(CustomLogger):
                 )
                 # send minor alert
                 await self.send_alert(
-                    message=msg, level="Medium", alert_type="outage_alerts"
+                    message=msg,
+                    level="Medium",
+                    alert_type="outage_alerts",
+                    alerting_metadata={},
                 )
                 # set to true
                 outage_value["minor_alert_sent"] = True
@@ -1081,7 +1117,10 @@ class SlackAlerting(CustomLogger):
                 )
                 # send minor alert
                 await self.send_alert(
-                    message=msg, level="High", alert_type="outage_alerts"
+                    message=msg,
+                    level="High",
+                    alert_type="outage_alerts",
+                    alerting_metadata={},
                 )
                 # set to true
                 outage_value["major_alert_sent"] = True
@@ -1143,7 +1182,10 @@ Model Info:
 """
 
         alert_val = self.send_alert(
-            message=message, level="Low", alert_type="new_model_added"
+            message=message,
+            level="Low",
+            alert_type="new_model_added",
+            alerting_metadata={},
         )
 
         if alert_val is not None and asyncio.iscoroutine(alert_val):
@@ -1159,6 +1201,9 @@ Model Info:
         Currently only implemented for budget alerts
 
         Returns -> True if sent, False if not.
+
+        Raises Exception
+            - if WEBHOOK_URL is not set
         """
 
         webhook_url = os.getenv("WEBHOOK_URL", None)
@@ -1297,7 +1342,9 @@ Model Info:
             verbose_proxy_logger.error("Error sending email alert %s", str(e))
             return False
 
-    async def send_email_alert_using_smtp(self, webhook_event: WebhookEvent) -> bool:
+    async def send_email_alert_using_smtp(
+        self, webhook_event: WebhookEvent, alert_type: str
+    ) -> bool:
         """
         Sends structured Email alert to an SMTP server
 
@@ -1306,7 +1353,6 @@ Model Info:
         Returns -> True if sent, False if not.
         """
         from litellm.proxy.utils import send_email
-
         from litellm.proxy.proxy_server import premium_user, prisma_client
 
         email_logo_url = os.getenv(
@@ -1360,6 +1406,10 @@ Model Info:
             subject=email_event["subject"],
             html=email_event["html"],
         )
+        if webhook_event.event_group == "team":
+            from litellm.integrations.email_alerting import send_team_budget_alert
+
+            await send_team_budget_alert(webhook_event=webhook_event)
 
         return False
 
@@ -1368,6 +1418,7 @@ Model Info:
         message: str,
         level: Literal["Low", "Medium", "High"],
         alert_type: Literal[AlertType],
+        alerting_metadata: dict,
         user_info: Optional[WebhookEvent] = None,
         **kwargs,
     ):
@@ -1401,7 +1452,9 @@ Model Info:
             and user_info is not None
         ):
             # only send budget alerts over Email
-            await self.send_email_alert_using_smtp(webhook_event=user_info)
+            await self.send_email_alert_using_smtp(
+                webhook_event=user_info, alert_type=alert_type
+            )
 
         if "slack" not in self.alerting:
             return
@@ -1425,6 +1478,9 @@ Model Info:
         if kwargs:
             for key, value in kwargs.items():
                 formatted_message += f"\n\n{key}: `{value}`\n\n"
+        if alerting_metadata:
+            for key, value in alerting_metadata.items():
+                formatted_message += f"\n\n*Alerting Metadata*: \n{key}: `{value}`\n\n"
         if _proxy_base_url is not None:
             formatted_message += f"\n\nProxy URL: `{_proxy_base_url}`"
 
@@ -1440,7 +1496,7 @@ Model Info:
             slack_webhook_url = os.getenv("SLACK_WEBHOOK_URL", None)
 
         if slack_webhook_url is None:
-            raise Exception("Missing SLACK_WEBHOOK_URL from environment")
+            raise ValueError("Missing SLACK_WEBHOOK_URL from environment")
         payload = {"text": formatted_message}
         headers = {"Content-type": "application/json"}
 
@@ -1453,7 +1509,7 @@ Model Info:
             pass
         else:
             verbose_proxy_logger.debug(
-                "Error sending slack alert. Error=", response.text
+                "Error sending slack alert. Error={}".format(response.text)
             )
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
@@ -1622,6 +1678,7 @@ Model Info:
                 message=_weekly_spend_message,
                 level="Low",
                 alert_type="spend_reports",
+                alerting_metadata={},
             )
         except Exception as e:
             verbose_proxy_logger.error("Error sending weekly spend report", e)
@@ -1673,6 +1730,7 @@ Model Info:
                 message=_spend_message,
                 level="Low",
                 alert_type="spend_reports",
+                alerting_metadata={},
             )
         except Exception as e:
             verbose_proxy_logger.error("Error sending weekly spend report", e)

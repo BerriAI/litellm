@@ -1,38 +1,49 @@
 # What is this?
 ## httpx client for vertex ai calls
 ## Initial implementation - covers gemini + image gen calls
-from functools import partial
-import os, types
+import inspect
 import json
-from enum import Enum
-import requests  # type: ignore
+import os
 import time
-from typing import Callable, Optional, Union, List, Any, Tuple
-from litellm.utils import ModelResponse, Usage, CustomStreamWrapper, map_finish_reason
-import litellm, uuid
-import httpx, inspect  # type: ignore
+import types
+import uuid
+from enum import Enum
+from functools import partial
+from typing import Any, Callable, List, Literal, Optional, Tuple, Union
+
+import httpx  # type: ignore
+import ijson
+import requests  # type: ignore
+
+import litellm
+import litellm.litellm_core_utils
+import litellm.litellm_core_utils.litellm_logging
+from litellm import verbose_logger
+from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from .base import BaseLLM
-from litellm.types.llms.vertex_ai import (
-    ContentType,
-    SystemInstructions,
-    PartType,
-    RequestBody,
-    GenerateContentResponseBody,
-    FunctionCallingConfig,
-    FunctionDeclaration,
-    Tools,
-    ToolConfig,
-    GenerationConfig,
-)
 from litellm.llms.vertex_ai import _gemini_convert_messages_with_history
-from litellm.types.utils import GenericStreamingChunk
 from litellm.types.llms.openai import (
-    ChatCompletionUsageBlock,
+    ChatCompletionResponseMessage,
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
-    ChatCompletionResponseMessage,
+    ChatCompletionUsageBlock,
 )
+from litellm.types.llms.vertex_ai import (
+    ContentType,
+    FunctionCallingConfig,
+    FunctionDeclaration,
+    GenerateContentResponseBody,
+    GenerationConfig,
+    PartType,
+    RequestBody,
+    SystemInstructions,
+    ToolConfig,
+    Tools,
+)
+from litellm.types.utils import GenericStreamingChunk
+from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
+
+from .base import BaseLLM
 
 
 class VertexGeminiConfig:
@@ -248,7 +259,7 @@ async def make_call(
         raise VertexAIError(status_code=response.status_code, message=response.text)
 
     completion_stream = ModelResponseIterator(
-        streaming_response=response.aiter_bytes(chunk_size=2056)
+        streaming_response=response.aiter_bytes(), sync_stream=False
     )
     # LOGGING
     logging_obj.post_call(
@@ -279,7 +290,7 @@ def make_sync_call(
         raise VertexAIError(status_code=response.status_code, message=response.read())
 
     completion_stream = ModelResponseIterator(
-        streaming_response=response.iter_bytes(chunk_size=2056)
+        streaming_response=response.iter_bytes(chunk_size=2056), sync_stream=True
     )
 
     # LOGGING
@@ -320,7 +331,7 @@ class VertexLLM(BaseLLM):
         model: str,
         response: httpx.Response,
         model_response: ModelResponse,
-        logging_obj: litellm.utils.Logging,
+        logging_obj: litellm.litellm_core_utils.litellm_logging.Logging,
         optional_params: dict,
         api_key: str,
         data: Union[dict, str],
@@ -411,9 +422,11 @@ class VertexLLM(BaseLLM):
     def load_auth(
         self, credentials: Optional[str], project_id: Optional[str]
     ) -> Tuple[Any, str]:
-        from google.auth.transport.requests import Request  # type: ignore[import-untyped]
-        from google.auth.credentials import Credentials  # type: ignore[import-untyped]
         import google.auth as google_auth
+        from google.auth.credentials import Credentials  # type: ignore[import-untyped]
+        from google.auth.transport.requests import (
+            Request,  # type: ignore[import-untyped]
+        )
 
         if credentials is not None and isinstance(credentials, str):
             import google.oauth2.service_account
@@ -446,7 +459,9 @@ class VertexLLM(BaseLLM):
         return creds, project_id
 
     def refresh_auth(self, credentials: Any) -> None:
-        from google.auth.transport.requests import Request  # type: ignore[import-untyped]
+        from google.auth.transport.requests import (
+            Request,  # type: ignore[import-untyped]
+        )
 
         credentials.refresh(Request())
 
@@ -478,6 +493,50 @@ class VertexLLM(BaseLLM):
             raise RuntimeError("Could not resolve API token from the environment")
 
         return self._credentials.token, self.project_id
+
+    def _get_token_and_url(
+        self,
+        model: str,
+        gemini_api_key: Optional[str],
+        vertex_project: Optional[str],
+        vertex_location: Optional[str],
+        vertex_credentials: Optional[str],
+        stream: Optional[bool],
+        custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
+    ) -> Tuple[Optional[str], str]:
+        """
+        Internal function. Returns the token and url for the call.
+
+        Handles logic if it's google ai studio vs. vertex ai.
+
+        Returns
+            token, url
+        """
+        if custom_llm_provider == "gemini":
+            _gemini_model_name = "models/{}".format(model)
+            auth_header = None
+            endpoint = "generateContent"
+            if stream is True:
+                endpoint = "streamGenerateContent"
+
+            url = (
+                "https://generativelanguage.googleapis.com/v1beta/{}:{}?key={}".format(
+                    _gemini_model_name, endpoint, gemini_api_key
+                )
+            )
+        else:
+            auth_header, vertex_project = self._ensure_access_token(
+                credentials=vertex_credentials, project_id=vertex_project
+            )
+            vertex_location = self.get_vertex_region(vertex_region=vertex_location)
+
+            ### SET RUNTIME ENDPOINT ###
+            endpoint = "generateContent"
+            if stream is True:
+                endpoint = "streamGenerateContent"
+            url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}"
+
+        return auth_header, url
 
     async def async_streaming(
         self,
@@ -571,6 +630,9 @@ class VertexLLM(BaseLLM):
         messages: list,
         model_response: ModelResponse,
         print_verbose: Callable,
+        custom_llm_provider: Literal[
+            "vertex_ai", "vertex_ai_beta", "gemini"
+        ],  # if it's vertex_ai or gemini (google ai studio)
         encoding,
         logging_obj,
         optional_params: dict,
@@ -579,41 +641,58 @@ class VertexLLM(BaseLLM):
         vertex_project: Optional[str],
         vertex_location: Optional[str],
         vertex_credentials: Optional[str],
+        gemini_api_key: Optional[str],
         litellm_params=None,
         logger_fn=None,
         extra_headers: Optional[dict] = None,
         client: Optional[Union[AsyncHTTPHandler, HTTPHandler]] = None,
     ) -> Union[ModelResponse, CustomStreamWrapper]:
-
-        auth_header, vertex_project = self._ensure_access_token(
-            credentials=vertex_credentials, project_id=vertex_project
-        )
-        vertex_location = self.get_vertex_region(vertex_region=vertex_location)
         stream: Optional[bool] = optional_params.pop("stream", None)  # type: ignore
 
-        ### SET RUNTIME ENDPOINT ###
-        url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:generateContent"
+        auth_header, url = self._get_token_and_url(
+            model=model,
+            gemini_api_key=gemini_api_key,
+            vertex_project=vertex_project,
+            vertex_location=vertex_location,
+            vertex_credentials=vertex_credentials,
+            stream=stream,
+            custom_llm_provider=custom_llm_provider,
+        )
 
         ## TRANSFORMATION ##
+        try:
+            supports_system_message = litellm.supports_system_messages(
+                model=model, custom_llm_provider=custom_llm_provider
+            )
+        except Exception as e:
+            verbose_logger.error(
+                "Unable to identify if system message supported. Defaulting to 'False'. Received error message - {}\nAdd it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json".format(
+                    str(e)
+                )
+            )
+            supports_system_message = False
         # Separate system prompt from rest of message
         system_prompt_indices = []
         system_content_blocks: List[PartType] = []
-        for idx, message in enumerate(messages):
-            if message["role"] == "system":
-                _system_content_block = PartType(text=message["content"])
-                system_content_blocks.append(_system_content_block)
-                system_prompt_indices.append(idx)
-        if len(system_prompt_indices) > 0:
-            for idx in reversed(system_prompt_indices):
-                messages.pop(idx)
-        system_instructions = SystemInstructions(parts=system_content_blocks)
+        if supports_system_message is True:
+            for idx, message in enumerate(messages):
+                if message["role"] == "system":
+                    _system_content_block = PartType(text=message["content"])
+                    system_content_blocks.append(_system_content_block)
+                    system_prompt_indices.append(idx)
+            if len(system_prompt_indices) > 0:
+                for idx in reversed(system_prompt_indices):
+                    messages.pop(idx)
         content = _gemini_convert_messages_with_history(messages=messages)
         tools: Optional[Tools] = optional_params.pop("tools", None)
         tool_choice: Optional[ToolConfig] = optional_params.pop("tool_choice", None)
         generation_config: Optional[GenerationConfig] = GenerationConfig(
             **optional_params
         )
-        data = RequestBody(system_instruction=system_instructions, contents=content)
+        data = RequestBody(contents=content)
+        if len(system_content_blocks) > 0:
+            system_instructions = SystemInstructions(parts=system_content_blocks)
+            data["system_instruction"] = system_instructions
         if tools is not None:
             data["tools"] = tools
         if tool_choice is not None:
@@ -623,8 +702,9 @@ class VertexLLM(BaseLLM):
 
         headers = {
             "Content-Type": "application/json; charset=utf-8",
-            "Authorization": f"Bearer {auth_header}",
         }
+        if auth_header is not None:
+            headers["Authorization"] = f"Bearer {auth_header}"
 
         ## LOGGING
         logging_obj.pre_call(
@@ -639,6 +719,25 @@ class VertexLLM(BaseLLM):
 
         ### ROUTING (ASYNC, STREAMING, SYNC)
         if acompletion:
+            ### ASYNC STREAMING
+            if stream is True:
+                return self.async_streaming(
+                    model=model,
+                    messages=messages,
+                    data=json.dumps(data),  # type: ignore
+                    api_base=url,
+                    model_response=model_response,
+                    print_verbose=print_verbose,
+                    encoding=encoding,
+                    logging_obj=logging_obj,
+                    optional_params=optional_params,
+                    stream=stream,
+                    litellm_params=litellm_params,
+                    logger_fn=logger_fn,
+                    headers=headers,
+                    timeout=timeout,
+                    client=client,  # type: ignore
+                )
             ### ASYNC COMPLETION
             return self.async_completion(
                 model=model,
@@ -850,9 +949,13 @@ class VertexLLM(BaseLLM):
 
 
 class ModelResponseIterator:
-    def __init__(self, streaming_response):
+    def __init__(self, streaming_response, sync_stream: bool):
         self.streaming_response = streaming_response
-        self.response_iterator = iter(self.streaming_response)
+        if sync_stream:
+            self.response_iterator = iter(self.streaming_response)
+
+        self.events = ijson.sendable_list()
+        self.coro = ijson.items_coro(self.events, "item")
 
     def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
         try:
@@ -904,10 +1007,21 @@ class ModelResponseIterator:
 
     def __next__(self):
         try:
-            chunk = next(self.response_iterator)
-            chunk = chunk.decode()
-            json_chunk = json.loads(chunk)
-            return self.chunk_parser(chunk=json_chunk)
+            chunk = self.response_iterator.__next__()
+            self.coro.send(chunk)
+            if self.events:
+                event = self.events[0]
+                json_chunk = event
+                self.events.clear()
+                return self.chunk_parser(chunk=json_chunk)
+            return GenericStreamingChunk(
+                text="",
+                is_finished=False,
+                finish_reason="",
+                usage=None,
+                index=0,
+                tool_use=None,
+            )
         except StopIteration:
             raise StopIteration
         except ValueError as e:
@@ -921,9 +1035,20 @@ class ModelResponseIterator:
     async def __anext__(self):
         try:
             chunk = await self.async_response_iterator.__anext__()
-            chunk = chunk.decode()
-            json_chunk = json.loads(chunk)
-            return self.chunk_parser(chunk=json_chunk)
+            self.coro.send(chunk)
+            if self.events:
+                event = self.events[0]
+                json_chunk = event
+                self.events.clear()
+                return self.chunk_parser(chunk=json_chunk)
+            return GenericStreamingChunk(
+                text="",
+                is_finished=False,
+                finish_reason="",
+                usage=None,
+                index=0,
+                tool_use=None,
+            )
         except StopAsyncIteration:
             raise StopAsyncIteration
         except ValueError as e:

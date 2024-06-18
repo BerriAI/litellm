@@ -167,7 +167,7 @@ class LangFuseLogger:
                 or isinstance(response_obj, litellm.EmbeddingResponse)
             ):
                 input = prompt
-                output = response_obj["data"]
+                output = None
             elif response_obj is not None and isinstance(
                 response_obj, litellm.ModelResponse
             ):
@@ -527,6 +527,10 @@ class LangFuseLogger:
                 "level": level,
                 "version": clean_metadata.pop("version", None),
             }
+
+            parent_observation_id = metadata.get("parent_observation_id", None)
+            if parent_observation_id is not None:
+                generation_params["parent_observation_id"] = parent_observation_id
 
             if supports_prompt:
                 user_prompt = clean_metadata.pop("prompt", None)
