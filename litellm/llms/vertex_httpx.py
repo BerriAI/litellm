@@ -21,6 +21,7 @@ import litellm.litellm_core_utils.litellm_logging
 from litellm import verbose_logger
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.prompt_templates.factory import convert_url_to_base64
 from litellm.llms.vertex_ai import _gemini_convert_messages_with_history
 from litellm.types.llms.openai import (
     ChatCompletionResponseMessage,

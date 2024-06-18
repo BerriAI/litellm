@@ -694,8 +694,10 @@ def test_completion_claude_3_base64():
             pytest.fail(f"An exception occurred - {str(e)}")
 
 
-@pytest.mark.skip(reason="issue getting wikipedia images in ci/cd")
-def test_completion_claude_3_function_plus_image():
+@pytest.mark.parametrize(
+    "model", ["gemini/gemini-1.5-flash"]  # "claude-3-sonnet-20240229",
+)
+def test_completion_claude_3_function_plus_image(model):
     litellm.set_verbose = True
 
     image_content = [
@@ -703,7 +705,7 @@ def test_completion_claude_3_function_plus_image():
         {
             "type": "image_url",
             "image_url": {
-                "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg"
+                "url": "https://litellm-listing.s3.amazonaws.com/litellm_logo.png"
             },
         },
     ]
@@ -719,7 +721,7 @@ def test_completion_claude_3_function_plus_image():
                     "type": "object",
                     "properties": {
                         "location": {
-                            "type": "text",
+                            "type": "string",
                             "description": "The city and state, e.g. San Francisco, CA",
                         },
                         "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
@@ -739,7 +741,7 @@ def test_completion_claude_3_function_plus_image():
     ]
 
     response = completion(
-        model="claude-3-sonnet-20240229",
+        model=model,
         messages=[image_message],
         tool_choice=tool_choice,
         tools=tools,
