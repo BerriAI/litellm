@@ -1884,43 +1884,7 @@ def completion(
                 )
                 return response
             response = model_response
-        elif custom_llm_provider == "gemini":
-            gemini_api_key = (
-                api_key
-                or get_secret("GEMINI_API_KEY")
-                or get_secret("PALM_API_KEY")  # older palm api key should also work
-                or litellm.api_key
-            )
-
-            # palm does not support streaming as yet :(
-            model_response = gemini.completion(
-                model=model,
-                messages=messages,
-                model_response=model_response,
-                print_verbose=print_verbose,
-                optional_params=optional_params,
-                litellm_params=litellm_params,
-                logger_fn=logger_fn,
-                encoding=encoding,
-                api_key=gemini_api_key,
-                logging_obj=logging,
-                acompletion=acompletion,
-                custom_prompt_dict=custom_prompt_dict,
-            )
-            if (
-                "stream" in optional_params
-                and optional_params["stream"] == True
-                and acompletion == False
-            ):
-                response = CustomStreamWrapper(
-                    iter(model_response),
-                    model,
-                    custom_llm_provider="gemini",
-                    logging_obj=logging,
-                )
-                return response
-            response = model_response
-        elif custom_llm_provider == "vertex_ai_beta":
+        elif custom_llm_provider == "vertex_ai_beta" or custom_llm_provider == "gemini":
             vertex_ai_project = (
                 optional_params.pop("vertex_project", None)
                 or optional_params.pop("vertex_ai_project", None)
@@ -1938,6 +1902,14 @@ def completion(
                 or optional_params.pop("vertex_ai_credentials", None)
                 or get_secret("VERTEXAI_CREDENTIALS")
             )
+
+            gemini_api_key = (
+                api_key
+                or get_secret("GEMINI_API_KEY")
+                or get_secret("PALM_API_KEY")  # older palm api key should also work
+                or litellm.api_key
+            )
+
             new_params = deepcopy(optional_params)
             response = vertex_chat_completion.completion(  # type: ignore
                 model=model,
@@ -1951,9 +1923,11 @@ def completion(
                 vertex_location=vertex_ai_location,
                 vertex_project=vertex_ai_project,
                 vertex_credentials=vertex_credentials,
+                gemini_api_key=gemini_api_key,
                 logging_obj=logging,
                 acompletion=acompletion,
                 timeout=timeout,
+                custom_llm_provider=custom_llm_provider,
             )
 
         elif custom_llm_provider == "vertex_ai":

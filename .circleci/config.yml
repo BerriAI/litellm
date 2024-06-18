@@ -65,6 +65,7 @@ jobs:
             pip install "pydantic==2.7.1"
             pip install "diskcache==5.6.1"
             pip install "Pillow==10.3.0"
+            pip install "ijson==3.2.3"
       - save_cache:
           paths:
             - ./venv
@@ -126,6 +127,7 @@ jobs:
             pip install jinja2
             pip install tokenizers
             pip install openai
+            pip install ijson
       - run:
           name: Run tests
           command: |
