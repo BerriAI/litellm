@@ -113,6 +113,33 @@ class AsyncHTTPHandler:
         except Exception as e:
             raise e
 
+    async def put(
+        self,
+        url: str,
+        data: Optional[Union[dict, str]] = None,
+        json: Optional[dict] = None,
+        params: Optional[dict] = None,
+        headers: Optional[dict] = None,
+        stream: bool = False,
+    ):
+        try:
+            req = self.client.build_request(
+                "PUT", url, data=data, json=json, params=params, headers=headers
+            )
+            response = await self.client.send(req, stream=stream)
+            response.raise_for_status()
+            return response
+        except httpx.HTTPStatusError as e:
+            raise e
+        except Exception as e:
+            raise e
+
+    def __del__(self) -> None:
+        try:
+            asyncio.get_running_loop().create_task(self.close())
+        except Exception:
+            pass
+
     async def single_connection_post_request(
         self,
         url: str,
@@ -210,6 +237,21 @@ class HTTPHandler:
     ):
         req = self.client.build_request(
             "POST", url, data=data, json=json, params=params, headers=headers  # type: ignore
+        )
+        response = self.client.send(req, stream=stream)
+        return response
+
+    def put(
+        self,
+        url: str,
+        data: Optional[Union[dict, str]] = None,
+        json: Optional[Union[dict, str]] = None,
+        params: Optional[dict] = None,
+        headers: Optional[dict] = None,
+        stream: bool = False,
+    ):
+        req = self.client.build_request(
+            "PUT", url, data=data, json=json, params=params, headers=headers
         )
         response = self.client.send(req, stream=stream)
         return response
