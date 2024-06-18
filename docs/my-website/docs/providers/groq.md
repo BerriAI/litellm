@@ -1,7 +1,11 @@
 # Groq
 https://groq.com/
 
-**We support ALL Groq models, just set `groq/` as a prefix when sending completion requests**
+:::tip
+
+**We support ALL Groq models, just set `model=groq/<any-model-on-groq>` as a prefix when sending litellm requests**
+
+:::
 
 ## API Key
 ```python
