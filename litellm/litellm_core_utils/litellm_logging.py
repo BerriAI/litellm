@@ -538,7 +538,7 @@ class Logging:
 
             if complete_streaming_response is not None:
                 verbose_logger.debug(
-                    f"Logging Details LiteLLM-Success Call streaming complete"
+                    "Logging Details LiteLLM-Success Call streaming complete"
                 )
                 self.model_call_details["complete_streaming_response"] = (
                     complete_streaming_response
@@ -1121,7 +1121,7 @@ class Logging:
                     )
                     if capture_exception:  # log this error to sentry for debugging
                         capture_exception(e)
-        except:
+        except Exception as e:
             verbose_logger.error(
                 "LiteLLM.LoggingError: [Non-Blocking] Exception occurred while success logging {}\n{}".format(
                     str(e), traceback.format_exc()
