@@ -1776,7 +1776,7 @@ def test_completion_sagemaker_stream():
         pytest.fail(f"Error occurred: {e}")
 
 
-@pytest.mark.skip(reason="IBM closed account.")
+@pytest.mark.skip(reason="Account deleted by IBM.")
 def test_completion_watsonx_stream():
     litellm.set_verbose = True
     try:
