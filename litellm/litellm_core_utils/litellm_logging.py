@@ -10,7 +10,7 @@ import sys
 import time
 import traceback
 import uuid
-from typing import Callable, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import litellm
 from litellm import (
@@ -72,6 +72,8 @@ from ..integrations.s3 import S3Logger
 from ..integrations.supabase import Supabase
 from ..integrations.traceloop import TraceloopLogger
 from ..integrations.weights_biases import WeightsBiasesLogger
+
+_in_memory_loggers: List[Any] = []
 
 
 class Logging:
@@ -1741,13 +1743,33 @@ def _init_custom_logger_compatible_class(
     logging_integration: litellm._custom_logger_compatible_callbacks_literal,
 ) -> Callable:
     if logging_integration == "lago":
-        return LagoLogger()  # type: ignore
+        for callback in _in_memory_loggers:
+            if isinstance(callback, LagoLogger):
+                return callback  # type: ignore
+
+        lago_logger = LagoLogger()
+        _in_memory_loggers.append(lago_logger)
+        return lago_logger  # type: ignore
     elif logging_integration == "openmeter":
-        return OpenMeterLogger()  # type: ignore
+        for callback in _in_memory_loggers:
+            if isinstance(callback, OpenMeterLogger):
+                return callback  # type: ignore
+
+        _openmeter_logger = OpenMeterLogger()
+        _in_memory_loggers.append(_openmeter_logger)
+        return _openmeter_logger  # type: ignore
     elif logging_integration == "logfire":
+        if "LOGFIRE_TOKEN" not in os.environ:
+            raise ValueError("LOGFIRE_TOKEN not found in environment variables")
+
         otel_config = OpenTelemetryConfig(
             exporter="otlp_http",
             endpoint="https://logfire-api.pydantic.dev/v1/traces",
             headers=f"Authorization={os.getenv('LOGFIRE_TOKEN')}",
         )
-        return OpenTelemetry(config=otel_config)  # type: ignore
+        for callback in _in_memory_loggers:
+            if isinstance(callback, OpenTelemetry):
+                return callback  # type: ignore
+        _otel_logger = OpenTelemetry(config=otel_config)
+        _in_memory_loggers.append(_otel_logger)
+        return _otel_logger  # type: ignore
