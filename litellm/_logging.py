@@ -1,6 +1,8 @@
-import logging, os, json
-from logging import Formatter
+import json
+import logging
+import os
 import traceback
+from logging import Formatter
 
 set_verbose = False
 
@@ -21,8 +23,12 @@ class JsonFormatter(Formatter):
         super(JsonFormatter, self).__init__()
 
     def format(self, record):
-        json_record = {}
-        json_record["message"] = record.getMessage()
+        json_record = {
+            "message": record.getMessage(),
+            "level": record.levelname,
+            "timestamp": self.formatTime(record, self.datefmt),
+        }
+
         return json.dumps(json_record)
 
 
