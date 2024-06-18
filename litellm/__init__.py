@@ -739,6 +739,7 @@ from .utils import (
     supports_function_calling,
     supports_parallel_function_calling,
     supports_vision,
+    supports_system_messages,
     get_litellm_params,
     acreate,
     get_model_list,

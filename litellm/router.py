@@ -7,66 +7,86 @@
 #
 #  Thank you ! We ❤️ you! - Krrish & Ishaan
 
-import copy, httpx
-from datetime import datetime
-from typing import Dict, List, Optional, Union, Literal, Any, BinaryIO, Tuple, TypedDict
-from typing_extensions import overload
-import random, threading, time, traceback, uuid
-import litellm, openai, hashlib, json
-from litellm.caching import RedisCache, InMemoryCache, DualCache
-import datetime as datetime_og
-import logging, asyncio
-import inspect, concurrent
-from openai import AsyncOpenAI
-from collections import defaultdict
-from litellm.router_strategy.least_busy import LeastBusyLoggingHandler
-from litellm.router_strategy.lowest_tpm_rpm import LowestTPMLoggingHandler
-from litellm.router_strategy.lowest_latency import LowestLatencyLoggingHandler
-from litellm.router_strategy.lowest_cost import LowestCostLoggingHandler
-from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2
-from litellm.llms.custom_httpx.azure_dall_e_2 import (
-    CustomHTTPTransport,
-    AsyncCustomHTTPTransport,
-)
-from litellm.utils import (
-    ModelResponse,
-    CustomStreamWrapper,
-    get_utc_datetime,
-    calculate_max_parallel_requests,
-    _is_region_eu,
-)
+import asyncio
+import concurrent
 import copy
-from litellm._logging import verbose_router_logger
+import datetime as datetime_og
+import hashlib
+import inspect
+import json
 import logging
-from litellm.types.utils import ModelInfo as ModelMapInfo
-from litellm.types.router import (
-    Deployment,
-    ModelInfo,
-    LiteLLM_Params,
-    RouterErrors,
-    updateDeployment,
-    updateLiteLLMParams,
-    RetryPolicy,
-    AllowedFailsPolicy,
-    AlertingConfig,
-    DeploymentTypedDict,
-    ModelGroupInfo,
-    AssistantsTypedDict,
+import random
+import threading
+import time
+import traceback
+import uuid
+from collections import defaultdict
+from datetime import datetime
+from typing import (
+    Any,
+    BinaryIO,
+    Dict,
+    Iterable,
+    List,
+    Literal,
+    Optional,
+    Tuple,
+    TypedDict,
+    Union,
 )
+
+import httpx
+import openai
+from openai import AsyncOpenAI
+from typing_extensions import overload
+
+import litellm
+from litellm._logging import verbose_router_logger
+from litellm.caching import DualCache, InMemoryCache, RedisCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.azure import get_azure_ad_token_from_oidc
+from litellm.llms.custom_httpx.azure_dall_e_2 import (
+    AsyncCustomHTTPTransport,
+    CustomHTTPTransport,
+)
+from litellm.router_strategy.least_busy import LeastBusyLoggingHandler
+from litellm.router_strategy.lowest_cost import LowestCostLoggingHandler
+from litellm.router_strategy.lowest_latency import LowestLatencyLoggingHandler
+from litellm.router_strategy.lowest_tpm_rpm import LowestTPMLoggingHandler
+from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2
+from litellm.router_utils.handle_error import send_llm_exception_alert
+from litellm.scheduler import FlowItem, Scheduler
 from litellm.types.llms.openai import (
-    AsyncCursorPage,
     Assistant,
-    Thread,
+    AssistantToolParam,
+    AsyncCursorPage,
     Attachment,
     OpenAIMessage,
     Run,
-    AssistantToolParam,
+    Thread,
 )
-from litellm.scheduler import Scheduler, FlowItem
-from typing import Iterable
-from litellm.router_utils.handle_error import send_llm_exception_alert
+from litellm.types.router import (
+    AlertingConfig,
+    AllowedFailsPolicy,
+    AssistantsTypedDict,
+    Deployment,
+    DeploymentTypedDict,
+    LiteLLM_Params,
+    ModelGroupInfo,
+    ModelInfo,
+    RetryPolicy,
+    RouterErrors,
+    updateDeployment,
+    updateLiteLLMParams,
+)
+from litellm.types.utils import ModelInfo as ModelMapInfo
+from litellm.utils import (
+    CustomStreamWrapper,
+    ModelResponse,
+    _is_region_eu,
+    calculate_max_parallel_requests,
+    get_utc_datetime,
+)
 
 
 class Router:
@@ -3114,6 +3134,7 @@ class Router:
 
             # proxy support
             import os
+
             import httpx
 
             # Check if the HTTP_PROXY and HTTPS_PROXY environment variables are set and use them accordingly.
@@ -3800,6 +3821,7 @@ class Router:
                         litellm_provider=llm_provider,
                         mode="chat",
                         supported_openai_params=supported_openai_params,
+                        supports_system_messages=None,
                     )
 
                 if model_group_info is None:
