@@ -64,7 +64,6 @@ from ..integrations.litedebugger import LiteDebugger
 from ..integrations.logfire_logger import LogfireLevel, LogfireLogger
 from ..integrations.lunary import LunaryLogger
 from ..integrations.openmeter import OpenMeterLogger
-from ..integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
 from ..integrations.prometheus import PrometheusLogger
 from ..integrations.prometheus_services import PrometheusServicesLogger
 from ..integrations.prompt_layer import PromptLayerLogger
@@ -1761,6 +1760,10 @@ def _init_custom_logger_compatible_class(
     elif logging_integration == "logfire":
         if "LOGFIRE_TOKEN" not in os.environ:
             raise ValueError("LOGFIRE_TOKEN not found in environment variables")
+        from litellm.integrations.opentelemetry import (
+            OpenTelemetry,
+            OpenTelemetryConfig,
+        )
 
         otel_config = OpenTelemetryConfig(
             exporter="otlp_http",
