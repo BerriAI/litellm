@@ -26,7 +26,7 @@ sys.path.insert(0, os.path.abspath("../.."))
 def test_completion_logfire_logging(stream):
     from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
 
-    litellm.success_callback = ["logfire"]
+    litellm.callbacks = ["logfire"]
     litellm.set_verbose = True
     messages = [{"role": "user", "content": "what llm are u"}]
     temperature = 0.3
@@ -53,7 +53,7 @@ def test_completion_logfire_logging(stream):
 async def test_acompletion_logfire_logging(stream):
     from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
 
-    litellm.success_callback = ["logfire"]
+    litellm.callbacks = ["logfire"]
     litellm.set_verbose = True
     messages = [{"role": "user", "content": "what llm are u"}]
     temperature = 0.3
