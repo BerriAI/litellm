@@ -666,7 +666,6 @@ class Logging:
                             end_time=end_time,
                             print_verbose=print_verbose,
                         )
-
                     if callback == "logfire":
                         global logfireLogger
                         verbose_logger.debug("reaches logfire for success logging!")
@@ -1473,25 +1472,6 @@ class Logging:
                             end_time=end_time,
                             print_verbose=print_verbose,
                         )
-
-                    if callback == "logfire":
-                        verbose_logger.debug("reaches logfire for failure logging!")
-                        kwargs = {}
-                        for k, v in self.model_call_details.items():
-                            if (
-                                k != "original_response"
-                            ):  # copy.deepcopy raises errors as this could be a coroutine
-                                kwargs[k] = v
-                        kwargs["exception"] = exception
-
-                        logfireLogger.log_event(
-                            kwargs=kwargs,
-                            response_obj=result,
-                            start_time=start_time,
-                            end_time=end_time,
-                            level=LogfireLevel.ERROR.value,
-                            print_verbose=print_verbose,
-                        )
                     if callback == "sentry":
                         print_verbose("sending exception to sentry")
                         if capture_exception:
@@ -1613,6 +1593,25 @@ class Logging:
                             start_time=start_time,
                             end_time=end_time,
                             user_id=kwargs.get("user", None),
+                            print_verbose=print_verbose,
+                        )
+
+                    if callback == "logfire":
+                        verbose_logger.debug("reaches logfire for failure logging!")
+                        kwargs = {}
+                        for k, v in self.model_call_details.items():
+                            if (
+                                k != "original_response"
+                            ):  # copy.deepcopy raises errors as this could be a coroutine
+                                kwargs[k] = v
+                        kwargs["exception"] = exception
+
+                        logfireLogger.log_event(
+                            kwargs=kwargs,
+                            response_obj=result,
+                            start_time=start_time,
+                            end_time=end_time,
+                            level=LogfireLevel.ERROR.value,
                             print_verbose=print_verbose,
                         )
 
