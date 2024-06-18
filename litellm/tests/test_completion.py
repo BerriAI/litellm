@@ -3392,15 +3392,28 @@ def test_completion_deep_infra_mistral():
 
 
 # Gemini tests
-def test_completion_gemini():
+@pytest.mark.parametrize(
+    "model",
+    [
+        # "gemini-1.0-pro",
+        "gemini-1.5-pro",
+        # "gemini-1.5-flash",
+    ],
+)
+def test_completion_gemini(model):
     litellm.set_verbose = True
-    model_name = "gemini/gemini-1.5-pro-latest"
-    messages = [{"role": "user", "content": "Hey, how's it going?"}]
+    model_name = "gemini/{}".format(model)
+    messages = [
+        {"role": "system", "content": "Be a good bot!"},
+        {"role": "user", "content": "Hey, how's it going?"},
+    ]
     try:
         response = completion(model=model_name, messages=messages)
         # Add any assertions,here to check the response
         print(response)
         assert response.choices[0]["index"] == 0
+
+        assert False
     except litellm.APIError as e:
         pass
     except Exception as e:

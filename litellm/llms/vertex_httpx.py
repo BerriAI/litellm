@@ -18,6 +18,7 @@ import requests  # type: ignore
 import litellm
 import litellm.litellm_core_utils
 import litellm.litellm_core_utils.litellm_logging
+from litellm import verbose_logger
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.vertex_ai import _gemini_convert_messages_with_history
@@ -659,17 +660,29 @@ class VertexLLM(BaseLLM):
         )
 
         ## TRANSFORMATION ##
+        try:
+            supports_system_message = litellm.supports_system_messages(
+                model=model, custom_llm_provider=custom_llm_provider
+            )
+        except Exception as e:
+            verbose_logger.error(
+                "Unable to identify if system message supported. Defaulting to 'False'. Received error message - {}\nAdd it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json".format(
+                    str(e)
+                )
+            )
+            supports_system_message = False
         # Separate system prompt from rest of message
         system_prompt_indices = []
         system_content_blocks: List[PartType] = []
-        for idx, message in enumerate(messages):
-            if message["role"] == "system":
-                _system_content_block = PartType(text=message["content"])
-                system_content_blocks.append(_system_content_block)
-                system_prompt_indices.append(idx)
-        if len(system_prompt_indices) > 0:
-            for idx in reversed(system_prompt_indices):
-                messages.pop(idx)
+        if supports_system_message is True:
+            for idx, message in enumerate(messages):
+                if message["role"] == "system":
+                    _system_content_block = PartType(text=message["content"])
+                    system_content_blocks.append(_system_content_block)
+                    system_prompt_indices.append(idx)
+            if len(system_prompt_indices) > 0:
+                for idx in reversed(system_prompt_indices):
+                    messages.pop(idx)
         content = _gemini_convert_messages_with_history(messages=messages)
         tools: Optional[Tools] = optional_params.pop("tools", None)
         tool_choice: Optional[ToolConfig] = optional_params.pop("tool_choice", None)

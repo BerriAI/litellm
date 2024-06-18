@@ -1,11 +1,20 @@
 import json
 import time
 import uuid
+import json
+import time
+import uuid
 from enum import Enum
+from typing import Dict, List, Literal, Optional, Tuple, Union
+
 from typing import Dict, List, Literal, Optional, Tuple, Union
 
 from openai._models import BaseModel as OpenAIObject
 from pydantic import ConfigDict
+from typing_extensions import Dict, Required, TypedDict, override
+
+from ..litellm_core_utils.core_helpers import map_finish_reason
+from .llms.openai import ChatCompletionToolCallChunk, ChatCompletionUsageBlock
 from typing_extensions import Dict, Required, TypedDict, override
 
 from ..litellm_core_utils.core_helpers import map_finish_reason
@@ -60,6 +69,7 @@ class ModelInfo(TypedDict, total=False):
         ]
     ]
     supported_openai_params: Required[Optional[List[str]]]
+    supports_system_messages: Optional[bool]
 
 
 class GenericStreamingChunk(TypedDict):
