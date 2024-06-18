@@ -1,6 +1,6 @@
 import Image from '@theme/IdealImage';
 
-# Logfire - Logging LLM Input/Output
+# 🔥 Logfire - Logging LLM Input/Output
 
 Logfire is open Source Observability & Analytics for LLM Apps
 Detailed production traces and a granular view on quality, cost and latency
@@ -14,10 +14,14 @@ join our [discord](https://discord.gg/wuPM9dRgDw)
 
 ## Pre-Requisites
 
-Ensure you have run `pip install logfire` for this integration
+Ensure you have installed the following packages to use this integration
 
 ```shell
-pip install logfire litellm
+pip install litellm
+
+pip install opentelemetry-api==1.25.0
+pip install opentelemetry-sdk==1.25.0
+pip install opentelemetry-exporter-otlp==1.25.0
 ```
 
 ## Quick Start
@@ -25,8 +29,7 @@ pip install logfire litellm
 Get your Logfire token from [Logfire](https://logfire.pydantic.dev/)
 
 ```python
-litellm.success_callback = ["logfire"]
-litellm.failure_callback = ["logfire"] # logs errors to logfire
+litellm.callbacks = ["logfire"]
 ```
 
 ```python
