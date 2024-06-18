@@ -1,20 +1,25 @@
-import sys, os, json
+import json
+import os
+import sys
 import traceback
+
 from dotenv import load_dotenv
 
 load_dotenv()
-import os, io
+import io
+import os
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
+from unittest.mock import MagicMock, patch
+
 import pytest
+
 import litellm
-from litellm import embedding, completion, completion_cost, Timeout
-from litellm import RateLimitError
+from litellm import RateLimitError, Timeout, completion, completion_cost, embedding
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.prompt_templates.factory import anthropic_messages_pt
-from unittest.mock import patch, MagicMock
-from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
 
 # litellm.num_retries =3
 litellm.cache = None
@@ -1500,7 +1505,9 @@ def test_ollama_image():
     data is untouched.
     """
 
-    import io, base64
+    import base64
+    import io
+
     from PIL import Image
 
     def mock_post(url, **kwargs):
@@ -3478,6 +3485,7 @@ def test_completion_palm_stream():
         pytest.fail(f"Error occurred: {e}")
 
 
+@pytest.mark.skip(reason="IBM closed account.")
 def test_completion_watsonx():
     litellm.set_verbose = True
     model_name = "watsonx/ibm/granite-13b-chat-v2"
@@ -3498,6 +3506,7 @@ def test_completion_watsonx():
         pytest.fail(f"Error occurred: {e}")
 
 
+@pytest.mark.skip(reason="IBM closed account.")
 def test_completion_stream_watsonx():
     litellm.set_verbose = True
     model_name = "watsonx/ibm/granite-13b-chat-v2"
@@ -3565,6 +3574,7 @@ def test_unified_auth_params(provider, model, project, region_name, token):
         assert value in translated_optional_params
 
 
+@pytest.mark.skip(reason="IBM closed account.")
 @pytest.mark.asyncio
 async def test_acompletion_watsonx():
     litellm.set_verbose = True
@@ -3585,6 +3595,7 @@ async def test_acompletion_watsonx():
         pytest.fail(f"Error occurred: {e}")
 
 
+@pytest.mark.skip(reason="IBM closed account.")
 @pytest.mark.asyncio
 async def test_acompletion_stream_watsonx():
     litellm.set_verbose = True
