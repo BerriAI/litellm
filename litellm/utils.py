@@ -340,6 +340,7 @@ def function_setup(
     try:
         global callback_list, add_breadcrumb, user_logger_fn, Logging
         function_id = kwargs["id"] if "id" in kwargs else None
+
         if len(litellm.callbacks) > 0:
             for callback in litellm.callbacks:
                 # check if callback is a string - e.g. "lago", "openmeter"
@@ -7243,7 +7244,7 @@ def get_secret(
                     else:
                         raise ValueError(
                             f"Google KMS requires the encrypted secret to be encoded in base64"
-                        )#fix for this vulnerability https://huntr.com/bounties/ae623c2f-b64b-4245-9ed4-f13a0a5824ce
+                        )  # fix for this vulnerability https://huntr.com/bounties/ae623c2f-b64b-4245-9ed4-f13a0a5824ce
                     response = client.decrypt(
                         request={
                             "name": litellm._google_kms_resource_name,
