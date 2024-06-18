@@ -3409,7 +3409,28 @@ def test_completion_gemini(model):
         {"role": "user", "content": "Hey, how's it going?"},
     ]
     try:
-        response = completion(model=model_name, messages=messages)
+        response = completion(
+            model=model_name,
+            messages=messages,
+            safety_settings=[
+                {
+                    "category": "HARM_CATEGORY_HARASSMENT",
+                    "threshold": "BLOCK_NONE",
+                },
+                {
+                    "category": "HARM_CATEGORY_HATE_SPEECH",
+                    "threshold": "BLOCK_NONE",
+                },
+                {
+                    "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                    "threshold": "BLOCK_NONE",
+                },
+                {
+                    "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                    "threshold": "BLOCK_NONE",
+                },
+            ],
+        )
         # Add any assertions,here to check the response
         print(response)
         assert response.choices[0]["index"] == 0
