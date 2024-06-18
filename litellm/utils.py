@@ -2366,6 +2366,7 @@ def get_optional_params(
             and custom_llm_provider != "together_ai"
             and custom_llm_provider != "groq"
             and custom_llm_provider != "deepseek"
+            and custom_llm_provider != "codestral"
             and custom_llm_provider != "mistral"
             and custom_llm_provider != "anthropic"
             and custom_llm_provider != "cohere_chat"
@@ -2974,7 +2975,7 @@ def get_optional_params(
             optional_params["stream"] = stream
         if max_tokens:
             optional_params["max_tokens"] = max_tokens
-    elif custom_llm_provider == "mistral":
+    elif custom_llm_provider == "mistral" or custom_llm_provider == "codestral":
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider
         )
@@ -2982,6 +2983,15 @@ def get_optional_params(
         optional_params = litellm.MistralConfig().map_openai_params(
             non_default_params=non_default_params, optional_params=optional_params
         )
+    elif custom_llm_provider == "text-completion-codestral":
+        supported_params = get_supported_openai_params(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+        _check_valid_arg(supported_params=supported_params)
+        optional_params = litellm.MistralTextCompletionConfig().map_openai_params(
+            non_default_params=non_default_params, optional_params=optional_params
+        )
+
     elif custom_llm_provider == "databricks":
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider
@@ -3014,7 +3024,6 @@ def get_optional_params(
             optional_params["response_format"] = response_format
         if seed is not None:
             optional_params["seed"] = seed
-
     elif custom_llm_provider == "deepseek":
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider
@@ -3633,11 +3642,14 @@ def get_supported_openai_params(
             "tool_choice",
             "max_retries",
         ]
-    elif custom_llm_provider == "mistral":
+    elif custom_llm_provider == "mistral" or custom_llm_provider == "codestral":
+        # mistal and codestral api have the exact same params
         if request_type == "chat_completion":
             return litellm.MistralConfig().get_supported_openai_params()
         elif request_type == "embeddings":
             return litellm.MistralEmbeddingConfig().get_supported_openai_params()
+    elif custom_llm_provider == "text-completion-codestral":
+        return litellm.MistralTextCompletionConfig().get_supported_openai_params()
     elif custom_llm_provider == "replicate":
         return [
             "stream",
@@ -3874,6 +3886,10 @@ def get_llm_provider(
                 # groq is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.groq.com/openai/v1
                 api_base = "https://api.groq.com/openai/v1"
                 dynamic_api_key = get_secret("GROQ_API_KEY")
+            elif custom_llm_provider == "codestral":
+                # codestral is openai compatible, we just need to set this to custom_openai and have the api_base be https://codestral.mistral.ai/v1
+                api_base = "https://codestral.mistral.ai/v1"
+                dynamic_api_key = get_secret("CODESTRAL_API_KEY")
             elif custom_llm_provider == "deepseek":
                 # deepseek is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.deepseek.com/v1
                 api_base = "https://api.deepseek.com/v1"
@@ -3966,6 +3982,12 @@ def get_llm_provider(
                     elif endpoint == "api.groq.com/openai/v1":
                         custom_llm_provider = "groq"
                         dynamic_api_key = get_secret("GROQ_API_KEY")
+                    elif endpoint == "https://codestral.mistral.ai/v1":
+                        custom_llm_provider = "codestral"
+                        dynamic_api_key = get_secret("CODESTRAL_API_KEY")
+                    elif endpoint == "https://codestral.mistral.ai/v1":
+                        custom_llm_provider = "text-completion-codestral"
+                        dynamic_api_key = get_secret("CODESTRAL_API_KEY")
                     elif endpoint == "api.deepseek.com/v1":
                         custom_llm_provider = "deepseek"
                         dynamic_api_key = get_secret("DEEPSEEK_API_KEY")
@@ -4286,8 +4308,10 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
                 split_model, custom_llm_provider, _, _ = get_llm_provider(model=model)
             except:
                 pass
+            combined_model_name = model
         else:
             split_model = model
+            combined_model_name = "{}/{}".format(custom_llm_provider, model)
         #########################
 
         supported_openai_params = litellm.get_supported_openai_params(
@@ -4305,33 +4329,58 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
             }
         else:
             """
-            Check if:
-            1. 'model' in litellm.model_cost. Checks "groq/llama3-8b-8192" in  litellm.model_cost
-            2. 'split_model' in litellm.model_cost. Checks "llama3-8b-8192" in litellm.model_cost
+            Check if: (in order of specificity)
+            1. 'custom_llm_provider/model' in litellm.model_cost. Checks "groq/llama3-8b-8192" if model="llama3-8b-8192" and custom_llm_provider="groq"
+            2. 'model' in litellm.model_cost. Checks "groq/llama3-8b-8192" in  litellm.model_cost if model="groq/llama3-8b-8192" and custom_llm_provider=None
+            3. 'split_model' in litellm.model_cost. Checks "llama3-8b-8192" in litellm.model_cost if model="groq/llama3-8b-8192"
             """
-            if model in litellm.model_cost:
+            if combined_model_name in litellm.model_cost:
+                _model_info = litellm.model_cost[combined_model_name]
+                _model_info["supported_openai_params"] = supported_openai_params
+                if (
+                    "litellm_provider" in _model_info
+                    and _model_info["litellm_provider"] != custom_llm_provider
+                ):
+                    if custom_llm_provider == "vertex_ai" and _model_info[
+                        "litellm_provider"
+                    ].startswith("vertex_ai"):
+                        pass
+                    else:
+                        raise Exception
+                return _model_info
+            elif model in litellm.model_cost:
                 _model_info = litellm.model_cost[model]
                 _model_info["supported_openai_params"] = supported_openai_params
                 if (
                     "litellm_provider" in _model_info
                     and _model_info["litellm_provider"] != custom_llm_provider
                 ):
-                    raise Exception
+                    if custom_llm_provider == "vertex_ai" and _model_info[
+                        "litellm_provider"
+                    ].startswith("vertex_ai"):
+                        pass
+                    else:
+                        raise Exception
                 return _model_info
-            if split_model in litellm.model_cost:
+            elif split_model in litellm.model_cost:
                 _model_info = litellm.model_cost[split_model]
                 _model_info["supported_openai_params"] = supported_openai_params
                 if (
                     "litellm_provider" in _model_info
                     and _model_info["litellm_provider"] != custom_llm_provider
                 ):
-                    raise Exception
+                    if custom_llm_provider == "vertex_ai" and _model_info[
+                        "litellm_provider"
+                    ].startswith("vertex_ai"):
+                        pass
+                    else:
+                        raise Exception
                 return _model_info
             else:
                 raise ValueError(
                     "This model isn't mapped yet. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
                 )
-    except:
+    except Exception:
         raise Exception(
             "This model isn't mapped yet. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
         )
@@ -4647,6 +4696,14 @@ def validate_environment(model: Optional[str] = None) -> dict:
                 missing_keys.append("GEMINI_API_KEY")
         elif custom_llm_provider == "groq":
             if "GROQ_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("GROQ_API_KEY")
+        elif (
+            custom_llm_provider == "codestral"
+            or custom_llm_provider == "text-completion-codestral"
+        ):
+            if "CODESTRAL_API_KEY" in os.environ:
                 keys_in_environment = True
             else:
                 missing_keys.append("GROQ_API_KEY")
@@ -8523,6 +8580,25 @@ class CustomStreamWrapper:
                         completion_tokens=response_obj["usage"].completion_tokens,
                         total_tokens=response_obj["usage"].total_tokens,
                     )
+            elif self.custom_llm_provider == "text-completion-codestral":
+                response_obj = litellm.MistralTextCompletionConfig()._chunk_parser(
+                    chunk
+                )
+                completion_obj["content"] = response_obj["text"]
+                print_verbose(f"completion obj content: {completion_obj['content']}")
+                if response_obj["is_finished"]:
+                    self.received_finish_reason = response_obj["finish_reason"]
+                if (
+                    self.stream_options
+                    and self.stream_options.get("include_usage", False) == True
+                    and response_obj["usage"] is not None
+                ):
+                    self.sent_stream_usage = True
+                    model_response.usage = litellm.Usage(
+                        prompt_tokens=response_obj["usage"].prompt_tokens,
+                        completion_tokens=response_obj["usage"].completion_tokens,
+                        total_tokens=response_obj["usage"].total_tokens,
+                    )
             elif self.custom_llm_provider == "databricks":
                 response_obj = litellm.DatabricksConfig()._chunk_parser(chunk)
                 completion_obj["content"] = response_obj["text"]
@@ -8996,6 +9072,7 @@ class CustomStreamWrapper:
                 or self.custom_llm_provider == "azure"
                 or self.custom_llm_provider == "custom_openai"
                 or self.custom_llm_provider == "text-completion-openai"
+                or self.custom_llm_provider == "text-completion-codestral"
                 or self.custom_llm_provider == "azure_text"
                 or self.custom_llm_provider == "anthropic"
                 or self.custom_llm_provider == "anthropic_text"
