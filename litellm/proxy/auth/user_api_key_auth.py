@@ -120,7 +120,7 @@ async def user_api_key_auth(
             )
         ### USER-DEFINED AUTH FUNCTION ###
         if user_custom_auth is not None:
-            response = await user_custom_auth(request=request, api_key=api_key)
+            response = await user_custom_auth(request=request, api_key=api_key)  # type: ignore
             return UserAPIKeyAuth.model_validate(response)
 
         ### LITELLM-DEFINED AUTH FUNCTION ###
@@ -140,7 +140,7 @@ async def user_api_key_auth(
             # check if public endpoint
             return UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY)
 
-        if general_settings.get("enable_jwt_auth", False) == True:
+        if general_settings.get("enable_jwt_auth", False) is True:
             is_jwt = jwt_handler.is_jwt(token=api_key)
             verbose_proxy_logger.debug("is_jwt: %s", is_jwt)
             if is_jwt:
@@ -177,7 +177,7 @@ async def user_api_key_auth(
                     token=jwt_valid_token, default_value=None
                 )
 
-                if team_id is None and jwt_handler.is_required_team_id() == True:
+                if team_id is None and jwt_handler.is_required_team_id() is True:
                     raise Exception(
                         f"No team id passed in. Field checked in jwt token - '{jwt_handler.litellm_jwtauth.team_id_jwt_field}'"
                     )
@@ -190,7 +190,7 @@ async def user_api_key_auth(
                         user_route=route,
                         litellm_proxy_roles=jwt_handler.litellm_jwtauth,
                     )
-                    if is_allowed == False:
+                    if is_allowed is False:
                         allowed_routes = jwt_handler.litellm_jwtauth.team_allowed_routes  # type: ignore
                         actual_routes = get_actual_routes(allowed_routes=allowed_routes)
                         raise Exception(
