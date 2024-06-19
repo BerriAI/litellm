@@ -1,22 +1,18 @@
-from typing import Optional, Literal
-import litellm
-import os
 import asyncio
-import fastapi
+import copy
+import os
 import traceback
 from datetime import datetime, timedelta
-from fastapi import Depends, Request, APIRouter, Header, status
-from litellm.proxy.health_check import perform_health_check
-from fastapi import HTTPException
-import copy
+from typing import Literal, Optional
+
+import fastapi
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+
+import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.proxy._types import CallInfo, ProxyException, UserAPIKeyAuth, WebhookEvent
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy._types import (
-    UserAPIKeyAuth,
-    ProxyException,
-    WebhookEvent,
-    CallInfo,
-)
+from litellm.proxy.health_check import perform_health_check
 
 #### Health ENDPOINTS ####
 
@@ -63,9 +59,9 @@ async def health_services_endpoint(
     """
     try:
         from litellm.proxy.proxy_server import (
-            proxy_logging_obj,
-            prisma_client,
             general_settings,
+            prisma_client,
+            proxy_logging_obj,
         )
 
         if service is None:
@@ -282,9 +278,9 @@ async def health_endpoint(
     """
     from litellm.proxy.proxy_server import (
         health_check_results,
+        llm_model_list,
         use_background_health_checks,
         user_model,
-        llm_model_list,
     )
 
     try:
@@ -361,7 +357,7 @@ async def active_callbacks():
     """
     Returns a list of active callbacks on litellm.callbacks, litellm.input_callback, litellm.failure_callback, litellm.success_callback
     """
-    from litellm.proxy.proxy_server import proxy_logging_obj, general_settings
+    from litellm.proxy.proxy_server import general_settings, proxy_logging_obj
 
     _alerting = str(general_settings.get("alerting"))
     # get success callbacks
@@ -409,11 +405,16 @@ async def active_callbacks():
     tags=["health"],
     dependencies=[Depends(user_api_key_auth)],
 )
+@router.options(
+    "/health/readiness",
+    tags=["health"],
+    dependencies=[Depends(user_api_key_auth)],
+)
 async def health_readiness():
     """
     Unprotected endpoint for checking if worker can receive requests
     """
-    from litellm.proxy.proxy_server import proxy_logging_obj, prisma_client, version
+    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, version
 
     try:
         # get success callback
