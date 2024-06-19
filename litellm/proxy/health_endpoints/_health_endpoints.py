@@ -405,11 +405,6 @@ async def active_callbacks():
     tags=["health"],
     dependencies=[Depends(user_api_key_auth)],
 )
-@router.options(
-    "/health/readiness",
-    tags=["health"],
-    dependencies=[Depends(user_api_key_auth)],
-)
 async def health_readiness():
     """
     Unprotected endpoint for checking if worker can receive requests
@@ -477,3 +472,20 @@ async def health_liveliness():
     Unprotected endpoint for checking if worker is alive
     """
     return "I'm alive!"
+
+
+@router.options(
+    "/health/readiness",
+    tags=["health"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def health_readiness_options():
+    """
+    Options endpoint for health/readiness check.
+    """
+    response_headers = {
+        "Allow": "GET, OPTIONS",
+        "Access-Control-Allow-Methods": "GET, OPTIONS",
+        "Access-Control-Allow-Headers": "*",
+    }
+    return {"headers": response_headers}
