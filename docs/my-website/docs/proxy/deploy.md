@@ -27,7 +27,7 @@ docker-compose up
 
 <Tabs>
 
-<TabItem value="basic" label="Basic">
+<TabItem value="basic" label="Basic (No DB)">
 
 ### Step 1. CREATE config.yaml 
 
@@ -98,7 +98,13 @@ docker run ghcr.io/berriai/litellm:main-latest --port 8002 --num_workers 8
 ```
 
 </TabItem>
+<TabItem value="terraform" label="Terraform">
 
+s/o [Nicholas Cecere](https://www.linkedin.com/in/nicholas-cecere-24243549/) for his LiteLLM User Management Terraform
+
+👉 [Go here for Terraform](https://github.com/ncecere/terraform-litellm-user-mgmt)
+
+</TabItem>
 <TabItem value="base-image" label="use litellm as a base image">
 
 ```shell
@@ -380,6 +386,7 @@ kubectl port-forward service/litellm-service 4000:4000
 Your OpenAI proxy server is now running on `http://0.0.0.0:4000`.
 
 </TabItem>
+
 <TabItem value="helm-deploy" label="Helm">
 
 
@@ -424,7 +431,6 @@ Your OpenAI proxy server is now running on `http://127.0.0.1:4000`.
 If you need to set your litellm proxy config.yaml, you can find this in [values.yaml](https://github.com/BerriAI/litellm/blob/main/deploy/charts/litellm-helm/values.yaml)
 
 </TabItem>
-
 
 <TabItem value="helm-oci" label="Helm OCI Registry (GHCR)">
 
