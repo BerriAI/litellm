@@ -9,7 +9,7 @@ import types
 import uuid
 from enum import Enum
 from functools import partial
-from typing import Any, Callable, List, Literal, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
 import httpx  # type: ignore
 import ijson
@@ -241,6 +241,20 @@ class VertexGeminiConfig:
             "europe-west9",
         ]
 
+    def get_flagged_finish_reasons(self) -> Dict[str, str]:
+        """
+        Return Dictionary of finish reasons which indicate response was flagged
+
+        and what it means
+        """
+        return {
+            "SAFETY": "The token generation was stopped as the response was flagged for safety reasons. NOTE: When streaming the Candidate.content will be empty if content filters blocked the output.",
+            "RECITATION": "The token generation was stopped as the response was flagged for unauthorized citations.",
+            "BLOCKLIST": "The token generation was stopped as the response was flagged for the terms which are included from the terminology blocklist.",
+            "PROHIBITED_CONTENT": "The token generation was stopped as the response was flagged for the prohibited contents.",
+            "SPII": "The token generation was stopped as the response was flagged for Sensitive Personally Identifiable Information (SPII) contents.",
+        }
+
 
 async def make_call(
     client: Optional[AsyncHTTPHandler],
@@ -361,6 +375,27 @@ class VertexLLM(BaseLLM):
                 ),
                 status_code=422,
             )
+
+        ## CHECK IF RESPONSE FLAGGED
+        if len(completion_response["candidates"]) > 0:
+            content_policy_violations = (
+                VertexGeminiConfig().get_flagged_finish_reasons()
+            )
+            if (
+                "finishReason" in completion_response["candidates"][0]
+                and completion_response["candidates"][0]["finishReason"]
+                in content_policy_violations.keys()
+            ):
+                ## CONTENT POLICY VIOLATION ERROR
+                raise VertexAIError(
+                    status_code=400,
+                    message="The response was blocked. Reason={}. Raw Response={}".format(
+                        content_policy_violations[
+                            completion_response["candidates"][0]["finishReason"]
+                        ],
+                        completion_response,
+                    ),
+                )
 
         model_response.choices = []  # type: ignore
 
@@ -804,6 +839,7 @@ class VertexLLM(BaseLLM):
             client = HTTPHandler(**_params)  # type: ignore
         else:
             client = client
+
         try:
             response = client.post(url=url, headers=headers, json=data)  # type: ignore
             response.raise_for_status()

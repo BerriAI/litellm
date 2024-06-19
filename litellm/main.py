@@ -1928,6 +1928,7 @@ def completion(
                 acompletion=acompletion,
                 timeout=timeout,
                 custom_llm_provider=custom_llm_provider,
+                client=client,
             )
 
         elif custom_llm_provider == "vertex_ai":
