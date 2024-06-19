@@ -1576,6 +1576,7 @@ class OpenAITextCompletion(BaseLLM):
                 response = openai_client.completions.create(**data)  # type: ignore
 
                 response_json = response.model_dump()
+
                 ## LOGGING
                 logging_obj.post_call(
                     input=prompt,

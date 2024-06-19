@@ -1,24 +1,31 @@
-import sys, os, asyncio
+import asyncio
+import os
+import sys
 import traceback
+
 from dotenv import load_dotenv
 
 load_dotenv()
-import os, io
+import io
+import os
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
+from unittest.mock import MagicMock, patch
+
 import pytest
+
 import litellm
 from litellm import (
-    embedding,
-    completion,
-    text_completion,
-    completion_cost,
-    atext_completion,
+    RateLimitError,
     TextCompletionResponse,
+    atext_completion,
+    completion,
+    completion_cost,
+    embedding,
+    text_completion,
 )
-from litellm import RateLimitError
 
 litellm.num_retries = 3
 
@@ -4082,8 +4089,9 @@ async def test_async_text_completion_chat_model_stream():
 async def test_completion_codestral_fim_api():
     try:
         litellm.set_verbose = True
-        from litellm._logging import verbose_logger
         import logging
+
+        from litellm._logging import verbose_logger
 
         verbose_logger.setLevel(level=logging.DEBUG)
         response = await litellm.atext_completion(
@@ -4113,8 +4121,9 @@ async def test_completion_codestral_fim_api():
 @pytest.mark.asyncio
 async def test_completion_codestral_fim_api_stream():
     try:
-        from litellm._logging import verbose_logger
         import logging
+
+        from litellm._logging import verbose_logger
 
         litellm.set_verbose = False
 
@@ -4145,3 +4154,47 @@ async def test_completion_codestral_fim_api_stream():
         # assert cost > 0.0
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
+def mock_post(*args, **kwargs):
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {"Content-Type": "application/json"}
+    mock_response.model_dump.return_value = {
+        "id": "cmpl-7a59383dd4234092b9e5d652a7ab8143",
+        "object": "text_completion",
+        "created": 1718824735,
+        "model": "Sao10K/L3-70B-Euryale-v2.1",
+        "choices": [
+            {
+                "index": 0,
+                "text": ") might be faster than then answering, and the added time it takes for the",
+                "logprobs": None,
+                "finish_reason": "length",
+                "stop_reason": None,
+            }
+        ],
+        "usage": {"prompt_tokens": 2, "total_tokens": 18, "completion_tokens": 16},
+    }
+    return mock_response
+
+
+def test_completion_vllm():
+    """
+    Asserts a text completion call for vllm actually goes to the text completion endpoint
+    """
+    from openai import OpenAI
+
+    client = OpenAI(api_key="my-fake-key")
+
+    with patch.object(client.completions, "create", side_effect=mock_post) as mock_call:
+        response = text_completion(
+            model="openai/gemini-1.5-flash",
+            prompt="ping",
+            client=client,
+        )
+        print(response)
+
+        assert response.usage.prompt_tokens == 2
+
+        mock_call.assert_called_once()
