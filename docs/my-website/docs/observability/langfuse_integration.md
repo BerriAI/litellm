@@ -127,6 +127,7 @@ response = completion(
       "trace_user_id": "user-id2",                  # set langfuse Trace User ID
       "session_id": "session-1",                    # set langfuse Session ID
       "tags": ["tag1", "tag2"],                     # set langfuse Tags
+      "trace_name": "new-trace-name"                # set langfuse Trace Name
       "trace_id": "trace-id22",                     # set langfuse Trace ID
       "trace_metadata": {"key": "value"},           # set langfuse Trace Metadata
       "trace_version": "test-trace-version",        # set langfuse Trace Version (if not set, defaults to Generation Version)
