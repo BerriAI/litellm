@@ -24,6 +24,7 @@ from litellm.utils import (
     create_pretrained_tokenizer,
     create_tokenizer,
     function_to_dict,
+    get_llm_provider,
     get_max_tokens,
     get_supported_openai_params,
     get_token_count,
@@ -517,3 +518,33 @@ def test_duration_in_seconds():
     value = _duration_in_seconds(duration="1mo")
 
     assert value - expected_duration < 2
+
+
+def test_get_llm_provider_ft_models():
+    """
+    All ft prefixed models should map to OpenAI
+    gpt-3.5-turbo-0125 (recommended),
+    gpt-3.5-turbo-1106,
+    gpt-3.5-turbo-0613,
+    gpt-4-0613 (experimental)
+    gpt-4o-2024-05-13.
+    babbage-002, davinci-002,
+
+    """
+    model, custom_llm_provider, _, _ = get_llm_provider(model="ft:gpt-3.5-turbo-0125")
+    assert custom_llm_provider == "openai"
+
+    model, custom_llm_provider, _, _ = get_llm_provider(model="ft:gpt-3.5-turbo-1106")
+    assert custom_llm_provider == "openai"
+
+    model, custom_llm_provider, _, _ = get_llm_provider(model="ft:gpt-3.5-turbo-0613")
+    assert custom_llm_provider == "openai"
+
+    model, custom_llm_provider, _, _ = get_llm_provider(model="ft:gpt-4-0613")
+    assert custom_llm_provider == "openai"
+
+    model, custom_llm_provider, _, _ = get_llm_provider(model="ft:gpt-3.5-turbo-0613")
+    assert custom_llm_provider == "openai"
+
+    model, custom_llm_provider, _, _ = get_llm_provider(model="ft:gpt-4o-2024-05-13")
+    assert custom_llm_provider == "openai"
