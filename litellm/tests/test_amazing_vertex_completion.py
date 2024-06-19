@@ -568,8 +568,6 @@ async def test_gemini_pro_vision(provider, sync_mode):
         # DO Not DELETE this ASSERT
         # Google counts the prompt tokens for us, we should ensure we use the tokens from the orignal response
         assert prompt_tokens == 263  # the gemini api returns 263 to us
-
-        # assert False
     except litellm.RateLimitError as e:
         pass
     except Exception as e:
@@ -1152,38 +1150,44 @@ async def test_vertexai_aembedding():
 #         raise e
 # test_gemini_pro_vision_stream()
 
-# def test_gemini_pro_vision_async():
-#     try:
-#         litellm.set_verbose = True
-#         litellm.num_retries=0
-#         async def test():
-#             resp = await litellm.acompletion(
-#                 model = "vertex_ai/gemini-pro-vision",
-#                 messages=[
-#                     {
-#                         "role": "user",
-#                         "content": [
-#                                         {
-#                                             "type": "text",
-#                                             "text": "Whats in this image?"
-#                                         },
-#                                         {
-#                                             "type": "image_url",
-#                                             "image_url": {
-#                                             "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg"
-#                                             }
-#                                         }
-#                                     ]
-#                     }
-#                 ],
-#             )
-#             print("async response gemini pro vision")
-#             print(resp)
-#         asyncio.run(test())
-#     except Exception as e:
-#         import traceback
-#         traceback.print_exc()
-#         raise e
+
+def test_gemini_pro_vision_async():
+    try:
+        litellm.set_verbose = True
+        litellm.num_retries = 0
+
+        async def test():
+            load_vertex_ai_credentials()
+            resp = await litellm.acompletion(
+                model="vertex_ai/gemini-pro-vision",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "Whats in this image?"},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg"
+                                },
+                            },
+                        ],
+                    }
+                ],
+            )
+            print("async response gemini pro vision")
+            print(resp)
+
+        asyncio.run(test())
+    except litellm.RateLimitError:
+        pass
+    except Exception as e:
+        import traceback
+
+        traceback.print_exc()
+        raise e
+
+
 # test_gemini_pro_vision_async()
 
 
