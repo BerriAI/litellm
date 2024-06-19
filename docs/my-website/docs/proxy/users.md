@@ -62,6 +62,14 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 You can:
 - Add budgets to Teams
 
+:::info
+
+**Step-by step tutorial on setting, resetting budgets on Teams here (API or using Admin UI)**
+
+👉 [https://docs.litellm.ai/docs/proxy/team_budgets](https://docs.litellm.ai/docs/proxy/team_budgets)
+
+:::
+
 
 #### **Add budgets to teams**
 ```shell 
