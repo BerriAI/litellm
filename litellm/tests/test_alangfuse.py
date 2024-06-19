@@ -1,22 +1,22 @@
+import asyncio
 import copy
 import json
-import sys
-import os
-import asyncio
-
 import logging
+import os
+import sys
 from unittest.mock import MagicMock, patch
 
 logging.basicConfig(level=logging.DEBUG)
 sys.path.insert(0, os.path.abspath("../.."))
 
-from litellm import completion
 import litellm
+from litellm import completion
 
 litellm.num_retries = 3
 litellm.success_callback = ["langfuse"]
 os.environ["LANGFUSE_DEBUG"] = "True"
 import time
+
 import pytest
 
 
@@ -177,6 +177,7 @@ def create_async_task(**completion_kwargs):
     """
     completion_args = {
         "model": "azure/chatgpt-v-2",
+        "api_version": "2024-02-01",
         "messages": [{"role": "user", "content": "This is a test"}],
         "max_tokens": 5,
         "temperature": 0.7,
@@ -550,7 +551,9 @@ def test_aaalangfuse_existing_trace_id():
     Assert no changes to the trace
     """
     # Test - if the logs were sent to the correct team on langfuse
-    import litellm, datetime
+    import datetime
+
+    import litellm
     from litellm.integrations.langfuse import LangFuseLogger
 
     langfuse_Logger = LangFuseLogger(
@@ -826,3 +829,40 @@ def test_langfuse_logging_tool_calling():
 
 
 # test_langfuse_logging_tool_calling()
+
+
+def get_langfuse_prompt(name: str):
+    import langfuse
+    from langfuse import Langfuse
+
+    try:
+        langfuse = Langfuse(
+            public_key=os.environ["LANGFUSE_DEV_PUBLIC_KEY"],
+            secret_key=os.environ["LANGFUSE_DEV_SK_KEY"],
+            host=os.environ["LANGFUSE_HOST"],
+        )
+
+        # Get current production version of a text prompt
+        prompt = langfuse.get_prompt(name=name)
+        return prompt
+    except Exception as e:
+        raise Exception(f"Error getting prompt: {e}")
+
+
+@pytest.mark.asyncio
+@pytest.mark.skip(
+    reason="local only test, use this to verify if we can send request to litellm proxy server"
+)
+async def test_make_request():
+    response = await litellm.acompletion(
+        model="openai/llama3",
+        api_key="sk-1234",
+        base_url="http://localhost:4000",
+        messages=[{"role": "user", "content": "Hi 👋 - i'm claude"}],
+        extra_body={
+            "metadata": {
+                "tags": ["openai"],
+                "prompt": get_langfuse_prompt("test-chat"),
+            }
+        },
+    )

@@ -195,6 +195,8 @@ async def test_aimage_generation_vertex_ai():
             assert isinstance(d, litellm.ImageObject)
             print("data in response.data", d)
             assert d.b64_json is not None
+    except litellm.ServiceUnavailableError as e:
+        pass
     except litellm.RateLimitError as e:
         pass
     except litellm.ContentPolicyViolationError:

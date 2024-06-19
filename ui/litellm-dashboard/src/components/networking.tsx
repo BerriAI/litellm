@@ -14,11 +14,12 @@ export interface Model {
 
 export const modelCostMap = async () => {
   try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/get/litellm_model_cost_map` : `/get/litellm_model_cost_map`;
     const response = await fetch(
-      "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
+      url
     );
     const jsonData = await response.json();
-    console.log(`received data: ${jsonData}`);
+    console.log(`received litellm model cost data: ${jsonData}`);
     return jsonData;
   } catch (error) {
     console.error("Failed to get model cost map:", error);
@@ -2405,7 +2406,6 @@ export const getProxyBaseUrlAndLogoutUrl = async (
 
     if (!response.ok) {
       const errorData = await response.text();
-      message.error(errorData, 10);
       throw new Error("Network response was not ok");
     }
 

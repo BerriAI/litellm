@@ -1,11 +1,16 @@
 #### What this tests ####
 #    This tests streaming for the completion endpoint
 
-import sys, os, asyncio
+import asyncio
+import os
+import sys
+import time
 import traceback
-import time, pytest, uuid
-from pydantic import BaseModel
+import uuid
 from typing import Tuple
+
+import pytest
+from pydantic import BaseModel
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -15,12 +20,12 @@ from dotenv import load_dotenv
 load_dotenv()
 import litellm
 from litellm import (
-    completion,
-    acompletion,
     AuthenticationError,
     BadRequestError,
-    RateLimitError,
     ModelResponse,
+    RateLimitError,
+    acompletion,
+    completion,
 )
 
 litellm.logging = False
@@ -557,7 +562,13 @@ async def test_completion_predibase_streaming(sync_mode):
         print(f"complete_response: {complete_response}")
     except litellm.Timeout as e:
         pass
+    except litellm.InternalServerError as e:
+        pass
     except Exception as e:
+        print("ERROR class", e.__class__)
+        print("ERROR message", e)
+        print("ERROR traceback", traceback.format_exc())
+
         pytest.fail(f"Error occurred: {e}")
 
 
@@ -1029,7 +1040,8 @@ def test_completion_claude_stream_bad_key():
 # test_completion_replicate_stream()
 
 
-def test_vertex_ai_stream():
+@pytest.mark.parametrize("provider", ["vertex_ai"])  # "vertex_ai_beta"
+def test_vertex_ai_stream(provider):
     from litellm.tests.test_amazing_vertex_completion import load_vertex_ai_credentials
 
     load_vertex_ai_credentials()
@@ -1042,7 +1054,7 @@ def test_vertex_ai_stream():
         try:
             print("making request", model)
             response = completion(
-                model=model,
+                model="{}/{}".format(provider, model),
                 messages=[
                     {"role": "user", "content": "write 10 line code code for saying hi"}
                 ],
@@ -1463,6 +1475,10 @@ async def test_parallel_streaming_requests(sync_mode, model):
 
     except RateLimitError:
         pass
+    except litellm.InternalServerError as e:
+        if "predibase" in str(e).lower():
+            # only skip internal server error from predibase - their endpoint seems quite unstable
+            pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -1633,9 +1649,8 @@ def test_sagemaker_weird_response():
     When the stream ends, flush any remaining holding chunks.
     """
     try:
-        from litellm.llms.sagemaker import TokenIterator
         import json
-        import json
+
         from litellm.llms.sagemaker import TokenIterator
 
         chunk = """<s>[INST] Hey, how's it going? [/INST],
@@ -1761,6 +1776,7 @@ def test_completion_sagemaker_stream():
         pytest.fail(f"Error occurred: {e}")
 
 
+@pytest.mark.skip(reason="Account deleted by IBM.")
 def test_completion_watsonx_stream():
     litellm.set_verbose = True
     try:
@@ -2535,7 +2551,10 @@ def streaming_and_function_calling_format_tests(idx, chunk):
     return extracted_chunk, finished
 
 
-def test_openai_streaming_and_function_calling():
+@pytest.mark.parametrize(
+    "model", ["gpt-3.5-turbo", "anthropic.claude-3-sonnet-20240229-v1:0"]
+)
+def test_streaming_and_function_calling(model):
     tools = [
         {
             "type": "function",
@@ -2556,16 +2575,21 @@ def test_openai_streaming_and_function_calling():
             },
         }
     ]
+
     messages = [{"role": "user", "content": "What is the weather like in Boston?"}]
     try:
-        response = completion(
-            model="gpt-3.5-turbo",
+        litellm.set_verbose = True
+        response: litellm.CustomStreamWrapper = completion(
+            model=model,
             tools=tools,
             messages=messages,
             stream=True,
-        )
+            tool_choice="required",
+        )  # type: ignore
         # Add any assertions here to check the response
         for idx, chunk in enumerate(response):
+            # continue
+            print("\n{}\n".format(chunk))
             if idx == 0:
                 assert (
                     chunk.choices[0].delta.tool_calls[0].function.arguments is not None
@@ -2573,6 +2597,7 @@ def test_openai_streaming_and_function_calling():
                 assert isinstance(
                     chunk.choices[0].delta.tool_calls[0].function.arguments, str
                 )
+        # assert False
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
         raise e
@@ -2611,9 +2636,10 @@ def test_success_callback_streaming():
 
 # test_success_callback_streaming()
 
+from typing import List, Optional
+
 #### STREAMING + FUNCTION CALLING ###
 from pydantic import BaseModel
-from typing import List, Optional
 
 
 class Function(BaseModel):

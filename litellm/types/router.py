@@ -2,12 +2,14 @@
 litellm.Router Types - includes RouterConfig, UpdateRouterConfig, ModelInfo etc
 """
 
-from typing import List, Optional, Union, Dict, Tuple, Literal, TypedDict
-import uuid
+import datetime
 import enum
+import uuid
+from typing import Dict, List, Literal, Optional, Tuple, TypedDict, Union
+
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
-import datetime
+
 from .completion import CompletionRequest
 from .embedding import EmbeddingRequest
 
@@ -293,7 +295,7 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     timeout: Optional[Union[float, str, httpx.Timeout]]
     stream_timeout: Optional[Union[float, str]]
     max_retries: Optional[int]
-    organization: Optional[str]  # for openai orgs
+    organization: Optional[Union[List, str]]  # for openai orgs
     ## DROP PARAMS ##
     drop_params: Optional[bool]
     ## UNIFIED PROJECT/REGION ##
