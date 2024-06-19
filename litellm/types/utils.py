@@ -1,20 +1,11 @@
 import json
 import time
 import uuid
-import json
-import time
-import uuid
 from enum import Enum
-from typing import Dict, List, Literal, Optional, Tuple, Union
-
 from typing import Dict, List, Literal, Optional, Tuple, Union
 
 from openai._models import BaseModel as OpenAIObject
 from pydantic import ConfigDict
-from typing_extensions import Dict, Required, TypedDict, override
-
-from ..litellm_core_utils.core_helpers import map_finish_reason
-from .llms.openai import ChatCompletionToolCallChunk, ChatCompletionUsageBlock
 from typing_extensions import Dict, Required, TypedDict, override
 
 from ..litellm_core_utils.core_helpers import map_finish_reason
@@ -548,9 +539,9 @@ class ModelResponse(OpenAIObject):
                 new_choices = []
                 for choice in choices:
                     if isinstance(choice, Choices):
-                        _new_choice = choice
+                        _new_choice = choice  # type: ignore
                     elif isinstance(choice, dict):
-                        _new_choice = Choices(**choice)
+                        _new_choice = Choices(**choice)  # type: ignore
                     new_choices.append(_new_choice)
                 choices = new_choices
             else:
