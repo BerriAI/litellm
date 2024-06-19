@@ -1,18 +1,22 @@
-import os, types
+import inspect
 import json
-from enum import Enum
-import requests  # type: ignore
+import os
 import time
-from typing import Callable, Optional, Union, List, Literal, Any
+import types
+import uuid
+from enum import Enum
+from typing import Any, Callable, List, Literal, Optional, Union
+
+import httpx  # type: ignore
+import requests  # type: ignore
 from pydantic import BaseModel
-from litellm.utils import ModelResponse, Usage, CustomStreamWrapper
+
+import litellm
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
-import litellm, uuid
-import httpx, inspect  # type: ignore
-from litellm.types.llms.vertex_ai import *
 from litellm.llms.prompt_templates.factory import (
-    convert_to_gemini_tool_call_result,
+    convert_to_anthropic_image_obj,
     convert_to_gemini_tool_call_invoke,
+    convert_to_gemini_tool_call_result,
 )
 from litellm.types.files import (
     get_file_mime_type_for_file_type,
@@ -20,6 +24,8 @@ from litellm.types.files import (
     is_gemini_1_5_accepted_file_type,
     is_video_file_type,
 )
+from litellm.types.llms.vertex_ai import *
+from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
 
 
 class VertexAIError(Exception):
@@ -274,28 +280,6 @@ def _get_image_bytes_from_url(image_url: str) -> bytes:
         raise Exception(f"An exception occurs with this image - {str(e)}")
 
 
-def _load_image_from_url(image_url: str):
-    """
-    Loads an image from a URL.
-
-    Args:
-        image_url (str): The URL of the image.
-
-    Returns:
-        Image: The loaded image.
-    """
-    from vertexai.preview.generative_models import (
-        GenerativeModel,
-        Part,
-        GenerationConfig,
-        Image,
-    )
-
-    image_bytes = _get_image_bytes_from_url(image_url)
-
-    return Image.from_bytes(data=image_bytes)
-
-
 def _convert_gemini_role(role: str) -> Literal["user", "model"]:
     if role == "user":
         return "user"
@@ -323,28 +307,9 @@ def _process_gemini_image(image_url: str) -> PartType:
             return PartType(file_data=file_data)
 
         # Direct links
-        elif "https:/" in image_url:
-            image = _load_image_from_url(image_url)
-            _blob = BlobType(data=image.data, mime_type=image._mime_type)
-            return PartType(inline_data=_blob)
-
-        # Base64 encoding
-        elif "base64" in image_url:
-            import base64, re
-
-            # base 64 is passed as data:image/jpeg;base64,<base-64-encoded-image>
-            image_metadata, img_without_base_64 = image_url.split(",")
-
-            # read mime_type from img_without_base_64=data:image/jpeg;base64
-            # Extract MIME type using regular expression
-            mime_type_match = re.match(r"data:(.*?);base64", image_metadata)
-
-            if mime_type_match:
-                mime_type = mime_type_match.group(1)
-            else:
-                mime_type = "image/jpeg"
-            decoded_img = base64.b64decode(img_without_base_64)
-            _blob = BlobType(data=decoded_img, mime_type=mime_type)
+        elif "https:/" in image_url or "base64" in image_url:
+            image = convert_to_anthropic_image_obj(image_url)
+            _blob = BlobType(data=image["data"], mime_type=image["media_type"])
             return PartType(inline_data=_blob)
         raise Exception("Invalid image received - {}".format(image_url))
     except Exception as e:
@@ -480,23 +445,25 @@ def completion(
             message="""Upgrade vertex ai. Run `pip install "google-cloud-aiplatform>=1.38"`""",
         )
     try:
+        import google.auth  # type: ignore
+        import proto  # type: ignore
+        from google.cloud import aiplatform  # type: ignore
+        from google.cloud.aiplatform_v1beta1.types import (
+            content as gapic_content_types,  # type: ignore
+        )
+        from google.protobuf import json_format  # type: ignore
+        from google.protobuf.struct_pb2 import Value  # type: ignore
+        from vertexai.language_models import CodeGenerationModel, TextGenerationModel
+        from vertexai.preview.generative_models import (
+            GenerationConfig,
+            GenerativeModel,
+            Part,
+        )
         from vertexai.preview.language_models import (
             ChatModel,
             CodeChatModel,
             InputOutputTextPair,
         )
-        from vertexai.language_models import TextGenerationModel, CodeGenerationModel
-        from vertexai.preview.generative_models import (
-            GenerativeModel,
-            Part,
-            GenerationConfig,
-        )
-        from google.cloud import aiplatform  # type: ignore
-        from google.protobuf import json_format  # type: ignore
-        from google.protobuf.struct_pb2 import Value  # type: ignore
-        from google.cloud.aiplatform_v1beta1.types import content as gapic_content_types  # type: ignore
-        import google.auth  # type: ignore
-        import proto  # type: ignore
 
         ## Load credentials with the correct quota project ref: https://github.com/googleapis/python-aiplatform/issues/2557#issuecomment-1709284744
         print_verbose(
@@ -1412,8 +1379,8 @@ def embedding(
             message="vertexai import failed please run `pip install google-cloud-aiplatform`",
         )
 
-    from vertexai.language_models import TextEmbeddingModel, TextEmbeddingInput
     import google.auth  # type: ignore
+    from vertexai.language_models import TextEmbeddingInput, TextEmbeddingModel
 
     ## Load credentials with the correct quota project ref: https://github.com/googleapis/python-aiplatform/issues/2557#issuecomment-1709284744
     try:

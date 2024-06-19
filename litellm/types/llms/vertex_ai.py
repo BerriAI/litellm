@@ -39,7 +39,7 @@ class FileDataType(TypedDict):
 
 class BlobType(TypedDict):
     mime_type: Required[str]
-    data: Required[bytes]
+    data: Required[str]
 
 
 class PartType(TypedDict, total=False):
