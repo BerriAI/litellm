@@ -155,9 +155,7 @@ response = client.chat.completions.create(
         }
     ],
     extra_body={
-        "metadata": {
-            "fallbacks": ["gpt-3.5-turbo"]
-        }
+        "fallbacks": ["gpt-3.5-turbo"]
     }
 )
 
@@ -180,9 +178,7 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
         "content": "what llm are you"
         }
     ],
-    "metadata": {
-        "fallbacks": ["gpt-3.5-turbo"]
-    }
+    "fallbacks": ["gpt-3.5-turbo"]
 }'
 ```
 </TabItem>
@@ -204,9 +200,7 @@ chat = ChatOpenAI(
     openai_api_base="http://0.0.0.0:4000",
     model="zephyr-beta",
     extra_body={
-        "metadata": {
-            "fallbacks": ["gpt-3.5-turbo"]
-        }
+        "fallbacks": ["gpt-3.5-turbo"]
     }
 )
 
@@ -414,6 +408,28 @@ print(response)
 </TabItem>
 </Tabs>
 
+
+### Content Policy Fallbacks
+
+Fallback across providers (e.g. from Azure OpenAI to Anthropic) if you hit content policy violation errors. 
+
+```yaml
+model_list:
+	- model_name: gpt-3.5-turbo-small
+	  litellm_params:
+		model: azure/chatgpt-v-2
+        api_base: os.environ/AZURE_API_BASE
+        api_key: os.environ/AZURE_API_KEY
+        api_version: "2023-07-01-preview"
+
+    - model_name: claude-opus
+      litellm_params:
+        model: claude-3-opus-20240229
+        api_key: os.environ/ANTHROPIC_API_KEY
+
+litellm_settings:
+  content_policy_fallbacks: [{"gpt-3.5-turbo-small": ["claude-opus"]}]
+```
 
 ### EU-Region Filtering (Pre-Call Checks)
 

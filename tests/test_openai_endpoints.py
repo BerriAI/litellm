@@ -22,6 +22,7 @@ async def generate_key(
         "text-embedding-ada-002",
         "dall-e-2",
         "fake-openai-endpoint-2",
+        "mistral-embed",
     ],
 ):
     url = "http://0.0.0.0:4000/key/generate"
@@ -197,14 +198,14 @@ async def completion(session, key):
         return response
 
 
-async def embeddings(session, key):
+async def embeddings(session, key, model="text-embedding-ada-002"):
     url = "http://0.0.0.0:4000/embeddings"
     headers = {
         "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
     }
     data = {
-        "model": "text-embedding-ada-002",
+        "model": model,
         "input": ["hello world"],
     }
 
@@ -308,7 +309,7 @@ async def test_chat_completion_different_deployments():
         # key_gen = await generate_key(session=session)
         key = "sk-1234"
         results = []
-        for _ in range(5):
+        for _ in range(20):
             results.append(
                 await chat_completion_with_headers(
                     session=session, key=key, model="fake-openai-endpoint-3"
@@ -407,6 +408,9 @@ async def test_embeddings():
         key_gen = await new_user(session=session)
         key_2 = key_gen["key"]
         await embeddings(session=session, key=key_2)
+
+        # embedding request with non OpenAI model
+        await embeddings(session=session, key=key, model="mistral-embed")
 
 
 @pytest.mark.asyncio

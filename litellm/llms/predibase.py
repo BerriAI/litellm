@@ -12,11 +12,11 @@ from typing import Callable, Optional, List, Literal, Union
 from litellm.utils import (
     ModelResponse,
     Usage,
-    map_finish_reason,
     CustomStreamWrapper,
     Message,
     Choices,
 )
+from litellm.litellm_core_utils.core_helpers import map_finish_reason
 import litellm
 from .prompt_templates.factory import prompt_factory, custom_prompt
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -198,7 +198,7 @@ class PredibaseChatCompletion(BaseLLM):
         response: Union[requests.Response, httpx.Response],
         model_response: ModelResponse,
         stream: bool,
-        logging_obj: litellm.utils.Logging,
+        logging_obj: litellm.litellm_core_utils.litellm_logging.Logging,
         optional_params: dict,
         api_key: str,
         data: Union[dict, str],

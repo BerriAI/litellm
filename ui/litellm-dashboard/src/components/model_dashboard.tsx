@@ -139,6 +139,7 @@ interface ProviderSettings {
 enum Providers {
   OpenAI = "OpenAI",
   Azure = "Azure",
+  Azure_AI_Studio = "Azure AI Studio",
   Anthropic = "Anthropic",
   Google_AI_Studio = "Google AI Studio",
   Bedrock = "Amazon Bedrock",
@@ -151,6 +152,7 @@ enum Providers {
 const provider_map: Record<string, string> = {
   OpenAI: "openai",
   Azure: "azure",
+  Azure_AI_Studio: "azure_ai",
   Anthropic: "anthropic",
   Google_AI_Studio: "gemini",
   Bedrock: "bedrock",
@@ -158,6 +160,7 @@ const provider_map: Record<string, string> = {
   Vertex_AI: "vertex_ai",
   Databricks: "databricks",
   Ollama: "ollama",
+
 };
 
 const retry_policy_map: Record<string, string> = {
@@ -1245,6 +1248,10 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
       return "claude-3-opus";
     } else if (selectedProvider == Providers.Google_AI_Studio) {
       return "gemini-pro";
+    } else if (selectedProvider == Providers.Azure_AI_Studio) {
+      return "azure_ai/command-r-plus";
+    } else if (selectedProvider == Providers.Azure) {
+      return "azure/my-deployment";
     } else {
       return "gpt-3.5-turbo";
     }
@@ -1524,7 +1531,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                             <pre className="text-xs">
                               {model.input_cost
                                 ? model.input_cost
-                                : model.litellm_params.input_cost_per_token
+                                : model.litellm_params.input_cost_per_token != null && model.litellm_params.input_cost_per_token != undefined
                                   ? (
                                       Number(
                                         model.litellm_params
@@ -2073,6 +2080,24 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                 </Card>
               </Col>
             </Grid>
+            <Grid numItems={1} className="gap-2 w-full mt-2">
+            <Card>
+
+            <Title>All Exceptions for {selectedModelGroup}</Title>
+             
+            <BarChart
+                    className="h-60"
+                    data={modelExceptions}
+                    index="model"
+                    categories={allExceptions}
+                    stack={true}
+                    
+                    yAxisWidth={30}
+              /> 
+                          </Card>
+      
+            </Grid>
+
 
             <Grid numItems={1} className="gap-2 w-full mt-2">
                 <Card>
@@ -2091,15 +2116,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                   </Col>
                   <Col>
 
-                {/* <BarChart
-                    className="h-40"
-                    data={modelExceptions}
-                    index="model"
-                    categories={allExceptions}
-                    stack={true}
-                    yAxisWidth={30}
-              /> */}
-      
+               
 
                 </Col>
 
