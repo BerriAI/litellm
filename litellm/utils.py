@@ -6235,7 +6235,11 @@ def exception_type(
                         llm_provider="sagemaker",
                         response=original_exception.response,
                     )
-            elif custom_llm_provider == "vertex_ai":
+            elif (
+                custom_llm_provider == "vertex_ai"
+                or custom_llm_provider == "vertex_ai_beta"
+                or custom_llm_provider == "gemini"
+            ):
                 if (
                     "Vertex AI API has not been used in project" in error_str
                     or "Unable to find your project" in error_str
@@ -6253,6 +6257,13 @@ def exception_type(
                             ),
                         ),
                         litellm_debug_info=extra_information,
+                    )
+                if "400 Request payload size exceeds" in error_str:
+                    exception_mapping_worked = True
+                    raise ContextWindowExceededError(
+                        message=f"VertexException - {error_str}",
+                        model=model,
+                        llm_provider=custom_llm_provider,
                     )
                 elif (
                     "None Unknown Error." in error_str
@@ -6287,13 +6298,13 @@ def exception_type(
                     )
                 elif "The response was blocked." in error_str:
                     exception_mapping_worked = True
-                    raise UnprocessableEntityError(
-                        message=f"VertexAIException UnprocessableEntityError - {error_str}",
+                    raise ContentPolicyViolationError(
+                        message=f"VertexAIException ContentPolicyViolationError - {error_str}",
                         model=model,
                         llm_provider="vertex_ai",
                         litellm_debug_info=extra_information,
                         response=httpx.Response(
-                            status_code=422,
+                            status_code=400,
                             request=httpx.Request(
                                 method="POST",
                                 url=" https://cloud.google.com/vertex-ai/",
@@ -6345,6 +6356,27 @@ def exception_type(
                                 ),
                             ),
                         )
+                    if original_exception.status_code == 401:
+                        exception_mapping_worked = True
+                        raise AuthenticationError(
+                            message=f"VertexAIException - {original_exception.message}",
+                            llm_provider=custom_llm_provider,
+                            model=model,
+                        )
+                    if original_exception.status_code == 404:
+                        exception_mapping_worked = True
+                        raise NotFoundError(
+                            message=f"VertexAIException - {original_exception.message}",
+                            llm_provider=custom_llm_provider,
+                            model=model,
+                        )
+                    if original_exception.status_code == 408:
+                        exception_mapping_worked = True
+                        raise Timeout(
+                            message=f"VertexAIException - {original_exception.message}",
+                            llm_provider=custom_llm_provider,
+                            model=model,
+                        )
 
                     if original_exception.status_code == 429:
                         exception_mapping_worked = True
@@ -6373,6 +6405,13 @@ def exception_type(
                                 content=str(original_exception),
                                 request=httpx.Request(method="completion", url="https://github.com/BerriAI/litellm"),  # type: ignore
                             ),
+                        )
+                    if original_exception.status_code == 503:
+                        exception_mapping_worked = True
+                        raise ServiceUnavailableError(
+                            message=f"VertexAIException - {original_exception.message}",
+                            llm_provider=custom_llm_provider,
+                            model=model,
                         )
             elif custom_llm_provider == "palm" or custom_llm_provider == "gemini":
                 if "503 Getting metadata" in error_str:
