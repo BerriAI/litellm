@@ -1,7 +1,5 @@
 from typing import Dict, Optional
 
-from langfuse.model import TextPromptClient
-
 
 def _ensure_extra_body_is_safe(extra_body: Optional[Dict]) -> Optional[Dict]:
     """
