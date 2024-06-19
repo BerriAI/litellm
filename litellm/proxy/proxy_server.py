@@ -1970,7 +1970,7 @@ class ProxyConfig:
         router = litellm.Router(
             **router_params, assistants_config=assistants_config
         )  # type:ignore
-        return router, model_list, general_settings
+        return router, router.get_model_list(), general_settings
 
     def get_model_info_with_id(self, model, db_model=False) -> RouterModelInfo:
         """
