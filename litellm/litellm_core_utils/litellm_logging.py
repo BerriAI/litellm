@@ -242,7 +242,7 @@ class Logging:
                     extra={"api_base": {api_base}, **masked_headers},
                 )
             else:
-                verbose_logger.debug(f"\033[92m{curl_command}\033[0m\n")
+                print_verbose(f"\033[92m{curl_command}\033[0m\n", log_level="DEBUG")
             # log raw request to provider (like LangFuse) -- if opted in.
             if log_raw_request_response is True:
                 try:
