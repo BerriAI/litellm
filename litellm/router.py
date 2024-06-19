@@ -3543,6 +3543,22 @@ class Router:
 
         return hash_object.hexdigest()
 
+    def _create_deployment(
+        self, model: dict, _model_name: str, _litellm_params: dict, _model_info: dict
+    ):
+        deployment = Deployment(
+            **model,
+            model_name=_model_name,
+            litellm_params=_litellm_params,  # type: ignore
+            model_info=_model_info,
+        )
+
+        deployment = self._add_deployment(deployment=deployment)
+
+        model = deployment.to_json(exclude_none=True)
+
+        self.model_list.append(model)
+
     def set_model_list(self, model_list: list):
         original_model_list = copy.deepcopy(model_list)
         self.model_list = []
@@ -3565,18 +3581,24 @@ class Router:
                 _id = self._generate_model_id(_model_name, _litellm_params)
                 _model_info["id"] = _id
 
-            deployment = Deployment(
-                **model,
-                model_name=_model_name,
-                litellm_params=_litellm_params,
-                model_info=_model_info,
-            )
-
-            deployment = self._add_deployment(deployment=deployment)
-
-            model = deployment.to_json(exclude_none=True)
-
-            self.model_list.append(model)
+            if _litellm_params.get("organization", None) is not None and isinstance(
+                _litellm_params["organization"], list
+            ):  # Addresses https://github.com/BerriAI/litellm/issues/3949
+                for org in _litellm_params["organization"]:
+                    _litellm_params["organization"] = org
+                    self._create_deployment(
+                        model=model,
+                        _model_name=_model_name,
+                        _litellm_params=_litellm_params,
+                        _model_info=_model_info,
+                    )
+            else:
+                self._create_deployment(
+                    model=model,
+                    _model_name=_model_name,
+                    _litellm_params=_litellm_params,
+                    _model_info=_model_info,
+                )
 
         verbose_router_logger.debug(f"\nInitialized Model List {self.model_list}")
         self.model_names = [m["model_name"] for m in model_list]
