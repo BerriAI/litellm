@@ -366,54 +366,65 @@ class VertexLLM(BaseLLM):
 
         ## GET MODEL ##
         model_response.model = model
-        ## GET TEXT ##
-        chat_completion_message: ChatCompletionResponseMessage = {"role": "assistant"}
-        content_str = ""
-        tools: List[ChatCompletionToolCallChunk] = []
-        for idx, candidate in enumerate(completion_response["candidates"]):
-            if "content" not in candidate:
-                continue
 
-            if "text" in candidate["content"]["parts"][0]:
-                content_str = candidate["content"]["parts"][0]["text"]
+        try:
+            ## GET TEXT ##
+            chat_completion_message: ChatCompletionResponseMessage = {
+                "role": "assistant"
+            }
+            content_str = ""
+            tools: List[ChatCompletionToolCallChunk] = []
+            for idx, candidate in enumerate(completion_response["candidates"]):
+                if "content" not in candidate:
+                    continue
 
-            if "functionCall" in candidate["content"]["parts"][0]:
-                _function_chunk = ChatCompletionToolCallFunctionChunk(
-                    name=candidate["content"]["parts"][0]["functionCall"]["name"],
-                    arguments=json.dumps(
-                        candidate["content"]["parts"][0]["functionCall"]["args"]
-                    ),
+                if "text" in candidate["content"]["parts"][0]:
+                    content_str = candidate["content"]["parts"][0]["text"]
+
+                if "functionCall" in candidate["content"]["parts"][0]:
+                    _function_chunk = ChatCompletionToolCallFunctionChunk(
+                        name=candidate["content"]["parts"][0]["functionCall"]["name"],
+                        arguments=json.dumps(
+                            candidate["content"]["parts"][0]["functionCall"]["args"]
+                        ),
+                    )
+                    _tool_response_chunk = ChatCompletionToolCallChunk(
+                        id=f"call_{str(uuid.uuid4())}",
+                        type="function",
+                        function=_function_chunk,
+                    )
+                    tools.append(_tool_response_chunk)
+
+                chat_completion_message["content"] = content_str
+                chat_completion_message["tool_calls"] = tools
+
+                choice = litellm.Choices(
+                    finish_reason=candidate.get("finishReason", "stop"),
+                    index=candidate.get("index", idx),
+                    message=chat_completion_message,  # type: ignore
+                    logprobs=None,
+                    enhancements=None,
                 )
-                _tool_response_chunk = ChatCompletionToolCallChunk(
-                    id=f"call_{str(uuid.uuid4())}",
-                    type="function",
-                    function=_function_chunk,
-                )
-                tools.append(_tool_response_chunk)
 
-            chat_completion_message["content"] = content_str
-            chat_completion_message["tool_calls"] = tools
+                model_response.choices.append(choice)
 
-            choice = litellm.Choices(
-                finish_reason=candidate.get("finishReason", "stop"),
-                index=candidate.get("index", idx),
-                message=chat_completion_message,  # type: ignore
-                logprobs=None,
-                enhancements=None,
+            ## GET USAGE ##
+            usage = litellm.Usage(
+                prompt_tokens=completion_response["usageMetadata"]["promptTokenCount"],
+                completion_tokens=completion_response["usageMetadata"][
+                    "candidatesTokenCount"
+                ],
+                total_tokens=completion_response["usageMetadata"]["totalTokenCount"],
             )
 
-            model_response.choices.append(choice)
-
-        ## GET USAGE ##
-        usage = litellm.Usage(
-            prompt_tokens=completion_response["usageMetadata"]["promptTokenCount"],
-            completion_tokens=completion_response["usageMetadata"][
-                "candidatesTokenCount"
-            ],
-            total_tokens=completion_response["usageMetadata"]["totalTokenCount"],
-        )
-
-        setattr(model_response, "usage", usage)
+            setattr(model_response, "usage", usage)
+        except Exception as e:
+            raise VertexAIError(
+                message="Received={}, Error converting to valid response block={}. File an issue if litellm error - https://github.com/BerriAI/litellm/issues".format(
+                    completion_response, str(e)
+                ),
+                status_code=422,
+            )
 
         return model_response
 
