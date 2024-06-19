@@ -1,26 +1,26 @@
-from openai import AuthenticationError, BadRequestError, RateLimitError, OpenAIError
+import asyncio
 import os
+import subprocess
 import sys
 import traceback
-import subprocess, asyncio
 from typing import Any
+
+from openai import AuthenticationError, BadRequestError, OpenAIError, RateLimitError
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-import litellm
-from litellm import (
-    embedding,
-    completion,
-    #     AuthenticationError,
-    ContextWindowExceededError,
-    #     RateLimitError,
-    #     ServiceUnavailableError,
-    #     OpenAIError,
-)
 from concurrent.futures import ThreadPoolExecutor
+from unittest.mock import MagicMock, patch
+
 import pytest
-from unittest.mock import patch, MagicMock
+
+import litellm
+from litellm import (  # AuthenticationError,; RateLimitError,; ServiceUnavailableError,; OpenAIError,
+    ContextWindowExceededError,
+    completion,
+    embedding,
+)
 
 litellm.vertex_project = "pathrise-convert-1606954137718"
 litellm.vertex_location = "us-central1"
@@ -252,6 +252,7 @@ def test_completion_azure_exception():
 async def asynctest_completion_azure_exception():
     try:
         import openai
+
         import litellm
 
         print("azure gpt-3.5 test\n\n")
@@ -283,8 +284,11 @@ async def asynctest_completion_azure_exception():
 
 def asynctest_completion_openai_exception_bad_model():
     try:
+        import asyncio
+
         import openai
-        import litellm, asyncio
+
+        import litellm
 
         print("azure exception bad model\n\n")
         litellm.set_verbose = True
@@ -311,8 +315,11 @@ def asynctest_completion_openai_exception_bad_model():
 
 def asynctest_completion_azure_exception_bad_model():
     try:
+        import asyncio
+
         import openai
-        import litellm, asyncio
+
+        import litellm
 
         print("azure exception bad model\n\n")
         litellm.set_verbose = True
@@ -663,7 +670,7 @@ def test_litellm_predibase_exception():
 # print(f"accuracy_score: {accuracy_score}")
 
 
-@pytest.mark.parametrize("provider", ["predibase"])
+@pytest.mark.parametrize("provider", ["predibase", "vertex_ai_beta"])
 def test_exception_mapping(provider):
     """
     For predibase, run through a set of mock exceptions
