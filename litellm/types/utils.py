@@ -53,6 +53,7 @@ class ModelInfo(TypedDict, total=False):
     output_cost_per_image: Optional[float]
     output_cost_per_video_per_second: Optional[float]
     output_cost_per_audio_per_second: Optional[float]
+    output_vector_size: Optional[int]
     litellm_provider: Required[str]
     mode: Required[
         Literal[
