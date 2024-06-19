@@ -1192,7 +1192,7 @@ class S3Cache(BaseCache):
             return cached_response
         except botocore.exceptions.ClientError as e:
             if e.response["Error"]["Code"] == "NoSuchKey":
-                verbose_logger.error(
+                verbose_logger.debug(
                     f"S3 Cache: The specified key '{key}' does not exist in the S3 bucket."
                 )
                 return None

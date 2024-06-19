@@ -7,65 +7,86 @@
 #
 #  Thank you ! We ❤️ you! - Krrish & Ishaan
 
-import copy, httpx
-from datetime import datetime
-from typing import Dict, List, Optional, Union, Literal, Any, BinaryIO, Tuple, TypedDict
-from typing_extensions import overload
-import random, threading, time, traceback, uuid
-import litellm, openai, hashlib, json
-from litellm.caching import RedisCache, InMemoryCache, DualCache
-import datetime as datetime_og
-import logging, asyncio
-import inspect, concurrent
-from openai import AsyncOpenAI
-from collections import defaultdict
-from litellm.router_strategy.least_busy import LeastBusyLoggingHandler
-from litellm.router_strategy.lowest_tpm_rpm import LowestTPMLoggingHandler
-from litellm.router_strategy.lowest_latency import LowestLatencyLoggingHandler
-from litellm.router_strategy.lowest_cost import LowestCostLoggingHandler
-from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2
-from litellm.llms.custom_httpx.azure_dall_e_2 import (
-    CustomHTTPTransport,
-    AsyncCustomHTTPTransport,
-)
-from litellm.utils import (
-    ModelResponse,
-    CustomStreamWrapper,
-    get_utc_datetime,
-    calculate_max_parallel_requests,
-    _is_region_eu,
-)
+import asyncio
+import concurrent
 import copy
-from litellm._logging import verbose_router_logger
+import datetime as datetime_og
+import hashlib
+import inspect
+import json
 import logging
-from litellm.types.utils import ModelInfo as ModelMapInfo
-from litellm.types.router import (
-    Deployment,
-    ModelInfo,
-    LiteLLM_Params,
-    RouterErrors,
-    updateDeployment,
-    updateLiteLLMParams,
-    RetryPolicy,
-    AllowedFailsPolicy,
-    AlertingConfig,
-    DeploymentTypedDict,
-    ModelGroupInfo,
-    AssistantsTypedDict,
+import random
+import threading
+import time
+import traceback
+import uuid
+from collections import defaultdict
+from datetime import datetime
+from typing import (
+    Any,
+    BinaryIO,
+    Dict,
+    Iterable,
+    List,
+    Literal,
+    Optional,
+    Tuple,
+    TypedDict,
+    Union,
 )
+
+import httpx
+import openai
+from openai import AsyncOpenAI
+from typing_extensions import overload
+
+import litellm
+from litellm._logging import verbose_router_logger
+from litellm.caching import DualCache, InMemoryCache, RedisCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.azure import get_azure_ad_token_from_oidc
+from litellm.llms.custom_httpx.azure_dall_e_2 import (
+    AsyncCustomHTTPTransport,
+    CustomHTTPTransport,
+)
+from litellm.router_strategy.least_busy import LeastBusyLoggingHandler
+from litellm.router_strategy.lowest_cost import LowestCostLoggingHandler
+from litellm.router_strategy.lowest_latency import LowestLatencyLoggingHandler
+from litellm.router_strategy.lowest_tpm_rpm import LowestTPMLoggingHandler
+from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2
+from litellm.router_utils.handle_error import send_llm_exception_alert
+from litellm.scheduler import FlowItem, Scheduler
 from litellm.types.llms.openai import (
-    AsyncCursorPage,
     Assistant,
-    Thread,
+    AssistantToolParam,
+    AsyncCursorPage,
     Attachment,
     OpenAIMessage,
     Run,
-    AssistantToolParam,
+    Thread,
 )
-from litellm.scheduler import Scheduler, FlowItem
-from typing import Iterable
+from litellm.types.router import (
+    AlertingConfig,
+    AllowedFailsPolicy,
+    AssistantsTypedDict,
+    Deployment,
+    DeploymentTypedDict,
+    LiteLLM_Params,
+    ModelGroupInfo,
+    ModelInfo,
+    RetryPolicy,
+    RouterErrors,
+    updateDeployment,
+    updateLiteLLMParams,
+)
+from litellm.types.utils import ModelInfo as ModelMapInfo
+from litellm.utils import (
+    CustomStreamWrapper,
+    ModelResponse,
+    _is_region_eu,
+    calculate_max_parallel_requests,
+    get_utc_datetime,
+)
 
 
 class Router:
@@ -108,6 +129,7 @@ class Router:
         ] = None,  # generic fallbacks, works across all deployments
         fallbacks: List = [],
         context_window_fallbacks: List = [],
+        content_policy_fallbacks: List = [],
         model_group_alias: Optional[dict] = {},
         enable_pre_call_checks: bool = False,
         retry_after: int = 0,  # min time to wait before retrying a failed request
@@ -311,6 +333,12 @@ class Router:
         self.context_window_fallbacks = (
             context_window_fallbacks or litellm.context_window_fallbacks
         )
+
+        _content_policy_fallbacks = (
+            content_policy_fallbacks or litellm.content_policy_fallbacks
+        )
+        self.validate_fallbacks(fallback_param=_content_policy_fallbacks)
+        self.content_policy_fallbacks = _content_policy_fallbacks
         self.total_calls: defaultdict = defaultdict(
             int
         )  # dict to store total calls made to each model
@@ -576,6 +604,14 @@ class Router:
 
             return response
         except Exception as e:
+            asyncio.create_task(
+                send_llm_exception_alert(
+                    litellm_router_instance=self,
+                    request_kwargs=kwargs,
+                    error_traceback_str=traceback.format_exc(),
+                    original_exception=e,
+                )
+            )
             raise e
 
     async def _acompletion(
@@ -1097,6 +1133,14 @@ class Router:
 
             return response
         except Exception as e:
+            asyncio.create_task(
+                send_llm_exception_alert(
+                    litellm_router_instance=self,
+                    request_kwargs=kwargs,
+                    error_traceback_str=traceback.format_exc(),
+                    original_exception=e,
+                )
+            )
             raise e
 
     async def _aimage_generation(self, prompt: str, model: str, **kwargs):
@@ -1221,6 +1265,14 @@ class Router:
 
             return response
         except Exception as e:
+            asyncio.create_task(
+                send_llm_exception_alert(
+                    litellm_router_instance=self,
+                    request_kwargs=kwargs,
+                    error_traceback_str=traceback.format_exc(),
+                    original_exception=e,
+                )
+            )
             raise e
 
     async def _atranscription(self, file: BinaryIO, model: str, **kwargs):
@@ -1387,6 +1439,14 @@ class Router:
 
             return response
         except Exception as e:
+            asyncio.create_task(
+                send_llm_exception_alert(
+                    litellm_router_instance=self,
+                    request_kwargs=kwargs,
+                    error_traceback_str=traceback.format_exc(),
+                    original_exception=e,
+                )
+            )
             raise e
 
     async def amoderation(self, model: str, input: str, **kwargs):
@@ -1402,6 +1462,14 @@ class Router:
 
             return response
         except Exception as e:
+            asyncio.create_task(
+                send_llm_exception_alert(
+                    litellm_router_instance=self,
+                    request_kwargs=kwargs,
+                    error_traceback_str=traceback.format_exc(),
+                    original_exception=e,
+                )
+            )
             raise e
 
     async def _amoderation(self, model: str, input: str, **kwargs):
@@ -1546,6 +1614,14 @@ class Router:
 
             return response
         except Exception as e:
+            asyncio.create_task(
+                send_llm_exception_alert(
+                    litellm_router_instance=self,
+                    request_kwargs=kwargs,
+                    error_traceback_str=traceback.format_exc(),
+                    original_exception=e,
+                )
+            )
             raise e
 
     async def _atext_completion(self, model: str, prompt: str, **kwargs):
@@ -1741,6 +1817,14 @@ class Router:
             response = await self.async_function_with_fallbacks(**kwargs)
             return response
         except Exception as e:
+            asyncio.create_task(
+                send_llm_exception_alert(
+                    litellm_router_instance=self,
+                    request_kwargs=kwargs,
+                    error_traceback_str=traceback.format_exc(),
+                    original_exception=e,
+                )
+            )
             raise e
 
     async def _aembedding(self, input: Union[str, List], model: str, **kwargs):
@@ -1998,6 +2082,9 @@ class Router:
         context_window_fallbacks = kwargs.get(
             "context_window_fallbacks", self.context_window_fallbacks
         )
+        content_policy_fallbacks = kwargs.get(
+            "content_policy_fallbacks", self.content_policy_fallbacks
+        )
         try:
             if mock_testing_fallbacks is not None and mock_testing_fallbacks == True:
                 raise Exception(
@@ -2016,7 +2103,10 @@ class Router:
                 if (
                     hasattr(e, "status_code")
                     and e.status_code == 400  # type: ignore
-                    and not isinstance(e, litellm.ContextWindowExceededError)
+                    and not (
+                        isinstance(e, litellm.ContextWindowExceededError)
+                        or isinstance(e, litellm.ContentPolicyViolationError)
+                    )
                 ):  # don't retry a malformed request
                     raise e
                 if (
@@ -2052,19 +2142,52 @@ class Router:
                             return response
                         except Exception as e:
                             pass
+                elif (
+                    isinstance(e, litellm.ContentPolicyViolationError)
+                    and content_policy_fallbacks is not None
+                ):
+                    fallback_model_group = None
+                    for (
+                        item
+                    ) in content_policy_fallbacks:  # [{"gpt-3.5-turbo": ["gpt-4"]}]
+                        if list(item.keys())[0] == model_group:
+                            fallback_model_group = item[model_group]
+                            break
+
+                    if fallback_model_group is None:
+                        raise original_exception
+
+                    for mg in fallback_model_group:
+                        """
+                        Iterate through the model groups and try calling that deployment
+                        """
+                        try:
+                            kwargs["model"] = mg
+                            kwargs.setdefault("metadata", {}).update(
+                                {"model_group": mg}
+                            )  # update model_group used, if fallbacks are done
+                            response = await self.async_function_with_retries(
+                                *args, **kwargs
+                            )
+                            verbose_router_logger.info(
+                                "Successful fallback b/w models."
+                            )
+                            return response
+                        except Exception as e:
+                            pass
                 elif fallbacks is not None:
                     verbose_router_logger.debug(f"inside model fallbacks: {fallbacks}")
                     generic_fallback_idx: Optional[int] = None
                     ## check for specific model group-specific fallbacks
-                    if isinstance(fallbacks, list):
-                        fallback_model_group = fallbacks
-                    elif isinstance(fallbacks, dict):
-                        for idx, item in enumerate(fallbacks):
+                    for idx, item in enumerate(fallbacks):
+                        if isinstance(item, dict):
                             if list(item.keys())[0] == model_group:
                                 fallback_model_group = item[model_group]
                                 break
                             elif list(item.keys())[0] == "*":
                                 generic_fallback_idx = idx
+                        elif isinstance(item, str):
+                            fallback_model_group = [fallbacks.pop(idx)]
                     ## if none, check for generic fallback
                     if (
                         fallback_model_group is None
@@ -2114,6 +2237,9 @@ class Router:
         context_window_fallbacks = kwargs.pop(
             "context_window_fallbacks", self.context_window_fallbacks
         )
+        content_policy_fallbacks = kwargs.pop(
+            "content_policy_fallbacks", self.content_policy_fallbacks
+        )
 
         num_retries = kwargs.pop("num_retries")
 
@@ -2141,6 +2267,7 @@ class Router:
                 healthy_deployments=_healthy_deployments,
                 context_window_fallbacks=context_window_fallbacks,
                 regular_fallbacks=fallbacks,
+                content_policy_fallbacks=content_policy_fallbacks,
             )
 
             # decides how long to sleep before retry
@@ -2206,10 +2333,12 @@ class Router:
         error: Exception,
         healthy_deployments: Optional[List] = None,
         context_window_fallbacks: Optional[List] = None,
+        content_policy_fallbacks: Optional[List] = None,
         regular_fallbacks: Optional[List] = None,
     ):
         """
         1. raise an exception for ContextWindowExceededError if context_window_fallbacks is not None
+        2. raise an exception for ContentPolicyViolationError if content_policy_fallbacks is not None
 
         2. raise an exception for RateLimitError if
             - there are no fallbacks
@@ -2219,10 +2348,16 @@ class Router:
         if healthy_deployments is not None and isinstance(healthy_deployments, list):
             _num_healthy_deployments = len(healthy_deployments)
 
-        ### CHECK IF RATE LIMIT / CONTEXT WINDOW ERROR w/ fallbacks available / Bad Request Error
+        ### CHECK IF RATE LIMIT / CONTEXT WINDOW ERROR / CONTENT POLICY VIOLATION ERROR w/ fallbacks available / Bad Request Error
         if (
             isinstance(error, litellm.ContextWindowExceededError)
             and context_window_fallbacks is not None
+        ):
+            raise error
+
+        if (
+            isinstance(error, litellm.ContentPolicyViolationError)
+            and content_policy_fallbacks is not None
         ):
             raise error
 
@@ -2256,6 +2391,9 @@ class Router:
         context_window_fallbacks = kwargs.get(
             "context_window_fallbacks", self.context_window_fallbacks
         )
+        content_policy_fallbacks = kwargs.get(
+            "content_policy_fallbacks", self.content_policy_fallbacks
+        )
         try:
             if mock_testing_fallbacks is not None and mock_testing_fallbacks == True:
                 raise Exception(
@@ -2271,7 +2409,10 @@ class Router:
                 if (
                     hasattr(e, "status_code")
                     and e.status_code == 400  # type: ignore
-                    and not isinstance(e, litellm.ContextWindowExceededError)
+                    and not (
+                        isinstance(e, litellm.ContextWindowExceededError)
+                        or isinstance(e, litellm.ContentPolicyViolationError)
+                    )
                 ):  # don't retry a malformed request
                     raise e
 
@@ -2309,20 +2450,50 @@ class Router:
                             return response
                         except Exception as e:
                             pass
+                elif (
+                    isinstance(e, litellm.ContentPolicyViolationError)
+                    and content_policy_fallbacks is not None
+                ):
+                    fallback_model_group = None
+
+                    for (
+                        item
+                    ) in content_policy_fallbacks:  # [{"gpt-3.5-turbo": ["gpt-4"]}]
+                        if list(item.keys())[0] == model_group:
+                            fallback_model_group = item[model_group]
+                            break
+
+                    if fallback_model_group is None:
+                        raise original_exception
+
+                    for mg in fallback_model_group:
+                        """
+                        Iterate through the model groups and try calling that deployment
+                        """
+                        try:
+                            ## LOGGING
+                            kwargs = self.log_retry(kwargs=kwargs, e=original_exception)
+                            kwargs["model"] = mg
+                            kwargs.setdefault("metadata", {}).update(
+                                {"model_group": mg}
+                            )  # update model_group used, if fallbacks are done
+                            response = self.function_with_fallbacks(*args, **kwargs)
+                            return response
+                        except Exception as e:
+                            pass
                 elif fallbacks is not None:
                     verbose_router_logger.debug(f"inside model fallbacks: {fallbacks}")
                     fallback_model_group = None
                     generic_fallback_idx: Optional[int] = None
-                    if isinstance(fallbacks, list):
-                        fallback_model_group = fallbacks
-                    elif isinstance(fallbacks, dict):
-                        ## check for specific model group-specific fallbacks
-                        for idx, item in enumerate(fallbacks):
+                    for idx, item in enumerate(fallbacks):
+                        if isinstance(item, dict):
                             if list(item.keys())[0] == model_group:
                                 fallback_model_group = item[model_group]
                                 break
                             elif list(item.keys())[0] == "*":
                                 generic_fallback_idx = idx
+                        elif isinstance(item, str):
+                            fallback_model_group = [fallbacks.pop(idx)]
                     ## if none, check for generic fallback
                     if (
                         fallback_model_group is None
@@ -2401,6 +2572,9 @@ class Router:
         context_window_fallbacks = kwargs.pop(
             "context_window_fallbacks", self.context_window_fallbacks
         )
+        content_policy_fallbacks = kwargs.pop(
+            "content_policy_fallbacks", self.content_policy_fallbacks
+        )
 
         try:
             # if the function call is successful, no exception will be raised and we'll break out of the loop
@@ -2420,6 +2594,7 @@ class Router:
                 healthy_deployments=_healthy_deployments,
                 context_window_fallbacks=context_window_fallbacks,
                 regular_fallbacks=fallbacks,
+                content_policy_fallbacks=content_policy_fallbacks,
             )
 
             # decides how long to sleep before retry
@@ -2959,6 +3134,7 @@ class Router:
 
             # proxy support
             import os
+
             import httpx
 
             # Check if the HTTP_PROXY and HTTPS_PROXY environment variables are set and use them accordingly.
@@ -3367,6 +3543,22 @@ class Router:
 
         return hash_object.hexdigest()
 
+    def _create_deployment(
+        self, model: dict, _model_name: str, _litellm_params: dict, _model_info: dict
+    ):
+        deployment = Deployment(
+            **model,
+            model_name=_model_name,
+            litellm_params=_litellm_params,  # type: ignore
+            model_info=_model_info,
+        )
+
+        deployment = self._add_deployment(deployment=deployment)
+
+        model = deployment.to_json(exclude_none=True)
+
+        self.model_list.append(model)
+
     def set_model_list(self, model_list: list):
         original_model_list = copy.deepcopy(model_list)
         self.model_list = []
@@ -3389,18 +3581,24 @@ class Router:
                 _id = self._generate_model_id(_model_name, _litellm_params)
                 _model_info["id"] = _id
 
-            deployment = Deployment(
-                **model,
-                model_name=_model_name,
-                litellm_params=_litellm_params,
-                model_info=_model_info,
-            )
-
-            deployment = self._add_deployment(deployment=deployment)
-
-            model = deployment.to_json(exclude_none=True)
-
-            self.model_list.append(model)
+            if _litellm_params.get("organization", None) is not None and isinstance(
+                _litellm_params["organization"], list
+            ):  # Addresses https://github.com/BerriAI/litellm/issues/3949
+                for org in _litellm_params["organization"]:
+                    _litellm_params["organization"] = org
+                    self._create_deployment(
+                        model=model,
+                        _model_name=_model_name,
+                        _litellm_params=_litellm_params,
+                        _model_info=_model_info,
+                    )
+            else:
+                self._create_deployment(
+                    model=model,
+                    _model_name=_model_name,
+                    _litellm_params=_litellm_params,
+                    _model_info=_model_info,
+                )
 
         verbose_router_logger.debug(f"\nInitialized Model List {self.model_list}")
         self.model_names = [m["model_name"] for m in model_list]
@@ -3619,6 +3817,7 @@ class Router:
                 except Exception:
                     model_info = None
                 # get llm provider
+                model, llm_provider = "", ""
                 try:
                     model, llm_provider, _, _ = litellm.get_llm_provider(
                         model=litellm_params.model,
@@ -3644,6 +3843,7 @@ class Router:
                         litellm_provider=llm_provider,
                         mode="chat",
                         supported_openai_params=supported_openai_params,
+                        supports_system_messages=None,
                     )
 
                 if model_group_info is None:
@@ -4569,6 +4769,8 @@ class Router:
             alerting=["slack"],
             default_webhook_url=router_alerting_config.webhook_url,
         )
+
+        self.slack_alerting_logger = _slack_alerting_logger
 
         litellm.callbacks.append(_slack_alerting_logger)
         litellm.success_callback.append(

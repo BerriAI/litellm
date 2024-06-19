@@ -8,21 +8,22 @@ Run checks for:
 2. If user is in budget 
 3. If end_user ('user' passed to /chat/completions, /embeddings endpoint) is in budget 
 """
+from datetime import datetime
+from typing import TYPE_CHECKING, Any, Literal, Optional
+
+import litellm
+from litellm.caching import DualCache
 from litellm.proxy._types import (
-    LiteLLM_UserTable,
     LiteLLM_EndUserTable,
     LiteLLM_JWTAuth,
-    LiteLLM_TeamTable,
-    LiteLLMRoutes,
     LiteLLM_OrganizationTable,
+    LiteLLM_TeamTable,
+    LiteLLM_UserTable,
+    LiteLLMRoutes,
     LitellmUserRoles,
 )
-from typing import Optional, Literal, TYPE_CHECKING, Any
 from litellm.proxy.utils import PrismaClient, ProxyLogging, log_to_opentelemetry
-from litellm.caching import DualCache
-import litellm
 from litellm.types.services import ServiceLoggerPayload, ServiceTypes
-from datetime import datetime
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -110,7 +111,7 @@ def common_checks(
         # Enterprise ONLY Feature
         # we already validate if user is premium_user when reading the config
         # Add an extra premium_usercheck here too, just incase
-        from litellm.proxy.proxy_server import premium_user, CommonProxyErrors
+        from litellm.proxy.proxy_server import CommonProxyErrors, premium_user
 
         if premium_user is not True:
             raise ValueError(
@@ -151,8 +152,8 @@ def common_checks(
         and route != "/models"
     ):
         if global_proxy_spend > litellm.max_budget:
-            raise Exception(
-                f"ExceededBudget: LiteLLM Proxy has exceeded its budget. Current spend: {global_proxy_spend}; Max Budget: {litellm.max_budget}"
+            raise litellm.BudgetExceededError(
+                current_cost=global_proxy_spend, max_budget=litellm.max_budget
             )
     return True
 
@@ -364,7 +365,8 @@ async def get_team_object(
         )
 
     # check if in cache
-    cached_team_obj = await user_api_key_cache.async_get_cache(key=team_id)
+    key = "team_id:{}".format(team_id)
+    cached_team_obj = await user_api_key_cache.async_get_cache(key=key)
     if cached_team_obj is not None:
         if isinstance(cached_team_obj, dict):
             return LiteLLM_TeamTable(**cached_team_obj)
@@ -381,7 +383,7 @@ async def get_team_object(
 
         _response = LiteLLM_TeamTable(**response.dict())
         # save the team object to cache
-        await user_api_key_cache.async_set_cache(key=response.team_id, value=_response)
+        await user_api_key_cache.async_set_cache(key=key, value=_response)
 
         return _response
     except Exception as e:

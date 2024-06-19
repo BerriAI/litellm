@@ -37,23 +37,7 @@ sys.path.insert(
 import pytest, logging, asyncio
 import litellm, asyncio
 from litellm.proxy.proxy_server import (
-    new_user,
-    generate_key_fn,
     user_api_key_auth,
-    user_update,
-    delete_key_fn,
-    info_key_fn,
-    update_key_fn,
-    generate_key_fn,
-    generate_key_helper_fn,
-    spend_user_fn,
-    spend_key_fn,
-    view_spend_logs,
-    user_info,
-    team_info,
-    info_key_fn,
-    new_team,
-    update_team,
     chat_completion,
     completion,
     embeddings,
@@ -62,6 +46,28 @@ from litellm.proxy.proxy_server import (
     moderations,
     model_list,
     LitellmUserRoles,
+)
+from litellm.proxy.management_endpoints.key_management_endpoints import (
+    delete_key_fn,
+    info_key_fn,
+    update_key_fn,
+    generate_key_fn,
+    generate_key_helper_fn,
+)
+from litellm.proxy.management_endpoints.internal_user_endpoints import (
+    new_user,
+    user_update,
+    user_info,
+)
+from litellm.proxy.management_endpoints.team_endpoints import (
+    team_info,
+    new_team,
+    update_team,
+)
+from litellm.proxy.spend_reporting_endpoints.spend_management_endpoints import (
+    spend_user_fn,
+    spend_key_fn,
+    view_spend_logs,
 )
 from litellm.proxy.utils import PrismaClient, ProxyLogging, hash_token, update_spend
 from litellm._logging import verbose_proxy_logger
@@ -137,6 +143,7 @@ async def test_new_user_response(prisma_client):
             NewTeamRequest(
                 team_id=_team_id,
             ),
+            http_request=Request(scope={"type": "http"}),
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.PROXY_ADMIN,
                 api_key="sk-1234",
@@ -368,6 +375,7 @@ async def test_call_with_valid_model_using_all_models(prisma_client):
         new_team_response = await new_team(
             data=team_request,
             user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+            http_request=Request(scope={"type": "http"}),
         )
         print("new_team_response", new_team_response)
         created_team_id = new_team_response["team_id"]
@@ -471,7 +479,7 @@ def test_call_with_user_over_budget(prisma_client):
         asyncio.run(test())
     except Exception as e:
         error_detail = e.message
-        assert "Authentication Error, ExceededBudget:" in error_detail
+        assert "Budget has been exceeded" in error_detail
         print(vars(e))
 
 
@@ -652,7 +660,7 @@ def test_call_with_proxy_over_budget(prisma_client):
             error_detail = e.message
         else:
             error_detail = traceback.format_exc()
-        assert "Authentication Error, ExceededBudget:" in error_detail
+        assert "Budget has been exceeded" in error_detail
         print(vars(e))
 
 
@@ -730,7 +738,7 @@ def test_call_with_user_over_budget_stream(prisma_client):
         asyncio.run(test())
     except Exception as e:
         error_detail = e.message
-        assert "Authentication Error, ExceededBudget:" in error_detail
+        assert "Budget has been exceeded" in error_detail
         print(vars(e))
 
 
@@ -827,7 +835,7 @@ def test_call_with_proxy_over_budget_stream(prisma_client):
         asyncio.run(test())
     except Exception as e:
         error_detail = e.message
-        assert "Authentication Error, ExceededBudget:" in error_detail
+        assert "Budget has been exceeded" in error_detail
         print(vars(e))
 
 
@@ -1086,6 +1094,7 @@ def test_generate_and_update_key(prisma_client):
                     api_key="sk-1234",
                     user_id="1234",
                 ),
+                http_request=Request(scope={"type": "http"}),
             )
 
             _team_2 = "ishaan-special-team_{}".format(uuid.uuid4())
@@ -1098,6 +1107,7 @@ def test_generate_and_update_key(prisma_client):
                     api_key="sk-1234",
                     user_id="1234",
                 ),
+                http_request=Request(scope={"type": "http"}),
             )
 
             request = NewUserRequest(
@@ -1175,7 +1185,6 @@ def test_generate_and_update_key(prisma_client):
         asyncio.run(test())
     except Exception as e:
         print("Got Exception", e)
-        print(e.message)
         pytest.fail(f"An exception occurred - {str(e)}")
 
 
@@ -1363,7 +1372,7 @@ def test_call_with_key_over_budget(prisma_client):
             error_detail = e.message
         else:
             error_detail = str(e)
-        assert "Authentication Error, ExceededTokenBudget:" in error_detail
+        assert "Budget has been exceeded" in error_detail
         print(vars(e))
 
 
@@ -1477,7 +1486,7 @@ def test_call_with_key_over_model_budget(prisma_client):
         # print(f"Error - {str(e)}")
         traceback.print_exc()
         error_detail = e.message
-        assert "Authentication Error, ExceededModelBudget:" in error_detail
+        assert "Budget has been exceeded!" in error_detail
         print(vars(e))
 
 
@@ -1638,7 +1647,7 @@ async def test_call_with_key_over_budget_stream(prisma_client):
     except Exception as e:
         print("Got Exception", e)
         error_detail = e.message
-        assert "Authentication Error, ExceededTokenBudget:" in error_detail
+        assert "Budget has been exceeded" in error_detail
         print(vars(e))
 
 
@@ -1776,7 +1785,7 @@ async def test_upperbound_key_params(prisma_client):
 
 
 def test_get_bearer_token():
-    from litellm.proxy.proxy_server import _get_bearer_token
+    from litellm.proxy.auth.user_api_key_auth import _get_bearer_token
 
     # Test valid Bearer token
     api_key = "Bearer valid_token"
@@ -2051,6 +2060,7 @@ async def test_master_key_hashing(prisma_client):
                 api_key="sk-1234",
                 user_id="1234",
             ),
+            http_request=Request(scope={"type": "http"}),
         )
 
         _response = await new_user(
@@ -2184,6 +2194,7 @@ async def test_create_update_team(prisma_client):
             tpm_limit=20,
             rpm_limit=20,
         ),
+        http_request=Request(scope={"type": "http"}),
         user_api_key_dict=UserAPIKeyAuth(
             user_role=LitellmUserRoles.PROXY_ADMIN,
             api_key="sk-1234",
@@ -2212,6 +2223,7 @@ async def test_create_update_team(prisma_client):
             tpm_limit=30,
             rpm_limit=30,
         ),
+        http_request=Request(scope={"type": "http"}),
         user_api_key_dict=UserAPIKeyAuth(
             user_role=LitellmUserRoles.PROXY_ADMIN,
             api_key="sk-1234",
@@ -2233,7 +2245,10 @@ async def test_create_update_team(prisma_client):
     )
 
     # now hit team_info
-    response = await team_info(team_id=_team_id)
+    response = await team_info(
+        team_id=_team_id,
+        http_request=Request(scope={"type": "http"}),
+    )
 
     print("RESPONSE from team_info", response)
 
@@ -2300,3 +2315,4 @@ async def test_enforced_params(prisma_client):
             "Authentication Error, BadRequest please pass param=[metadata][generation_name] in request body"
             in e.message
         )
+    general_settings.pop("enforced_params")

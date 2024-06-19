@@ -28,20 +28,25 @@ from litellm.proxy.utils import PrismaClient, ProxyLogging, hash_token
 import pytest, logging, asyncio
 import litellm, asyncio
 from litellm.proxy.proxy_server import (
-    new_user,
-    generate_key_fn,
     user_api_key_auth,
-    user_update,
+    block_user,
+)
+from litellm.proxy.management_endpoints.key_management_endpoints import (
     delete_key_fn,
     info_key_fn,
     update_key_fn,
     generate_key_fn,
     generate_key_helper_fn,
+)
+from litellm.proxy.management_endpoints.internal_user_endpoints import (
+    new_user,
+    user_update,
+    user_info,
+)
+from litellm.proxy.spend_reporting_endpoints.spend_management_endpoints import (
     spend_user_fn,
     spend_key_fn,
     view_spend_logs,
-    user_info,
-    block_user,
 )
 from litellm.proxy.utils import PrismaClient, ProxyLogging, hash_token
 from litellm._logging import verbose_proxy_logger

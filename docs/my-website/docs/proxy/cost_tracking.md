@@ -428,3 +428,22 @@ model_list:
 ## Custom Input/Output Pricing
 
 👉 Head to [Custom Input/Output Pricing](https://docs.litellm.ai/docs/proxy/custom_pricing) to setup custom pricing or your models
+
+## ✨ Custom k,v pairs
+
+Log specific key,value pairs as part of the metadata for a spend log
+
+:::info 
+
+Logging specific key,value pairs in spend logs metadata is an enterprise feature. [See here](./enterprise.md#tracking-spend-with-custom-metadata)
+
+:::
+
+
+## ✨ Custom Tags
+
+:::info 
+
+Tracking spend with Custom tags is an enterprise feature. [See here](./enterprise.md#tracking-spend-for-custom-tags)
+
+:::
