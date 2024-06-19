@@ -3006,6 +3006,10 @@ async def chat_completion(
         ):  # model in router model list
             tasks.append(llm_router.acompletion(**data))
         elif (
+            llm_router is not None and data["model"] in llm_router.get_model_ids()
+        ):  # model in router model list
+            tasks.append(llm_router.acompletion(**data))
+        elif (
             llm_router is not None
             and llm_router.model_group_alias is not None
             and data["model"] in llm_router.model_group_alias
@@ -3257,6 +3261,10 @@ async def completion(
                 llm_router.atext_completion(**data, specific_deployment=True)
             )
         elif (
+            llm_router is not None and data["model"] in llm_router.get_model_ids()
+        ):  # model in router model list
+            llm_response = asyncio.create_task(llm_router.atext_completion(**data))
+        elif (
             llm_router is not None
             and data["model"] not in router_model_names
             and llm_router.default_deployment is not None
@@ -3488,6 +3496,10 @@ async def embeddings(
             llm_router is not None and data["model"] in llm_router.deployment_names
         ):  # model in router deployments, calling a specific deployment on the router
             response = await llm_router.aembedding(**data, specific_deployment=True)
+        elif (
+            llm_router is not None and data["model"] in llm_router.get_model_ids()
+        ):  # model in router deployments, calling a specific deployment on the router
+            response = await llm_router.aembedding(**data)
         elif (
             llm_router is not None
             and data["model"] not in router_model_names
