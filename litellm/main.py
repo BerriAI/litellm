@@ -3944,6 +3944,7 @@ def image_generation(
         proxy_server_request = kwargs.get("proxy_server_request", None)
         model_info = kwargs.get("model_info", None)
         metadata = kwargs.get("metadata", {})
+        client = kwargs.get("client", None)
 
         model_response = litellm.utils.ImageResponse()
         if model is not None or custom_llm_provider is not None:
@@ -4082,6 +4083,7 @@ def image_generation(
                 model_response=model_response,
                 api_version=api_version,
                 aimg_generation=aimg_generation,
+                client=client,
             )
         elif custom_llm_provider == "openai":
             model_response = openai_chat_completions.image_generation(
@@ -4094,6 +4096,7 @@ def image_generation(
                 optional_params=optional_params,
                 model_response=model_response,
                 aimg_generation=aimg_generation,
+                client=client,
             )
         elif custom_llm_provider == "bedrock":
             if model is None:
