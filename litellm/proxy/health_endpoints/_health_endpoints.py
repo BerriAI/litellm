@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from typing import Literal, Optional
 
 import fastapi
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -488,4 +488,21 @@ async def health_readiness_options():
         "Access-Control-Allow-Methods": "GET, OPTIONS",
         "Access-Control-Allow-Headers": "*",
     }
-    return {"headers": response_headers}
+    return Response(headers=response_headers, status_code=200)
+
+
+@router.options(
+    "/health/liveliness",
+    tags=["health"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def health_liveliness_options():
+    """
+    Options endpoint for health/liveliness check.
+    """
+    response_headers = {
+        "Allow": "GET, OPTIONS",
+        "Access-Control-Allow-Methods": "GET, OPTIONS",
+        "Access-Control-Allow-Headers": "*",
+    }
+    return Response(headers=response_headers, status_code=200)
