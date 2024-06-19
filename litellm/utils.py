@@ -50,6 +50,7 @@ import litellm._service_logger  # for storing API inputs, outputs, and metadata
 import litellm.litellm_core_utils
 from litellm.caching import DualCache
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.litellm_core_utils.llm_request_utils import _ensure_extra_body_is_safe
 from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_logging,
 )
@@ -3256,6 +3257,10 @@ def get_optional_params(
                 extra_body[k] = passed_params[k]
         optional_params.setdefault("extra_body", {})
         optional_params["extra_body"] = {**optional_params["extra_body"], **extra_body}
+
+        optional_params["extra_body"] = _ensure_extra_body_is_safe(
+            extra_body=optional_params["extra_body"]
+        )
     else:
         # if user passed in non-default kwargs for specific providers/models, pass them along
         for k in passed_params.keys():
