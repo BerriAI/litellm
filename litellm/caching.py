@@ -1166,13 +1166,13 @@ class S3Cache(BaseCache):
             verbose_logger.debug(f"S3 Cache: Presigned URL is {presigned_url}")
 
             put_headers = {
-                "Cache-Control": cache_control,
-                "Content-Disposition": content_disposition,
-                "Content-Encoding": content_encoding,
-                "Content-Language": content_language,
-                "Content-Type": content_type,
-                "Content-MD5": content_md5,
-                "Content-Length": str(content_length),
+                "cache-control": cache_control,
+                "content-disposition": content_disposition,
+                "content-encoding": content_encoding,
+                "content-language": content_language,
+                "content-type": content_type,
+                "content-md5": content_md5,
+                "content-length": str(content_length),
             }
 
             put_response = self.sync_http_handler.put(url=presigned_url, data=serialized_value, headers=put_headers)
@@ -1183,7 +1183,7 @@ class S3Cache(BaseCache):
                 )
             else:
                 verbose_logger.error(
-                    f"S3 Cache: Failed to set cache for key '{key}' in S3 bucket, returned status code: {put_response.status_code}"
+                    f"S3 Cache: Failed to set cache for key '{key}' in S3 bucket, returned status code: {put_response.status_code} for URL: {presigned_url}"
                 )
 
         except Exception as e:
