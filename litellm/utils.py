@@ -7341,40 +7341,6 @@ def exception_type(
             )
 
 
-def get_or_generate_uuid():
-    temp_dir = os.path.join(os.path.abspath(os.sep), "tmp")
-    uuid_file = os.path.join(temp_dir, "litellm_uuid.txt")
-    try:
-        # Try to open the file and load the UUID
-        with open(uuid_file, "r") as file:
-            uuid_value = file.read()
-            if uuid_value:
-                uuid_value = uuid_value.strip()
-            else:
-                raise FileNotFoundError
-
-    except FileNotFoundError:
-        # Generate a new UUID if the file doesn't exist or is empty
-        try:
-            new_uuid = uuid.uuid4()
-            uuid_value = str(new_uuid)
-            with open(uuid_file, "w") as file:
-                file.write(uuid_value)
-        except:  # if writing to tmp/litellm_uuid.txt then retry writing to litellm_uuid.txt
-            try:
-                new_uuid = uuid.uuid4()
-                uuid_value = str(new_uuid)
-                with open("litellm_uuid.txt", "w") as file:
-                    file.write(uuid_value)
-            except:  # if this 3rd attempt fails just pass
-                # Good first issue for someone to improve this function :)
-                return
-    except:
-        # [Non-Blocking Error]
-        return
-    return uuid_value
-
-
 ######### Secret Manager ############################
 # checks if user has passed in a secret manager client
 # if passed in then checks the secret there
