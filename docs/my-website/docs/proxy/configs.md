@@ -252,6 +252,31 @@ $ litellm --config /path/to/config.yaml
 ```
 
 
+## Multiple OpenAI Organizations 
+
+Add all openai models across all OpenAI organizations with just 1 model definition 
+
+```yaml
+  - model_name: *
+    litellm_params:
+      model: openai/*
+      api_key: os.environ/OPENAI_API_KEY
+      organization:
+       - org-1 
+       - org-2 
+       - org-3
+```
+
+LiteLLM will automatically create separate deployments for each org.
+
+Confirm this via 
+
+```bash
+curl --location 'http://0.0.0.0:4000/v1/model/info' \
+--header 'Authorization: Bearer ${LITELLM_KEY}' \
+--data ''
+```
+
 ## Load Balancing 
 
 :::info
