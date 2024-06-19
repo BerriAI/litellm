@@ -2626,7 +2626,7 @@ async def startup_event():
     master_key = litellm.get_secret("LITELLM_MASTER_KEY", None)
     # check if DATABASE_URL in environment - load from there
     if prisma_client is None:
-        prisma_setup(database_url=os.getenv("DATABASE_URL"))
+        prisma_setup(database_url=litellm.get_secret("DATABASE_URL", None))
 
     ### LOAD CONFIG ###
     worker_config = litellm.get_secret("WORKER_CONFIG")
@@ -2752,9 +2752,6 @@ async def startup_event():
             )
         )
 
-    verbose_proxy_logger.debug(
-        f"custom_db_client client {custom_db_client}. Master_key: {master_key}"
-    )
     if custom_db_client is not None and master_key is not None:
         # add master key to db
         await generate_key_helper_fn(

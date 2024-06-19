@@ -3990,7 +3990,7 @@ def test_async_text_completion():
     asyncio.run(test_get_response())
 
 
-@pytest.mark.skip(reason="Tgai endpoints are unstable")
+@pytest.mark.skip(reason="Skip flaky tgai test")
 def test_async_text_completion_together_ai():
     litellm.set_verbose = True
     print("test_async_text_completion")
@@ -3998,7 +3998,7 @@ def test_async_text_completion_together_ai():
     async def test_get_response():
         try:
             response = await litellm.atext_completion(
-                model="together_ai/codellama/CodeLlama-13b-Instruct-hf",
+                model="together_ai/mistralai/Mixtral-8x7B-Instruct-v0.1",
                 prompt="good morning",
                 max_tokens=10,
             )
