@@ -709,8 +709,11 @@ class VertexLLM(BaseLLM):
 
         ## TRANSFORMATION ##
         try:
+            _custom_llm_provider = custom_llm_provider
+            if custom_llm_provider == "vertex_ai_beta":
+                _custom_llm_provider = "vertex_ai"
             supports_system_message = litellm.supports_system_messages(
-                model=model, custom_llm_provider=custom_llm_provider
+                model=model, custom_llm_provider=_custom_llm_provider
             )
         except Exception as e:
             verbose_logger.error(
