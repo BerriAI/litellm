@@ -9435,7 +9435,7 @@ def mock_completion_streaming_obj(model_response, mock_response, model):
 
 async def async_mock_completion_streaming_obj(model_response, mock_response, model):
     for i in range(0, len(mock_response), 3):
-        completion_obj = Delta(role="assistant", content=mock_response)
+        completion_obj = Delta(role="assistant", content=mock_response[i : i + 3])
         model_response.choices[0].delta = completion_obj
         model_response.choices[0].finish_reason = "stop"
         yield model_response
