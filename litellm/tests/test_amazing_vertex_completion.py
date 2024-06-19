@@ -15,6 +15,7 @@ import asyncio
 import json
 import os
 import tempfile
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -695,37 +696,161 @@ async def test_gemini_pro_function_calling_httpx(provider, sync_mode):
             pytest.fail("An unexpected exception occurred - {}".format(str(e)))
 
 
-@pytest.mark.skip(reason="exhausted vertex quota. need to refactor to mock the call")
+# @pytest.mark.skip(reason="exhausted vertex quota. need to refactor to mock the call")
+def vertex_httpx_mock_post(url, data=None, json=None, headers=None):
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {"Content-Type": "application/json"}
+    mock_response.json.return_value = {
+        "candidates": [
+            {
+                "finishReason": "RECITATION",
+                "safetyRatings": [
+                    {
+                        "category": "HARM_CATEGORY_HATE_SPEECH",
+                        "probability": "NEGLIGIBLE",
+                        "probabilityScore": 0.14965563,
+                        "severity": "HARM_SEVERITY_NEGLIGIBLE",
+                        "severityScore": 0.13660839,
+                    },
+                    {
+                        "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                        "probability": "NEGLIGIBLE",
+                        "probabilityScore": 0.16344544,
+                        "severity": "HARM_SEVERITY_NEGLIGIBLE",
+                        "severityScore": 0.10230471,
+                    },
+                    {
+                        "category": "HARM_CATEGORY_HARASSMENT",
+                        "probability": "NEGLIGIBLE",
+                        "probabilityScore": 0.1979091,
+                        "severity": "HARM_SEVERITY_NEGLIGIBLE",
+                        "severityScore": 0.06052939,
+                    },
+                    {
+                        "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                        "probability": "NEGLIGIBLE",
+                        "probabilityScore": 0.1765296,
+                        "severity": "HARM_SEVERITY_NEGLIGIBLE",
+                        "severityScore": 0.18417984,
+                    },
+                ],
+                "citationMetadata": {
+                    "citations": [
+                        {
+                            "startIndex": 251,
+                            "endIndex": 380,
+                            "uri": "https://chocolatecake2023.blogspot.com/2023/02/taste-deliciousness-of-perfectly-baked.html?m=1",
+                        },
+                        {
+                            "startIndex": 393,
+                            "endIndex": 535,
+                            "uri": "https://skinnymixes.co.uk/blogs/food-recipes/peanut-butter-cup-cookies",
+                        },
+                        {
+                            "startIndex": 439,
+                            "endIndex": 581,
+                            "uri": "https://mast-producing-trees.org/aldis-chocolate-chips-are-peanut-and-tree-nut-free/",
+                        },
+                        {
+                            "startIndex": 1117,
+                            "endIndex": 1265,
+                            "uri": "https://github.com/frdrck100/To_Do_Assignments",
+                        },
+                        {
+                            "startIndex": 1146,
+                            "endIndex": 1288,
+                            "uri": "https://skinnymixes.co.uk/blogs/food-recipes/peanut-butter-cup-cookies",
+                        },
+                        {
+                            "startIndex": 1166,
+                            "endIndex": 1299,
+                            "uri": "https://www.girlversusdough.com/brookies/",
+                        },
+                        {
+                            "startIndex": 1780,
+                            "endIndex": 1909,
+                            "uri": "https://chocolatecake2023.blogspot.com/2023/02/taste-deliciousness-of-perfectly-baked.html?m=1",
+                        },
+                        {
+                            "startIndex": 1834,
+                            "endIndex": 1964,
+                            "uri": "https://newsd.in/national-cream-cheese-brownie-day-2023-date-history-how-to-make-a-cream-cheese-brownie/",
+                        },
+                        {
+                            "startIndex": 1846,
+                            "endIndex": 1989,
+                            "uri": "https://github.com/frdrck100/To_Do_Assignments",
+                        },
+                        {
+                            "startIndex": 2121,
+                            "endIndex": 2261,
+                            "uri": "https://recipes.net/copycat/hardee/hardees-chocolate-chip-cookie-recipe/",
+                        },
+                        {
+                            "startIndex": 2505,
+                            "endIndex": 2671,
+                            "uri": "https://www.tfrecipes.com/Oranges%20with%20dried%20cherries/",
+                        },
+                        {
+                            "startIndex": 3390,
+                            "endIndex": 3529,
+                            "uri": "https://github.com/quantumcognition/Crud-palm",
+                        },
+                        {
+                            "startIndex": 3568,
+                            "endIndex": 3724,
+                            "uri": "https://recipes.net/dessert/cakes/ultimate-easy-gingerbread/",
+                        },
+                        {
+                            "startIndex": 3640,
+                            "endIndex": 3770,
+                            "uri": "https://recipes.net/dessert/cookies/soft-and-chewy-peanut-butter-cookies/",
+                        },
+                    ]
+                },
+            }
+        ],
+        "usageMetadata": {"promptTokenCount": 336, "totalTokenCount": 336},
+    }
+    return mock_response
+
+
 @pytest.mark.parametrize("provider", ["vertex_ai_beta"])  # "vertex_ai",
 @pytest.mark.asyncio
-async def test_gemini_pro_json_schema_httpx(provider):
+async def test_gemini_pro_json_schema_httpx_content_policy_error(provider):
     load_vertex_ai_credentials()
     litellm.set_verbose = True
     messages = [
         {
             "role": "user",
             "content": """
-    List 5 popular cookie recipes.
+    
+List 5 popular cookie recipes.
 
-    Using this JSON schema:
-
-        Recipe = {"recipe_name": str}
-
-    Return a `list[Recipe]`
+Using this JSON schema:
+```json
+{'$defs': {'Recipe': {'properties': {'recipe_name': {'examples': ['Chocolate Chip Cookies', 'Peanut Butter Cookies'], 'maxLength': 100, 'title': 'The recipe name', 'type': 'string'}, 'estimated_time': {'anyOf': [{'minimum': 0, 'type': 'integer'}, {'type': 'null'}], 'default': None, 'description': 'The estimated time to make the recipe in minutes', 'examples': [30, 45], 'title': 'The estimated time'}, 'ingredients': {'examples': [['flour', 'sugar', 'chocolate chips'], ['peanut butter', 'sugar', 'eggs']], 'items': {'type': 'string'}, 'maxItems': 10, 'title': 'The ingredients', 'type': 'array'}, 'instructions': {'examples': [['mix', 'bake'], ['mix', 'chill', 'bake']], 'items': {'type': 'string'}, 'maxItems': 10, 'title': 'The instructions', 'type': 'array'}}, 'required': ['recipe_name', 'ingredients', 'instructions'], 'title': 'Recipe', 'type': 'object'}}, 'properties': {'recipes': {'items': {'$ref': '#/$defs/Recipe'}, 'maxItems': 11, 'title': 'The recipes', 'type': 'array'}}, 'required': ['recipes'], 'title': 'MyRecipes', 'type': 'object'}
+```
             """,
         }
     ]
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
-    response = completion(
-        model="vertex_ai_beta/gemini-1.5-flash-preview-0514",
-        messages=messages,
-        response_format={"type": "json_object"},
-    )
+    client = HTTPHandler()
 
-    assert response.choices[0].message.content is not None
-    response_json = json.loads(response.choices[0].message.content)
+    with patch.object(client, "post", side_effect=vertex_httpx_mock_post) as mock_call:
+        try:
+            response = completion(
+                model="vertex_ai_beta/gemini-1.5-flash",
+                messages=messages,
+                response_format={"type": "json_object"},
+                client=client,
+            )
+        except litellm.ContentPolicyViolationError as e:
+            pass
 
-    assert isinstance(response_json, dict) or isinstance(response_json, list)
+        mock_call.assert_called_once()
 
 
 @pytest.mark.skip(reason="exhausted vertex quota. need to refactor to mock the call")
