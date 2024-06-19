@@ -67,6 +67,10 @@ By default, LiteLLM raises an exception if the openai param being passed in isn'
 
 To drop the param instead, set `litellm.drop_params = True` or `completion(..drop_params=True)`.
 
+This **ONLY DROPS UNSUPPORTED OPENAI PARAMS**. 
+
+LiteLLM assumes any non-openai param is provider specific and passes it in as a kwarg in the request body
+
 ::: 
 
 ## Input Params
