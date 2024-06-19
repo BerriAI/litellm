@@ -5652,6 +5652,14 @@ def exception_type(
                         response=original_exception.response,
                         litellm_debug_info=extra_information,
                     )
+                elif "A timeout occurred" in error_str:
+                    exception_mapping_worked = True
+                    raise Timeout(
+                        message=f"{exception_provider} - {message}",
+                        model=model,
+                        llm_provider=custom_llm_provider,
+                        litellm_debug_info=extra_information,
+                    )
                 elif (
                     "invalid_request_error" in error_str
                     and "content_policy_violation" in error_str
@@ -6844,7 +6852,13 @@ def exception_type(
                         llm_provider="together_ai",
                         response=original_exception.response,
                     )
-
+                elif "A timeout occurred" in error_str:
+                    exception_mapping_worked = True
+                    raise Timeout(
+                        message=f"TogetherAIException - {error_str}",
+                        model=model,
+                        llm_provider="together_ai",
+                    )
                 elif (
                     "error" in error_response
                     and "API key doesn't match expected format."
@@ -7283,7 +7297,6 @@ def get_secret(
 ):
     key_management_system = litellm._key_management_system
     key_management_settings = litellm._key_management_settings
-    args = locals()
 
     if secret_name.startswith("os.environ/"):
         secret_name = secret_name.replace("os.environ/", "")
@@ -7417,19 +7430,24 @@ def get_secret(
                     """
                     encrypted_value = os.getenv(secret_name, None)
                     if encrypted_value is None:
-                        raise Exception("encrypted value for AWS KMS cannot be None.")
+                        raise Exception(
+                            "AWS KMS - Encrypted Value of Key={} is None".format(
+                                secret_name
+                            )
+                        )
                     # Decode the base64 encoded ciphertext
                     ciphertext_blob = base64.b64decode(encrypted_value)
 
                     # Set up the parameters for the decrypt call
                     params = {"CiphertextBlob": ciphertext_blob}
-
                     # Perform the decryption
                     response = client.decrypt(**params)
 
                     # Extract and decode the plaintext
                     plaintext = response["Plaintext"]
                     secret = plaintext.decode("utf-8")
+                    if isinstance(secret, str):
+                        secret = secret.strip()
                 elif key_manager == KeyManagementSystem.AWS_SECRET_MANAGER.value:
                     try:
                         get_secret_value_response = client.get_secret_value(
@@ -7456,7 +7474,7 @@ def get_secret(
                     secret = client.get_secret(secret_name).secret_value
             except Exception as e:  # check if it's in os.environ
                 verbose_logger.error(
-                    f"An exception occurred - {str(e)}\n\n{traceback.format_exc()}"
+                    f"Defaulting to os.environ value for key={secret_name}. An exception occurred - {str(e)}.\n\n{traceback.format_exc()}"
                 )
                 secret = os.getenv(secret_name)
             try:
