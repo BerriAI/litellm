@@ -1,8 +1,11 @@
 #### What this tests ####
 #    This tests mock request calls to litellm
 
-import sys, os
+import os
+import sys
 import traceback
+
+import pytest
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -29,11 +32,29 @@ def test_streaming_mock_request():
         response = litellm.mock_completion(model=model, messages=messages, stream=True)
         complete_response = ""
         for chunk in response:
-            complete_response += chunk["choices"][0]["delta"]["content"]
+            complete_response += chunk["choices"][0]["delta"]["content"] or ""
         if complete_response == "":
             raise Exception("Empty response received")
     except:
         traceback.print_exc()
 
 
-test_streaming_mock_request()
+# test_streaming_mock_request()
+
+
+@pytest.mark.asyncio()
+async def test_async_mock_streaming_request():
+    generator = await litellm.acompletion(
+        messages=[{"role": "user", "content": "Why is LiteLLM amazing?"}],
+        mock_response="LiteLLM is awesome",
+        stream=True,
+        model="gpt-3.5-turbo",
+    )
+    complete_response = ""
+    async for chunk in generator:
+        print(chunk)
+        complete_response += chunk["choices"][0]["delta"]["content"] or ""
+
+    assert (
+        complete_response == "LiteLLM is awesome"
+    ), f"Unexpected response got {complete_response}"
