@@ -75,6 +75,44 @@ from ..integrations.weights_biases import WeightsBiasesLogger
 
 _in_memory_loggers: List[Any] = []
 
+### GLOBAL VARIABLES ###
+
+sentry_sdk_instance = None
+capture_exception = None
+add_breadcrumb = None
+posthog = None
+slack_app = None
+alerts_channel = None
+heliconeLogger = None
+athinaLogger = None
+promptLayerLogger = None
+langsmithLogger = None
+logfireLogger = None
+weightsBiasesLogger = None
+customLogger = None
+langFuseLogger = None
+openMeterLogger = None
+lagoLogger = None
+dataDogLogger = None
+prometheusLogger = None
+dynamoLogger = None
+s3Logger = None
+genericAPILogger = None
+clickHouseLogger = None
+greenscaleLogger = None
+lunaryLogger = None
+aispendLogger = None
+berrispendLogger = None
+supabaseClient = None
+liteDebuggerClient = None
+callback_list: Optional[List[str]] = []
+user_logger_fn = None
+additional_details: Optional[Dict[str, str]] = {}
+local_cache: Optional[Dict[str, str]] = {}
+last_fetched_at = None
+last_fetched_at_keys = None
+####
+
 
 class Logging:
     global supabaseClient, liteDebuggerClient, promptLayerLogger, weightsBiasesLogger, langsmithLogger, logfireLogger, capture_exception, add_breadcrumb, lunaryLogger, logfireLogger, prometheusLogger, slack_app
@@ -95,6 +133,7 @@ class Logging:
         dynamic_async_success_callbacks=None,
         langfuse_public_key=None,
         langfuse_secret=None,
+        langfuse_host=None,
     ):
         if call_type not in [item.value for item in CallTypes]:
             allowed_values = ", ".join([item.value for item in CallTypes])
@@ -136,6 +175,7 @@ class Logging:
         ## DYNAMIC LANGFUSE KEYS ##
         self.langfuse_public_key = langfuse_public_key
         self.langfuse_secret = langfuse_secret
+        self.langfuse_host = langfuse_host
         ## TIME TO FIRST TOKEN LOGGING ##
         self.completion_start_time: Optional[datetime.datetime] = None
 
@@ -743,7 +783,7 @@ class Logging:
                         )
                     if callback == "langfuse":
                         global langFuseLogger
-                        verbose_logger.debug("reaches langfuse for success logging!")
+                        print_verbose("reaches langfuse for success logging!")
                         kwargs = {}
                         for k, v in self.model_call_details.items():
                             if (
@@ -775,6 +815,7 @@ class Logging:
                             langFuseLogger = LangFuseLogger(
                                 langfuse_public_key=self.langfuse_public_key,
                                 langfuse_secret=self.langfuse_secret,
+                                langfuse_host=self.langfuse_host,
                             )
                         langFuseLogger.log_event(
                             kwargs=kwargs,
@@ -1556,6 +1597,7 @@ class Logging:
                             langFuseLogger = LangFuseLogger(
                                 langfuse_public_key=self.langfuse_public_key,
                                 langfuse_secret=self.langfuse_secret,
+                                langfuse_host=self.langfuse_host,
                             )
                         langFuseLogger.log_event(
                             start_time=start_time,
