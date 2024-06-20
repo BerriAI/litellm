@@ -1080,7 +1080,6 @@ def completion(
                 )
         elif (
             custom_llm_provider == "text-completion-openai"
-            or (text_completion is True and custom_llm_provider == "openai")
             or "ft:babbage-002" in model
             or "ft:davinci-002" in model  # support for finetuned completion models
         ):
@@ -3782,6 +3781,12 @@ def text_completion(
         )
 
     kwargs.pop("prompt", None)
+
+    if model is not None and model.startswith(
+        "openai/"
+    ):  # for openai compatible endpoints - e.g. vllm, call the native /v1/completions endpoint for text completion calls
+        model = model.replace("openai/", "text-completion-openai/")
+
     kwargs["text_completion"] = True
     response = completion(
         model=model,
