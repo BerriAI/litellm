@@ -542,6 +542,7 @@ def function_setup(
             langfuse_public_key=kwargs.pop("langfuse_public_key", None),
             langfuse_secret=kwargs.pop("langfuse_secret", None)
             or kwargs.pop("langfuse_secret_key", None),
+            langfuse_host=kwargs.pop("langfuse_host", None),
         )
         ## check if metadata is passed in
         litellm_params = {"api_base": ""}
