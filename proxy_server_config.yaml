@@ -111,6 +111,7 @@ litellm_settings:
       failure_callback: ["langfuse"]
       langfuse_public_key: os.environ/LANGFUSE_PROJECT2_PUBLIC # Project 2
       langfuse_secret: os.environ/LANGFUSE_PROJECT2_SECRET # Project 2
+      langfuse_host: https://us.cloud.langfuse.com
 
 router_settings:
   routing_strategy: usage-based-routing-v2 
