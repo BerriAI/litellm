@@ -869,6 +869,9 @@ async def test_make_request():
     )
 
 
+@pytest.mark.skip(
+    reason="local only test, use this to verify if dynamic langfuse logging works as expected"
+)
 def test_aaalangfuse_dynamic_logging():
     """
     pass in langfuse credentials via completion call
