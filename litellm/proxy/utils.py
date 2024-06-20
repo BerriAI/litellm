@@ -691,7 +691,7 @@ class PrismaClient:
             finally:
                 os.chdir(original_dir)
             # Now you can import the Prisma Client
-            from prisma import Prisma
+            from prisma import Prisma  # type: ignore
 
         self.db = Prisma()  # Client to connect to Prisma db
 

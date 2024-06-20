@@ -1,20 +1,25 @@
 #### What this tests ####
 #    This tests if get_optional_params works as expected
-import sys, os, time, inspect, asyncio, traceback
+import asyncio
+import inspect
+import os
+import sys
+import time
+import traceback
+
 import pytest
 
 sys.path.insert(0, os.path.abspath("../.."))
+from unittest.mock import MagicMock, patch
+
 import litellm
-from litellm.utils import get_optional_params_embeddings, get_optional_params
-from litellm.llms.prompt_templates.factory import (
-    map_system_message_pt,
-)
-from unittest.mock import patch, MagicMock
+from litellm.llms.prompt_templates.factory import map_system_message_pt
 from litellm.types.completion import (
-    ChatCompletionUserMessageParam,
-    ChatCompletionSystemMessageParam,
     ChatCompletionMessageParam,
+    ChatCompletionSystemMessageParam,
+    ChatCompletionUserMessageParam,
 )
+from litellm.utils import get_optional_params, get_optional_params_embeddings
 
 ## get_optional_params_embeddings
 ### Models: OpenAI, Azure, Bedrock
@@ -286,3 +291,45 @@ def test_dynamic_drop_params_e2e():
         mock_response.assert_called_once()
         print(mock_response.call_args.kwargs["data"])
         assert "response_format" not in mock_response.call_args.kwargs["data"]
+
+
+@pytest.mark.parametrize("drop_params", [True, False, None])
+def test_dynamic_drop_additional_params(drop_params):
+    """
+    Make a call to cohere, dropping 'response_format' specifically
+    """
+    if drop_params is True:
+        optional_params = litellm.utils.get_optional_params(
+            model="command-r",
+            custom_llm_provider="cohere",
+            response_format="json",
+            additional_drop_params=["response_format"],
+        )
+    else:
+        try:
+            optional_params = litellm.utils.get_optional_params(
+                model="command-r",
+                custom_llm_provider="cohere",
+                response_format="json",
+            )
+            pytest.fail("Expected to fail")
+        except Exception as e:
+            pass
+
+
+def test_dynamic_drop_additional_params_e2e():
+    with patch("requests.post", new=MagicMock()) as mock_response:
+        try:
+            response = litellm.completion(
+                model="command-r",
+                messages=[{"role": "user", "content": "Hey, how's it going?"}],
+                response_format={"key": "value"},
+                additional_drop_params=["response_format"],
+            )
+        except Exception as e:
+            pass
+
+        mock_response.assert_called_once()
+        print(mock_response.call_args.kwargs["data"])
+        assert "response_format" not in mock_response.call_args.kwargs["data"]
+        assert "additional_drop_params" not in mock_response.call_args.kwargs["data"]
