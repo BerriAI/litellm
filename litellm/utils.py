@@ -5688,7 +5688,11 @@ def exception_type(
                         + "Exception"
                     )
 
-                if "This model's maximum context length is" in error_str:
+                if (
+                    "This model's maximum context length is" in error_str
+                    or "string too long. Expected a string with maximum length"
+                    in error_str
+                ):
                     exception_mapping_worked = True
                     raise ContextWindowExceededError(
                         message=f"ContextWindowExceededError: {exception_provider} - {message}",
