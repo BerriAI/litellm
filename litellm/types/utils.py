@@ -44,15 +44,25 @@ class ModelInfo(TypedDict, total=False):
     max_input_tokens: Required[Optional[int]]
     max_output_tokens: Required[Optional[int]]
     input_cost_per_token: Required[float]
-    input_cost_per_token_above_128k_tokens: Optional[float]
-    input_cost_per_image: Optional[float]
-    input_cost_per_audio_per_second: Optional[float]
-    input_cost_per_video_per_second: Optional[float]
+    input_cost_per_character: Optional[float]  # only for vertex ai models
+    input_cost_per_token_above_128k_tokens: Optional[float]  # only for vertex ai models
+    input_cost_per_character_above_128k_tokens: Optional[
+        float
+    ]  # only for vertex ai models
+    input_cost_per_image: Optional[float]  # only for vertex ai models
+    input_cost_per_audio_per_second: Optional[float]  # only for vertex ai models
+    input_cost_per_video_per_second: Optional[float]  # only for vertex ai models
     output_cost_per_token: Required[float]
-    output_cost_per_token_above_128k_tokens: Optional[float]
+    output_cost_per_character: Required[float]  # only for vertex ai models
+    output_cost_per_token_above_128k_tokens: Optional[
+        float
+    ]  # only for vertex ai models
+    output_cost_per_character_above_128k_tokens: Optional[
+        float
+    ]  # only for vertex ai models
     output_cost_per_image: Optional[float]
-    output_cost_per_video_per_second: Optional[float]
-    output_cost_per_audio_per_second: Optional[float]
+    output_cost_per_video_per_second: Optional[float]  # only for vertex ai models
+    output_cost_per_audio_per_second: Optional[float]  # only for vertex ai models
     litellm_provider: Required[str]
     mode: Required[
         Literal[
