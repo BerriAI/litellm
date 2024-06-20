@@ -570,7 +570,6 @@ async def test_gemini_pro_vision(provider, sync_mode):
         # Google counts the prompt tokens for us, we should ensure we use the tokens from the orignal response
         assert prompt_tokens == 263  # the gemini api returns 263 to us
 
-        assert False
     except litellm.RateLimitError as e:
         pass
     except Exception as e:
@@ -1164,6 +1163,7 @@ def test_gemini_pro_vision_async():
             resp = await litellm.acompletion(
                 model="vertex_ai/gemini-pro-vision",
                 messages=[
+                    {"role": "system", "content": ""},
                     {
                         "role": "user",
                         "content": [
@@ -1175,7 +1175,7 @@ def test_gemini_pro_vision_async():
                                 },
                             },
                         ],
-                    }
+                    },
                 ],
             )
             print("async response gemini pro vision")

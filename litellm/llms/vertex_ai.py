@@ -337,7 +337,7 @@ def _gemini_convert_messages_with_history(messages: list) -> List[ContentType]:
                 _parts: List[PartType] = []
                 for element in messages[msg_i]["content"]:
                     if isinstance(element, dict):
-                        if element["type"] == "text":
+                        if element["type"] == "text" and len(element["text"]) > 0:
                             _part = PartType(text=element["text"])
                             _parts.append(_part)
                         elif element["type"] == "image_url":
@@ -345,7 +345,10 @@ def _gemini_convert_messages_with_history(messages: list) -> List[ContentType]:
                             _part = _process_gemini_image(image_url=image_url)
                             _parts.append(_part)  # type: ignore
                 user_content.extend(_parts)
-            else:
+            elif (
+                isinstance(messages[msg_i]["content"], str)
+                and len(messages[msg_i]["content"]) > 0
+            ):
                 _part = PartType(text=messages[msg_i]["content"])
                 user_content.append(_part)
 
