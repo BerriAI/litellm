@@ -27,6 +27,7 @@ def langfuse_client():
     langfuse_client = langfuse.Langfuse(
         public_key=os.environ["LANGFUSE_PUBLIC_KEY"],
         secret_key=os.environ["LANGFUSE_SECRET_KEY"],
+        host=None,
     )
 
     with patch(
@@ -279,7 +280,7 @@ async def test_langfuse_masked_input_output(langfuse_client):
 
 
 @pytest.mark.asyncio
-async def test_langfuse_logging_metadata(langfuse_client):
+async def test_alangfuse_logging_metadata(langfuse_client):
     """
     Test that creates multiple traces, with a varying number of generations and sets various metadata fields
     Confirms that no metadata that is standard within Langfuse is duplicated in the respective trace or generation metadata
@@ -868,7 +869,7 @@ async def test_make_request():
     )
 
 
-def test_langfuse_dynamic_logging():
+def test_alangfuse_dynamic_logging():
     """
     pass in langfuse credentials via completion call
 
