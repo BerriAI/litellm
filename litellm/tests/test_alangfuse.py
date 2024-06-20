@@ -873,7 +873,6 @@ def test_langfuse_dynamic_logging():
     pass in langfuse credentials via completion call
 
     assert call is logged.
-
     Covers the team-logging scenario.
     """
     import uuid
