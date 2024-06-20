@@ -13,7 +13,10 @@ from litellm._logging import (
     verbose_logger,
     json_logs,
     _turn_on_json,
+    log_level,
 )
+
+
 from litellm.proxy._types import (
     KeyManagementSystem,
     KeyManagementSettings,
@@ -34,7 +37,7 @@ input_callback: List[Union[str, Callable]] = []
 success_callback: List[Union[str, Callable]] = []
 failure_callback: List[Union[str, Callable]] = []
 service_callback: List[Union[str, Callable]] = []
-_custom_logger_compatible_callbacks_literal = Literal["lago", "openmeter"]
+_custom_logger_compatible_callbacks_literal = Literal["lago", "openmeter", "logfire"]
 callbacks: List[Union[Callable, _custom_logger_compatible_callbacks_literal]] = []
 _langfuse_default_tags: Optional[
     List[
@@ -73,7 +76,7 @@ token: Optional[str] = (
 )
 telemetry = True
 max_tokens = 256  # OpenAI Defaults
-drop_params = False
+drop_params = bool(os.getenv("LITELLM_DROP_PARAMS", False))
 modify_params = False
 retry = True
 ### AUTH ###
@@ -240,6 +243,7 @@ num_retries: Optional[int] = None  # per model endpoint
 default_fallbacks: Optional[List] = None
 fallbacks: Optional[List] = None
 context_window_fallbacks: Optional[List] = None
+content_policy_fallbacks: Optional[List] = None
 allowed_fails: int = 0
 num_retries_per_request: Optional[int] = (
     None  # for the request overall (incl. fallbacks + model retries)
@@ -337,6 +341,7 @@ bedrock_models: List = []
 deepinfra_models: List = []
 perplexity_models: List = []
 watsonx_models: List = []
+gemini_models: List = []
 for key, value in model_cost.items():
     if value.get("litellm_provider") == "openai":
         open_ai_chat_completion_models.append(key)
@@ -383,13 +388,16 @@ for key, value in model_cost.items():
         perplexity_models.append(key)
     elif value.get("litellm_provider") == "watsonx":
         watsonx_models.append(key)
-
+    elif value.get("litellm_provider") == "gemini":
+        gemini_models.append(key)
 # known openai compatible endpoints - we'll eventually move this list to the model_prices_and_context_window.json dictionary
 openai_compatible_endpoints: List = [
     "api.perplexity.ai",
     "api.endpoints.anyscale.com/v1",
     "api.deepinfra.com/v1/openai",
     "api.mistral.ai/v1",
+    "codestral.mistral.ai/v1/chat/completions",
+    "codestral.mistral.ai/v1/fim/completions",
     "api.groq.com/openai/v1",
     "api.deepseek.com/v1",
     "api.together.xyz/v1",
@@ -400,6 +408,7 @@ openai_compatible_providers: List = [
     "anyscale",
     "mistral",
     "groq",
+    "codestral",
     "deepseek",
     "deepinfra",
     "perplexity",
@@ -590,6 +599,7 @@ model_list = (
     + maritalk_models
     + vertex_language_models
     + watsonx_models
+    + gemini_models
 )
 
 provider_list: List = [
@@ -605,6 +615,7 @@ provider_list: List = [
     "together_ai",
     "openrouter",
     "vertex_ai",
+    "vertex_ai_beta",
     "palm",
     "gemini",
     "ai21",
@@ -625,6 +636,8 @@ provider_list: List = [
     "anyscale",
     "mistral",
     "groq",
+    "codestral",
+    "text-completion-codestral",
     "deepseek",
     "maritalk",
     "voyage",
@@ -661,6 +674,7 @@ models_by_provider: dict = {
     "perplexity": perplexity_models,
     "maritalk": maritalk_models,
     "watsonx": watsonx_models,
+    "gemini": gemini_models,
 }
 
 # mapping for those models which have larger equivalents
@@ -713,6 +727,7 @@ openai_image_generation_models = ["dall-e-2", "dall-e-3"]
 
 from .timeout import timeout
 from .cost_calculator import completion_cost
+from litellm.litellm_core_utils.litellm_logging import Logging
 from .utils import (
     client,
     exception_type,
@@ -721,12 +736,11 @@ from .utils import (
     token_counter,
     create_pretrained_tokenizer,
     create_tokenizer,
-    cost_per_token,
     supports_function_calling,
     supports_parallel_function_calling,
     supports_vision,
+    supports_system_messages,
     get_litellm_params,
-    Logging,
     acreate,
     get_model_list,
     get_max_tokens,
@@ -746,9 +760,10 @@ from .utils import (
     get_first_chars_messages,
     ModelResponse,
     ImageResponse,
-    ImageObject,
     get_provider_fields,
 )
+
+from .types.utils import ImageObject
 from .llms.huggingface_restapi import HuggingfaceConfig
 from .llms.anthropic import AnthropicConfig
 from .llms.databricks import DatabricksConfig, DatabricksEmbeddingConfig
@@ -765,7 +780,8 @@ from .llms.gemini import GeminiConfig
 from .llms.nlp_cloud import NLPCloudConfig
 from .llms.aleph_alpha import AlephAlphaConfig
 from .llms.petals import PetalsConfig
-from .llms.vertex_ai import VertexAIConfig
+from .llms.vertex_httpx import VertexGeminiConfig
+from .llms.vertex_ai import VertexAIConfig, VertexAITextEmbeddingConfig
 from .llms.vertex_ai_anthropic import VertexAIAnthropicConfig
 from .llms.sagemaker import SagemakerConfig
 from .llms.ollama import OllamaConfig
@@ -787,8 +803,11 @@ from .llms.openai import (
     OpenAIConfig,
     OpenAITextCompletionConfig,
     MistralConfig,
+    MistralEmbeddingConfig,
     DeepInfraConfig,
+    AzureAIStudioConfig,
 )
+from .llms.text_completion_codestral import MistralTextCompletionConfig
 from .llms.azure import (
     AzureOpenAIConfig,
     AzureOpenAIError,
@@ -822,4 +841,4 @@ from .router import Router
 from .assistants.main import *
 from .batches.main import *
 from .scheduler import *
-from .cost_calculator import response_cost_calculator
+from .cost_calculator import response_cost_calculator, cost_per_token

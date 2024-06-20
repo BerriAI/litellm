@@ -73,18 +73,21 @@ model_list:
       api_key: my-fake-key
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
       stream_timeout: 0.001
-      rpm: 100
+      rpm: 1000
   - model_name: fake-openai-endpoint-3
     litellm_params:
       model: openai/my-fake-model-2
       api_key: my-fake-key
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
       stream_timeout: 0.001
-      rpm: 100
+      rpm: 1000
   - model_name: "*"
     litellm_params:
       model: openai/*
       api_key: os.environ/OPENAI_API_KEY
+  - model_name: mistral-embed
+    litellm_params:
+      model: mistral/mistral-embed
   - model_name: gpt-instruct # [PROD TEST] - tests if `/health` automatically infers this to be a text completion model
     litellm_params:
       model: text-completion-openai/gpt-3.5-turbo-instruct
@@ -108,6 +111,7 @@ litellm_settings:
       failure_callback: ["langfuse"]
       langfuse_public_key: os.environ/LANGFUSE_PROJECT2_PUBLIC # Project 2
       langfuse_secret: os.environ/LANGFUSE_PROJECT2_SECRET # Project 2
+      langfuse_host: https://us.cloud.langfuse.com
 
 router_settings:
   routing_strategy: usage-based-routing-v2 

@@ -1109,3 +1109,59 @@ async def test_client_side_fallbacks_list(sync_mode):
 
     assert isinstance(response, litellm.ModelResponse)
     assert response.model is not None and response.model == "gpt-4o"
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_router_content_policy_fallbacks(sync_mode):
+    os.environ["LITELLM_LOG"] = "DEBUG"
+    router = Router(
+        model_list=[
+            {
+                "model_name": "claude-2",
+                "litellm_params": {
+                    "model": "claude-2",
+                    "api_key": "",
+                    "mock_response": Exception("content filtering policy"),
+                },
+            },
+            {
+                "model_name": "my-fallback-model",
+                "litellm_params": {
+                    "model": "claude-2",
+                    "api_key": "",
+                    "mock_response": "This works!",
+                },
+            },
+            {
+                "model_name": "my-general-model",
+                "litellm_params": {
+                    "model": "claude-2",
+                    "api_key": "",
+                    "mock_response": Exception("Should not have called this."),
+                },
+            },
+            {
+                "model_name": "my-context-window-model",
+                "litellm_params": {
+                    "model": "claude-2",
+                    "api_key": "",
+                    "mock_response": Exception("Should not have called this."),
+                },
+            },
+        ],
+        content_policy_fallbacks=[{"claude-2": ["my-fallback-model"]}],
+        fallbacks=[{"claude-2": ["my-general-model"]}],
+        context_window_fallbacks=[{"claude-2": ["my-context-window-model"]}],
+    )
+
+    if sync_mode is True:
+        response = router.completion(
+            model="claude-2",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+        )
+    else:
+        response = await router.acompletion(
+            model="claude-2",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+        )

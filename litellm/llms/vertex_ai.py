@@ -1,18 +1,31 @@
-import os, types
+import inspect
 import json
-from enum import Enum
-import requests  # type: ignore
+import os
 import time
-from typing import Callable, Optional, Union, List, Literal, Any
-from litellm.utils import ModelResponse, Usage, CustomStreamWrapper, map_finish_reason
-import litellm, uuid
-import httpx, inspect  # type: ignore
-from litellm.types.llms.vertex_ai import *
+import types
+import uuid
+from enum import Enum
+from typing import Any, Callable, List, Literal, Optional, Union
+
+import httpx  # type: ignore
+import requests  # type: ignore
+from pydantic import BaseModel
+
+import litellm
+from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.prompt_templates.factory import (
-    convert_to_gemini_tool_call_result,
+    convert_to_anthropic_image_obj,
     convert_to_gemini_tool_call_invoke,
+    convert_to_gemini_tool_call_result,
 )
-from litellm.types.files import get_file_mime_type_for_file_type, get_file_type_from_extension, is_gemini_1_5_accepted_file_type, is_video_file_type
+from litellm.types.files import (
+    get_file_mime_type_for_file_type,
+    get_file_type_from_extension,
+    is_gemini_1_5_accepted_file_type,
+    is_video_file_type,
+)
+from litellm.types.llms.vertex_ai import *
+from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
 
 
 class VertexAIError(Exception):
@@ -267,28 +280,6 @@ def _get_image_bytes_from_url(image_url: str) -> bytes:
         raise Exception(f"An exception occurs with this image - {str(e)}")
 
 
-def _load_image_from_url(image_url: str):
-    """
-    Loads an image from a URL.
-
-    Args:
-        image_url (str): The URL of the image.
-
-    Returns:
-        Image: The loaded image.
-    """
-    from vertexai.preview.generative_models import (
-        GenerativeModel,
-        Part,
-        GenerationConfig,
-        Image,
-    )
-
-    image_bytes = _get_image_bytes_from_url(image_url)
-
-    return Image.from_bytes(data=image_bytes)
-
-
 def _convert_gemini_role(role: str) -> Literal["user", "model"]:
     if role == "user":
         return "user"
@@ -301,43 +292,24 @@ def _process_gemini_image(image_url: str) -> PartType:
         # GCS URIs
         if "gs://" in image_url:
             # Figure out file type
-            extension_with_dot = os.path.splitext(image_url)[-1] # Ex: ".png"
-            extension = extension_with_dot[1:] # Ex: "png"
+            extension_with_dot = os.path.splitext(image_url)[-1]  # Ex: ".png"
+            extension = extension_with_dot[1:]  # Ex: "png"
 
             file_type = get_file_type_from_extension(extension)
 
             # Validate the file type is supported by Gemini
             if not is_gemini_1_5_accepted_file_type(file_type):
                 raise Exception(f"File type not supported by gemini - {file_type}")
-            
+
             mime_type = get_file_mime_type_for_file_type(file_type)
             file_data = FileDataType(mime_type=mime_type, file_uri=image_url)
 
             return PartType(file_data=file_data)
 
         # Direct links
-        elif "https:/" in image_url:
-            image = _load_image_from_url(image_url)
-            _blob = BlobType(data=image.data, mime_type=image._mime_type)
-            return PartType(inline_data=_blob)
-        
-        # Base64 encoding
-        elif "base64" in image_url:
-            import base64, re
-
-            # base 64 is passed as data:image/jpeg;base64,<base-64-encoded-image>
-            image_metadata, img_without_base_64 = image_url.split(",")
-
-            # read mime_type from img_without_base_64=data:image/jpeg;base64
-            # Extract MIME type using regular expression
-            mime_type_match = re.match(r"data:(.*?);base64", image_metadata)
-
-            if mime_type_match:
-                mime_type = mime_type_match.group(1)
-            else:
-                mime_type = "image/jpeg"
-            decoded_img = base64.b64decode(img_without_base_64)
-            _blob = BlobType(data=decoded_img, mime_type=mime_type)
+        elif "https:/" in image_url or "base64" in image_url:
+            image = convert_to_anthropic_image_obj(image_url)
+            _blob = BlobType(data=image["data"], mime_type=image["media_type"])
             return PartType(inline_data=_blob)
         raise Exception("Invalid image received - {}".format(image_url))
     except Exception as e:
@@ -365,7 +337,7 @@ def _gemini_convert_messages_with_history(messages: list) -> List[ContentType]:
                 _parts: List[PartType] = []
                 for element in messages[msg_i]["content"]:
                     if isinstance(element, dict):
-                        if element["type"] == "text":
+                        if element["type"] == "text" and len(element["text"]) > 0:
                             _part = PartType(text=element["text"])
                             _parts.append(_part)
                         elif element["type"] == "image_url":
@@ -373,7 +345,10 @@ def _gemini_convert_messages_with_history(messages: list) -> List[ContentType]:
                             _part = _process_gemini_image(image_url=image_url)
                             _parts.append(_part)  # type: ignore
                 user_content.extend(_parts)
-            else:
+            elif (
+                isinstance(messages[msg_i]["content"], str)
+                and len(messages[msg_i]["content"]) > 0
+            ):
                 _part = PartType(text=messages[msg_i]["content"])
                 user_content.append(_part)
 
@@ -473,23 +448,25 @@ def completion(
             message="""Upgrade vertex ai. Run `pip install "google-cloud-aiplatform>=1.38"`""",
         )
     try:
+        import google.auth  # type: ignore
+        import proto  # type: ignore
+        from google.cloud import aiplatform  # type: ignore
+        from google.cloud.aiplatform_v1beta1.types import (
+            content as gapic_content_types,  # type: ignore
+        )
+        from google.protobuf import json_format  # type: ignore
+        from google.protobuf.struct_pb2 import Value  # type: ignore
+        from vertexai.language_models import CodeGenerationModel, TextGenerationModel
+        from vertexai.preview.generative_models import (
+            GenerationConfig,
+            GenerativeModel,
+            Part,
+        )
         from vertexai.preview.language_models import (
             ChatModel,
             CodeChatModel,
             InputOutputTextPair,
         )
-        from vertexai.language_models import TextGenerationModel, CodeGenerationModel
-        from vertexai.preview.generative_models import (
-            GenerativeModel,
-            Part,
-            GenerationConfig,
-        )
-        from google.cloud import aiplatform  # type: ignore
-        from google.protobuf import json_format  # type: ignore
-        from google.protobuf.struct_pb2 import Value  # type: ignore
-        from google.cloud.aiplatform_v1beta1.types import content as gapic_content_types  # type: ignore
-        import google.auth  # type: ignore
-        import proto  # type: ignore
 
         ## Load credentials with the correct quota project ref: https://github.com/googleapis/python-aiplatform/issues/2557#issuecomment-1709284744
         print_verbose(
@@ -611,7 +588,7 @@ def completion(
             llm_model = None
 
         # NOTE: async prediction and streaming under "private" mode isn't supported by aiplatform right now
-        if acompletion == True:
+        if acompletion is True:
             data = {
                 "llm_model": llm_model,
                 "mode": mode,
@@ -643,7 +620,7 @@ def completion(
             tools = optional_params.pop("tools", None)
             content = _gemini_convert_messages_with_history(messages=messages)
             stream = optional_params.pop("stream", False)
-            if stream == True:
+            if stream is True:
                 request_str += f"response = llm_model.generate_content({content}, generation_config=GenerationConfig(**{optional_params}), safety_settings={safety_settings}, stream={stream})\n"
                 logging_obj.pre_call(
                     input=prompt,
@@ -1293,6 +1270,95 @@ async def async_streaming(
     return streamwrapper
 
 
+class VertexAITextEmbeddingConfig(BaseModel):
+    """
+    Reference: https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/text-embeddings-api#TextEmbeddingInput
+
+    Args:
+        auto_truncate: Optional(bool) If True, will truncate input text to fit within the model's max input length.
+        task_type: Optional(str) The type of task to be performed. The default is "RETRIEVAL_QUERY".
+        title: Optional(str) The title of the document to be embedded. (only valid with task_type=RETRIEVAL_DOCUMENT).
+    """
+
+    auto_truncate: Optional[bool] = None
+    task_type: Optional[
+        Literal[
+            "RETRIEVAL_QUERY",
+            "RETRIEVAL_DOCUMENT",
+            "SEMANTIC_SIMILARITY",
+            "CLASSIFICATION",
+            "CLUSTERING",
+            "QUESTION_ANSWERING",
+            "FACT_VERIFICATION",
+        ]
+    ] = None
+    title: Optional[str] = None
+
+    def __init__(
+        self,
+        auto_truncate: Optional[bool] = None,
+        task_type: Optional[
+            Literal[
+                "RETRIEVAL_QUERY",
+                "RETRIEVAL_DOCUMENT",
+                "SEMANTIC_SIMILARITY",
+                "CLASSIFICATION",
+                "CLUSTERING",
+                "QUESTION_ANSWERING",
+                "FACT_VERIFICATION",
+            ]
+        ] = None,
+        title: Optional[str] = None,
+    ) -> None:
+        locals_ = locals()
+        for key, value in locals_.items():
+            if key != "self" and value is not None:
+                setattr(self.__class__, key, value)
+
+    @classmethod
+    def get_config(cls):
+        return {
+            k: v
+            for k, v in cls.__dict__.items()
+            if not k.startswith("__")
+            and not isinstance(
+                v,
+                (
+                    types.FunctionType,
+                    types.BuiltinFunctionType,
+                    classmethod,
+                    staticmethod,
+                ),
+            )
+            and v is not None
+        }
+
+    def get_supported_openai_params(self):
+        return [
+            "dimensions",
+        ]
+
+    def map_openai_params(self, non_default_params: dict, optional_params: dict):
+        for param, value in non_default_params.items():
+            if param == "dimensions":
+                optional_params["output_dimensionality"] = value
+        return optional_params
+
+    def get_mapped_special_auth_params(self) -> dict:
+        """
+        Common auth params across bedrock/vertex_ai/azure/watsonx
+        """
+        return {"project": "vertex_project", "region_name": "vertex_location"}
+
+    def map_special_auth_params(self, non_default_params: dict, optional_params: dict):
+        mapped_params = self.get_mapped_special_auth_params()
+
+        for param, value in non_default_params.items():
+            if param in mapped_params:
+                optional_params[mapped_params[param]] = value
+        return optional_params
+
+
 def embedding(
     model: str,
     input: Union[list, str],
@@ -1316,8 +1382,8 @@ def embedding(
             message="vertexai import failed please run `pip install google-cloud-aiplatform`",
         )
 
-    from vertexai.language_models import TextEmbeddingModel
     import google.auth  # type: ignore
+    from vertexai.language_models import TextEmbeddingInput, TextEmbeddingModel
 
     ## Load credentials with the correct quota project ref: https://github.com/googleapis/python-aiplatform/issues/2557#issuecomment-1709284744
     try:
@@ -1347,6 +1413,16 @@ def embedding(
     if isinstance(input, str):
         input = [input]
 
+    if optional_params is not None and isinstance(optional_params, dict):
+        if optional_params.get("task_type") or optional_params.get("title"):
+            # if user passed task_type or title, cast to TextEmbeddingInput
+            _task_type = optional_params.pop("task_type", None)
+            _title = optional_params.pop("title", None)
+            input = [
+                TextEmbeddingInput(text=x, task_type=_task_type, title=_title)
+                for x in input
+            ]
+
     try:
         llm_model = TextEmbeddingModel.from_pretrained(model)
     except Exception as e:
@@ -1363,7 +1439,8 @@ def embedding(
             encoding=encoding,
         )
 
-    request_str = f"""embeddings = llm_model.get_embeddings({input})"""
+    _input_dict = {"texts": input, **optional_params}
+    request_str = f"""embeddings = llm_model.get_embeddings({_input_dict})"""
     ## LOGGING PRE-CALL
     logging_obj.pre_call(
         input=input,
@@ -1375,7 +1452,7 @@ def embedding(
     )
 
     try:
-        embeddings = llm_model.get_embeddings(input)
+        embeddings = llm_model.get_embeddings(**_input_dict)
     except Exception as e:
         raise VertexAIError(status_code=500, message=str(e))
 
@@ -1383,6 +1460,7 @@ def embedding(
     logging_obj.post_call(input=input, api_key=None, original_response=embeddings)
     ## Populate OpenAI compliant dictionary
     embedding_response = []
+    input_tokens: int = 0
     for idx, embedding in enumerate(embeddings):
         embedding_response.append(
             {
@@ -1391,14 +1469,10 @@ def embedding(
                 "embedding": embedding.values,
             }
         )
+        input_tokens += embedding.statistics.token_count
     model_response["object"] = "list"
     model_response["data"] = embedding_response
     model_response["model"] = model
-    input_tokens = 0
-
-    input_str = "".join(input)
-
-    input_tokens += len(encoding.encode(input_str))
 
     usage = Usage(
         prompt_tokens=input_tokens, completion_tokens=0, total_tokens=input_tokens
@@ -1420,7 +1494,8 @@ async def async_embedding(
     """
     Async embedding implementation
     """
-    request_str = f"""embeddings = llm_model.get_embeddings({input})"""
+    _input_dict = {"texts": input, **optional_params}
+    request_str = f"""embeddings = llm_model.get_embeddings({_input_dict})"""
     ## LOGGING PRE-CALL
     logging_obj.pre_call(
         input=input,
@@ -1432,7 +1507,7 @@ async def async_embedding(
     )
 
     try:
-        embeddings = await client.get_embeddings_async(input)
+        embeddings = await client.get_embeddings_async(**_input_dict)
     except Exception as e:
         raise VertexAIError(status_code=500, message=str(e))
 
@@ -1440,6 +1515,7 @@ async def async_embedding(
     logging_obj.post_call(input=input, api_key=None, original_response=embeddings)
     ## Populate OpenAI compliant dictionary
     embedding_response = []
+    input_tokens: int = 0
     for idx, embedding in enumerate(embeddings):
         embedding_response.append(
             {
@@ -1448,18 +1524,13 @@ async def async_embedding(
                 "embedding": embedding.values,
             }
         )
+        input_tokens += embedding.statistics.token_count
+
     model_response["object"] = "list"
     model_response["data"] = embedding_response
     model_response["model"] = model
-    input_tokens = 0
-
-    input_str = "".join(input)
-
-    input_tokens += len(encoding.encode(input_str))
-
     usage = Usage(
         prompt_tokens=input_tokens, completion_tokens=0, total_tokens=input_tokens
     )
     model_response.usage = usage
-
     return model_response

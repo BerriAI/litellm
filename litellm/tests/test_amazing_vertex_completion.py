@@ -1,22 +1,35 @@
-import sys, os
+import os
+import sys
 import traceback
+
 from dotenv import load_dotenv
 
 load_dotenv()
-import os, io
+import io
+import os
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-import pytest, asyncio
-import litellm
-from litellm import embedding, completion, completion_cost, Timeout, acompletion
-from litellm import RateLimitError
-from litellm.tests.test_streaming import streaming_format_tests
+import asyncio
 import json
 import os
 import tempfile
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+import litellm
+from litellm import (
+    RateLimitError,
+    Timeout,
+    acompletion,
+    completion,
+    completion_cost,
+    embedding,
+)
 from litellm.llms.vertex_ai import _gemini_convert_messages_with_history
+from litellm.tests.test_streaming import streaming_format_tests
 
 litellm.num_retries = 3
 litellm.cache = None
@@ -114,7 +127,8 @@ async def test_get_response():
             ],
         )
         return response
-
+    except litellm.RateLimitError:
+        pass
     except litellm.UnprocessableEntityError as e:
         pass
     except Exception as e:
@@ -503,35 +517,60 @@ async def test_async_vertexai_streaming_response():
 # asyncio.run(test_async_vertexai_streaming_response())
 
 
-def test_gemini_pro_vision():
+@pytest.mark.parametrize("provider", ["vertex_ai"])  # "vertex_ai_beta"
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_gemini_pro_vision(provider, sync_mode):
     try:
         load_vertex_ai_credentials()
         litellm.set_verbose = True
         litellm.num_retries = 3
-        resp = litellm.completion(
-            model="vertex_ai/gemini-1.5-flash-preview-0514",
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": "Whats in this image?"},
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": "gs://cloud-samples-data/generative-ai/image/boats.jpeg"
+        if sync_mode:
+            resp = litellm.completion(
+                model="{}/gemini-1.5-flash-preview-0514".format(provider),
+                messages=[
+                    {"role": "system", "content": "Be a good bot"},
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "Whats in this image?"},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": "gs://cloud-samples-data/generative-ai/image/boats.jpeg"
+                                },
                             },
-                        },
-                    ],
-                }
-            ],
-        )
+                        ],
+                    },
+                ],
+            )
+        else:
+            resp = await litellm.acompletion(
+                model="{}/gemini-1.5-flash-preview-0514".format(provider),
+                messages=[
+                    {"role": "system", "content": "Be a good bot"},
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "Whats in this image?"},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": "gs://cloud-samples-data/generative-ai/image/boats.jpeg"
+                                },
+                            },
+                        ],
+                    },
+                ],
+            )
         print(resp)
 
         prompt_tokens = resp.usage.prompt_tokens
 
         # DO Not DELETE this ASSERT
         # Google counts the prompt tokens for us, we should ensure we use the tokens from the orignal response
-        assert prompt_tokens == 263  # the gemini api returns 263 to us
+        assert prompt_tokens == 267  # the gemini api returns 267 to us
+
     except litellm.RateLimitError as e:
         pass
     except Exception as e:
@@ -591,9 +630,235 @@ def test_gemini_pro_vision_base64():
             pytest.fail(f"An exception occurred - {str(e)}")
 
 
-@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.skip(reason="exhausted vertex quota. need to refactor to mock the call")
+@pytest.mark.parametrize("provider", ["vertex_ai_beta"])  # "vertex_ai",
+@pytest.mark.parametrize("sync_mode", [True])  # "vertex_ai",
 @pytest.mark.asyncio
-async def test_gemini_pro_function_calling(sync_mode):
+async def test_gemini_pro_function_calling_httpx(provider, sync_mode):
+    try:
+        load_vertex_ai_credentials()
+        litellm.set_verbose = True
+
+        messages = [
+            {
+                "role": "system",
+                "content": "Your name is Litellm Bot, you are a helpful assistant",
+            },
+            # User asks for their name and weather in San Francisco
+            {
+                "role": "user",
+                "content": "Hello, what is your name and can you tell me the weather?",
+            },
+        ]
+
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get the current weather in a given location",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "location": {
+                                "type": "string",
+                                "description": "The city and state, e.g. San Francisco, CA",
+                            }
+                        },
+                        "required": ["location"],
+                    },
+                },
+            }
+        ]
+
+        data = {
+            "model": "{}/gemini-1.5-pro".format(provider),
+            "messages": messages,
+            "tools": tools,
+            "tool_choice": "required",
+        }
+        if sync_mode:
+            response = litellm.completion(**data)
+        else:
+            response = await litellm.acompletion(**data)
+
+        print(f"response: {response}")
+
+        assert response.choices[0].message.tool_calls[0].function.arguments is not None
+        assert isinstance(
+            response.choices[0].message.tool_calls[0].function.arguments, str
+        )
+    except litellm.RateLimitError as e:
+        pass
+    except Exception as e:
+        if "429 Quota exceeded" in str(e):
+            pass
+        else:
+            pytest.fail("An unexpected exception occurred - {}".format(str(e)))
+
+
+# @pytest.mark.skip(reason="exhausted vertex quota. need to refactor to mock the call")
+def vertex_httpx_mock_post(url, data=None, json=None, headers=None):
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {"Content-Type": "application/json"}
+    mock_response.json.return_value = {
+        "candidates": [
+            {
+                "finishReason": "RECITATION",
+                "safetyRatings": [
+                    {
+                        "category": "HARM_CATEGORY_HATE_SPEECH",
+                        "probability": "NEGLIGIBLE",
+                        "probabilityScore": 0.14965563,
+                        "severity": "HARM_SEVERITY_NEGLIGIBLE",
+                        "severityScore": 0.13660839,
+                    },
+                    {
+                        "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                        "probability": "NEGLIGIBLE",
+                        "probabilityScore": 0.16344544,
+                        "severity": "HARM_SEVERITY_NEGLIGIBLE",
+                        "severityScore": 0.10230471,
+                    },
+                    {
+                        "category": "HARM_CATEGORY_HARASSMENT",
+                        "probability": "NEGLIGIBLE",
+                        "probabilityScore": 0.1979091,
+                        "severity": "HARM_SEVERITY_NEGLIGIBLE",
+                        "severityScore": 0.06052939,
+                    },
+                    {
+                        "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                        "probability": "NEGLIGIBLE",
+                        "probabilityScore": 0.1765296,
+                        "severity": "HARM_SEVERITY_NEGLIGIBLE",
+                        "severityScore": 0.18417984,
+                    },
+                ],
+                "citationMetadata": {
+                    "citations": [
+                        {
+                            "startIndex": 251,
+                            "endIndex": 380,
+                            "uri": "https://chocolatecake2023.blogspot.com/2023/02/taste-deliciousness-of-perfectly-baked.html?m=1",
+                        },
+                        {
+                            "startIndex": 393,
+                            "endIndex": 535,
+                            "uri": "https://skinnymixes.co.uk/blogs/food-recipes/peanut-butter-cup-cookies",
+                        },
+                        {
+                            "startIndex": 439,
+                            "endIndex": 581,
+                            "uri": "https://mast-producing-trees.org/aldis-chocolate-chips-are-peanut-and-tree-nut-free/",
+                        },
+                        {
+                            "startIndex": 1117,
+                            "endIndex": 1265,
+                            "uri": "https://github.com/frdrck100/To_Do_Assignments",
+                        },
+                        {
+                            "startIndex": 1146,
+                            "endIndex": 1288,
+                            "uri": "https://skinnymixes.co.uk/blogs/food-recipes/peanut-butter-cup-cookies",
+                        },
+                        {
+                            "startIndex": 1166,
+                            "endIndex": 1299,
+                            "uri": "https://www.girlversusdough.com/brookies/",
+                        },
+                        {
+                            "startIndex": 1780,
+                            "endIndex": 1909,
+                            "uri": "https://chocolatecake2023.blogspot.com/2023/02/taste-deliciousness-of-perfectly-baked.html?m=1",
+                        },
+                        {
+                            "startIndex": 1834,
+                            "endIndex": 1964,
+                            "uri": "https://newsd.in/national-cream-cheese-brownie-day-2023-date-history-how-to-make-a-cream-cheese-brownie/",
+                        },
+                        {
+                            "startIndex": 1846,
+                            "endIndex": 1989,
+                            "uri": "https://github.com/frdrck100/To_Do_Assignments",
+                        },
+                        {
+                            "startIndex": 2121,
+                            "endIndex": 2261,
+                            "uri": "https://recipes.net/copycat/hardee/hardees-chocolate-chip-cookie-recipe/",
+                        },
+                        {
+                            "startIndex": 2505,
+                            "endIndex": 2671,
+                            "uri": "https://www.tfrecipes.com/Oranges%20with%20dried%20cherries/",
+                        },
+                        {
+                            "startIndex": 3390,
+                            "endIndex": 3529,
+                            "uri": "https://github.com/quantumcognition/Crud-palm",
+                        },
+                        {
+                            "startIndex": 3568,
+                            "endIndex": 3724,
+                            "uri": "https://recipes.net/dessert/cakes/ultimate-easy-gingerbread/",
+                        },
+                        {
+                            "startIndex": 3640,
+                            "endIndex": 3770,
+                            "uri": "https://recipes.net/dessert/cookies/soft-and-chewy-peanut-butter-cookies/",
+                        },
+                    ]
+                },
+            }
+        ],
+        "usageMetadata": {"promptTokenCount": 336, "totalTokenCount": 336},
+    }
+    return mock_response
+
+
+@pytest.mark.parametrize("provider", ["vertex_ai_beta"])  # "vertex_ai",
+@pytest.mark.asyncio
+async def test_gemini_pro_json_schema_httpx_content_policy_error(provider):
+    load_vertex_ai_credentials()
+    litellm.set_verbose = True
+    messages = [
+        {
+            "role": "user",
+            "content": """
+    
+List 5 popular cookie recipes.
+
+Using this JSON schema:
+```json
+{'$defs': {'Recipe': {'properties': {'recipe_name': {'examples': ['Chocolate Chip Cookies', 'Peanut Butter Cookies'], 'maxLength': 100, 'title': 'The recipe name', 'type': 'string'}, 'estimated_time': {'anyOf': [{'minimum': 0, 'type': 'integer'}, {'type': 'null'}], 'default': None, 'description': 'The estimated time to make the recipe in minutes', 'examples': [30, 45], 'title': 'The estimated time'}, 'ingredients': {'examples': [['flour', 'sugar', 'chocolate chips'], ['peanut butter', 'sugar', 'eggs']], 'items': {'type': 'string'}, 'maxItems': 10, 'title': 'The ingredients', 'type': 'array'}, 'instructions': {'examples': [['mix', 'bake'], ['mix', 'chill', 'bake']], 'items': {'type': 'string'}, 'maxItems': 10, 'title': 'The instructions', 'type': 'array'}}, 'required': ['recipe_name', 'ingredients', 'instructions'], 'title': 'Recipe', 'type': 'object'}}, 'properties': {'recipes': {'items': {'$ref': '#/$defs/Recipe'}, 'maxItems': 11, 'title': 'The recipes', 'type': 'array'}}, 'required': ['recipes'], 'title': 'MyRecipes', 'type': 'object'}
+```
+            """,
+        }
+    ]
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
+
+    with patch.object(client, "post", side_effect=vertex_httpx_mock_post) as mock_call:
+        try:
+            response = completion(
+                model="vertex_ai_beta/gemini-1.5-flash",
+                messages=messages,
+                response_format={"type": "json_object"},
+                client=client,
+            )
+        except litellm.ContentPolicyViolationError as e:
+            pass
+
+        mock_call.assert_called_once()
+
+
+@pytest.mark.skip(reason="exhausted vertex quota. need to refactor to mock the call")
+@pytest.mark.parametrize("sync_mode", [True])
+@pytest.mark.parametrize("provider", ["vertex_ai"])
+@pytest.mark.asyncio
+async def test_gemini_pro_function_calling(provider, sync_mode):
     try:
         load_vertex_ai_credentials()
         litellm.set_verbose = True
@@ -655,7 +920,7 @@ async def test_gemini_pro_function_calling(sync_mode):
         ]
 
         data = {
-            "model": "vertex_ai/gemini-1.5-pro-preview-0514",
+            "model": "{}/gemini-1.5-pro-preview-0514".format(provider),
             "messages": messages,
             "tools": tools,
         }
@@ -798,11 +1063,36 @@ async def test_gemini_pro_async_function_calling():
 def test_vertexai_embedding():
     try:
         load_vertex_ai_credentials()
-        # litellm.set_verbose=True
+        # litellm.set_verbose = True
         response = embedding(
             model="textembedding-gecko@001",
             input=["good morning from litellm", "this is another item"],
         )
+        print(f"response:", response)
+    except litellm.RateLimitError as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.skip(
+    reason="new test - works locally running into vertex version issues on ci/cd"
+)
+def test_vertexai_embedding_embedding_latest():
+    try:
+        load_vertex_ai_credentials()
+        litellm.set_verbose = True
+
+        response = embedding(
+            model="vertex_ai/text-embedding-004",
+            input=["hi"],
+            dimensions=1,
+            auto_truncate=True,
+            task_type="RETRIEVAL_QUERY",
+        )
+
+        assert len(response.data[0]["embedding"]) == 1
+        assert response.usage.prompt_tokens > 0
         print(f"response:", response)
     except litellm.RateLimitError as e:
         pass
@@ -863,38 +1153,45 @@ async def test_vertexai_aembedding():
 #         raise e
 # test_gemini_pro_vision_stream()
 
-# def test_gemini_pro_vision_async():
-#     try:
-#         litellm.set_verbose = True
-#         litellm.num_retries=0
-#         async def test():
-#             resp = await litellm.acompletion(
-#                 model = "vertex_ai/gemini-pro-vision",
-#                 messages=[
-#                     {
-#                         "role": "user",
-#                         "content": [
-#                                         {
-#                                             "type": "text",
-#                                             "text": "Whats in this image?"
-#                                         },
-#                                         {
-#                                             "type": "image_url",
-#                                             "image_url": {
-#                                             "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg"
-#                                             }
-#                                         }
-#                                     ]
-#                     }
-#                 ],
-#             )
-#             print("async response gemini pro vision")
-#             print(resp)
-#         asyncio.run(test())
-#     except Exception as e:
-#         import traceback
-#         traceback.print_exc()
-#         raise e
+
+def test_gemini_pro_vision_async():
+    try:
+        litellm.set_verbose = True
+        litellm.num_retries = 0
+
+        async def test():
+            load_vertex_ai_credentials()
+            resp = await litellm.acompletion(
+                model="vertex_ai/gemini-pro-vision",
+                messages=[
+                    {"role": "system", "content": ""},
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "Whats in this image?"},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg"
+                                },
+                            },
+                        ],
+                    },
+                ],
+            )
+            print("async response gemini pro vision")
+            print(resp)
+
+        asyncio.run(test())
+    except litellm.RateLimitError:
+        pass
+    except Exception as e:
+        import traceback
+
+        traceback.print_exc()
+        raise e
+
+
 # test_gemini_pro_vision_async()
 
 

@@ -1,20 +1,28 @@
-import sys, os
+import os
+import sys
 import traceback
+
+import litellm.cost_calculator
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
+import asyncio
 import time
 from typing import Optional
+
+import pytest
+
 import litellm
 from litellm import (
+    TranscriptionResponse,
+    completion_cost,
+    cost_per_token,
     get_max_tokens,
     model_cost,
     open_ai_chat_completion_models,
-    TranscriptionResponse,
 )
-from litellm.utils import CustomLogger
-import pytest, asyncio
+from litellm.litellm_core_utils.litellm_logging import CustomLogger
 
 
 class CustomLoggingHandler(CustomLogger):
@@ -66,7 +74,7 @@ async def test_custom_pricing(sync_mode):
 
 
 def test_custom_pricing_as_completion_cost_param():
-    from litellm import ModelResponse, Choices, Message
+    from litellm import Choices, Message, ModelResponse
     from litellm.utils import Usage
 
     resp = ModelResponse(
@@ -134,7 +142,7 @@ def test_cost_ft_gpt_35():
     try:
         # this tests if litellm.completion_cost can calculate cost for ft:gpt-3.5-turbo:my-org:custom_suffix:id
         # it needs to lookup  ft:gpt-3.5-turbo in the litellm model_cost map to get the correct cost
-        from litellm import ModelResponse, Choices, Message
+        from litellm import Choices, Message, ModelResponse
         from litellm.utils import Usage
 
         resp = ModelResponse(
@@ -179,7 +187,7 @@ def test_cost_azure_gpt_35():
     try:
         # this tests if litellm.completion_cost can calculate cost for azure/chatgpt-deployment-2 which maps to azure/gpt-3.5-turbo
         # for this test we check if passing `model` to completion_cost overrides the completion cost
-        from litellm import ModelResponse, Choices, Message
+        from litellm import Choices, Message, ModelResponse
         from litellm.utils import Usage
 
         resp = ModelResponse(
@@ -266,7 +274,7 @@ def test_cost_bedrock_pricing():
     """
     - get pricing specific to region for a model
     """
-    from litellm import ModelResponse, Choices, Message
+    from litellm import Choices, Message, ModelResponse
     from litellm.utils import Usage
 
     litellm.set_verbose = True
@@ -475,13 +483,13 @@ def test_replicate_llama3_cost_tracking():
 @pytest.mark.parametrize("is_streaming", [True, False])  #
 def test_groq_response_cost_tracking(is_streaming):
     from litellm.utils import (
-        ModelResponse,
-        Choices,
-        Message,
-        Usage,
         CallTypes,
-        StreamingChoices,
+        Choices,
         Delta,
+        Message,
+        ModelResponse,
+        StreamingChoices,
+        Usage,
     )
 
     response = ModelResponse(
@@ -565,3 +573,90 @@ def test_together_ai_qwen_completion_cost():
     )
 
     assert response == "together-ai-41.1b-80b"
+
+
+@pytest.mark.parametrize("above_128k", [False, True])
+@pytest.mark.parametrize("provider", ["gemini"])
+def test_gemini_completion_cost(above_128k, provider):
+    """
+    Check if cost correctly calculated for gemini models based on context window
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    if provider == "gemini":
+        model_name = "gemini-1.5-flash-latest"
+    else:
+        model_name = "gemini-1.5-flash-preview-0514"
+    if above_128k:
+        prompt_tokens = 128001.0
+        output_tokens = 228001.0
+    else:
+        prompt_tokens = 128.0
+        output_tokens = 228.0
+    ## GET MODEL FROM LITELLM.MODEL_INFO
+    model_info = litellm.get_model_info(model=model_name, custom_llm_provider=provider)
+
+    ## EXPECTED COST
+    if above_128k:
+        assert (
+            model_info["input_cost_per_token_above_128k_tokens"] is not None
+        ), "model info for model={} does not have pricing for > 128k tokens\nmodel_info={}".format(
+            model_name, model_info
+        )
+        assert (
+            model_info["output_cost_per_token_above_128k_tokens"] is not None
+        ), "model info for model={} does not have pricing for > 128k tokens\nmodel_info={}".format(
+            model_name, model_info
+        )
+        input_cost = (
+            prompt_tokens * model_info["input_cost_per_token_above_128k_tokens"]
+        )
+        output_cost = (
+            output_tokens * model_info["output_cost_per_token_above_128k_tokens"]
+        )
+    else:
+        input_cost = prompt_tokens * model_info["input_cost_per_token"]
+        output_cost = output_tokens * model_info["output_cost_per_token"]
+
+    ## CALCULATED COST
+    calculated_input_cost, calculated_output_cost = cost_per_token(
+        model=model_name,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=output_tokens,
+        custom_llm_provider=provider,
+    )
+
+    assert calculated_input_cost == input_cost
+    assert calculated_output_cost == output_cost
+
+
+def _count_characters(text):
+    # Remove white spaces and count characters
+    filtered_text = "".join(char for char in text if not char.isspace())
+    return len(filtered_text)
+
+
+def test_vertex_ai_completion_cost():
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    text = "The quick brown fox jumps over the lazy dog."
+    characters = _count_characters(text=text)
+
+    model_info = litellm.get_model_info(model="gemini-1.5-flash")
+
+    print("\nExpected model info:\n{}\n\n".format(model_info))
+
+    expected_input_cost = characters * model_info["input_cost_per_character"]
+
+    ## CALCULATED COST
+    calculated_input_cost, calculated_output_cost = cost_per_token(
+        model="gemini-1.5-flash",
+        custom_llm_provider="vertex_ai",
+        prompt_characters=characters,
+        completion_characters=0,
+    )
+
+    assert round(expected_input_cost, 6) == round(calculated_input_cost, 6)
+    print("expected_input_cost: {}".format(expected_input_cost))
+    print("calculated_input_cost: {}".format(calculated_input_cost))

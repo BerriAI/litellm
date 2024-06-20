@@ -1,33 +1,41 @@
+import hashlib
+import json
+import time
+import traceback
+import types
 from typing import (
-    Optional,
-    Union,
     Any,
     BinaryIO,
-    Literal,
+    Callable,
+    Coroutine,
     Iterable,
+    Literal,
+    Optional,
+    Union,
 )
-import hashlib
-from typing_extensions import override, overload
-from pydantic import BaseModel
-import types, time, json, traceback
+
 import httpx
-from .base import BaseLLM
-from litellm.utils import (
-    ModelResponse,
-    Choices,
-    Message,
-    CustomStreamWrapper,
-    convert_to_model_response_object,
-    Usage,
-    TranscriptionResponse,
-    TextCompletionResponse,
-)
-from typing import Callable, Optional, Coroutine
-import litellm
-from .prompt_templates.factory import prompt_factory, custom_prompt
-from openai import OpenAI, AsyncOpenAI
-from ..types.llms.openai import *
 import openai
+from openai import AsyncOpenAI, OpenAI
+from pydantic import BaseModel
+from typing_extensions import overload, override
+
+import litellm
+from litellm.types.utils import ProviderField
+from litellm.utils import (
+    Choices,
+    CustomStreamWrapper,
+    Message,
+    ModelResponse,
+    TextCompletionResponse,
+    TranscriptionResponse,
+    Usage,
+    convert_to_model_response_object,
+)
+
+from ..types.llms.openai import *
+from .base import BaseLLM
+from .prompt_templates.factory import custom_prompt, prompt_factory
 
 
 class OpenAIError(Exception):
@@ -164,6 +172,68 @@ class MistralConfig:
         return optional_params
 
 
+class MistralEmbeddingConfig:
+    """
+    Reference: https://docs.mistral.ai/api/#operation/createEmbedding
+    """
+
+    def __init__(
+        self,
+    ) -> None:
+        locals_ = locals().copy()
+        for key, value in locals_.items():
+            if key != "self" and value is not None:
+                setattr(self.__class__, key, value)
+
+    @classmethod
+    def get_config(cls):
+        return {
+            k: v
+            for k, v in cls.__dict__.items()
+            if not k.startswith("__")
+            and not isinstance(
+                v,
+                (
+                    types.FunctionType,
+                    types.BuiltinFunctionType,
+                    classmethod,
+                    staticmethod,
+                ),
+            )
+            and v is not None
+        }
+
+    def get_supported_openai_params(self):
+        return [
+            "encoding_format",
+        ]
+
+    def map_openai_params(self, non_default_params: dict, optional_params: dict):
+        for param, value in non_default_params.items():
+            if param == "encoding_format":
+                optional_params["encoding_format"] = value
+        return optional_params
+
+
+class AzureAIStudioConfig:
+    def get_required_params(self) -> List[ProviderField]:
+        """For a given provider, return it's required fields with a description"""
+        return [
+            ProviderField(
+                field_name="api_key",
+                field_type="string",
+                field_description="Your Azure AI Studio API Key.",
+                field_value="zEJ...",
+            ),
+            ProviderField(
+                field_name="api_base",
+                field_type="string",
+                field_description="Your Azure AI Studio API Base.",
+                field_value="https://Mistral-serverless.",
+            ),
+        ]
+
+
 class DeepInfraConfig:
     """
     Reference: https://deepinfra.com/docs/advanced/openai_api
@@ -243,8 +313,12 @@ class DeepInfraConfig:
         ]
 
     def map_openai_params(
-        self, non_default_params: dict, optional_params: dict, model: str
-    ):
+        self,
+        non_default_params: dict,
+        optional_params: dict,
+        model: str,
+        drop_params: bool,
+    ) -> dict:
         supported_openai_params = self.get_supported_openai_params()
         for param, value in non_default_params.items():
             if (
@@ -253,8 +327,23 @@ class DeepInfraConfig:
                 and model == "mistralai/Mistral-7B-Instruct-v0.1"
             ):  # this model does no support temperature == 0
                 value = 0.0001  # close to 0
+            if param == "tool_choice":
+                if (
+                    value != "auto" and value != "none"
+                ):  # https://deepinfra.com/docs/advanced/function_calling
+                    ## UNSUPPORTED TOOL CHOICE VALUE
+                    if litellm.drop_params is True or drop_params is True:
+                        value = None
+                    else:
+                        raise litellm.utils.UnsupportedParamsError(
+                            message="Deepinfra doesn't support tool_choice={}. To drop unsupported openai params from the call, set `litellm.drop_params = True`".format(
+                                value
+                            ),
+                            status_code=400,
+                        )
             if param in supported_openai_params:
-                optional_params[param] = value
+                if value is not None:
+                    optional_params[param] = value
         return optional_params
 
 
@@ -1487,6 +1576,7 @@ class OpenAITextCompletion(BaseLLM):
                 response = openai_client.completions.create(**data)  # type: ignore
 
                 response_json = response.model_dump()
+
                 ## LOGGING
                 logging_obj.post_call(
                     input=prompt,
