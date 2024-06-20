@@ -888,7 +888,6 @@ def test_aaalangfuse_dynamic_logging():
         mock_response="Hey! how's it going?",
         langfuse_public_key=os.getenv("LANGFUSE_PROJECT2_PUBLIC"),
         langfuse_secret_key=os.getenv("LANGFUSE_PROJECT2_SECRET"),
-        langfuse_host="https://us.cloud.langfuse.com",
         metadata={"trace_id": trace_id},
         success_callback=["langfuse"],
     )
