@@ -892,7 +892,7 @@ def test_aaalangfuse_dynamic_logging():
         success_callback=["langfuse"],
     )
 
-    time.sleep(1)
+    time.sleep(3)
 
     langfuse_client = langfuse.Langfuse(
         public_key=os.getenv("LANGFUSE_PROJECT2_PUBLIC"),
