@@ -1,12 +1,21 @@
-import logging, os, json
-from logging import Formatter
+import json
+import logging
+import os
 import traceback
+from logging import Formatter
 
 set_verbose = False
+
+if set_verbose is True:
+    logging.warning(
+        "`litellm.set_verbose` is deprecated. Please set `os.environ['LITELLM_LOG'] = 'DEBUG'` for debug logs."
+    )
 json_logs = bool(os.getenv("JSON_LOGS", False))
 # Create a handler for the logger (you may need to adapt this based on your needs)
+log_level = os.getenv("LITELLM_LOG", "DEBUG")
+numeric_level: str = getattr(logging, log_level.upper())
 handler = logging.StreamHandler()
-handler.setLevel(logging.DEBUG)
+handler.setLevel(numeric_level)
 
 
 class JsonFormatter(Formatter):
@@ -14,8 +23,12 @@ class JsonFormatter(Formatter):
         super(JsonFormatter, self).__init__()
 
     def format(self, record):
-        json_record = {}
-        json_record["message"] = record.getMessage()
+        json_record = {
+            "message": record.getMessage(),
+            "level": record.levelname,
+            "timestamp": self.formatTime(record, self.datefmt),
+        }
+
         return json.dumps(json_record)
 
 

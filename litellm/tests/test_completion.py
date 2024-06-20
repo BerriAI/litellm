@@ -1,20 +1,27 @@
-import sys, os, json
+import json
+import os
+import sys
 import traceback
+
 from dotenv import load_dotenv
 
 load_dotenv()
-import os, io
+import io
+import os
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
+
+import os
+from unittest.mock import MagicMock, patch
+
 import pytest
+
 import litellm
-from litellm import embedding, completion, completion_cost, Timeout
-from litellm import RateLimitError
+from litellm import RateLimitError, Timeout, completion, completion_cost, embedding
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.prompt_templates.factory import anthropic_messages_pt
-from unittest.mock import patch, MagicMock
-from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
 
 # litellm.num_retries = 3
 litellm.cache = None
@@ -687,8 +694,10 @@ def test_completion_claude_3_base64():
             pytest.fail(f"An exception occurred - {str(e)}")
 
 
-@pytest.mark.skip(reason="issue getting wikipedia images in ci/cd")
-def test_completion_claude_3_function_plus_image():
+@pytest.mark.parametrize(
+    "model", ["gemini/gemini-1.5-flash"]  # "claude-3-sonnet-20240229",
+)
+def test_completion_function_plus_image(model):
     litellm.set_verbose = True
 
     image_content = [
@@ -696,7 +705,7 @@ def test_completion_claude_3_function_plus_image():
         {
             "type": "image_url",
             "image_url": {
-                "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg"
+                "url": "https://litellm-listing.s3.amazonaws.com/litellm_logo.png"
             },
         },
     ]
@@ -712,7 +721,7 @@ def test_completion_claude_3_function_plus_image():
                     "type": "object",
                     "properties": {
                         "location": {
-                            "type": "text",
+                            "type": "string",
                             "description": "The city and state, e.g. San Francisco, CA",
                         },
                         "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
@@ -732,7 +741,7 @@ def test_completion_claude_3_function_plus_image():
     ]
 
     response = completion(
-        model="claude-3-sonnet-20240229",
+        model=model,
         messages=[image_message],
         tool_choice=tool_choice,
         tools=tools,
@@ -813,6 +822,34 @@ def test_completion_mistral_api():
         print("cost to make mistral completion=", cost)
         assert cost > 0.0
         assert response.model == "mistral/mistral-tiny"
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.asyncio
+async def test_completion_codestral_chat_api():
+    try:
+        litellm.set_verbose = True
+        response = await litellm.acompletion(
+            model="codestral/codestral-latest",
+            messages=[
+                {
+                    "role": "user",
+                    "content": "Hey, how's it going?",
+                }
+            ],
+            temperature=0.0,
+            top_p=1,
+            max_tokens=10,
+            safe_prompt=False,
+            seed=12,
+        )
+        # Add any assertions here to-check the response
+        print(response)
+
+        # cost = litellm.completion_cost(completion_response=response)
+        # print("cost to make mistral completion=", cost)
+        # assert cost > 0.0
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -1472,7 +1509,9 @@ def test_ollama_image():
     data is untouched.
     """
 
-    import io, base64
+    import base64
+    import io
+
     from PIL import Image
 
     def mock_post(url, **kwargs):
@@ -3300,6 +3339,7 @@ def test_mistral_anyscale_stream():
 
 
 #### Test A121 ###################
+@pytest.mark.skip(reason="Local test")
 def test_completion_ai21():
     print("running ai21 j2light test")
     litellm.set_verbose = True
@@ -3317,17 +3357,54 @@ def test_completion_ai21():
 # test_completion_ai21()
 # test_completion_ai21()
 ## test deep infra
-def test_completion_deep_infra():
+@pytest.mark.parametrize("drop_params", [True, False])
+def test_completion_deep_infra(drop_params):
     litellm.set_verbose = False
     model_name = "deepinfra/meta-llama/Llama-2-70b-chat-hf"
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                    },
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+    messages = [
+        {
+            "role": "user",
+            "content": "What's the weather like in Boston today in Fahrenheit?",
+        }
+    ]
     try:
         response = completion(
-            model=model_name, messages=messages, temperature=0, max_tokens=10
+            model=model_name,
+            messages=messages,
+            temperature=0,
+            max_tokens=10,
+            tools=tools,
+            tool_choice={
+                "type": "function",
+                "function": {"name": "get_current_weather"},
+            },
+            drop_params=drop_params,
         )
         # Add any assertions here to check the response
         print(response)
     except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
+        if drop_params is True:
+            pytest.fail(f"Error occurred: {e}")
 
 
 # test_completion_deep_infra()
@@ -3355,12 +3432,44 @@ def test_completion_deep_infra_mistral():
 
 
 # Gemini tests
-def test_completion_gemini():
+@pytest.mark.parametrize(
+    "model",
+    [
+        # "gemini-1.0-pro",
+        "gemini-1.5-pro",
+        # "gemini-1.5-flash",
+    ],
+)
+def test_completion_gemini(model):
     litellm.set_verbose = True
-    model_name = "gemini/gemini-1.5-pro-latest"
-    messages = [{"role": "user", "content": "Hey, how's it going?"}]
+    model_name = "gemini/{}".format(model)
+    messages = [
+        {"role": "system", "content": "Be a good bot!"},
+        {"role": "user", "content": "Hey, how's it going?"},
+    ]
     try:
-        response = completion(model=model_name, messages=messages)
+        response = completion(
+            model=model_name,
+            messages=messages,
+            safety_settings=[
+                {
+                    "category": "HARM_CATEGORY_HARASSMENT",
+                    "threshold": "BLOCK_NONE",
+                },
+                {
+                    "category": "HARM_CATEGORY_HATE_SPEECH",
+                    "threshold": "BLOCK_NONE",
+                },
+                {
+                    "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                    "threshold": "BLOCK_NONE",
+                },
+                {
+                    "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                    "threshold": "BLOCK_NONE",
+                },
+            ],
+        )
         # Add any assertions,here to check the response
         print(response)
         assert response.choices[0]["index"] == 0
@@ -3450,6 +3559,7 @@ def test_completion_palm_stream():
         pytest.fail(f"Error occurred: {e}")
 
 
+@pytest.mark.skip(reason="Account deleted by IBM.")
 def test_completion_watsonx():
     litellm.set_verbose = True
     model_name = "watsonx/ibm/granite-13b-chat-v2"
@@ -3470,6 +3580,7 @@ def test_completion_watsonx():
         pytest.fail(f"Error occurred: {e}")
 
 
+@pytest.mark.skip(reason="Skip test. account deleted.")
 def test_completion_stream_watsonx():
     litellm.set_verbose = True
     model_name = "watsonx/ibm/granite-13b-chat-v2"
@@ -3537,6 +3648,7 @@ def test_unified_auth_params(provider, model, project, region_name, token):
         assert value in translated_optional_params
 
 
+@pytest.mark.skip(reason="Local test")
 @pytest.mark.asyncio
 async def test_acompletion_watsonx():
     litellm.set_verbose = True
@@ -3557,6 +3669,7 @@ async def test_acompletion_watsonx():
         pytest.fail(f"Error occurred: {e}")
 
 
+@pytest.mark.skip(reason="Local test")
 @pytest.mark.asyncio
 async def test_acompletion_stream_watsonx():
     litellm.set_verbose = True

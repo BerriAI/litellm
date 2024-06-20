@@ -1,24 +1,30 @@
+import json
+import re
+import traceback
+import uuid
+import xml.etree.ElementTree as ET
 from enum import Enum
-import requests, traceback
-import json, re, xml.etree.ElementTree as ET
-from jinja2 import Template, exceptions, meta, BaseLoader
-from jinja2.sandbox import ImmutableSandboxedEnvironment
 from typing import Any, List, Mapping, MutableMapping, Optional, Sequence, Tuple
+
+import requests
+from jinja2 import BaseLoader, Template, exceptions, meta
+from jinja2.sandbox import ImmutableSandboxedEnvironment
+
 import litellm
 import litellm.types
-from litellm.types.completion import (
-    ChatCompletionUserMessageParam,
-    ChatCompletionSystemMessageParam,
-    ChatCompletionMessageParam,
-    ChatCompletionFunctionMessageParam,
-    ChatCompletionMessageToolCallParam,
-    ChatCompletionToolMessageParam,
-)
 import litellm.types.llms
-from litellm.types.llms.anthropic import *
-import uuid
-from litellm.types.llms.bedrock import MessageBlock as BedrockMessageBlock
 import litellm.types.llms.vertex_ai
+from litellm.types.completion import (
+    ChatCompletionFunctionMessageParam,
+    ChatCompletionMessageParam,
+    ChatCompletionMessageToolCallParam,
+    ChatCompletionSystemMessageParam,
+    ChatCompletionToolMessageParam,
+    ChatCompletionUserMessageParam,
+)
+from litellm.types.llms.anthropic import *
+from litellm.types.llms.bedrock import MessageBlock as BedrockMessageBlock
+from litellm.types.utils import GenericImageParsingChunk
 
 
 def default_pt(messages):
@@ -622,8 +628,9 @@ def construct_tool_use_system_prompt(
 
 
 def convert_url_to_base64(url):
-    import requests
     import base64
+
+    import requests
 
     for _ in range(3):
         try:
@@ -654,7 +661,7 @@ def convert_url_to_base64(url):
         raise Exception(f"Error: Unable to fetch image from URL. url={url}")
 
 
-def convert_to_anthropic_image_obj(openai_image_url: str):
+def convert_to_anthropic_image_obj(openai_image_url: str) -> GenericImageParsingChunk:
     """
     Input:
     "image_url": "data:image/jpeg;base64,{base64_image}",
@@ -675,11 +682,11 @@ def convert_to_anthropic_image_obj(openai_image_url: str):
         # Infer image format from the URL
         image_format = openai_image_url.split("data:image/")[1].split(";base64,")[0]
 
-        return {
-            "type": "base64",
-            "media_type": f"image/{image_format}",
-            "data": base64_data,
-        }
+        return GenericImageParsingChunk(
+            type="base64",
+            media_type=f"image/{image_format}",
+            data=base64_data,
+        )
     except Exception as e:
         if "Error: Unable to fetch image from URL" in str(e):
             raise e
@@ -1606,19 +1613,23 @@ def azure_text_pt(messages: list):
 
 ###### AMAZON BEDROCK #######
 
+from litellm.types.llms.bedrock import ContentBlock as BedrockContentBlock
+from litellm.types.llms.bedrock import ImageBlock as BedrockImageBlock
+from litellm.types.llms.bedrock import ImageSourceBlock as BedrockImageSourceBlock
+from litellm.types.llms.bedrock import ToolBlock as BedrockToolBlock
 from litellm.types.llms.bedrock import (
-    ToolResultContentBlock as BedrockToolResultContentBlock,
-    ToolResultBlock as BedrockToolResultBlock,
-    ToolConfigBlock as BedrockToolConfigBlock,
-    ToolUseBlock as BedrockToolUseBlock,
-    ImageSourceBlock as BedrockImageSourceBlock,
-    ImageBlock as BedrockImageBlock,
-    ContentBlock as BedrockContentBlock,
-    ToolInputSchemaBlock as BedrockToolInputSchemaBlock,
-    ToolSpecBlock as BedrockToolSpecBlock,
-    ToolBlock as BedrockToolBlock,
     ToolChoiceValuesBlock as BedrockToolChoiceValuesBlock,
 )
+from litellm.types.llms.bedrock import ToolConfigBlock as BedrockToolConfigBlock
+from litellm.types.llms.bedrock import (
+    ToolInputSchemaBlock as BedrockToolInputSchemaBlock,
+)
+from litellm.types.llms.bedrock import ToolResultBlock as BedrockToolResultBlock
+from litellm.types.llms.bedrock import (
+    ToolResultContentBlock as BedrockToolResultContentBlock,
+)
+from litellm.types.llms.bedrock import ToolSpecBlock as BedrockToolSpecBlock
+from litellm.types.llms.bedrock import ToolUseBlock as BedrockToolUseBlock
 
 
 def get_image_details(image_url) -> Tuple[str, str]:
@@ -1655,7 +1666,8 @@ def get_image_details(image_url) -> Tuple[str, str]:
 def _process_bedrock_converse_image_block(image_url: str) -> BedrockImageBlock:
     if "base64" in image_url:
         # Case 1: Images with base64 encoding
-        import base64, re
+        import base64
+        import re
 
         # base 64 is passed as data:image/jpeg;base64,<base-64-encoded-image>
         image_metadata, img_without_base_64 = image_url.split(",")

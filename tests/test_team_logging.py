@@ -144,6 +144,7 @@ async def test_team_2logging():
             langfuse_client = langfuse.Langfuse(
                 public_key=os.getenv("LANGFUSE_PROJECT2_PUBLIC"),
                 secret_key=os.getenv("LANGFUSE_PROJECT2_SECRET"),
+                host="https://us.cloud.langfuse.com",
             )
 
             await asyncio.sleep(10)

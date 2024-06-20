@@ -63,6 +63,7 @@ def test_spend_logs_payload():
                     "user_api_key_team_id": None,
                     "user_api_key_team_alias": None,
                     "user_api_key_metadata": {},
+                    "spend_logs_metadata": {"hello": "world"},
                     "headers": {
                         "content-type": "application/json",
                         "user-agent": "PostmanRuntime/7.32.3",

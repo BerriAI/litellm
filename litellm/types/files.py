@@ -151,23 +151,16 @@ Util Functions
 """
 
 
-def get_file_mime_type_from_extension(extension: str) -> str:
-    for file_type, extensions in FILE_EXTENSIONS.items():
-        if extension in extensions:
-            return FILE_MIME_TYPES[file_type]
-    raise ValueError(f"Unknown mime type for extension: {extension}")
-
-
 def get_file_extension_from_mime_type(mime_type: str) -> str:
     for file_type, mime in FILE_MIME_TYPES.items():
-        if mime == mime_type:
+        if mime.lower() == mime_type.lower():
             return FILE_EXTENSIONS[file_type][0]
     raise ValueError(f"Unknown extension for mime type: {mime_type}")
 
 
 def get_file_type_from_extension(extension: str) -> FileType:
     for file_type, extensions in FILE_EXTENSIONS.items():
-        if extension in extensions:
+        if extension.lower() in extensions:
             return file_type
 
     raise ValueError(f"Unknown file type for extension: {extension}")
@@ -179,6 +172,11 @@ def get_file_extension_for_file_type(file_type: FileType) -> str:
 
 def get_file_mime_type_for_file_type(file_type: FileType) -> str:
     return FILE_MIME_TYPES[file_type]
+
+
+def get_file_mime_type_from_extension(extension: str) -> str:
+    file_type = get_file_type_from_extension(extension)
+    return get_file_mime_type_for_file_type(file_type)
 
 
 """
