@@ -806,10 +806,14 @@ class Logging:
                                 and self.langfuse_public_key
                                 != langFuseLogger.public_key
                             )
-                            and (
+                            or (
                                 self.langfuse_public_key is not None
                                 and self.langfuse_public_key
                                 != langFuseLogger.public_key
+                            )
+                            or (
+                                self.langfuse_host is not None
+                                and self.langfuse_host != langFuseLogger.langfuse_host
                             )
                         ):
                             langFuseLogger = LangFuseLogger(
@@ -1588,10 +1592,14 @@ class Logging:
                                 and self.langfuse_public_key
                                 != langFuseLogger.public_key
                             )
-                            and (
+                            or (
                                 self.langfuse_public_key is not None
                                 and self.langfuse_public_key
                                 != langFuseLogger.public_key
+                            )
+                            or (
+                                self.langfuse_host is not None
+                                and self.langfuse_host != langFuseLogger.langfuse_host
                             )
                         ):
                             langFuseLogger = LangFuseLogger(
