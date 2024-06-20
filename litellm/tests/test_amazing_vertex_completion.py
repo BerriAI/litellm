@@ -548,6 +548,7 @@ async def test_gemini_pro_vision(provider, sync_mode):
             resp = await litellm.acompletion(
                 model="{}/gemini-1.5-flash-preview-0514".format(provider),
                 messages=[
+                    {"role": "system", "content": "Be a good bot"},
                     {
                         "role": "user",
                         "content": [
@@ -559,7 +560,7 @@ async def test_gemini_pro_vision(provider, sync_mode):
                                 },
                             },
                         ],
-                    }
+                    },
                 ],
             )
         print(resp)
@@ -568,7 +569,7 @@ async def test_gemini_pro_vision(provider, sync_mode):
 
         # DO Not DELETE this ASSERT
         # Google counts the prompt tokens for us, we should ensure we use the tokens from the orignal response
-        assert prompt_tokens == 263  # the gemini api returns 263 to us
+        assert prompt_tokens == 267  # the gemini api returns 267 to us
 
     except litellm.RateLimitError as e:
         pass
