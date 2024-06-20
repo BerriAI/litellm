@@ -69,7 +69,7 @@ from litellm.types.router import (
     AlertingConfig,
     AllowedFailsPolicy,
     AssistantsTypedDict,
-    CustomRoutingStrategy,
+    CustomRoutingStrategyBase,
     Deployment,
     DeploymentTypedDict,
     LiteLLM_Params,
@@ -4815,7 +4815,18 @@ class Router:
         except Exception as e:
             pass
 
-    def set_custom_routing_strategy(self, CustomRoutingStrategy: CustomRoutingStrategy):
+    def set_custom_routing_strategy(
+        self, CustomRoutingStrategy: CustomRoutingStrategyBase
+    ):
+        """
+        Sets get_available_deployment and async_get_available_deployment on an instanced of litellm.Router
+
+        Use this to set your custom routing strategy
+
+        Args:
+            CustomRoutingStrategy: litellm.router.CustomRoutingStrategyBase
+        """
+
         setattr(
             self,
             "get_available_deployment",

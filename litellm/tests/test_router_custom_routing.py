@@ -21,10 +21,6 @@ import pytest
 
 import litellm
 from litellm import Router
-from litellm.caching import DualCache
-from litellm.router import CustomRoutingStrategy as BaseCustomRoutingStrategy
-from litellm.router import Deployment, LiteLLM_Params
-from litellm.router_strategy.lowest_latency import LowestLatencyLoggingHandler
 
 router = Router(
     model_list=[
@@ -49,11 +45,12 @@ router = Router(
     ],
     set_verbose=True,
     debug_level="DEBUG",
-    timeout=1,
-)  # type: ignore
+)
+
+from litellm.router import CustomRoutingStrategyBase
 
 
-class CustomRoutingStrategy(BaseCustomRoutingStrategy):
+class CustomRoutingStrategy(CustomRoutingStrategyBase):
     async def async_get_available_deployment(
         self,
         model: str,
@@ -62,6 +59,20 @@ class CustomRoutingStrategy(BaseCustomRoutingStrategy):
         specific_deployment: Optional[bool] = False,
         request_kwargs: Optional[Dict] = None,
     ):
+        """
+        Asynchronously retrieves the available deployment based on the given parameters.
+
+        Args:
+            model (str): The name of the model.
+            messages (Optional[List[Dict[str, str]]], optional): The list of messages for a given request. Defaults to None.
+            input (Optional[Union[str, List]], optional): The input for a given embedding request. Defaults to None.
+            specific_deployment (Optional[bool], optional): Whether to retrieve a specific deployment. Defaults to False.
+            request_kwargs (Optional[Dict], optional): Additional request keyword arguments. Defaults to None.
+
+        Returns:
+            Returns an element from litellm.router.model_list
+
+        """
         print("In CUSTOM async get available deployment")
         model_list = router.model_list
         print("router model list=", model_list)
@@ -79,7 +90,20 @@ class CustomRoutingStrategy(BaseCustomRoutingStrategy):
         specific_deployment: Optional[bool] = False,
         request_kwargs: Optional[Dict] = None,
     ):
-        # used for router.completion() calls
+        """
+        Synchronously retrieves the available deployment based on the given parameters.
+
+        Args:
+            model (str): The name of the model.
+            messages (Optional[List[Dict[str, str]]], optional): The list of messages for a given request. Defaults to None.
+            input (Optional[Union[str, List]], optional): The input for a given embedding request. Defaults to None.
+            specific_deployment (Optional[bool], optional): Whether to retrieve a specific deployment. Defaults to False.
+            request_kwargs (Optional[Dict], optional): Additional request keyword arguments. Defaults to None.
+
+        Returns:
+            Returns an element from litellm.router.model_list
+
+        """
         pass
 
 
