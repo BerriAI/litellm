@@ -53,7 +53,7 @@ class ModelInfo(TypedDict, total=False):
     input_cost_per_audio_per_second: Optional[float]  # only for vertex ai models
     input_cost_per_video_per_second: Optional[float]  # only for vertex ai models
     output_cost_per_token: Required[float]
-    output_cost_per_character: Required[float]  # only for vertex ai models
+    output_cost_per_character: Optional[float]  # only for vertex ai models
     output_cost_per_token_above_128k_tokens: Optional[
         float
     ]  # only for vertex ai models
