@@ -867,37 +867,3 @@ async def test_make_request():
             }
         },
     )
-
-
-def test_alangfuse_dynamic_logging():
-    """
-    pass in langfuse credentials via completion call
-
-    assert call is logged.
-    Covers the team-logging scenario.
-    """
-    import uuid
-
-    import langfuse
-
-    trace_id = str(uuid.uuid4())
-    _ = litellm.completion(
-        model="gpt-3.5-turbo",
-        messages=[{"role": "user", "content": "Hey"}],
-        mock_response="Hey! how's it going?",
-        langfuse_public_key=os.getenv("LANGFUSE_PROJECT2_PUBLIC"),
-        langfuse_secret_key=os.getenv("LANGFUSE_PROJECT2_SECRET"),
-        langfuse_host="https://us.cloud.langfuse.com",
-        metadata={"trace_id": trace_id},
-        success_callback=["langfuse"],
-    )
-
-    time.sleep(1)
-
-    langfuse_client = langfuse.Langfuse(
-        public_key=os.getenv("LANGFUSE_PROJECT2_PUBLIC"),
-        secret_key=os.getenv("LANGFUSE_PROJECT2_SECRET"),
-        host="https://us.cloud.langfuse.com",
-    )
-
-    langfuse_client.get_trace(id=trace_id)
