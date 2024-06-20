@@ -576,7 +576,7 @@ def test_together_ai_qwen_completion_cost():
 
 
 @pytest.mark.parametrize("above_128k", [False, True])
-@pytest.mark.parametrize("provider", ["vertex_ai", "gemini"])
+@pytest.mark.parametrize("provider", ["gemini"])
 def test_gemini_completion_cost(above_128k, provider):
     """
     Check if cost correctly calculated for gemini models based on context window
@@ -628,3 +628,35 @@ def test_gemini_completion_cost(above_128k, provider):
 
     assert calculated_input_cost == input_cost
     assert calculated_output_cost == output_cost
+
+
+def _count_characters(text):
+    # Remove white spaces and count characters
+    filtered_text = "".join(char for char in text if not char.isspace())
+    return len(filtered_text)
+
+
+def test_vertex_ai_completion_cost():
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    text = "The quick brown fox jumps over the lazy dog."
+    characters = _count_characters(text=text)
+
+    model_info = litellm.get_model_info(model="gemini-1.5-flash")
+
+    print("\nExpected model info:\n{}\n\n".format(model_info))
+
+    expected_input_cost = characters * model_info["input_cost_per_character"]
+
+    ## CALCULATED COST
+    calculated_input_cost, calculated_output_cost = cost_per_token(
+        model="gemini-1.5-flash",
+        custom_llm_provider="vertex_ai",
+        prompt_characters=characters,
+        completion_characters=0,
+    )
+
+    assert round(expected_input_cost, 6) == round(calculated_input_cost, 6)
+    print("expected_input_cost: {}".format(expected_input_cost))
+    print("calculated_input_cost: {}".format(calculated_input_cost))
