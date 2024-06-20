@@ -936,8 +936,8 @@ async def update_cache(
             f"_update_key_cache: existing spend: {existing_spend_obj}"
         )
         if existing_spend_obj is None:
-            existing_spend = 0
-            existing_spend_obj = LiteLLM_VerificationTokenView(token=token)
+            # print("existing_spend_obj is None adding a bad value to use api key cache")
+            return
         else:
             existing_spend = existing_spend_obj.spend
         # Calculate the new cost by adding the existing cost and response_cost
