@@ -451,3 +451,25 @@ class ModelGroupInfo(BaseModel):
 class AssistantsTypedDict(TypedDict):
     custom_llm_provider: Literal["azure", "openai"]
     litellm_params: LiteLLMParamsTypedDict
+
+
+class CustomRoutingStrategy:
+    async def async_get_available_deployment(
+        self,
+        model: str,
+        messages: Optional[List[Dict[str, str]]] = None,
+        input: Optional[Union[str, List]] = None,
+        specific_deployment: Optional[bool] = False,
+        request_kwargs: Optional[Dict] = None,
+    ):
+        pass
+
+    def get_available_deployment(
+        self,
+        model: str,
+        messages: Optional[List[Dict[str, str]]] = None,
+        input: Optional[Union[str, List]] = None,
+        specific_deployment: Optional[bool] = False,
+        request_kwargs: Optional[Dict] = None,
+    ):
+        pass

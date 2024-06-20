@@ -69,6 +69,7 @@ from litellm.types.router import (
     AlertingConfig,
     AllowedFailsPolicy,
     AssistantsTypedDict,
+    CustomRoutingStrategy,
     Deployment,
     DeploymentTypedDict,
     LiteLLM_Params,
@@ -4813,6 +4814,18 @@ class Router:
                 # )
         except Exception as e:
             pass
+
+    def set_custom_routing_strategy(self, CustomRoutingStrategy: CustomRoutingStrategy):
+        setattr(
+            self,
+            "get_available_deployment",
+            CustomRoutingStrategy.get_available_deployment,
+        )
+        setattr(
+            self,
+            "async_get_available_deployment",
+            CustomRoutingStrategy.async_get_available_deployment,
+        )
 
     def flush_cache(self):
         litellm.cache = None
