@@ -362,8 +362,9 @@ async def test_aaalangfuse_logging_metadata(langfuse_client):
             print(response)
             metadata["existing_trace_id"] = trace_id
 
-            langfuse_client.flush()  # make sure traces w/ generations are flushed in-order, prevents race condition of trace output being overwritten
-    await asyncio.sleep(10)
+            await asyncio.sleep(2)
+    langfuse_client.flush()
+    # await asyncio.sleep(10)
 
     # Tests the metadata filtering and the override of the output to be the last generation
     for trace_id, generation_ids in trace_identifiers.items():
