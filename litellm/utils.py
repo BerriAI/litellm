@@ -2293,6 +2293,7 @@ def get_optional_params(
     extra_headers=None,
     api_version=None,
     drop_params=None,
+    additional_drop_params=None,
     **kwargs,
 ):
     # retrieve all parameters passed to the function
@@ -2309,7 +2310,6 @@ def get_optional_params(
             k.startswith("vertex_") and custom_llm_provider != "vertex_ai"
         ):  # allow dynamically setting vertex ai init logic
             continue
-
         passed_params[k] = v
 
     optional_params: Dict = {}
@@ -2365,7 +2365,19 @@ def get_optional_params(
         "extra_headers": None,
         "api_version": None,
         "drop_params": None,
+        "additional_drop_params": None,
     }
+
+    def _should_drop_param(k, additional_drop_params) -> bool:
+        if (
+            additional_drop_params is not None
+            and isinstance(additional_drop_params, list)
+            and k in additional_drop_params
+        ):
+            return True  # allow user to drop specific params for a model - e.g. vllm - logit bias
+
+        return False
+
     # filter out those parameters that were passed with non-default values
     non_default_params = {
         k: v
@@ -2375,8 +2387,11 @@ def get_optional_params(
             and k != "custom_llm_provider"
             and k != "api_version"
             and k != "drop_params"
+            and k != "additional_drop_params"
             and k in default_params
             and v != default_params[k]
+            and _should_drop_param(k=k, additional_drop_params=additional_drop_params)
+            is False
         )
     }
 
