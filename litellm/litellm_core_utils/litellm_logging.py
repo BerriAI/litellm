@@ -1792,7 +1792,9 @@ def set_callbacks(callback_list, function_id=None):
             elif callback == "promptlayer":
                 promptLayerLogger = PromptLayerLogger()
             elif callback == "langfuse":
-                langFuseLogger = LangFuseLogger()
+                langFuseLogger = LangFuseLogger(
+                    langfuse_public_key=None, langfuse_secret=None, langfuse_host=None
+                )
             elif callback == "openmeter":
                 openMeterLogger = OpenMeterLogger()
             elif callback == "datadog":
