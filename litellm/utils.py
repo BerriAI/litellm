@@ -5741,7 +5741,15 @@ def exception_type(
                         response=original_exception.response,
                         litellm_debug_info=extra_information,
                     )
+                elif "Web server is returning an unknown error" in error_str:
+                    exception_mapping_worked = True
+                    raise litellm.InternalServerError(
+                        message=f"{exception_provider} - {message}",
+                        model=model,
+                        llm_provider=custom_llm_provider,
+                    )
                 elif "Request too large" in error_str:
+                    exception_mapping_worked = True
                     raise RateLimitError(
                         message=f"RateLimitError: {exception_provider} - {message}",
                         model=model,
