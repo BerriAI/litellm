@@ -191,6 +191,29 @@ def cost_per_token(
             * completion_tokens
         )
         return prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar
+    elif "ft:gpt-4-0613" in model:
+        print_verbose(f"Cost Tracking: {model} is an OpenAI FinteTuned LLM")
+        # fuzzy match ft:gpt-4-0613:abcd-id-cool-litellm
+        prompt_tokens_cost_usd_dollar = (
+            model_cost_ref["ft:gpt-4-0613"]["input_cost_per_token"] * prompt_tokens
+        )
+        completion_tokens_cost_usd_dollar = (
+            model_cost_ref["ft:gpt-4-0613"]["output_cost_per_token"] * completion_tokens
+        )
+        return prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar
+    elif "ft:gpt-4o-2024-05-13" in model:
+        print_verbose(f"Cost Tracking: {model} is an OpenAI FinteTuned LLM")
+        # fuzzy match ft:gpt-4o-2024-05-13:abcd-id-cool-litellm
+        prompt_tokens_cost_usd_dollar = (
+            model_cost_ref["ft:gpt-4o-2024-05-13"]["input_cost_per_token"]
+            * prompt_tokens
+        )
+        completion_tokens_cost_usd_dollar = (
+            model_cost_ref["ft:gpt-4o-2024-05-13"]["output_cost_per_token"]
+            * completion_tokens
+        )
+        return prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar
+
     elif "ft:davinci-002" in model:
         print_verbose(f"Cost Tracking: {model} is an OpenAI FinteTuned LLM")
         # fuzzy match ft:davinci-002:abcd-id-cool-litellm
