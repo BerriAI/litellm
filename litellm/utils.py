@@ -3265,7 +3265,11 @@ def get_optional_params(
             optional_params["top_logprobs"] = top_logprobs
         if extra_headers is not None:
             optional_params["extra_headers"] = extra_headers
-    if custom_llm_provider in ["openai", "azure"] + litellm.openai_compatible_providers:
+    if (
+        custom_llm_provider
+        in ["openai", "azure", "text-completion-openai"]
+        + litellm.openai_compatible_providers
+    ):
         # for openai, azure we should pass the extra/passed params within `extra_body` https://github.com/openai/openai-python/blob/ac33853ba10d13ac149b1fa3ca6dba7d613065c9/src/openai/resources/models.py#L46
         extra_body = passed_params.pop("extra_body", {})
         for k in passed_params.keys():
