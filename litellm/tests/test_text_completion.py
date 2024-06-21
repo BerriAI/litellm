@@ -1,24 +1,31 @@
-import sys, os, asyncio
+import asyncio
+import os
+import sys
 import traceback
+
 from dotenv import load_dotenv
 
 load_dotenv()
-import os, io
+import io
+import os
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
+from unittest.mock import MagicMock, patch
+
 import pytest
+
 import litellm
 from litellm import (
-    embedding,
-    completion,
-    text_completion,
-    completion_cost,
-    atext_completion,
+    RateLimitError,
     TextCompletionResponse,
+    atext_completion,
+    completion,
+    completion_cost,
+    embedding,
+    text_completion,
 )
-from litellm import RateLimitError
 
 litellm.num_retries = 3
 
@@ -3990,7 +3997,7 @@ def test_async_text_completion():
     asyncio.run(test_get_response())
 
 
-@pytest.mark.skip(reason="Tgai endpoints are unstable")
+@pytest.mark.skip(reason="Skip flaky tgai test")
 def test_async_text_completion_together_ai():
     litellm.set_verbose = True
     print("test_async_text_completion")
@@ -3998,7 +4005,7 @@ def test_async_text_completion_together_ai():
     async def test_get_response():
         try:
             response = await litellm.atext_completion(
-                model="together_ai/codellama/CodeLlama-13b-Instruct-hf",
+                model="together_ai/mistralai/Mixtral-8x7B-Instruct-v0.1",
                 prompt="good morning",
                 max_tokens=10,
             )
@@ -4076,3 +4083,118 @@ async def test_async_text_completion_chat_model_stream():
 
 
 # asyncio.run(test_async_text_completion_chat_model_stream())
+
+
+@pytest.mark.asyncio
+async def test_completion_codestral_fim_api():
+    try:
+        litellm.set_verbose = True
+        import logging
+
+        from litellm._logging import verbose_logger
+
+        verbose_logger.setLevel(level=logging.DEBUG)
+        response = await litellm.atext_completion(
+            model="text-completion-codestral/codestral-2405",
+            prompt="def is_odd(n): \n return n % 2 == 1 \ndef test_is_odd():",
+            suffix="return True",
+            temperature=0,
+            top_p=1,
+            max_tokens=10,
+            min_tokens=10,
+            seed=10,
+            stop=["return"],
+        )
+        # Add any assertions here to check the response
+        print(response)
+
+        assert response.choices[0].text is not None
+        assert len(response.choices[0].text) > 0
+
+        # cost = litellm.completion_cost(completion_response=response)
+        # print("cost to make mistral completion=", cost)
+        # assert cost > 0.0
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.asyncio
+async def test_completion_codestral_fim_api_stream():
+    try:
+        import logging
+
+        from litellm._logging import verbose_logger
+
+        litellm.set_verbose = False
+
+        # verbose_logger.setLevel(level=logging.DEBUG)
+        response = await litellm.atext_completion(
+            model="text-completion-codestral/codestral-2405",
+            prompt="def is_odd(n): \n return n % 2 == 1 \ndef test_is_odd():",
+            suffix="return True",
+            temperature=0,
+            top_p=1,
+            stream=True,
+            seed=10,
+            stop=["return"],
+        )
+
+        full_response = ""
+        # Add any assertions here to check the response
+        async for chunk in response:
+            print(chunk)
+            full_response += chunk.get("choices")[0].get("text") or ""
+
+        print("full_response", full_response)
+
+        assert len(full_response) > 2  # we at least have a few chars in response :)
+
+        # cost = litellm.completion_cost(completion_response=response)
+        # print("cost to make mistral completion=", cost)
+        # assert cost > 0.0
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+def mock_post(*args, **kwargs):
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {"Content-Type": "application/json"}
+    mock_response.model_dump.return_value = {
+        "id": "cmpl-7a59383dd4234092b9e5d652a7ab8143",
+        "object": "text_completion",
+        "created": 1718824735,
+        "model": "Sao10K/L3-70B-Euryale-v2.1",
+        "choices": [
+            {
+                "index": 0,
+                "text": ") might be faster than then answering, and the added time it takes for the",
+                "logprobs": None,
+                "finish_reason": "length",
+                "stop_reason": None,
+            }
+        ],
+        "usage": {"prompt_tokens": 2, "total_tokens": 18, "completion_tokens": 16},
+    }
+    return mock_response
+
+
+def test_completion_vllm():
+    """
+    Asserts a text completion call for vllm actually goes to the text completion endpoint
+    """
+    from openai import OpenAI
+
+    client = OpenAI(api_key="my-fake-key")
+
+    with patch.object(client.completions, "create", side_effect=mock_post) as mock_call:
+        response = text_completion(
+            model="openai/gemini-1.5-flash",
+            prompt="ping",
+            client=client,
+        )
+        print(response)
+
+        assert response.usage.prompt_tokens == 2
+
+        mock_call.assert_called_once()

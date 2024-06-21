@@ -2,7 +2,7 @@
 import litellm
 import httpx, requests
 from typing import Optional, Union
-from litellm.utils import Logging
+from litellm.litellm_core_utils.litellm_logging import Logging
 
 
 class BaseLLM:
@@ -22,6 +22,25 @@ class BaseLLM:
         print_verbose,
         encoding,
     ) -> Union[litellm.utils.ModelResponse, litellm.utils.CustomStreamWrapper]:
+        """
+        Helper function to process the response across sync + async completion calls
+        """
+        return model_response
+
+    def process_text_completion_response(
+        self,
+        model: str,
+        response: Union[requests.Response, httpx.Response],
+        model_response: litellm.utils.TextCompletionResponse,
+        stream: bool,
+        logging_obj: Logging,
+        optional_params: dict,
+        api_key: str,
+        data: Union[dict, str],
+        messages: list,
+        print_verbose,
+        encoding,
+    ) -> Union[litellm.utils.TextCompletionResponse, litellm.utils.CustomStreamWrapper]:
         """
         Helper function to process the response across sync + async completion calls
         """

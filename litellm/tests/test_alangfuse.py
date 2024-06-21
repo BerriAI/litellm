@@ -1,22 +1,22 @@
+import asyncio
 import copy
 import json
-import sys
-import os
-import asyncio
-
 import logging
+import os
+import sys
 from unittest.mock import MagicMock, patch
 
 logging.basicConfig(level=logging.DEBUG)
 sys.path.insert(0, os.path.abspath("../.."))
 
-from litellm import completion
 import litellm
+from litellm import completion
 
 litellm.num_retries = 3
 litellm.success_callback = ["langfuse"]
 os.environ["LANGFUSE_DEBUG"] = "True"
 import time
+
 import pytest
 
 
@@ -27,6 +27,7 @@ def langfuse_client():
     langfuse_client = langfuse.Langfuse(
         public_key=os.environ["LANGFUSE_PUBLIC_KEY"],
         secret_key=os.environ["LANGFUSE_SECRET_KEY"],
+        host=None,
     )
 
     with patch(
@@ -177,6 +178,7 @@ def create_async_task(**completion_kwargs):
     """
     completion_args = {
         "model": "azure/chatgpt-v-2",
+        "api_version": "2024-02-01",
         "messages": [{"role": "user", "content": "This is a test"}],
         "max_tokens": 5,
         "temperature": 0.7,
@@ -278,7 +280,7 @@ async def test_langfuse_masked_input_output(langfuse_client):
 
 
 @pytest.mark.asyncio
-async def test_langfuse_logging_metadata(langfuse_client):
+async def test_aaalangfuse_logging_metadata(langfuse_client):
     """
     Test that creates multiple traces, with a varying number of generations and sets various metadata fields
     Confirms that no metadata that is standard within Langfuse is duplicated in the respective trace or generation metadata
@@ -360,8 +362,9 @@ async def test_langfuse_logging_metadata(langfuse_client):
             print(response)
             metadata["existing_trace_id"] = trace_id
 
+            await asyncio.sleep(2)
     langfuse_client.flush()
-    await asyncio.sleep(10)
+    # await asyncio.sleep(10)
 
     # Tests the metadata filtering and the override of the output to be the last generation
     for trace_id, generation_ids in trace_identifiers.items():
@@ -550,7 +553,9 @@ def test_aaalangfuse_existing_trace_id():
     Assert no changes to the trace
     """
     # Test - if the logs were sent to the correct team on langfuse
-    import litellm, datetime
+    import datetime
+
+    import litellm
     from litellm.integrations.langfuse import LangFuseLogger
 
     langfuse_Logger = LangFuseLogger(
@@ -826,3 +831,76 @@ def test_langfuse_logging_tool_calling():
 
 
 # test_langfuse_logging_tool_calling()
+
+
+def get_langfuse_prompt(name: str):
+    import langfuse
+    from langfuse import Langfuse
+
+    try:
+        langfuse = Langfuse(
+            public_key=os.environ["LANGFUSE_DEV_PUBLIC_KEY"],
+            secret_key=os.environ["LANGFUSE_DEV_SK_KEY"],
+            host=os.environ["LANGFUSE_HOST"],
+        )
+
+        # Get current production version of a text prompt
+        prompt = langfuse.get_prompt(name=name)
+        return prompt
+    except Exception as e:
+        raise Exception(f"Error getting prompt: {e}")
+
+
+@pytest.mark.asyncio
+@pytest.mark.skip(
+    reason="local only test, use this to verify if we can send request to litellm proxy server"
+)
+async def test_make_request():
+    response = await litellm.acompletion(
+        model="openai/llama3",
+        api_key="sk-1234",
+        base_url="http://localhost:4000",
+        messages=[{"role": "user", "content": "Hi 👋 - i'm claude"}],
+        extra_body={
+            "metadata": {
+                "tags": ["openai"],
+                "prompt": get_langfuse_prompt("test-chat"),
+            }
+        },
+    )
+
+
+@pytest.mark.skip(
+    reason="local only test, use this to verify if dynamic langfuse logging works as expected"
+)
+def test_aaalangfuse_dynamic_logging():
+    """
+    pass in langfuse credentials via completion call
+
+    assert call is logged.
+
+    Covers the team-logging scenario.
+    """
+    import uuid
+
+    import langfuse
+
+    trace_id = str(uuid.uuid4())
+    _ = litellm.completion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "Hey"}],
+        mock_response="Hey! how's it going?",
+        langfuse_public_key=os.getenv("LANGFUSE_PROJECT2_PUBLIC"),
+        langfuse_secret_key=os.getenv("LANGFUSE_PROJECT2_SECRET"),
+        metadata={"trace_id": trace_id},
+        success_callback=["langfuse"],
+    )
+
+    time.sleep(3)
+
+    langfuse_client = langfuse.Langfuse(
+        public_key=os.getenv("LANGFUSE_PROJECT2_PUBLIC"),
+        secret_key=os.getenv("LANGFUSE_PROJECT2_SECRET"),
+    )
+
+    langfuse_client.get_trace(id=trace_id)

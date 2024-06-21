@@ -6,6 +6,7 @@
 import React, { useState, useEffect } from "react";
 import BudgetSettings from "./budget_settings";
 import BudgetModal from "./budget_modal";
+import EditBudgetModal from "./edit_budget_modal";
 import {
   Table,
   TableBody,
@@ -43,7 +44,7 @@ interface BudgetSettingsPageProps {
   accessToken: string | null;
 }
 
-interface budgetItem {
+export interface budgetItem {
   budget_id: string;
   max_budget: string | null;
   rpm_limit: number | null;
@@ -52,6 +53,8 @@ interface budgetItem {
 
 const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
   const [isModalVisible, setIsModalVisible] = useState(false);
+  const [isEditModalVisible, setIsEditModalVisible] = useState(false);
+  const [selectedBudget, setSelectedBudget] = useState<budgetItem | null>(null);
   const [budgetList, setBudgetList] = useState<budgetItem[]>([]);
   useEffect(() => {
     if (!accessToken) {
@@ -62,6 +65,15 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
     });
   }, [accessToken]);
 
+
+  const handleEditCall = async (budget_id: string, index: number) => {
+    if (accessToken == null) {
+      return;
+    }
+    setSelectedBudget(budgetList[index])
+    setIsEditModalVisible(true)
+  };
+  
   const handleDeleteCall = async (budget_id: string, index: number) => {
     if (accessToken == null) {
       return;
@@ -94,6 +106,15 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
         setIsModalVisible={setIsModalVisible}
         setBudgetList={setBudgetList}
       />
+      {
+        selectedBudget && <EditBudgetModal
+          accessToken={accessToken}
+          isModalVisible={isEditModalVisible}
+          setIsModalVisible={setIsEditModalVisible}
+          setBudgetList={setBudgetList}
+          existingBudget={selectedBudget}
+        />
+      }
       <Card>
         <Text>Create a budget to assign to customers.</Text>
         <Table>
@@ -119,6 +140,11 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
                 <TableCell>
                   {value.rpm_limit ? value.rpm_limit : "n/a"}
                 </TableCell>
+                <Icon
+                  icon={PencilAltIcon}
+                  size="sm"
+                  onClick={() => handleEditCall(value.budget_id, index)}
+                />
                 <Icon
                   icon={TrashIcon}
                   size="sm"
