@@ -4189,12 +4189,12 @@ def test_completion_vllm():
 
     with patch.object(client.completions, "create", side_effect=mock_post) as mock_call:
         response = text_completion(
-            model="openai/gemini-1.5-flash",
-            prompt="ping",
-            client=client,
+            model="openai/gemini-1.5-flash", prompt="ping", client=client, hello="world"
         )
         print(response)
 
         assert response.usage.prompt_tokens == 2
 
         mock_call.assert_called_once()
+
+        assert "hello" in mock_call.call_args.kwargs["extra_body"]
