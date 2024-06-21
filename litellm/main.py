@@ -3852,14 +3852,20 @@ def moderation(
 
 
 @client
-async def amoderation(input: str, model: str, api_key: Optional[str] = None, **kwargs):
+async def amoderation(
+    input: str, model: Optional[str] = None, api_key: Optional[str] = None, **kwargs
+):
     # only supports open ai for now
     api_key = (
         api_key or litellm.api_key or litellm.openai_key or get_secret("OPENAI_API_KEY")
     )
     openai_client = kwargs.get("client", None)
     if openai_client is None:
-        openai_client = openai.AsyncOpenAI(
+
+        # call helper to get OpenAI client
+        # _get_openai_client maintains in-memory caching logic for OpenAI clients
+        openai_client = openai_chat_completions._get_openai_client(
+            is_async=True,
             api_key=api_key,
         )
     response = await openai_client.moderations.create(input=input, model=model)
