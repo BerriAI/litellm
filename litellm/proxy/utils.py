@@ -199,7 +199,7 @@ class ProxyLogging:
         alerting_args: Optional[dict] = None,
     ):
         updated_slack_alerting: bool = False
-        if self.alerting is not None:
+        if alerting is not None:
             self.alerting = alerting
             updated_slack_alerting = True
         if alerting_threshold is not None:
