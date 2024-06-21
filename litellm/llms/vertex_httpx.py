@@ -132,6 +132,7 @@ class VertexGeminiConfig:
             "response_format",
             "n",
             "stop",
+            "extra_headers",
         ]
 
     def map_tool_choice_values(
@@ -775,6 +776,9 @@ class VertexLLM(BaseLLM):
         }
         if auth_header is not None:
             headers["Authorization"] = f"Bearer {auth_header}"
+
+        if extra_headers is not None:
+            headers.update(extra_headers)
 
         ## LOGGING
         logging_obj.pre_call(
