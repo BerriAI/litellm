@@ -101,12 +101,8 @@ def cost_per_token(
     if custom_llm_provider is not None:
         model_with_provider = custom_llm_provider + "/" + model
         if region_name is not None:
-            model_with_provider_and_region = (
-                f"{custom_llm_provider}/{region_name}/{model}"
-            )
-            if (
-                model_with_provider_and_region in model_cost_ref
-            ):  # use region based pricing, if it's available
+            model_with_provider_and_region = f"{custom_llm_provider}/{region_name}/{model}"
+            if model_with_provider_and_region in model_cost_ref:  # use region based pricing, if it's available
                 model_with_provider = model_with_provider_and_region
     else:
         _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model)
@@ -122,9 +118,7 @@ def cost_per_token(
     Option2. model = "openai/gpt-4"       - model = provider/model
     Option3. model = "anthropic.claude-3" - model = model
     """
-    if (
-        model_with_provider in model_cost_ref
-    ):  # Option 2. use model with provider, model = "openai/gpt-4"
+    if model_with_provider in model_cost_ref:  # Option 2. use model with provider, model = "openai/gpt-4"
         model = model_with_provider
     elif model in model_cost_ref:  # Option 1. use model passed, model="gpt-4"
         model = model
@@ -135,6 +129,13 @@ def cost_per_token(
 
     # see this https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models
     print_verbose(f"Looking up model={model} in model_cost_map")
+    if custom_llm_provider == "vertex_ai" and "claude" in model:
+        return google_cost_per_token(
+            model=model_without_prefix,
+            custom_llm_provider=custom_llm_provider,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+        )
     if custom_llm_provider == "vertex_ai":
         return google_cost_per_character(
             model=model_without_prefix,
@@ -153,45 +154,29 @@ def cost_per_token(
         )
     elif model in model_cost_ref:
         print_verbose(f"Success: model={model} in model_cost_map")
-        print_verbose(
-            f"prompt_tokens={prompt_tokens}; completion_tokens={completion_tokens}"
-        )
+        print_verbose(f"prompt_tokens={prompt_tokens}; completion_tokens={completion_tokens}")
         if (
             model_cost_ref[model].get("input_cost_per_token", None) is not None
             and model_cost_ref[model].get("output_cost_per_token", None) is not None
         ):
             ## COST PER TOKEN ##
-            prompt_tokens_cost_usd_dollar = (
-                model_cost_ref[model]["input_cost_per_token"] * prompt_tokens
-            )
-            completion_tokens_cost_usd_dollar = (
-                model_cost_ref[model]["output_cost_per_token"] * completion_tokens
-            )
-        elif (
-            model_cost_ref[model].get("output_cost_per_second", None) is not None
-            and response_time_ms is not None
-        ):
+            prompt_tokens_cost_usd_dollar = model_cost_ref[model]["input_cost_per_token"] * prompt_tokens
+            completion_tokens_cost_usd_dollar = model_cost_ref[model]["output_cost_per_token"] * completion_tokens
+        elif model_cost_ref[model].get("output_cost_per_second", None) is not None and response_time_ms is not None:
             print_verbose(
                 f"For model={model} - output_cost_per_second: {model_cost_ref[model].get('output_cost_per_second')}; response time: {response_time_ms}"
             )
             ## COST PER SECOND ##
             prompt_tokens_cost_usd_dollar = 0
             completion_tokens_cost_usd_dollar = (
-                model_cost_ref[model]["output_cost_per_second"]
-                * response_time_ms
-                / 1000
+                model_cost_ref[model]["output_cost_per_second"] * response_time_ms / 1000
             )
-        elif (
-            model_cost_ref[model].get("input_cost_per_second", None) is not None
-            and response_time_ms is not None
-        ):
+        elif model_cost_ref[model].get("input_cost_per_second", None) is not None and response_time_ms is not None:
             print_verbose(
                 f"For model={model} - input_cost_per_second: {model_cost_ref[model].get('input_cost_per_second')}; response time: {response_time_ms}"
             )
             ## COST PER SECOND ##
-            prompt_tokens_cost_usd_dollar = (
-                model_cost_ref[model]["input_cost_per_second"] * response_time_ms / 1000
-            )
+            prompt_tokens_cost_usd_dollar = model_cost_ref[model]["input_cost_per_second"] * response_time_ms / 1000
             completion_tokens_cost_usd_dollar = 0.0
         print_verbose(
             f"Returned custom cost for model={model} - prompt_tokens_cost_usd_dollar: {prompt_tokens_cost_usd_dollar}, completion_tokens_cost_usd_dollar: {completion_tokens_cost_usd_dollar}"
@@ -200,57 +185,40 @@ def cost_per_token(
     elif "ft:gpt-3.5-turbo" in model:
         print_verbose(f"Cost Tracking: {model} is an OpenAI FinteTuned LLM")
         # fuzzy match ft:gpt-3.5-turbo:abcd-id-cool-litellm
-        prompt_tokens_cost_usd_dollar = (
-            model_cost_ref["ft:gpt-3.5-turbo"]["input_cost_per_token"] * prompt_tokens
-        )
+        prompt_tokens_cost_usd_dollar = model_cost_ref["ft:gpt-3.5-turbo"]["input_cost_per_token"] * prompt_tokens
         completion_tokens_cost_usd_dollar = (
-            model_cost_ref["ft:gpt-3.5-turbo"]["output_cost_per_token"]
-            * completion_tokens
+            model_cost_ref["ft:gpt-3.5-turbo"]["output_cost_per_token"] * completion_tokens
         )
         return prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar
     elif "ft:gpt-4-0613" in model:
         print_verbose(f"Cost Tracking: {model} is an OpenAI FinteTuned LLM")
         # fuzzy match ft:gpt-4-0613:abcd-id-cool-litellm
-        prompt_tokens_cost_usd_dollar = (
-            model_cost_ref["ft:gpt-4-0613"]["input_cost_per_token"] * prompt_tokens
-        )
-        completion_tokens_cost_usd_dollar = (
-            model_cost_ref["ft:gpt-4-0613"]["output_cost_per_token"] * completion_tokens
-        )
+        prompt_tokens_cost_usd_dollar = model_cost_ref["ft:gpt-4-0613"]["input_cost_per_token"] * prompt_tokens
+        completion_tokens_cost_usd_dollar = model_cost_ref["ft:gpt-4-0613"]["output_cost_per_token"] * completion_tokens
         return prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar
     elif "ft:gpt-4o-2024-05-13" in model:
         print_verbose(f"Cost Tracking: {model} is an OpenAI FinteTuned LLM")
         # fuzzy match ft:gpt-4o-2024-05-13:abcd-id-cool-litellm
-        prompt_tokens_cost_usd_dollar = (
-            model_cost_ref["ft:gpt-4o-2024-05-13"]["input_cost_per_token"]
-            * prompt_tokens
-        )
+        prompt_tokens_cost_usd_dollar = model_cost_ref["ft:gpt-4o-2024-05-13"]["input_cost_per_token"] * prompt_tokens
         completion_tokens_cost_usd_dollar = (
-            model_cost_ref["ft:gpt-4o-2024-05-13"]["output_cost_per_token"]
-            * completion_tokens
+            model_cost_ref["ft:gpt-4o-2024-05-13"]["output_cost_per_token"] * completion_tokens
         )
         return prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar
 
     elif "ft:davinci-002" in model:
         print_verbose(f"Cost Tracking: {model} is an OpenAI FinteTuned LLM")
         # fuzzy match ft:davinci-002:abcd-id-cool-litellm
-        prompt_tokens_cost_usd_dollar = (
-            model_cost_ref["ft:davinci-002"]["input_cost_per_token"] * prompt_tokens
-        )
+        prompt_tokens_cost_usd_dollar = model_cost_ref["ft:davinci-002"]["input_cost_per_token"] * prompt_tokens
         completion_tokens_cost_usd_dollar = (
-            model_cost_ref["ft:davinci-002"]["output_cost_per_token"]
-            * completion_tokens
+            model_cost_ref["ft:davinci-002"]["output_cost_per_token"] * completion_tokens
         )
         return prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar
     elif "ft:babbage-002" in model:
         print_verbose(f"Cost Tracking: {model} is an OpenAI FinteTuned LLM")
         # fuzzy match ft:babbage-002:abcd-id-cool-litellm
-        prompt_tokens_cost_usd_dollar = (
-            model_cost_ref["ft:babbage-002"]["input_cost_per_token"] * prompt_tokens
-        )
+        prompt_tokens_cost_usd_dollar = model_cost_ref["ft:babbage-002"]["input_cost_per_token"] * prompt_tokens
         completion_tokens_cost_usd_dollar = (
-            model_cost_ref["ft:babbage-002"]["output_cost_per_token"]
-            * completion_tokens
+            model_cost_ref["ft:babbage-002"]["output_cost_per_token"] * completion_tokens
         )
         return prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar
     elif model in litellm.azure_llms:
@@ -259,25 +227,17 @@ def cost_per_token(
         verbose_logger.debug(
             f"applying cost={model_cost_ref[model]['input_cost_per_token']} for prompt_tokens={prompt_tokens}"
         )
-        prompt_tokens_cost_usd_dollar = (
-            model_cost_ref[model]["input_cost_per_token"] * prompt_tokens
-        )
+        prompt_tokens_cost_usd_dollar = model_cost_ref[model]["input_cost_per_token"] * prompt_tokens
         verbose_logger.debug(
             f"applying cost={model_cost_ref[model]['output_cost_per_token']} for completion_tokens={completion_tokens}"
         )
-        completion_tokens_cost_usd_dollar = (
-            model_cost_ref[model]["output_cost_per_token"] * completion_tokens
-        )
+        completion_tokens_cost_usd_dollar = model_cost_ref[model]["output_cost_per_token"] * completion_tokens
         return prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar
     elif model in litellm.azure_embedding_models:
         verbose_logger.debug(f"Cost Tracking: {model} is an Azure Embedding Model")
         model = litellm.azure_embedding_models[model]
-        prompt_tokens_cost_usd_dollar = (
-            model_cost_ref[model]["input_cost_per_token"] * prompt_tokens
-        )
-        completion_tokens_cost_usd_dollar = (
-            model_cost_ref[model]["output_cost_per_token"] * completion_tokens
-        )
+        prompt_tokens_cost_usd_dollar = model_cost_ref[model]["input_cost_per_token"] * prompt_tokens
+        completion_tokens_cost_usd_dollar = model_cost_ref[model]["output_cost_per_token"] * completion_tokens
         return prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar
     else:
         # if model is not in model_prices_and_context_window.json. Raise an exception-let users know
@@ -301,9 +261,7 @@ def get_model_params_and_category(model_name) -> str:
     import re
 
     model_name = model_name.lower()
-    re_params_match = re.search(
-        r"(\d+b)", model_name
-    )  # catch all decimals like 3b, 70b, etc
+    re_params_match = re.search(r"(\d+b)", model_name)  # catch all decimals like 3b, 70b, etc
     category = None
     if re_params_match is not None:
         params_match = str(re_params_match.group(1))
@@ -334,9 +292,7 @@ def get_model_params_and_category(model_name) -> str:
 def get_replicate_completion_pricing(completion_response=None, total_time=0.0):
     # see https://replicate.com/pricing
     # for all litellm currently supported LLMs, almost all requests go to a100_80gb
-    a100_80gb_price_per_second_public = (
-        0.001400  # assume all calls sent to A100 80GB for now
-    )
+    a100_80gb_price_per_second_public = 0.001400  # assume all calls sent to A100 80GB for now
     if total_time == 0.0:  # total time is in ms
         start_time = completion_response["created"]
         end_time = getattr(completion_response, "ended", time.time())
@@ -425,13 +381,9 @@ def completion_cost(
         if completion_response is not None:
             # get input/output tokens from completion_response
             prompt_tokens = completion_response.get("usage", {}).get("prompt_tokens", 0)
-            completion_tokens = completion_response.get("usage", {}).get(
-                "completion_tokens", 0
-            )
+            completion_tokens = completion_response.get("usage", {}).get("completion_tokens", 0)
             total_time = completion_response.get("_response_ms", 0)
-            verbose_logger.debug(
-                f"completion_response response ms: {completion_response.get('_response_ms')} "
-            )
+            verbose_logger.debug(f"completion_response response ms: {completion_response.get('_response_ms')} ")
             model = model or completion_response.get(
                 "model", None
             )  # check if user passed an override for model, if it's none check completion_response['model']
@@ -441,25 +393,15 @@ def completion_cost(
                     and len(completion_response._hidden_params["model"]) > 0
                 ):
                     model = completion_response._hidden_params.get("model", model)
-                custom_llm_provider = completion_response._hidden_params.get(
-                    "custom_llm_provider", ""
-                )
-                region_name = completion_response._hidden_params.get(
-                    "region_name", region_name
-                )
-                size = completion_response._hidden_params.get(
-                    "optional_params", {}
-                ).get(
+                custom_llm_provider = completion_response._hidden_params.get("custom_llm_provider", "")
+                region_name = completion_response._hidden_params.get("region_name", region_name)
+                size = completion_response._hidden_params.get("optional_params", {}).get(
                     "size", "1024-x-1024"
                 )  # openai default
-                quality = completion_response._hidden_params.get(
-                    "optional_params", {}
-                ).get(
+                quality = completion_response._hidden_params.get("optional_params", {}).get(
                     "quality", "standard"
                 )  # openai default
-                n = completion_response._hidden_params.get("optional_params", {}).get(
-                    "n", 1
-                )  # openai default
+                n = completion_response._hidden_params.get("optional_params", {}).get("n", 1)  # openai default
         else:
             if len(messages) > 0:
                 prompt_tokens = token_counter(model=model, messages=messages)
@@ -471,10 +413,7 @@ def completion_cost(
                 f"Model is None and does not exist in passed completion_response. Passed completion_response={completion_response}, model={model}"
             )
 
-        if (
-            call_type == CallTypes.image_generation.value
-            or call_type == CallTypes.aimage_generation.value
-        ):
+        if call_type == CallTypes.image_generation.value or call_type == CallTypes.aimage_generation.value:
             ### IMAGE GENERATION COST CALCULATION ###
             if custom_llm_provider == "vertex_ai":
                 # https://cloud.google.com/vertex-ai/generative-ai/pricing
@@ -492,43 +431,23 @@ def completion_cost(
             height = int(size[0])  # if it's 1024-x-1024 vs. 1024x1024
             width = int(size[1])
             verbose_logger.debug(f"image_gen_model_name: {image_gen_model_name}")
-            verbose_logger.debug(
-                f"image_gen_model_name_with_quality: {image_gen_model_name_with_quality}"
-            )
+            verbose_logger.debug(f"image_gen_model_name_with_quality: {image_gen_model_name_with_quality}")
             if image_gen_model_name in litellm.model_cost:
-                return (
-                    litellm.model_cost[image_gen_model_name]["input_cost_per_pixel"]
-                    * height
-                    * width
-                    * n
-                )
+                return litellm.model_cost[image_gen_model_name]["input_cost_per_pixel"] * height * width * n
             elif image_gen_model_name_with_quality in litellm.model_cost:
                 return (
-                    litellm.model_cost[image_gen_model_name_with_quality][
-                        "input_cost_per_pixel"
-                    ]
-                    * height
-                    * width
-                    * n
+                    litellm.model_cost[image_gen_model_name_with_quality]["input_cost_per_pixel"] * height * width * n
                 )
             else:
-                raise Exception(
-                    f"Model={image_gen_model_name} not found in completion cost model map"
-                )
+                raise Exception(f"Model={image_gen_model_name} not found in completion cost model map")
         # Calculate cost based on prompt_tokens, completion_tokens
-        if (
-            "togethercomputer" in model
-            or "together_ai" in model
-            or custom_llm_provider == "together_ai"
-        ):
+        if "togethercomputer" in model or "together_ai" in model or custom_llm_provider == "together_ai":
             # together ai prices based on size of llm
             # get_model_params_and_category takes a model name and returns the category of LLM size it is in model_prices_and_context_window.json
             model = get_model_params_and_category(model)
         # replicate llms are calculate based on time for request running
         # see https://replicate.com/pricing
-        elif (
-            model in litellm.replicate_models or "replicate" in model
-        ) and model not in litellm.model_cost:
+        elif (model in litellm.replicate_models or "replicate" in model) and model not in litellm.model_cost:
             # for unmapped replicate model, default to replicate's time tracking logic
             return get_replicate_completion_pricing(completion_response, total_time)
 
@@ -545,21 +464,15 @@ def completion_cost(
         ):
             # Calculate the prompt characters + response characters
             if len("messages") > 0:
-                prompt_string = litellm.utils.get_formatted_prompt(
-                    data={"messages": messages}, call_type="completion"
-                )
+                prompt_string = litellm.utils.get_formatted_prompt(data={"messages": messages}, call_type="completion")
             else:
                 prompt_string = ""
 
             prompt_characters = litellm.utils._count_characters(text=prompt_string)
 
-            completion_string = litellm.utils.get_response_string(
-                response_obj=completion_response
-            )
+            completion_string = litellm.utils.get_response_string(response_obj=completion_response)
 
-            completion_characters = litellm.utils._count_characters(
-                text=completion_string
-            )
+            completion_characters = litellm.utils._count_characters(text=completion_string)
 
         (
             prompt_tokens_cost_usd_dollar,
@@ -631,9 +544,7 @@ def response_cost_calculator(
                 )
             else:
                 if (
-                    model in litellm.model_cost
-                    and custom_pricing is not None
-                    and custom_llm_provider is True
+                    model in litellm.model_cost and custom_pricing is not None and custom_llm_provider is True
                 ):  # override defaults if custom pricing is set
                     base_model = model
                 # base_model defaults to None if not set on model_info
@@ -645,7 +556,5 @@ def response_cost_calculator(
                 )
         return response_cost
     except litellm.NotFoundError as e:
-        print_verbose(
-            f"Model={model} for LLM Provider={custom_llm_provider} not found in completion cost map."
-        )
+        print_verbose(f"Model={model} for LLM Provider={custom_llm_provider} not found in completion cost map.")
         return None
