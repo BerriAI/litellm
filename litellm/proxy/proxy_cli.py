@@ -44,7 +44,7 @@ def run_ollama_serve():
         with open(os.devnull, "w") as devnull:
             process = subprocess.Popen(command, stdout=devnull, stderr=devnull)
     except Exception as e:
-        print(
+        print(  # noqa
             f"""
             LiteLLM Warning: proxy started with `ollama` model\n`ollama serve` failed with Exception{e}. \nEnsure you run `ollama serve`
         """
@@ -305,17 +305,17 @@ def run_server(
                     polling_url = f"{api_base}{url}"
                     polling_response = requests.get(polling_url)
                     polling_response = polling_response.json()
-                    print("\n RESPONSE FROM POLLING JOB", polling_response)
+                    print("\n RESPONSE FROM POLLING JOB", polling_response)  # noqa
                     status = polling_response["status"]
                     if status == "finished":
                         llm_response = polling_response["result"]
                         break
-                    print(
-                        f"POLLING JOB{polling_url}\nSTATUS: {status}, \n Response {polling_response}"
+                    print(  # noqa
+                        f"POLLING JOB{polling_url}\nSTATUS: {status}, \n Response {polling_response}"  # noqa
                     )  # noqa
                     time.sleep(0.5)
                 except Exception as e:
-                    print("got exception in polling", e)
+                    print("got exception in polling", e)  # noqa
                     break
 
         # Number of concurrent calls (you can adjust this)
@@ -345,18 +345,18 @@ def run_server(
                 else:
                     failed_calls += 1
         end_time = time.time()
-        print(f"Elapsed Time: {end_time-start_time}")
-        print(f"Load test Summary:")
-        print(f"Total Requests: {concurrent_calls}")
-        print(f"Successful Calls: {successful_calls}")
-        print(f"Failed Calls: {failed_calls}")
+        print(f"Elapsed Time: {end_time-start_time}")  # noqa
+        print(f"Load test Summary:")  # noqa
+        print(f"Total Requests: {concurrent_calls}")  # noqa
+        print(f"Successful Calls: {successful_calls}")  # noqa
+        print(f"Failed Calls: {failed_calls}")  # noqa
         return
     if health != False:
         import requests
 
-        print("\nLiteLLM: Health Testing models in config")
+        print("\nLiteLLM: Health Testing models in config")  # noqa
         response = requests.get(url=f"http://{host}:{port}/health")
-        print(json.dumps(response.json(), indent=4))
+        print(json.dumps(response.json(), indent=4))  # noqa
         return
     if test != False:
         request_model = model or "gpt-3.5-turbo"
@@ -383,8 +383,8 @@ def run_server(
         )
         click.echo(f"\nLiteLLM: response from proxy {response}")
 
-        print(
-            f"\n LiteLLM: Making a test ChatCompletions + streaming request to proxy. Model={request_model}"
+        print(  # noqa
+            f"\n LiteLLM: Making a test ChatCompletions + streaming r equest to proxy. Model={request_model}"
         )
 
         response = client.chat.completions.create(
@@ -399,11 +399,11 @@ def run_server(
         )
         for chunk in response:
             click.echo(f"LiteLLM: streaming response from proxy {chunk}")
-        print("\n making completion request to proxy")
+        print("\n making completion request to proxy")  # noqa
         response = client.completions.create(
             model=request_model, prompt="this is a test request, write a short poem"
         )
-        print(response)
+        print(response)  # noqa
 
         return
     else:
@@ -573,13 +573,13 @@ def run_server(
                         subprocess.run(["prisma", "db", "push", "--accept-data-loss"])
                         break  # Exit the loop if the subprocess succeeds
                     except subprocess.CalledProcessError as e:
-                        print(f"Error: {e}")
+                        print(f"Error: {e}")  # noqa
                         time.sleep(random.randrange(start=1, stop=5))
                     finally:
                         os.chdir(original_dir)
             else:
-                print(
-                    f"Unable to connect to DB. DATABASE_URL found in environment, but prisma package not found."
+                print(  # noqa
+                    f"Unable to connect to DB. DATABASE_URL found in environment, but prisma package not found."  # noqa
                 )
         if port == 4000 and is_port_in_use(port):
             port = random.randint(1024, 49152)
@@ -589,8 +589,8 @@ def run_server(
 
         if run_gunicorn == False:
             if ssl_certfile_path is not None and ssl_keyfile_path is not None:
-                print(
-                    f"\033[1;32mLiteLLM Proxy: Using SSL with certfile: {ssl_certfile_path} and keyfile: {ssl_keyfile_path}\033[0m\n"
+                print(  # noqa
+                    f"\033[1;32mLiteLLM Proxy: Using SSL with certfile: {ssl_certfile_path} and keyfile: {ssl_keyfile_path}\033[0m\n"  # noqa
                 )
                 uvicorn.run(
                     app,
@@ -642,7 +642,7 @@ def run_server(
                     print(  # noqa
                         f"\033[1;34mLiteLLM: Curl Command Test for your local proxy\n {curl_command} \033[0m\n"
                     )
-                    print(
+                    print(  # noqa
                         "\033[1;34mDocs: https://docs.litellm.ai/docs/simple_proxy\033[0m\n"
                     )  # noqa
                     print(  # noqa
@@ -663,8 +663,8 @@ def run_server(
                     # gunicorn app function
                     return self.application
 
-            print(
-                f"\033[1;32mLiteLLM Proxy: Starting server on {host}:{port} with {num_workers} workers\033[0m\n"
+            print(  # noqa
+                f"\033[1;32mLiteLLM Proxy: Starting server on {host}:{port} with {num_workers} workers\033[0m\n"  # noqa
             )
             gunicorn_options = {
                 "bind": f"{host}:{port}",
@@ -677,8 +677,8 @@ def run_server(
             }
 
             if ssl_certfile_path is not None and ssl_keyfile_path is not None:
-                print(
-                    f"\033[1;32mLiteLLM Proxy: Using SSL with certfile: {ssl_certfile_path} and keyfile: {ssl_keyfile_path}\033[0m\n"
+                print(  # noqa
+                    f"\033[1;32mLiteLLM Proxy: Using SSL with certfile: {ssl_certfile_path} and keyfile: {ssl_keyfile_path}\033[0m\n"  # noqa
                 )
                 gunicorn_options["certfile"] = ssl_certfile_path
                 gunicorn_options["keyfile"] = ssl_keyfile_path
