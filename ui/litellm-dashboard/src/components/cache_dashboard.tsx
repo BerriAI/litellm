@@ -287,7 +287,7 @@ const CacheDashboard: React.FC<CachePageProps> = ({
 
       </div>
 
-      <Subtitle>Cache Hits vs API Requests</Subtitle>
+      <Subtitle className="mt-4">Cache Hits vs API Requests</Subtitle>
       <BarChart
         title="Cache Hits vs API Requests"
         data={filteredData}
@@ -298,7 +298,7 @@ const CacheDashboard: React.FC<CachePageProps> = ({
         yAxisWidth={48}
       />
 
-    <Subtitle>Cached Completion Tokens vs Generated Completion Tokens</Subtitle>
+    <Subtitle className="mt-4">Cached Completion Tokens vs Generated Completion Tokens</Subtitle>
     <BarChart
         className="mt-6"
         data={filteredData}
