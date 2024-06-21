@@ -15,6 +15,7 @@ import APIRef from "@/components/api_ref";
 import ChatUI from "@/components/chat_ui";
 import Sidebar from "../components/leftnav";
 import Usage from "../components/usage";
+import CacheDashboard from "@/components/cache_dashboard";
 import { jwtDecode } from "jwt-decode";
 import { Typography } from "antd";
 
@@ -219,6 +220,14 @@ const CreateKeyPage = () => {
             <ModelHub
               accessToken={accessToken}
               publicPage={false}
+              premiumUser={premiumUser}
+            />
+          ) : page == "caching" ? (
+            <CacheDashboard
+              userID={userID}
+              userRole={userRole}
+              token={token}
+              accessToken={accessToken}
               premiumUser={premiumUser}
             />
           ) : (
