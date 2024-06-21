@@ -1703,6 +1703,11 @@ class OpenAITextCompletion(BaseLLM):
         else:
             openai_client = client
 
+        # Prompt should be a string, not an array.
+        if not isinstance(data["prompt"], str):
+            # If prompt is not a string, assume it's an array and take the first element, otherwise just use the default prompt
+            data["prompt"] = data["prompt"][0] if data["prompt"] else data["prompt"]
+            
         response = await openai_client.completions.create(**data)
 
         streamwrapper = CustomStreamWrapper(
