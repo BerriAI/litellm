@@ -8,21 +8,24 @@ Run checks for:
 2. If user is in budget 
 3. If end_user ('user' passed to /chat/completions, /embeddings endpoint) is in budget 
 """
+from datetime import datetime
+from typing import TYPE_CHECKING, Any, Literal, Optional
+
+import litellm
+from litellm._logging import verbose_proxy_logger
+from litellm.caching import DualCache
 from litellm.proxy._types import (
-    LiteLLM_UserTable,
     LiteLLM_EndUserTable,
     LiteLLM_JWTAuth,
-    LiteLLM_TeamTable,
-    LiteLLMRoutes,
     LiteLLM_OrganizationTable,
+    LiteLLM_TeamTable,
+    LiteLLM_UserTable,
+    LiteLLMRoutes,
     LitellmUserRoles,
+    UserAPIKeyAuth,
 )
-from typing import Optional, Literal, TYPE_CHECKING, Any
 from litellm.proxy.utils import PrismaClient, ProxyLogging, log_to_opentelemetry
-from litellm.caching import DualCache
-import litellm
 from litellm.types.services import ServiceLoggerPayload, ServiceTypes
-from datetime import datetime
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -110,7 +113,7 @@ def common_checks(
         # Enterprise ONLY Feature
         # we already validate if user is premium_user when reading the config
         # Add an extra premium_usercheck here too, just incase
-        from litellm.proxy.proxy_server import premium_user, CommonProxyErrors
+        from litellm.proxy.proxy_server import CommonProxyErrors, premium_user
 
         if premium_user is not True:
             raise ValueError(
@@ -364,7 +367,8 @@ async def get_team_object(
         )
 
     # check if in cache
-    cached_team_obj = await user_api_key_cache.async_get_cache(key=team_id)
+    key = "team_id:{}".format(team_id)
+    cached_team_obj = await user_api_key_cache.async_get_cache(key=key)
     if cached_team_obj is not None:
         if isinstance(cached_team_obj, dict):
             return LiteLLM_TeamTable(**cached_team_obj)
@@ -381,7 +385,7 @@ async def get_team_object(
 
         _response = LiteLLM_TeamTable(**response.dict())
         # save the team object to cache
-        await user_api_key_cache.async_set_cache(key=response.team_id, value=_response)
+        await user_api_key_cache.async_set_cache(key=key, value=_response)
 
         return _response
     except Exception as e:
@@ -429,3 +433,61 @@ async def get_org_object(
         raise Exception(
             f"Organization doesn't exist in db. Organization={org_id}. Create organization via `/organization/new` call."
         )
+
+
+async def can_key_call_model(
+    model: str, llm_model_list: Optional[list], valid_token: UserAPIKeyAuth
+) -> Literal[True]:
+    """
+    Checks if token can call a given model
+
+    Returns:
+        - True: if token allowed to call model
+
+    Raises:
+        - Exception: If token not allowed to call model
+    """
+    if model in litellm.model_alias_map:
+        model = litellm.model_alias_map[model]
+
+    ## check if model in allowed model names
+    verbose_proxy_logger.debug(
+        f"LLM Model List pre access group check: {llm_model_list}"
+    )
+    from collections import defaultdict
+
+    access_groups = defaultdict(list)
+    if llm_model_list is not None:
+        for m in llm_model_list:
+            for group in m.get("model_info", {}).get("access_groups", []):
+                model_name = m["model_name"]
+                access_groups[group].append(model_name)
+
+    models_in_current_access_groups = []
+    if len(access_groups) > 0:  # check if token contains any model access groups
+        for idx, m in enumerate(
+            valid_token.models
+        ):  # loop token models, if any of them are an access group add the access group
+            if m in access_groups:
+                # if it is an access group we need to remove it from valid_token.models
+                models_in_group = access_groups[m]
+                models_in_current_access_groups.extend(models_in_group)
+
+    # Filter out models that are access_groups
+    filtered_models = [m for m in valid_token.models if m not in access_groups]
+
+    filtered_models += models_in_current_access_groups
+    verbose_proxy_logger.debug(f"model: {model}; allowed_models: {filtered_models}")
+    if (
+        model is not None
+        and model not in filtered_models
+        and "*" not in filtered_models
+    ):
+        raise ValueError(
+            f"API Key not allowed to access model. This token can only access models={valid_token.models}. Tried to access {model}"
+        )
+    valid_token.models = filtered_models
+    verbose_proxy_logger.debug(
+        f"filtered allowed_models: {filtered_models}; valid_token.models: {valid_token.models}"
+    )
+    return True

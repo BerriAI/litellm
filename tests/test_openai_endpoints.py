@@ -309,7 +309,7 @@ async def test_chat_completion_different_deployments():
         # key_gen = await generate_key(session=session)
         key = "sk-1234"
         results = []
-        for _ in range(5):
+        for _ in range(20):
             results.append(
                 await chat_completion_with_headers(
                     session=session, key=key, model="fake-openai-endpoint-3"
