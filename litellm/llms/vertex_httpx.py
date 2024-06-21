@@ -70,10 +70,6 @@ class GoogleAIStudioGeminiConfig:  # key diff from VertexAI - 'frequency_penalty
 
     - `stop_sequences` (List[str]): The set of character sequences (up to 5) that will stop output generation. If specified, the API will stop at the first appearance of a stop sequence. The stop sequence will not be included as part of the response.
 
-    - `frequency_penalty` (float): This parameter is used to penalize the model from repeating the same output. The default value is 0.0.
-
-    - `presence_penalty` (float): This parameter is used to penalize the model from generating the same output as the input. The default value is 0.0.
-
     Note: Please make sure to modify the default parameters as required for your use case.
     """
 
