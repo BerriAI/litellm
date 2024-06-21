@@ -43,6 +43,9 @@ const CacheDashboard: React.FC<CachePageProps> = ({
   const [selectedApiKeys, setSelectedApiKeys] = useState([]);
   const [selectedModels, setSelectedModels] = useState([]);
   const [data, setData] = useState([]);
+  const [cachedResponses, setCachedResponses] = useState(0);
+  const [cachedTokens, setCachedTokens] = useState(0);
+  const [cacheHitRatio, setCacheHitRatio] = useState("0");
 
   const [dateValue, setDateValue] = useState<DateRangePickerValue>({
     from: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000), 
@@ -98,6 +101,9 @@ const CacheDashboard: React.FC<CachePageProps> = ({
 
     console.log("before processed data in cache dashboard", newData);
 
+    let llm_api_requests = 0;
+    let cache_hits = 0;
+    let cached_tokens = 0;
     const processedData = newData.reduce((acc, item) => {
         console.log("Processing item:", item);
         
@@ -105,20 +111,39 @@ const CacheDashboard: React.FC<CachePageProps> = ({
           console.log("Item has no call_type:", item);
           item.call_type = "Unknown";
         }
+
+
+        llm_api_requests += (item.total_rows || 0) - (item.cache_hit_true_rows || 0);
+        cache_hits += item.cache_hit_true_rows || 0;
+        cached_tokens += item.cached_completion_tokens || 0;
     
         const existingItem = acc.find(i => i.name === item.call_type);
         if (existingItem) {
           existingItem["LLM API requests"] += (item.total_rows || 0) - (item.cache_hit_true_rows || 0);
           existingItem["Cache hit"] += item.cache_hit_true_rows || 0;
+          existingItem["Cached Completion Tokens"] += item.cached_completion_tokens || 0;
+          existingItem["Generated Completion Tokens"] += item.generated_completion_tokens || 0;
         } else {
           acc.push({
             name: item.call_type,
             "LLM API requests": (item.total_rows || 0) - (item.cache_hit_true_rows || 0),
             "Cache hit": item.cache_hit_true_rows || 0,
+            "Cached Completion Tokens": item.cached_completion_tokens || 0,
+            "Generated Completion Tokens": item.generated_completion_tokens || 0
           });
         }
         return acc;
       }, []);
+    
+    // set header cache statistics 
+    setCachedResponses(cache_hits);
+    setCachedTokens(cached_tokens);
+    if (llm_api_requests > 0) {
+      let cache_hit_ratio = ((cache_hits / llm_api_requests) * 100).toFixed(2);
+      setCacheHitRatio(cache_hit_ratio);
+    } else {
+      setCacheHitRatio(0);
+    }
   
     setFilteredData(processedData);
 
@@ -126,8 +151,8 @@ const CacheDashboard: React.FC<CachePageProps> = ({
 
   }, [selectedApiKeys, selectedModels, dateValue, data]);
 
-  return (
-    <Card>
+  return (        
+      <Card>
       <Title>API Activity Dashboard</Title>
       <Subtitle>Cache hits vs API requests broken down by call type</Subtitle>
       
@@ -167,6 +192,45 @@ const CacheDashboard: React.FC<CachePageProps> = ({
         </Col>
       </Grid>
 
+      <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3 mt-4">
+      <Card>
+            <p className="text-tremor-default font-medium text-tremor-content dark:text-dark-tremor-content">
+              Cache Hit Ratio
+            </p>
+            <div className="mt-2 flex items-baseline space-x-2.5">
+              <p className="text-tremor-metric font-semibold text-tremor-content-strong dark:text-dark-tremor-content-strong">
+                {cacheHitRatio}%
+              </p>
+              
+            </div>
+          </Card>
+          <Card>
+            <p className="text-tremor-default font-medium text-tremor-content dark:text-dark-tremor-content">
+              Cache Hits
+            </p>
+            <div className="mt-2 flex items-baseline space-x-2.5">
+              <p className="text-tremor-metric font-semibold text-tremor-content-strong dark:text-dark-tremor-content-strong">
+                {cachedResponses}
+              </p>
+              
+            </div>
+          </Card>
+          
+          <Card>
+            <p className="text-tremor-default font-medium text-tremor-content dark:text-dark-tremor-content">
+              Cached Tokens
+            </p>
+            <div className="mt-2 flex items-baseline space-x-2.5">
+              <p className="text-tremor-metric font-semibold text-tremor-content-strong dark:text-dark-tremor-content-strong">
+                {cachedTokens}
+              </p>
+              
+            </div>
+          </Card>
+
+      </div>
+
+
       <BarChart
         className="mt-6"
         data={filteredData}
@@ -175,7 +239,24 @@ const CacheDashboard: React.FC<CachePageProps> = ({
         colors={["blue", "teal"]}
         yAxisWidth={48}
       />
-    </Card>
+
+      <Card>
+        <BarChart
+            className="mt-6"
+            data={filteredData}
+            index="name"
+            categories={["Generated Completion Tokens", "Cached Completion Tokens"]}
+            colors={["blue", "teal"]}
+            yAxisWidth={48}
+        />
+        </Card>
+
+      </Card>
+
+
+    
+
+
   );
 };
 
