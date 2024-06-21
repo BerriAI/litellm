@@ -42,6 +42,29 @@ interface CachePageProps {
     premiumUser: boolean;
 }
 
+interface cacheDataItem {
+    api_key: string;
+    model: string;
+    cache_hit_true_rows: number;
+    cached_completion_tokens: number;
+    total_rows: number;
+    generated_completion_tokens: number;
+    call_type: string;
+
+    // Add other properties as needed
+  }
+
+
+interface uiData {
+    "name": string;
+    "LLM API requests": number;
+    "Cache hit": number;
+    "Cached Completion Tokens": number;
+    "Generated Completion Tokens": number;
+
+}
+
+
 
 const CacheDashboard: React.FC<CachePageProps> = ({
   accessToken,
@@ -50,10 +73,10 @@ const CacheDashboard: React.FC<CachePageProps> = ({
   userID,
   premiumUser,
 }) => {
-  const [filteredData, setFilteredData] = useState([]);
-  const [selectedApiKeys, setSelectedApiKeys] = useState([]);
-  const [selectedModels, setSelectedModels] = useState([]);
-  const [data, setData] = useState([]);
+  const [filteredData, setFilteredData] = useState<uiData[]>([]);
+  const [selectedApiKeys, setSelectedApiKeys] = useState<string[]>([]);
+  const [selectedModels, setSelectedModels] =  useState<string[]>([]);
+  const [data, setData] = useState<cacheDataItem[]>([]);
   const [cachedResponses, setCachedResponses] = useState("0");
   const [cachedTokens, setCachedTokens] = useState("0");
   const [cacheHitRatio, setCacheHitRatio] = useState("0");
@@ -75,9 +98,9 @@ const CacheDashboard: React.FC<CachePageProps> = ({
     fetchData();
   }, [accessToken]);
 
-  const uniqueApiKeys = [...new Set(data.map((item) => item?.api_key ? item.api_key : ""))];
-  const uniqueModels = [...new Set(data.map((item) => item?.model ? item.model : ""))];
-  const uniqueCallTypes = [...new Set(data.map((item) => item?.call_type ? item.call_type : ""))];
+    const uniqueApiKeys = Array.from(new Set(data.map((item) => item?.api_key ?? "")));
+    const uniqueModels = Array.from(new Set(data.map((item) => item?.model ?? "")));
+    const uniqueCallTypes = Array.from(new Set(data.map((item) => item?.call_type ?? "")));
 
 
   const updateCachingData = async (startTime:  Date | undefined, endTime:  Date | undefined) => {
@@ -103,7 +126,7 @@ const CacheDashboard: React.FC<CachePageProps> = ({
 
   useEffect(() => {
     console.log("DATA IN CACHE DASHBOARD", data);
-    let newData = data;
+    let newData: cacheDataItem[] = data;
     if (selectedApiKeys.length > 0) {
       newData = newData.filter((item) => selectedApiKeys.includes(item.api_key));
     }
@@ -137,7 +160,7 @@ const CacheDashboard: React.FC<CachePageProps> = ({
     let llm_api_requests = 0;
     let cache_hits = 0;
     let cached_tokens = 0;
-    const processedData = newData.reduce((acc, item) => {
+    const processedData = newData.reduce((acc: uiData[], item) => {
         console.log("Processing item:", item);
         
         if (!item.call_type) {
@@ -175,7 +198,7 @@ const CacheDashboard: React.FC<CachePageProps> = ({
       let cache_hit_ratio = ((cache_hits / llm_api_requests) * 100).toFixed(2);
       setCacheHitRatio(cache_hit_ratio);
     } else {
-      setCacheHitRatio(0);
+      setCacheHitRatio("0");
     }
   
     setFilteredData(processedData);
@@ -271,7 +294,7 @@ const CacheDashboard: React.FC<CachePageProps> = ({
         index="name"
         valueFormatter={valueFormatterNumbers}
         categories={["LLM API requests", "Cache hit"]}
-        colors={["blue", "teal"]}
+        colors={["sky", "teal"]}
         yAxisWidth={48}
       />
 
@@ -282,7 +305,7 @@ const CacheDashboard: React.FC<CachePageProps> = ({
         index="name"
         valueFormatter={valueFormatterNumbers}
         categories={["Generated Completion Tokens", "Cached Completion Tokens"]}
-        colors={["blue", "teal"]}
+        colors={["sky", "teal"]}
         yAxisWidth={48}
     />
 
