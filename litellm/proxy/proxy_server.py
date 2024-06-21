@@ -165,9 +165,10 @@ from litellm.proxy.secret_managers.aws_secret_manager import (
     load_aws_secret_manager,
 )
 from litellm.proxy.secret_managers.google_kms import load_google_kms
-from litellm.proxy.spend_reporting_endpoints.spend_management_endpoints import (
+from litellm.proxy.spend_tracking.spend_management_endpoints import (
     router as spend_management_router,
 )
+from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.proxy.utils import (
     DBClient,
     PrismaClient,
@@ -180,7 +181,6 @@ from litellm.proxy.utils import (
     encrypt_value,
     get_error_message_str,
     get_instance_fn,
-    get_logging_payload,
     hash_token,
     html_form,
     missing_keys_html_form,
