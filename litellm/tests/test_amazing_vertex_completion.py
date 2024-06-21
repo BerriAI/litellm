@@ -877,6 +877,7 @@ async def test_gemini_pro_httpx_custom_api_base(provider):
                 response_format={"type": "json_object"},
                 client=client,
                 api_base="my-custom-api-base",
+                extra_headers={"hello": "world"},
             )
         except Exception as e:
             pass
@@ -884,6 +885,7 @@ async def test_gemini_pro_httpx_custom_api_base(provider):
         mock_call.assert_called_once()
 
         assert "my-custom-api-base:generateContent" == mock_call.call_args.kwargs["url"]
+        assert "hello" in mock_call.call_args.kwargs["headers"]
 
 
 @pytest.mark.skip(reason="exhausted vertex quota. need to refactor to mock the call")
