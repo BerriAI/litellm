@@ -1426,7 +1426,7 @@ def test_hf_test_completion_tgi():
                 messages=[{"content": "Hello, how are you?", "role": "user"}],
                 max_tokens=10,
             )
-            # Add any assertions here to check the response
+            # Add any assertions-here to check the response
             print(response)
     except litellm.ServiceUnavailableError as e:
         pass
