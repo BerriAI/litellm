@@ -42,7 +42,6 @@ def get_vertex_ai_creds_json() -> dict:
     print("loading vertex ai credentials")
     filepath = os.path.dirname(os.path.abspath(__file__))
     vertex_key_path = filepath + "/vertex_key.json"
-
     # Read the existing content of the file or create an empty dictionary
     try:
         with open(vertex_key_path, "r") as file:
