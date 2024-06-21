@@ -79,17 +79,18 @@ const Sidebar: React.FC<SidebarProps> = ({
               <Text>Logging & Alerts</Text>
             </Menu.Item>
           ) : null}
-
           {userRole == "Admin" ? (
-            <Menu.Item key="9" onClick={() => setPage("budgets")}>
-              <Text>Budgets</Text>
-            </Menu.Item>
-          ) : null}
-          {userRole == "Admin" ? (
-            <Menu.Item key="10" onClick={() => setPage("caching")}>
+            <Menu.Item key="9" onClick={() => setPage("caching")}>
               <Text>Caching</Text>
             </Menu.Item>
           ) : null}
+
+          {userRole == "Admin" ? (
+            <Menu.Item key="10" onClick={() => setPage("budgets")}>
+              <Text>Budgets</Text>
+            </Menu.Item>
+          ) : null}
+          
           {userRole == "Admin" ? (
             <Menu.Item key="11" onClick={() => setPage("general-settings")}>
               <Text>Router Settings</Text>
