@@ -462,9 +462,11 @@ class ProxyLogging:
         extra_kwargs = {}
         alerting_metadata = {}
         if request_data is not None:
+
             _url = self.slack_alerting_instance._add_langfuse_trace_id_to_alert(
                 request_data=request_data
             )
+
             if _url is not None:
                 extra_kwargs["🪢 Langfuse Trace"] = _url
                 formatted_message += "\n\n🪢 Langfuse Trace: {}".format(_url)
