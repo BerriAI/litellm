@@ -252,6 +252,11 @@ class LangFuseLogger:
                 "Langfuse Layer Error(): Exception occured - {}".format(str(e))
             )
             verbose_logger.debug(traceback.format_exc())
+            response_obj["litellm"]["langfuse"] = {
+                "trace_id": trace_id,
+                "trace_url": trace_url,
+                "generation_id": generation_id,
+            }
             return {"trace_id": None, "generation_id": None}
 
     async def _async_log_event(
