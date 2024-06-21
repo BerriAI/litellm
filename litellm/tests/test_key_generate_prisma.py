@@ -513,7 +513,7 @@ def test_call_with_end_user_over_budget(prisma_client):
 
         async def test():
             await litellm.proxy.proxy_server.prisma_client.connect()
-            user = f"ishaan {random.randint(0, 10000)}"
+            user = f"ishaan {uuid.uuid4().hex}"
             request = NewCustomerRequest(
                 user_id=user, max_budget=0.000001
             )  # create a key with no budget
