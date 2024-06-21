@@ -72,6 +72,7 @@ from litellm.proxy.proxy_server import (
     image_generation,
     model_list,
     moderations,
+    new_end_user,
     user_api_key_auth,
 )
 from litellm.proxy.spend_reporting_endpoints.spend_management_endpoints import (
@@ -91,6 +92,7 @@ from litellm.proxy._types import (
     GenerateKeyRequest,
     KeyRequest,
     LiteLLM_UpperboundKeyGenerateParams,
+    NewCustomerRequest,
     NewTeamRequest,
     NewUserRequest,
     UpdateKeyRequest,
@@ -511,15 +513,22 @@ def test_call_with_end_user_over_budget(prisma_client):
 
         async def test():
             await litellm.proxy.proxy_server.prisma_client.connect()
-            request = GenerateKeyRequest()  # create a key with no budget
-            key = await new_user(request)
-            print(key)
-
-            generated_key = key.key
-            bearer_token = "Bearer " + generated_key
             user = f"ishaan {random.randint(0, 10000)}"
+            request = NewCustomerRequest(
+                user_id=user, max_budget=0.000001
+            )  # create a key with no budget
+            await new_end_user(
+                request,
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_role=LitellmUserRoles.PROXY_ADMIN,
+                    api_key="sk-1234",
+                    user_id="1234",
+                ),
+            )
+
             request = Request(scope={"type": "http"})
             request._url = URL(url="/chat/completions")
+            bearer_token = "Bearer sk-1234"
 
             result = await user_api_key_auth(request=request, api_key=bearer_token)
 
@@ -556,7 +565,7 @@ def test_call_with_end_user_over_budget(prisma_client):
                     "stream": False,
                     "litellm_params": {
                         "metadata": {
-                            "user_api_key": generated_key,
+                            "user_api_key": "sk-1234",
                             "user_api_key_user_id": user,
                         },
                         "proxy_server_request": {
@@ -571,7 +580,14 @@ def test_call_with_end_user_over_budget(prisma_client):
                 start_time=datetime.now(),
                 end_time=datetime.now(),
             )
-            await asyncio.sleep(5)
+
+            await asyncio.sleep(10)
+            await update_spend(
+                prisma_client=prisma_client,
+                db_writer_client=None,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+
             # use generated key to auth in
             result = await user_api_key_auth(request=request, api_key=bearer_token)
             print("result from user auth with new key", result)
