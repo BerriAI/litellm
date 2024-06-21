@@ -500,9 +500,9 @@ def run_server(
                         load_aws_kms(use_aws_kms=True)
                     else:
                         raise ValueError("Invalid Key Management System selected")
-                key_management_settings = general_settings.get(
-                    "key_management_settings", None
-                )
+            key_management_settings = general_settings.get(
+                "key_management_settings", None
+            )
             if key_management_settings is not None:
                 import litellm
 
