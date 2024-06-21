@@ -9,22 +9,24 @@ All /key management endpoints
 /key/delete
 """
 
+import asyncio
 import copy
 import json
-import uuid
 import re
-import traceback
-import asyncio
 import secrets
-from typing import Optional, List
-import fastapi
-from fastapi import Depends, Request, APIRouter, Header, status
-from fastapi import HTTPException
-import litellm
+import traceback
+import uuid
 from datetime import datetime, timedelta, timezone
+from typing import List, Optional
+
+import fastapi
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+
+import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy._types import *
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.utils import _duration_in_seconds
 
 router = APIRouter()
 
@@ -84,12 +86,12 @@ async def generate_key_fn(
     """
     try:
         from litellm.proxy.proxy_server import (
-            user_custom_key_generate,
-            prisma_client,
-            litellm_proxy_admin_name,
-            general_settings,
-            proxy_logging_obj,
             create_audit_log_for_update,
+            general_settings,
+            litellm_proxy_admin_name,
+            prisma_client,
+            proxy_logging_obj,
+            user_custom_key_generate,
         )
 
         verbose_proxy_logger.debug("entered /key/generate")
@@ -288,13 +290,13 @@ async def update_key_fn(
     Update an existing key
     """
     from litellm.proxy.proxy_server import (
-        user_custom_key_generate,
-        prisma_client,
-        litellm_proxy_admin_name,
-        general_settings,
-        proxy_logging_obj,
         create_audit_log_for_update,
+        general_settings,
+        litellm_proxy_admin_name,
+        prisma_client,
+        proxy_logging_obj,
         user_api_key_cache,
+        user_custom_key_generate,
     )
 
     try:
@@ -411,13 +413,13 @@ async def delete_key_fn(
     """
     try:
         from litellm.proxy.proxy_server import (
-            user_custom_key_generate,
-            prisma_client,
-            litellm_proxy_admin_name,
-            general_settings,
-            proxy_logging_obj,
             create_audit_log_for_update,
+            general_settings,
+            litellm_proxy_admin_name,
+            prisma_client,
+            proxy_logging_obj,
             user_api_key_cache,
+            user_custom_key_generate,
         )
 
         keys = data.keys
@@ -541,12 +543,12 @@ async def info_key_fn_v2(
     ```
     """
     from litellm.proxy.proxy_server import (
-        user_custom_key_generate,
-        prisma_client,
-        litellm_proxy_admin_name,
-        general_settings,
-        proxy_logging_obj,
         create_audit_log_for_update,
+        general_settings,
+        litellm_proxy_admin_name,
+        prisma_client,
+        proxy_logging_obj,
+        user_custom_key_generate,
     )
 
     try:
@@ -621,12 +623,12 @@ async def info_key_fn(
     ```
     """
     from litellm.proxy.proxy_server import (
-        user_custom_key_generate,
-        prisma_client,
-        litellm_proxy_admin_name,
-        general_settings,
-        proxy_logging_obj,
         create_audit_log_for_update,
+        general_settings,
+        litellm_proxy_admin_name,
+        prisma_client,
+        proxy_logging_obj,
+        user_custom_key_generate,
     )
 
     try:
@@ -661,26 +663,6 @@ async def info_key_fn(
             param=getattr(e, "param", "None"),
             code=status.HTTP_400_BAD_REQUEST,
         )
-
-
-def _duration_in_seconds(duration: str):
-    match = re.match(r"(\d+)([smhd]?)", duration)
-    if not match:
-        raise ValueError("Invalid duration format")
-
-    value, unit = match.groups()
-    value = int(value)
-
-    if unit == "s":
-        return value
-    elif unit == "m":
-        return value * 60
-    elif unit == "h":
-        return value * 3600
-    elif unit == "d":
-        return value * 86400
-    else:
-        raise ValueError("Unsupported duration unit")
 
 
 async def generate_key_helper_fn(
@@ -721,10 +703,10 @@ async def generate_key_helper_fn(
     send_invite_email: Optional[bool] = None,
 ):
     from litellm.proxy.proxy_server import (
-        prisma_client,
         custom_db_client,
         litellm_proxy_budget_name,
         premium_user,
+        prisma_client,
     )
 
     if prisma_client is None and custom_db_client is None:
@@ -894,7 +876,7 @@ async def generate_key_helper_fn(
 
 
 async def delete_verification_token(tokens: List, user_id: Optional[str] = None):
-    from litellm.proxy.proxy_server import prisma_client, litellm_proxy_admin_name
+    from litellm.proxy.proxy_server import litellm_proxy_admin_name, prisma_client
 
     try:
         if prisma_client:
