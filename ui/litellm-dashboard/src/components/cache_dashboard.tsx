@@ -23,6 +23,17 @@ const formatDateWithoutTZ = (date: Date | undefined) => {
     return date.toISOString().split('T')[0];
   };
 
+
+function valueFormatterNumbers(number: number) {
+const formatter = new Intl.NumberFormat('en-US', {
+    maximumFractionDigits: 0,
+    notation: 'compact',
+    compactDisplay: 'short',
+});
+
+return formatter.format(number);
+}
+
 interface CachePageProps {
     accessToken: string | null;
     token: string | null;
@@ -43,8 +54,8 @@ const CacheDashboard: React.FC<CachePageProps> = ({
   const [selectedApiKeys, setSelectedApiKeys] = useState([]);
   const [selectedModels, setSelectedModels] = useState([]);
   const [data, setData] = useState([]);
-  const [cachedResponses, setCachedResponses] = useState(0);
-  const [cachedTokens, setCachedTokens] = useState(0);
+  const [cachedResponses, setCachedResponses] = useState("0");
+  const [cachedTokens, setCachedTokens] = useState("0");
   const [cacheHitRatio, setCacheHitRatio] = useState("0");
 
   const [dateValue, setDateValue] = useState<DateRangePickerValue>({
@@ -64,9 +75,31 @@ const CacheDashboard: React.FC<CachePageProps> = ({
     fetchData();
   }, [accessToken]);
 
-  const uniqueApiKeys = [...new Set(data.map((item) => item.api_key))];
-  const uniqueModels = [...new Set(data.map((item) => item.model))];
-  const uniqueCallTypes = [...new Set(data.map((item) => item.call_type))];
+  const uniqueApiKeys = [...new Set(data.map((item) => item?.api_key ? item.api_key : ""))];
+  const uniqueModels = [...new Set(data.map((item) => item?.model ? item.model : ""))];
+  const uniqueCallTypes = [...new Set(data.map((item) => item?.call_type ? item.call_type : ""))];
+
+
+  const updateCachingData = async (startTime:  Date | undefined, endTime:  Date | undefined) => {
+    if (!startTime || !endTime || !accessToken) {
+      return;
+    }
+
+    // the endTime put it to the last hour of the selected date
+    endTime.setHours(23, 59, 59, 999);
+
+    // startTime put it to the first hour of the selected date
+    startTime.setHours(0, 0, 0, 0);
+
+    let new_cache_data = await adminGlobalCacheActivity(
+      accessToken,
+      formatDateWithoutTZ(startTime),
+      formatDateWithoutTZ(endTime)
+    )
+
+    setData(new_cache_data);
+  
+  }
 
   useEffect(() => {
     console.log("DATA IN CACHE DASHBOARD", data);
@@ -136,8 +169,8 @@ const CacheDashboard: React.FC<CachePageProps> = ({
       }, []);
     
     // set header cache statistics 
-    setCachedResponses(cache_hits);
-    setCachedTokens(cached_tokens);
+    setCachedResponses(valueFormatterNumbers(cache_hits));
+    setCachedTokens(valueFormatterNumbers(cached_tokens));
     if (llm_api_requests > 0) {
       let cache_hit_ratio = ((cache_hits / llm_api_requests) * 100).toFixed(2);
       setCacheHitRatio(cache_hit_ratio);
@@ -152,10 +185,7 @@ const CacheDashboard: React.FC<CachePageProps> = ({
   }, [selectedApiKeys, selectedModels, dateValue, data]);
 
   return (        
-      <Card>
-      <Title>API Activity Dashboard</Title>
-      <Subtitle>Cache hits vs API requests broken down by call type</Subtitle>
-      
+      <Card>      
       <Grid numItems={3} className="gap-4 mt-4">
         <Col>
           <MultiSelect
@@ -185,8 +215,12 @@ const CacheDashboard: React.FC<CachePageProps> = ({
         </Col>
         <Col>
           <DateRangePicker
+          enableSelect={true} 
             value={dateValue}
-            // onChange={setDateRange}
+            onValueChange={(value) => {
+                setDateValue(value);
+                updateCachingData(value.from, value.to);
+              }}
             selectPlaceholder="Select date range"
           />
         </Col>
@@ -230,26 +264,28 @@ const CacheDashboard: React.FC<CachePageProps> = ({
 
       </div>
 
-
+      <Subtitle>Cache Hits vs API Requests</Subtitle>
       <BarChart
-        className="mt-6"
+        title="Cache Hits vs API Requests"
         data={filteredData}
         index="name"
+        valueFormatter={valueFormatterNumbers}
         categories={["LLM API requests", "Cache hit"]}
         colors={["blue", "teal"]}
         yAxisWidth={48}
       />
 
-      <Card>
-        <BarChart
-            className="mt-6"
-            data={filteredData}
-            index="name"
-            categories={["Generated Completion Tokens", "Cached Completion Tokens"]}
-            colors={["blue", "teal"]}
-            yAxisWidth={48}
-        />
-        </Card>
+    <Subtitle>Cached Completion Tokens vs Generated Completion Tokens</Subtitle>
+    <BarChart
+        className="mt-6"
+        data={filteredData}
+        index="name"
+        valueFormatter={valueFormatterNumbers}
+        categories={["Generated Completion Tokens", "Cached Completion Tokens"]}
+        colors={["blue", "teal"]}
+        yAxisWidth={48}
+    />
+
 
       </Card>
 
