@@ -116,6 +116,9 @@ from litellm.exceptions import RejectedRequestError
 from litellm.integrations.slack_alerting import SlackAlerting, SlackAlertingArgs
 from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
 from litellm.proxy._types import *
+from litellm.proxy.analytics_endpoints.analytics_endpoints import (
+    router as analytics_router,
+)
 from litellm.proxy.auth.auth_checks import (
     allowed_routes_check,
     common_checks,
@@ -9139,3 +9142,4 @@ app.include_router(internal_user_router)
 app.include_router(team_router)
 app.include_router(spend_management_router)
 app.include_router(caching_router)
+app.include_router(analytics_router)
