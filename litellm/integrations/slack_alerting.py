@@ -24,6 +24,7 @@ import litellm.types
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import AlertType, CallInfo, UserAPIKeyAuth, WebhookEvent
 from litellm.types.router import LiteLLM_Params
@@ -229,7 +230,7 @@ class SlackAlerting(CustomLogger):
             "db_exceptions",
         ]
 
-    def _add_langfuse_trace_id_to_alert(
+    async def _add_langfuse_trace_id_to_alert(
         self,
         request_data: Optional[dict] = None,
     ) -> Optional[str]:
@@ -242,21 +243,19 @@ class SlackAlerting(CustomLogger):
         -> litellm_call_id
         """
         # do nothing for now
-        if request_data is not None:
-            trace_id = None
-            if (
-                request_data.get("metadata", {}).get("existing_trace_id", None)
-                is not None
-            ):
-                trace_id = request_data["metadata"]["existing_trace_id"]
-            elif request_data.get("metadata", {}).get("trace_id", None) is not None:
-                trace_id = request_data["metadata"]["trace_id"]
-            elif request_data.get("litellm_logging_obj", None) is not None and hasattr(
-                request_data["litellm_logging_obj"], "model_call_details"
-            ):
-                trace_id = request_data["litellm_logging_obj"].model_call_details[
-                    "litellm_call_id"
-                ]
+        if (
+            request_data is not None
+            and request_data.get("litellm_logging_obj", None) is not None
+        ):
+            trace_id: Optional[str] = None
+            litellm_logging_obj: Logging = request_data["litellm_logging_obj"]
+
+            for _ in range(3):
+                trace_id = litellm_logging_obj._get_trace_id(service_name="langfuse")
+                if trace_id is not None:
+                    break
+                await asyncio.sleep(3)  # wait 3s before retrying for trace id
+
             if litellm.litellm_core_utils.litellm_logging.langFuseLogger is not None:
                 base_url = (
                     litellm.litellm_core_utils.litellm_logging.langFuseLogger.Langfuse.base_url
@@ -645,7 +644,7 @@ class SlackAlerting(CustomLogger):
                 )
 
                 if "langfuse" in litellm.success_callback:
-                    langfuse_url = self._add_langfuse_trace_id_to_alert(
+                    langfuse_url = await self._add_langfuse_trace_id_to_alert(
                         request_data=request_data,
                     )
 

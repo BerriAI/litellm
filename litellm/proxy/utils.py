@@ -463,7 +463,7 @@ class ProxyLogging:
         alerting_metadata = {}
         if request_data is not None:
 
-            _url = self.slack_alerting_instance._add_langfuse_trace_id_to_alert(
+            _url = await self.slack_alerting_instance._add_langfuse_trace_id_to_alert(
                 request_data=request_data
             )
 

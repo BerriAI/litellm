@@ -1,5 +1,6 @@
 import copy
 import sys
+import time
 from datetime import datetime
 from unittest import mock
 
@@ -548,3 +549,63 @@ def test_get_llm_provider_ft_models():
 
     model, custom_llm_provider, _, _ = get_llm_provider(model="ft:gpt-4o-2024-05-13")
     assert custom_llm_provider == "openai"
+
+
+@pytest.mark.parametrize("langfuse_trace_id", [None, "my-unique-trace-id"])
+@pytest.mark.parametrize(
+    "langfuse_existing_trace_id", [None, "my-unique-existing-trace-id"]
+)
+def test_logging_trace_id(langfuse_trace_id, langfuse_existing_trace_id):
+    """
+    - Unit test for `_get_trace_id` function in Logging obj
+    """
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    litellm.success_callback = ["langfuse"]
+    litellm_call_id = "my-unique-call-id"
+    litellm_logging_obj = Logging(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="acompletion",
+        litellm_call_id=litellm_call_id,
+        start_time=datetime.now(),
+        function_id="1234",
+    )
+
+    metadata = {}
+
+    if langfuse_trace_id is not None:
+        metadata["trace_id"] = langfuse_trace_id
+    if langfuse_existing_trace_id is not None:
+        metadata["existing_trace_id"] = langfuse_existing_trace_id
+
+    litellm.completion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "Hey how's it going?"}],
+        mock_response="Hey!",
+        litellm_logging_obj=litellm_logging_obj,
+        metadata=metadata,
+    )
+
+    time.sleep(3)
+    assert litellm_logging_obj._get_trace_id(service_name="langfuse") is not None
+
+    ## if existing_trace_id exists
+    if langfuse_existing_trace_id is not None:
+        assert (
+            litellm_logging_obj._get_trace_id(service_name="langfuse")
+            == langfuse_existing_trace_id
+        )
+    ## if trace_id exists
+    elif langfuse_trace_id is not None:
+        assert (
+            litellm_logging_obj._get_trace_id(service_name="langfuse")
+            == langfuse_trace_id
+        )
+    ## if existing_trace_id exists
+    else:
+        assert (
+            litellm_logging_obj._get_trace_id(service_name="langfuse")
+            == litellm_call_id
+        )
