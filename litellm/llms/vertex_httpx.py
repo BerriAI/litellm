@@ -775,6 +775,8 @@ class VertexLLM(BaseLLM):
         }
         if auth_header is not None:
             headers["Authorization"] = f"Bearer {auth_header}"
+        if extra_headers is not None:
+            headers.update(extra_headers)
 
         ## LOGGING
         logging_obj.pre_call(
