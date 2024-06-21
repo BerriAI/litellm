@@ -802,7 +802,7 @@ async def update_database(
                         + prisma_client.key_list_transactons.get(hashed_token, 0)
                     )
             except Exception as e:
-                verbose_proxy_logger.info(
+                verbose_proxy_logger.error(
                     f"Update Key DB Call failed to execute - {str(e)}\n{traceback.format_exc()}"
                 )
                 raise e
@@ -936,8 +936,7 @@ async def update_cache(
             f"_update_key_cache: existing spend: {existing_spend_obj}"
         )
         if existing_spend_obj is None:
-            existing_spend = 0
-            existing_spend_obj = LiteLLM_VerificationTokenView(token=token)
+            return
         else:
             existing_spend = existing_spend_obj.spend
         # Calculate the new cost by adding the existing cost and response_cost
@@ -1019,27 +1018,16 @@ async def update_cache(
                     continue
                 existing_spend_obj = await user_api_key_cache.async_get_cache(key=_id)
                 if existing_spend_obj is None:
-                    # if user does not exist in LiteLLM_UserTable, create a new user
-                    existing_spend = 0
-                    max_user_budget = None
-                    if litellm.max_user_budget is not None:
-                        max_user_budget = litellm.max_user_budget
-                    existing_spend_obj = LiteLLM_UserTable(
-                        user_id=_id,
-                        spend=0,
-                        max_budget=max_user_budget,
-                        user_email=None,
-                    )
+                    # do nothing if there is no cache value
+                    return
                 verbose_proxy_logger.debug(
                     f"_update_user_db: existing spend: {existing_spend_obj}; response_cost: {response_cost}"
                 )
-                if existing_spend_obj is None:
-                    existing_spend = 0
+
+                if isinstance(existing_spend_obj, dict):
+                    existing_spend = existing_spend_obj["spend"]
                 else:
-                    if isinstance(existing_spend_obj, dict):
-                        existing_spend = existing_spend_obj["spend"]
-                    else:
-                        existing_spend = existing_spend_obj.spend
+                    existing_spend = existing_spend_obj.spend
                 # Calculate the new cost by adding the existing cost and response_cost
                 new_spend = existing_spend + response_cost
 
@@ -1057,9 +1045,8 @@ async def update_cache(
                 key="{}:spend".format(litellm_proxy_admin_name)
             )
             if global_proxy_spend is None:
-                await user_api_key_cache.async_set_cache(
-                    key="{}:spend".format(litellm_proxy_admin_name), value=response_cost
-                )
+                # do nothing if not in cache
+                return
             elif response_cost is not None and global_proxy_spend is not None:
                 increment = global_proxy_spend + response_cost
                 await user_api_key_cache.async_set_cache(
@@ -1081,19 +1068,8 @@ async def update_cache(
             existing_spend_obj = await user_api_key_cache.async_get_cache(key=_id)
             if existing_spend_obj is None:
                 # if user does not exist in LiteLLM_UserTable, create a new user
-                existing_spend = 0
-                max_user_budget = None
-                max_end_user_budget = None
-                if litellm.max_end_user_budget is not None:
-                    max_end_user_budget = litellm.max_end_user_budget
-                existing_spend_obj = LiteLLM_EndUserTable(
-                    user_id=end_user_id,
-                    spend=0,
-                    blocked=False,
-                    litellm_budget_table=LiteLLM_BudgetTable(
-                        max_budget=max_end_user_budget
-                    ),
-                )
+                # do nothing if end-user not in api key cache
+                return
             verbose_proxy_logger.debug(
                 f"_update_end_user_db: existing spend: {existing_spend_obj}; response_cost: {response_cost}"
             )
@@ -1131,6 +1107,7 @@ async def update_cache(
                 await user_api_key_cache.async_get_cache(key=_id)
             )
             if existing_spend_obj is None:
+                # do nothing if team not in api key cache
                 return
             verbose_proxy_logger.debug(
                 f"_update_team_db: existing spend: {existing_spend_obj}; response_cost: {response_cost}"
