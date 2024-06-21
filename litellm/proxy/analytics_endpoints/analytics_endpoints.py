@@ -74,18 +74,24 @@ async def get_global_activity(
 
         sql_query = """
             SELECT
-                "api_key",
-                "call_type",
-                "model",
+                CASE 
+                    WHEN vt."key_alias" IS NOT NULL THEN vt."key_alias"
+                    ELSE 'Unnamed Key'
+                END AS api_key,
+                sl."call_type",
+                sl."model",
                 COUNT(*) AS total_rows,
-                SUM(CASE WHEN "cache_hit" = 'True' THEN 1 ELSE 0 END) AS cache_hit_true_rows
-            FROM "LiteLLM_SpendLogs"
+                SUM(CASE WHEN sl."cache_hit" = 'True' THEN 1 ELSE 0 END) AS cache_hit_true_rows,
+                SUM(CASE WHEN sl."cache_hit" = 'True' THEN sl."completion_tokens" ELSE 0 END) AS cached_completion_tokens,
+                SUM(CASE WHEN sl."cache_hit" != 'True' THEN sl."completion_tokens" ELSE 0 END) AS generated_completion_tokens
+            FROM "LiteLLM_SpendLogs" sl
+            LEFT JOIN "LiteLLM_VerificationToken" vt ON sl."api_key" = vt."token"
             WHERE 
-                "startTime" BETWEEN $1::date AND $2::date + interval '1 day'
+                sl."startTime" BETWEEN $1::date AND $2::date + interval '1 day'
             GROUP BY 
-                "api_key",
-                "call_type",
-                "model"
+                vt."key_alias",
+                sl."call_type",
+                sl."model"
         """
         db_response = await prisma_client.db.query_raw(
             sql_query, start_date_obj, end_date_obj
