@@ -401,6 +401,7 @@ openai_compatible_endpoints: List = [
     "api.groq.com/openai/v1",
     "api.deepseek.com/v1",
     "api.together.xyz/v1",
+    "inference.friendli.ai/v1",
 ]
 
 # this is maintained for Exception Mapping
@@ -415,6 +416,7 @@ openai_compatible_providers: List = [
     "xinference",
     "together_ai",
     "fireworks_ai",
+    "friendliai",
     "azure_ai",
 ]
 
@@ -644,6 +646,7 @@ provider_list: List = [
     "cloudflare",
     "xinference",
     "fireworks_ai",
+    "friendliai",
     "watsonx",
     "triton",
     "predibase",
