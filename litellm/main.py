@@ -1931,6 +1931,7 @@ def completion(
                 custom_llm_provider=custom_llm_provider,
                 client=client,
                 api_base=api_base,
+                extra_headers=extra_headers,
             )
 
         elif custom_llm_provider == "vertex_ai":
