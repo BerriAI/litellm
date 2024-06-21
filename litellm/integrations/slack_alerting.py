@@ -251,7 +251,7 @@ class SlackAlerting(CustomLogger):
                     "litellm_call_id"
                 ]
             if litellm.utils.langFuseLogger is not None:
-                base_url = litellm.utils.langFuseLogger.Langfuse.base_url
+                base_url = litellm.utils.langFuseLogger.langfuse_ui_base_url
                 return f"{base_url}/trace/{trace_id}"
         return None
 
