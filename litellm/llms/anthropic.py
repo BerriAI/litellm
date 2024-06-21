@@ -5,10 +5,16 @@ import requests, copy  # type: ignore
 import time
 from functools import partial
 from typing import Callable, Optional, List, Union
-from litellm.utils import ModelResponse, Usage, map_finish_reason, CustomStreamWrapper
+import litellm.litellm_core_utils
+from litellm.utils import ModelResponse, Usage, CustomStreamWrapper
+from litellm.litellm_core_utils.core_helpers import map_finish_reason
 import litellm
 from .prompt_templates.factory import prompt_factory, custom_prompt
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
+    _get_async_httpx_client,
+    _get_httpx_client,
+)
 from .base import BaseLLM
 import httpx  # type: ignore
 from litellm.types.llms.anthropic import AnthropicMessagesToolChoice
@@ -171,7 +177,7 @@ async def make_call(
     logging_obj,
 ):
     if client is None:
-        client = AsyncHTTPHandler()  # Create a new client if none provided
+        client = _get_async_httpx_client()  # Create a new client if none provided
 
     response = await client.post(api_base, headers=headers, data=data, stream=True)
 
@@ -201,7 +207,7 @@ class AnthropicChatCompletion(BaseLLM):
         response: Union[requests.Response, httpx.Response],
         model_response: ModelResponse,
         stream: bool,
-        logging_obj: litellm.utils.Logging,
+        logging_obj: litellm.litellm_core_utils.litellm_logging.Logging,
         optional_params: dict,
         api_key: str,
         data: Union[dict, str],
@@ -316,7 +322,7 @@ class AnthropicChatCompletion(BaseLLM):
         response: Union[requests.Response, httpx.Response],
         model_response: ModelResponse,
         stream: bool,
-        logging_obj: litellm.utils.Logging,
+        logging_obj: litellm.litellm_core_utils.litellm_logging.Logging,
         optional_params: dict,
         api_key: str,
         data: Union[dict, str],
@@ -463,9 +469,7 @@ class AnthropicChatCompletion(BaseLLM):
         logger_fn=None,
         headers={},
     ) -> Union[ModelResponse, CustomStreamWrapper]:
-        async_handler = AsyncHTTPHandler(
-            timeout=httpx.Timeout(timeout=600.0, connect=5.0)
-        )
+        async_handler = _get_async_httpx_client()
         response = await async_handler.post(api_base, headers=headers, json=data)
         if stream and _is_function_call:
             return self.process_streaming_response(

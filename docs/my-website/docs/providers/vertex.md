@@ -8,6 +8,152 @@ import TabItem from '@theme/TabItem';
   <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
 </a>
 
+## 🆕 `vertex_ai_beta/` route 
+
+New `vertex_ai_beta/` route. Adds support for system messages, tool_choice params, etc. by moving to httpx client (instead of vertex sdk).
+
+```python
+from litellm import completion
+import json 
+
+## GET CREDENTIALS 
+file_path = 'path/to/vertex_ai_service_account.json'
+
+# Load the JSON file
+with open(file_path, 'r') as file:
+    vertex_credentials = json.load(file)
+
+# Convert to JSON string
+vertex_credentials_json = json.dumps(vertex_credentials)
+
+## COMPLETION CALL 
+response = completion(
+  model="vertex_ai_beta/gemini-pro",
+  messages=[{ "content": "Hello, how are you?","role": "user"}],
+  vertex_credentials=vertex_credentials_json
+)
+```
+
+### **System Message**
+
+```python
+from litellm import completion
+import json 
+
+## GET CREDENTIALS 
+file_path = 'path/to/vertex_ai_service_account.json'
+
+# Load the JSON file
+with open(file_path, 'r') as file:
+    vertex_credentials = json.load(file)
+
+# Convert to JSON string
+vertex_credentials_json = json.dumps(vertex_credentials)
+
+
+response = completion(
+  model="vertex_ai_beta/gemini-pro",
+  messages=[{"content": "You are a good bot.","role": "system"}, {"content": "Hello, how are you?","role": "user"}], 
+  vertex_credentials=vertex_credentials_json
+)
+```
+
+### **Function Calling**
+
+Force Gemini to make tool calls with `tool_choice="required"`.
+
+```python
+from litellm import completion
+import json 
+
+## GET CREDENTIALS 
+file_path = 'path/to/vertex_ai_service_account.json'
+
+# Load the JSON file
+with open(file_path, 'r') as file:
+    vertex_credentials = json.load(file)
+
+# Convert to JSON string
+vertex_credentials_json = json.dumps(vertex_credentials)
+
+
+messages = [
+    {
+        "role": "system",
+        "content": "Your name is Litellm Bot, you are a helpful assistant",
+    },
+    # User asks for their name and weather in San Francisco
+    {
+        "role": "user",
+        "content": "Hello, what is your name and can you tell me the weather?",
+    },
+]
+
+tools = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "Get the current weather in a given location",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location": {
+                        "type": "string",
+                        "description": "The city and state, e.g. San Francisco, CA",
+                    }
+                },
+                "required": ["location"],
+            },
+        },
+    }
+]
+
+data = {
+    "model": "vertex_ai_beta/gemini-1.5-pro-preview-0514"),
+    "messages": messages,
+    "tools": tools,
+    "tool_choice": "required",
+    "vertex_credentials": vertex_credentials_json
+}
+
+## COMPLETION CALL 
+print(completion(**data))
+```
+
+### **JSON Schema**
+
+```python 
+from litellm import completion 
+
+## GET CREDENTIALS 
+file_path = 'path/to/vertex_ai_service_account.json'
+
+# Load the JSON file
+with open(file_path, 'r') as file:
+    vertex_credentials = json.load(file)
+
+# Convert to JSON string
+vertex_credentials_json = json.dumps(vertex_credentials)
+
+messages = [
+    {
+        "role": "user",
+        "content": """
+List 5 popular cookie recipes.
+
+Using this JSON schema:
+
+    Recipe = {"recipe_name": str}
+
+Return a `list[Recipe]`
+        """
+    }
+]
+
+completion(model="vertex_ai_beta/gemini-1.5-flash-preview-0514", messages=messages, response_format={ "type": "json_object" })
+```
+
 ## Pre-requisites
 * `pip install google-cloud-aiplatform` (pre-installed on proxy docker image)
 * Authentication: 
@@ -140,7 +286,7 @@ In certain use-cases you may need to make calls to the models and pass [safety s
 
 ```python
 response = completion(
-    model="gemini/gemini-pro", 
+    model="vertex_ai/gemini-pro", 
     messages=[{"role": "user", "content": "write code for saying hi from LiteLLM"}]
     safety_settings=[
         {
@@ -254,6 +400,7 @@ litellm.vertex_location = "us-central1 # Your Location
 | Model Name       | Function Call                        |
 |------------------|--------------------------------------|
 | claude-3-opus@20240229   | `completion('vertex_ai/claude-3-opus@20240229', messages)` |
+| claude-3-5-sonnet@20240620  | `completion('vertex_ai/claude-3-5-sonnet@20240620', messages)` |
 | claude-3-sonnet@20240229   | `completion('vertex_ai/claude-3-sonnet@20240229', messages)` |
 | claude-3-haiku@20240307   | `completion('vertex_ai/claude-3-haiku@20240307', messages)` |
 
@@ -363,8 +510,8 @@ response = completion(
 ## Gemini 1.5 Pro (and Vision)
 | Model Name       | Function Call                        |
 |------------------|--------------------------------------|
-| gemini-1.5-pro   | `completion('gemini-1.5-pro', messages)`, `completion('vertex_ai/gemini-pro', messages)` |
-| gemini-1.5-flash-preview-0514   | `completion('gemini-1.5-flash-preview-0514', messages)`, `completion('vertex_ai/gemini-pro', messages)` |
+| gemini-1.5-pro   | `completion('gemini-1.5-pro', messages)`, `completion('vertex_ai/gemini-1.5-pro', messages)` |
+| gemini-1.5-flash-preview-0514   | `completion('gemini-1.5-flash-preview-0514', messages)`, `completion('vertex_ai/gemini-1.5-flash-preview-0514', messages)` |
 | gemini-1.5-pro-preview-0514   | `completion('gemini-1.5-pro-preview-0514', messages)`, `completion('vertex_ai/gemini-1.5-pro-preview-0514', messages)` |
 
 
@@ -676,9 +823,6 @@ Once that's done, when you deploy the new container in the Google Cloud Run serv
 
 
 s/o @[Darien Kindlund](https://www.linkedin.com/in/kindlund/) for this tutorial
-
-
-
 
 
 

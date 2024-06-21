@@ -1,11 +1,15 @@
-import click
-import subprocess, traceback, json
-import os, sys
-import random
-from datetime import datetime
 import importlib
-from dotenv import load_dotenv
+import json
+import os
+import random
+import subprocess
+import sys
+import traceback
 import urllib.parse as urlparse
+from datetime import datetime
+
+import click
+from dotenv import load_dotenv
 
 sys.path.append(os.getcwd())
 
@@ -14,14 +18,13 @@ config_filename = "litellm.secrets"
 litellm_mode = os.getenv("LITELLM_MODE", "DEV")  # "PRODUCTION", "DEV"
 if litellm_mode == "DEV":
     load_dotenv()
-from importlib import resources
 import shutil
-
+from importlib import resources
 
 telemetry = None
 
 
-def append_query_params(url, params):
+def append_query_params(url, params) -> str:
     from litellm._logging import verbose_proxy_logger
 
     verbose_proxy_logger.debug(f"url: {url}")
@@ -229,13 +232,29 @@ def run_server(
 ):
     args = locals()
     if local:
-        from proxy_server import app, save_worker_config, ProxyConfig
+        from proxy_server import (
+            KeyManagementSettings,
+            KeyManagementSystem,
+            ProxyConfig,
+            app,
+            load_aws_kms,
+            load_aws_secret_manager,
+            load_from_azure_key_vault,
+            load_google_kms,
+            save_worker_config,
+        )
     else:
         try:
             from .proxy_server import (
-                app,
-                save_worker_config,
+                KeyManagementSettings,
+                KeyManagementSystem,
                 ProxyConfig,
+                app,
+                load_aws_kms,
+                load_aws_secret_manager,
+                load_from_azure_key_vault,
+                load_google_kms,
+                save_worker_config,
             )
         except ImportError as e:
             if "litellm[proxy]" in str(e):
@@ -244,9 +263,15 @@ def run_server(
             else:
                 # this is just a local/relative import error, user git cloned litellm
                 from proxy_server import (
-                    app,
-                    save_worker_config,
+                    KeyManagementSettings,
+                    KeyManagementSystem,
                     ProxyConfig,
+                    app,
+                    load_aws_kms,
+                    load_aws_secret_manager,
+                    load_from_azure_key_vault,
+                    load_google_kms,
+                    save_worker_config,
                 )
     if version == True:
         pkg_version = importlib.metadata.version("litellm")
@@ -255,7 +280,10 @@ def run_server(
     if model and "ollama" in model and api_base is None:
         run_ollama_serve()
     if test_async is True:
-        import requests, concurrent, time  # type: ignore
+        import concurrent
+        import time
+
+        import requests  # type: ignore
 
         api_base = f"http://{host}:{port}"
 
@@ -421,7 +449,9 @@ def run_server(
             read from there and save it to os.env['DATABASE_URL']
             """
             try:
-                import yaml, asyncio  # type: ignore
+                import asyncio
+
+                import yaml  # type: ignore
             except:
                 raise ImportError(
                     "yaml needs to be imported. Run - `pip install 'litellm[proxy]'`"
@@ -445,6 +475,40 @@ def run_server(
             general_settings = _config.get("general_settings", {})
             if general_settings is None:
                 general_settings = {}
+            if general_settings:
+                ### LOAD SECRET MANAGER ###
+                key_management_system = general_settings.get(
+                    "key_management_system", None
+                )
+                if key_management_system is not None:
+                    if (
+                        key_management_system
+                        == KeyManagementSystem.AZURE_KEY_VAULT.value
+                    ):
+                        ### LOAD FROM AZURE KEY VAULT ###
+                        load_from_azure_key_vault(use_azure_key_vault=True)
+                    elif key_management_system == KeyManagementSystem.GOOGLE_KMS.value:
+                        ### LOAD FROM GOOGLE KMS ###
+                        load_google_kms(use_google_kms=True)
+                    elif (
+                        key_management_system
+                        == KeyManagementSystem.AWS_SECRET_MANAGER.value  # noqa: F405
+                    ):
+                        ### LOAD FROM AWS SECRET MANAGER ###
+                        load_aws_secret_manager(use_aws_secret_manager=True)
+                    elif key_management_system == KeyManagementSystem.AWS_KMS.value:
+                        load_aws_kms(use_aws_kms=True)
+                    else:
+                        raise ValueError("Invalid Key Management System selected")
+                key_management_settings = general_settings.get(
+                    "key_management_settings", None
+                )
+            if key_management_settings is not None:
+                import litellm
+
+                litellm._key_management_settings = KeyManagementSettings(
+                    **key_management_settings
+                )
             database_url = general_settings.get("database_url", None)
             db_connection_pool_limit = general_settings.get(
                 "database_connection_pool_limit", 100
@@ -460,7 +524,7 @@ def run_server(
                 )  # Adds the parent directory to the system path - for litellm local dev
                 import litellm
 
-                database_url = litellm.get_secret(database_url)
+                database_url = litellm.get_secret(database_url, default_value=None)
                 os.chdir(original_dir)
             if database_url is not None and isinstance(database_url, str):
                 os.environ["DATABASE_URL"] = database_url
@@ -470,13 +534,15 @@ def run_server(
             or os.getenv("DIRECT_URL", None) is not None
         ):
             try:
+                from litellm import get_secret
+
                 if os.getenv("DATABASE_URL", None) is not None:
                     ### add connection pool + pool timeout args
                     params = {
                         "connection_limit": db_connection_pool_limit,
                         "pool_timeout": db_connection_timeout,
                     }
-                    database_url = os.getenv("DATABASE_URL")
+                    database_url = get_secret("DATABASE_URL", default_value=None)
                     modified_url = append_query_params(database_url, params)
                     os.environ["DATABASE_URL"] = modified_url
                 if os.getenv("DIRECT_URL", None) is not None:
@@ -518,8 +584,8 @@ def run_server(
         if port == 4000 and is_port_in_use(port):
             port = random.randint(1024, 49152)
 
-        from litellm.proxy.proxy_server import app
         import litellm
+        from litellm.proxy.proxy_server import app
 
         if run_gunicorn == False:
             if ssl_certfile_path is not None and ssl_keyfile_path is not None:
@@ -535,8 +601,6 @@ def run_server(
                 )  # run uvicorn
             else:
                 if litellm.json_logs:
-                    from litellm.proxy._logging import logger
-
                     uvicorn.run(
                         app, host=host, port=port, log_config=None
                     )  # run uvicorn w/ json

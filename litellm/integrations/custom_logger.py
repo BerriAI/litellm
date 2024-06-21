@@ -10,7 +10,7 @@ import traceback
 
 class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callback#callback-class
     # Class variables or attributes
-    def __init__(self):
+    def __init__(self) -> None:
         pass
 
     def log_pre_api_call(self, model, messages, kwargs):

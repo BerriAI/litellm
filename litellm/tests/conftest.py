@@ -1,7 +1,10 @@
 # conftest.py
 
-import pytest, sys, os
 import importlib
+import os
+import sys
+
+import pytest
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -18,6 +21,7 @@ def setup_and_teardown():
     sys.path.insert(
         0, os.path.abspath("../..")
     )  # Adds the project directory to the system path
+
     import litellm
     from litellm import Router
 

@@ -1,9 +1,14 @@
 #### What this tests ####
 #    This tests the router's ability to pick deployment with lowest tpm using 'usage-based-routing-v2-v2'
 
-import sys, os, asyncio, time, random
-from datetime import datetime
+import asyncio
+import os
+import random
+import sys
+import time
 import traceback
+from datetime import datetime
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -13,13 +18,14 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import pytest
-from litellm import Router
+
 import litellm
+from litellm import Router
+from litellm.caching import DualCache
 from litellm.router_strategy.lowest_tpm_rpm_v2 import (
     LowestTPMLoggingHandler_v2 as LowestTPMLoggingHandler,
 )
 from litellm.utils import get_utc_datetime
-from litellm.caching import DualCache
 
 ### UNIT TESTS FOR TPM/RPM ROUTING ###
 
@@ -341,9 +347,10 @@ async def test_multiple_potential_deployments(sync_mode):
 
 
 def test_single_deployment_tpm_zero():
-    import litellm
     import os
     from datetime import datetime
+
+    import litellm
 
     model_list = [
         {
@@ -388,6 +395,7 @@ async def test_router_completion_streaming():
                 "api_key": "os.environ/AZURE_FRANCE_API_KEY",
                 "api_base": "https://openai-france-1234.openai.azure.com",
                 "rpm": 1440,
+                "mock_response": "Hello world",
             },
             "model_info": {"id": 1},
         },
@@ -398,6 +406,7 @@ async def test_router_completion_streaming():
                 "api_key": "os.environ/AZURE_EUROPE_API_KEY",
                 "api_base": "https://my-endpoint-europe-berri-992.openai.azure.com",
                 "rpm": 6,
+                "mock_response": "Hello world",
             },
             "model_info": {"id": 2},
         },
