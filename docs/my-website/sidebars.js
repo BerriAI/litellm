@@ -88,6 +88,7 @@ const sidebars = {
       },
       items: [
         "completion/input",
+        "completion/drop_params",
         "completion/prompt_formatting",
         "completion/output",
         "exception_mapping",
