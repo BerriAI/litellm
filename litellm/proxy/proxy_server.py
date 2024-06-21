@@ -4947,7 +4947,7 @@ async def moderations(
         data["model"] = (
             general_settings.get("moderation_model", None)  # server default
             or user_model  # model name passed via cli args
-            or data["model"]  # default passed in http request
+            or data.get("model")  # default passed in http request
         )
         if user_model:
             data["model"] = user_model
@@ -4966,37 +4966,33 @@ async def moderations(
         if "api_key" in data:
             response = await litellm.amoderation(**data)
         elif (
-            llm_router is not None and data["model"] in router_model_names
+            llm_router is not None and data.get("model") in router_model_names
         ):  # model in router model list
             response = await llm_router.amoderation(**data)
         elif (
-            llm_router is not None and data["model"] in llm_router.deployment_names
+            llm_router is not None and data.get("model") in llm_router.deployment_names
         ):  # model in router deployments, calling a specific deployment on the router
             response = await llm_router.amoderation(**data, specific_deployment=True)
         elif (
             llm_router is not None
             and llm_router.model_group_alias is not None
-            and data["model"] in llm_router.model_group_alias
+            and data.get("model") in llm_router.model_group_alias
         ):  # model set in model_group_alias
             response = await llm_router.amoderation(
                 **data
             )  # ensure this goes the llm_router, router will do the correct alias mapping
         elif (
             llm_router is not None
-            and data["model"] not in router_model_names
+            and data.get("model") not in router_model_names
             and llm_router.default_deployment is not None
         ):  # model in router deployments, calling a specific deployment on the router
             response = await llm_router.amoderation(**data)
         elif user_model is not None:  # `litellm --model <your-model-name>`
             response = await litellm.amoderation(**data)
         else:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={
-                    "error": "moderations: Invalid model name passed in model="
-                    + data.get("model", "")
-                },
-            )
+            # /moderations does not need a "model" passed
+            # see https://platform.openai.com/docs/api-reference/moderations
+            response = await litellm.amoderation(**data)
 
         ### ALERTING ###
         data["litellm_status"] = "success"  # used for alerting
