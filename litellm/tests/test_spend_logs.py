@@ -1,26 +1,32 @@
-import sys, os
-import traceback, uuid
+import os
+import sys
+import traceback
+import uuid
+
 from dotenv import load_dotenv
 from fastapi import Request
 from fastapi.routing import APIRoute
 
 load_dotenv()
-import os, io, time
+import io
+import os
+import time
 
 # this file is to test litellm/proxy
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-import pytest, logging, asyncio
-import litellm, asyncio
-import json
+import asyncio
 import datetime
-from litellm.proxy.utils import (
-    get_logging_payload,
-    SpendLogsPayload,
-    SpendLogsMetadata,
-)  # noqa: E402
+import json
+import logging
+
+import pytest
+
+import litellm
+from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+from litellm.proxy.utils import SpendLogsMetadata, SpendLogsPayload  # noqa: E402
 
 
 def test_spend_logs_payload():
@@ -53,6 +59,7 @@ def test_spend_logs_payload():
                 "model_alias_map": {},
                 "completion_call_id": None,
                 "metadata": {
+                    "tags": ["model-anthropic-claude-v2.1", "app-ishaan-prod"],
                     "user_api_key": "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",
                     "user_api_key_alias": None,
                     "user_api_end_user_max_budget": None,
@@ -193,3 +200,8 @@ def test_spend_logs_payload():
     assert isinstance(payload["metadata"], str)
     payload["metadata"] = json.loads(payload["metadata"])
     assert set(payload["metadata"].keys()) == set(expected_metadata_keys)
+
+    # This is crucial - used in PROD, it should pass, related issue: https://github.com/BerriAI/litellm/issues/4334
+    assert (
+        payload["request_tags"] == '["model-anthropic-claude-v2.1", "app-ishaan-prod"]'
+    )
