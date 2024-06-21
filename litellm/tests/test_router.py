@@ -49,6 +49,27 @@ def test_router_multi_org_list():
     assert len(router.get_model_list()) == 3
 
 
+def test_router_specific_model_via_id():
+    """
+    Call a specific deployment by it's id
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "my-fake-key",
+                    "mock_response": "Hello world",
+                },
+                "model_info": {"id": "1234"},
+            }
+        ]
+    )
+
+    router.completion(model="1234", messages=[{"role": "user", "content": "Hey!"}])
+
+
 def test_router_sensitive_keys():
     try:
         router = Router(

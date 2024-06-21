@@ -4295,6 +4295,15 @@ class Router:
             raise ValueError(
                 f"LiteLLM Router: Trying to call specific deployment, but Model:{model} does not exist in Model List: {self.model_list}"
             )
+        elif model in self.get_model_ids():
+            deployment = self.get_model_info(id=model)
+            if deployment is not None:
+                deployment_model = deployment.get("litellm_params", {}).get("model")
+                return deployment_model, deployment
+            raise ValueError(
+                f"LiteLLM Router: Trying to call specific deployment, but Model ID :{model} does not exist in \
+                    Model ID List: {self.get_model_ids}"
+            )
 
         if model in self.model_group_alias:
             verbose_router_logger.debug(
