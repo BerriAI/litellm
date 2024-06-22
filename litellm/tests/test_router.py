@@ -1768,6 +1768,9 @@ def mock_response() -> litellm.ModelResponse:
 
 @pytest.mark.asyncio
 async def test_router_model_usage(mock_response):
+    """
+    Test if tracking used model tpm works as expected
+    """
     model = "my-fake-model"
     model_tpm = 100
     setattr(

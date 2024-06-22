@@ -55,11 +55,21 @@ class DynamicRateLimiterCache:
         Raises:
         - Exception, if unable to connect to cache client (if redis caching enabled)
         """
-        dt = get_utc_datetime()
-        current_minute = dt.strftime("%H-%M")
+        try:
+            dt = get_utc_datetime()
+            current_minute = dt.strftime("%H-%M")
 
-        key_name = "{}:{}".format(current_minute, model)
-        await self.cache.async_set_cache_sadd(key=key_name, value=value, ttl=self.ttl)
+            key_name = "{}:{}".format(current_minute, model)
+            await self.cache.async_set_cache_sadd(
+                key=key_name, value=value, ttl=self.ttl
+            )
+        except Exception as e:
+            verbose_proxy_logger.error(
+                "litellm.proxy.hooks.dynamic_rate_limiter.py::async_set_cache_sadd(): Exception occured - {}\n{}".format(
+                    str(e), traceback.format_exc()
+                )
+            )
+            raise e
 
 
 class _PROXY_DynamicRateLimitHandler(CustomLogger):
@@ -79,7 +89,7 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
 
         Returns
         - Tuple[available_tpm, model_tpm, active_projects]
-            - available_tpm: int or null
+            - available_tpm: int or null - always 0 or positive.
             - remaining_model_tpm: int or null. If available tpm is int, then this will be too.
             - active_projects: int or null
         """
@@ -108,6 +118,8 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
             else:
                 available_tpm = remaining_model_tpm
 
+        if available_tpm is not None and available_tpm < 0:
+            available_tpm = 0
         return available_tpm, remaining_model_tpm, active_projects
 
     async def async_pre_call_hook(
@@ -150,9 +162,44 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
             elif available_tpm is not None:
                 ## UPDATE CACHE WITH ACTIVE PROJECT
                 asyncio.create_task(
-                    self.internal_usage_cache.async_set_cache_sadd(
+                    self.internal_usage_cache.async_set_cache_sadd(  # this is a set
                         model=data["model"],  # type: ignore
                         value=[user_api_key_dict.team_id or "default_team"],
                     )
                 )
         return None
+
+    async def async_post_call_success_hook(
+        self, user_api_key_dict: UserAPIKeyAuth, response
+    ):
+        try:
+            if isinstance(response, ModelResponse):
+                model_info = self.llm_router.get_model_info(
+                    id=response._hidden_params["model_id"]
+                )
+                assert (
+                    model_info is not None
+                ), "Model info for model with id={} is None".format(
+                    response._hidden_params["model_id"]
+                )
+                available_tpm, remaining_model_tpm, active_projects = (
+                    await self.check_available_tpm(model=model_info["model_name"])
+                )
+                response._hidden_params["additional_headers"] = {
+                    "x-litellm-model_group": model_info["model_name"],
+                    "x-ratelimit-remaining-litellm-project-tokens": available_tpm,
+                    "x-ratelimit-remaining-model-tokens": remaining_model_tpm,
+                    "x-ratelimit-current-active-projects": active_projects,
+                }
+
+                return response
+            return await super().async_post_call_success_hook(
+                user_api_key_dict, response
+            )
+        except Exception as e:
+            verbose_proxy_logger.error(
+                "litellm.proxy.hooks.dynamic_rate_limiter.py::async_post_call_success_hook(): Exception occured - {}\n{}".format(
+                    str(e), traceback.format_exc()
+                )
+            )
+            return response

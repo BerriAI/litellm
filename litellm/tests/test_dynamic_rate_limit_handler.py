@@ -22,6 +22,7 @@ import pytest
 
 import litellm
 from litellm import DualCache, Router
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.dynamic_rate_limiter import (
     _PROXY_DynamicRateLimitHandler as DynamicRateLimitHandler,
 )
@@ -74,6 +75,11 @@ def mock_response() -> litellm.ModelResponse:
     )
 
 
+@pytest.fixture
+def user_api_key_auth() -> UserAPIKeyAuth:
+    return UserAPIKeyAuth()
+
+
 @pytest.mark.parametrize("num_projects", [1, 2, 100])
 @pytest.mark.asyncio
 async def test_available_tpm(num_projects, dynamic_rate_limit_handler):
@@ -113,6 +119,62 @@ async def test_available_tpm(num_projects, dynamic_rate_limit_handler):
 
 
 @pytest.mark.asyncio
+async def test_rate_limit_raised(dynamic_rate_limit_handler, user_api_key_auth):
+    """
+    Unit test. Tests if rate limit error raised when quota exhausted.
+    """
+    from fastapi import HTTPException
+
+    model = "my-fake-model"
+    ## SET CACHE W/ ACTIVE PROJECTS
+    projects = [str(uuid.uuid4())]
+
+    await dynamic_rate_limit_handler.internal_usage_cache.async_set_cache_sadd(
+        model=model, value=projects
+    )
+
+    model_tpm = 0
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": model,
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "my-key",
+                    "api_base": "my-base",
+                    "tpm": model_tpm,
+                },
+            }
+        ]
+    )
+    dynamic_rate_limit_handler.update_variables(llm_router=llm_router)
+
+    ## CHECK AVAILABLE TPM PER PROJECT
+
+    availability, _, _ = await dynamic_rate_limit_handler.check_available_tpm(
+        model=model
+    )
+
+    expected_availability = int(model_tpm / 1)
+
+    assert availability == expected_availability
+
+    ## CHECK if exception raised
+
+    try:
+        await dynamic_rate_limit_handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_auth,
+            cache=DualCache(),
+            data={"model": model},
+            call_type="completion",
+        )
+        pytest.fail("Expected this to raise HTTPexception")
+    except HTTPException as e:
+        assert e.status_code == 429  # check if rate limit error raised
+        pass
+
+
+@pytest.mark.asyncio
 async def test_base_case(dynamic_rate_limit_handler, mock_response):
     """
     If just 1 active project
@@ -122,9 +184,12 @@ async def test_base_case(dynamic_rate_limit_handler, mock_response):
     = allow request to go through
     - update token usage
     - exhaust all tpm with just 1 project
+    - assert ratelimiterror raised at 100%+1 tpm
     """
     model = "my-fake-model"
+    ## model tpm - 50
     model_tpm = 50
+    ## tpm per request - 10
     setattr(
         mock_response,
         "usage",
@@ -148,7 +213,144 @@ async def test_base_case(dynamic_rate_limit_handler, mock_response):
     dynamic_rate_limit_handler.update_variables(llm_router=llm_router)
 
     prev_availability: Optional[int] = None
+    allowed_fails = 1
     for _ in range(5):
+        try:
+            # check availability
+            availability, _, _ = await dynamic_rate_limit_handler.check_available_tpm(
+                model=model
+            )
+
+            ## assert availability updated
+            if prev_availability is not None and availability is not None:
+                assert availability == prev_availability - 10
+
+            print(
+                "prev_availability={}, availability={}".format(
+                    prev_availability, availability
+                )
+            )
+
+            prev_availability = availability
+
+            # make call
+            await llm_router.acompletion(
+                model=model, messages=[{"role": "user", "content": "hey!"}]
+            )
+
+            await asyncio.sleep(3)
+        except Exception:
+            if allowed_fails > 0:
+                allowed_fails -= 1
+            else:
+                raise
+
+
+@pytest.mark.asyncio
+async def test_update_cache(
+    dynamic_rate_limit_handler, mock_response, user_api_key_auth
+):
+    """
+    Check if active project correctly updated
+    """
+    model = "my-fake-model"
+    model_tpm = 50
+
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": model,
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "my-key",
+                    "api_base": "my-base",
+                    "tpm": model_tpm,
+                    "mock_response": mock_response,
+                },
+            }
+        ]
+    )
+    dynamic_rate_limit_handler.update_variables(llm_router=llm_router)
+
+    ## INITIAL ACTIVE PROJECTS - ASSERT NONE
+    _, _, active_projects = await dynamic_rate_limit_handler.check_available_tpm(
+        model=model
+    )
+
+    assert active_projects is None
+
+    ## MAKE CALL
+    await dynamic_rate_limit_handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_auth,
+        cache=DualCache(),
+        data={"model": model},
+        call_type="completion",
+    )
+
+    await asyncio.sleep(2)
+    ## INITIAL ACTIVE PROJECTS - ASSERT 1
+    _, _, active_projects = await dynamic_rate_limit_handler.check_available_tpm(
+        model=model
+    )
+
+    assert active_projects == 1
+
+
+@pytest.mark.parametrize("num_projects", [2])
+@pytest.mark.asyncio
+async def test_multiple_projects(
+    dynamic_rate_limit_handler, mock_response, num_projects
+):
+    """
+    If 2 active project
+
+    it should split 50% each
+
+    - assert available tpm is 0 after 50%+1 tpm calls
+    """
+    model = "my-fake-model"
+    model_tpm = 50
+    total_tokens_per_call = 10
+    step_tokens_per_call_per_project = total_tokens_per_call / num_projects
+
+    available_tpm_per_project = int(model_tpm / num_projects)
+
+    ## SET CACHE W/ ACTIVE PROJECTS
+    projects = [str(uuid.uuid4()) for _ in range(num_projects)]
+    await dynamic_rate_limit_handler.internal_usage_cache.async_set_cache_sadd(
+        model=model, value=projects
+    )
+
+    expected_runs = int(available_tpm_per_project / step_tokens_per_call_per_project)
+
+    setattr(
+        mock_response,
+        "usage",
+        litellm.Usage(
+            prompt_tokens=5, completion_tokens=5, total_tokens=total_tokens_per_call
+        ),
+    )
+
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": model,
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "my-key",
+                    "api_base": "my-base",
+                    "tpm": model_tpm,
+                    "mock_response": mock_response,
+                },
+            }
+        ]
+    )
+    dynamic_rate_limit_handler.update_variables(llm_router=llm_router)
+
+    prev_availability: Optional[int] = None
+
+    print("expected_runs: {}".format(expected_runs))
+    for i in range(expected_runs + 1):
         # check availability
         availability, _, _ = await dynamic_rate_limit_handler.check_available_tpm(
             model=model
@@ -156,7 +358,15 @@ async def test_base_case(dynamic_rate_limit_handler, mock_response):
 
         ## assert availability updated
         if prev_availability is not None and availability is not None:
-            assert availability == prev_availability - 10
+            assert (
+                availability == prev_availability - step_tokens_per_call_per_project
+            ), "Current Availability: Got={}, Expected={}, Step={}, Tokens per step={}, Initial model tpm={}".format(
+                availability,
+                prev_availability - 10,
+                i,
+                step_tokens_per_call_per_project,
+                model_tpm,
+            )
 
         print(
             "prev_availability={}, availability={}".format(
@@ -172,3 +382,105 @@ async def test_base_case(dynamic_rate_limit_handler, mock_response):
         )
 
         await asyncio.sleep(3)
+
+    # check availability
+    availability, _, _ = await dynamic_rate_limit_handler.check_available_tpm(
+        model=model
+    )
+    assert availability == 0
+
+
+@pytest.mark.parametrize("num_projects", [2])
+@pytest.mark.asyncio
+async def test_multiple_projects_e2e(
+    dynamic_rate_limit_handler, mock_response, num_projects
+):
+    """
+    2 parallel calls with different keys, same model
+
+    If 2 active project
+
+    it should split 50% each
+
+    - assert available tpm is 0 after 50%+1 tpm calls
+    """
+    model = "my-fake-model"
+    model_tpm = 50
+    total_tokens_per_call = 10
+    step_tokens_per_call_per_project = total_tokens_per_call / num_projects
+
+    available_tpm_per_project = int(model_tpm / num_projects)
+
+    ## SET CACHE W/ ACTIVE PROJECTS
+    projects = [str(uuid.uuid4()) for _ in range(num_projects)]
+    await dynamic_rate_limit_handler.internal_usage_cache.async_set_cache_sadd(
+        model=model, value=projects
+    )
+
+    expected_runs = int(available_tpm_per_project / step_tokens_per_call_per_project)
+
+    setattr(
+        mock_response,
+        "usage",
+        litellm.Usage(
+            prompt_tokens=5, completion_tokens=5, total_tokens=total_tokens_per_call
+        ),
+    )
+
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": model,
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "my-key",
+                    "api_base": "my-base",
+                    "tpm": model_tpm,
+                    "mock_response": mock_response,
+                },
+            }
+        ]
+    )
+    dynamic_rate_limit_handler.update_variables(llm_router=llm_router)
+
+    prev_availability: Optional[int] = None
+
+    print("expected_runs: {}".format(expected_runs))
+    for i in range(expected_runs + 1):
+        # check availability
+        availability, _, _ = await dynamic_rate_limit_handler.check_available_tpm(
+            model=model
+        )
+
+        ## assert availability updated
+        if prev_availability is not None and availability is not None:
+            assert (
+                availability == prev_availability - step_tokens_per_call_per_project
+            ), "Current Availability: Got={}, Expected={}, Step={}, Tokens per step={}, Initial model tpm={}".format(
+                availability,
+                prev_availability - 10,
+                i,
+                step_tokens_per_call_per_project,
+                model_tpm,
+            )
+
+        print(
+            "prev_availability={}, availability={}".format(
+                prev_availability, availability
+            )
+        )
+
+        prev_availability = availability
+
+        # make call
+        await llm_router.acompletion(
+            model=model, messages=[{"role": "user", "content": "hey!"}]
+        )
+
+        await asyncio.sleep(3)
+
+    # check availability
+    availability, _, _ = await dynamic_rate_limit_handler.check_available_tpm(
+        model=model
+    )
+    assert availability == 0
