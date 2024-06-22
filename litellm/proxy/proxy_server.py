@@ -7514,8 +7514,10 @@ async def login(request: Request):
             "secret",
             algorithm="HS256",
         )
-        litellm_dashboard_ui += "?userID=" + user_id + "&token=" + jwt_token
-        return RedirectResponse(url=litellm_dashboard_ui, status_code=303)
+        litellm_dashboard_ui += "?userID=" + user_id
+        redirect_response = RedirectResponse(url=litellm_dashboard_ui, status_code=303)
+        redirect_response.set_cookie(key="token", value=jwt_token)
+        return redirect_response
     elif _user_row is not None:
         """
         When sharing invite links
@@ -7576,8 +7578,12 @@ async def login(request: Request):
                 "secret",
                 algorithm="HS256",
             )
-            litellm_dashboard_ui += "?userID=" + user_id + "&token=" + jwt_token
-            return RedirectResponse(url=litellm_dashboard_ui, status_code=303)
+            litellm_dashboard_ui += "?userID=" + user_id
+            redirect_response = RedirectResponse(
+                url=litellm_dashboard_ui, status_code=303
+            )
+            redirect_response.set_cookie(key="token", value=jwt_token)
+            return redirect_response
         else:
             raise ProxyException(
                 message=f"Invalid credentials used to access UI. Passed in username: {username}, passed in password: {password}.\nNot valid credentials for {username}",
@@ -8120,8 +8126,10 @@ async def auth_callback(request: Request):
         "secret",
         algorithm="HS256",
     )
-    litellm_dashboard_ui += "?userID=" + user_id + "&token=" + jwt_token
-    return RedirectResponse(url=litellm_dashboard_ui)
+    litellm_dashboard_ui += "?userID=" + user_id
+    redirect_response = RedirectResponse(url=litellm_dashboard_ui, status_code=303)
+    redirect_response.set_cookie(key="token", value=jwt_token)
+    return redirect_response
 
 
 #### INVITATION MANAGEMENT ####
