@@ -151,8 +151,8 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
                 raise HTTPException(
                     status_code=429,
                     detail={
-                        "error": "Team={} over available TPM={}. Model TPM={}, Active teams={}".format(
-                            user_api_key_dict.team_id,
+                        "error": "Key={} over available TPM={}. Model TPM={}, Active keys={}".format(
+                            user_api_key_dict.api_key,
                             available_tpm,
                             model_tpm,
                             active_projects,
@@ -164,7 +164,7 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
                 asyncio.create_task(
                     self.internal_usage_cache.async_set_cache_sadd(  # this is a set
                         model=data["model"],  # type: ignore
-                        value=[user_api_key_dict.team_id or "default_team"],
+                        value=[user_api_key_dict.token or "default_key"],
                     )
                 )
         return None
