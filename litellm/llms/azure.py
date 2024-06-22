@@ -177,53 +177,54 @@ class AzureOpenAIConfig:
         drop_params,
     ) -> dict:
         supported_openai_params = self.get_supported_openai_params()
+        if api_version:
+            api_version_times = api_version.split("-")
+            if len(api_version_times) >= 3:
+                api_version_year = api_version_times[0]
+                api_version_month = api_version_times[1]
+                api_version_day = api_version_times[2]
+                for param, value in non_default_params.items():
+                    if param == "tool_choice" or param == "response_format":
+                        """
+                        This parameter requires API version 2023-12-01-preview or later
 
-        api_version_times = api_version.split("-")
-        api_version_year = api_version_times[0]
-        api_version_month = api_version_times[1]
-        api_version_day = api_version_times[2]
-        for param, value in non_default_params.items():
-            if param == "tool_choice":
-                """
-                This parameter requires API version 2023-12-01-preview or later
-
-                tool_choice='required' is not supported as of 2024-05-01-preview
-                """
-                ## check if api version supports this param ##
-                if (
-                    api_version_year < "2023"
-                    or (api_version_year == "2023" and api_version_month < "12")
-                    or (
-                        api_version_year == "2023"
-                        and api_version_month == "12"
-                        and api_version_day < "01"
-                    )
-                ):
-                    if litellm.drop_params == True or (
-                        drop_params is not None and drop_params == True
-                    ):
-                        pass
-                    else:
-                        raise UnsupportedParamsError(
-                            status_code=400,
-                            message=f"""Azure does not support 'tool_choice', for api_version={api_version}. Bump your API version to '2023-12-01-preview' or later. This parameter requires 'api_version="2023-12-01-preview"' or later. Azure API Reference: https://learn.microsoft.com/en-us/azure/ai-services/openai/reference#chat-completions""",
-                        )
-                elif value == "required" and (
-                    api_version_year == "2024" and api_version_month <= "05"
-                ):  ## check if tool_choice value is supported ##
-                    if litellm.drop_params == True or (
-                        drop_params is not None and drop_params == True
-                    ):
-                        pass
-                    else:
-                        raise UnsupportedParamsError(
-                            status_code=400,
-                            message=f"Azure does not support '{value}' as a {param} param, for api_version={api_version}. To drop 'tool_choice=required' for calls with this Azure API version, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\nAzure API Reference: https://learn.microsoft.com/en-us/azure/ai-services/openai/reference#chat-completions",
-                        )
-                else:
-                    optional_params["tool_choice"] = value
-            elif param in supported_openai_params:
-                optional_params[param] = value
+                        tool_choice='required' is not supported as of 2024-05-01-preview
+                        """
+                        ## check if api version supports this param ##
+                        if (
+                            api_version_year < "2023"
+                            or (api_version_year == "2023" and api_version_month < "12")
+                            or (
+                                api_version_year == "2023"
+                                and api_version_month == "12"
+                                and api_version_day < "01"
+                            )
+                        ):
+                            if litellm.drop_params == True or (
+                                drop_params is not None and drop_params == True
+                            ):
+                                pass
+                            else:
+                                raise UnsupportedParamsError(
+                                    status_code=400,
+                                    message=f"""Azure does not support 'tool_choice', for api_version={api_version}. Bump your API version to '2023-12-01-preview' or later. This parameter requires 'api_version="2023-12-01-preview"' or later. Azure API Reference: https://learn.microsoft.com/en-us/azure/ai-services/openai/reference#chat-completions""",
+                                )
+                        elif value == "required" and (
+                            api_version_year == "2024" and api_version_month <= "05"
+                        ):  ## check if tool_choice value is supported ##
+                            if litellm.drop_params == True or (
+                                drop_params is not None and drop_params == True
+                            ):
+                                pass
+                            else:
+                                raise UnsupportedParamsError(
+                                    status_code=400,
+                                    message=f"Azure does not support '{value}' as a {param} param, for api_version={api_version}. To drop 'tool_choice=required' for calls with this Azure API version, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\nAzure API Reference: https://learn.microsoft.com/en-us/azure/ai-services/openai/reference#chat-completions",
+                                )
+                        else:
+                            optional_params["tool_choice"] = value
+                    elif param in supported_openai_params:
+                        optional_params[param] = value
         return optional_params
 
     def get_mapped_special_auth_params(self) -> dict:
@@ -1320,6 +1321,10 @@ class AzureChatCompletion(BaseLLM):
         if completion.headers.get("x-ms-region", None) is not None:
             response["x-ms-region"] = completion.headers["x-ms-region"]
 
+        if completion.headers.get("azureml-model-session", None) is not None:
+            response["azureml-model-session"] = completion.headers[
+                "azureml-model-session"
+            ]
         return response
 
     async def ahealth_check(
