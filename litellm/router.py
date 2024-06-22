@@ -3090,7 +3090,7 @@ class Router:
             if not, add it - https://github.com/BerriAI/litellm/issues/2279
             """
             if (
-                is_azure_ai_studio_model == True
+                is_azure_ai_studio_model is True
                 and api_base is not None
                 and isinstance(api_base, str)
                 and not api_base.endswith("/v1/")
@@ -3174,7 +3174,7 @@ class Router:
                 organization = litellm.get_secret(organization_env_name)
                 litellm_params["organization"] = organization
 
-            if "azure" in model_name:
+            if custom_llm_provider == "azure" or custom_llm_provider == "azure_text":
                 if api_base is None or not isinstance(api_base, str):
                     filtered_litellm_params = {
                         k: v
