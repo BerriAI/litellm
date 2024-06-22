@@ -393,7 +393,11 @@ class Router:
         else:
             litellm.failure_callback = [self.deployment_callback_on_failure]
         print(  # noqa
-            f"Intialized router with Routing strategy: {self.routing_strategy}\n\nRouting fallbacks: {self.fallbacks}\n\nRouting context window fallbacks: {self.context_window_fallbacks}\n\nRouter Redis Caching={self.cache.redis_cache}"
+            f"Intialized router with Routing strategy: {self.routing_strategy}\n\n"
+            f"Routing fallbacks: {self.fallbacks}\n\n"
+            f"Routing content fallbacks: {self.content_policy_fallbacks}\n\n"
+            f"Routing context window fallbacks: {self.context_window_fallbacks}\n\n"
+            f"Router Redis Caching={self.cache.redis_cache}\n"
         )  # noqa
         self.routing_strategy_args = routing_strategy_args
         self.retry_policy: Optional[RetryPolicy] = retry_policy
