@@ -173,7 +173,7 @@ class Logging:
                     new_messages.append({"role": "user", "content": m})
                 messages = new_messages
         self.model = model
-        self.messages = messages
+        self.messages = copy.deepcopy(messages)
         self.stream = stream
         self.start_time = start_time  # log the call start time
         self.call_type = call_type
@@ -263,10 +263,17 @@ class Logging:
             if headers is None:
                 headers = {}
             data = additional_args.get("complete_input_dict", {})
-            api_base = additional_args.get("api_base", "")
-            self.model_call_details["litellm_params"]["api_base"] = str(
-                api_base
-            )  # used for alerting
+            api_base = str(additional_args.get("api_base", ""))
+            if "key=" in api_base:
+                # Find the position of "key=" in the string
+                key_index = api_base.find("key=") + 4
+                # Mask the last 5 characters after "key="
+                masked_api_base = (
+                    api_base[:key_index] + "*" * 5 + api_base[key_index + 5 :]
+                )
+            else:
+                masked_api_base = api_base
+            self.model_call_details["litellm_params"]["api_base"] = masked_api_base
             masked_headers = {
                 k: (
                     (v[:-44] + "*" * 44)
