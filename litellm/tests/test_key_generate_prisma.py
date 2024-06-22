@@ -75,7 +75,7 @@ from litellm.proxy.proxy_server import (
     new_end_user,
     user_api_key_auth,
 )
-from litellm.proxy.spend_reporting_endpoints.spend_management_endpoints import (
+from litellm.proxy.spend_tracking.spend_management_endpoints import (
     spend_key_fn,
     spend_user_fn,
     view_spend_logs,
