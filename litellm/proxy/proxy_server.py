@@ -433,6 +433,7 @@ def get_custom_headers(
     version: Optional[str] = None,
     model_region: Optional[str] = None,
     fastest_response_batch_completion: Optional[bool] = None,
+    **kwargs,
 ) -> dict:
     exclude_values = {"", None}
     headers = {
@@ -448,6 +449,7 @@ def get_custom_headers(
             if fastest_response_batch_completion is not None
             else None
         ),
+        **{k: str(v) for k, v in kwargs.items()},
     }
     try:
         return {
@@ -3063,6 +3065,14 @@ async def chat_completion(
                 headers=custom_headers,
             )
 
+        ### CALL HOOKS ### - modify outgoing data
+        response = await proxy_logging_obj.post_call_success_hook(
+            user_api_key_dict=user_api_key_dict, response=response
+        )
+
+        hidden_params = getattr(response, "_hidden_params", {}) or {}
+        additional_headers: dict = hidden_params.get("additional_headers", {}) or {}
+
         fastapi_response.headers.update(
             get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
@@ -3072,12 +3082,8 @@ async def chat_completion(
                 version=version,
                 model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
                 fastest_response_batch_completion=fastest_response_batch_completion,
+                **additional_headers,
             )
-        )
-
-        ### CALL HOOKS ### - modify outgoing data
-        response = await proxy_logging_obj.post_call_success_hook(
-            user_api_key_dict=user_api_key_dict, response=response
         )
 
         return response

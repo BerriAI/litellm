@@ -737,6 +737,7 @@ from .utils import (
     client,
     exception_type,
     get_optional_params,
+    get_response_string,
     modify_integration,
     token_counter,
     create_pretrained_tokenizer,
