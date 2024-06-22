@@ -609,3 +609,61 @@ def test_logging_trace_id(langfuse_trace_id, langfuse_existing_trace_id):
             litellm_logging_obj._get_trace_id(service_name="langfuse")
             == litellm_call_id
         )
+
+
+def test_convert_model_response_object():
+    """
+    Test azure content policy violation errors
+    """
+    from litellm.utils import convert_to_model_response_object
+
+    try:
+        convert_to_model_response_object(
+            response_object={
+                "id": "chatcmpl-9d4FGK1I1747zNtQ7mFq3sHkD2KTo",
+                "choices": [
+                    {
+                        "finish_reason": "content_filter",
+                        "index": 0,
+                        "logprobs": None,
+                        "message": {
+                            "content": "# United States District Court\n**Southern District of New York**  \nCase No.: 1:16-cv-07673-RA\n\n## Jane Doe, Plaintiff v. Donald J. Trump and Jeffrey E. Epstein, Defendants\n\n### Jury Trial Demanded\n\n### Complaint for Rape, Sexual Misconduct, Criminal Sexual Acts, Sexual Abuse, Forcible Touching, Assault, Battery, Intentional and Reckless Infliction of Emotional Distress, Duress, False Imprisonment, and Defamation.\n\nPlaintiff Jane Doe, proceeding under a pseudonym, brings this action against Donald J. Trump and Jeffrey E. Epstein, alleging the following:\n\n### Parties\n1. Plaintiff is an individual residing in and a citizen of the State of California.\n2. Upon information and belief, Defendants Donald J. Trump and Jeffrey E. Epstein each reside in this District and are citizens of the State of New York.\n  \n### Jurisdiction and Venue\n3. Plaintiff is a citizen of the State of California for purposes of diversity jurisdiction under 28 U.S.C. § 1332.\n4. Defendants are citizens of the State of New York for purposes of diversity jurisdiction under 28 U.S.C. § 1332.\n5. This Court has original subject matter jurisdiction with respect to this action pursuant to 28 U.S.C. § 1332 as there exists complete diversity of citizenship between Plaintiff and Defendants and the amount in controversy exceeds Seventy Five Thousand Dollars ($75,000.00), exclusive of interest and costs.\n6. Defendants are each subject to the jurisdiction of this Court pursuant to 28 U.S.C. § 1332 with proper venue pursuant to 28 U.S.C. § 1391 as both defendants are residents of and/or are domiciled in this district and the events giving rise to the claims occurred in this district.\n\n### Allegation Summary\n7. Plaintiff was subject to acts of rape, sexual misconduct, criminal sexual acts, sexual abuse, forcible touching, assault, battery, intentional and reckless infliction of emotional distress, duress, false imprisonment, and threats of death and/or serious bodil",
+                            "role": "assistant",
+                            "function_call": None,
+                            "tool_calls": None,
+                        },
+                        "content_filter_results": {
+                            "hate": {"filtered": False, "severity": "safe"},
+                            "self_harm": {"filtered": False, "severity": "safe"},
+                            "sexual": {"filtered": True, "severity": "high"},
+                            "violence": {"filtered": True, "severity": "medium"},
+                        },
+                    }
+                ],
+                "created": 1719098138,
+                "model": "gpt-4o-2024-05-13",
+                "object": "chat.completion",
+                "system_fingerprint": "fp_abc28019ad",
+                "usage": {
+                    "completion_tokens": 1022,
+                    "prompt_tokens": 5944,
+                    "total_tokens": 6966,
+                },
+                "prompt_filter_results": [
+                    {
+                        "prompt_index": 0,
+                        "content_filter_results": {
+                            "hate": {"filtered": False, "severity": "safe"},
+                            "self_harm": {"filtered": False, "severity": "safe"},
+                            "sexual": {"filtered": False, "severity": "safe"},
+                            "violence": {"filtered": False, "severity": "low"},
+                        },
+                    }
+                ],
+            },
+            model_response_object=litellm.ModelResponse(),
+            response_type="completion",
+        )
+        pytest.fail("Expected this to fail")
+    except litellm.AzureOpenAIError as e:
+        assert e.status_code == 400

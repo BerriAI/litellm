@@ -2104,7 +2104,9 @@ class Router:
             original_exception = e
             fallback_model_group = None
             try:
-                verbose_router_logger.debug(f"Trying to fallback b/w models")
+                verbose_router_logger.info(
+                    "Trying to fallback b/w models - Error Type:{}".format(type(e))
+                )
                 if (
                     hasattr(e, "status_code")
                     and e.status_code == 400  # type: ignore
@@ -2113,6 +2115,9 @@ class Router:
                         or isinstance(e, litellm.ContentPolicyViolationError)
                     )
                 ):  # don't retry a malformed request
+                    verbose_router_logger.info(
+                        "400-Bad request. Not retrying. (Not A ContextWindow or ContentPolicy Error)"
+                    )
                     raise e
                 if (
                     isinstance(e, litellm.ContextWindowExceededError)
@@ -2160,6 +2165,11 @@ class Router:
                             break
 
                     if fallback_model_group is None:
+                        verbose_router_logger.info(
+                            "No fallback model group for content_policy_fallbacks. model_group={}. content_policy_fallbacks={}".format(
+                                model_group, content_policy_fallbacks
+                            )
+                        )
                         raise original_exception
 
                     for mg in fallback_model_group:
@@ -2171,11 +2181,16 @@ class Router:
                             kwargs.setdefault("metadata", {}).update(
                                 {"model_group": mg}
                             )  # update model_group used, if fallbacks are done
+                            verbose_router_logger.info(
+                                "Fallbacks - trying with new model = {}".format(mg)
+                            )
                             response = await self.async_function_with_retries(
                                 *args, **kwargs
                             )
                             verbose_router_logger.info(
-                                "Successful fallback b/w models."
+                                "Successful fallback b/w models. Returned model={}".format(
+                                    mg
+                                )
                             )
                             return response
                         except Exception as e:
@@ -2229,8 +2244,11 @@ class Router:
                         except Exception as e:
                             raise e
             except Exception as e:
-                verbose_router_logger.error(f"An exception occurred - {str(e)}")
-                verbose_router_logger.debug(traceback.format_exc())
+                verbose_router_logger.error(
+                    "litellm.router.py::async_function_with_fallbacks(): An exception occurred - {}\n{}.\nAdd fallbacks to prevent errors - https://docs.litellm.ai/docs/routing#fallbacks".format(
+                        str(e), traceback.format_exc()
+                    )
+                )
             raise original_exception
 
     async def async_function_with_retries(self, *args, **kwargs):

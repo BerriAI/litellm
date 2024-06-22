@@ -1,8 +1,12 @@
 #### What this tests ####
 #    This tests calling router with fallback models
 
-import sys, os, time
-import traceback, asyncio
+import asyncio
+import os
+import sys
+import time
+import traceback
+
 import pytest
 
 sys.path.insert(
@@ -762,9 +766,11 @@ def test_ausage_based_routing_fallbacks():
         # The Request should fail azure/gpt-4-fast. Then fallback -> "azure/gpt-4-basic" -> "openai-gpt-4"
         # It should work with "openai-gpt-4"
         import os
+
+        from dotenv import load_dotenv
+
         import litellm
         from litellm import Router
-        from dotenv import load_dotenv
 
         load_dotenv()
 
@@ -1111,41 +1117,46 @@ async def test_client_side_fallbacks_list(sync_mode):
     assert response.model is not None and response.model == "gpt-4o"
 
 
+@pytest.mark.parametrize("provider", ["anthropic", "azure"])
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
-async def test_router_content_policy_fallbacks(sync_mode):
+async def test_router_content_policy_fallbacks(sync_mode, provider):
     os.environ["LITELLM_LOG"] = "DEBUG"
     router = Router(
         model_list=[
             {
                 "model_name": "claude-2",
                 "litellm_params": {
-                    "model": "claude-2",
-                    "api_key": "",
+                    "model": "{}/claude-2".format(provider),
+                    "api_key": "my-fake-key",
+                    "api_base": "my-fake-base",
                     "mock_response": Exception("content filtering policy"),
                 },
             },
             {
                 "model_name": "my-fallback-model",
                 "litellm_params": {
-                    "model": "claude-2",
-                    "api_key": "",
+                    "model": "{}/claude-2".format(provider),
+                    "api_key": "my-fake-key",
+                    "api_base": "my-fake-base",
                     "mock_response": "This works!",
                 },
             },
             {
                 "model_name": "my-general-model",
                 "litellm_params": {
-                    "model": "claude-2",
-                    "api_key": "",
+                    "model": "{}/claude-2".format(provider),
+                    "api_key": "my-fake-key",
+                    "api_base": "my-fake-base",
                     "mock_response": Exception("Should not have called this."),
                 },
             },
             {
                 "model_name": "my-context-window-model",
                 "litellm_params": {
-                    "model": "claude-2",
-                    "api_key": "",
+                    "model": "{}/claude-2".format(provider),
+                    "api_key": "my-fake-key",
+                    "api_base": "my-fake-base",
                     "mock_response": Exception("Should not have called this."),
                 },
             },

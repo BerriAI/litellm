@@ -5193,6 +5193,7 @@ def convert_to_model_response_object(
             if stream == True:
                 # for returning cached responses, we need to yield a generator
                 return convert_to_streaming_response(response_object=response_object)
+
             choice_list = []
 
             assert response_object["choices"] is not None and isinstance(
@@ -5206,10 +5207,24 @@ def convert_to_model_response_object(
                     function_call=choice["message"].get("function_call", None),
                     tool_calls=choice["message"].get("tool_calls", None),
                 )
-                finish_reason = choice.get("finish_reason", None)
-                if finish_reason == None:
+                finish_reason: Optional[str] = choice.get("finish_reason", None)
+                if finish_reason is None:
                     # gpt-4 vision can return 'finish_reason' or 'finish_details'
-                    finish_reason = choice.get("finish_details")
+                    finish_reason = choice.get("finish_details", "stop")
+
+                ## CHECK IF RESPONSE FLAGGED
+                if (
+                    finish_reason is not None and finish_reason == "content_filter"
+                ):  # https://learn.microsoft.com/en-us/azure/ai-services/openai/reference#example-response-2
+                    ## CONTENT POLICY VIOLATION ERROR
+                    raise litellm.AzureOpenAIError(
+                        status_code=400,
+                        message="The response was blocked. Reason={}. Raw Response={}".format(
+                            finish_reason,
+                            response_object,
+                        ),
+                    )
+
                 logprobs = choice.get("logprobs", None)
                 enhancements = choice.get("enhancements", None)
                 choice = Choices(
@@ -5319,6 +5334,8 @@ def convert_to_model_response_object(
             if hidden_params is not None:
                 model_response_object._hidden_params = hidden_params
             return model_response_object
+    except litellm.AzureOpenAIError as e:
+        raise e
     except Exception as e:
         raise Exception(
             f"Invalid response object {traceback.format_exc()}\n\nreceived_args={received_args}"
@@ -7192,6 +7209,8 @@ def exception_type(
                     )
                     or "Your task failed as a result of our safety system" in error_str
                     or "The model produced invalid content" in error_str
+                    or "The response was blocked" in error_str
+                    or "content filtering policy" in error_str
                 ):
                     exception_mapping_worked = True
                     raise ContentPolicyViolationError(
@@ -8827,7 +8846,7 @@ class CustomStreamWrapper:
                             self.received_finish_reason = chunk.candidates[
                                 0
                             ].finish_reason.name
-                    except Exception as e:
+                    except Exception:
                         if chunk.candidates[0].finish_reason.name == "SAFETY":
                             raise Exception(
                                 f"The response was blocked by VertexAI. {str(chunk)}"
