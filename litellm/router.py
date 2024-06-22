@@ -3808,10 +3808,39 @@ class Router:
 
         model_group_info: Optional[ModelGroupInfo] = None
 
+        total_tpm: Optional[int] = None
+        total_rpm: Optional[int] = None
+
         for model in self.model_list:
             if "model_name" in model and model["model_name"] == model_group:
                 # model in model group found #
                 litellm_params = LiteLLM_Params(**model["litellm_params"])
+                # get model tpm
+                _deployment_tpm: Optional[int] = None
+                if _deployment_tpm is None:
+                    _deployment_tpm = model.get("tpm", None)
+                if _deployment_tpm is None:
+                    _deployment_tpm = model.get("litellm_params", {}).get("tpm", None)
+                if _deployment_tpm is None:
+                    _deployment_tpm = model.get("model_info", {}).get("tpm", None)
+
+                if _deployment_tpm is not None:
+                    if total_tpm is None:
+                        total_tpm = 0
+                    total_tpm += _deployment_tpm  # type: ignore
+                # get model rpm
+                _deployment_rpm: Optional[int] = None
+                if _deployment_rpm is None:
+                    _deployment_rpm = model.get("rpm", None)
+                if _deployment_rpm is None:
+                    _deployment_rpm = model.get("litellm_params", {}).get("rpm", None)
+                if _deployment_rpm is None:
+                    _deployment_rpm = model.get("model_info", {}).get("rpm", None)
+
+                if _deployment_rpm is not None:
+                    if total_rpm is None:
+                        total_rpm = 0
+                    total_rpm += _deployment_rpm  # type: ignore
                 # get model info
                 try:
                     model_info = litellm.get_model_info(model=litellm_params.model)
@@ -3924,6 +3953,13 @@ class Router:
                         model_group_info.supported_openai_params = model_info[
                             "supported_openai_params"
                         ]
+
+        ## UPDATE WITH TOTAL TPM/RPM FOR MODEL GROUP
+        if total_tpm is not None and model_group_info is not None:
+            model_group_info.tpm = total_tpm
+
+        if total_rpm is not None and model_group_info is not None:
+            model_group_info.rpm = total_rpm
 
         return model_group_info
 
