@@ -32,6 +32,10 @@ def redact_message_input_output_from_logging(
     if litellm.turn_off_message_logging is not True:
         return result
 
+    request_headers = litellm_logging_obj.model_call_details['litellm_params']['metadata']['headers']
+    if request_headers and request_headers.get('litellm-turn-on-message-logging', False):
+        return result
+
     # remove messages, prompts, input, response from logging
     litellm_logging_obj.model_call_details["messages"] = [
         {"role": "user", "content": "redacted-by-litellm"}
