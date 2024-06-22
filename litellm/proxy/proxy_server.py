@@ -7502,6 +7502,12 @@ async def login(request: Request):
             litellm_dashboard_ui += "/ui/"
         import jwt
 
+        if litellm_master_key_hash is None:
+            raise HTTPException(
+                status_code=500,
+                detail={"error": "No master key set, please set LITELLM_MASTER_KEY"},
+            )
+
         jwt_token = jwt.encode(
             {
                 "user_id": user_id,
@@ -7511,7 +7517,7 @@ async def login(request: Request):
                 "login_method": "username_password",
                 "premium_user": premium_user,
             },
-            "secret",
+            litellm_master_key_hash,
             algorithm="HS256",
         )
         litellm_dashboard_ui += "?userID=" + user_id
@@ -7566,6 +7572,14 @@ async def login(request: Request):
                 litellm_dashboard_ui += "/ui/"
             import jwt
 
+            if litellm_master_key_hash is None:
+                raise HTTPException(
+                    status_code=500,
+                    detail={
+                        "error": "No master key set, please set LITELLM_MASTER_KEY"
+                    },
+                )
+
             jwt_token = jwt.encode(
                 {
                     "user_id": user_id,
@@ -7575,7 +7589,7 @@ async def login(request: Request):
                     "login_method": "username_password",
                     "premium_user": premium_user,
                 },
-                "secret",
+                litellm_master_key_hash,
                 algorithm="HS256",
             )
             litellm_dashboard_ui += "?userID=" + user_id
@@ -7694,6 +7708,12 @@ async def onboarding(invite_link: str):
         litellm_dashboard_ui += "/ui/onboarding"
     import jwt
 
+    if litellm_master_key_hash is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "No master key set, please set LITELLM_MASTER_KEY"},
+        )
+
     jwt_token = jwt.encode(
         {
             "user_id": user_obj.user_id,
@@ -7703,7 +7723,7 @@ async def onboarding(invite_link: str):
             "login_method": "username_password",
             "premium_user": premium_user,
         },
-        "secret",
+        litellm_master_key_hash,
         algorithm="HS256",
     )
 
@@ -8114,6 +8134,12 @@ async def auth_callback(request: Request):
 
     import jwt
 
+    if litellm_master_key_hash is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "No master key set, please set LITELLM_MASTER_KEY"},
+        )
+
     jwt_token = jwt.encode(
         {
             "user_id": user_id,
@@ -8123,7 +8149,7 @@ async def auth_callback(request: Request):
             "login_method": "sso",
             "premium_user": premium_user,
         },
-        "secret",
+        litellm_master_key_hash,
         algorithm="HS256",
     )
     litellm_dashboard_ui += "?userID=" + user_id
