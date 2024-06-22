@@ -6,6 +6,7 @@ import random
 import sys
 import time
 import traceback
+import uuid
 from datetime import datetime
 from typing import Tuple
 
@@ -44,8 +45,10 @@ def dynamic_rate_limit_handler() -> DynamicRateLimitHandler:
 async def test_available_tpm(num_projects, dynamic_rate_limit_handler):
     model = "my-fake-model"
     ## SET CACHE W/ ACTIVE PROJECTS
-    await dynamic_rate_limit_handler.internal_usage_cache.async_increment_cache(
-        model=model, value=num_projects
+    projects = [str(uuid.uuid4()) for _ in range(num_projects)]
+
+    await dynamic_rate_limit_handler.internal_usage_cache.async_set_cache_sadd(
+        model=model, value=projects
     )
 
     model_tpm = 100
@@ -66,7 +69,9 @@ async def test_available_tpm(num_projects, dynamic_rate_limit_handler):
 
     ## CHECK AVAILABLE TPM PER PROJECT
 
-    availability = await dynamic_rate_limit_handler.check_available_tpm(model=model)
+    availability, _, _ = await dynamic_rate_limit_handler.check_available_tpm(
+        model=model
+    )
 
     expected_availability = int(model_tpm / num_projects)
 
