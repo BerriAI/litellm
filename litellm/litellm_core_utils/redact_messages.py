@@ -28,12 +28,13 @@ def redact_message_input_output_from_logging(
     Removes messages, prompts, input, response from logging. This modifies the data in-place
     only redacts when litellm.turn_off_message_logging == True
     """
+    request_headers = litellm_logging_obj.model_call_details['litellm_params']['metadata']['headers']
+
     # check if user opted out of logging message/response to callbacks
-    if litellm.turn_off_message_logging is not True:
+    if litellm.turn_off_message_logging is not True and request_headers.get('litellm-enable-message-redaction', False):
         return result
 
-    request_headers = litellm_logging_obj.model_call_details['litellm_params']['metadata']['headers']
-    if request_headers and request_headers.get('litellm-turn-on-message-logging', False):
+    if request_headers and request_headers.get('litellm-disable-message-redaction', False):
         return result
 
     # remove messages, prompts, input, response from logging
