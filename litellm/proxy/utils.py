@@ -229,31 +229,32 @@ class ProxyLogging:
         if redis_cache is not None:
             self.internal_usage_cache.redis_cache = redis_cache
 
-    def _init_litellm_callbacks(self):
-        print_verbose("INITIALIZING LITELLM CALLBACKS!")
+    def _init_litellm_callbacks(self, llm_router: Optional[litellm.Router] = None):
         self.service_logging_obj = ServiceLogging()
-        litellm.callbacks.append(self.max_parallel_request_limiter)
-        litellm.callbacks.append(self.max_budget_limiter)
-        litellm.callbacks.append(self.cache_control_check)
-        litellm.callbacks.append(self.service_logging_obj)
+        litellm.callbacks.append(self.max_parallel_request_limiter)  # type: ignore
+        litellm.callbacks.append(self.max_budget_limiter)  # type: ignore
+        litellm.callbacks.append(self.cache_control_check)  # type: ignore
+        litellm.callbacks.append(self.service_logging_obj)  # type: ignore
         litellm.success_callback.append(
             self.slack_alerting_instance.response_taking_too_long_callback
         )
         for callback in litellm.callbacks:
             if isinstance(callback, str):
-                callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(
-                    callback
+                callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(  # type: ignore
+                    callback,
+                    internal_usage_cache=self.internal_usage_cache,
+                    llm_router=llm_router,
                 )
             if callback not in litellm.input_callback:
-                litellm.input_callback.append(callback)
+                litellm.input_callback.append(callback)  # type: ignore
             if callback not in litellm.success_callback:
-                litellm.success_callback.append(callback)
+                litellm.success_callback.append(callback)  # type: ignore
             if callback not in litellm.failure_callback:
-                litellm.failure_callback.append(callback)
+                litellm.failure_callback.append(callback)  # type: ignore
             if callback not in litellm._async_success_callback:
-                litellm._async_success_callback.append(callback)
+                litellm._async_success_callback.append(callback)  # type: ignore
             if callback not in litellm._async_failure_callback:
-                litellm._async_failure_callback.append(callback)
+                litellm._async_failure_callback.append(callback)  # type: ignore
 
         if (
             len(litellm.input_callback) > 0
@@ -301,10 +302,19 @@ class ProxyLogging:
 
         try:
             for callback in litellm.callbacks:
-                if isinstance(callback, CustomLogger) and "async_pre_call_hook" in vars(
-                    callback.__class__
+                _callback: Optional[CustomLogger] = None
+                if isinstance(callback, str):
+                    _callback = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
+                        callback
+                    )
+                else:
+                    _callback = callback  # type: ignore
+                if (
+                    _callback is not None
+                    and isinstance(_callback, CustomLogger)
+                    and "async_pre_call_hook" in vars(_callback.__class__)
                 ):
-                    response = await callback.async_pre_call_hook(
+                    response = await _callback.async_pre_call_hook(
                         user_api_key_dict=user_api_key_dict,
                         cache=self.call_details["user_api_key_cache"],
                         data=data,

@@ -152,3 +152,40 @@ litellm_remaining_team_budget_metric{team_alias="QA Prod Bot",team_id="de35b29e-
 ```
 
 
+### Dynamic TPM Allocation 
+
+Prevent teams from gobbling too much quota. 
+
+1. Setup config.yaml 
+
+```yaml 
+model_list: 
+  - model_name: my-fake-model
+    litellm_params:
+      model: gpt-3.5-turbo
+      api_key: my-fake-key
+      mock_response: hello-world
+      tpm: 60
+
+general_settings: 
+  callbacks: ["dynamic_rate_limiting"]
+```
+
+2. Start proxy 
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+```python
+"""
+- Run 2 concurrent teams calling same model
+- model has 60 TPM
+- Mock response returns 30 total tokens / request
+- Each team will only be able to make 1 request per minute
+"""
+
+
+```
