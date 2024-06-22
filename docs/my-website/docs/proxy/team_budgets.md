@@ -167,8 +167,12 @@ model_list:
       mock_response: hello-world
       tpm: 60
 
-general_settings: 
-  callbacks: ["dynamic_rate_limiting"]
+litellm_settings: 
+  callbacks: ["dynamic_rate_limiter"]
+
+general_settings:
+  master_key: sk-1234 # OR set `LITELLM_MASTER_KEY=".."` in your .env
+  database_url: postgres://.. # OR set `DATABASE_URL=".."` in your .env
 ```
 
 2. Start proxy 
@@ -186,6 +190,55 @@ litellm --config /path/to/config.yaml
 - Mock response returns 30 total tokens / request
 - Each team will only be able to make 1 request per minute
 """
+import requests
+from openai import OpenAI, RateLimitError
+
+def create_key(api_key: str, base_url: str): 
+    response = requests.post(
+        url="{}/key/generate".format(base_url), 
+        json={},
+        headers={
+            "Authorization": "Bearer {}".format(api_key)
+        }
+    )
+
+    _response = response.json()
+
+    print(f"_response: {_response}")
+    return _response["key"]
+
+key_1 = create_key(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+key_2 = create_key(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+
+# call proxy with key 1 - works
+openai_client_1 = OpenAI(api_key=key_1, base_url="http://0.0.0.0:4000")
+
+response = openai_client_1.chat.completions.with_raw_response.create(
+    model="my-fake-model", messages=[{"role": "user", "content": "Hello world!"}],
+)
+
+print("Headers for call - {}".format(response.headers))
+_response = response.parse()
+print("Total tokens for call - {}".format(_response.usage.total_tokens))
+
+
+# call proxy with key 2 -  works 
+openai_client_2 = OpenAI(api_key=key_1, base_url="http://0.0.0.0:4000")
+
+response = openai_client_2.chat.completions.with_raw_response.create(
+    model="my-fake-model", messages=[{"role": "user", "content": "Hello world!"}],
+)
+
+print("Headers for call - {}".format(response.headers))
+_response = response.parse()
+print("Total tokens for call - {}".format(_response.usage.total_tokens))
+# call proxy with key 2 -  fails
+try:  
+    openai_client_2.chat.completions.with_raw_response.create(model="my-fake-model", messages=[{"role": "user", "content": "Hey, how's it going?"}])
+    raise Exception("This should have failed!")
+except RateLimitError as e: 
+    print("This was rate limited b/c - {}".format(str(e)))
+
 
 
 ```
