@@ -43,7 +43,7 @@ def get_logging_payload(
 
     request_tags = (
         json.dumps(metadata.get("tags", []))
-        if isinstance(metadata.get("tags", []), dict)
+        if isinstance(metadata.get("tags", []), list)
         else "[]"
     )
 
