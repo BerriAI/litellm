@@ -20,8 +20,6 @@ import time
 
 import pytest
 
-in_memory_langfuse_client: dict[str, Any] = {}
-
 
 @pytest.fixture
 def langfuse_client():
@@ -31,15 +29,15 @@ def langfuse_client():
         f"{os.environ['LANGFUSE_PUBLIC_KEY']}-{os.environ['LANGFUSE_SECRET_KEY']}"
     )
     # use a in memory langfuse client for testing, RAM util on ci/cd gets too high when we init many langfuse clients
-    if _langfuse_cache_key in in_memory_langfuse_clients:
-        langfuse_client = in_memory_langfuse_clients[_langfuse_cache_key]
+    if _langfuse_cache_key in litellm.in_memory_llm_clients_cache:
+        langfuse_client = litellm.in_memory_llm_clients_cache[_langfuse_cache_key]
     else:
         langfuse_client = langfuse.Langfuse(
             public_key=os.environ["LANGFUSE_PUBLIC_KEY"],
             secret_key=os.environ["LANGFUSE_SECRET_KEY"],
             host=None,
         )
-        in_memory_langfuse_clients[_langfuse_cache_key] = langfuse_client
+        litellm.in_memory_llm_clients_cache[_langfuse_cache_key] = langfuse_client
 
         print("NEW LANGFUSE CLIENT")
 
