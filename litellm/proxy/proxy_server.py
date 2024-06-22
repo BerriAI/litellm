@@ -2644,7 +2644,9 @@ async def startup_event():
         redis_cache=redis_usage_cache
     )  # used by parallel request limiter for rate limiting keys across instances
 
-    proxy_logging_obj._init_litellm_callbacks()  # INITIALIZE LITELLM CALLBACKS ON SERVER STARTUP <- do this to catch any logging errors on startup, not when calls are being made
+    proxy_logging_obj._init_litellm_callbacks(
+        llm_router=llm_router
+    )  # INITIALIZE LITELLM CALLBACKS ON SERVER STARTUP <- do this to catch any logging errors on startup, not when calls are being made
 
     if "daily_reports" in proxy_logging_obj.slack_alerting_instance.alert_types:
         asyncio.create_task(
@@ -3116,11 +3118,10 @@ async def chat_completion(
     except Exception as e:
         data["litellm_status"] = "fail"  # used for alerting
         verbose_proxy_logger.error(
-            "litellm.proxy.proxy_server.chat_completion(): Exception occured - {}".format(
-                get_error_message_str(e=e)
+            "litellm.proxy.proxy_server.chat_completion(): Exception occured - {}\n{}".format(
+                get_error_message_str(e=e), traceback.format_exc()
             )
         )
-        verbose_proxy_logger.debug(traceback.format_exc())
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
