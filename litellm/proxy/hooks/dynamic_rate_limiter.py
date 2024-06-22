@@ -131,7 +131,6 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
         - Check if tpm available
         - Raise RateLimitError if no tpm available
         """
-
         if "model" in data:
             available_tpm, model_tpm, active_projects = await self.check_available_tpm(
                 model=data["model"]
