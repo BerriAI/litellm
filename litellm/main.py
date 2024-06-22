@@ -428,7 +428,7 @@ def mock_completion(
     model: str,
     messages: List,
     stream: Optional[bool] = False,
-    mock_response: Union[str, Exception] = "This is a mock request",
+    mock_response: Union[str, Exception, dict] = "This is a mock request",
     mock_tool_calls: Optional[List] = None,
     logging=None,
     custom_llm_provider=None,
@@ -476,6 +476,9 @@ def mock_completion(
         time_delay = kwargs.get("mock_delay", None)
         if time_delay is not None:
             time.sleep(time_delay)
+
+        if isinstance(mock_response, dict):
+            return ModelResponse(**mock_response)
 
         model_response = ModelResponse(stream=stream)
         if stream is True:

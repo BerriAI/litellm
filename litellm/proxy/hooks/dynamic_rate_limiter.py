@@ -80,25 +80,35 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
         Returns
         - Tuple[available_tpm, model_tpm, active_projects]
             - available_tpm: int or null
-            - model_tpm: int or null. If available tpm is int, then this will be too.
+            - remaining_model_tpm: int or null. If available tpm is int, then this will be too.
             - active_projects: int or null
         """
         active_projects = await self.internal_usage_cache.async_get_cache(model=model)
+        current_model_tpm: Optional[int] = await self.llm_router.get_model_group_usage(
+            model_group=model
+        )
         model_group_info: Optional[ModelGroupInfo] = (
             self.llm_router.get_model_group_info(model_group=model)
         )
+        total_model_tpm: Optional[int] = None
+        if model_group_info is not None and model_group_info.tpm is not None:
+            total_model_tpm = model_group_info.tpm
+
+        remaining_model_tpm: Optional[int] = None
+        if total_model_tpm is not None and current_model_tpm is not None:
+            remaining_model_tpm = total_model_tpm - current_model_tpm
+        elif total_model_tpm is not None:
+            remaining_model_tpm = total_model_tpm
 
         available_tpm: Optional[int] = None
-        model_tpm: Optional[int] = None
 
-        if model_group_info is not None and model_group_info.tpm is not None:
-            model_tpm = model_group_info.tpm
+        if remaining_model_tpm is not None:
             if active_projects is not None:
-                available_tpm = int(model_group_info.tpm / active_projects)
+                available_tpm = int(remaining_model_tpm / active_projects)
             else:
-                available_tpm = model_group_info.tpm
+                available_tpm = remaining_model_tpm
 
-        return available_tpm, model_tpm, active_projects
+        return available_tpm, remaining_model_tpm, active_projects
 
     async def async_pre_call_hook(
         self,
@@ -121,6 +131,7 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
         - Check if tpm available
         - Raise RateLimitError if no tpm available
         """
+
         if "model" in data:
             available_tpm, model_tpm, active_projects = await self.check_available_tpm(
                 model=data["model"]
