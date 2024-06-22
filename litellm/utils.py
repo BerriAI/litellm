@@ -5922,21 +5922,28 @@ def exception_type(
                 if "prompt is too long" in error_str or "prompt: length" in error_str:
                     exception_mapping_worked = True
                     raise ContextWindowExceededError(
-                        message=error_str,
+                        message="AnthropicError - {}".format(error_str),
                         model=model,
                         llm_provider="anthropic",
                     )
                 if "Invalid API Key" in error_str:
                     exception_mapping_worked = True
                     raise AuthenticationError(
-                        message=error_str,
+                        message="AnthropicError - {}".format(error_str),
                         model=model,
                         llm_provider="anthropic",
                     )
                 if "content filtering policy" in error_str:
                     exception_mapping_worked = True
                     raise ContentPolicyViolationError(
-                        message=error_str,
+                        message="AnthropicError - {}".format(error_str),
+                        model=model,
+                        llm_provider="anthropic",
+                    )
+                if "Client error '400 Bad Request'" in error_str:
+                    exception_mapping_worked = True
+                    raise BadRequestError(
+                        message="AnthropicError - {}".format(error_str),
                         model=model,
                         llm_provider="anthropic",
                     )
