@@ -29,6 +29,7 @@ def langfuse_client():
         secret_key=os.environ["LANGFUSE_SECRET_KEY"],
         host=None,
     )
+    print("NEW LANGFUSE CLIENT")
 
     with patch(
         "langfuse.Langfuse", MagicMock(return_value=langfuse_client)
