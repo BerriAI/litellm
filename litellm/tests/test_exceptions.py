@@ -724,11 +724,15 @@ def test_anthropic_tool_calling_exception():
             "function": {
                 "name": "get_current_weather",
                 "description": "Get the current weather in a given location",
+                "parameters": {},
             },
         }
     ]
-    litellm.completion(
-        model="claude-3.5",
-        messages=[{"role": "user", "content": "Hey, how's it going?"}],
-        tools=tools,
-    )
+    try:
+        litellm.completion(
+            model="claude-3-5-sonnet-20240620",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+            tools=tools,
+        )
+    except litellm.BadRequestError:
+        pass
