@@ -70,6 +70,31 @@ def test_router_specific_model_via_id():
     router.completion(model="1234", messages=[{"role": "user", "content": "Hey!"}])
 
 
+def test_router_azure_ai_client_init():
+
+    _deployment = {
+        "model_name": "meta-llama-3-70b",
+        "litellm_params": {
+            "model": "azure_ai/Meta-Llama-3-70B-instruct",
+            "api_base": "my-fake-route",
+            "api_key": "my-fake-key",
+        },
+        "model_info": {"id": "1234"},
+    }
+    router = Router(model_list=[_deployment])
+
+    _client = router._get_client(
+        deployment=_deployment,
+        client_type="async",
+        kwargs={"stream": False},
+    )
+    print(_client)
+    from openai import AsyncAzureOpenAI, AsyncOpenAI
+
+    assert isinstance(_client, AsyncOpenAI)
+    assert not isinstance(_client, AsyncAzureOpenAI)
+
+
 def test_router_sensitive_keys():
     try:
         router = Router(
