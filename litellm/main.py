@@ -477,6 +477,9 @@ def mock_completion(
         if time_delay is not None:
             time.sleep(time_delay)
 
+        if isinstance(mock_response, dict):
+            return ModelResponse(**mock_response)
+
         model_response = ModelResponse(stream=stream)
         if stream is True:
             # don't try to access stream object,
