@@ -152,3 +152,104 @@ litellm_remaining_team_budget_metric{team_alias="QA Prod Bot",team_id="de35b29e-
 ```
 
 
+### Dynamic TPM Allocation 
+
+Prevent projects from gobbling too much quota. 
+
+Dynamically allocate TPM quota to api keys, based on active keys in that minute.
+
+1. Setup config.yaml 
+
+```yaml 
+model_list: 
+  - model_name: my-fake-model
+    litellm_params:
+      model: gpt-3.5-turbo
+      api_key: my-fake-key
+      mock_response: hello-world
+      tpm: 60
+
+litellm_settings: 
+  callbacks: ["dynamic_rate_limiter"]
+
+general_settings:
+  master_key: sk-1234 # OR set `LITELLM_MASTER_KEY=".."` in your .env
+  database_url: postgres://.. # OR set `DATABASE_URL=".."` in your .env
+```
+
+2. Start proxy 
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+```python
+"""
+- Run 2 concurrent teams calling same model
+- model has 60 TPM
+- Mock response returns 30 total tokens / request
+- Each team will only be able to make 1 request per minute
+"""
+"""
+- Run 2 concurrent teams calling same model
+- model has 60 TPM
+- Mock response returns 30 total tokens / request
+- Each team will only be able to make 1 request per minute
+"""
+import requests
+from openai import OpenAI, RateLimitError
+
+def create_key(api_key: str, base_url: str): 
+    response = requests.post(
+        url="{}/key/generate".format(base_url), 
+        json={},
+        headers={
+            "Authorization": "Bearer {}".format(api_key)
+        }
+    )
+
+    _response = response.json()
+
+    return _response["key"]
+
+key_1 = create_key(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+key_2 = create_key(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+
+# call proxy with key 1 - works
+openai_client_1 = OpenAI(api_key=key_1, base_url="http://0.0.0.0:4000")
+
+response = openai_client_1.chat.completions.with_raw_response.create(
+    model="my-fake-model", messages=[{"role": "user", "content": "Hello world!"}],
+)
+
+print("Headers for call 1 - {}".format(response.headers))
+_response = response.parse()
+print("Total tokens for call - {}".format(_response.usage.total_tokens))
+
+
+# call proxy with key 2 -  works 
+openai_client_2 = OpenAI(api_key=key_2, base_url="http://0.0.0.0:4000")
+
+response = openai_client_2.chat.completions.with_raw_response.create(
+    model="my-fake-model", messages=[{"role": "user", "content": "Hello world!"}],
+)
+
+print("Headers for call 2 - {}".format(response.headers))
+_response = response.parse()
+print("Total tokens for call - {}".format(_response.usage.total_tokens))
+# call proxy with key 2 -  fails
+try:  
+    openai_client_2.chat.completions.with_raw_response.create(model="my-fake-model", messages=[{"role": "user", "content": "Hey, how's it going?"}])
+    raise Exception("This should have failed!")
+except RateLimitError as e: 
+    print("This was rate limited b/c - {}".format(str(e)))
+
+```
+
+**Expected Response**
+
+```
+This was rate limited b/c - Error code: 429 - {'error': {'message': {'error': 'Key=<hashed_token> over available TPM=0. Model TPM=0, Active keys=2'}, 'type': 'None', 'param': 'None', 'code': 429}}
+```
