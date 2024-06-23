@@ -19,7 +19,8 @@ from litellm import (
     turn_off_message_logging,
     verbose_logger,
 )
-from litellm.caching import InMemoryCache, S3Cache
+
+from litellm.caching import InMemoryCache, S3Cache, DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_logging,
@@ -1899,7 +1900,11 @@ def set_callbacks(callback_list, function_id=None):
 
 def _init_custom_logger_compatible_class(
     logging_integration: litellm._custom_logger_compatible_callbacks_literal,
-) -> Callable:
+    internal_usage_cache: Optional[DualCache],
+    llm_router: Optional[
+        Any
+    ],  # expect litellm.Router, but typing errors due to circular import
+) -> CustomLogger:
     if logging_integration == "lago":
         for callback in _in_memory_loggers:
             if isinstance(callback, LagoLogger):
@@ -1935,3 +1940,58 @@ def _init_custom_logger_compatible_class(
         _otel_logger = OpenTelemetry(config=otel_config)
         _in_memory_loggers.append(_otel_logger)
         return _otel_logger  # type: ignore
+    elif logging_integration == "dynamic_rate_limiter":
+        from litellm.proxy.hooks.dynamic_rate_limiter import (
+            _PROXY_DynamicRateLimitHandler,
+        )
+
+        for callback in _in_memory_loggers:
+            if isinstance(callback, _PROXY_DynamicRateLimitHandler):
+                return callback  # type: ignore
+
+        if internal_usage_cache is None:
+            raise Exception(
+                "Internal Error: Cache cannot be empty - internal_usage_cache={}".format(
+                    internal_usage_cache
+                )
+            )
+
+        dynamic_rate_limiter_obj = _PROXY_DynamicRateLimitHandler(
+            internal_usage_cache=internal_usage_cache
+        )
+
+        if llm_router is not None and isinstance(llm_router, litellm.Router):
+            dynamic_rate_limiter_obj.update_variables(llm_router=llm_router)
+        _in_memory_loggers.append(dynamic_rate_limiter_obj)
+        return dynamic_rate_limiter_obj  # type: ignore
+
+
+def get_custom_logger_compatible_class(
+    logging_integration: litellm._custom_logger_compatible_callbacks_literal,
+) -> Optional[CustomLogger]:
+    if logging_integration == "lago":
+        for callback in _in_memory_loggers:
+            if isinstance(callback, LagoLogger):
+                return callback
+    elif logging_integration == "openmeter":
+        for callback in _in_memory_loggers:
+            if isinstance(callback, OpenMeterLogger):
+                return callback
+    elif logging_integration == "logfire":
+        if "LOGFIRE_TOKEN" not in os.environ:
+            raise ValueError("LOGFIRE_TOKEN not found in environment variables")
+        from litellm.integrations.opentelemetry import OpenTelemetry
+
+        for callback in _in_memory_loggers:
+            if isinstance(callback, OpenTelemetry):
+                return callback  # type: ignore
+
+    elif logging_integration == "dynamic_rate_limiter":
+        from litellm.proxy.hooks.dynamic_rate_limiter import (
+            _PROXY_DynamicRateLimitHandler,
+        )
+
+        for callback in _in_memory_loggers:
+            if isinstance(callback, _PROXY_DynamicRateLimitHandler):
+                return callback  # type: ignore
+    return None
