@@ -538,6 +538,7 @@ response = completion(
             aws_region_name=aws_region_name,
             aws_access_key_id=aws_access_key_id,
             aws_secret_access_key=aws_secret_access_key,
+            aws_session_token=aws_session_token,
             aws_role_name=aws_role_name,
             aws_session_name="my-test-session",
         )
@@ -553,7 +554,7 @@ This is a deprecated flow. Boto3 is not async. And boto3.client does not let us 
 
 Experimental - 2024-Jun-23:
     aws_access_key_id, aws_secret_access_key=, and aws_session_token will be extracted from boto3.client and be passed onto the httpx client 
-    
+
 :::
 
 Pass an external BedrockRuntime.Client object as a parameter to litellm.completion. Useful when using an AWS credentials profile, SSO session, assumed role session, or if environment variables are not available for auth.

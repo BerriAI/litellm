@@ -145,6 +145,7 @@ class GenericLiteLLMParams(BaseModel):
     ## AWS BEDROCK / SAGEMAKER ##
     aws_access_key_id: Optional[str] = None
     aws_secret_access_key: Optional[str] = None
+    aws_session_token: Optional[str] = None
     aws_region_name: Optional[str] = None
     ## IBM WATSONX ##
     watsonx_region_name: Optional[str] = None
@@ -178,6 +179,7 @@ class GenericLiteLLMParams(BaseModel):
         ## AWS BEDROCK / SAGEMAKER ##
         aws_access_key_id: Optional[str] = None,
         aws_secret_access_key: Optional[str] = None,
+        aws_session_token: Optional[str] = None,
         aws_region_name: Optional[str] = None,
         ## IBM WATSONX ##
         watsonx_region_name: Optional[str] = None,
@@ -242,6 +244,7 @@ class LiteLLM_Params(GenericLiteLLMParams):
         ## AWS BEDROCK / SAGEMAKER ##
         aws_access_key_id: Optional[str] = None,
         aws_secret_access_key: Optional[str] = None,
+        aws_session_token: Optional[str] = None,
         aws_region_name: Optional[str] = None,
         **params,
     ):
@@ -307,6 +310,7 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     ## AWS BEDROCK / SAGEMAKER ##
     aws_access_key_id: Optional[str]
     aws_secret_access_key: Optional[str]
+    aws_session_token: Optional[str]
     aws_region_name: Optional[str]
     ## IBM WATSONX ##
     watsonx_region_name: Optional[str]
