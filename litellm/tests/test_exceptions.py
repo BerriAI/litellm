@@ -670,7 +670,7 @@ def test_litellm_predibase_exception():
 # print(f"accuracy_score: {accuracy_score}")
 
 
-@pytest.mark.parametrize("provider", ["predibase", "vertex_ai_beta"])
+@pytest.mark.parametrize("provider", ["predibase", "vertex_ai_beta", "anthropic"])
 def test_exception_mapping(provider):
     """
     For predibase, run through a set of mock exceptions
@@ -712,3 +712,27 @@ def test_exception_mapping(provider):
         )
 
     pass
+
+
+def test_anthropic_tool_calling_exception():
+    """
+    Related - https://github.com/BerriAI/litellm/issues/4348
+    """
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {},
+            },
+        }
+    ]
+    try:
+        litellm.completion(
+            model="claude-3-5-sonnet-20240620",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+            tools=tools,
+        )
+    except litellm.BadRequestError:
+        pass

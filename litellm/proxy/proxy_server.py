@@ -165,9 +165,10 @@ from litellm.proxy.secret_managers.aws_secret_manager import (
     load_aws_secret_manager,
 )
 from litellm.proxy.secret_managers.google_kms import load_google_kms
-from litellm.proxy.spend_reporting_endpoints.spend_management_endpoints import (
+from litellm.proxy.spend_tracking.spend_management_endpoints import (
     router as spend_management_router,
 )
+from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.proxy.utils import (
     DBClient,
     PrismaClient,
@@ -180,7 +181,6 @@ from litellm.proxy.utils import (
     encrypt_value,
     get_error_message_str,
     get_instance_fn,
-    get_logging_payload,
     hash_token,
     html_form,
     missing_keys_html_form,
@@ -7509,6 +7509,12 @@ async def login(request: Request):
             litellm_dashboard_ui += "/ui/"
         import jwt
 
+        if litellm_master_key_hash is None:
+            raise HTTPException(
+                status_code=500,
+                detail={"error": "No master key set, please set LITELLM_MASTER_KEY"},
+            )
+
         jwt_token = jwt.encode(
             {
                 "user_id": user_id,
@@ -7518,11 +7524,13 @@ async def login(request: Request):
                 "login_method": "username_password",
                 "premium_user": premium_user,
             },
-            "secret",
+            litellm_master_key_hash,
             algorithm="HS256",
         )
-        litellm_dashboard_ui += "?userID=" + user_id + "&token=" + jwt_token
-        return RedirectResponse(url=litellm_dashboard_ui, status_code=303)
+        litellm_dashboard_ui += "?userID=" + user_id
+        redirect_response = RedirectResponse(url=litellm_dashboard_ui, status_code=303)
+        redirect_response.set_cookie(key="token", value=jwt_token)
+        return redirect_response
     elif _user_row is not None:
         """
         When sharing invite links
@@ -7571,6 +7579,14 @@ async def login(request: Request):
                 litellm_dashboard_ui += "/ui/"
             import jwt
 
+            if litellm_master_key_hash is None:
+                raise HTTPException(
+                    status_code=500,
+                    detail={
+                        "error": "No master key set, please set LITELLM_MASTER_KEY"
+                    },
+                )
+
             jwt_token = jwt.encode(
                 {
                     "user_id": user_id,
@@ -7580,11 +7596,15 @@ async def login(request: Request):
                     "login_method": "username_password",
                     "premium_user": premium_user,
                 },
-                "secret",
+                litellm_master_key_hash,
                 algorithm="HS256",
             )
-            litellm_dashboard_ui += "?userID=" + user_id + "&token=" + jwt_token
-            return RedirectResponse(url=litellm_dashboard_ui, status_code=303)
+            litellm_dashboard_ui += "?userID=" + user_id
+            redirect_response = RedirectResponse(
+                url=litellm_dashboard_ui, status_code=303
+            )
+            redirect_response.set_cookie(key="token", value=jwt_token)
+            return redirect_response
         else:
             raise ProxyException(
                 message=f"Invalid credentials used to access UI. Passed in username: {username}, passed in password: {password}.\nNot valid credentials for {username}",
@@ -7695,6 +7715,12 @@ async def onboarding(invite_link: str):
         litellm_dashboard_ui += "/ui/onboarding"
     import jwt
 
+    if litellm_master_key_hash is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "No master key set, please set LITELLM_MASTER_KEY"},
+        )
+
     jwt_token = jwt.encode(
         {
             "user_id": user_obj.user_id,
@@ -7704,7 +7730,7 @@ async def onboarding(invite_link: str):
             "login_method": "username_password",
             "premium_user": premium_user,
         },
-        "secret",
+        litellm_master_key_hash,
         algorithm="HS256",
     )
 
@@ -8115,6 +8141,12 @@ async def auth_callback(request: Request):
 
     import jwt
 
+    if litellm_master_key_hash is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "No master key set, please set LITELLM_MASTER_KEY"},
+        )
+
     jwt_token = jwt.encode(
         {
             "user_id": user_id,
@@ -8124,11 +8156,13 @@ async def auth_callback(request: Request):
             "login_method": "sso",
             "premium_user": premium_user,
         },
-        "secret",
+        litellm_master_key_hash,
         algorithm="HS256",
     )
-    litellm_dashboard_ui += "?userID=" + user_id + "&token=" + jwt_token
-    return RedirectResponse(url=litellm_dashboard_ui)
+    litellm_dashboard_ui += "?userID=" + user_id
+    redirect_response = RedirectResponse(url=litellm_dashboard_ui, status_code=303)
+    redirect_response.set_cookie(key="token", value=jwt_token)
+    return redirect_response
 
 
 #### INVITATION MANAGEMENT ####
