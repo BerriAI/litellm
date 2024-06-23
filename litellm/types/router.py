@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .completion import CompletionRequest
 from .embedding import EmbeddingRequest
+from .utils import ModelResponse
 
 
 class ModelConfig(BaseModel):
@@ -315,7 +316,7 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     input_cost_per_second: Optional[float]
     output_cost_per_second: Optional[float]
     ## MOCK RESPONSES ##
-    mock_response: Optional[str]
+    mock_response: Optional[Union[str, ModelResponse, Exception]]
 
 
 class DeploymentTypedDict(TypedDict):
