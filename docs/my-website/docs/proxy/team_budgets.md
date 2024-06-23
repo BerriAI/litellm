@@ -156,7 +156,7 @@ litellm_remaining_team_budget_metric{team_alias="QA Prod Bot",team_id="de35b29e-
 
 Prevent projects from gobbling too much quota. 
 
-Dynamically allocate TPM quota to api keys, based on active keys in that minute.
+Dynamically allocate TPM quota to api keys, based on active keys in that minute. [**See Code**](https://github.com/BerriAI/litellm/blob/9bffa9a48e610cc6886fc2dce5c1815aeae2ad46/litellm/proxy/hooks/dynamic_rate_limiter.py#L125)
 
 1. Setup config.yaml 
 
@@ -192,12 +192,7 @@ litellm --config /path/to/config.yaml
 - Mock response returns 30 total tokens / request
 - Each team will only be able to make 1 request per minute
 """
-"""
-- Run 2 concurrent teams calling same model
-- model has 60 TPM
-- Mock response returns 30 total tokens / request
-- Each team will only be able to make 1 request per minute
-"""
+
 import requests
 from openai import OpenAI, RateLimitError
 
