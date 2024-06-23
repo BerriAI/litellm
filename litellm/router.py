@@ -282,7 +282,7 @@ class Router:
                 litellm.cache = litellm.Cache(type=cache_type, **cache_config)  # type: ignore
             self.cache_responses = cache_responses
         self.cache = DualCache(
-            redis_cache=redis_cache, in_memory_cache=InMemoryCache()
+            redis_cache=redis_cache, in_memory_cache=InMemoryCache(default_ttl=86400)
         )  # use a dual cache (Redis+In-Memory) for tracking cooldowns, usage, etc.
 
         ### SCHEDULER ###
