@@ -558,6 +558,7 @@ def init_bedrock_client(
     region_name=None,
     aws_access_key_id: Optional[str] = None,
     aws_secret_access_key: Optional[str] = None,
+    aws_session_token: Optional[str] = None,
     aws_region_name: Optional[str] = None,
     aws_bedrock_runtime_endpoint: Optional[str] = None,
     aws_session_name: Optional[str] = None,
@@ -591,6 +592,7 @@ def init_bedrock_client(
     (
         aws_access_key_id,
         aws_secret_access_key,
+        aws_session_token,
         aws_region_name,
         aws_bedrock_runtime_endpoint,
         aws_session_name,
@@ -668,6 +670,21 @@ def init_bedrock_client(
             endpoint_url=endpoint_url,
             config=config,
         )
+    elif (
+            aws_access_key_id is not None
+            and aws_secret_access_key is not None
+            and aws_session_token is not None
+        ): ### CHECK FOR AWS SESSION TOKEN ###        
+        client = boto3.client(
+            service_name="bedrock-runtime",
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
+            aws_session_token=aws_session_token,
+            region_name=region_name,
+            endpoint_url=endpoint_url,
+            config=config,
+        )
+
     elif aws_role_name is not None and aws_session_name is not None:
         # use sts if role name passed in
         sts_client = boto3.client(
@@ -786,9 +803,10 @@ def completion(
     _is_function_call = False
     json_schemas: dict = {}
     try:
-        # pop aws_secret_access_key, aws_access_key_id, aws_region_name from kwargs, since completion calls fail with them
+        # pop aws_secret_access_key, aws_access_key_id, aws_session_token, aws_region_name from kwargs, since completion calls fail with them
         aws_secret_access_key = optional_params.pop("aws_secret_access_key", None)
         aws_access_key_id = optional_params.pop("aws_access_key_id", None)
+        aws_session_token = optional_params.pop("aws_session_token", None)
         aws_region_name = optional_params.pop("aws_region_name", None)
         aws_role_name = optional_params.pop("aws_role_name", None)
         aws_session_name = optional_params.pop("aws_session_name", None)
@@ -806,6 +824,7 @@ def completion(
             client = init_bedrock_client(
                 aws_access_key_id=aws_access_key_id,
                 aws_secret_access_key=aws_secret_access_key,
+                aws_session_token=aws_session_token,
                 aws_region_name=aws_region_name,
                 aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
                 aws_role_name=aws_role_name,
@@ -1328,6 +1347,7 @@ def embedding(
     # pop aws_secret_access_key, aws_access_key_id, aws_region_name from kwargs, since completion calls fail with them
     aws_secret_access_key = optional_params.pop("aws_secret_access_key", None)
     aws_access_key_id = optional_params.pop("aws_access_key_id", None)
+    aws_session_token = optional_params.pop("aws_session_token", None)
     aws_region_name = optional_params.pop("aws_region_name", None)
     aws_role_name = optional_params.pop("aws_role_name", None)
     aws_session_name = optional_params.pop("aws_session_name", None)
@@ -1340,6 +1360,7 @@ def embedding(
     client = init_bedrock_client(
         aws_access_key_id=aws_access_key_id,
         aws_secret_access_key=aws_secret_access_key,
+        aws_session_token=aws_session_token,
         aws_region_name=aws_region_name,
         aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
         aws_web_identity_token=aws_web_identity_token,
@@ -1419,6 +1440,7 @@ def image_generation(
     # pop aws_secret_access_key, aws_access_key_id, aws_region_name from kwargs, since completion calls fail with them
     aws_secret_access_key = optional_params.pop("aws_secret_access_key", None)
     aws_access_key_id = optional_params.pop("aws_access_key_id", None)
+    aws_session_token = optional_params.pop("aws_session_token", None)
     aws_region_name = optional_params.pop("aws_region_name", None)
     aws_role_name = optional_params.pop("aws_role_name", None)
     aws_session_name = optional_params.pop("aws_session_name", None)
@@ -1431,6 +1453,7 @@ def image_generation(
     client = init_bedrock_client(
         aws_access_key_id=aws_access_key_id,
         aws_secret_access_key=aws_secret_access_key,
+        aws_session_token=aws_session_token,
         aws_region_name=aws_region_name,
         aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
         aws_web_identity_token=aws_web_identity_token,
