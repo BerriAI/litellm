@@ -64,10 +64,14 @@ class BaseCache:
 
 class InMemoryCache(BaseCache):
     def __init__(self, default_ttl: Optional[float] = 60.0):
+        """
+        default_ttl [float]: If default_ttl is 6 seconds, every 6 seconds the cache will be set to {}
+        this is done to prevent overuse of System RAM
+        """
         # if users don't provider one, use the default litellm cache
         self.cache_dict: dict = {}
         self.ttl_dict: dict = {}
-        self.default_ttl = default_ttl
+        self.default_ttl = default_ttl or 60.0
         self.last_cleaned = 0  # since this is in memory we need to periodically clean it up to not overuse the machines RAM
 
     def set_cache(self, key, value, **kwargs):
@@ -78,7 +82,7 @@ class InMemoryCache(BaseCache):
 
     async def async_set_cache(self, key, value, **kwargs):
         self.set_cache(key=key, value=value, **kwargs)
-        if time.time() > self.last_cleaned:
+        if time.time() - self.last_cleaned > self.default_ttl:
             asyncio.create_task(self.clean_up_in_memory_cache())
 
     async def async_set_cache_pipeline(self, cache_list, ttl=None):
@@ -88,7 +92,7 @@ class InMemoryCache(BaseCache):
             else:
                 self.set_cache(key=cache_key, value=cache_value)
 
-        if time.time() > self.last_cleaned:
+        if time.time() - self.last_cleaned > self.default_ttl:
             asyncio.create_task(self.clean_up_in_memory_cache())
 
     def get_cache(self, key, **kwargs):
@@ -135,7 +139,7 @@ class InMemoryCache(BaseCache):
         value = init_value + value
         await self.async_set_cache(key, value, **kwargs)
 
-        if time.time() > self.last_cleaned:
+        if time.time() - self.last_cleaned > self.default_ttl:
             asyncio.create_task(self.clean_up_in_memory_cache())
 
         return value
@@ -147,11 +151,8 @@ class InMemoryCache(BaseCache):
         - loop through all keys in cache, check if they are expired
         - if yes, delete them
         """
-        for key in list(self.cache_dict.keys()):
-            if key in self.ttl_dict:
-                if time.time() > self.ttl_dict[key]:
-                    self.cache_dict.pop(key, None)
-                    self.ttl_dict.pop(key, None)
+        self.cache_dict = {}
+        self.ttl_dict = {}
         self.last_cleaned = time.time()
 
     def flush_cache(self):
