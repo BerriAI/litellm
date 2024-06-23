@@ -433,6 +433,7 @@ def get_custom_headers(
     version: Optional[str] = None,
     model_region: Optional[str] = None,
     fastest_response_batch_completion: Optional[bool] = None,
+    **kwargs,
 ) -> dict:
     exclude_values = {"", None}
     headers = {
@@ -448,6 +449,7 @@ def get_custom_headers(
             if fastest_response_batch_completion is not None
             else None
         ),
+        **{k: str(v) for k, v in kwargs.items()},
     }
     try:
         return {
@@ -2524,11 +2526,10 @@ async def async_data_generator(
         yield f"data: {done_message}\n\n"
     except Exception as e:
         verbose_proxy_logger.error(
-            "litellm.proxy.proxy_server.async_data_generator(): Exception occured - {}".format(
-                str(e)
+            "litellm.proxy.proxy_server.async_data_generator(): Exception occured - {}\n{}".format(
+                str(e), traceback.format_exc()
             )
         )
-        verbose_proxy_logger.debug(traceback.format_exc())
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
             original_exception=e,
@@ -2644,7 +2645,9 @@ async def startup_event():
         redis_cache=redis_usage_cache
     )  # used by parallel request limiter for rate limiting keys across instances
 
-    proxy_logging_obj._init_litellm_callbacks()  # INITIALIZE LITELLM CALLBACKS ON SERVER STARTUP <- do this to catch any logging errors on startup, not when calls are being made
+    proxy_logging_obj._init_litellm_callbacks(
+        llm_router=llm_router
+    )  # INITIALIZE LITELLM CALLBACKS ON SERVER STARTUP <- do this to catch any logging errors on startup, not when calls are being made
 
     if "daily_reports" in proxy_logging_obj.slack_alerting_instance.alert_types:
         asyncio.create_task(
@@ -3061,6 +3064,14 @@ async def chat_completion(
                 headers=custom_headers,
             )
 
+        ### CALL HOOKS ### - modify outgoing data
+        response = await proxy_logging_obj.post_call_success_hook(
+            user_api_key_dict=user_api_key_dict, response=response
+        )
+
+        hidden_params = getattr(response, "_hidden_params", {}) or {}
+        additional_headers: dict = hidden_params.get("additional_headers", {}) or {}
+
         fastapi_response.headers.update(
             get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
@@ -3070,12 +3081,8 @@ async def chat_completion(
                 version=version,
                 model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
                 fastest_response_batch_completion=fastest_response_batch_completion,
+                **additional_headers,
             )
-        )
-
-        ### CALL HOOKS ### - modify outgoing data
-        response = await proxy_logging_obj.post_call_success_hook(
-            user_api_key_dict=user_api_key_dict, response=response
         )
 
         return response
@@ -3116,11 +3123,10 @@ async def chat_completion(
     except Exception as e:
         data["litellm_status"] = "fail"  # used for alerting
         verbose_proxy_logger.error(
-            "litellm.proxy.proxy_server.chat_completion(): Exception occured - {}".format(
-                get_error_message_str(e=e)
+            "litellm.proxy.proxy_server.chat_completion(): Exception occured - {}\n{}".format(
+                get_error_message_str(e=e), traceback.format_exc()
             )
         )
-        verbose_proxy_logger.debug(traceback.format_exc())
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
@@ -7502,6 +7508,12 @@ async def login(request: Request):
             litellm_dashboard_ui += "/ui/"
         import jwt
 
+        if litellm_master_key_hash is None:
+            raise HTTPException(
+                status_code=500,
+                detail={"error": "No master key set, please set LITELLM_MASTER_KEY"},
+            )
+
         jwt_token = jwt.encode(
             {
                 "user_id": user_id,
@@ -7511,11 +7523,13 @@ async def login(request: Request):
                 "login_method": "username_password",
                 "premium_user": premium_user,
             },
-            "secret",
+            litellm_master_key_hash,
             algorithm="HS256",
         )
-        litellm_dashboard_ui += "?userID=" + user_id + "&token=" + jwt_token
-        return RedirectResponse(url=litellm_dashboard_ui, status_code=303)
+        litellm_dashboard_ui += "?userID=" + user_id
+        redirect_response = RedirectResponse(url=litellm_dashboard_ui, status_code=303)
+        redirect_response.set_cookie(key="token", value=jwt_token)
+        return redirect_response
     elif _user_row is not None:
         """
         When sharing invite links
@@ -7564,6 +7578,14 @@ async def login(request: Request):
                 litellm_dashboard_ui += "/ui/"
             import jwt
 
+            if litellm_master_key_hash is None:
+                raise HTTPException(
+                    status_code=500,
+                    detail={
+                        "error": "No master key set, please set LITELLM_MASTER_KEY"
+                    },
+                )
+
             jwt_token = jwt.encode(
                 {
                     "user_id": user_id,
@@ -7573,11 +7595,15 @@ async def login(request: Request):
                     "login_method": "username_password",
                     "premium_user": premium_user,
                 },
-                "secret",
+                litellm_master_key_hash,
                 algorithm="HS256",
             )
-            litellm_dashboard_ui += "?userID=" + user_id + "&token=" + jwt_token
-            return RedirectResponse(url=litellm_dashboard_ui, status_code=303)
+            litellm_dashboard_ui += "?userID=" + user_id
+            redirect_response = RedirectResponse(
+                url=litellm_dashboard_ui, status_code=303
+            )
+            redirect_response.set_cookie(key="token", value=jwt_token)
+            return redirect_response
         else:
             raise ProxyException(
                 message=f"Invalid credentials used to access UI. Passed in username: {username}, passed in password: {password}.\nNot valid credentials for {username}",
@@ -7688,6 +7714,12 @@ async def onboarding(invite_link: str):
         litellm_dashboard_ui += "/ui/onboarding"
     import jwt
 
+    if litellm_master_key_hash is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "No master key set, please set LITELLM_MASTER_KEY"},
+        )
+
     jwt_token = jwt.encode(
         {
             "user_id": user_obj.user_id,
@@ -7697,7 +7729,7 @@ async def onboarding(invite_link: str):
             "login_method": "username_password",
             "premium_user": premium_user,
         },
-        "secret",
+        litellm_master_key_hash,
         algorithm="HS256",
     )
 
@@ -8108,6 +8140,12 @@ async def auth_callback(request: Request):
 
     import jwt
 
+    if litellm_master_key_hash is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "No master key set, please set LITELLM_MASTER_KEY"},
+        )
+
     jwt_token = jwt.encode(
         {
             "user_id": user_id,
@@ -8117,11 +8155,13 @@ async def auth_callback(request: Request):
             "login_method": "sso",
             "premium_user": premium_user,
         },
-        "secret",
+        litellm_master_key_hash,
         algorithm="HS256",
     )
-    litellm_dashboard_ui += "?userID=" + user_id + "&token=" + jwt_token
-    return RedirectResponse(url=litellm_dashboard_ui)
+    litellm_dashboard_ui += "?userID=" + user_id
+    redirect_response = RedirectResponse(url=litellm_dashboard_ui, status_code=303)
+    redirect_response.set_cookie(key="token", value=jwt_token)
+    return redirect_response
 
 
 #### INVITATION MANAGEMENT ####
