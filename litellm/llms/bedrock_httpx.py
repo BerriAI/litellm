@@ -745,7 +745,7 @@ class BedrockLLM(BaseLLM):
         provider = model.split(".")[0]
 
         ## CREDENTIALS ##
-        # pop aws_secret_access_key, aws_access_key_id, aws_region_name from kwargs, since completion calls fail with them
+        # pop aws_secret_access_key, aws_access_key_id, aws_session_token, aws_region_name from kwargs, since completion calls fail with them
         aws_secret_access_key = optional_params.pop("aws_secret_access_key", None)
         aws_access_key_id = optional_params.pop("aws_access_key_id", None)
         aws_session_token = optional_params.pop("aws_session_token", None)
