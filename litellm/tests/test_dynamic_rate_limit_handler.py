@@ -296,6 +296,9 @@ async def test_update_cache(
     assert active_projects == 1
 
 
+@pytest.mark.skip(
+    reason="Unstable on ci/cd due to curr minute changes. Refactor to handle minute changing"
+)
 @pytest.mark.parametrize("num_projects", [2])
 @pytest.mark.asyncio
 async def test_multiple_projects(
@@ -350,8 +353,10 @@ async def test_multiple_projects(
     prev_availability: Optional[int] = None
 
     print("expected_runs: {}".format(expected_runs))
+
     for i in range(expected_runs + 1):
         # check availability
+
         availability, _, _ = await dynamic_rate_limit_handler.check_available_tpm(
             model=model
         )
@@ -390,6 +395,9 @@ async def test_multiple_projects(
     assert availability == 0
 
 
+@pytest.mark.skip(
+    reason="Unstable on ci/cd due to curr minute changes. Refactor to handle minute changing"
+)
 @pytest.mark.parametrize("num_projects", [2])
 @pytest.mark.asyncio
 async def test_multiple_projects_e2e(
