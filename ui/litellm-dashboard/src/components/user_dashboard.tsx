@@ -24,6 +24,14 @@ type UserSpendData = {
   max_budget?: number | null;
 };
 
+function getCookie(name: string) {
+  console.log("COOKIES", document.cookie)
+  const cookieValue = document.cookie
+      .split('; ')
+      .find(row => row.startsWith(name + '='));
+  return cookieValue ? cookieValue.split('=')[1] : null;
+}
+
 interface UserDashboardProps {
   userID: string | null;
   userRole: string | null;
@@ -66,7 +74,8 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   const viewSpend = searchParams.get("viewSpend");
   const router = useRouter();
 
-  const token = searchParams.get("token");
+  const token = getCookie('token');
+
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [teamSpend, setTeamSpend] = useState<number | null>(null);
   const [userModels, setUserModels] = useState<string[]>([]);

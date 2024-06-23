@@ -340,14 +340,15 @@ def function_setup(
         )
     try:
         global callback_list, add_breadcrumb, user_logger_fn, Logging
+
         function_id = kwargs["id"] if "id" in kwargs else None
 
         if len(litellm.callbacks) > 0:
             for callback in litellm.callbacks:
                 # check if callback is a string - e.g. "lago", "openmeter"
                 if isinstance(callback, str):
-                    callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(
-                        callback
+                    callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(  # type: ignore
+                        callback, internal_usage_cache=None, llm_router=None
                     )
                     if any(
                         isinstance(cb, type(callback))
@@ -3895,12 +3896,16 @@ def get_formatted_prompt(
 
 
 def get_response_string(response_obj: ModelResponse) -> str:
-    _choices: List[Choices] = response_obj.choices  # type: ignore
+    _choices: List[Union[Choices, StreamingChoices]] = response_obj.choices
 
     response_str = ""
     for choice in _choices:
-        if choice.message.content is not None:
-            response_str += choice.message.content
+        if isinstance(choice, Choices):
+            if choice.message.content is not None:
+                response_str += choice.message.content
+        elif isinstance(choice, StreamingChoices):
+            if choice.delta.content is not None:
+                response_str += choice.delta.content
 
     return response_str
 
@@ -9590,6 +9595,11 @@ class CustomStreamWrapper:
                 litellm.request_timeout
             )
             if self.logging_obj is not None:
+                ## LOGGING
+                threading.Thread(
+                    target=self.logging_obj.failure_handler,
+                    args=(e, traceback_exception),
+                ).start()  # log response
                 # Handle any exceptions that might occur during streaming
                 asyncio.create_task(
                     self.logging_obj.async_failure_handler(e, traceback_exception)
@@ -9597,11 +9607,24 @@ class CustomStreamWrapper:
             raise e
         except Exception as e:
             traceback_exception = traceback.format_exc()
-            # Handle any exceptions that might occur during streaming
-            asyncio.create_task(
-                self.logging_obj.async_failure_handler(e, traceback_exception)  # type: ignore
+            if self.logging_obj is not None:
+                ## LOGGING
+                threading.Thread(
+                    target=self.logging_obj.failure_handler,
+                    args=(e, traceback_exception),
+                ).start()  # log response
+                # Handle any exceptions that might occur during streaming
+                asyncio.create_task(
+                    self.logging_obj.async_failure_handler(e, traceback_exception)  # type: ignore
+                )
+            ## Map to OpenAI Exception
+            raise exception_type(
+                model=self.model,
+                custom_llm_provider=self.custom_llm_provider,
+                original_exception=e,
+                completion_kwargs={},
+                extra_kwargs={},
             )
-            raise e
 
 
 class TextCompletionStreamWrapper:

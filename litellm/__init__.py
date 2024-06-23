@@ -37,7 +37,9 @@ input_callback: List[Union[str, Callable]] = []
 success_callback: List[Union[str, Callable]] = []
 failure_callback: List[Union[str, Callable]] = []
 service_callback: List[Union[str, Callable]] = []
-_custom_logger_compatible_callbacks_literal = Literal["lago", "openmeter", "logfire"]
+_custom_logger_compatible_callbacks_literal = Literal[
+    "lago", "openmeter", "logfire", "dynamic_rate_limiter"
+]
 callbacks: List[Union[Callable, _custom_logger_compatible_callbacks_literal]] = []
 _langfuse_default_tags: Optional[
     List[
@@ -735,6 +737,7 @@ from .utils import (
     client,
     exception_type,
     get_optional_params,
+    get_response_string,
     modify_integration,
     token_counter,
     create_pretrained_tokenizer,

@@ -105,8 +105,8 @@ class OpenTelemetry(CustomLogger):
         self,
         payload: ServiceLoggerPayload,
         parent_otel_span: Optional[Span] = None,
-        start_time: Optional[datetime] = None,
-        end_time: Optional[datetime] = None,
+        start_time: Optional[Union[datetime, float]] = None,
+        end_time: Optional[Union[datetime, float]] = None,
     ):
         from datetime import datetime
 
@@ -144,8 +144,8 @@ class OpenTelemetry(CustomLogger):
         self,
         payload: ServiceLoggerPayload,
         parent_otel_span: Optional[Span] = None,
-        start_time: Optional[datetime] = None,
-        end_time: Optional[datetime] = None,
+        start_time: Optional[Union[datetime, float]] = None,
+        end_time: Optional[Union[float, datetime]] = None,
     ):
         from datetime import datetime
 

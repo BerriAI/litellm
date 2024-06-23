@@ -1218,6 +1218,7 @@ class ModelResponseIterator:
     def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
         try:
             processed_chunk = GenerateContentResponseBody(**chunk)  # type: ignore
+
             text = ""
             tool_use: Optional[ChatCompletionToolCallChunk] = None
             is_finished = False
@@ -1236,7 +1237,8 @@ class ModelResponseIterator:
                 finish_reason = map_finish_reason(
                     finish_reason=gemini_chunk["finishReason"]
                 )
-                is_finished = True
+                ## DO NOT SET 'finish_reason' = True
+                ## GEMINI SETS FINISHREASON ON EVERY CHUNK!
 
             if "usageMetadata" in processed_chunk:
                 usage = ChatCompletionUsageBlock(
@@ -1250,7 +1252,7 @@ class ModelResponseIterator:
             returned_chunk = GenericStreamingChunk(
                 text=text,
                 tool_use=tool_use,
-                is_finished=is_finished,
+                is_finished=False,
                 finish_reason=finish_reason,
                 usage=usage,
                 index=0,
@@ -1268,9 +1270,8 @@ class ModelResponseIterator:
             chunk = self.response_iterator.__next__()
             self.coro.send(chunk)
             if self.events:
-                event = self.events[0]
+                event = self.events.pop(0)
                 json_chunk = event
-                self.events.clear()
                 return self.chunk_parser(chunk=json_chunk)
             return GenericStreamingChunk(
                 text="",
@@ -1281,6 +1282,9 @@ class ModelResponseIterator:
                 tool_use=None,
             )
         except StopIteration:
+            if self.events:  # flush the events
+                event = self.events.pop(0)  # Remove the first event
+                return self.chunk_parser(chunk=event)
             raise StopIteration
         except ValueError as e:
             raise RuntimeError(f"Error parsing chunk: {e}")
@@ -1295,9 +1299,8 @@ class ModelResponseIterator:
             chunk = await self.async_response_iterator.__anext__()
             self.coro.send(chunk)
             if self.events:
-                event = self.events[0]
+                event = self.events.pop(0)
                 json_chunk = event
-                self.events.clear()
                 return self.chunk_parser(chunk=json_chunk)
             return GenericStreamingChunk(
                 text="",
@@ -1308,6 +1311,9 @@ class ModelResponseIterator:
                 tool_use=None,
             )
         except StopAsyncIteration:
+            if self.events:  # flush the events
+                event = self.events.pop(0)  # Remove the first event
+                return self.chunk_parser(chunk=event)
             raise StopAsyncIteration
         except ValueError as e:
             raise RuntimeError(f"Error parsing chunk: {e}")
