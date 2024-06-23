@@ -572,6 +572,18 @@ class Router:
                 f"litellm.completion(model={model_name})\033[32m 200 OK\033[0m"
             )
 
+            ## CHECK CONTENT FILTER ERROR ##
+            if isinstance(response, ModelResponse):
+                _should_raise = self._should_raise_content_policy_error(
+                    model=model, response=response, kwargs=kwargs
+                )
+                if _should_raise:
+                    raise litellm.ContentPolicyViolationError(
+                        message="Response output was blocked.",
+                        model=model,
+                        llm_provider="",
+                    )
+
             return response
         except Exception as e:
             verbose_router_logger.info(
@@ -730,6 +742,18 @@ class Router:
             else:
                 await self.async_routing_strategy_pre_call_checks(deployment=deployment)
                 response = await _response
+
+            ## CHECK CONTENT FILTER ERROR ##
+            if isinstance(response, ModelResponse):
+                _should_raise = self._should_raise_content_policy_error(
+                    model=model, response=response, kwargs=kwargs
+                )
+                if _should_raise:
+                    raise litellm.ContentPolicyViolationError(
+                        message="Response output was blocked.",
+                        model=model,
+                        llm_provider="",
+                    )
 
             self.success_calls[model_name] += 1
             verbose_router_logger.info(
@@ -2866,6 +2890,40 @@ class Router:
         except:
             # Catch all - if any exceptions default to cooling down
             return True
+
+    def _should_raise_content_policy_error(
+        self, model: str, response: ModelResponse, kwargs: dict
+    ) -> bool:
+        """
+        Determines if a content policy error should be raised.
+
+        Only raised if a fallback is available.
+
+        Else, original response is returned.
+        """
+        if response.choices[0].finish_reason != "content_filter":
+            return False
+
+        content_policy_fallbacks = kwargs.get(
+            "content_policy_fallbacks", self.content_policy_fallbacks
+        )
+        ### ONLY RAISE ERROR IF CP FALLBACK AVAILABLE ###
+        if content_policy_fallbacks is not None:
+            fallback_model_group = None
+            for item in content_policy_fallbacks:  # [{"gpt-3.5-turbo": ["gpt-4"]}]
+                if list(item.keys())[0] == model:
+                    fallback_model_group = item[model]
+                    break
+
+            if fallback_model_group is not None:
+                return True
+
+        verbose_router_logger.info(
+            "Content Policy Error occurred. No available fallbacks. Returning original response. model={}, content_policy_fallbacks={}".format(
+                model, content_policy_fallbacks
+            )
+        )
+        return False
 
     def _set_cooldown_deployments(
         self,
