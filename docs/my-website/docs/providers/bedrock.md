@@ -476,6 +476,7 @@ response = completion(
             messages=[{ "content": "Hello, how are you?","role": "user"}],
             aws_access_key_id="",
             aws_secret_access_key="",
+            aws_session_token="",
             aws_region_name="",
 )
 ```
@@ -549,6 +550,10 @@ response = completion(
 
 This is a deprecated flow. Boto3 is not async. And boto3.client does not let us make the http call through httpx. Pass in your aws params through the method above 👆. [See Auth Code](https://github.com/BerriAI/litellm/blob/55a20c7cce99a93d36a82bf3ae90ba3baf9a7f89/litellm/llms/bedrock_httpx.py#L284) [Add new auth flow](https://github.com/BerriAI/litellm/issues)
 
+
+Experimental - 2024-Jun-23:
+    aws_access_key_id, aws_secret_access_key=, and aws_session_token will be extracted from boto3.client and be passed onto the httpx client 
+    
 :::
 
 Pass an external BedrockRuntime.Client object as a parameter to litellm.completion. Useful when using an AWS credentials profile, SSO session, assumed role session, or if environment variables are not available for auth.
