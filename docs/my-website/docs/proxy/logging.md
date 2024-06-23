@@ -210,6 +210,24 @@ litellm_settings:
   turn_off_message_logging: True
 ```
 
+If you have this feature turned on, you can override it for specific requests by
+setting a request header `LiteLLM-Disable-Message-Redaction: true`.
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --header 'LiteLLM-Disable-Message-Redaction: true' \
+    --data '{
+    "model": "gpt-3.5-turbo",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what llm are you"
+        }
+    ]
+}'
+```
+
 ### 🔧 Debugging - Viewing RAW CURL sent from LiteLLM to provider
 
 Use this when you want to view the RAW curl request sent from LiteLLM to the LLM API 
