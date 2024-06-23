@@ -6343,6 +6343,7 @@ async def model_info_v2(
         _model["litellm_params"].pop("vertex_credentials", None)
         _model["litellm_params"].pop("aws_access_key_id", None)
         _model["litellm_params"].pop("aws_secret_access_key", None)
+        _model["litellm_params"].pop("aws_session_token", None)
 
     verbose_proxy_logger.debug("all_models: %s", all_models)
     return {"data": all_models}
@@ -6859,6 +6860,7 @@ async def model_info_v1(
         model["litellm_params"].pop("vertex_credentials", None)
         model["litellm_params"].pop("aws_access_key_id", None)
         model["litellm_params"].pop("aws_secret_access_key", None)
+        model["litellm_params"].pop("aws_session_token", None)
 
     verbose_proxy_logger.debug("all_models: %s", all_models)
     return {"data": all_models}
