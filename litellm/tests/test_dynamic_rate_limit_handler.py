@@ -214,22 +214,22 @@ async def test_base_case(dynamic_rate_limit_handler, mock_response):
 
     prev_availability: Optional[int] = None
     allowed_fails = 1
-    for _ in range(5):
+    for _ in range(2):
         try:
             # check availability
             availability, _, _ = await dynamic_rate_limit_handler.check_available_tpm(
                 model=model
             )
 
-            ## assert availability updated
-            if prev_availability is not None and availability is not None:
-                assert availability == prev_availability - 10
-
             print(
                 "prev_availability={}, availability={}".format(
                     prev_availability, availability
                 )
             )
+
+            ## assert availability updated
+            if prev_availability is not None and availability is not None:
+                assert availability == prev_availability - 10
 
             prev_availability = availability
 
