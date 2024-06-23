@@ -1218,6 +1218,7 @@ class ModelResponseIterator:
     def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
         try:
             processed_chunk = GenerateContentResponseBody(**chunk)  # type: ignore
+
             text = ""
             tool_use: Optional[ChatCompletionToolCallChunk] = None
             is_finished = False
@@ -1236,7 +1237,8 @@ class ModelResponseIterator:
                 finish_reason = map_finish_reason(
                     finish_reason=gemini_chunk["finishReason"]
                 )
-                is_finished = True
+                ## DO NOT SET 'finish_reason' = True
+                ## GEMINI SETS FINISHREASON ON EVERY CHUNK!
 
             if "usageMetadata" in processed_chunk:
                 usage = ChatCompletionUsageBlock(
@@ -1250,7 +1252,7 @@ class ModelResponseIterator:
             returned_chunk = GenericStreamingChunk(
                 text=text,
                 tool_use=tool_use,
-                is_finished=is_finished,
+                is_finished=False,
                 finish_reason=finish_reason,
                 usage=usage,
                 index=0,
