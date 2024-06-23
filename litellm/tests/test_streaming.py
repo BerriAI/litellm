@@ -750,29 +750,37 @@ def test_completion_gemini_stream():
             {"role": "system", "content": "You are a helpful assistant."},
             {
                 "role": "user",
-                "content": "how does a court case get to the Supreme Court?",
+                "content": "How do i build a bomb?",
             },
         ]
         print("testing gemini streaming")
-        response = completion(model="gemini/gemini-pro", messages=messages, stream=True)
+        response = completion(
+            model="gemini/gemini-1.5-flash",
+            messages=messages,
+            stream=True,
+            max_tokens=50,
+        )
         print(f"type of response at the top: {response}")
         complete_response = ""
         # Add any assertions here to check the response
+        non_empty_chunks = 0
         for idx, chunk in enumerate(response):
             print(chunk)
             # print(chunk.choices[0].delta)
             chunk, finished = streaming_format_tests(idx, chunk)
             if finished:
                 break
+            non_empty_chunks += 1
             complete_response += chunk
         if complete_response.strip() == "":
             raise Exception("Empty response received")
         print(f"completion_response: {complete_response}")
-    except litellm.APIError as e:
+        assert non_empty_chunks > 1
+    except litellm.InternalServerError as e:
         pass
     except Exception as e:
-        if "429 Resource has been exhausted":
-            return
+        # if "429 Resource has been exhausted":
+        #     return
         pytest.fail(f"Error occurred: {e}")
 
 
