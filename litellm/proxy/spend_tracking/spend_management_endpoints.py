@@ -1,13 +1,14 @@
 #### SPEND MANAGEMENT #####
-from typing import Optional, List
+from datetime import datetime, timedelta, timezone
+from typing import List, Optional
+
+import fastapi
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+
 import litellm
 from litellm._logging import verbose_proxy_logger
-from datetime import datetime, timedelta, timezone
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-import fastapi
-from fastapi import Depends, Request, APIRouter, Header, status
-from fastapi import HTTPException
 from litellm.proxy._types import *
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 router = APIRouter()
 
@@ -227,7 +228,7 @@ async def get_global_activity(
     start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
     end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
 
-    from litellm.proxy.proxy_server import prisma_client, llm_router
+    from litellm.proxy.proxy_server import llm_router, prisma_client
 
     try:
         if prisma_client is None:
@@ -355,7 +356,7 @@ async def get_global_activity_model(
     start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
     end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
 
-    from litellm.proxy.proxy_server import prisma_client, llm_router, premium_user
+    from litellm.proxy.proxy_server import llm_router, premium_user, prisma_client
 
     try:
         if prisma_client is None:
@@ -500,7 +501,7 @@ async def get_global_activity_exceptions_per_deployment(
     start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
     end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
 
-    from litellm.proxy.proxy_server import prisma_client, llm_router, premium_user
+    from litellm.proxy.proxy_server import llm_router, premium_user, prisma_client
 
     try:
         if prisma_client is None:
@@ -634,7 +635,7 @@ async def get_global_activity_exceptions(
     start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
     end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
 
-    from litellm.proxy.proxy_server import prisma_client, llm_router
+    from litellm.proxy.proxy_server import llm_router, prisma_client
 
     try:
         if prisma_client is None:
@@ -739,7 +740,7 @@ async def get_global_spend_provider(
     start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
     end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
 
-    from litellm.proxy.proxy_server import prisma_client, llm_router
+    from litellm.proxy.proxy_server import llm_router, prisma_client
 
     try:
         if prisma_client is None:
@@ -1091,7 +1092,6 @@ async def global_view_spend_tags(
     """
 
     from enterprise.utils import ui_get_spend_by_tags
-
     from litellm.proxy.proxy_server import prisma_client
 
     try:

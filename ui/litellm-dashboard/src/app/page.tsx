@@ -19,6 +19,15 @@ import CacheDashboard from "@/components/cache_dashboard";
 import { jwtDecode } from "jwt-decode";
 import { Typography } from "antd";
 
+function getCookie(name: string) {
+  console.log("COOKIES", document.cookie)
+  const cookieValue = document.cookie
+      .split('; ')
+      .find(row => row.startsWith(name + '='));
+  return cookieValue ? cookieValue.split('=')[1] : null;
+}
+
+
 function formatUserRole(userRole: string) {
   if (!userRole) {
     return "Undefined Role";
@@ -68,7 +77,7 @@ const CreateKeyPage = () => {
   const searchParams = useSearchParams();
   const [modelData, setModelData] = useState<any>({ data: [] });
   const userID = searchParams.get("userID");
-  const token = searchParams.get("token");
+  const token = getCookie('token');
 
   const [page, setPage] = useState("api-keys");
   const [accessToken, setAccessToken] = useState<string | null>(null);
