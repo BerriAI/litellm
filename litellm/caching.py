@@ -64,7 +64,7 @@ class BaseCache:
 
 
 class InMemoryCache(BaseCache):
-    def __init__(self, default_ttl: Optional[float] = 60.0):
+    def __init__(self, default_ttl: Optional[float] = 120.0):
         """
         default_ttl [float]: If default_ttl is 6 seconds, every 6 seconds the cache will be set to {}
         this is done to prevent overuse of System RAM
@@ -72,7 +72,7 @@ class InMemoryCache(BaseCache):
         # if users don't provider one, use the default litellm cache
         self.cache_dict: dict = {}
         self.ttl_dict: dict = {}
-        self.default_ttl = default_ttl or 60.0
+        self.default_ttl = default_ttl or 120.0
         self.last_cleaned = 0  # since this is in memory we need to periodically clean it up to not overuse the machines RAM
 
     def set_cache(self, key, value, **kwargs):
