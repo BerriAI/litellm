@@ -433,6 +433,7 @@ def get_custom_headers(
     version: Optional[str] = None,
     model_region: Optional[str] = None,
     fastest_response_batch_completion: Optional[bool] = None,
+    **kwargs,
 ) -> dict:
     exclude_values = {"", None}
     headers = {
@@ -448,6 +449,7 @@ def get_custom_headers(
             if fastest_response_batch_completion is not None
             else None
         ),
+        **{k: str(v) for k, v in kwargs.items()},
     }
     try:
         return {
@@ -2644,7 +2646,9 @@ async def startup_event():
         redis_cache=redis_usage_cache
     )  # used by parallel request limiter for rate limiting keys across instances
 
-    proxy_logging_obj._init_litellm_callbacks()  # INITIALIZE LITELLM CALLBACKS ON SERVER STARTUP <- do this to catch any logging errors on startup, not when calls are being made
+    proxy_logging_obj._init_litellm_callbacks(
+        llm_router=llm_router
+    )  # INITIALIZE LITELLM CALLBACKS ON SERVER STARTUP <- do this to catch any logging errors on startup, not when calls are being made
 
     if "daily_reports" in proxy_logging_obj.slack_alerting_instance.alert_types:
         asyncio.create_task(
@@ -3061,6 +3065,14 @@ async def chat_completion(
                 headers=custom_headers,
             )
 
+        ### CALL HOOKS ### - modify outgoing data
+        response = await proxy_logging_obj.post_call_success_hook(
+            user_api_key_dict=user_api_key_dict, response=response
+        )
+
+        hidden_params = getattr(response, "_hidden_params", {}) or {}
+        additional_headers: dict = hidden_params.get("additional_headers", {}) or {}
+
         fastapi_response.headers.update(
             get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
@@ -3070,12 +3082,8 @@ async def chat_completion(
                 version=version,
                 model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
                 fastest_response_batch_completion=fastest_response_batch_completion,
+                **additional_headers,
             )
-        )
-
-        ### CALL HOOKS ### - modify outgoing data
-        response = await proxy_logging_obj.post_call_success_hook(
-            user_api_key_dict=user_api_key_dict, response=response
         )
 
         return response
@@ -3116,11 +3124,10 @@ async def chat_completion(
     except Exception as e:
         data["litellm_status"] = "fail"  # used for alerting
         verbose_proxy_logger.error(
-            "litellm.proxy.proxy_server.chat_completion(): Exception occured - {}".format(
-                get_error_message_str(e=e)
+            "litellm.proxy.proxy_server.chat_completion(): Exception occured - {}\n{}".format(
+                get_error_message_str(e=e), traceback.format_exc()
             )
         )
-        verbose_proxy_logger.debug(traceback.format_exc())
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
