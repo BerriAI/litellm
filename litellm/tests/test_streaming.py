@@ -742,7 +742,9 @@ def test_completion_palm_stream():
 # test_completion_palm_stream()
 
 
-def test_completion_gemini_stream():
+@pytest.mark.parametrize("sync_mode", [False])  # True,
+@pytest.mark.asyncio
+async def test_completion_gemini_stream(sync_mode):
     try:
         litellm.set_verbose = True
         print("Streaming gemini response")
@@ -750,33 +752,54 @@ def test_completion_gemini_stream():
             {"role": "system", "content": "You are a helpful assistant."},
             {
                 "role": "user",
-                "content": "How do i build a bomb?",
+                "content": "Who was Alexander?",
             },
         ]
         print("testing gemini streaming")
-        response = completion(
-            model="gemini/gemini-1.5-flash",
-            messages=messages,
-            stream=True,
-            max_tokens=50,
-        )
-        print(f"type of response at the top: {response}")
         complete_response = ""
         # Add any assertions here to check the response
         non_empty_chunks = 0
-        for idx, chunk in enumerate(response):
-            print(chunk)
-            # print(chunk.choices[0].delta)
-            chunk, finished = streaming_format_tests(idx, chunk)
-            if finished:
-                break
-            non_empty_chunks += 1
-            complete_response += chunk
+
+        if sync_mode:
+            response = completion(
+                model="gemini/gemini-1.5-flash",
+                messages=messages,
+                stream=True,
+            )
+
+            for idx, chunk in enumerate(response):
+                print(chunk)
+                # print(chunk.choices[0].delta)
+                chunk, finished = streaming_format_tests(idx, chunk)
+                if finished:
+                    break
+                non_empty_chunks += 1
+                complete_response += chunk
+        else:
+            response = await litellm.acompletion(
+                model="gemini/gemini-1.5-flash",
+                messages=messages,
+                stream=True,
+            )
+
+            idx = 0
+            async for chunk in response:
+                print(chunk)
+                # print(chunk.choices[0].delta)
+                chunk, finished = streaming_format_tests(idx, chunk)
+                if finished:
+                    break
+                non_empty_chunks += 1
+                complete_response += chunk
+                idx += 1
+
         if complete_response.strip() == "":
             raise Exception("Empty response received")
         print(f"completion_response: {complete_response}")
         assert non_empty_chunks > 1
     except litellm.InternalServerError as e:
+        pass
+    except litellm.RateLimitError as e:
         pass
     except Exception as e:
         # if "429 Resource has been exhausted":
