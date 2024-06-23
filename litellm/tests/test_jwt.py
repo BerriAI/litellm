@@ -135,7 +135,6 @@ async def test_valid_invalid_token(audience):
     public_jwk = json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(public_key_obj))
 
     assert isinstance(public_jwk, dict)
-
     # set cache
     cache = DualCache()
 

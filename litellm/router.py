@@ -856,6 +856,7 @@ class Router:
             try:
                 return await self.acompletion(model=model, messages=messages, **kwargs)
             except Exception as e:
+
                 return e
 
         _tasks = []
