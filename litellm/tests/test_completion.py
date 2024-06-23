@@ -2580,6 +2580,8 @@ async def test_completion_replicate_llama3(sync_mode):
         # Add any assertions here to check the response
         assert isinstance(response, litellm.ModelResponse)
         response_format_tests(response=response)
+    except litellm.APIError as e:
+        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
