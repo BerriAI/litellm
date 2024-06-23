@@ -443,6 +443,8 @@ class ModelGroupInfo(BaseModel):
             "chat", "embedding", "completion", "image_generation", "audio_transcription"
         ]
     ] = Field(default="chat")
+    tpm: Optional[int] = None
+    rpm: Optional[int] = None
     supports_parallel_function_calling: bool = Field(default=False)
     supports_vision: bool = Field(default=False)
     supports_function_calling: bool = Field(default=False)

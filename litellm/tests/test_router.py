@@ -1730,3 +1730,99 @@ async def test_router_text_completion_client():
         print(responses)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.fixture
+def mock_response() -> litellm.ModelResponse:
+    return litellm.ModelResponse(
+        **{
+            "id": "chatcmpl-abc123",
+            "object": "chat.completion",
+            "created": 1699896916,
+            "model": "gpt-3.5-turbo-0125",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "call_abc123",
+                                "type": "function",
+                                "function": {
+                                    "name": "get_current_weather",
+                                    "arguments": '{\n"location": "Boston, MA"\n}',
+                                },
+                            }
+                        ],
+                    },
+                    "logprobs": None,
+                    "finish_reason": "tool_calls",
+                }
+            ],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 5, "total_tokens": 10},
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_router_model_usage(mock_response):
+    """
+    Test if tracking used model tpm works as expected
+    """
+    model = "my-fake-model"
+    model_tpm = 100
+    setattr(
+        mock_response,
+        "usage",
+        litellm.Usage(prompt_tokens=5, completion_tokens=5, total_tokens=10),
+    )
+
+    print(f"mock_response: {mock_response}")
+    model_tpm = 100
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": model,
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "my-key",
+                    "api_base": "my-base",
+                    "tpm": model_tpm,
+                    "mock_response": mock_response,
+                },
+            }
+        ]
+    )
+
+    allowed_fails = 1  # allow for changing b/w minutes
+
+    for _ in range(2):
+        try:
+            _ = await llm_router.acompletion(
+                model=model, messages=[{"role": "user", "content": "Hey!"}]
+            )
+            await asyncio.sleep(3)
+
+            initial_usage = await llm_router.get_model_group_usage(model_group=model)
+
+            # completion call - 10 tokens
+            _ = await llm_router.acompletion(
+                model=model, messages=[{"role": "user", "content": "Hey!"}]
+            )
+
+            await asyncio.sleep(3)
+            updated_usage = await llm_router.get_model_group_usage(model_group=model)
+
+            assert updated_usage == initial_usage + 10  # type: ignore
+            break
+        except Exception as e:
+            if allowed_fails > 0:
+                print(
+                    f"Decrementing allowed_fails: {allowed_fails}.\nReceived error - {str(e)}"
+                )
+                allowed_fails -= 1
+            else:
+                print(f"allowed_fails: {allowed_fails}")
+                raise e
