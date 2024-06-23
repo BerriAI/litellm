@@ -39,8 +39,9 @@ def redact_message_input_output_from_logging(
     request_headers = _request_headers.get("headers", {})
 
     # check if user opted out of logging message/response to callbacks
-    if litellm.turn_off_message_logging is not True and request_headers.get(
-        "litellm-enable-message-redaction", False
+    if (
+        litellm.turn_off_message_logging is not True
+        and request_headers.get("litellm-enable-message-redaction", False) is not True
     ):
         return result
 
