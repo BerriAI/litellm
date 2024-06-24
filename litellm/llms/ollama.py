@@ -126,7 +126,7 @@ class OllamaConfig:
             )
             and v is not None
         }
-    
+
     def get_required_params(self) -> List[ProviderField]:
         """For a given provider, return it's required fields with a description"""
         return [
@@ -451,7 +451,7 @@ async def ollama_acompletion(url, data, model_response, encoding, logging_obj):
                         {
                             "id": f"call_{str(uuid.uuid4())}",
                             "function": {
-                                "name": function_call["name"],
+                                "name": function_call.get("name", function_call.get("function", None)),
                                 "arguments": json.dumps(function_call["arguments"]),
                             },
                             "type": "function",
