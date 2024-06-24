@@ -302,7 +302,7 @@ def completion(
                     "complete_input_dict": optional_params,
                 },
             )
-            response = vertex_ai_client.messages.create(**data, stream=True)  # type: ignore
+            response = vertex_ai_client.messages.create(**strip_message_args(data), stream=True)  # type: ignore
             return response
 
         ## LOGGING
@@ -314,7 +314,7 @@ def completion(
             },
         )
 
-        message = vertex_ai_client.messages.create(**data)  # type: ignore
+        message = vertex_ai_client.messages.create(**strip_message_args(data))  # type: ignore
         text_content = message.content[0].text
         ## TOOL CALLING - OUTPUT PARSE
         if text_content is not None and contains_tag("invoke", text_content):
@@ -389,7 +389,7 @@ async def async_completion(
             "complete_input_dict": optional_params,
         },
     )
-    message = await vertex_ai_client.messages.create(**data)  # type: ignore
+    message = await vertex_ai_client.messages.create(**strip_message_args(data))  # type: ignore
     text_content = message.content[0].text
     ## TOOL CALLING - OUTPUT PARSE
     if text_content is not None and contains_tag("invoke", text_content):
@@ -460,7 +460,7 @@ async def async_streaming(
             "complete_input_dict": optional_params,
         },
     )
-    response = await vertex_ai_client.messages.create(**data, stream=True)  # type: ignore
+    response = await vertex_ai_client.messages.create(**strip_message_args(data), stream=True)  # type: ignore
     logging_obj.post_call(input=messages, api_key=None, original_response=response)
 
     streamwrapper = CustomStreamWrapper(
@@ -471,3 +471,8 @@ async def async_streaming(
     )
 
     return streamwrapper
+
+
+def strip_message_args(data: dict):
+    supported_param = litellm.AnthropicConfig().get_supported_openai_params()
+    return {k: v for k, v in data.items() if k in supported_param}
