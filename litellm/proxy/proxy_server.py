@@ -7502,12 +7502,6 @@ async def login(request: Request):
             litellm_dashboard_ui += "/ui/"
         import jwt
 
-        if litellm_master_key_hash is None:
-            raise HTTPException(
-                status_code=500,
-                detail={"error": "No master key set, please set LITELLM_MASTER_KEY"},
-            )
-
         jwt_token = jwt.encode(
             {
                 "user_id": user_id,
@@ -7517,7 +7511,7 @@ async def login(request: Request):
                 "login_method": "username_password",
                 "premium_user": premium_user,
             },
-            litellm_master_key_hash,
+            master_key,
             algorithm="HS256",
         )
         litellm_dashboard_ui += "?userID=" + user_id
@@ -7572,14 +7566,6 @@ async def login(request: Request):
                 litellm_dashboard_ui += "/ui/"
             import jwt
 
-            if litellm_master_key_hash is None:
-                raise HTTPException(
-                    status_code=500,
-                    detail={
-                        "error": "No master key set, please set LITELLM_MASTER_KEY"
-                    },
-                )
-
             jwt_token = jwt.encode(
                 {
                     "user_id": user_id,
@@ -7589,7 +7575,7 @@ async def login(request: Request):
                     "login_method": "username_password",
                     "premium_user": premium_user,
                 },
-                litellm_master_key_hash,
+                master_key,
                 algorithm="HS256",
             )
             litellm_dashboard_ui += "?userID=" + user_id
@@ -7636,7 +7622,14 @@ async def onboarding(invite_link: str):
     - Get user from db
     - Pass in user_email if set
     """
-    global prisma_client
+    global prisma_client, master_key
+    if master_key is None:
+        raise ProxyException(
+            message="Master Key not set for Proxy. Please set Master Key to use Admin UI. Set `LITELLM_MASTER_KEY` in .env or set general_settings:master_key in config.yaml.  https://docs.litellm.ai/docs/proxy/virtual_keys. If set, use `--detailed_debug` to debug issue.",
+            type="auth_error",
+            param="master_key",
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
     ### VALIDATE INVITE LINK ###
     if prisma_client is None:
         raise HTTPException(
@@ -7708,12 +7701,6 @@ async def onboarding(invite_link: str):
         litellm_dashboard_ui += "/ui/onboarding"
     import jwt
 
-    if litellm_master_key_hash is None:
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "No master key set, please set LITELLM_MASTER_KEY"},
-        )
-
     jwt_token = jwt.encode(
         {
             "user_id": user_obj.user_id,
@@ -7723,7 +7710,7 @@ async def onboarding(invite_link: str):
             "login_method": "username_password",
             "premium_user": premium_user,
         },
-        litellm_master_key_hash,
+        master_key,
         algorithm="HS256",
     )
 
@@ -7856,11 +7843,18 @@ def get_image():
 @app.get("/sso/callback", tags=["experimental"], include_in_schema=False)
 async def auth_callback(request: Request):
     """Verify login"""
-    global general_settings, ui_access_mode, premium_user
+    global general_settings, ui_access_mode, premium_user, master_key
     microsoft_client_id = os.getenv("MICROSOFT_CLIENT_ID", None)
     google_client_id = os.getenv("GOOGLE_CLIENT_ID", None)
     generic_client_id = os.getenv("GENERIC_CLIENT_ID", None)
     # get url from request
+    if master_key is None:
+        raise ProxyException(
+            message="Master Key not set for Proxy. Please set Master Key to use Admin UI. Set `LITELLM_MASTER_KEY` in .env or set general_settings:master_key in config.yaml.  https://docs.litellm.ai/docs/proxy/virtual_keys. If set, use `--detailed_debug` to debug issue.",
+            type="auth_error",
+            param="master_key",
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
     redirect_url = os.getenv("PROXY_BASE_URL", str(request.base_url))
     if redirect_url.endswith("/"):
         redirect_url += "sso/callback"
@@ -8134,12 +8128,6 @@ async def auth_callback(request: Request):
 
     import jwt
 
-    if litellm_master_key_hash is None:
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "No master key set, please set LITELLM_MASTER_KEY"},
-        )
-
     jwt_token = jwt.encode(
         {
             "user_id": user_id,
@@ -8149,7 +8137,7 @@ async def auth_callback(request: Request):
             "login_method": "sso",
             "premium_user": premium_user,
         },
-        litellm_master_key_hash,
+        master_key,
         algorithm="HS256",
     )
     litellm_dashboard_ui += "?userID=" + user_id
