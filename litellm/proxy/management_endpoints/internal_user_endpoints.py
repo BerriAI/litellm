@@ -9,25 +9,26 @@ These are members of a Team on LiteLLM
 /user/delete
 """
 
+import asyncio
 import copy
 import json
-import uuid
 import re
-import traceback
-import asyncio
 import secrets
-from typing import Optional, List
-import fastapi
-from fastapi import Depends, Request, APIRouter, Header, status
-from fastapi import HTTPException
-import litellm
+import traceback
+import uuid
 from datetime import datetime, timedelta, timezone
+from typing import List, Optional
+
+import fastapi
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+
+import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     generate_key_helper_fn,
 )
-from litellm.proxy._types import *
 
 router = APIRouter()
 
@@ -55,6 +56,7 @@ async def new_user(data: NewUserRequest):
     - send_invite_email: Optional[bool] - Specify if an invite email should be sent.
     - user_role: Optional[str] - Specify a user role - "proxy_admin", "proxy_admin_viewer", "internal_user", "internal_user_viewer", "team", "customer". Info about each role here: `https://github.com/BerriAI/litellm/litellm/proxy/_types.py#L20`
     - max_budget: Optional[float] - Specify max budget for a given user.
+    - budget_duration: Optional[str] - Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
     - models: Optional[list] - Model_name's a user is allowed to call. (if empty, key is allowed to call all models)
     - tpm_limit: Optional[int] - Specify tpm limit for a given user (Tokens per minute)
     - rpm_limit: Optional[int] - Specify rpm limit for a given user (Requests per minute)
@@ -280,9 +282,9 @@ async def user_info(
     ```
     """
     from litellm.proxy.proxy_server import (
-        prisma_client,
         general_settings,
         litellm_master_key_hash,
+        prisma_client,
     )
 
     try:
@@ -674,3 +676,36 @@ async def get_users(
     )
 
     return all_users
+
+
+@router.post(
+    "/user/delete",
+    tags=["Internal User management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def delete_user(
+    data: DeleteUserRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    litellm_changed_by: Optional[str] = Header(
+        None,
+        description="The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
+    ),
+):
+    """
+    delete user and associated user keys
+
+    ```
+    curl --location 'http://0.0.0.0:8000/team/delete' \
+
+    --header 'Authorization: Bearer sk-1234' \
+
+    --header 'Content-Type: application/json' \
+
+    --data-raw '{
+        "user_ids": ["45e3e396-ee08-4a61-a88e-16b3ce7e0849"]
+    }'
+    ```
+
+    Parameters:
+    - user_ids: List[str] - The list of user id's to be deleted.
+    """
