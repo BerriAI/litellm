@@ -108,6 +108,7 @@ class LunaryLogger:
         try:
             print_verbose(f"Lunary Logging - Logging request for model {model}")
 
+            template_id = None
             litellm_params = kwargs.get("litellm_params", {})
             optional_params = kwargs.get("optional_params", {})
             metadata = litellm_params.get("metadata", {}) or {}
