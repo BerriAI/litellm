@@ -6068,6 +6068,14 @@ def exception_type(
                             model=model,
                             llm_provider="replicate",
                         )
+                    elif original_exception.status_code == 422:
+                        exception_mapping_worked = True
+                        raise UnprocessableEntityError(
+                            message=f"ReplicateException - {original_exception.message}",
+                            llm_provider="replicate",
+                            model=model,
+                            response=original_exception.response,
+                        )
                     elif original_exception.status_code == 429:
                         exception_mapping_worked = True
                         raise RateLimitError(
