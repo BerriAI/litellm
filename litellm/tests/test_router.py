@@ -755,6 +755,7 @@ def test_router_context_window_check_pre_call_check_in_group():
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
                     "base_model": "azure/gpt-35-turbo",
+                    "mock_response": "Hello world 1!",
                 },
             },
             {
@@ -762,6 +763,7 @@ def test_router_context_window_check_pre_call_check_in_group():
                 "litellm_params": {  # params for litellm completion/embedding call
                     "model": "gpt-3.5-turbo-1106",
                     "api_key": os.getenv("OPENAI_API_KEY"),
+                    "mock_response": "Hello world 2!",
                 },
             },
         ]
@@ -777,6 +779,9 @@ def test_router_context_window_check_pre_call_check_in_group():
         )
 
         print(f"response: {response}")
+
+        assert response.choices[0].message.content == "Hello world 2!"
+        assert False
     except Exception as e:
         pytest.fail(f"Got unexpected exception on router! - {str(e)}")
 
