@@ -1,6 +1,4 @@
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._types import LiteLLMRoutes
-from litellm.proxy.proxy_server import general_settings, premium_user
 
 
 def route_in_additonal_public_routes(current_route: str):
@@ -25,6 +23,9 @@ def route_in_additonal_public_routes(current_route: str):
     """
 
     # check if user is premium_user - if not do nothing
+    from litellm.proxy._types import LiteLLMRoutes
+    from litellm.proxy.proxy_server import general_settings, premium_user
+
     try:
         if premium_user is not True:
             return False
