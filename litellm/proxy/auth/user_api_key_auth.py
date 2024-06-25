@@ -56,6 +56,7 @@ from litellm.proxy.auth.auth_checks import (
     get_user_object,
     log_to_opentelemetry,
 )
+from litellm.proxy.auth.auth_utils import route_in_additonal_public_routes
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.proxy.utils import _to_ns
 
@@ -137,8 +138,9 @@ async def user_api_key_auth(
         """
         route: str = request.url.path
 
-        if route in LiteLLMRoutes.public_routes.value or route in general_settings.get(
-            "public_routes", []
+        if (
+            route in LiteLLMRoutes.public_routes.value
+            or route_in_additonal_public_routes(current_route=route)
         ):
             # check if public endpoint
             return UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY)
