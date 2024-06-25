@@ -65,16 +65,13 @@ class BaseCache:
 
 
 class InMemoryCache(BaseCache):
-    def __init__(self, default_ttl: Optional[float] = 120.0):
+    def __init__(self, max_size_in_memory: Optional[int] = 200):
         """
-        default_ttl [float]: If default_ttl is 6 seconds, every 6 seconds the cache will be set to {}
-        this is done to prevent overuse of System RAM
+        max_size_in_memory [int]: Maximum number of items in cache. done to prevent memory leaks. Use 200 items as a default
         """
-        # if users don't provider one, use the default litellm cache
-        max_size_in_memory = 1000
-        self.cache_dict: LRUCache = LRUCache(maxsize=max_size_in_memory)
-        self.ttl_dict: LRUCache = LRUCache(maxsize=max_size_in_memory)
-        self.default_ttl = default_ttl or 120.0
+        self.max_size_in_memory = max_size_in_memory or 200
+        self.cache_dict: LRUCache = LRUCache(maxsize=self.max_size_in_memory)
+        self.ttl_dict: LRUCache = LRUCache(maxsize=self.max_size_in_memory)
 
     def set_cache(self, key, value, **kwargs):
         print_verbose("InMemoryCache: set_cache")
