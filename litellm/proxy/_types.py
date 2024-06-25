@@ -1627,3 +1627,9 @@ class CommonProxyErrors(enum.Enum):
     no_llm_router = "No models configured on proxy"
     not_allowed_access = "Admin-only endpoint. Not allowed to access this."
     not_premium_user = "You must be a LiteLLM Enterprise user to use this feature. If you have a license please set `LITELLM_LICENSE` in your env. If you want to obtain a license meet with us here: https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat"
+
+
+class SpendCalculateRequest(LiteLLMBase):
+    model: Optional[str] = None
+    messages: Optional[List] = None
+    completion_response: Optional[dict] = None
