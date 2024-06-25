@@ -1997,6 +1997,14 @@ def get_custom_logger_compatible_class(
         for callback in _in_memory_loggers:
             if isinstance(callback, OpenTelemetry):
                 return callback  # type: ignore
+    elif logging_integration == "stripe":
+        if "STRIPE_SECRET_KEY" not in os.environ:
+            raise ValueError("STRIPE_SECRET_KEY not found in environment variables")
+        from litellm.integrations.stripe import StripeLogger
+
+        for callback in _in_memory_loggers:
+            if isinstance(callback, StripeLogger):
+                return callback  # type: ignore
 
     elif logging_integration == "dynamic_rate_limiter":
         from litellm.proxy.hooks.dynamic_rate_limiter import (
