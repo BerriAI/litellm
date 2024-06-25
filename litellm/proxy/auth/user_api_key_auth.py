@@ -137,7 +137,9 @@ async def user_api_key_auth(
         """
         route: str = request.url.path
 
-        if route in LiteLLMRoutes.public_routes.value:
+        if route in LiteLLMRoutes.public_routes.value or route in general_settings.get(
+            "public_routes", []
+        ):
             # check if public endpoint
             return UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY)
 
