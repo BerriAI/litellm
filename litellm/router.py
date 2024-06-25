@@ -2117,6 +2117,12 @@ class Router:
         If it fails after num_retries, fall back to another model group
         """
         mock_testing_fallbacks = kwargs.pop("mock_testing_fallbacks", None)
+        mock_testing_context_fallbacks = kwargs.pop(
+            "mock_testing_context_fallbacks", None
+        )
+        mock_testing_content_policy_fallbacks = kwargs.pop(
+            "mock_testing_content_policy_fallbacks", None
+        )
         model_group = kwargs.get("model")
         fallbacks = kwargs.get("fallbacks", self.fallbacks)
         context_window_fallbacks = kwargs.get(
@@ -2129,6 +2135,26 @@ class Router:
             if mock_testing_fallbacks is not None and mock_testing_fallbacks is True:
                 raise Exception(
                     f"This is a mock exception for model={model_group}, to trigger a fallback. Fallbacks={fallbacks}"
+                )
+            elif (
+                mock_testing_context_fallbacks is not None
+                and mock_testing_context_fallbacks is True
+            ):
+                raise litellm.ContextWindowExceededError(
+                    model=model_group,
+                    llm_provider="",
+                    message=f"This is a mock exception for model={model_group}, to trigger a fallback. \
+                        Context_Window_Fallbacks={context_window_fallbacks}",
+                )
+            elif (
+                mock_testing_content_policy_fallbacks is not None
+                and mock_testing_content_policy_fallbacks is True
+            ):
+                raise litellm.ContentPolicyViolationError(
+                    model=model_group,
+                    llm_provider="",
+                    message=f"This is a mock exception for model={model_group}, to trigger a fallback. \
+                        Context_Policy_Fallbacks={content_policy_fallbacks}",
                 )
 
             response = await self.async_function_with_retries(*args, **kwargs)
