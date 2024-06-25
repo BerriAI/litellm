@@ -73,3 +73,22 @@ def test_mock_request_n_greater_than_1():
 
     except:
         traceback.print_exc()
+
+
+@pytest.mark.asyncio()
+async def test_async_mock_streaming_request_n_greater_than_1():
+    generator = await litellm.acompletion(
+        messages=[{"role": "user", "content": "Why is LiteLLM amazing?"}],
+        mock_response="LiteLLM is awesome",
+        stream=True,
+        model="gpt-3.5-turbo",
+        n=5,
+    )
+    complete_response = ""
+    async for chunk in generator:
+        print(chunk)
+        # complete_response += chunk["choices"][0]["delta"]["content"] or ""
+
+    # assert (
+    #     complete_response == "LiteLLM is awesome"
+    # ), f"Unexpected response got {complete_response}"
