@@ -63,7 +63,7 @@ class _ENTERPRISE_SecretDetection(CustomLogger):
         return detected_secrets
 
     #### CALL HOOKS - proxy only ####
-    def async_pre_call_hook(
+    async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
