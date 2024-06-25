@@ -20,7 +20,7 @@ import os
 
 os.environ['NVIDIA_NIM_API_KEY'] = ""
 response = completion(
-    model=model_name,
+    model="nvidia_nim/meta/llama3-70b-instruct",
     messages=[
         {
             "role": "user",
@@ -44,7 +44,7 @@ import os
 
 os.environ['NVIDIA_NIM_API_KEY'] = ""
 response = completion(
-    model=model_name,
+    model="nvidia_nim/meta/llama3-70b-instruct",
     messages=[
         {
             "role": "user",
