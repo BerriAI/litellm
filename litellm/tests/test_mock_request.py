@@ -58,3 +58,18 @@ async def test_async_mock_streaming_request():
     assert (
         complete_response == "LiteLLM is awesome"
     ), f"Unexpected response got {complete_response}"
+
+
+def test_mock_request_n_greater_than_1():
+    try:
+        model = "gpt-3.5-turbo"
+        messages = [{"role": "user", "content": "Hey, I'm a mock request"}]
+        response = litellm.mock_completion(model=model, messages=messages, n=5)
+        print("response: ", response)
+
+        assert len(response.choices) == 5
+        for choice in response.choices:
+            assert choice.message.content == "This is a mock request"
+
+    except:
+        traceback.print_exc()
