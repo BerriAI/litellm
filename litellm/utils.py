@@ -2609,7 +2609,15 @@ def get_optional_params(
             optional_params["top_p"] = top_p
         if stop is not None:
             optional_params["stop_sequences"] = stop
-    elif custom_llm_provider == "huggingface" or custom_llm_provider == "predibase":
+    elif custom_llm_provider == "predibase":
+        supported_params = get_supported_openai_params(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+        _check_valid_arg(supported_params=supported_params)
+        optional_params = litellm.PredibaseConfig().map_openai_params(
+            non_default_params=non_default_params, optional_params=optional_params
+        )
+    elif custom_llm_provider == "huggingface":
         ## check if unsupported param passed in
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider
