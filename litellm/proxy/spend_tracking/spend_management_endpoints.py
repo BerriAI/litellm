@@ -1298,9 +1298,14 @@ async def calculate_spend(request: SpendCalculateRequest):
                 )
             else:
                 _cost = completion_cost(model=request.model, messages=request.messages)
-        else:
-            _completion_response = litellm.ModelResponse(request.completion_response)
+        elif request.completion_response is not None:
+            _completion_response = litellm.ModelResponse(**request.completion_response)
             _cost = completion_cost(completion_response=_completion_response)
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Bad Request - Either 'model' or 'completion_response' must be provided",
+            )
         return {"cost": _cost}
     except Exception as e:
         if isinstance(e, HTTPException):
