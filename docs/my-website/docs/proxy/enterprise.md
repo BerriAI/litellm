@@ -14,6 +14,7 @@ Features:
 - ✅ [SSO for Admin UI](./ui.md#✨-enterprise-features)
 - ✅ [Audit Logs](#audit-logs)
 - ✅ [Tracking Spend for Custom Tags](#tracking-spend-for-custom-tags)
+- ✅ [Control available public, private routes](#control-available-public-private-routes)
 - ✅ [Enforce Required Params for LLM Requests (ex. Reject requests missing ["metadata"]["generation_name"])](#enforce-required-params-for-llm-requests)
 - ✅ [Content Moderation with LLM Guard, LlamaGuard, Google Text Moderations](#content-moderation)
 - ✅ [Prompt Injection Detection (with LakeraAI API)](#prompt-injection-detection---lakeraai)
@@ -447,6 +448,48 @@ Expected Response
 </Tabs>
 
 
+
+## Control available public, private routes
+
+:::info
+
+❓ Use this when you want to make an existing private route -> public
+
+Example - Make `/spend/calculate` a publicly available route (by default `/spend/calculate` on LiteLLM Proxy requires authentication)
+
+:::
+
+#### Usage - Define public routes
+
+**Step 1** - set allowed public routes on config.yaml 
+
+`LiteLLMRoutes.public_routes` is an ENUM corresponding to the default public routes on LiteLLM. [You can see this here](https://github.com/BerriAI/litellm/blob/main/litellm/proxy/_types.py)
+
+```yaml
+general_settings:
+  master_key: sk-1234
+  public_routes: ["LiteLLMRoutes.public_routes", "/spend/calculate"]
+```
+
+**Step 2** - start proxy 
+
+```shell
+litellm --config config.yaml
+```
+
+**Step 3** - Test it 
+
+```shell
+curl --request POST \
+  --url 'http://localhost:4000/spend/calculate' \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "model": "gpt-4",
+    "messages": [{"role": "user", "content": "Hey, how'\''s it going?"}]
+  }'
+```
+
+🎉 Expect this endpoint to work without an `Authorization / Bearer Token`
 
 
 
