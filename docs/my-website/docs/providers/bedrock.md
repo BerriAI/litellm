@@ -474,10 +474,9 @@ from litellm import completion
 response = completion(
             model="bedrock/anthropic.claude-instant-v1",
             messages=[{ "content": "Hello, how are you?","role": "user"}],
-            aws_region_name="",
             aws_access_key_id="",
             aws_secret_access_key="",
-            aws_session_token=None,
+            aws_region_name="",
 )
 ```
 
@@ -538,7 +537,6 @@ response = completion(
             aws_region_name=aws_region_name,
             aws_access_key_id=aws_access_key_id,
             aws_secret_access_key=aws_secret_access_key,
-            aws_session_token=aws_session_token,
             aws_role_name=aws_role_name,
             aws_session_name="my-test-session",
         )
@@ -553,7 +551,7 @@ This is a deprecated flow. Boto3 is not async. And boto3.client does not let us 
 
 
 Experimental - 2024-Jun-23:
-    `aws_access_key_id`, `aws_secret_access_key`, and `aws_session_token` will be extracted from boto3.client and be passed onto the httpx client 
+    `aws_access_key_id`, `aws_secret_access_key`, and `aws_session_token` will be extracted from boto3.client and be passed into the httpx client 
 
 :::
 
@@ -569,7 +567,7 @@ bedrock = boto3.client(
             region_name="us-east-1",
             aws_access_key_id="",
             aws_secret_access_key="",
-            aws_session_token=None,
+            aws_session_token="",
 )
 
 response = completion(
