@@ -2816,7 +2816,9 @@ class Router:
 
             exception_response = getattr(exception, "response", {})
             exception_headers = getattr(exception_response, "headers", None)
-            _time_to_cooldown = self.cooldown_time
+            _time_to_cooldown = kwargs.get("litellm_params", {}).get(
+                "cooldown_time", self.cooldown_time
+            )
 
             if exception_headers is not None:
 
