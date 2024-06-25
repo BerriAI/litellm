@@ -78,15 +78,15 @@ def common_checks(
                 f"Team={team_object.team_id} not allowed to call model={_model}. Allowed team models = {team_object.models}"
             )
     # 3. If team is in budget
-    if (
-        team_object is not None
-        and team_object.max_budget is not None
-        and team_object.spend is not None
-        and team_object.spend > team_object.max_budget
-    ):
-        raise Exception(
-            f"Team={team_object.team_id} over budget. Spend={team_object.spend}, Budget={team_object.max_budget}"
-        )
+    # if (
+    #     team_object is not None
+    #     and team_object.max_budget is not None
+    #     and team_object.spend is not None
+    #     and team_object.spend > team_object.max_budget
+    # ):
+    #     raise Exception(
+    #         f"Team={team_object.team_id} over budget. Spend={team_object.spend}, Budget={team_object.max_budget}"
+    #     )
     if user_object is not None and user_object.max_budget is not None:
         user_budget = user_object.max_budget
         if user_budget > user_object.spend:

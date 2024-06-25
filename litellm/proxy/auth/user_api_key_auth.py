@@ -456,7 +456,6 @@ async def user_api_key_auth(
             raise Exception("No connected db.")
 
         ## check for cache hit (In-Memory Cache)
-        original_api_key = api_key  # (Patch: For DynamoDB Backwards Compatibility)
         _user_role = None
         if api_key.startswith("sk-"):
             api_key = hash_token(token=api_key)
@@ -810,32 +809,32 @@ async def user_api_key_auth(
                         )
 
             # Check 6. Team spend is under Team budget
-            if (
-                hasattr(valid_token, "team_spend")
-                and valid_token.team_spend is not None
-                and hasattr(valid_token, "team_max_budget")
-                and valid_token.team_max_budget is not None
-            ):
-                call_info = CallInfo(
-                    token=valid_token.token,
-                    spend=valid_token.team_spend,
-                    max_budget=valid_token.team_max_budget,
-                    user_id=valid_token.user_id,
-                    team_id=valid_token.team_id,
-                    team_alias=valid_token.team_alias,
-                )
-                asyncio.create_task(
-                    proxy_logging_obj.budget_alerts(
-                        type="team_budget",
-                        user_info=call_info,
-                    )
-                )
+            # if (
+            #     hasattr(valid_token, "team_spend")
+            #     and valid_token.team_spend is not None
+            #     and hasattr(valid_token, "team_max_budget")
+            #     and valid_token.team_max_budget is not None
+            # ):
+            #     call_info = CallInfo(
+            #         token=valid_token.token,
+            #         spend=valid_token.team_spend,
+            #         max_budget=valid_token.team_max_budget,
+            #         user_id=valid_token.user_id,
+            #         team_id=valid_token.team_id,
+            #         team_alias=valid_token.team_alias,
+            #     )
+            #     asyncio.create_task(
+            #         proxy_logging_obj.budget_alerts(
+            #             type="team_budget",
+            #             user_info=call_info,
+            #         )
+            #     )
 
-                if valid_token.team_spend >= valid_token.team_max_budget:
-                    raise litellm.BudgetExceededError(
-                        current_cost=valid_token.team_spend,
-                        max_budget=valid_token.team_max_budget,
-                    )
+            # if valid_token.team_spend >= valid_token.team_max_budget:
+            #     raise litellm.BudgetExceededError(
+            #         current_cost=valid_token.team_spend,
+            #         max_budget=valid_token.team_max_budget,
+            #     )
 
             # Check 8: Additional Common Checks across jwt + key auth
             _team_obj = LiteLLM_TeamTable(
