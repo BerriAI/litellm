@@ -2175,73 +2175,93 @@ class Router:
                     )
                 ):  # don't retry a malformed request
                     raise e
-                if (
-                    isinstance(e, litellm.ContextWindowExceededError)
-                    and context_window_fallbacks is not None
-                ):
-                    fallback_model_group = None
-                    for (
-                        item
-                    ) in context_window_fallbacks:  # [{"gpt-3.5-turbo": ["gpt-4"]}]
-                        if list(item.keys())[0] == model_group:
-                            fallback_model_group = item[model_group]
-                            break
+                if isinstance(e, litellm.ContextWindowExceededError):
+                    if context_window_fallbacks is not None:
+                        fallback_model_group = None
+                        for (
+                            item
+                        ) in context_window_fallbacks:  # [{"gpt-3.5-turbo": ["gpt-4"]}]
+                            if list(item.keys())[0] == model_group:
+                                fallback_model_group = item[model_group]
+                                break
 
-                    if fallback_model_group is None:
-                        raise original_exception
+                        if fallback_model_group is None:
+                            raise original_exception
 
-                    for mg in fallback_model_group:
-                        """
-                        Iterate through the model groups and try calling that deployment
-                        """
-                        try:
-                            kwargs["model"] = mg
-                            kwargs.setdefault("metadata", {}).update(
-                                {"model_group": mg}
-                            )  # update model_group used, if fallbacks are done
-                            response = await self.async_function_with_retries(
-                                *args, **kwargs
+                        for mg in fallback_model_group:
+                            """
+                            Iterate through the model groups and try calling that deployment
+                            """
+                            try:
+                                kwargs["model"] = mg
+                                kwargs.setdefault("metadata", {}).update(
+                                    {"model_group": mg}
+                                )  # update model_group used, if fallbacks are done
+                                response = await self.async_function_with_retries(
+                                    *args, **kwargs
+                                )
+                                verbose_router_logger.info(
+                                    "Successful fallback b/w models."
+                                )
+                                return response
+                            except Exception as e:
+                                pass
+                    else:
+                        error_message = "model={}. context_window_fallbacks={}. fallbacks={}.\n\nSet 'context_window_fallback' - https://docs.litellm.ai/docs/routing#fallbacks".format(
+                            model_group, context_window_fallbacks, fallbacks
+                        )
+                        verbose_router_logger.info(
+                            msg="Got 'ContextWindowExceededError'. No context_window_fallback set. Defaulting \
+                            to fallbacks, if available.{}".format(
+                                error_message
                             )
-                            verbose_router_logger.info(
-                                "Successful fallback b/w models."
-                            )
-                            return response
-                        except Exception as e:
-                            pass
-                elif (
-                    isinstance(e, litellm.ContentPolicyViolationError)
-                    and content_policy_fallbacks is not None
-                ):
-                    fallback_model_group = None
-                    for (
-                        item
-                    ) in content_policy_fallbacks:  # [{"gpt-3.5-turbo": ["gpt-4"]}]
-                        if list(item.keys())[0] == model_group:
-                            fallback_model_group = item[model_group]
-                            break
+                        )
 
-                    if fallback_model_group is None:
-                        raise original_exception
+                        e.message += "\n{}".format(error_message)
+                elif isinstance(e, litellm.ContentPolicyViolationError):
+                    if content_policy_fallbacks is not None:
+                        fallback_model_group = None
+                        for (
+                            item
+                        ) in content_policy_fallbacks:  # [{"gpt-3.5-turbo": ["gpt-4"]}]
+                            if list(item.keys())[0] == model_group:
+                                fallback_model_group = item[model_group]
+                                break
 
-                    for mg in fallback_model_group:
-                        """
-                        Iterate through the model groups and try calling that deployment
-                        """
-                        try:
-                            kwargs["model"] = mg
-                            kwargs.setdefault("metadata", {}).update(
-                                {"model_group": mg}
-                            )  # update model_group used, if fallbacks are done
-                            response = await self.async_function_with_retries(
-                                *args, **kwargs
+                        if fallback_model_group is None:
+                            raise original_exception
+
+                        for mg in fallback_model_group:
+                            """
+                            Iterate through the model groups and try calling that deployment
+                            """
+                            try:
+                                kwargs["model"] = mg
+                                kwargs.setdefault("metadata", {}).update(
+                                    {"model_group": mg}
+                                )  # update model_group used, if fallbacks are done
+                                response = await self.async_function_with_retries(
+                                    *args, **kwargs
+                                )
+                                verbose_router_logger.info(
+                                    "Successful fallback b/w models."
+                                )
+                                return response
+                            except Exception as e:
+                                pass
+                    else:
+                        error_message = "model={}. content_policy_fallback={}. fallbacks={}.\n\nSet 'content_policy_fallback' - https://docs.litellm.ai/docs/routing#fallbacks".format(
+                            model_group, content_policy_fallbacks, fallbacks
+                        )
+                        verbose_router_logger.info(
+                            msg="Got 'ContentPolicyViolationError'. No content_policy_fallback set. Defaulting \
+                            to fallbacks, if available.{}".format(
+                                error_message
                             )
-                            verbose_router_logger.info(
-                                "Successful fallback b/w models."
-                            )
-                            return response
-                        except Exception as e:
-                            pass
-                elif fallbacks is not None:
+                        )
+
+                        e.message += "\n{}".format(error_message)
+                if fallbacks is not None:
                     verbose_router_logger.debug(f"inside model fallbacks: {fallbacks}")
                     generic_fallback_idx: Optional[int] = None
                     ## check for specific model group-specific fallbacks
