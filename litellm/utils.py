@@ -2410,6 +2410,7 @@ def get_optional_params(
             and custom_llm_provider != "anyscale"
             and custom_llm_provider != "together_ai"
             and custom_llm_provider != "groq"
+            and custom_llm_provider != "nvidia_nim"
             and custom_llm_provider != "deepseek"
             and custom_llm_provider != "codestral"
             and custom_llm_provider != "mistral"
@@ -3060,6 +3061,14 @@ def get_optional_params(
         optional_params = litellm.DatabricksConfig().map_openai_params(
             non_default_params=non_default_params, optional_params=optional_params
         )
+    elif custom_llm_provider == "nvidia_nim":
+        supported_params = get_supported_openai_params(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+        _check_valid_arg(supported_params=supported_params)
+        optional_params = litellm.NvidiaNimConfig().map_openai_params(
+            non_default_params=non_default_params, optional_params=optional_params
+        )
     elif custom_llm_provider == "groq":
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider
@@ -3626,6 +3635,8 @@ def get_supported_openai_params(
         return litellm.OllamaChatConfig().get_supported_openai_params()
     elif custom_llm_provider == "anthropic":
         return litellm.AnthropicConfig().get_supported_openai_params()
+    elif custom_llm_provider == "nvidia_nim":
+        return litellm.NvidiaNimConfig().get_supported_openai_params()
     elif custom_llm_provider == "groq":
         return [
             "temperature",
@@ -3986,6 +3997,10 @@ def get_llm_provider(
                 # groq is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.groq.com/openai/v1
                 api_base = "https://api.groq.com/openai/v1"
                 dynamic_api_key = get_secret("GROQ_API_KEY")
+            elif custom_llm_provider == "nvidia_nim":
+                # nvidia_nim is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.endpoints.anyscale.com/v1
+                api_base = "https://integrate.api.nvidia.com/v1"
+                dynamic_api_key = get_secret("NVIDIA_NIM_API_KEY")
             elif custom_llm_provider == "codestral":
                 # codestral is openai compatible, we just need to set this to custom_openai and have the api_base be https://codestral.mistral.ai/v1
                 api_base = "https://codestral.mistral.ai/v1"
@@ -4087,6 +4102,9 @@ def get_llm_provider(
                     elif endpoint == "api.groq.com/openai/v1":
                         custom_llm_provider = "groq"
                         dynamic_api_key = get_secret("GROQ_API_KEY")
+                    elif endpoint == "https://integrate.api.nvidia.com/v1":
+                        custom_llm_provider = "nvidia_nim"
+                        dynamic_api_key = get_secret("NVIDIA_NIM_API_KEY")
                     elif endpoint == "https://codestral.mistral.ai/v1":
                         custom_llm_provider = "codestral"
                         dynamic_api_key = get_secret("CODESTRAL_API_KEY")
@@ -4900,6 +4918,11 @@ def validate_environment(model: Optional[str] = None) -> dict:
                 keys_in_environment = True
             else:
                 missing_keys.append("GROQ_API_KEY")
+        elif custom_llm_provider == "nvidia_nim":
+            if "NVIDIA_NIM_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("NVIDIA_NIM_API_KEY")
         elif (
             custom_llm_provider == "codestral"
             or custom_llm_provider == "text-completion-codestral"
