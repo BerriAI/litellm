@@ -101,3 +101,41 @@ async def test_spend_calc_using_response():
     print("calculated cost", cost_obj)
     cost = cost_obj["cost"]
     assert cost > 0.0
+
+
+@pytest.mark.asyncio
+async def test_spend_calc_model_alias_on_router_messages():
+    from litellm.proxy.proxy_server import llm_router as init_llm_router
+
+    temp_llm_router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                },
+            }
+        ],
+        model_group_alias={
+            "gpt4o": "gpt-4o",
+        },
+    )
+
+    setattr(litellm.proxy.proxy_server, "llm_router", temp_llm_router)
+
+    cost_obj = await calculate_spend(
+        request=SpendCalculateRequest(
+            model="gpt4o",
+            messages=[
+                {"role": "user", "content": "What is the capital of France?"},
+            ],
+        )
+    )
+
+    print("calculated cost", cost_obj)
+    _cost = cost_obj["cost"]
+
+    assert _cost > 0.0
+
+    # set router to init value
+    setattr(litellm.proxy.proxy_server, "llm_router", init_llm_router)
