@@ -2017,6 +2017,7 @@ def get_litellm_params(
     input_cost_per_token=None,
     output_cost_per_token=None,
     output_cost_per_second=None,
+    cooldown_time=None,
 ):
     litellm_params = {
         "acompletion": acompletion,
@@ -2039,6 +2040,7 @@ def get_litellm_params(
         "input_cost_per_second": input_cost_per_second,
         "output_cost_per_token": output_cost_per_token,
         "output_cost_per_second": output_cost_per_second,
+        "cooldown_time": cooldown_time,
     }
 
     return litellm_params

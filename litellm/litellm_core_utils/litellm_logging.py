@@ -19,8 +19,7 @@ from litellm import (
     turn_off_message_logging,
     verbose_logger,
 )
-
-from litellm.caching import InMemoryCache, S3Cache, DualCache
+from litellm.caching import DualCache, InMemoryCache, S3Cache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_logging,
