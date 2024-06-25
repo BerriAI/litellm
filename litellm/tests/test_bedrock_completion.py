@@ -238,6 +238,20 @@ def bedrock_session_token_creds():
         )
     return creds
 
+def process_stream_response(res, messages):
+    import types
+    if isinstance(res, litellm.utils.CustomStreamWrapper):
+        chunks = []
+        for part in res:
+            chunks.append(part)
+            text = part.choices[0].delta.content or ""
+            print(text, end="")
+        res = litellm.stream_chunk_builder(chunks, messages=messages)
+    else:
+        raise ValueError("Response object is not a streaming response")
+    
+    return res
+
 @pytest.mark.skipif(
     os.environ.get("CIRCLE_OIDC_TOKEN_V2") is None,
     reason="Cannot run without being in CircleCI Runner",
@@ -297,6 +311,23 @@ def test_completion_bedrock_claude_aws_session_token(bedrock_session_token_creds
         print(response_3)
         assert len(response_3.choices) > 0
         assert len(response_3.choices[0].message.content) > 0
+
+        # This fourth call is to verify streaming api works
+        response_4 = completion(
+            model="bedrock/anthropic.claude-3-haiku-20240307-v1:0",
+            messages=messages,
+            max_tokens=6,
+            temperature=0.3,
+            aws_region_name="us-east-1",
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
+            aws_session_token=aws_session_token,
+            stream=True
+        )
+        response_4 = process_stream_response(response_4, messages)
+        print(response_4)
+        assert len(response_4.choices) > 0
+        assert len(response_4.choices[0].message.content) > 0
 
     except RateLimitError:
         pass
@@ -379,6 +410,21 @@ def test_completion_bedrock_claude_aws_bedrock_client(bedrock_session_token_cred
         print(response_3)
         assert len(response_3.choices) > 0
         assert len(response_3.choices[0].message.content) > 0
+
+        # This fourth call is to verify streaming api works
+        response_4 = completion(
+            model="bedrock/anthropic.claude-3-haiku-20240307-v1:0",
+            messages=messages,
+            max_tokens=6,
+            temperature=0.3,
+            aws_bedrock_client=aws_bedrock_client_east,
+            stream=True
+        )
+        response_4 = process_stream_response(response_4, messages)
+        print(response_4)
+        assert len(response_4.choices) > 0
+        assert len(response_4.choices[0].message.content) > 0
+
 
     except RateLimitError:
         pass
