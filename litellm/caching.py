@@ -76,7 +76,6 @@ class InMemoryCache(BaseCache):
         )
         self.ttl_dict: dict = {}
         self.default_ttl = default_ttl or 120.0
-        self.last_cleaned = 0  # since this is in memory we need to periodically clean it up to not overuse the machines RAM
 
     def set_cache(self, key, value, **kwargs):
         print_verbose("InMemoryCache: set_cache")
@@ -149,21 +148,7 @@ class InMemoryCache(BaseCache):
         value = init_value + value
         await self.async_set_cache(key, value, **kwargs)
 
-        if time.time() - self.last_cleaned > self.default_ttl:
-            asyncio.create_task(self.clean_up_in_memory_cache())
-
         return value
-
-    async def clean_up_in_memory_cache(self):
-        """
-        Runs periodically to clean up the in-memory cache
-
-        - loop through all keys in cache, check if they are expired
-        - if yes, delete them
-        """
-        self.cache_dict = {}
-        self.ttl_dict = {}
-        self.last_cleaned = time.time()
 
     def flush_cache(self):
         self.cache_dict.clear()
