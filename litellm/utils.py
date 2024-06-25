@@ -6470,7 +6470,11 @@ def exception_type(
                         ),
                         litellm_debug_info=extra_information,
                     )
-                elif "The response was blocked." in error_str:
+                elif (
+                    "The response was blocked." in error_str
+                    or "Output blocked by content filtering policy"
+                    in error_str  # anthropic on vertex ai
+                ):
                     exception_mapping_worked = True
                     raise ContentPolicyViolationError(
                         message=f"VertexAIException ContentPolicyViolationError - {error_str}",
