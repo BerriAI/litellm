@@ -732,7 +732,7 @@ def test_router_rpm_pre_call_check():
         pytest.fail(f"Got unexpected exception on router! - {str(e)}")
 
 
-def test_router_context_window_check_pre_call_check_in_group():
+def test_router_context_window_check_pre_call_check_in_group_custom_model_info():
     """
     - Give a gpt-3.5-turbo model group with different context windows (4k vs. 16k)
     - Send a 5k prompt
@@ -755,6 +755,61 @@ def test_router_context_window_check_pre_call_check_in_group():
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
                     "base_model": "azure/gpt-35-turbo",
+                    "mock_response": "Hello world 1!",
+                },
+                "model_info": {"max_input_tokens": 100},
+            },
+            {
+                "model_name": "gpt-3.5-turbo",  # openai model name
+                "litellm_params": {  # params for litellm completion/embedding call
+                    "model": "gpt-3.5-turbo-1106",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                    "mock_response": "Hello world 2!",
+                },
+                "model_info": {"max_input_tokens": 0},
+            },
+        ]
+
+        router = Router(model_list=model_list, set_verbose=True, enable_pre_call_checks=True, num_retries=0)  # type: ignore
+
+        response = router.completion(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "user", "content": "Who was Alexander?"},
+            ],
+        )
+
+        print(f"response: {response}")
+
+        assert response.choices[0].message.content == "Hello world 1!"
+    except Exception as e:
+        pytest.fail(f"Got unexpected exception on router! - {str(e)}")
+
+
+def test_router_context_window_check_pre_call_check():
+    """
+    - Give a gpt-3.5-turbo model group with different context windows (4k vs. 16k)
+    - Send a 5k prompt
+    - Assert it works
+    """
+    import os
+
+    from large_text import text
+
+    litellm.set_verbose = False
+
+    print(f"len(text): {len(text)}")
+    try:
+        model_list = [
+            {
+                "model_name": "gpt-3.5-turbo",  # openai model name
+                "litellm_params": {  # params for litellm completion/embedding call
+                    "model": "azure/chatgpt-v-2",
+                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "api_base": os.getenv("AZURE_API_BASE"),
+                    "base_model": "azure/gpt-35-turbo",
+                    "mock_response": "Hello world 1!",
                 },
             },
             {
@@ -762,6 +817,7 @@ def test_router_context_window_check_pre_call_check_in_group():
                 "litellm_params": {  # params for litellm completion/embedding call
                     "model": "gpt-3.5-turbo-1106",
                     "api_key": os.getenv("OPENAI_API_KEY"),
+                    "mock_response": "Hello world 2!",
                 },
             },
         ]
@@ -777,6 +833,8 @@ def test_router_context_window_check_pre_call_check_in_group():
         )
 
         print(f"response: {response}")
+
+        assert response.choices[0].message.content == "Hello world 2!"
     except Exception as e:
         pytest.fail(f"Got unexpected exception on router! - {str(e)}")
 
