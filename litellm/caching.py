@@ -17,7 +17,6 @@ import traceback
 from datetime import timedelta
 from typing import Any, BinaryIO, List, Literal, Optional, Union
 
-from cachetools import LRUCache
 from openai._models import BaseModel as OpenAIObject
 
 import litellm
@@ -69,6 +68,8 @@ class InMemoryCache(BaseCache):
         """
         max_size_in_memory [int]: Maximum number of items in cache. done to prevent memory leaks. Use 200 items as a default
         """
+        from cachetools import LRUCache
+
         self.max_size_in_memory = max_size_in_memory or 200
         self.cache_dict: LRUCache = LRUCache(maxsize=self.max_size_in_memory)
         self.ttl_dict: LRUCache = LRUCache(maxsize=self.max_size_in_memory)
