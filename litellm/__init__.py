@@ -816,6 +816,7 @@ from .llms.openai import (
     DeepInfraConfig,
     AzureAIStudioConfig,
 )
+from .llms.nvidia_nim import NvidiaNimConfig
 from .llms.text_completion_codestral import MistralTextCompletionConfig
 from .llms.azure import (
     AzureOpenAIConfig,
