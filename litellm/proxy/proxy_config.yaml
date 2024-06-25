@@ -21,6 +21,8 @@ model_list:
 general_settings:
   master_key: sk-1234
   alerting: ["slack", "email"]
+  public_routes: ["LiteLLMRoutes.public_routes", "/spend/calculate"]
+
 
 litellm_settings:
   success_callback: ["prometheus"]
