@@ -23,7 +23,7 @@ from litellm import RateLimitError, Timeout, completion, completion_cost, embedd
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.prompt_templates.factory import anthropic_messages_pt
 
-# litellm.num_retries=3
+# litellm.num_retries = 3
 litellm.cache = None
 litellm.success_callback = []
 user_message = "Write a short poem about the sky"
@@ -3468,6 +3468,28 @@ def test_completion_deep_infra_mistral():
 
 
 # test_completion_deep_infra_mistral()
+
+
+def test_completion_nvidia_nim():
+    model_name = "nvidia_nim/databricks/dbrx-instruct"
+    try:
+        response = completion(
+            model=model_name,
+            messages=[
+                {
+                    "role": "user",
+                    "content": "What's the weather like in Boston today in Fahrenheit?",
+                }
+            ],
+        )
+        # Add any assertions here to check the response
+        print(response)
+        assert response.choices[0].message.content is not None
+        assert len(response.choices[0].message.content) > 0
+    except litellm.exceptions.Timeout as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
 
 # Gemini tests
