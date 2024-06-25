@@ -562,6 +562,9 @@ class VertexLLM(BaseLLM):
                 status_code=422,
             )
 
+        ## GET MODEL ##
+        model_response.model = model
+
         ## CHECK IF RESPONSE FLAGGED
         if "promptFeedback" in completion_response:
             if "blockReason" in completion_response["promptFeedback"]:
@@ -645,9 +648,6 @@ class VertexLLM(BaseLLM):
                 return model_response
 
         model_response.choices = []  # type: ignore
-
-        ## GET MODEL ##
-        model_response.model = model
 
         try:
             ## GET TEXT ##
