@@ -901,6 +901,39 @@ response = await router.acompletion(
 
 If a call fails after num_retries, fall back to another model group. 
 
+### Quick Start 
+
+```python
+from litellm import Router 
+router = Router(
+	model_list=[
+		{ # bad model
+			"model_name": "bad-model",
+			"litellm_params": {
+				"model": "openai/my-bad-model",
+				"api_key": "my-bad-api-key",
+				"mock_response": "Bad call"
+			},
+		},
+		{ # good model
+			"model_name": "my-good-model",
+			"litellm_params": {
+				"model": "gpt-4o",
+				"api_key": os.getenv("OPENAI_API_KEY"),
+				"mock_response": "Good call"
+			},
+		},
+	],
+	fallbacks=[{"bad-model": ["my-good-model"]}] # 👈 KEY CHANGE
+)
+
+response = router.completion(
+	model="bad-model",
+	messages=[{"role": "user", "content": "Hey, how's it going?"}],
+	mock_testing_fallbacks=True,
+)
+```
+
 If the error is a context window exceeded error, fall back to a larger model group (if given). 
 
 Fallbacks are done in-order - ["gpt-3.5-turbo, "gpt-4", "gpt-4-32k"], will do 'gpt-3.5-turbo' first, then 'gpt-4', etc.
