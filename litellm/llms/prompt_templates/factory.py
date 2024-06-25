@@ -181,9 +181,9 @@ def ollama_pt(
                 for call in message["tool_calls"]:
                     function_name = call["function"]["name"]
                     arguments = json.loads(call["function"]["arguments"])
-                    prompt += f"### Tool Call ({call["id"]}):\nName: {function_name}\nArguments: {json.dumps(arguments)}\n\n"
+                    prompt += f"### FunctionCall ({call["id"]}):\nFunctionName: {function_name}\nArguments: {json.dumps(arguments)}\n\n"
             elif "tool_call_id" in message:
-                prompt += f"### Tool Call Result ({message["tool_call_id"]}):\n{message["content"]}\n\n"
+                prompt += f"### FunctionCall Result ({message["tool_call_id"]}):\n{message["content"]}\n\n"
             elif content:
                 prompt += f"### {role.capitalize()}:\n{content}\n\n"
 
