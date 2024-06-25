@@ -558,7 +558,6 @@ def init_bedrock_client(
     region_name=None,
     aws_access_key_id: Optional[str] = None,
     aws_secret_access_key: Optional[str] = None,
-    aws_session_token: Optional[str] = None,
     aws_region_name: Optional[str] = None,
     aws_bedrock_runtime_endpoint: Optional[str] = None,
     aws_session_name: Optional[str] = None,
@@ -576,7 +575,6 @@ def init_bedrock_client(
     params_to_check = [
         aws_access_key_id,
         aws_secret_access_key,
-        aws_session_token,
         aws_region_name,
         aws_bedrock_runtime_endpoint,
         aws_session_name,
@@ -593,7 +591,6 @@ def init_bedrock_client(
     (
         aws_access_key_id,
         aws_secret_access_key,
-        aws_session_token,
         aws_region_name,
         aws_bedrock_runtime_endpoint,
         aws_session_name,
@@ -1438,10 +1435,9 @@ def image_generation(
     Bedrock Image Gen endpoint support
     """
     ### BOTO3 INIT ###
-    # pop aws_secret_access_key, aws_access_key_id, aws_session_token, aws_region_name from kwargs, since completion calls fail with them
+    # pop aws_secret_access_key, aws_access_key_id, aws_region_name from kwargs, since completion calls fail with them
     aws_secret_access_key = optional_params.pop("aws_secret_access_key", None)
     aws_access_key_id = optional_params.pop("aws_access_key_id", None)
-    aws_session_token = optional_params.pop("aws_session_token", None)
     aws_region_name = optional_params.pop("aws_region_name", None)
     aws_role_name = optional_params.pop("aws_role_name", None)
     aws_session_name = optional_params.pop("aws_session_name", None)
@@ -1454,7 +1450,6 @@ def image_generation(
     client = init_bedrock_client(
         aws_access_key_id=aws_access_key_id,
         aws_secret_access_key=aws_secret_access_key,
-        aws_session_token=aws_session_token,
         aws_region_name=aws_region_name,
         aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
         aws_web_identity_token=aws_web_identity_token,
