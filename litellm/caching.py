@@ -17,7 +17,7 @@ import traceback
 from datetime import timedelta
 from typing import Any, BinaryIO, List, Literal, Optional, Union
 
-from cachetools import Cache as CachetoolsCache
+from cachetools import LRUCache
 from openai._models import BaseModel as OpenAIObject
 
 import litellm
@@ -71,10 +71,9 @@ class InMemoryCache(BaseCache):
         this is done to prevent overuse of System RAM
         """
         # if users don't provider one, use the default litellm cache
-        self.cache_dict: CachetoolsCache = CachetoolsCache(
-            maxsize=1000,
-        )
-        self.ttl_dict: dict = {}
+        max_size_in_memory = 1000
+        self.cache_dict: LRUCache = LRUCache(maxsize=max_size_in_memory)
+        self.ttl_dict: LRUCache = LRUCache(maxsize=max_size_in_memory)
         self.default_ttl = default_ttl or 120.0
 
     def set_cache(self, key, value, **kwargs):
