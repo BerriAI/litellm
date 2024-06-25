@@ -887,7 +887,7 @@
         "max_input_tokens": 8192,
         "max_output_tokens": 8192,
         "input_cost_per_token": 0.00000005,
-        "output_cost_per_token": 0.00000010,
+        "output_cost_per_token": 0.00000008,
         "litellm_provider": "groq",
         "mode": "chat",
         "supports_function_calling": true
@@ -906,8 +906,8 @@
         "max_tokens": 32768,
         "max_input_tokens": 32768,
         "max_output_tokens": 32768,
-        "input_cost_per_token": 0.00000027,
-        "output_cost_per_token": 0.00000027,
+        "input_cost_per_token": 0.00000024,
+        "output_cost_per_token": 0.00000024,
         "litellm_provider": "groq",
         "mode": "chat",
         "supports_function_calling": true
@@ -916,8 +916,8 @@
         "max_tokens": 8192,
         "max_input_tokens": 8192,
         "max_output_tokens": 8192,
-        "input_cost_per_token": 0.00000010,
-        "output_cost_per_token": 0.00000010,
+        "input_cost_per_token": 0.00000007,
+        "output_cost_per_token": 0.00000007,
         "litellm_provider": "groq",
         "mode": "chat",
         "supports_function_calling": true
