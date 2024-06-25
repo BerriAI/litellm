@@ -1,27 +1,26 @@
 # What is this?
 ## Controller file for Predibase Integration - https://predibase.com/
 
-from functools import partial
-import os, types
-import traceback
+import copy
 import json
-from enum import Enum
-import requests, copy  # type: ignore
+import os
 import time
-from typing import Callable, Optional, List, Literal, Union
-from litellm.utils import (
-    ModelResponse,
-    Usage,
-    CustomStreamWrapper,
-    Message,
-    Choices,
-)
-from litellm.litellm_core_utils.core_helpers import map_finish_reason
-import litellm
-from .prompt_templates.factory import prompt_factory, custom_prompt
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from .base import BaseLLM
+import traceback
+import types
+from enum import Enum
+from functools import partial
+from typing import Callable, List, Literal, Optional, Union
+
 import httpx  # type: ignore
+import requests  # type: ignore
+
+import litellm
+from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.utils import Choices, CustomStreamWrapper, Message, ModelResponse, Usage
+
+from .base import BaseLLM
+from .prompt_templates.factory import custom_prompt, prompt_factory
 
 
 class PredibaseError(Exception):
@@ -496,7 +495,9 @@ class PredibaseChatCompletion(BaseLLM):
         except httpx.HTTPStatusError as e:
             raise PredibaseError(
                 status_code=e.response.status_code,
-                message="HTTPStatusError - {}".format(e.response.text),
+                message="HTTPStatusError - received status_code={}, error_message={}".format(
+                    e.response.status_code, e.response.text
+                ),
             )
         except Exception as e:
             raise PredibaseError(
