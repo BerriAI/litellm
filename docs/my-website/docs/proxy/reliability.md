@@ -431,6 +431,67 @@ litellm_settings:
   content_policy_fallbacks: [{"gpt-3.5-turbo-small": ["claude-opus"]}]
 ```
 
+
+
+### Test Fallbacks! 
+
+Check if your fallbacks are working as expected. 
+
+#### **Regular Fallbacks**
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-D '{
+  "model": "my-bad-model",
+  "messages": [
+    {
+      "role": "user",
+      "content": "ping"
+    }
+  ],
+  "mock_testing_fallbacks": true # 👈 KEY CHANGE
+}
+'
+```
+
+#### **Content Policy Fallbacks**
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-D '{
+  "model": "my-bad-model",
+  "messages": [
+    {
+      "role": "user",
+      "content": "ping"
+    }
+  ],
+  "mock_testing_content_policy_fallbacks": true # 👈 KEY CHANGE
+}
+'
+```
+
+#### **Context Window Fallbacks**
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-D '{
+  "model": "my-bad-model",
+  "messages": [
+    {
+      "role": "user",
+      "content": "ping"
+    }
+  ],
+  "mock_testing_context_window_fallbacks": true # 👈 KEY CHANGE
+}
+'
+```
+
 ### EU-Region Filtering (Pre-Call Checks)
 
 **Before call is made** check if a call is within model context window with  **`enable_pre_call_checks: true`**.
