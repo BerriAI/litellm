@@ -1265,9 +1265,22 @@ async def calculate_spend(request: SpendCalculateRequest):
             _model_in_llm_router = None
             cost_per_token: Optional[CostPerToken] = None
             if llm_router is not None:
-                for model in llm_router.model_list:
-                    if model.get("model_name") == request.model:
-                        _model_in_llm_router = model
+                if (
+                    llm_router.model_group_alias is not None
+                    and request.model in llm_router.model_group_alias
+                ):
+                    # lookup alias in llm_router
+                    _model_group_name = llm_router.model_group_alias[request.model]
+                    for model in llm_router.model_list:
+                        if model.get("model_name") == _model_group_name:
+                            _model_in_llm_router = model
+
+                else:
+                    # no model_group aliases set -> try finding model in llm_router
+                    # find model in llm_router
+                    for model in llm_router.model_list:
+                        if model.get("model_name") == request.model:
+                            _model_in_llm_router = model
 
             """
             3 cases for /spend/calculate
