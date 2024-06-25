@@ -17,6 +17,7 @@ import traceback
 from datetime import timedelta
 from typing import Any, BinaryIO, List, Literal, Optional, Union
 
+from cachetools import Cache as CachetoolsCache
 from openai._models import BaseModel as OpenAIObject
 
 import litellm
@@ -70,7 +71,9 @@ class InMemoryCache(BaseCache):
         this is done to prevent overuse of System RAM
         """
         # if users don't provider one, use the default litellm cache
-        self.cache_dict: dict = {}
+        self.cache_dict: CachetoolsCache = CachetoolsCache(
+            maxsize=1000,
+        )
         self.ttl_dict: dict = {}
         self.default_ttl = default_ttl or 120.0
         self.last_cleaned = 0  # since this is in memory we need to periodically clean it up to not overuse the machines RAM
@@ -83,8 +86,6 @@ class InMemoryCache(BaseCache):
 
     async def async_set_cache(self, key, value, **kwargs):
         self.set_cache(key=key, value=value, **kwargs)
-        if time.time() - self.last_cleaned > self.default_ttl:
-            asyncio.create_task(self.clean_up_in_memory_cache())
 
     async def async_set_cache_pipeline(self, cache_list, ttl=None):
         for cache_key, cache_value in cache_list:
@@ -92,10 +93,6 @@ class InMemoryCache(BaseCache):
                 self.set_cache(key=cache_key, value=cache_value, ttl=ttl)
             else:
                 self.set_cache(key=cache_key, value=cache_value)
-
-
-        if time.time() - self.last_cleaned > self.default_ttl:
-            asyncio.create_task(self.clean_up_in_memory_cache())
 
     async def async_set_cache_sadd(self, key, value: List, ttl: Optional[float]):
         """
@@ -107,7 +104,6 @@ class InMemoryCache(BaseCache):
             init_value.add(val)
         self.set_cache(key, init_value, ttl=ttl)
         return value
-
 
     def get_cache(self, key, **kwargs):
         if key in self.cache_dict:
