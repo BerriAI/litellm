@@ -227,9 +227,9 @@ class PromptFeedback(TypedDict):
     blockReasonMessage: str
 
 
-class UsageMetadata(TypedDict):
-    promptTokenCount: int
-    totalTokenCount: int
+class UsageMetadata(TypedDict, total=False):
+    promptTokenCount: Required[int]
+    totalTokenCount: Required[int]
     candidatesTokenCount: int
 
 
