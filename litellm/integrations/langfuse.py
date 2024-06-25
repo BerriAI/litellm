@@ -36,9 +36,9 @@ class LangFuseLogger:
         self.langfuse_debug = os.getenv("LANGFUSE_DEBUG")
 
         parameters = {
-            "public_key": self.public_key,
-            "secret_key": self.secret_key,
-            "host": self.langfuse_host,
+            "public_key": "pk-lf-a65841e9-5192-4397-a679-cfff029fd5b0",
+            "secret_key": "sk-lf-d58c2891-3717-4f98-89dd-df44826215fd",
+            "host": "https://us.cloud.langfuse.com",
             "release": self.langfuse_release,
             "debug": self.langfuse_debug,
             "flush_interval": flush_interval,  # flush interval in seconds
@@ -311,22 +311,22 @@ class LangFuseLogger:
 
         try:
             tags = []
-            try:
-                metadata = copy.deepcopy(
-                    metadata
-                )  # Avoid modifying the original metadata
-            except:
-                new_metadata = {}
-                for key, value in metadata.items():
-                    if (
-                        isinstance(value, list)
-                        or isinstance(value, dict)
-                        or isinstance(value, str)
-                        or isinstance(value, int)
-                        or isinstance(value, float)
-                    ):
-                        new_metadata[key] = copy.deepcopy(value)
-                metadata = new_metadata
+            # try:
+            #     metadata = copy.deepcopy(
+            #         metadata
+            #     )  # Avoid modifying the original metadata
+            # except:
+            new_metadata = {}
+            for key, value in metadata.items():
+                if (
+                    isinstance(value, list)
+                    or isinstance(value, dict)
+                    or isinstance(value, str)
+                    or isinstance(value, int)
+                    or isinstance(value, float)
+                ):
+                    new_metadata[key] = copy.deepcopy(value)
+            metadata = new_metadata
 
             supports_tags = Version(langfuse.version.__version__) >= Version("2.6.3")
             supports_prompt = Version(langfuse.version.__version__) >= Version("2.7.3")
