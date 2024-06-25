@@ -135,7 +135,7 @@ def convert_to_ollama_image(openai_image_url: str):
 
 
 def ollama_pt(
-        model, messages
+    model, messages
 ):  # https://github.com/ollama/ollama/blob/af4cf55884ac54b9e637cd71dadfe9b7a5685877/docs/modelfile.md#template
     if "instruct" in model:
         prompt = custom_prompt(
@@ -185,19 +185,18 @@ def ollama_pt(
                     function_name: str = call["function"]["name"]
                     arguments = json.loads(call["function"]["arguments"])
 
-                    tool_calls.append({
-                        "id": call_id,
-                        "type": "function",
-                        "function": {
-                            "name": function_name,
-                            "arguments": arguments
+                    tool_calls.append(
+                        {
+                            "id": call_id,
+                            "type": "function",
+                            "function": {"name": function_name, "arguments": arguments},
                         }
-                    })
+                    )
 
                 prompt += f"### Assistant:\nTool Calls: {json.dumps(tool_calls, indent=2)}\n\n"
 
             elif "tool_call_id" in message:
-                prompt += f"### User:\n{message["content"]}\n\n"
+                prompt += f"### User:\n{message['content']}\n\n"
 
             elif content:
                 prompt += f"### {role.capitalize()}:\n{content}\n\n"

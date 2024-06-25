@@ -428,6 +428,7 @@ def mock_completion(
     model: str,
     messages: List,
     stream: Optional[bool] = False,
+    n: Optional[int] = None,
     mock_response: Union[str, Exception, dict] = "This is a mock request",
     mock_tool_calls: Optional[List] = None,
     logging=None,
@@ -496,8 +497,19 @@ def mock_completion(
                 model_response, mock_response=mock_response, model=model
             )
             return response
-
-        model_response["choices"][0]["message"]["content"] = mock_response
+        if n is None:
+            model_response["choices"][0]["message"]["content"] = mock_response
+        else:
+            _all_choices = []
+            for i in range(n):
+                _choice = litellm.utils.Choices(
+                    index=i,
+                    message=litellm.utils.Message(
+                        content=mock_response, role="assistant"
+                    ),
+                )
+                _all_choices.append(_choice)
+            model_response["choices"] = _all_choices
         model_response["created"] = int(time.time())
         model_response["model"] = model
 
@@ -944,6 +956,7 @@ def completion(
                 model,
                 messages,
                 stream=stream,
+                n=n,
                 mock_response=mock_response,
                 mock_tool_calls=mock_tool_calls,
                 logging=logging,
