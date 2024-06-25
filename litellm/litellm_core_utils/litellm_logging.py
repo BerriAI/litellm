@@ -19,8 +19,7 @@ from litellm import (
     turn_off_message_logging,
     verbose_logger,
 )
-
-from litellm.caching import InMemoryCache, S3Cache, DualCache
+from litellm.caching import DualCache, InMemoryCache, S3Cache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_logging,
@@ -1940,6 +1939,19 @@ def _init_custom_logger_compatible_class(
         _otel_logger = OpenTelemetry(config=otel_config)
         _in_memory_loggers.append(_otel_logger)
         return _otel_logger  # type: ignore
+    elif logging_integration == "stripe":
+        if "STRIPE_SECRET_KEY" not in os.environ:
+            raise ValueError("STRIPE_SECRET_KEY not found in environment variables")
+        from litellm.integrations.stripe import StripeLogger
+
+        stripe_logger = StripeLogger()
+
+        for callback in _in_memory_loggers:
+            if isinstance(callback, StripeLogger):
+                return callback  # type: ignore
+
+        _in_memory_loggers.append(stripe_logger)
+        return stripe_logger  # type: ignore
     elif logging_integration == "dynamic_rate_limiter":
         from litellm.proxy.hooks.dynamic_rate_limiter import (
             _PROXY_DynamicRateLimitHandler,

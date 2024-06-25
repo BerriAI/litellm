@@ -15,7 +15,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
 
 
-class TrackingHandler(CustomLogger):
+class StripeLogger(CustomLogger):
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         user_id = (
