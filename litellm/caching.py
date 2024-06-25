@@ -97,6 +97,14 @@ class InMemoryCache(BaseCache):
         """
         for key in list(self.ttl_dict.keys()):
             if time.time() > self.ttl_dict[key]:
+                print(  # noqa
+                    "Cache Evicting item key=",
+                    key,
+                    "ttl=",
+                    self.ttl_dict[key],
+                    "size of cache=",
+                    len(self.cache_dict),
+                )
                 self.cache_dict.pop(key, None)
                 self.ttl_dict.pop(key, None)
 
