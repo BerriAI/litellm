@@ -487,14 +487,17 @@ def mock_completion(
             if kwargs.get("acompletion", False) == True:
                 return CustomStreamWrapper(
                     completion_stream=async_mock_completion_streaming_obj(
-                        model_response, mock_response=mock_response, model=model
+                        model_response, mock_response=mock_response, model=model, n=n
                     ),
                     model=model,
                     custom_llm_provider="openai",
                     logging_obj=logging,
                 )
             response = mock_completion_streaming_obj(
-                model_response, mock_response=mock_response, model=model
+                model_response,
+                mock_response=mock_response,
+                model=model,
+                n=n,
             )
             return response
         if n is None:

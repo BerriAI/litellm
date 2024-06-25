@@ -9708,18 +9708,45 @@ class TextCompletionStreamWrapper:
             raise StopAsyncIteration
 
 
-def mock_completion_streaming_obj(model_response, mock_response, model):
+def mock_completion_streaming_obj(
+    model_response, mock_response, model, n: Optional[int] = None
+):
     for i in range(0, len(mock_response), 3):
-        completion_obj = {"role": "assistant", "content": mock_response[i : i + 3]}
-        model_response.choices[0].delta = completion_obj
+        completion_obj = Delta(role="assistant", content=mock_response[i : i + 3])
+        if n is None:
+            model_response.choices[0].delta = completion_obj
+        else:
+            _all_choices = []
+            for j in range(n):
+                _streaming_choice = litellm.utils.StreamingChoices(
+                    index=j,
+                    delta=litellm.utils.Delta(
+                        role="assistant", content=mock_response[i : i + 3]
+                    ),
+                )
+                _all_choices.append(_streaming_choice)
+            model_response.choices = _all_choices
         yield model_response
 
 
-async def async_mock_completion_streaming_obj(model_response, mock_response, model):
+async def async_mock_completion_streaming_obj(
+    model_response, mock_response, model, n: Optional[int] = None
+):
     for i in range(0, len(mock_response), 3):
         completion_obj = Delta(role="assistant", content=mock_response[i : i + 3])
-        model_response.choices[0].delta = completion_obj
-        model_response.choices[0].finish_reason = "stop"
+        if n is None:
+            model_response.choices[0].delta = completion_obj
+        else:
+            _all_choices = []
+            for j in range(n):
+                _streaming_choice = litellm.utils.StreamingChoices(
+                    index=j,
+                    delta=litellm.utils.Delta(
+                        role="assistant", content=mock_response[i : i + 3]
+                    ),
+                )
+                _all_choices.append(_streaming_choice)
+            model_response.choices = _all_choices
         yield model_response
 
 
