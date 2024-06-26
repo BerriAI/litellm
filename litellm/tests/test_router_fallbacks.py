@@ -1129,7 +1129,9 @@ async def test_router_content_policy_fallbacks(
         mock_response = Exception("content filtering policy")
     else:
         mock_response = litellm.ModelResponse(
-            choices=[litellm.Choices(finish_reason="content_filter")]
+            choices=[litellm.Choices(finish_reason="content_filter")],
+            model="gpt-3.5-turbo",
+            usage=litellm.Usage(prompt_tokens=10, completion_tokens=0, total_tokens=10),
         )
     router = Router(
         model_list=[

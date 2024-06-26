@@ -172,14 +172,35 @@ def ollama_pt(
                             images.append(base64_image)
         return {"prompt": prompt, "images": images}
     else:
-        prompt = "".join(
-            (
-                m["content"]
-                if isinstance(m["content"], str) is str
-                else "".join(m["content"])
-            )
-            for m in messages
-        )
+        prompt = ""
+        for message in messages:
+            role = message["role"]
+            content = message.get("content", "")
+
+            if "tool_calls" in message:
+                tool_calls = []
+
+                for call in message["tool_calls"]:
+                    call_id: str = call["id"]
+                    function_name: str = call["function"]["name"]
+                    arguments = json.loads(call["function"]["arguments"])
+
+                    tool_calls.append(
+                        {
+                            "id": call_id,
+                            "type": "function",
+                            "function": {"name": function_name, "arguments": arguments},
+                        }
+                    )
+
+                prompt += f"### Assistant:\nTool Calls: {json.dumps(tool_calls, indent=2)}\n\n"
+
+            elif "tool_call_id" in message:
+                prompt += f"### User:\n{message['content']}\n\n"
+
+            elif content:
+                prompt += f"### {role.capitalize()}:\n{content}\n\n"
+
     return prompt
 
 
@@ -710,7 +731,7 @@ def convert_to_anthropic_tool_result_xml(message: dict) -> str:
 
     """
     Anthropic tool_results look like:
-    
+
     [Successful results]
     <function_results>
     <result>

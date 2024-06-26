@@ -762,6 +762,9 @@ asyncio.run(router_acompletion())
 
 Set the limit for how many calls a model is allowed to fail in a minute, before being cooled down for a minute. 
 
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
 ```python
 from litellm import Router
 
@@ -779,8 +782,38 @@ messages = [{"content": user_message, "role": "user"}]
 response = router.completion(model="gpt-3.5-turbo", messages=messages)
 
 print(f"response: {response}")
-
 ```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+**Set Global Value**
+
+```yaml
+router_settings:
+	allowed_fails: 3 # cooldown model if it fails > 1 call in a minute. 
+  	cooldown_time: 30 # (in seconds) how long to cooldown model if fails/min > allowed_fails
+```
+
+Defaults:
+- allowed_fails: 0
+- cooldown_time: 60s 
+
+**Set Per Model**
+
+```yaml
+model_list:
+- model_name: fake-openai-endpoint
+  litellm_params:
+    model: predibase/llama-3-8b-instruct
+    api_key: os.environ/PREDIBASE_API_KEY
+    tenant_id: os.environ/PREDIBASE_TENANT_ID
+    max_new_tokens: 256
+    cooldown_time: 0 # 👈 KEY CHANGE
+```
+
+</TabItem>
+</Tabs>
 
 ### Retries
 
@@ -900,6 +933,39 @@ response = await router.acompletion(
 ### Fallbacks 
 
 If a call fails after num_retries, fall back to another model group. 
+
+### Quick Start 
+
+```python
+from litellm import Router 
+router = Router(
+	model_list=[
+		{ # bad model
+			"model_name": "bad-model",
+			"litellm_params": {
+				"model": "openai/my-bad-model",
+				"api_key": "my-bad-api-key",
+				"mock_response": "Bad call"
+			},
+		},
+		{ # good model
+			"model_name": "my-good-model",
+			"litellm_params": {
+				"model": "gpt-4o",
+				"api_key": os.getenv("OPENAI_API_KEY"),
+				"mock_response": "Good call"
+			},
+		},
+	],
+	fallbacks=[{"bad-model": ["my-good-model"]}] # 👈 KEY CHANGE
+)
+
+response = router.completion(
+	model="bad-model",
+	messages=[{"role": "user", "content": "Hey, how's it going?"}],
+	mock_testing_fallbacks=True,
+)
+```
 
 If the error is a context window exceeded error, fall back to a larger model group (if given). 
 

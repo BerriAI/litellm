@@ -1199,7 +1199,7 @@ async def _get_spend_report_for_time_range(
         }
     },
 )
-async def calculate_spend(request: Request):
+async def calculate_spend(request: SpendCalculateRequest):
     """
     Accepts all the params of completion_cost.
 
@@ -1248,14 +1248,93 @@ async def calculate_spend(request: Request):
     }'
     ```
     """
-    from litellm import completion_cost
+    try:
+        from litellm import completion_cost
+        from litellm.cost_calculator import CostPerToken
+        from litellm.proxy.proxy_server import llm_router
 
-    data = await request.json()
-    if "completion_response" in data:
-        data["completion_response"] = litellm.ModelResponse(
-            **data["completion_response"]
+        _cost = None
+        if request.model is not None:
+            if request.messages is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Bad Request - messages must be provided if 'model' is provided",
+                )
+
+            # check if model in llm_router
+            _model_in_llm_router = None
+            cost_per_token: Optional[CostPerToken] = None
+            if llm_router is not None:
+                if (
+                    llm_router.model_group_alias is not None
+                    and request.model in llm_router.model_group_alias
+                ):
+                    # lookup alias in llm_router
+                    _model_group_name = llm_router.model_group_alias[request.model]
+                    for model in llm_router.model_list:
+                        if model.get("model_name") == _model_group_name:
+                            _model_in_llm_router = model
+
+                else:
+                    # no model_group aliases set -> try finding model in llm_router
+                    # find model in llm_router
+                    for model in llm_router.model_list:
+                        if model.get("model_name") == request.model:
+                            _model_in_llm_router = model
+
+            """
+            3 cases for /spend/calculate
+
+            1. user passes model, and model is defined on litellm config.yaml or in DB. use info on config or in DB in this case
+            2. user passes model, and model is not defined on litellm config.yaml or in DB. Pass model as is to litellm.completion_cost
+            3. user passes completion_response
+            
+            """
+            if _model_in_llm_router is not None:
+                _litellm_params = _model_in_llm_router.get("litellm_params")
+                _litellm_model_name = _litellm_params.get("model")
+                input_cost_per_token = _litellm_params.get("input_cost_per_token")
+                output_cost_per_token = _litellm_params.get("output_cost_per_token")
+                if (
+                    input_cost_per_token is not None
+                    or output_cost_per_token is not None
+                ):
+                    cost_per_token = CostPerToken(
+                        input_cost_per_token=input_cost_per_token,
+                        output_cost_per_token=output_cost_per_token,
+                    )
+
+                _cost = completion_cost(
+                    model=_litellm_model_name,
+                    messages=request.messages,
+                    custom_cost_per_token=cost_per_token,
+                )
+            else:
+                _cost = completion_cost(model=request.model, messages=request.messages)
+        elif request.completion_response is not None:
+            _completion_response = litellm.ModelResponse(**request.completion_response)
+            _cost = completion_cost(completion_response=_completion_response)
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Bad Request - Either 'model' or 'completion_response' must be provided",
+            )
+        return {"cost": _cost}
+    except Exception as e:
+        if isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "detail", str(e)),
+                type=getattr(e, "type", "None"),
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+            )
+        error_msg = f"{str(e)}"
+        raise ProxyException(
+            message=getattr(e, "message", error_msg),
+            type=getattr(e, "type", "None"),
+            param=getattr(e, "param", "None"),
+            code=getattr(e, "status_code", 500),
         )
-    return {"cost": completion_cost(**data)}
 
 
 @router.get(

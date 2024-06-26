@@ -348,6 +348,7 @@ async def acompletion(
             or custom_llm_provider == "deepinfra"
             or custom_llm_provider == "perplexity"
             or custom_llm_provider == "groq"
+            or custom_llm_provider == "nvidia_nim"
             or custom_llm_provider == "codestral"
             or custom_llm_provider == "text-completion-codestral"
             or custom_llm_provider == "deepseek"
@@ -428,6 +429,7 @@ def mock_completion(
     model: str,
     messages: List,
     stream: Optional[bool] = False,
+    n: Optional[int] = None,
     mock_response: Union[str, Exception, dict] = "This is a mock request",
     mock_tool_calls: Optional[List] = None,
     logging=None,
@@ -486,18 +488,32 @@ def mock_completion(
             if kwargs.get("acompletion", False) == True:
                 return CustomStreamWrapper(
                     completion_stream=async_mock_completion_streaming_obj(
-                        model_response, mock_response=mock_response, model=model
+                        model_response, mock_response=mock_response, model=model, n=n
                     ),
                     model=model,
                     custom_llm_provider="openai",
                     logging_obj=logging,
                 )
             response = mock_completion_streaming_obj(
-                model_response, mock_response=mock_response, model=model
+                model_response,
+                mock_response=mock_response,
+                model=model,
+                n=n,
             )
             return response
-
-        model_response["choices"][0]["message"]["content"] = mock_response
+        if n is None:
+            model_response["choices"][0]["message"]["content"] = mock_response
+        else:
+            _all_choices = []
+            for i in range(n):
+                _choice = litellm.utils.Choices(
+                    index=i,
+                    message=litellm.utils.Message(
+                        content=mock_response, role="assistant"
+                    ),
+                )
+                _all_choices.append(_choice)
+            model_response["choices"] = _all_choices
         model_response["created"] = int(time.time())
         model_response["model"] = model
 
@@ -634,6 +650,7 @@ def completion(
     headers = kwargs.get("headers", None) or extra_headers
     num_retries = kwargs.get("num_retries", None)  ## deprecated
     max_retries = kwargs.get("max_retries", None)
+    cooldown_time = kwargs.get("cooldown_time", None)
     context_window_fallback_dict = kwargs.get("context_window_fallback_dict", None)
     organization = kwargs.get("organization", None)
     ### CUSTOM MODEL COST ###
@@ -747,6 +764,7 @@ def completion(
         "allowed_model_region",
         "model_config",
         "fastest_response",
+        "cooldown_time",
     ]
 
     default_params = openai_params + litellm_params
@@ -931,6 +949,7 @@ def completion(
             input_cost_per_token=input_cost_per_token,
             output_cost_per_second=output_cost_per_second,
             output_cost_per_token=output_cost_per_token,
+            cooldown_time=cooldown_time,
         )
         logging.update_environment_variables(
             model=model,
@@ -944,6 +963,7 @@ def completion(
                 model,
                 messages,
                 stream=stream,
+                n=n,
                 mock_response=mock_response,
                 mock_tool_calls=mock_tool_calls,
                 logging=logging,
@@ -1171,6 +1191,7 @@ def completion(
             or custom_llm_provider == "deepinfra"
             or custom_llm_provider == "perplexity"
             or custom_llm_provider == "groq"
+            or custom_llm_provider == "nvidia_nim"
             or custom_llm_provider == "codestral"
             or custom_llm_provider == "deepseek"
             or custom_llm_provider == "anyscale"
@@ -2906,6 +2927,7 @@ async def aembedding(*args, **kwargs) -> EmbeddingResponse:
             or custom_llm_provider == "deepinfra"
             or custom_llm_provider == "perplexity"
             or custom_llm_provider == "groq"
+            or custom_llm_provider == "nvidia_nim"
             or custom_llm_provider == "deepseek"
             or custom_llm_provider == "fireworks_ai"
             or custom_llm_provider == "ollama"
@@ -2985,6 +3007,7 @@ def embedding(
     client = kwargs.pop("client", None)
     rpm = kwargs.pop("rpm", None)
     tpm = kwargs.pop("tpm", None)
+    cooldown_time = kwargs.get("cooldown_time", None)
     max_parallel_requests = kwargs.pop("max_parallel_requests", None)
     model_info = kwargs.get("model_info", None)
     metadata = kwargs.get("metadata", None)
@@ -3060,6 +3083,7 @@ def embedding(
         "region_name",
         "allowed_model_region",
         "model_config",
+        "cooldown_time",
     ]
     default_params = openai_params + litellm_params
     non_default_params = {
@@ -3120,6 +3144,7 @@ def embedding(
                 "aembedding": aembedding,
                 "preset_cache_key": None,
                 "stream_response": {},
+                "cooldown_time": cooldown_time,
             },
         )
         if azure == True or custom_llm_provider == "azure":
@@ -3481,6 +3506,7 @@ async def atext_completion(
             or custom_llm_provider == "deepinfra"
             or custom_llm_provider == "perplexity"
             or custom_llm_provider == "groq"
+            or custom_llm_provider == "nvidia_nim"
             or custom_llm_provider == "text-completion-codestral"
             or custom_llm_provider == "deepseek"
             or custom_llm_provider == "fireworks_ai"

@@ -14,10 +14,11 @@ Features:
 - ✅ [SSO for Admin UI](./ui.md#✨-enterprise-features)
 - ✅ [Audit Logs](#audit-logs)
 - ✅ [Tracking Spend for Custom Tags](#tracking-spend-for-custom-tags)
-- ✅ [Enforce Required Params for LLM Requests (ex. Reject requests missing ["metadata"]["generation_name"])](#enforce-required-params-for-llm-requests)
-- ✅ [Content Moderation with LLM Guard, LlamaGuard, Google Text Moderations](#content-moderation)
+- ✅ [Control available public, private routes](#control-available-public-private-routes)
+- ✅ [Content Moderation with LLM Guard, LlamaGuard, Secret Detection, Google Text Moderations](#content-moderation)
 - ✅ [Prompt Injection Detection (with LakeraAI API)](#prompt-injection-detection---lakeraai)
 - ✅ [Custom Branding + Routes on Swagger Docs](#swagger-docs---custom-routes--branding)
+- ✅ [Enforce Required Params for LLM Requests (ex. Reject requests missing ["metadata"]["generation_name"])](#enforce-required-params-for-llm-requests)
 - ✅ Reject calls from Blocked User list 
 - ✅ Reject calls (incoming / outgoing) with Banned Keywords (e.g. competitors)
 
@@ -448,11 +449,144 @@ Expected Response
 
 
 
+## Control available public, private routes
+
+:::info
+
+❓ Use this when you want to make an existing private route -> public
+
+Example - Make `/spend/calculate` a publicly available route (by default `/spend/calculate` on LiteLLM Proxy requires authentication)
+
+:::
+
+#### Usage - Define public routes
+
+**Step 1** - set allowed public routes on config.yaml 
+
+`LiteLLMRoutes.public_routes` is an ENUM corresponding to the default public routes on LiteLLM. [You can see this here](https://github.com/BerriAI/litellm/blob/main/litellm/proxy/_types.py)
+
+```yaml
+general_settings:
+  master_key: sk-1234
+  public_routes: ["LiteLLMRoutes.public_routes", "/spend/calculate"]
+```
+
+**Step 2** - start proxy 
+
+```shell
+litellm --config config.yaml
+```
+
+**Step 3** - Test it 
+
+```shell
+curl --request POST \
+  --url 'http://localhost:4000/spend/calculate' \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "model": "gpt-4",
+    "messages": [{"role": "user", "content": "Hey, how'\''s it going?"}]
+  }'
+```
+
+🎉 Expect this endpoint to work without an `Authorization / Bearer Token`
+
 
 
 
 ## Content Moderation
-#### Content Moderation with LLM Guard
+### Content Moderation - Secret Detection
+❓ Use this to REDACT API Keys, Secrets sent in requests to an LLM. 
+
+Example if you want to redact the value of `OPENAI_API_KEY` in the following request
+
+#### Incoming Request 
+
+```json
+{
+    "messages": [
+        {
+            "role": "user",
+            "content": "Hey, how's it going, API_KEY = 'sk_1234567890abcdef'",
+        }
+    ]
+}
+```
+
+#### Request after Moderation
+
+```json
+{
+    "messages": [
+        {
+            "role": "user",
+            "content": "Hey, how's it going, API_KEY = '[REDACTED]'",
+        }
+    ]
+}
+```
+
+**Usage**
+
+**Step 1** Add this to your config.yaml 
+
+```yaml
+litellm_settings:
+  callbacks: ["hide_secrets"]
+```
+
+**Step 2** Run litellm proxy with `--detailed_debug` to see the server logs
+
+```
+litellm --config config.yaml --detailed_debug
+```
+
+**Step 3** Test it with request
+
+Send this request
+```shell
+curl --location 'http://localhost:4000/chat/completions' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'Content-Type: application/json' \
+    --data '{
+    "model": "llama3",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what is the value of my open ai key? openai_api_key=sk-1234998222"
+        }
+    ]
+}'
+```
+
+
+Expect to see the following warning on your litellm server logs
+
+```shell
+LiteLLM Proxy:WARNING: secret_detection.py:88 - Detected and redacted secrets in message: ['Secret Keyword']
+```
+
+
+You can also see the raw request sent from litellm to the API Provider
+```json
+POST Request Sent from LiteLLM:
+curl -X POST \
+https://api.groq.com/openai/v1/ \
+-H 'Authorization: Bearer gsk_mySVchjY********************************************' \
+-d {
+  "model": "llama3-8b-8192",
+  "messages": [
+    {
+      "role": "user",
+      "content": "what is the time today, openai_api_key=[REDACTED]"
+    }
+  ],
+  "stream": false,
+  "extra_body": {}
+}
+```
+
+### Content Moderation with LLM Guard
 
 Set the LLM Guard API Base in your environment 
 
@@ -587,7 +721,7 @@ curl --location 'http://0.0.0.0:4000/v1/chat/completions' \
 </TabItem>
 </Tabs>
 
-#### Content Moderation with LlamaGuard 
+### Content Moderation with LlamaGuard 
 
 Currently works with Sagemaker's LlamaGuard endpoint. 
 
@@ -621,7 +755,7 @@ callbacks: ["llamaguard_moderations"]
 
 
 
-#### Content Moderation with Google Text Moderation 
+### Content Moderation with Google Text Moderation 
 
 Requires your GOOGLE_APPLICATION_CREDENTIALS to be set in your .env (same as VertexAI).
 
