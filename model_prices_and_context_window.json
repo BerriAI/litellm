@@ -1291,6 +1291,16 @@
         "mode": "completion",
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
+    "code-gecko-latest": {
+        "max_tokens": 64,
+        "max_input_tokens": 2048,
+        "max_output_tokens": 64,
+        "input_cost_per_token": 0.000000125,
+        "output_cost_per_token": 0.000000125,
+        "litellm_provider": "vertex_ai-code-text-models",
+        "mode": "completion",
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
+    },
     "codechat-bison": {
         "max_tokens": 1024,
         "max_input_tokens": 6144,
