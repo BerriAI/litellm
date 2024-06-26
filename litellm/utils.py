@@ -2609,7 +2609,15 @@ def get_optional_params(
             optional_params["top_p"] = top_p
         if stop is not None:
             optional_params["stop_sequences"] = stop
-    elif custom_llm_provider == "huggingface" or custom_llm_provider == "predibase":
+    elif custom_llm_provider == "predibase":
+        supported_params = get_supported_openai_params(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+        _check_valid_arg(supported_params=supported_params)
+        optional_params = litellm.PredibaseConfig().map_openai_params(
+            non_default_params=non_default_params, optional_params=optional_params
+        )
+    elif custom_llm_provider == "huggingface":
         ## check if unsupported param passed in
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider
@@ -6157,13 +6165,6 @@ def exception_type(
                         response=original_exception.response,
                         litellm_debug_info=extra_information,
                     )
-                if "Request failed during generation" in error_str:
-                    # this is an internal server error from predibase
-                    raise litellm.InternalServerError(
-                        message=f"PredibaseException - {error_str}",
-                        llm_provider="predibase",
-                        model=model,
-                    )
                 elif hasattr(original_exception, "status_code"):
                     if original_exception.status_code == 500:
                         exception_mapping_worked = True
@@ -6201,7 +6202,10 @@ def exception_type(
                             llm_provider=custom_llm_provider,
                             litellm_debug_info=extra_information,
                         )
-                    elif original_exception.status_code == 422:
+                    elif (
+                        original_exception.status_code == 422
+                        or original_exception.status_code == 424
+                    ):
                         exception_mapping_worked = True
                         raise BadRequestError(
                             message=f"PredibaseException - {original_exception.message}",
