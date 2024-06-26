@@ -261,20 +261,24 @@ class BedrockLLM(BaseLLM):
         # handle anthropic prompts and amazon titan prompts
         prompt = ""
         chat_history: Optional[list] = None
+        ## CUSTOM PROMPT
+        if model in custom_prompt_dict:
+            # check if the model has a registered custom prompt
+            model_prompt_details = custom_prompt_dict[model]
+            prompt = custom_prompt(
+                role_dict=model_prompt_details["roles"],
+                initial_prompt_value=model_prompt_details.get(
+                    "initial_prompt_value", ""
+                ),
+                final_prompt_value=model_prompt_details.get("final_prompt_value", ""),
+                messages=messages,
+            )
+            return prompt, None
+        ## ELSE
         if provider == "anthropic" or provider == "amazon":
-            if model in custom_prompt_dict:
-                # check if the model has a registered custom prompt
-                model_prompt_details = custom_prompt_dict[model]
-                prompt = custom_prompt(
-                    role_dict=model_prompt_details["roles"],
-                    initial_prompt_value=model_prompt_details["initial_prompt_value"],
-                    final_prompt_value=model_prompt_details["final_prompt_value"],
-                    messages=messages,
-                )
-            else:
-                prompt = prompt_factory(
-                    model=model, messages=messages, custom_llm_provider="bedrock"
-                )
+            prompt = prompt_factory(
+                model=model, messages=messages, custom_llm_provider="bedrock"
+            )
         elif provider == "mistral":
             prompt = prompt_factory(
                 model=model, messages=messages, custom_llm_provider="bedrock"
