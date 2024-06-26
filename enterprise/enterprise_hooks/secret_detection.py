@@ -126,11 +126,14 @@ class _ENTERPRISE_SecretDetection(CustomLogger):
                         f"Detected and redacted secrets in input: {secret_types}"
                     )
             elif isinstance(data["input"], list):
-                for item in data["input"]:
+                _input_in_request = data["input"]
+                for idx, item in enumerate(_input_in_request):
                     if isinstance(item, str):
                         detected_secrets = self.scan_message_for_secrets(item)
                         for secret in detected_secrets:
-                            item = item.replace(secret["value"], "[REDACTED]")
+                            _input_in_request[idx] = item.replace(
+                                secret["value"], "[REDACTED]"
+                            )
                         if len(detected_secrets) > 0:
                             secret_types = [
                                 secret["type"] for secret in detected_secrets
@@ -138,27 +141,5 @@ class _ENTERPRISE_SecretDetection(CustomLogger):
                             verbose_proxy_logger.warning(
                                 f"Detected and redacted secrets in input: {secret_types}"
                             )
-
-
-# secretDetect = _ENTERPRISE_SecretDetection()
-
-# from litellm.caching import DualCache
-# print("running hook to detect a secret")
-# test_data = {
-#     "messages": [
-#         {"role": "user", "content": "Hey, how's it going, API_KEY = 'sk_1234567890abcdef'"},
-#         {"role": "assistant", "content": "Hello! I'm doing well. How can I assist you today?"},
-#         {"role": "user", "content": "this is my OPENAI_API_KEY = 'sk_1234567890abcdef'"},
-#          {"role": "user", "content": "i think it is sk-1234567890abcdef"},
-#     ],
-#     "model": "gpt-3.5-turbo",
-# }
-# secretDetect.async_pre_call_hook(
-#     data=test_data,
-#     user_api_key_dict=UserAPIKeyAuth(token="your_api_key"),
-#     cache=DualCache(),
-#     call_type="completion",
-# )
-
-
-# print("finished hook to detect a secret - test data=", test_data)
+                verbose_proxy_logger.debug("Data after redacting input %s", data)
+        return
