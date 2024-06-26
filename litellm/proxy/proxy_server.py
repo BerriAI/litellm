@@ -1480,6 +1480,21 @@ class ProxyConfig:
                                 llama_guard_object = _ENTERPRISE_LlamaGuard()
                                 imported_list.append(llama_guard_object)
                             elif (
+                                isinstance(callback, str) and callback == "hide_secrets"
+                            ):
+                                from enterprise.enterprise_hooks.secret_detection import (
+                                    _ENTERPRISE_SecretDetection,
+                                )
+
+                                if premium_user != True:
+                                    raise Exception(
+                                        "Trying to use secret hiding"
+                                        + CommonProxyErrors.not_premium_user.value
+                                    )
+
+                                _secret_detection_object = _ENTERPRISE_SecretDetection()
+                                imported_list.append(_secret_detection_object)
+                            elif (
                                 isinstance(callback, str)
                                 and callback == "openai_moderations"
                             ):
