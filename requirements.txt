@@ -32,6 +32,7 @@ opentelemetry-api==1.25.0
 opentelemetry-sdk==1.25.0
 opentelemetry-exporter-otlp==1.25.0
 detect-secrets==1.5.0 # Enterprise - secret detection / masking in LLM requests
+cryptography==42.0.7
 
 ### LITELLM PACKAGE DEPENDENCIES
 python-dotenv==1.0.0 # for env 
