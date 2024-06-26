@@ -92,16 +92,15 @@ class FireworksAIConfig:
         non_default_params: dict,
         optional_params: dict,
         model: str,
-        drop_params: bool,
     ) -> dict:
         supported_openai_params = self.get_supported_openai_params()
         for param, value in non_default_params.items():
             if param == "tool_choice":
                 if value == "required":
                     # relevant issue: https://github.com/BerriAI/litellm/issues/4416
-                    optional_params["tools"] = "any"
+                    optional_params["tool_choice"] = "any"
 
-            if param in supported_openai_params:
+            elif param in supported_openai_params:
                 if value is not None:
                     optional_params[param] = value
         return optional_params
