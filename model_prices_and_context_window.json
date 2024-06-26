@@ -1261,6 +1261,18 @@
         "mode": "completion",
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
+    "codechat-bison@latest": {
+        "max_tokens": 1024,
+        "max_input_tokens": 6144,
+        "max_output_tokens": 1024,
+        "input_cost_per_token": 0.000000125,
+        "output_cost_per_token": 0.000000125,
+        "input_cost_per_character": 0.00000025,
+        "output_cost_per_character": 0.0000005,
+        "litellm_provider": "vertex_ai-code-chat-models",
+        "mode": "chat",
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
+    },
     "codechat-bison": {
         "max_tokens": 1024,
         "max_input_tokens": 6144,
@@ -1285,7 +1297,31 @@
         "mode": "chat",
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
+    "codechat-bison@002": {
+        "max_tokens": 1024,
+        "max_input_tokens": 6144,
+        "max_output_tokens": 1024,
+        "input_cost_per_token": 0.000000125,
+        "output_cost_per_token": 0.000000125,
+        "input_cost_per_character": 0.00000025,
+        "output_cost_per_character": 0.0000005,
+        "litellm_provider": "vertex_ai-code-chat-models",
+        "mode": "chat",
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
+    },
     "codechat-bison-32k": {
+        "max_tokens": 8192,
+        "max_input_tokens": 32000,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 0.000000125,
+        "output_cost_per_token": 0.000000125,
+        "input_cost_per_character": 0.00000025,
+        "output_cost_per_character": 0.0000005,
+        "litellm_provider": "vertex_ai-code-chat-models",
+        "mode": "chat",
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
+    },
+    "codechat-bison-32k@002": {
         "max_tokens": 8192,
         "max_input_tokens": 32000,
         "max_output_tokens": 8192,
