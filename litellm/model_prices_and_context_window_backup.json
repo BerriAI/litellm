@@ -1225,6 +1225,42 @@
         "mode": "completion",
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
+    "code-bison@002": {
+        "max_tokens": 1024,
+        "max_input_tokens": 6144,
+        "max_output_tokens": 1024,
+        "input_cost_per_token": 0.000000125,
+        "output_cost_per_token": 0.000000125,
+        "input_cost_per_character": 0.00000025,
+        "output_cost_per_character": 0.0000005,
+        "litellm_provider": "vertex_ai-code-text-models",
+        "mode": "completion",
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
+    },
+    "code-bison32k": {
+        "max_tokens": 1024,
+        "max_input_tokens": 6144,
+        "max_output_tokens": 1024,
+        "input_cost_per_token": 0.000000125,
+        "output_cost_per_token": 0.000000125,
+        "input_cost_per_character": 0.00000025,
+        "output_cost_per_character": 0.0000005,
+        "litellm_provider": "vertex_ai-code-text-models",
+        "mode": "completion",
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
+    },
+    "code-bison-32k@002": {
+        "max_tokens": 1024,
+        "max_input_tokens": 6144,
+        "max_output_tokens": 1024,
+        "input_cost_per_token": 0.000000125,
+        "output_cost_per_token": 0.000000125,
+        "input_cost_per_character": 0.00000025,
+        "output_cost_per_character": 0.0000005,
+        "litellm_provider": "vertex_ai-code-text-models",
+        "mode": "completion",
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
+    },
     "code-gecko@001": {
         "max_tokens": 64,
         "max_input_tokens": 2048,
