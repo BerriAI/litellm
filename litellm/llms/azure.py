@@ -902,7 +902,7 @@ class AzureChatCompletion(BaseLLM):
                 },
             )
 
-            if aembedding == True:
+            if aembedding is True:
                 response = self.aembedding(
                     data=data,
                     input=input,
