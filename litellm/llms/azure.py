@@ -812,7 +812,7 @@ class AzureChatCompletion(BaseLLM):
         azure_client_params: dict,
         api_key: str,
         input: list,
-        client=None,
+        client: Optional[AsyncAzureOpenAI] = None,
         logging_obj=None,
         timeout=None,
     ):
@@ -911,6 +911,7 @@ class AzureChatCompletion(BaseLLM):
                     model_response=model_response,
                     azure_client_params=azure_client_params,
                     timeout=timeout,
+                    client=client,
                 )
                 return response
             if client is None:
