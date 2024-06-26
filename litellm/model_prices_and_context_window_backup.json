@@ -3369,6 +3369,15 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true
     },
+    "ollama/codegemma": {
+        "max_tokens": 8192, 
+        "max_input_tokens": 8192, 
+        "max_output_tokens": 8192, 
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "ollama",
+        "mode": "completion"
+    },
     "ollama/llama2": {
         "max_tokens": 4096, 
         "max_input_tokens": 4096, 
