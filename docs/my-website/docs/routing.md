@@ -762,6 +762,9 @@ asyncio.run(router_acompletion())
 
 Set the limit for how many calls a model is allowed to fail in a minute, before being cooled down for a minute. 
 
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
 ```python
 from litellm import Router
 
@@ -779,8 +782,38 @@ messages = [{"content": user_message, "role": "user"}]
 response = router.completion(model="gpt-3.5-turbo", messages=messages)
 
 print(f"response: {response}")
-
 ```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+**Set Global Value**
+
+```yaml
+router_settings:
+	allowed_fails: 3 # cooldown model if it fails > 1 call in a minute. 
+  	cooldown_time: 30 # (in seconds) how long to cooldown model if fails/min > allowed_fails
+```
+
+Defaults:
+- allowed_fails: 0
+- cooldown_time: 60s 
+
+**Set Per Model**
+
+```yaml
+model_list:
+- model_name: fake-openai-endpoint
+  litellm_params:
+    model: predibase/llama-3-8b-instruct
+    api_key: os.environ/PREDIBASE_API_KEY
+    tenant_id: os.environ/PREDIBASE_TENANT_ID
+    max_new_tokens: 256
+    cooldown_time: 0 # 👈 KEY CHANGE
+```
+
+</TabItem>
+</Tabs>
 
 ### Retries
 
