@@ -35,7 +35,9 @@ class DataDogLogger:
     async def _async_log_event(
         self, kwargs, response_obj, start_time, end_time, print_verbose, user_id
     ):
-        self.log_event(kwargs, response_obj, start_time, end_time, print_verbose)
+        self.log_event(
+            kwargs, response_obj, start_time, end_time, user_id, print_verbose
+        )
 
     def log_event(
         self, kwargs, response_obj, start_time, end_time, user_id, print_verbose
