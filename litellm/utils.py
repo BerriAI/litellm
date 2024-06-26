@@ -3670,6 +3670,8 @@ def get_supported_openai_params(
             "tool_choice",
             "response_format",
             "seed",
+            "extra_headers",
+            "extra_body",
         ]
     elif custom_llm_provider == "deepseek":
         return [
