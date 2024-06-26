@@ -26,7 +26,7 @@ general_settings:
 
 litellm_settings:
   success_callback: ["prometheus"]
-  callbacks: ["otel"]
+  callbacks: ["otel", "hide_secrets"]
   failure_callback: ["prometheus"]
   store_audit_logs: true
   redact_messages_in_exceptions: True
