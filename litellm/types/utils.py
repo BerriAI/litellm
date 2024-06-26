@@ -171,7 +171,7 @@ class Function(OpenAIObject):
         arguments: Union[Dict, str],
         name: Optional[str] = None,
         **params,
-    ):
+    ) -> None:
         if isinstance(arguments, Dict):
             arguments = json.dumps(arguments)
         else:
@@ -242,7 +242,7 @@ class ChatCompletionMessageToolCall(OpenAIObject):
         id: Optional[str] = None,
         type: Optional[str] = None,
         **params,
-    ):
+    ) -> None:
         super(ChatCompletionMessageToolCall, self).__init__(**params)
         if isinstance(function, Dict):
             self.function = Function(**function)
@@ -285,7 +285,7 @@ class Message(OpenAIObject):
         function_call=None,
         tool_calls=None,
         **params,
-    ):
+    ) -> None:
         super(Message, self).__init__(**params)
         self.content = content
         self.role = role
@@ -328,7 +328,7 @@ class Delta(OpenAIObject):
         function_call=None,
         tool_calls=None,
         **params,
-    ):
+    ) -> None:
         super(Delta, self).__init__(**params)
         self.content = content
         self.role = role
@@ -375,7 +375,7 @@ class Choices(OpenAIObject):
         logprobs=None,
         enhancements=None,
         **params,
-    ):
+    ) -> None:
         super(Choices, self).__init__(**params)
         if finish_reason is not None:
             self.finish_reason = map_finish_reason(
@@ -416,7 +416,7 @@ class Choices(OpenAIObject):
 class Usage(OpenAIObject):
     def __init__(
         self, prompt_tokens=None, completion_tokens=None, total_tokens=None, **params
-    ):
+    ) -> None:
         super(Usage, self).__init__(**params)
         if prompt_tokens:
             self.prompt_tokens = prompt_tokens
@@ -451,7 +451,7 @@ class StreamingChoices(OpenAIObject):
         logprobs=None,
         enhancements=None,
         **params,
-    ):
+    ) -> None:
         super(StreamingChoices, self).__init__(**params)
         if finish_reason:
             self.finish_reason = finish_reason
@@ -657,7 +657,7 @@ class EmbeddingResponse(OpenAIObject):
         response_ms=None,
         data=None,
         **params,
-    ):
+    ) -> None:
         object = "list"
         if response_ms:
             _response_ms = response_ms
@@ -708,7 +708,7 @@ class Logprobs(OpenAIObject):
 
 
 class TextChoices(OpenAIObject):
-    def __init__(self, finish_reason=None, index=0, text=None, logprobs=None, **params):
+    def __init__(self, finish_reason=None, index=0, text=None, logprobs=None, **params) -> None:
         super(TextChoices, self).__init__(**params)
         if finish_reason:
             self.finish_reason = map_finish_reason(finish_reason)
@@ -790,7 +790,7 @@ class TextCompletionResponse(OpenAIObject):
         response_ms=None,
         object=None,
         **params,
-    ):
+    ) -> None:
         if stream:
             object = "text_completion.chunk"
             choices = [TextChoices()]
@@ -873,7 +873,7 @@ class ImageObject(OpenAIObject):
     url: Optional[str] = None
     revised_prompt: Optional[str] = None
 
-    def __init__(self, b64_json=None, url=None, revised_prompt=None):
+    def __init__(self, b64_json=None, url=None, revised_prompt=None) -> None:
         super().__init__(b64_json=b64_json, url=url, revised_prompt=revised_prompt)
 
     def __contains__(self, key):
@@ -909,7 +909,7 @@ class ImageResponse(OpenAIObject):
 
     _hidden_params: dict = {}
 
-    def __init__(self, created=None, data=None, response_ms=None):
+    def __init__(self, created=None, data=None, response_ms=None) -> None:
         if response_ms:
             _response_ms = response_ms
         else:
@@ -956,7 +956,7 @@ class TranscriptionResponse(OpenAIObject):
 
     _hidden_params: dict = {}
 
-    def __init__(self, text=None):
+    def __init__(self, text=None) -> None:
         super().__init__(text=text)
 
     def __contains__(self, key):
