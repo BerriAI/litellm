@@ -13,7 +13,8 @@ This covers:
 - ✅ [**Audit Logs with retention policy**](../docs/proxy/enterprise.md#audit-logs)
 - ✅ [**JWT-Auth**](../docs/proxy/token_auth.md)
 - ✅ [**Control available public, private routes**](../docs/proxy/enterprise.md#control-available-public-private-routes)
-- ✅ [**Prompt Injection Detection**](#prompt-injection-detection-lakeraai)
+- ✅ [**Guardrails, Content Moderation, PII Masking, Secret/API Key Masking**](../docs/proxy/enterprise.md#prompt-injection-detection---lakeraai)
+- ✅ [**Prompt Injection Detection**](../docs/proxy/enterprise.md#prompt-injection-detection---lakeraai)
 - ✅ [**Invite Team Members to access `/spend` Routes**](../docs/proxy/cost_tracking#allowing-non-proxy-admins-to-access-spend-endpoints)
 - ✅ **Feature Prioritization**
 - ✅ **Custom Integrations**
