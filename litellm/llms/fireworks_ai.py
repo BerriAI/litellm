@@ -99,7 +99,9 @@ class FireworksAIConfig:
                 if value == "required":
                     # relevant issue: https://github.com/BerriAI/litellm/issues/4416
                     optional_params["tool_choice"] = "any"
-
+                else:
+                    # pass through the value of tool choice
+                    optional_params["tool_choice"] = value
             elif param in supported_openai_params:
                 if value is not None:
                     optional_params[param] = value
