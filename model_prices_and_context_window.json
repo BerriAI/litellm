@@ -1147,6 +1147,8 @@
         "max_output_tokens": 4096,
         "input_cost_per_token": 0.000000125,
         "output_cost_per_token": 0.000000125,
+        "input_cost_per_character": 0.00000025,
+        "output_cost_per_character": 0.0000005,
         "litellm_provider": "vertex_ai-chat-models",
         "mode": "chat",
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
@@ -1157,6 +1159,8 @@
         "max_output_tokens": 4096,
         "input_cost_per_token": 0.000000125,
         "output_cost_per_token": 0.000000125,
+        "input_cost_per_character": 0.00000025,
+        "output_cost_per_character": 0.0000005,
         "litellm_provider": "vertex_ai-chat-models",
         "mode": "chat",
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
@@ -1167,6 +1171,8 @@
         "max_output_tokens": 4096,
         "input_cost_per_token": 0.000000125,
         "output_cost_per_token": 0.000000125,
+        "input_cost_per_character": 0.00000025,
+        "output_cost_per_character": 0.0000005,
         "litellm_provider": "vertex_ai-chat-models",
         "mode": "chat",
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
@@ -1177,6 +1183,20 @@
         "max_output_tokens": 8192,
         "input_cost_per_token": 0.000000125,
         "output_cost_per_token": 0.000000125,
+        "input_cost_per_character": 0.00000025,
+        "output_cost_per_character": 0.0000005,
+        "litellm_provider": "vertex_ai-chat-models",
+        "mode": "chat",
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
+    },
+    "chat-bison-32k@002": {
+        "max_tokens": 8192,
+        "max_input_tokens": 32000,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 0.000000125,
+        "output_cost_per_token": 0.000000125,
+        "input_cost_per_character": 0.00000025,
+        "output_cost_per_character": 0.0000005,
         "litellm_provider": "vertex_ai-chat-models",
         "mode": "chat",
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
@@ -1187,6 +1207,8 @@
         "max_output_tokens": 1024,
         "input_cost_per_token": 0.000000125,
         "output_cost_per_token": 0.000000125,
+        "input_cost_per_character": 0.00000025,
+        "output_cost_per_character": 0.0000005,
         "litellm_provider": "vertex_ai-code-text-models",
         "mode": "chat",
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
@@ -1197,6 +1219,8 @@
         "max_output_tokens": 1024,
         "input_cost_per_token": 0.000000125,
         "output_cost_per_token": 0.000000125,
+        "input_cost_per_character": 0.00000025,
+        "output_cost_per_character": 0.0000005,
         "litellm_provider": "vertex_ai-code-text-models",
         "mode": "completion",
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
@@ -1237,6 +1261,8 @@
         "max_output_tokens": 1024,
         "input_cost_per_token": 0.000000125,
         "output_cost_per_token": 0.000000125,
+        "input_cost_per_character": 0.00000025,
+        "output_cost_per_character": 0.0000005,
         "litellm_provider": "vertex_ai-code-chat-models",
         "mode": "chat",
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
@@ -1247,6 +1273,8 @@
         "max_output_tokens": 1024,
         "input_cost_per_token": 0.000000125,
         "output_cost_per_token": 0.000000125,
+        "input_cost_per_character": 0.00000025,
+        "output_cost_per_character": 0.0000005,
         "litellm_provider": "vertex_ai-code-chat-models",
         "mode": "chat",
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
@@ -1257,6 +1285,8 @@
         "max_output_tokens": 8192,
         "input_cost_per_token": 0.000000125,
         "output_cost_per_token": 0.000000125,
+        "input_cost_per_character": 0.00000025,
+        "output_cost_per_character": 0.0000005,
         "litellm_provider": "vertex_ai-code-chat-models",
         "mode": "chat",
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
