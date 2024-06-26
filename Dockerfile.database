@@ -9,27 +9,6 @@ FROM $LITELLM_BUILD_IMAGE as builder
 # Set the working directory to /app
 WORKDIR /app
 
-ARG LITELLM_USER=litellm LITELLM_UID=1729
-ARG LITELLM_GROUP=litellm LITELLM_GID=1729
-
-RUN groupadd \
-	--gid ${LITELLM_GID} \
-	${LITELLM_GROUP} \
-	&& useradd \
-	--create-home \
-	--shell /bin/sh \
-	--gid ${LITELLM_GID} \
-	--uid ${LITELLM_UID} \
-	${LITELLM_USER}
-
-# Allows user to update python install.
-# This is necessary for prisma.
-RUN chown -R ${LITELLM_USER}:${LITELLM_GROUP} /usr/local/lib/python3.11
-
-# Set the HOME var forcefully because of prisma.
-ENV HOME=/home/${LITELLM_USER}
-USER ${LITELLM_USER}
-
 # Install build dependencies
 RUN apt-get clean && apt-get update && \
     apt-get install -y gcc python3-dev && \
