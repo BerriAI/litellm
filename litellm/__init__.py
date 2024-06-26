@@ -820,6 +820,7 @@ from .llms.openai import (
 )
 from .llms.nvidia_nim import NvidiaNimConfig
 from .llms.fireworks_ai import FireworksAIConfig
+from .llms.volcengine import VolcEngineConfig
 from .llms.text_completion_codestral import MistralTextCompletionConfig
 from .llms.azure import (
     AzureOpenAIConfig,
