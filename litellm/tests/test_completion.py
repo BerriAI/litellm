@@ -1222,6 +1222,44 @@ def test_completion_fireworks_ai():
         pytest.fail(f"Error occurred: {e}")
 
 
+def test_fireworks_ai_tool_calling():
+    litellm.set_verbose = True
+    model_name = "fireworks_ai/accounts/fireworks/models/firefunction-v2"
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                    },
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+    messages = [
+        {
+            "role": "user",
+            "content": "What's the weather like in Boston today in Fahrenheit?",
+        }
+    ]
+    response = completion(
+        model=model_name,
+        messages=messages,
+        tools=tools,
+        tool_choice="required",
+    )
+    print(response)
+
+
 @pytest.mark.skip(reason="this test is flaky")
 def test_completion_perplexity_api():
     try:
