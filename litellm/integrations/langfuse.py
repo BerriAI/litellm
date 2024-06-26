@@ -311,22 +311,17 @@ class LangFuseLogger:
 
         try:
             tags = []
-            try:
-                metadata = copy.deepcopy(
-                    metadata
-                )  # Avoid modifying the original metadata
-            except:
-                new_metadata = {}
-                for key, value in metadata.items():
-                    if (
-                        isinstance(value, list)
-                        or isinstance(value, dict)
-                        or isinstance(value, str)
-                        or isinstance(value, int)
-                        or isinstance(value, float)
-                    ):
-                        new_metadata[key] = copy.deepcopy(value)
-                metadata = new_metadata
+            new_metadata = {}
+            for key, value in metadata.items():
+                if (
+                    isinstance(value, list)
+                    or isinstance(value, dict)
+                    or isinstance(value, str)
+                    or isinstance(value, int)
+                    or isinstance(value, float)
+                ):
+                    new_metadata[key] = copy.deepcopy(value)
+            metadata = new_metadata
 
             supports_tags = Version(langfuse.version.__version__) >= Version("2.6.3")
             supports_prompt = Version(langfuse.version.__version__) >= Version("2.7.3")
