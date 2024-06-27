@@ -69,6 +69,10 @@ async def test_basic_secret_detection_chat():
                 "role": "user",
                 "content": "this is my OPENAI_API_KEY = 'sk_1234567890abcdef'",
             },
+            {
+                "role": "user",
+                "content": "My hi API Key is sk-Pc4nlxVoMz41290028TbMCxx, does it seem to be in the correct format?",
+            },
             {"role": "user", "content": "i think it is +1 412-555-5555"},
         ],
         "model": "gpt-3.5-turbo",
@@ -93,6 +97,10 @@ async def test_basic_secret_detection_chat():
                 "content": "Hello! I'm doing well. How can I assist you today?",
             },
             {"role": "user", "content": "this is my OPENAI_API_KEY = '[REDACTED]'"},
+            {
+                "role": "user",
+                "content": "My hi API Key is [REDACTED], does it seem to be in the correct format?",
+            },
             {"role": "user", "content": "i think it is +1 412-555-5555"},
         ],
         "model": "gpt-3.5-turbo",
