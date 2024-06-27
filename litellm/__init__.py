@@ -738,6 +738,7 @@ openai_image_generation_models = ["dall-e-2", "dall-e-3"]
 from .timeout import timeout
 from .cost_calculator import completion_cost
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.token_counter import get_modified_max_tokens
 from .utils import (
     client,
     exception_type,
