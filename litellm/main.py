@@ -4410,6 +4410,7 @@ def speech(
     voice: str,
     api_key: Optional[str] = None,
     api_base: Optional[str] = None,
+    api_version: Optional[str] = None,
     organization: Optional[str] = None,
     project: Optional[str] = None,
     max_retries: Optional[int] = None,
@@ -4478,6 +4479,45 @@ def speech(
             api_base=api_base,
             organization=organization,
             project=project,
+            max_retries=max_retries,
+            timeout=timeout,
+            client=client,  # pass AsyncOpenAI, OpenAI client
+            aspeech=aspeech,
+        )
+    elif custom_llm_provider == "azure":
+        # azure configs
+        api_base = api_base or litellm.api_base or get_secret("AZURE_API_BASE")  # type: ignore
+
+        api_version = (
+            api_version or litellm.api_version or get_secret("AZURE_API_VERSION")
+        )  # type: ignore
+
+        api_key = (
+            api_key
+            or litellm.api_key
+            or litellm.azure_key
+            or get_secret("AZURE_OPENAI_API_KEY")
+            or get_secret("AZURE_API_KEY")
+        )  # type: ignore
+
+        azure_ad_token: Optional[str] = optional_params.get("extra_body", {}).pop(  # type: ignore
+            "azure_ad_token", None
+        ) or get_secret(
+            "AZURE_AD_TOKEN"
+        )
+
+        headers = headers or litellm.headers
+
+        response = azure_chat_completions.audio_speech(
+            model=model,
+            input=input,
+            voice=voice,
+            optional_params=optional_params,
+            api_key=api_key,
+            api_base=api_base,
+            api_version=api_version,
+            azure_ad_token=azure_ad_token,
+            organization=organization,
             max_retries=max_retries,
             timeout=timeout,
             client=client,  # pass AsyncOpenAI, OpenAI client
