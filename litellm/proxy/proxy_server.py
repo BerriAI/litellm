@@ -6284,7 +6284,7 @@ async def model_info_v2(
         raise HTTPException(
             status_code=500,
             detail={
-                "error": f"Invalid llm model list. llm_model_list={llm_model_list}"
+                "error": f"No model list passed, models={llm_model_list}. You can add a model through the config.yaml or on the LiteLLM Admin UI."
             },
         )
 
