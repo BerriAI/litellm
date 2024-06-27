@@ -115,3 +115,18 @@ Here's how to call an OpenAI-Compatible Endpoint with the LiteLLM Proxy Server
   </TabItem>
 
   </Tabs>
+
+
+### Advanced - Disable System Messages
+
+Some VLLM models (e.g. gemma) don't support system messages. To map those requests to 'user' messages, use the `supports_system_message` flag. 
+
+```yaml
+model_list:
+- model_name: my-custom-model
+   litellm_params:
+      model: openai/google/gemma
+      api_base: http://my-custom-base
+      api_key: "" 
+      supports_system_message: False # 👈 KEY CHANGE
+```
