@@ -863,6 +863,46 @@
         "litellm_provider": "deepseek",
         "mode": "chat"
     },
+    "codestral/codestral-latest": {
+        "max_tokens": 8191,
+        "max_input_tokens": 32000,
+        "max_output_tokens": 8191,
+        "input_cost_per_token": 0.000000,
+        "output_cost_per_token": 0.000000,
+        "litellm_provider": "codestral",
+        "mode": "chat",
+        "source": "https://docs.mistral.ai/capabilities/code_generation/"
+    },
+    "codestral/codestral-2405": {
+        "max_tokens": 8191,
+        "max_input_tokens": 32000,
+        "max_output_tokens": 8191,
+        "input_cost_per_token": 0.000000,
+        "output_cost_per_token": 0.000000,
+        "litellm_provider": "codestral",
+        "mode": "chat",
+        "source": "https://docs.mistral.ai/capabilities/code_generation/"
+    },
+    "text-completion-codestral/codestral-latest": {
+        "max_tokens": 8191,
+        "max_input_tokens": 32000,
+        "max_output_tokens": 8191,
+        "input_cost_per_token": 0.000000,
+        "output_cost_per_token": 0.000000,
+        "litellm_provider": "text-completion-codestral",
+        "mode": "completion",
+        "source": "https://docs.mistral.ai/capabilities/code_generation/"
+    },
+    "text-completion-codestral/codestral-2405": {
+        "max_tokens": 8191,
+        "max_input_tokens": 32000,
+        "max_output_tokens": 8191,
+        "input_cost_per_token": 0.000000,
+        "output_cost_per_token": 0.000000,
+        "litellm_provider": "text-completion-codestral",
+        "mode": "completion",
+        "source": "https://docs.mistral.ai/capabilities/code_generation/"
+    },
     "deepseek-coder": {
         "max_tokens": 4096,
         "max_input_tokens": 32000,
