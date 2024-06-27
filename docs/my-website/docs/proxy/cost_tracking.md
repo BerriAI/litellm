@@ -114,6 +114,14 @@ print(response)
 **Step3 - Verify Spend Tracked**
 That's IT. Now Verify your spend was tracked
 
+<Tabs>
+<TabItem value="curl" label="Response Headers">
+
+<Image img={require('../../img/response_cost_img.png')} />
+
+</TabItem>
+<TabItem value="db" label="DB + UI">
+
 The following spend gets tracked in Table `LiteLLM_SpendLogs`
 
 ```json
@@ -143,6 +151,10 @@ Navigate to the Usage Tab on the LiteLLM UI (found on https://your-proxy-endpoin
 Use the `/global/spend/report` endpoint to get daily spend report per 
 - team
 - customer [this is `user` passed to `/chat/completions` request](#how-to-track-spend-with-litellm)
+
+</TabItem>
+</Tabs>
+
 
 <Tabs>
 
