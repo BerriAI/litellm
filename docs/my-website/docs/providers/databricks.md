@@ -27,7 +27,7 @@ import os
 os.environ["DATABRICKS_API_KEY"] = "databricks key"
 os.environ["DATABRICKS_API_BASE"] = "databricks base url" # e.g.: https://adb-3064715882934586.6.azuredatabricks.net/serving-endpoints
 
-# predibase llama-3 call
+# Databricks dbrx-instruct call
 response = completion(
     model="databricks/databricks-dbrx-instruct", 
     messages = [{ "content": "Hello, how are you?","role": "user"}]
@@ -143,8 +143,8 @@ response = completion(
   model_list:
     - model_name: llama-3
       litellm_params:
-        model: predibase/llama-3-8b-instruct
-        api_key: os.environ/PREDIBASE_API_KEY
+        model: databricks/databricks-dbrx-instruct
+        api_key: os.environ/DATABRICKS_API_KEY
         max_tokens: 20
         temperature: 0.5
 ```
@@ -162,7 +162,7 @@ import os
 os.environ["DATABRICKS_API_KEY"] = "databricks key"
 os.environ["DATABRICKS_API_BASE"] = "databricks url"
 
-# predibase llama3 call
+# Databricks bge-large-en call
 response = litellm.embedding(
       model="databricks/databricks-bge-large-en",
       input=["good morning from litellm"],
