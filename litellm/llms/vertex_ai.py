@@ -437,7 +437,7 @@ def completion(
     except:
         raise VertexAIError(
             status_code=400,
-            message="vertexai import failed please run `pip install google-cloud-aiplatform`",
+            message="vertexai import failed please run `pip install google-cloud-aiplatform`. This is required for the 'vertex_ai/' route on LiteLLM",
         )
 
     if not (
