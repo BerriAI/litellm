@@ -143,13 +143,13 @@ response = completion(
   model_list:
     - model_name: llama-3
       litellm_params:
-        model: databricks/databricks-dbrx-instruct
+        model: databricks/databricks-meta-llama-3-70b-instruct
         api_key: os.environ/DATABRICKS_API_KEY
         max_tokens: 20
         temperature: 0.5
 ```
 
-## Passings Database specific params - 'instruction'
+## Passings Databricks specific params - 'instruction'
 
 For embedding models, databricks lets you pass in an additional param 'instruction'. [Full Spec](https://github.com/BerriAI/litellm/blob/43353c28b341df0d9992b45c6ce464222ebd7984/litellm/llms/databricks.py#L164)
 
@@ -177,14 +177,13 @@ response = litellm.embedding(
     - model_name: bge-large
       litellm_params:
         model: databricks/databricks-bge-large-en
-        api_key: os.environ/DATABRICKS_API_KEY
-        api_base: os.environ/DATABRICKS_API_BASE
+        api_key: ${DATABRICKS_API_KEY}
+        api_base: ${DATABRICKS_API_BASE}
         instruction: "Represent this sentence for searching relevant passages:"
 ```
 
 
 ## Supported Databricks Chat Completion Models 
-Here's an example of using a Databricks models with LiteLLM
 
 | Model Name                 | Command                                                          |
 |----------------------------|------------------------------------------------------------------|
@@ -196,8 +195,8 @@ Here's an example of using a Databricks models with LiteLLM
 | databricks-mpt-7b-instruct    | `completion(model='databricks/databricks-mpt-7b-instruct', messages=messages)`   | 
 
 ## Supported Databricks Embedding Models 
-Here's an example of using a databricks models with LiteLLM
 
 | Model Name                 | Command                                                          |
 |----------------------------|------------------------------------------------------------------|
-| databricks-bge-large-en    | `completion(model='databricks/databricks-bge-large-en', messages=messages)`   | 
+| databricks-bge-large-en    | `embedding(model='databricks/databricks-bge-large-en', messages=messages)`   |
+| databricks-gte-large-en    | `embedding(model='databricks/databricks-gte-large-en', messages=messages)`   |
