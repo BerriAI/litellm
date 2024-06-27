@@ -427,7 +427,7 @@ model_list:
 
 ```shell
 $ litellm --config /path/to/config.yaml
-```
+``` 
 
 ## Setting Embedding Models 
 
