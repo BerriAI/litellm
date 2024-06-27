@@ -177,8 +177,8 @@ response = litellm.embedding(
     - model_name: bge-large
       litellm_params:
         model: databricks/databricks-bge-large-en
-        api_key: ${DATABRICKS_API_KEY}
-        api_base: ${DATABRICKS_API_BASE}
+        api_key: os.environ/DATABRICKS_API_KEY
+        api_base: os.environ/DATABRICKS_API_BASE
         instruction: "Represent this sentence for searching relevant passages:"
 ```
 
