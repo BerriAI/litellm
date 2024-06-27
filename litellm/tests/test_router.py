@@ -1884,3 +1884,41 @@ async def test_router_model_usage(mock_response):
             else:
                 print(f"allowed_fails: {allowed_fails}")
                 raise e
+
+
+@pytest.mark.asyncio
+async def test_is_proxy_set():
+    """
+    Assert if proxy is set
+    """
+    from httpcore import AsyncHTTPProxy
+
+    os.environ["HTTPS_PROXY"] = "https://proxy.example.com:8080"
+    from openai import AsyncAzureOpenAI
+
+    # Function to check if a proxy is set on the client
+    # Function to check if a proxy is set on the client
+    def check_proxy(client: httpx.AsyncClient) -> bool:
+        return isinstance(client._transport.__dict__["_pool"], AsyncHTTPProxy)
+
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "azure/gpt-3.5-turbo",
+                    "api_key": "my-key",
+                    "api_base": "my-base",
+                    "mock_response": "hello world",
+                },
+                "model_info": {"id": "1"},
+            }
+        ]
+    )
+
+    _deployment = llm_router.get_deployment(model_id="1")
+    model_client: AsyncAzureOpenAI = llm_router._get_client(
+        deployment=_deployment, kwargs={}, client_type="async"
+    )  # type: ignore
+
+    assert check_proxy(client=model_client._client) is True
