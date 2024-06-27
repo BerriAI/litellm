@@ -4,7 +4,9 @@ import traceback
 
 import litellm.cost_calculator
 
-sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
+sys.path.insert(
+    0, os.path.abspath("../..")
+)  # Adds the parent directory to the system path
 import asyncio
 import time
 from typing import Optional
@@ -167,11 +169,15 @@ def test_cost_ft_gpt_35():
         input_cost = model_cost["ft:gpt-3.5-turbo"]["input_cost_per_token"]
         output_cost = model_cost["ft:gpt-3.5-turbo"]["output_cost_per_token"]
         print(input_cost, output_cost)
-        expected_cost = (input_cost * resp.usage.prompt_tokens) + (output_cost * resp.usage.completion_tokens)
+        expected_cost = (input_cost * resp.usage.prompt_tokens) + (
+            output_cost * resp.usage.completion_tokens
+        )
         print("\n Excpected cost", expected_cost)
         assert cost == expected_cost
     except Exception as e:
-        pytest.fail(f"Cost Calc failed for ft:gpt-3.5. Expected {expected_cost}, Calculated cost {cost}")
+        pytest.fail(
+            f"Cost Calc failed for ft:gpt-3.5. Expected {expected_cost}, Calculated cost {cost}"
+        )
 
 
 # test_cost_ft_gpt_35()
@@ -200,15 +206,21 @@ def test_cost_azure_gpt_35():
             usage=Usage(prompt_tokens=21, completion_tokens=17, total_tokens=38),
         )
 
-        cost = litellm.completion_cost(completion_response=resp, model="azure/gpt-35-turbo")
+        cost = litellm.completion_cost(
+            completion_response=resp, model="azure/gpt-35-turbo"
+        )
         print("\n Calculated Cost for azure/gpt-3.5-turbo", cost)
         input_cost = model_cost["azure/gpt-35-turbo"]["input_cost_per_token"]
         output_cost = model_cost["azure/gpt-35-turbo"]["output_cost_per_token"]
-        expected_cost = (input_cost * resp.usage.prompt_tokens) + (output_cost * resp.usage.completion_tokens)
+        expected_cost = (input_cost * resp.usage.prompt_tokens) + (
+            output_cost * resp.usage.completion_tokens
+        )
         print("\n Excpected cost", expected_cost)
         assert cost == expected_cost
     except Exception as e:
-        pytest.fail(f"Cost Calc failed for azure/gpt-3.5-turbo. Expected {expected_cost}, Calculated cost {cost}")
+        pytest.fail(
+            f"Cost Calc failed for azure/gpt-3.5-turbo. Expected {expected_cost}, Calculated cost {cost}"
+        )
 
 
 # test_cost_azure_gpt_35()
@@ -239,7 +251,9 @@ def test_cost_azure_embedding():
         assert cost == expected_cost
 
     except Exception as e:
-        pytest.fail(f"Cost Calc failed for azure/gpt-3.5-turbo. Expected {expected_cost}, Calculated cost {cost}")
+        pytest.fail(
+            f"Cost Calc failed for azure/gpt-3.5-turbo. Expected {expected_cost}, Calculated cost {cost}"
+        )
 
 
 # test_cost_azure_embedding()
@@ -315,7 +329,9 @@ def test_cost_bedrock_pricing_actual_calls():
     litellm.set_verbose = True
     model = "anthropic.claude-instant-v1"
     messages = [{"role": "user", "content": "Hey, how's it going?"}]
-    response = litellm.completion(model=model, messages=messages, mock_response="hello cool one")
+    response = litellm.completion(
+        model=model, messages=messages, mock_response="hello cool one"
+    )
 
     print("response", response)
     cost = litellm.completion_cost(
@@ -345,7 +361,8 @@ def test_whisper_openai():
     print(f"cost: {cost}")
     print(f"whisper dict: {litellm.model_cost['whisper-1']}")
     expected_cost = round(
-        litellm.model_cost["whisper-1"]["output_cost_per_second"] * _total_time_in_seconds,
+        litellm.model_cost["whisper-1"]["output_cost_per_second"]
+        * _total_time_in_seconds,
         5,
     )
     assert cost == expected_cost
@@ -365,12 +382,15 @@ def test_whisper_azure():
     _total_time_in_seconds = 3
 
     transcription._response_ms = _total_time_in_seconds * 1000
-    cost = litellm.completion_cost(model="azure/azure-whisper", completion_response=transcription)
+    cost = litellm.completion_cost(
+        model="azure/azure-whisper", completion_response=transcription
+    )
 
     print(f"cost: {cost}")
     print(f"whisper dict: {litellm.model_cost['whisper-1']}")
     expected_cost = round(
-        litellm.model_cost["whisper-1"]["output_cost_per_second"] * _total_time_in_seconds,
+        litellm.model_cost["whisper-1"]["output_cost_per_second"]
+        * _total_time_in_seconds,
         5,
     )
     assert cost == expected_cost
@@ -401,7 +421,9 @@ def test_dalle_3_azure_cost_tracking():
     response.usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
     response._hidden_params = {"model": "dall-e-3", "model_id": None}
     print(f"response hidden params: {response._hidden_params}")
-    cost = litellm.completion_cost(completion_response=response, call_type="image_generation")
+    cost = litellm.completion_cost(
+        completion_response=response, call_type="image_generation"
+    )
     assert cost > 0
 
 
@@ -433,7 +455,9 @@ def test_replicate_llama3_cost_tracking():
         model="replicate/meta/meta-llama-3-8b-instruct",
         object="chat.completion",
         system_fingerprint=None,
-        usage=litellm.utils.Usage(prompt_tokens=48, completion_tokens=31, total_tokens=79),
+        usage=litellm.utils.Usage(
+            prompt_tokens=48, completion_tokens=31, total_tokens=79
+        ),
     )
     cost = litellm.completion_cost(
         completion_response=response,
@@ -443,8 +467,14 @@ def test_replicate_llama3_cost_tracking():
     print(f"cost: {cost}")
     cost = round(cost, 5)
     expected_cost = round(
-        litellm.model_cost["replicate/meta/meta-llama-3-8b-instruct"]["input_cost_per_token"] * 48
-        + litellm.model_cost["replicate/meta/meta-llama-3-8b-instruct"]["output_cost_per_token"] * 31,
+        litellm.model_cost["replicate/meta/meta-llama-3-8b-instruct"][
+            "input_cost_per_token"
+        ]
+        * 48
+        + litellm.model_cost["replicate/meta/meta-llama-3-8b-instruct"][
+            "output_cost_per_token"
+        ]
+        * 31,
         5,
     )
     assert cost == expected_cost
@@ -538,7 +568,9 @@ def test_together_ai_qwen_completion_cost():
         "custom_cost_per_second": None,
     }
 
-    response = litellm.cost_calculator.get_model_params_and_category(model_name="qwen/Qwen2-72B-Instruct")
+    response = litellm.cost_calculator.get_model_params_and_category(
+        model_name="qwen/Qwen2-72B-Instruct"
+    )
 
     assert response == "together-ai-41.1b-80b"
 
@@ -576,8 +608,12 @@ def test_gemini_completion_cost(above_128k, provider):
         ), "model info for model={} does not have pricing for > 128k tokens\nmodel_info={}".format(
             model_name, model_info
         )
-        input_cost = prompt_tokens * model_info["input_cost_per_token_above_128k_tokens"]
-        output_cost = output_tokens * model_info["output_cost_per_token_above_128k_tokens"]
+        input_cost = (
+            prompt_tokens * model_info["input_cost_per_token_above_128k_tokens"]
+        )
+        output_cost = (
+            output_tokens * model_info["output_cost_per_token_above_128k_tokens"]
+        )
     else:
         input_cost = prompt_tokens * model_info["input_cost_per_token"]
         output_cost = output_tokens * model_info["output_cost_per_token"]
@@ -674,3 +710,23 @@ def test_vertex_ai_claude_completion_cost():
     )
     predicted_cost = input_tokens * 0.000003 + 0.000015 * output_tokens
     assert cost == predicted_cost
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_completion_cost_hidden_params(sync_mode):
+    if sync_mode:
+        response = litellm.completion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+            mock_response="Hello world",
+        )
+    else:
+        response = await litellm.acompletion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+            mock_response="Hello world",
+        )
+
+    assert "response_cost" in response._hidden_params
+    assert isinstance(response._hidden_params["response_cost"], float)

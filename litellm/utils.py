@@ -899,6 +899,17 @@ def client(original_function):
                     model=model,
                     optional_params=getattr(logging_obj, "optional_params", {}),
                 )
+                result._hidden_params["response_cost"] = (
+                    litellm.response_cost_calculator(
+                        response_object=result,
+                        model=getattr(logging_obj, "model", ""),
+                        custom_llm_provider=getattr(
+                            logging_obj, "custom_llm_provider", None
+                        ),
+                        call_type=getattr(logging_obj, "call_type", "completion"),
+                        optional_params=getattr(logging_obj, "optional_params", {}),
+                    )
+                )
             result._response_ms = (
                 end_time - start_time
             ).total_seconds() * 1000  # return response latency in ms like openai
@@ -1291,6 +1302,17 @@ def client(original_function):
                 result._hidden_params["api_base"] = get_api_base(
                     model=model,
                     optional_params=kwargs,
+                )
+                result._hidden_params["response_cost"] = (
+                    litellm.response_cost_calculator(
+                        response_object=result,
+                        model=getattr(logging_obj, "model", ""),
+                        custom_llm_provider=getattr(
+                            logging_obj, "custom_llm_provider", None
+                        ),
+                        call_type=getattr(logging_obj, "call_type", "completion"),
+                        optional_params=getattr(logging_obj, "optional_params", {}),
+                    )
                 )
             if (
                 isinstance(result, ModelResponse)
