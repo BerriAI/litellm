@@ -670,6 +670,10 @@ class UpdateUserRequest(GenerateRequestBase):
         return values
 
 
+class DeleteUserRequest(LiteLLMBase):
+    user_ids: List[str]  # required
+
+
 class NewCustomerRequest(LiteLLMBase):
     """
     Create a new customer, allocate a budget to them
