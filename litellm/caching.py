@@ -97,19 +97,13 @@ class InMemoryCache(BaseCache):
         """
         for key in list(self.ttl_dict.keys()):
             if time.time() > self.ttl_dict[key]:
-                print(  # noqa
-                    "Cache Evicting item key=",
-                    key,
-                    "ttl=",
-                    self.ttl_dict[key],
-                    "size of cache=",
-                    len(self.cache_dict),
-                )
                 self.cache_dict.pop(key, None)
                 self.ttl_dict.pop(key, None)
 
     def set_cache(self, key, value, **kwargs):
-        print_verbose("InMemoryCache: set_cache")
+        print_verbose(
+            "InMemoryCache: set_cache. current size= {}".format(len(self.cache_dict))
+        )
         if len(self.cache_dict) >= self.max_size_in_memory:
             # only evict when cache is full
             self.evict_cache()
