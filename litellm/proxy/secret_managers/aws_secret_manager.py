@@ -62,7 +62,7 @@ def load_aws_kms(use_aws_kms: Optional[bool]):
         raise e
 
 
-class AWSKeyManagementService:
+class AWSKeyManagementService_V2:
     """
     V2 Clean Class for decrypting keys from AWS KeyManagementService
     """
@@ -77,6 +77,12 @@ class AWSKeyManagementService:
         if "AWS_REGION_NAME" not in os.environ:
             raise ValueError("Missing required environment variable - AWS_REGION_NAME")
 
+        ## CHECK IF LICENSE IN ENV ## - premium feature
+        if os.getenv("LITELLM_LICENSE", None) is None:
+            raise ValueError(
+                "AWSKeyManagementService V2 is an Enterprise Feature. Please add a valid LITELLM_LICENSE to your envionment."
+            )
+
     def load_aws_kms(self, use_aws_kms: Optional[bool]):
         if use_aws_kms is None or use_aws_kms is False:
             return
@@ -88,8 +94,6 @@ class AWSKeyManagementService:
             # Create a Secrets Manager client
             kms_client = boto3.client("kms", region_name=os.getenv("AWS_REGION_NAME"))
 
-            litellm.secret_manager_client = kms_client
-            litellm._key_management_system = KeyManagementSystem.AWS_KMS
             return kms_client
         except Exception as e:
             raise e
@@ -131,13 +135,13 @@ class AWSKeyManagementService:
 """
 - look for all values in the env with `aws_kms/<hashed_key>` 
 - decrypt keys 
-- rewrite env var with decrypted key
+- rewrite env var with decrypted key (). Note: this environment variable will only be available to the current process and any child processes spawned from it. Once the Python script ends, the environment variable will not persist.
 """
 
 
-def decrypt_and_reset_env_var() -> dict:
+def decrypt_env_var() -> dict[str, Any]:
     # setup client class
-    aws_kms = AWSKeyManagementService()
+    aws_kms = AWSKeyManagementService_V2()
     # iterate through env - for `aws_kms/`
     new_values = {}
     for k, v in os.environ.items():
