@@ -572,7 +572,6 @@ def completion_cost(
                 completion_string = litellm.utils.get_response_string(
                     response_obj=completion_response
                 )
-
                 completion_characters = litellm.utils._count_characters(
                     text=completion_string
                 )
@@ -610,7 +609,7 @@ def response_cost_calculator(
         TextCompletionResponse,
     ],
     model: str,
-    custom_llm_provider: str,
+    custom_llm_provider: Optional[str],
     call_type: Literal[
         "embedding",
         "aembedding",
@@ -632,6 +631,10 @@ def response_cost_calculator(
     base_model: Optional[str] = None,
     custom_pricing: Optional[bool] = None,
 ) -> Optional[float]:
+    """
+    Returns
+    - float or None: cost of response OR none if error.
+    """
     try:
         response_cost: float = 0.0
         if cache_hit is not None and cache_hit is True:
