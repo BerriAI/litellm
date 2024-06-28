@@ -106,7 +106,7 @@ class Router:
     def __init__(
         self,
         model_list: Optional[
-            Union[List[DeploymentTypedDict], List[dict[str, Any]], List[Dict[str, Any]]]
+            Union[List[DeploymentTypedDict], List[Dict[str, Any]]]
         ] = None,
         ## ASSISTANTS API ##
         assistants_config: Optional[AssistantsTypedDict] = None,
