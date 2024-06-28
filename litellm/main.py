@@ -1025,7 +1025,7 @@ def completion(
                 client=client,  # pass AsyncAzureOpenAI, AzureOpenAI client
             )
 
-            if optional_params.get("stream", False) or acompletion == True:
+            if optional_params.get("stream", False):
                 ## LOGGING
                 logging.post_call(
                     input=messages,
