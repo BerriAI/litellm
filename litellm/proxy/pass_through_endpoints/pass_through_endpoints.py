@@ -5,20 +5,49 @@ import httpx
 from fastapi import APIRouter, FastAPI, HTTPException, Request, Response, status
 from fastapi.responses import StreamingResponse
 
+import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import ProxyException
 
 async_client = httpx.AsyncClient()
 
 
+async def set_env_variables_in_header(custom_headers: dict):
+    """
+    checks if nay headers on config.yaml are defined as os.environ/COHERE_API_KEY etc
+
+    only runs for headers defined on config.yaml
+
+    example header can be
+
+    {"Authorization": "bearer os.environ/COHERE_API_KEY"}
+    """
+    headers = {}
+    for key, value in custom_headers.items():
+        headers[key] = value
+        if isinstance(value, str) and "os.environ/" in value:
+            verbose_proxy_logger.debug(
+                "pass through endpoint - looking up 'os.environ/' variable"
+            )
+            # get string section that is os.environ/
+            start_index = value.find("os.environ/")
+            _variable_name = value[start_index:]
+
+            verbose_proxy_logger.debug(
+                "pass through endpoint - getting secret for variable name: %s",
+                _variable_name,
+            )
+            _secret_value = litellm.get_secret(_variable_name)
+            new_value = value.replace(_variable_name, _secret_value)
+            headers[key] = new_value
+    return headers
+
+
 async def pass_through_request(request: Request, target: str, custom_headers: dict):
     try:
 
         url = httpx.URL(target)
-
-        # Start with the original request headers
         headers = custom_headers
-        # headers = dict(request.headers)
 
         request_body = await request.body()
         _parsed_body = ast.literal_eval(request_body.decode("utf-8"))
@@ -86,6 +115,9 @@ async def initialize_pass_through_endpoints(pass_through_endpoints: list):
         _target = endpoint.get("target", None)
         _path = endpoint.get("path", None)
         _custom_headers = endpoint.get("headers", None)
+        _custom_headers = await set_env_variables_in_header(
+            custom_headers=_custom_headers
+        )
 
         if _target is None:
             continue

@@ -22,6 +22,13 @@ general_settings:
   master_key: sk-1234
   alerting: ["slack", "email"]
   public_routes: ["LiteLLMRoutes.public_routes", "/spend/calculate"]
+  pass_through_endpoints:
+    - path: "/v1/rerank"
+      target: "https://api.cohere.com/v1/rerank"
+      headers:
+        Authorization: "bearer os.environ/COHERE_API_KEY"
+        content-type: application/json
+        accept: application/json
 
 
 litellm_settings:
@@ -34,6 +41,5 @@ litellm_settings:
     - user
     - metadata
     - metadata.generation_name
-  cache: True
 
 
