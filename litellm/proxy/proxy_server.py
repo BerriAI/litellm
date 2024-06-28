@@ -2956,6 +2956,11 @@ async def chat_completion(
         if isinstance(data["model"], str) and data["model"] in litellm.model_alias_map:
             data["model"] = litellm.model_alias_map[data["model"]]
 
+        ### CALL HOOKS ### - modify/reject incoming data before calling the model
+        data = await proxy_logging_obj.pre_call_hook(  # type: ignore
+            user_api_key_dict=user_api_key_dict, data=data, call_type="completion"
+        )
+
         ## LOGGING OBJECT ## - initialize logging object for logging success/failure events for call
         data["litellm_call_id"] = str(uuid.uuid4())
         logging_obj, data = litellm.utils.function_setup(
@@ -2966,11 +2971,6 @@ async def chat_completion(
         )
 
         data["litellm_logging_obj"] = logging_obj
-
-        ### CALL HOOKS ### - modify/reject incoming data before calling the model
-        data = await proxy_logging_obj.pre_call_hook(  # type: ignore
-            user_api_key_dict=user_api_key_dict, data=data, call_type="completion"
-        )
 
         tasks = []
         tasks.append(
@@ -6300,7 +6300,7 @@ async def model_info_v2(
         raise HTTPException(
             status_code=500,
             detail={
-                "error": f"Invalid llm model list. llm_model_list={llm_model_list}"
+                "error": f"No model list passed, models={llm_model_list}. You can add a model through the config.yaml or on the LiteLLM Admin UI."
             },
         )
 

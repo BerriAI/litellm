@@ -144,10 +144,13 @@ async def add_litellm_data_to_request(
     )  # do not store the original `sk-..` api key in the db
     data[_metadata_variable_name]["headers"] = _headers
     data[_metadata_variable_name]["endpoint"] = str(request.url)
+
+    # OTEL Controls / Tracing
     # Add the OTEL Parent Trace before sending it LiteLLM
     data[_metadata_variable_name][
         "litellm_parent_otel_span"
     ] = user_api_key_dict.parent_otel_span
+    _add_otel_traceparent_to_data(data, request=request)
 
     ### END-USER SPECIFIC PARAMS ###
     if user_api_key_dict.allowed_model_region is not None:
@@ -169,3 +172,23 @@ async def add_litellm_data_to_request(
             }  # add the team-specific configs to the completion call
 
     return data
+
+
+def _add_otel_traceparent_to_data(data: dict, request: Request):
+    from litellm.proxy.proxy_server import open_telemetry_logger
+    if data is None:
+        return
+    if open_telemetry_logger is None:
+        # if user is not use OTEL don't send extra_headers
+        # relevant issue: https://github.com/BerriAI/litellm/issues/4448
+        return
+    if request.headers:
+        if "traceparent" in request.headers:
+            # we want to forward this to the LLM Provider
+            # Relevant issue: https://github.com/BerriAI/litellm/issues/4419
+            # pass this in extra_headers
+            if "extra_headers" not in data:
+                data["extra_headers"] = {}
+            _exra_headers = data["extra_headers"]
+            if "traceparent" not in _exra_headers:
+                _exra_headers["traceparent"] = request.headers["traceparent"]

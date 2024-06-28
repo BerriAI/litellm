@@ -712,6 +712,7 @@ def test_vertex_ai_claude_completion_cost():
     assert cost == predicted_cost
 
 
+
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_completion_cost_hidden_params(sync_mode):
@@ -730,3 +731,11 @@ async def test_completion_cost_hidden_params(sync_mode):
 
     assert "response_cost" in response._hidden_params
     assert isinstance(response._hidden_params["response_cost"], float)
+
+def test_vertex_ai_gemini_predict_cost():
+    model = "gemini-1.5-flash"
+    messages = [{"role": "user", "content": "Hey, hows it going???"}]
+    predictive_cost = completion_cost(model=model, messages=messages)
+
+    assert predictive_cost > 0
+

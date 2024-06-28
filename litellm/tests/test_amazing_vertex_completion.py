@@ -329,11 +329,14 @@ def test_vertex_ai():
                 "code-gecko@001",
                 "code-gecko@002",
                 "code-gecko@latest",
+                "codechat-bison@latest",
                 "code-bison@001",
                 "text-bison@001",
                 "gemini-1.5-pro",
                 "gemini-1.5-pro-preview-0215",
-            ]:
+            ] or (
+                "gecko" in model or "32k" in model or "ultra" in model or "002" in model
+            ):
                 # our account does not have access to this model
                 continue
             print("making request", model)
@@ -381,12 +384,15 @@ def test_vertex_ai_stream():
                 "code-gecko@001",
                 "code-gecko@002",
                 "code-gecko@latest",
+                "codechat-bison@latest",
                 "code-bison@001",
                 "text-bison@001",
                 "gemini-1.5-pro",
                 "gemini-1.5-pro-preview-0215",
-            ]:
-                # ouraccount does not have access to this model
+            ] or (
+                "gecko" in model or "32k" in model or "ultra" in model or "002" in model
+            ):
+                # our account does not have access to this model
                 continue
             print("making request", model)
             response = completion(
@@ -433,11 +439,12 @@ async def test_async_vertexai_response():
             "code-gecko@001",
             "code-gecko@002",
             "code-gecko@latest",
+            "codechat-bison@latest",
             "code-bison@001",
             "text-bison@001",
             "gemini-1.5-pro",
             "gemini-1.5-pro-preview-0215",
-        ]:
+        ] or ("gecko" in model or "32k" in model or "ultra" in model or "002" in model):
             # our account does not have access to this model
             continue
         try:
@@ -479,11 +486,12 @@ async def test_async_vertexai_streaming_response():
             "code-gecko@001",
             "code-gecko@002",
             "code-gecko@latest",
+            "codechat-bison@latest",
             "code-bison@001",
             "text-bison@001",
             "gemini-1.5-pro",
             "gemini-1.5-pro-preview-0215",
-        ]:
+        ] or ("gecko" in model or "32k" in model or "ultra" in model or "002" in model):
             # our account does not have access to this model
             continue
         try:
