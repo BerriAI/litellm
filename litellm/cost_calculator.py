@@ -1,6 +1,7 @@
 # What is this?
 ## File for 'response_cost' calculation in Logging
 import time
+import traceback
 from typing import List, Literal, Optional, Tuple, Union
 
 import litellm
@@ -666,5 +667,12 @@ def response_cost_calculator(
     except litellm.NotFoundError as e:
         print_verbose(
             f"Model={model} for LLM Provider={custom_llm_provider} not found in completion cost map."
+        )
+        return None
+    except Exception as e:
+        verbose_logger.error(
+            "litellm.cost_calculator.py::response_cost_calculator - Exception occurred - {}/n{}".format(
+                str(e), traceback.format_exc()
+            )
         )
         return None
