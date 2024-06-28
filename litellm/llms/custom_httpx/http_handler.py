@@ -114,6 +114,11 @@ class AsyncHTTPHandler:
             finally:
                 await new_client.aclose()
         except httpx.HTTPStatusError as e:
+            setattr(e, "status_code", e.response.status_code)
+            if stream is True:
+                setattr(e, "message", await e.response.aread())
+            else:
+                setattr(e, "message", e.response.text)
             raise e
         except Exception as e:
             raise e
