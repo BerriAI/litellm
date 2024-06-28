@@ -14,14 +14,6 @@ response = speech(
         model="openai/tts-1",
         voice="alloy",
         input="the quick brown fox jumped over the lazy dogs",
-        api_base=None,
-        api_key=None,
-        organization=None,
-        project=None,
-        max_retries=1,
-        timeout=600,
-        client=None,
-        optional_params={},
     )
 response.stream_to_file(speech_file_path)
 ```
@@ -84,4 +76,37 @@ curl http://0.0.0.0:4000/v1/audio/speech \
 litellm --config /path/to/config.yaml
 
 # RUNNING on http://0.0.0.0:4000
+```
+
+## Azure Usage 
+
+**PROXY**
+
+```yaml
+ - model_name: azure/tts-1
+    litellm_params:
+      model: azure/tts-1
+      api_base: "os.environ/AZURE_API_BASE_TTS"
+      api_key: "os.environ/AZURE_API_KEY_TTS"
+      api_version: "os.environ/AZURE_API_VERSION" 
+```
+
+**SDK**
+
+```python 
+from litellm import completion
+
+## set ENV variables
+os.environ["AZURE_API_KEY"] = ""
+os.environ["AZURE_API_BASE"] = ""
+os.environ["AZURE_API_VERSION"] = ""
+
+# azure call
+speech_file_path = Path(__file__).parent / "speech.mp3"
+response = speech(
+        model="azure/<your-deployment-name",
+        voice="alloy",
+        input="the quick brown fox jumped over the lazy dogs",
+    )
+response.stream_to_file(speech_file_path)
 ```
