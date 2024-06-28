@@ -168,8 +168,12 @@ print(response)
 
 ## Supported Models
 
+`Model Name` 👉 Human-friendly name.  
+`Function Call` 👉 How to call the model in LiteLLM.
+
 | Model Name       | Function Call                              |
 |------------------|--------------------------------------------|
+| claude-3-5-sonnet  | `completion('claude-3-5-sonnet-20240620', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
 | claude-3-haiku  | `completion('claude-3-haiku-20240307', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
 | claude-3-opus  | `completion('claude-3-opus-20240229', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
 | claude-3-5-sonnet-20240620  | `completion('claude-3-5-sonnet-20240620', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
