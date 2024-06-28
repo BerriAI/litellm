@@ -4,7 +4,7 @@ import TabItem from '@theme/TabItem';
 
 # 🤗 UI - Self-Serve
 
-Allow users to creat their own keys on [Proxy UI](./ui.md).
+Allow users to create their own keys on [Proxy UI](./ui.md).
 
 1. Add user with permissions to a team on proxy 
 
