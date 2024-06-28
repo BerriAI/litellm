@@ -491,7 +491,7 @@ def make_sync_call(
         raise VertexAIError(status_code=response.status_code, message=response.read())
 
     completion_stream = ModelResponseIterator(
-        streaming_response=response.iter_bytes(chunk_size=2056), sync_stream=True
+        streaming_response=response.iter_bytes(), sync_stream=True
     )
 
     # LOGGING
@@ -811,12 +811,13 @@ class VertexLLM(BaseLLM):
             endpoint = "generateContent"
             if stream is True:
                 endpoint = "streamGenerateContent"
-
-            url = (
-                "https://generativelanguage.googleapis.com/v1beta/{}:{}?key={}".format(
+                url = "https://generativelanguage.googleapis.com/v1beta/{}:{}?key={}&alt=sse".format(
                     _gemini_model_name, endpoint, gemini_api_key
                 )
-            )
+            else:
+                url = "https://generativelanguage.googleapis.com/v1beta/{}:{}?key={}".format(
+                    _gemini_model_name, endpoint, gemini_api_key
+                )
         else:
             auth_header, vertex_project = self._ensure_access_token(
                 credentials=vertex_credentials, project_id=vertex_project
@@ -827,7 +828,9 @@ class VertexLLM(BaseLLM):
             endpoint = "generateContent"
             if stream is True:
                 endpoint = "streamGenerateContent"
-            url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}"
+                url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}?alt=sse"
+            else:
+                url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}"
 
         if (
             api_base is not None
@@ -839,6 +842,9 @@ class VertexLLM(BaseLLM):
                 )
             else:
                 url = "{}:{}".format(api_base, endpoint)
+
+            if stream is True:
+                url = url + "?alt=sse"
 
         return auth_header, url
 
@@ -1268,11 +1274,6 @@ class VertexLLM(BaseLLM):
 class ModelResponseIterator:
     def __init__(self, streaming_response, sync_stream: bool):
         self.streaming_response = streaming_response
-        if sync_stream:
-            self.response_iterator = iter(self.streaming_response)
-
-        self.events = ijson.sendable_list()
-        self.coro = ijson.items_coro(self.events, "item")
 
     def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
         try:
@@ -1322,28 +1323,18 @@ class ModelResponseIterator:
 
     # Sync iterator
     def __iter__(self):
+        self.response_iterator = self.streaming_response
         return self
 
     def __next__(self):
         try:
             chunk = self.response_iterator.__next__()
-            self.coro.send(chunk)
-            if self.events:
-                event = self.events.pop(0)
-                json_chunk = event
-                return self.chunk_parser(chunk=json_chunk)
-            return GenericStreamingChunk(
-                text="",
-                is_finished=False,
-                finish_reason="",
-                usage=None,
-                index=0,
-                tool_use=None,
-            )
+            chunk = chunk.decode()
+            chunk = chunk.replace("data:", "")
+            chunk = chunk.strip()
+            json_chunk = json.loads(chunk)
+            return self.chunk_parser(chunk=json_chunk)
         except StopIteration:
-            if self.events:  # flush the events
-                event = self.events.pop(0)  # Remove the first event
-                return self.chunk_parser(chunk=event)
             raise StopIteration
         except ValueError as e:
             raise RuntimeError(f"Error parsing chunk: {e}")
@@ -1356,23 +1347,12 @@ class ModelResponseIterator:
     async def __anext__(self):
         try:
             chunk = await self.async_response_iterator.__anext__()
-            self.coro.send(chunk)
-            if self.events:
-                event = self.events.pop(0)
-                json_chunk = event
-                return self.chunk_parser(chunk=json_chunk)
-            return GenericStreamingChunk(
-                text="",
-                is_finished=False,
-                finish_reason="",
-                usage=None,
-                index=0,
-                tool_use=None,
-            )
+            chunk = chunk.decode()
+            chunk = chunk.replace("data:", "")
+            chunk = chunk.strip()
+            json_chunk = json.loads(chunk)
+            return self.chunk_parser(chunk=json_chunk)
         except StopAsyncIteration:
-            if self.events:  # flush the events
-                event = self.events.pop(0)  # Remove the first event
-                return self.chunk_parser(chunk=event)
             raise StopAsyncIteration
         except ValueError as e:
             raise RuntimeError(f"Error parsing chunk: {e}")
