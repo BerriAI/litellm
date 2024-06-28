@@ -183,10 +183,17 @@ class GoogleAIStudioGeminiConfig:  # key diff from VertexAI - 'frequency_penalty
             if param == "tools" and isinstance(value, list):
                 gtool_func_declarations = []
                 for tool in value:
+                    _parameters = tool.get("function", {}).get("parameters", {})
+                    _properties = _parameters.get("properties", {})
+                    if isinstance(_properties, dict):
+                        for _, _property in _properties.items():
+                            if "enum" in _property and "format" not in _property:
+                                _property["format"] = "enum"
+
                     gtool_func_declaration = FunctionDeclaration(
                         name=tool["function"]["name"],
                         description=tool["function"].get("description", ""),
-                        parameters=tool["function"].get("parameters", {}),
+                        parameters=_parameters,
                     )
                     gtool_func_declarations.append(gtool_func_declaration)
                 optional_params["tools"] = [
@@ -729,9 +736,6 @@ class VertexLLM(BaseLLM):
                 json_obj,
                 scopes=["https://www.googleapis.com/auth/cloud-platform"],
             )
-
-            if project_id is None:
-                project_id = creds.project_id
         else:
             creds, project_id = google_auth.default(
                 quota_project_id=project_id,
@@ -739,14 +743,6 @@ class VertexLLM(BaseLLM):
             )
 
         creds.refresh(Request())
-
-        if not project_id:
-            raise ValueError("Could not resolve project_id")
-
-        if not isinstance(project_id, str):
-            raise TypeError(
-                f"Expected project_id to be a str but got {type(project_id)}"
-            )
 
         return creds, project_id
 
@@ -763,28 +759,17 @@ class VertexLLM(BaseLLM):
         """
         Returns auth token and project id
         """
-        if self.access_token is not None and self.project_id is not None:
-            return self.access_token, self.project_id
-
         if not self._credentials:
-            self._credentials, project_id = self.load_auth(
+            self._credentials, _ = self.load_auth(
                 credentials=credentials, project_id=project_id
             )
-            if not self.project_id:
-                self.project_id = project_id
         else:
             self.refresh_auth(self._credentials)
 
-            if not self.project_id:
-                self.project_id = self._credentials.project_id
-
-        if not self.project_id:
-            raise ValueError("Could not resolve project_id")
-
-        if not self._credentials or not self._credentials.token:
+        if not self._credentials.token:
             raise RuntimeError("Could not resolve API token from the environment")
 
-        return self._credentials.token, self.project_id
+        return self._credentials.token, None
 
     def _get_token_and_url(
         self,
@@ -818,7 +803,7 @@ class VertexLLM(BaseLLM):
                 )
             )
         else:
-            auth_header, vertex_project = self._ensure_access_token(
+            auth_header, _ = self._ensure_access_token(
                 credentials=vertex_credentials, project_id=vertex_project
             )
             vertex_location = self.get_vertex_region(vertex_region=vertex_location)

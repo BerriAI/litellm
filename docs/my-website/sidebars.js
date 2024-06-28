@@ -147,6 +147,7 @@ const sidebars = {
         "providers/watsonx",
         "providers/predibase",
         "providers/nvidia_nim", 
+        "providers/volcano", 
         "providers/triton-inference-server",
         "providers/ollama", 
         "providers/perplexity", 
