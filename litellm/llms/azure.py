@@ -660,8 +660,16 @@ class AzureChatCompletion(BaseLLM):
             response = await azure_client.chat.completions.create(
                 **data, timeout=timeout
             )
+
+            stringified_response = response.model_dump()
+            logging_obj.post_call(
+                input=data["messages"],
+                api_key=api_key,
+                original_response=stringified_response,
+                additional_args={"complete_input_dict": data},
+            )
             return convert_to_model_response_object(
-                response_object=response.model_dump(),
+                response_object=stringified_response,
                 model_response_object=model_response,
             )
         except AzureOpenAIError as e:
