@@ -280,14 +280,14 @@ curl --location 'http://0.0.0.0:4000/v1/model/info' \
 ## Load Balancing 
 
 :::info
-For more on this, go to [this page](./load_balancing.md)
+For more on this, go to [this page](https://docs.litellm.ai/docs/proxy/load_balancing)
 :::
 
-Use this to call multiple instances of the same model and configure things like [routing strategy](../routing.md#advanced). 
+Use this to call multiple instances of the same model and configure things like [routing strategy](https://docs.litellm.ai/docs/routing#advanced).
 
 For optimal performance:
 - Set `tpm/rpm` per model deployment. Weighted picks are then based on the established tpm/rpm.
-- Select your optimal routing strategy in `router_settings:routing_strategy`. 
+- Select your optimal routing strategy in `router_settings:routing_strategy`.
 
 LiteLLM supports
 ```python
