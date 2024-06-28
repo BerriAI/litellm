@@ -295,10 +295,6 @@ class ProxyLogging:
         3. /image/generation
         """
         print_verbose("Inside Proxy Logging Pre-call hook!")
-        ### ALERTING ###
-        asyncio.create_task(
-            self.slack_alerting_instance.response_taking_too_long(request_data=data)
-        )
 
         try:
             for callback in litellm.callbacks:
@@ -340,6 +336,12 @@ class ProxyLogging:
                                 raise HTTPException(
                                     status_code=400, detail={"error": response}
                                 )
+
+            ### ALERTING ###
+            asyncio.create_task(
+                self.slack_alerting_instance.response_taking_too_long(request_data=data)
+            )
+
             print_verbose(f"final data being sent to {call_type} call: {data}")
             return data
         except Exception as e:
