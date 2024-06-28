@@ -176,7 +176,6 @@ async def add_litellm_data_to_request(
 
 def _add_otel_traceparent_to_data(data: dict, request: Request):
     from litellm.proxy.proxy_server import open_telemetry_logger
-
     if data is None:
         return
     if open_telemetry_logger is None:
