@@ -114,7 +114,11 @@ class _ENTERPRISE_lakeraAI_Moderation(CustomLogger):
 
             if flagged == True:
                 raise HTTPException(
-                    status_code=400, detail={"error": "Violated content safety policy"}
+                    status_code=400,
+                    detail={
+                        "error": "Violated content safety policy",
+                        "lakera_ai_response": _json_response,
+                    },
                 )
 
         pass
