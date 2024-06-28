@@ -175,7 +175,13 @@ async def add_litellm_data_to_request(
 
 
 def _add_otel_traceparent_to_data(data: dict, request: Request):
+    from litellm.proxy.proxy_server import open_telemetry_logger
+
     if data is None:
+        return
+    if open_telemetry_logger is None:
+        # if user is not use OTEL don't send extra_headers
+        # relevant issue: https://github.com/BerriAI/litellm/issues/4448
         return
     if request.headers:
         if "traceparent" in request.headers:
