@@ -380,10 +380,6 @@ _default_detect_secrets_config = {
             "path": _custom_plugins_path + "/shopify.py",
         },
         {
-            "name": "SidekiqDetector",
-            "path": _custom_plugins_path + "/sidekiq.py",
-        },
-        {
             "name": "SlackDetector",
             "path": _custom_plugins_path + "/slack.py",
         },
