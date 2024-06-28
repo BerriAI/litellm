@@ -428,7 +428,6 @@ def completion_cost(
         prompt_characters = 0
         completion_tokens = 0
         completion_characters = 0
-        custom_llm_provider = None
         if completion_response is not None:
             # get input/output tokens from completion_response
             prompt_tokens = completion_response.get("usage", {}).get("prompt_tokens", 0)
@@ -468,6 +467,10 @@ def completion_cost(
                     "n", 1
                 )  # openai default
         else:
+            if model is None:
+                raise ValueError(
+                    f"Model is None and does not exist in passed completion_response. Passed completion_response={completion_response}, model={model}"
+                )
             if len(messages) > 0:
                 prompt_tokens = token_counter(model=model, messages=messages)
             elif len(prompt) > 0:
@@ -478,6 +481,15 @@ def completion_cost(
                 f"Model is None and does not exist in passed completion_response. Passed completion_response={completion_response}, model={model}"
             )
 
+        if custom_llm_provider is None:
+            try:
+                _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model)
+            except Exception as e:
+                verbose_logger.error(
+                    "litellm.cost_calculator.py::completion_cost() - Error inferring custom_llm_provider - {}".format(
+                        str(e)
+                    )
+                )
         if (
             call_type == CallTypes.image_generation.value
             or call_type == CallTypes.aimage_generation.value
@@ -544,12 +556,7 @@ def completion_cost(
                 f"Model is None and does not exist in passed completion_response. Passed completion_response={completion_response}, model={model}"
             )
 
-        if (
-            custom_llm_provider is not None
-            and custom_llm_provider == "vertex_ai"
-            and completion_response is not None
-            and isinstance(completion_response, ModelResponse)
-        ):
+        if custom_llm_provider is not None and custom_llm_provider == "vertex_ai":
             # Calculate the prompt characters + response characters
             if len("messages") > 0:
                 prompt_string = litellm.utils.get_formatted_prompt(
@@ -559,14 +566,15 @@ def completion_cost(
                 prompt_string = ""
 
             prompt_characters = litellm.utils._count_characters(text=prompt_string)
-
-            completion_string = litellm.utils.get_response_string(
-                response_obj=completion_response
-            )
-
-            completion_characters = litellm.utils._count_characters(
-                text=completion_string
-            )
+            if completion_response is not None and isinstance(
+                completion_response, ModelResponse
+            ):
+                completion_string = litellm.utils.get_response_string(
+                    response_obj=completion_response
+                )
+                completion_characters = litellm.utils._count_characters(
+                    text=completion_string
+                )
 
         (
             prompt_tokens_cost_usd_dollar,

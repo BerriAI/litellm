@@ -996,11 +996,11 @@ class OpenAIChatCompletion(BaseLLM):
         self,
         input: list,
         data: dict,
-        model_response: ModelResponse,
+        model_response: litellm.utils.EmbeddingResponse,
         timeout: float,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
-        client=None,
+        client: Optional[AsyncOpenAI] = None,
         max_retries=None,
         logging_obj=None,
     ):
@@ -1039,9 +1039,9 @@ class OpenAIChatCompletion(BaseLLM):
         input: list,
         timeout: float,
         logging_obj,
+        model_response: litellm.utils.EmbeddingResponse,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
-        model_response: Optional[litellm.utils.EmbeddingResponse] = None,
         optional_params=None,
         client=None,
         aembedding=None,
@@ -1062,7 +1062,17 @@ class OpenAIChatCompletion(BaseLLM):
             )
 
             if aembedding is True:
-                response = self.aembedding(data=data, input=input, logging_obj=logging_obj, model_response=model_response, api_base=api_base, api_key=api_key, timeout=timeout, client=client, max_retries=max_retries)  # type: ignore
+                response = self.aembedding(
+                    data=data,
+                    input=input,
+                    logging_obj=logging_obj,
+                    model_response=model_response,
+                    api_base=api_base,
+                    api_key=api_key,
+                    timeout=timeout,
+                    client=client,
+                    max_retries=max_retries,
+                )
                 return response
 
             openai_client = self._get_openai_client(
