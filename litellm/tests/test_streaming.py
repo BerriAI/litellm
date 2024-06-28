@@ -742,7 +742,10 @@ def test_completion_palm_stream():
 # test_completion_palm_stream()
 
 
-@pytest.mark.parametrize("sync_mode", [False])  # True,
+@pytest.mark.parametrize(
+    "sync_mode",
+    [True, False],
+)  # ,
 @pytest.mark.asyncio
 async def test_completion_gemini_stream(sync_mode):
     try:
@@ -805,49 +808,6 @@ async def test_completion_gemini_stream(sync_mode):
         # if "429 Resource has been exhausted":
         #     return
         pytest.fail(f"Error occurred: {e}")
-
-
-@pytest.mark.asyncio
-async def test_acompletion_gemini_stream():
-    try:
-        litellm.set_verbose = True
-        print("Streaming gemini response")
-        messages = [
-            # {"role": "system", "content": "You are a helpful assistant."},
-            {
-                "role": "user",
-                "content": "What do you know?",
-            },
-        ]
-        print("testing gemini streaming")
-        response = await acompletion(
-            model="gemini/gemini-pro", messages=messages, max_tokens=50, stream=True
-        )
-        print(f"type of response at the top: {response}")
-        complete_response = ""
-        idx = 0
-        # Add any assertions here to check, the response
-        async for chunk in response:
-            print(f"chunk in acompletion gemini: {chunk}")
-            print(chunk.choices[0].delta)
-            chunk, finished = streaming_format_tests(idx, chunk)
-            if finished:
-                break
-            print(f"chunk: {chunk}")
-            complete_response += chunk
-            idx += 1
-        print(f"completion_response: {complete_response}")
-        if complete_response.strip() == "":
-            raise Exception("Empty response received")
-    except litellm.APIError as e:
-        pass
-    except litellm.RateLimitError as e:
-        pass
-    except Exception as e:
-        if "429 Resource has been exhausted" in str(e):
-            pass
-        else:
-            pytest.fail(f"Error occurred: {e}")
 
 
 # asyncio.run(test_acompletion_gemini_stream())
@@ -1071,7 +1031,7 @@ def test_completion_claude_stream_bad_key():
 # test_completion_replicate_stream()
 
 
-@pytest.mark.parametrize("provider", ["vertex_ai"])  # "vertex_ai_beta"
+@pytest.mark.parametrize("provider", ["vertex_ai_beta"])  # ""
 def test_vertex_ai_stream(provider):
     from litellm.tests.test_amazing_vertex_completion import load_vertex_ai_credentials
 

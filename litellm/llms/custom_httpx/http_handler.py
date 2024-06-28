@@ -1,6 +1,11 @@
+import asyncio
+import os
+import traceback
+from typing import Any, Mapping, Optional, Union
+
+import httpx
+
 import litellm
-import httpx, asyncio, traceback, os
-from typing import Optional, Union, Mapping, Any
 
 # https://www.python-httpx.org/advanced/timeouts
 _DEFAULT_TIMEOUT = httpx.Timeout(timeout=5.0, connect=5.0)
@@ -208,6 +213,7 @@ class HTTPHandler:
         headers: Optional[dict] = None,
         stream: bool = False,
     ):
+
         req = self.client.build_request(
             "POST", url, data=data, json=json, params=params, headers=headers  # type: ignore
         )
