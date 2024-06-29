@@ -6,7 +6,7 @@ import TabItem from '@theme/TabItem';
 
 :::tip
 
-Get in touch with us [here](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+To get a license, get in touch with us [here](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
 
 :::
 
@@ -21,6 +21,7 @@ Features:
 - ✅ [Enforce Required Params for LLM Requests (ex. Reject requests missing ["metadata"]["generation_name"])](#enforce-required-params-for-llm-requests)
 - ✅ Reject calls from Blocked User list 
 - ✅ Reject calls (incoming / outgoing) with Banned Keywords (e.g. competitors)
+- [BETA] AWS Key Manager v2 - Key Decryption
 
 ## Audit Logs
 
@@ -1020,3 +1021,34 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 Share a public page of available models for users
 
 <Image img={require('../../img/model_hub.png')} style={{ width: '900px', height: 'auto' }}/>
+
+
+## [BETA] AWS Key Manager - Key Decryption
+
+This is a beta feature, and subject to changes.
+
+
+**Step 1.** Add `USE_AWS_KMS` to env
+
+```env
+USE_AWS_KMS="True"
+```
+
+**Step 2.** Add `aws_kms/` to encrypted keys in env 
+
+```env
+DATABASE_URL="aws_kms/AQICAH.."
+```
+
+**Step 3.** Start proxy 
+
+```
+$ litellm
+```
+
+How it works? 
+- Key Decryption runs before server starts up. [**Code**](https://github.com/BerriAI/litellm/blob/8571cb45e80cc561dc34bc6aa89611eb96b9fe3e/litellm/proxy/proxy_cli.py#L445)
+- It adds the decrypted value to the `os.environ` for the python process. 
+
+**Note:** Setting an environment variable within a Python script using os.environ will not make that variable accessible via SSH sessions or any other new processes that are started independently of the Python script. Environment variables set this way only affect the current process and its child processes.
+
