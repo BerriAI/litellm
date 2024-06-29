@@ -593,7 +593,7 @@ async def _PROXY_failure_handler(
         _model_id = _metadata.get("model_info", {}).get("id", "")
         _model_group = _metadata.get("model_group", "")
         api_base = litellm.get_api_base(model=_model, optional_params=_litellm_params)
-        _exception_string = str(_exception)[:500]
+        _exception_string = str(_exception)
 
         error_log = LiteLLM_ErrorLogs(
             request_id=str(uuid.uuid4()),
