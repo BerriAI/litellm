@@ -20,8 +20,6 @@ model_list:
 
 general_settings:
   master_key: sk-1234
-  alerting: ["slack", "email"]
-  public_routes: ["LiteLLMRoutes.public_routes", "/spend/calculate"]
   pass_through_endpoints:
     - path: "/v1/rerank"
       target: "https://api.cohere.com/v1/rerank"
@@ -29,7 +27,11 @@ general_settings:
         Authorization: "bearer os.environ/COHERE_API_KEY"
         content-type: application/json
         accept: application/json
-
+    - path: "/api/public/ingestion"
+      target: "https://us.cloud.langfuse.com/api/public/ingestion"
+      headers:
+        LANGFUSE_PUBLIC_KEY: "os.environ/LANGFUSE_DEV_PUBLIC_KEY"
+        LANGFUSE_SECRET_KEY: "os.environ/LANGFUSE_DEV_SK_KEY"
 
 litellm_settings:
   success_callback: ["prometheus"]
