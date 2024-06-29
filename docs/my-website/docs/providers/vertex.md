@@ -123,6 +123,45 @@ print(completion(**data))
 
 ### **JSON Schema**
 
+From v`1.40.1+` LiteLLM supports sending `response_schema` as a param for Gemini-Pro-1.5 on Vertex AI. 
+
+```python
+from litellm import completion 
+import json 
+
+## SETUP ENVIRONMENT
+# !gcloud auth application-default login - run this to add vertex credentials to your env
+
+messages = [
+    {
+        "role": "user",
+        "content": "List 5 popular cookie recipes."
+    }
+]
+
+response_schema = {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "recipe_name": {
+                    "type": "string",
+                },
+            },
+            "required": ["recipe_name"],
+        },
+    }
+
+
+completion(
+    model="vertex_ai_beta/gemini-1.5-pro", 
+    messages=messages, 
+    response_format={"type": "json_object", "response_schema": response_schema} # 👈 KEY CHANGE
+    )
+
+print(json.loads(completion.choices[0].message.content))
+```
+
 ```python 
 from litellm import completion 
 
