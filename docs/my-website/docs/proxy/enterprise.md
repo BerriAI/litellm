@@ -21,7 +21,7 @@ Features:
 - ✅ [Enforce Required Params for LLM Requests (ex. Reject requests missing ["metadata"]["generation_name"])](#enforce-required-params-for-llm-requests)
 - ✅ Reject calls from Blocked User list 
 - ✅ Reject calls (incoming / outgoing) with Banned Keywords (e.g. competitors)
-- [BETA] AWS Key Manager v2 - Key Decryption
+- [[BETA] AWS Key Manager v2 - Key Decryption](#beta-aws-key-manager---key-decryption)
 
 ## Audit Logs
 
