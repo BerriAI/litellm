@@ -152,6 +152,44 @@ POST /api/public/ingestion HTTP/1.1" 207 Multi-Status
 ```
 
 
+## ✨ [Enterprise] - Use LiteLLM keys/authentication on Pass Through Endpoints
+
+Use this if you want the pass through endpoint to honour LiteLLM keys/authentication
+
+Usage - set `auth: true` on the config
+```yaml
+general_settings:
+  master_key: sk-1234
+  pass_through_endpoints:
+    - path: "/v1/rerank"
+      target: "https://api.cohere.com/v1/rerank"
+      auth: true # 👈 Key change to use LiteLLM Auth / Keys
+      headers:
+        Authorization: "bearer os.environ/COHERE_API_KEY"
+        content-type: application/json
+        accept: application/json
+```
+
+Test Request with LiteLLM Key
+
+```shell
+curl --request POST \
+  --url http://localhost:4000/v1/rerank \
+  --header 'accept: application/json' \
+  --header 'Authorization: Bearer sk-1234'\
+  --header 'content-type: application/json' \
+  --data '{
+    "model": "rerank-english-v3.0",
+    "query": "What is the capital of the United States?",
+    "top_n": 3,
+    "documents": ["Carson City is the capital city of the American state of Nevada.",
+                  "The Commonwealth of the Northern Mariana Islands is a group of islands in the Pacific Ocean. Its capital is Saipan.",
+                  "Washington, D.C. (also known as simply Washington or D.C., and officially as the District of Columbia) is the capital of the United States. It is a federal district.",
+                  "Capitalization or capitalisation in English grammar is the use of a capital letter at the start of a word. English usage varies from capitalization in other languages.",
+                  "Capital punishment (the death penalty) has existed in the United States since beforethe United States was a country. As of 2017, capital punishment is legal in 30 of the 50 states."]
+  }'
+```
+
 ## `pass_through_endpoints` Spec on config.yaml
 
 All possible values for `pass_through_endpoints` and what they mean 
