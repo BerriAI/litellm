@@ -1,5 +1,6 @@
 import ast
 import traceback
+from base64 import b64encode
 
 import httpx
 from fastapi import APIRouter, FastAPI, HTTPException, Request, Response, status
@@ -24,22 +25,41 @@ async def set_env_variables_in_header(custom_headers: dict):
     """
     headers = {}
     for key, value in custom_headers.items():
-        headers[key] = value
-        if isinstance(value, str) and "os.environ/" in value:
-            verbose_proxy_logger.debug(
-                "pass through endpoint - looking up 'os.environ/' variable"
-            )
-            # get string section that is os.environ/
-            start_index = value.find("os.environ/")
-            _variable_name = value[start_index:]
+        # langfuse Api requires base64 encoded headers - it's simpleer to just ask litellm users to set their langfuse public and secret keys
+        # we can then get the b64 encoded keys here
+        if key == "LANGFUSE_PUBLIC_KEY" or key == "LANGFUSE_SECRET_KEY":
+            # langfuse requires b64 encoded headers - we construct that here
+            _langfuse_public_key = custom_headers["LANGFUSE_PUBLIC_KEY"]
+            _langfuse_secret_key = custom_headers["LANGFUSE_SECRET_KEY"]
+            if isinstance(
+                _langfuse_public_key, str
+            ) and _langfuse_public_key.startswith("os.environ/"):
+                _langfuse_public_key = litellm.get_secret(_langfuse_public_key)
+            if isinstance(
+                _langfuse_secret_key, str
+            ) and _langfuse_secret_key.startswith("os.environ/"):
+                _langfuse_secret_key = litellm.get_secret(_langfuse_secret_key)
+            headers["Authorization"] = "Basic " + b64encode(
+                f"{_langfuse_public_key}:{_langfuse_secret_key}".encode("utf-8")
+            ).decode("ascii")
+        else:
+            # for all other headers
+            headers[key] = value
+            if isinstance(value, str) and "os.environ/" in value:
+                verbose_proxy_logger.debug(
+                    "pass through endpoint - looking up 'os.environ/' variable"
+                )
+                # get string section that is os.environ/
+                start_index = value.find("os.environ/")
+                _variable_name = value[start_index:]
 
-            verbose_proxy_logger.debug(
-                "pass through endpoint - getting secret for variable name: %s",
-                _variable_name,
-            )
-            _secret_value = litellm.get_secret(_variable_name)
-            new_value = value.replace(_variable_name, _secret_value)
-            headers[key] = new_value
+                verbose_proxy_logger.debug(
+                    "pass through endpoint - getting secret for variable name: %s",
+                    _variable_name,
+                )
+                _secret_value = litellm.get_secret(_variable_name)
+                new_value = value.replace(_variable_name, _secret_value)
+                headers[key] = new_value
     return headers
 
 
