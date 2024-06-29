@@ -467,7 +467,7 @@ async def make_call(
         raise VertexAIError(status_code=response.status_code, message=response.text)
 
     completion_stream = ModelResponseIterator(
-        streaming_response=response.aiter_bytes(), sync_stream=False
+        streaming_response=response.aiter_lines(), sync_stream=False
     )
     # LOGGING
     logging_obj.post_call(
@@ -498,7 +498,7 @@ def make_sync_call(
         raise VertexAIError(status_code=response.status_code, message=response.read())
 
     completion_stream = ModelResponseIterator(
-        streaming_response=response.iter_bytes(), sync_stream=True
+        streaming_response=response.iter_lines(), sync_stream=True
     )
 
     # LOGGING
@@ -1028,7 +1028,7 @@ class VertexLLM(BaseLLM):
             data["generationConfig"] = generation_config
 
         headers = {
-            "Content-Type": "application/json; charset=utf-8",
+            "Content-Type": "application/json",
         }
         if auth_header is not None:
             headers["Authorization"] = f"Bearer {auth_header}"
@@ -1310,9 +1310,9 @@ class ModelResponseIterator:
             if "usageMetadata" in processed_chunk:
                 usage = ChatCompletionUsageBlock(
                     prompt_tokens=processed_chunk["usageMetadata"]["promptTokenCount"],
-                    completion_tokens=processed_chunk["usageMetadata"][
-                        "candidatesTokenCount"
-                    ],
+                    completion_tokens=processed_chunk["usageMetadata"].get(
+                        "candidatesTokenCount", 0
+                    ),
                     total_tokens=processed_chunk["usageMetadata"]["totalTokenCount"],
                 )
 
@@ -1336,15 +1336,30 @@ class ModelResponseIterator:
     def __next__(self):
         try:
             chunk = self.response_iterator.__next__()
-            chunk = chunk.decode()
-            chunk = chunk.replace("data:", "")
-            chunk = chunk.strip()
-            json_chunk = json.loads(chunk)
-            return self.chunk_parser(chunk=json_chunk)
         except StopIteration:
             raise StopIteration
         except ValueError as e:
-            raise RuntimeError(f"Error parsing chunk: {e}")
+            raise RuntimeError(f"Error receiving chunk from stream: {e}")
+
+        try:
+            chunk = chunk.replace("data:", "")
+            chunk = chunk.strip()
+            if len(chunk) > 0:
+                json_chunk = json.loads(chunk)
+                return self.chunk_parser(chunk=json_chunk)
+            else:
+                return GenericStreamingChunk(
+                    text="",
+                    is_finished=False,
+                    finish_reason="",
+                    usage=None,
+                    index=0,
+                    tool_use=None,
+                )
+        except StopIteration:
+            raise StopIteration
+        except ValueError as e:
+            raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
 
     # Async iterator
     def __aiter__(self):
@@ -1354,12 +1369,27 @@ class ModelResponseIterator:
     async def __anext__(self):
         try:
             chunk = await self.async_response_iterator.__anext__()
-            chunk = chunk.decode()
-            chunk = chunk.replace("data:", "")
-            chunk = chunk.strip()
-            json_chunk = json.loads(chunk)
-            return self.chunk_parser(chunk=json_chunk)
         except StopAsyncIteration:
             raise StopAsyncIteration
         except ValueError as e:
-            raise RuntimeError(f"Error parsing chunk: {e}")
+            raise RuntimeError(f"Error receiving chunk from stream: {e}")
+
+        try:
+            chunk = chunk.replace("data:", "")
+            chunk = chunk.strip()
+            if len(chunk) > 0:
+                json_chunk = json.loads(chunk)
+                return self.chunk_parser(chunk=json_chunk)
+            else:
+                return GenericStreamingChunk(
+                    text="",
+                    is_finished=False,
+                    finish_reason="",
+                    usage=None,
+                    index=0,
+                    tool_use=None,
+                )
+        except StopAsyncIteration:
+            raise StopAsyncIteration
+        except ValueError as e:
+            raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
