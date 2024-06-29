@@ -1,3 +1,5 @@
+import Image from '@theme/IdealImage';
+
 # ➡️ Create Pass Through Endpoints 
 
 Add pass through routes to LiteLLM Proxy
@@ -19,7 +21,7 @@ curl --request POST \
   }'
 ```
 
-## Tutorial - Setup Cohere Re-Rank Endpoint on LiteLLM Proxy
+## Tutorial - Pass through Cohere Re-Rank Endpoint
 
 **Step 1** Define pass through routes on [litellm config.yaml](configs.md)
 
@@ -38,9 +40,11 @@ general_settings:
 **Step 2** Start Proxy Server in detailed_debug mode
 
 ```shell
-litellm --config config.yaml
+litellm --config config.yaml --detailed_debug
 ```
 **Step 3** Make Request to pass through endpoint
+
+Here `http://localhost:4000` is your litellm proxy endpoint
 
 ```shell
 curl --request POST \
@@ -92,6 +96,59 @@ This request got forwarded from LiteLLM Proxy -> Defined Target URL (with header
 }
 ```
 
+## Tutorial - Pass Through Langfuse Requests
 
+
+**Step 1** Define pass through routes on [litellm config.yaml](configs.md)
+
+```yaml
+general_settings:
+  master_key: sk-1234
+  pass_through_endpoints:
+    - path: "/api/public/ingestion"                                # route you want to add to LiteLLM Proxy Server
+      target: "https://us.cloud.langfuse.com/api/public/ingestion" # URL this route should forward 
+      headers:
+        LANGFUSE_PUBLIC_KEY: "os.environ/LANGFUSE_DEV_PUBLIC_KEY" # your langfuse account public key
+        LANGFUSE_SECRET_KEY: "os.environ/LANGFUSE_DEV_SK_KEY"     # your langfuse account secret key
+```
+
+**Step 2** Start Proxy Server in detailed_debug mode
+
+```shell
+litellm --config config.yaml --detailed_debug
+```
+**Step 3** Make Request to pass through endpoint
+
+Run this code to make a sample trace 
+```python
+from langfuse import Langfuse
+
+langfuse = Langfuse(
+    host="http://localhost:4000", # your litellm proxy endpoint
+    public_key="anything",        # no key required since this is a pass through
+    secret_key="anything",        # no key required since this is a pass through
+)
+
+print("sending langfuse trace request")
+trace = langfuse.trace(name="test-trace-litellm-proxy-passthrough")
+print("flushing langfuse request")
+langfuse.flush()
+
+print("flushed langfuse request")
+```
+
+
+🎉 **Expected Response**
+
+On success
+Expect to see the following Trace Generated on your Langfuse Dashboard
+
+<Image img={require('../../img/proxy_langfuse.png')} />
+
+You will see the following endpoint called on your litellm proxy server logs
+
+```shell
+POST /api/public/ingestion HTTP/1.1" 207 Multi-Status
+```
 
 
