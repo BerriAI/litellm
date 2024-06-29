@@ -663,3 +663,29 @@ def test_convert_model_response_object():
             e.message
             == '{"type":"error","error":{"type":"invalid_request_error","message":"Output blocked by content filtering policy"}}'
         )
+
+
+@pytest.mark.parametrize(
+    "model, expected_bool",
+    [
+        ("vertex_ai/gemini-1.5-pro", True),
+        ("gemini/gemini-1.5-pro", True),
+        ("predibase/llama3-8b-instruct", True),
+        ("gpt-4o", False),
+    ],
+)
+def test_supports_response_schema(model, expected_bool):
+    """
+    Unit tests for 'supports_response_schema' helper function.
+
+    Should be true for gemini-1.5-pro on google ai studio / vertex ai AND predibase models
+    Should be false otherwise
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    from litellm.utils import supports_response_schema
+
+    response = supports_response_schema(model=model, custom_llm_provider=None)
+
+    assert expected_bool == response
