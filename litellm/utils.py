@@ -6160,11 +6160,18 @@ def exception_type(
                         )
                     elif (
                         original_exception.status_code == 400
-                        or original_exception.status_code == 422
                         or original_exception.status_code == 413
                     ):
                         exception_mapping_worked = True
                         raise BadRequestError(
+                            message=f"ReplicateException - {original_exception.message}",
+                            model=model,
+                            llm_provider="replicate",
+                            response=original_exception.response,
+                        )
+                    elif original_exception.status_code == 422:
+                        exception_mapping_worked = True
+                        raise UnprocessableEntityError(
                             message=f"ReplicateException - {original_exception.message}",
                             model=model,
                             llm_provider="replicate",
