@@ -11,7 +11,7 @@ Requires:
 import ast
 import base64
 import os
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
 import litellm
 from litellm.proxy._types import KeyManagementSystem
@@ -139,7 +139,7 @@ class AWSKeyManagementService_V2:
 """
 
 
-def decrypt_env_var() -> dict[str, Any]:
+def decrypt_env_var() -> Dict[str, Any]:
     # setup client class
     aws_kms = AWSKeyManagementService_V2()
     # iterate through env - for `aws_kms/`
