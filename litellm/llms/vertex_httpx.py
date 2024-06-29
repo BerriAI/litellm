@@ -356,6 +356,7 @@ class VertexGeminiConfig:
         model: str,
         non_default_params: dict,
         optional_params: dict,
+        drop_params: bool,
     ):
         for param, value in non_default_params.items():
             if param == "temperature":
@@ -375,8 +376,13 @@ class VertexGeminiConfig:
                     optional_params["stop_sequences"] = value
             if param == "max_tokens":
                 optional_params["max_output_tokens"] = value
-            if param == "response_format" and value["type"] == "json_object":  # type: ignore
-                optional_params["response_mime_type"] = "application/json"
+            if param == "response_format" and isinstance(value, dict):  # type: ignore
+                if value["type"] == "json_object":
+                    optional_params["response_mime_type"] = "application/json"
+                elif value["type"] == "text":
+                    optional_params["response_mime_type"] = "text/plain"
+                if "response_schema" in value:
+                    optional_params["response_schema"] = value["response_schema"]
             if param == "frequency_penalty":
                 optional_params["frequency_penalty"] = value
             if param == "presence_penalty":

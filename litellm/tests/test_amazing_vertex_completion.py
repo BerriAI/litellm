@@ -882,6 +882,51 @@ Using this JSON schema:
 
 @pytest.mark.parametrize("provider", ["vertex_ai_beta"])  # "vertex_ai",
 @pytest.mark.asyncio
+async def test_gemini_pro_json_schema_httpx(provider):
+    load_vertex_ai_credentials()
+    litellm.set_verbose = True
+    messages = [{"role": "user", "content": "List 5 cookie recipes"}]
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    response_schema = {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "recipe_name": {
+                    "type": "string",
+                },
+            },
+            "required": ["recipe_name"],
+        },
+    }
+
+    client = HTTPHandler()
+
+    with patch.object(client, "post", new=MagicMock()) as mock_call:
+        try:
+            response = completion(
+                model="vertex_ai_beta/gemini-1.5-pro-001",
+                messages=messages,
+                response_format={
+                    "type": "json_object",
+                    "response_schema": response_schema,
+                },
+                client=client,
+            )
+        except Exception as e:
+            pass
+
+        mock_call.assert_called_once()
+        print(mock_call.call_args.kwargs)
+        print(mock_call.call_args.kwargs["json"]["generationConfig"])
+        assert (
+            "response_schema" in mock_call.call_args.kwargs["json"]["generationConfig"]
+        )
+
+
+@pytest.mark.parametrize("provider", ["vertex_ai_beta"])  # "vertex_ai",
+@pytest.mark.asyncio
 async def test_gemini_pro_httpx_custom_api_base(provider):
     load_vertex_ai_credentials()
     litellm.set_verbose = True
