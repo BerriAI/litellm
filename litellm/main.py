@@ -1828,6 +1828,7 @@ def completion(
                 logging_obj=logging,
                 acompletion=acompletion,
                 timeout=timeout,  # type: ignore
+                custom_llm_provider="openrouter",
             )
             ## LOGGING
             logging.post_call(
