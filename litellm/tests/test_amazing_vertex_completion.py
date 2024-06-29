@@ -880,15 +880,133 @@ Using this JSON schema:
         mock_call.assert_called_once()
 
 
+def vertex_httpx_mock_post_valid_response(*args, **kwargs):
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {"Content-Type": "application/json"}
+    mock_response.json.return_value = {
+        "candidates": [
+            {
+                "content": {
+                    "role": "model",
+                    "parts": [
+                        {
+                            "text": '[{"recipe_name": "Chocolate Chip Cookies"}, {"recipe_name": "Oatmeal Raisin Cookies"}, {"recipe_name": "Peanut Butter Cookies"}, {"recipe_name": "Sugar Cookies"}, {"recipe_name": "Snickerdoodles"}]\n'
+                        }
+                    ],
+                },
+                "finishReason": "STOP",
+                "safetyRatings": [
+                    {
+                        "category": "HARM_CATEGORY_HATE_SPEECH",
+                        "probability": "NEGLIGIBLE",
+                        "probabilityScore": 0.09790669,
+                        "severity": "HARM_SEVERITY_NEGLIGIBLE",
+                        "severityScore": 0.11736965,
+                    },
+                    {
+                        "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                        "probability": "NEGLIGIBLE",
+                        "probabilityScore": 0.1261379,
+                        "severity": "HARM_SEVERITY_NEGLIGIBLE",
+                        "severityScore": 0.08601588,
+                    },
+                    {
+                        "category": "HARM_CATEGORY_HARASSMENT",
+                        "probability": "NEGLIGIBLE",
+                        "probabilityScore": 0.083441176,
+                        "severity": "HARM_SEVERITY_NEGLIGIBLE",
+                        "severityScore": 0.0355444,
+                    },
+                    {
+                        "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                        "probability": "NEGLIGIBLE",
+                        "probabilityScore": 0.071981624,
+                        "severity": "HARM_SEVERITY_NEGLIGIBLE",
+                        "severityScore": 0.08108212,
+                    },
+                ],
+            }
+        ],
+        "usageMetadata": {
+            "promptTokenCount": 60,
+            "candidatesTokenCount": 55,
+            "totalTokenCount": 115,
+        },
+    }
+    return mock_response
+
+
+def vertex_httpx_mock_post_invalid_schema_response(*args, **kwargs):
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {"Content-Type": "application/json"}
+    mock_response.json.return_value = {
+        "candidates": [
+            {
+                "content": {
+                    "role": "model",
+                    "parts": [
+                        {"text": '[{"recipe_world": "Chocolate Chip Cookies"}]\n'}
+                    ],
+                },
+                "finishReason": "STOP",
+                "safetyRatings": [
+                    {
+                        "category": "HARM_CATEGORY_HATE_SPEECH",
+                        "probability": "NEGLIGIBLE",
+                        "probabilityScore": 0.09790669,
+                        "severity": "HARM_SEVERITY_NEGLIGIBLE",
+                        "severityScore": 0.11736965,
+                    },
+                    {
+                        "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                        "probability": "NEGLIGIBLE",
+                        "probabilityScore": 0.1261379,
+                        "severity": "HARM_SEVERITY_NEGLIGIBLE",
+                        "severityScore": 0.08601588,
+                    },
+                    {
+                        "category": "HARM_CATEGORY_HARASSMENT",
+                        "probability": "NEGLIGIBLE",
+                        "probabilityScore": 0.083441176,
+                        "severity": "HARM_SEVERITY_NEGLIGIBLE",
+                        "severityScore": 0.0355444,
+                    },
+                    {
+                        "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                        "probability": "NEGLIGIBLE",
+                        "probabilityScore": 0.071981624,
+                        "severity": "HARM_SEVERITY_NEGLIGIBLE",
+                        "severityScore": 0.08108212,
+                    },
+                ],
+            }
+        ],
+        "usageMetadata": {
+            "promptTokenCount": 60,
+            "candidatesTokenCount": 55,
+            "totalTokenCount": 115,
+        },
+    }
+    return mock_response
+
+
 @pytest.mark.parametrize(
     "model, supports_response_schema",
     [
         ("vertex_ai_beta/gemini-1.5-pro-001", True),
         ("vertex_ai_beta/gemini-1.5-flash", False),
     ],
-)  # "vertex_ai",
+)
+@pytest.mark.parametrize(
+    "invalid_response",
+    [True, False],
+)
 @pytest.mark.asyncio
-async def test_gemini_pro_json_schema_httpx(model, supports_response_schema):
+async def test_gemini_pro_json_schema_args_sent_httpx(
+    model, supports_response_schema, invalid_response
+):
     load_vertex_ai_credentials()
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
@@ -912,7 +1030,12 @@ async def test_gemini_pro_json_schema_httpx(model, supports_response_schema):
 
     client = HTTPHandler()
 
-    with patch.object(client, "post", new=MagicMock()) as mock_call:
+    httpx_response = MagicMock()
+    if invalid_response is True:
+        httpx_response.side_effect = vertex_httpx_mock_post_invalid_schema_response
+    else:
+        httpx_response.side_effect = vertex_httpx_mock_post_valid_response
+    with patch.object(client, "post", new=httpx_response) as mock_call:
         try:
             _ = completion(
                 model=model,
@@ -923,8 +1046,11 @@ async def test_gemini_pro_json_schema_httpx(model, supports_response_schema):
                 },
                 client=client,
             )
-        except Exception:
-            pass
+            if invalid_response is True:
+                pytest.fail("Expected this to fail")
+        except litellm.JSONSchemaValidationError as e:
+            if invalid_response is False:
+                pytest.fail("Expected this to pass. Got={}".format(e))
 
         mock_call.assert_called_once()
         print(mock_call.call_args.kwargs)

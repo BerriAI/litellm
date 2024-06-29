@@ -849,6 +849,7 @@ from .exceptions import (
     APIResponseValidationError,
     UnprocessableEntityError,
     InternalServerError,
+    JSONSchemaValidationError,
     LITELLM_EXCEPTION_TYPES,
 )
 from .budget_manager import BudgetManager
