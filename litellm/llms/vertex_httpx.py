@@ -183,10 +183,17 @@ class GoogleAIStudioGeminiConfig:  # key diff from VertexAI - 'frequency_penalty
             if param == "tools" and isinstance(value, list):
                 gtool_func_declarations = []
                 for tool in value:
+                    _parameters = tool.get("function", {}).get("parameters", {})
+                    _properties = _parameters.get("properties", {})
+                    if isinstance(_properties, dict):
+                        for _, _property in _properties.items():
+                            if "enum" in _property and "format" not in _property:
+                                _property["format"] = "enum"
+
                     gtool_func_declaration = FunctionDeclaration(
                         name=tool["function"]["name"],
                         description=tool["function"].get("description", ""),
-                        parameters=tool["function"].get("parameters", {}),
+                        parameters=_parameters,
                     )
                     gtool_func_declarations.append(gtool_func_declaration)
                 optional_params["tools"] = [
