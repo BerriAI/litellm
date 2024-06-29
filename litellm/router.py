@@ -3998,8 +3998,8 @@ class Router:
             verbose_router_logger.error(
                 "Could not identify azure model. Set azure 'base_model' for accurate max tokens, cost tracking, etc.- https://docs.litellm.ai/docs/proxy/cost_tracking#spend-tracking-for-azure-openai-models"
             )
-        else:
-            model = deployment.get("litellm_params", {}).get("model", None)
+        elif custom_llm_provider != "azure":
+            model = _model
 
         ## GET LITELLM MODEL INFO - raises exception, if model is not mapped
         model_info = litellm.get_model_info(model=model)
