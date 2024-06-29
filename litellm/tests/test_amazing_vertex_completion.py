@@ -880,10 +880,19 @@ Using this JSON schema:
         mock_call.assert_called_once()
 
 
-@pytest.mark.parametrize("provider", ["vertex_ai_beta"])  # "vertex_ai",
+@pytest.mark.parametrize(
+    "model, supports_response_schema",
+    [
+        ("vertex_ai_beta/gemini-1.5-pro-001", True),
+        ("vertex_ai_beta/gemini-1.5-flash", False),
+    ],
+)  # "vertex_ai",
 @pytest.mark.asyncio
-async def test_gemini_pro_json_schema_httpx(provider):
+async def test_gemini_pro_json_schema_httpx(model, supports_response_schema):
     load_vertex_ai_credentials()
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
     litellm.set_verbose = True
     messages = [{"role": "user", "content": "List 5 cookie recipes"}]
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
@@ -905,8 +914,8 @@ async def test_gemini_pro_json_schema_httpx(provider):
 
     with patch.object(client, "post", new=MagicMock()) as mock_call:
         try:
-            response = completion(
-                model="vertex_ai_beta/gemini-1.5-pro-001",
+            _ = completion(
+                model=model,
                 messages=messages,
                 response_format={
                     "type": "json_object",
@@ -914,15 +923,27 @@ async def test_gemini_pro_json_schema_httpx(provider):
                 },
                 client=client,
             )
-        except Exception as e:
+        except Exception:
             pass
 
         mock_call.assert_called_once()
         print(mock_call.call_args.kwargs)
         print(mock_call.call_args.kwargs["json"]["generationConfig"])
-        assert (
-            "response_schema" in mock_call.call_args.kwargs["json"]["generationConfig"]
-        )
+
+        if supports_response_schema:
+            assert (
+                "response_schema"
+                in mock_call.call_args.kwargs["json"]["generationConfig"]
+            )
+        else:
+            assert (
+                "response_schema"
+                not in mock_call.call_args.kwargs["json"]["generationConfig"]
+            )
+            assert (
+                "Use this JSON schema:"
+                in mock_call.call_args.kwargs["json"]["contents"][0]["parts"][1]["text"]
+            )
 
 
 @pytest.mark.parametrize("provider", ["vertex_ai_beta"])  # "vertex_ai",
