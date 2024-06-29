@@ -114,6 +114,16 @@ print(response)
 **Step3 - Verify Spend Tracked**
 That's IT. Now Verify your spend was tracked
 
+<Tabs>
+<TabItem value="curl" label="Response Headers">
+
+Expect to see `x-litellm-response-cost` in the response headers with calculated cost
+
+<Image img={require('../../img/response_cost_img.png')} />
+
+</TabItem>
+<TabItem value="db" label="DB + UI">
+
 The following spend gets tracked in Table `LiteLLM_SpendLogs`
 
 ```json
@@ -137,12 +147,16 @@ Navigate to the Usage Tab on the LiteLLM UI (found on https://your-proxy-endpoin
 
 <Image img={require('../../img/admin_ui_spend.png')} />
 
-## API Endpoints to get Spend
+</TabItem>
+</Tabs>
+
+## ✨ (Enterprise) API Endpoints to get Spend
 #### Getting Spend Reports - To Charge Other Teams, Customers
 
 Use the `/global/spend/report` endpoint to get daily spend report per 
-- team
-- customer [this is `user` passed to `/chat/completions` request](#how-to-track-spend-with-litellm)
+- Team
+- Customer [this is `user` passed to `/chat/completions` request](#how-to-track-spend-with-litellm)
+- [LiteLLM API key](virtual_keys.md)
 
 <Tabs>
 
@@ -324,6 +338,61 @@ curl -X GET 'http://localhost:4000/global/spend/report?start_date=2024-04-01&end
 ]
 ```
 
+
+</TabItem>
+
+<TabItem value="per key" label="Spend Per API Key">
+
+
+👉 Key Change: Specify `group_by=api_key`
+
+
+```shell
+curl -X GET 'http://localhost:4000/global/spend/report?start_date=2024-04-01&end_date=2024-06-30&group_by=api_key' \
+  -H 'Authorization: Bearer sk-1234'
+```
+
+##### Example Response
+
+
+```shell
+[
+  {
+    "api_key": "ad64768847d05d978d62f623d872bff0f9616cc14b9c1e651c84d14fe3b9f539",
+    "total_cost": 0.0002157,
+    "total_input_tokens": 45.0,
+    "total_output_tokens": 1375.0,
+    "model_details": [
+      {
+        "model": "gpt-3.5-turbo",
+        "total_cost": 0.0001095,
+        "total_input_tokens": 9,
+        "total_output_tokens": 70
+      },
+      {
+        "model": "llama3-8b-8192",
+        "total_cost": 0.0001062,
+        "total_input_tokens": 36,
+        "total_output_tokens": 1305
+      }
+    ]
+  },
+  {
+    "api_key": "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",
+    "total_cost": 0.00012924,
+    "total_input_tokens": 36.0,
+    "total_output_tokens": 1593.0,
+    "model_details": [
+      {
+        "model": "llama3-8b-8192",
+        "total_cost": 0.00012924,
+        "total_input_tokens": 36,
+        "total_output_tokens": 1593
+      }
+    ]
+  }
+]
+```
 
 </TabItem>
 

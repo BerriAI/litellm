@@ -29,7 +29,7 @@ def get_logging_payload(
     completion_start_time = kwargs.get("completion_start_time", end_time)
     call_type = kwargs.get("call_type")
     cache_hit = kwargs.get("cache_hit", False)
-    usage = response_obj["usage"]
+    usage = response_obj.get("usage", None) or {}
     if type(usage) == litellm.Usage:
         usage = dict(usage)
     id = response_obj.get("id", kwargs.get("litellm_call_id"))

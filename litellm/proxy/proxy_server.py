@@ -161,6 +161,9 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     router as key_management_router,
 )
 from litellm.proxy.management_endpoints.team_endpoints import router as team_router
+from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+    initialize_pass_through_endpoints,
+)
 from litellm.proxy.secret_managers.aws_secret_manager import (
     load_aws_kms,
     load_aws_secret_manager,
@@ -433,6 +436,7 @@ def get_custom_headers(
     api_base: Optional[str] = None,
     version: Optional[str] = None,
     model_region: Optional[str] = None,
+    response_cost: Optional[Union[float, str]] = None,
     fastest_response_batch_completion: Optional[bool] = None,
     **kwargs,
 ) -> dict:
@@ -443,6 +447,7 @@ def get_custom_headers(
         "x-litellm-model-api-base": api_base,
         "x-litellm-version": version,
         "x-litellm-model-region": model_region,
+        "x-litellm-response-cost": str(response_cost),
         "x-litellm-key-tpm-limit": str(user_api_key_dict.tpm_limit),
         "x-litellm-key-rpm-limit": str(user_api_key_dict.rpm_limit),
         "x-litellm-fastest_response_batch_completion": (
@@ -1854,6 +1859,11 @@ class ProxyConfig:
                 user_custom_key_generate = get_instance_fn(
                     value=custom_key_generate, config_file_path=config_file_path
                 )
+            ## pass through endpoints
+            if general_settings.get("pass_through_endpoints", None) is not None:
+                await initialize_pass_through_endpoints(
+                    pass_through_endpoints=general_settings["pass_through_endpoints"]
+                )
             ## dynamodb
             database_type = general_settings.get("database_type", None)
             if database_type is not None and (
@@ -2954,6 +2964,11 @@ async def chat_completion(
         if isinstance(data["model"], str) and data["model"] in litellm.model_alias_map:
             data["model"] = litellm.model_alias_map[data["model"]]
 
+        ### CALL HOOKS ### - modify/reject incoming data before calling the model
+        data = await proxy_logging_obj.pre_call_hook(  # type: ignore
+            user_api_key_dict=user_api_key_dict, data=data, call_type="completion"
+        )
+
         ## LOGGING OBJECT ## - initialize logging object for logging success/failure events for call
         data["litellm_call_id"] = str(uuid.uuid4())
         logging_obj, data = litellm.utils.function_setup(
@@ -2964,11 +2979,6 @@ async def chat_completion(
         )
 
         data["litellm_logging_obj"] = logging_obj
-
-        ### CALL HOOKS ### - modify/reject incoming data before calling the model
-        data = await proxy_logging_obj.pre_call_hook(  # type: ignore
-            user_api_key_dict=user_api_key_dict, data=data, call_type="completion"
-        )
 
         tasks = []
         tasks.append(
@@ -3048,6 +3058,7 @@ async def chat_completion(
         model_id = hidden_params.get("model_id", None) or ""
         cache_key = hidden_params.get("cache_key", None) or ""
         api_base = hidden_params.get("api_base", None) or ""
+        response_cost = hidden_params.get("response_cost", None) or ""
         fastest_response_batch_completion = hidden_params.get(
             "fastest_response_batch_completion", None
         )
@@ -3066,6 +3077,7 @@ async def chat_completion(
                 cache_key=cache_key,
                 api_base=api_base,
                 version=version,
+                response_cost=response_cost,
                 model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
                 fastest_response_batch_completion=fastest_response_batch_completion,
             )
@@ -3095,6 +3107,7 @@ async def chat_completion(
                 cache_key=cache_key,
                 api_base=api_base,
                 version=version,
+                response_cost=response_cost,
                 model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
                 fastest_response_batch_completion=fastest_response_batch_completion,
                 **additional_headers,
@@ -3290,6 +3303,7 @@ async def completion(
         model_id = hidden_params.get("model_id", None) or ""
         cache_key = hidden_params.get("cache_key", None) or ""
         api_base = hidden_params.get("api_base", None) or ""
+        response_cost = hidden_params.get("response_cost", None) or ""
 
         ### ALERTING ###
         data["litellm_status"] = "success"  # used for alerting
@@ -3304,6 +3318,7 @@ async def completion(
                 cache_key=cache_key,
                 api_base=api_base,
                 version=version,
+                response_cost=response_cost,
             )
             selected_data_generator = select_data_generator(
                 response=response,
@@ -3323,6 +3338,7 @@ async def completion(
                 cache_key=cache_key,
                 api_base=api_base,
                 version=version,
+                response_cost=response_cost,
             )
         )
 
@@ -3527,6 +3543,7 @@ async def embeddings(
         model_id = hidden_params.get("model_id", None) or ""
         cache_key = hidden_params.get("cache_key", None) or ""
         api_base = hidden_params.get("api_base", None) or ""
+        response_cost = hidden_params.get("response_cost", None) or ""
 
         fastapi_response.headers.update(
             get_custom_headers(
@@ -3535,6 +3552,7 @@ async def embeddings(
                 cache_key=cache_key,
                 api_base=api_base,
                 version=version,
+                response_cost=response_cost,
                 model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
             )
         )
@@ -3676,6 +3694,7 @@ async def image_generation(
         model_id = hidden_params.get("model_id", None) or ""
         cache_key = hidden_params.get("cache_key", None) or ""
         api_base = hidden_params.get("api_base", None) or ""
+        response_cost = hidden_params.get("response_cost", None) or ""
 
         fastapi_response.headers.update(
             get_custom_headers(
@@ -3684,6 +3703,7 @@ async def image_generation(
                 cache_key=cache_key,
                 api_base=api_base,
                 version=version,
+                response_cost=response_cost,
                 model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
             )
         )
@@ -3812,6 +3832,7 @@ async def audio_speech(
         model_id = hidden_params.get("model_id", None) or ""
         cache_key = hidden_params.get("cache_key", None) or ""
         api_base = hidden_params.get("api_base", None) or ""
+        response_cost = hidden_params.get("response_cost", None) or ""
 
         # Printing each chunk size
         async def generate(_response: HttpxBinaryResponseContent):
@@ -3825,6 +3846,7 @@ async def audio_speech(
             cache_key=cache_key,
             api_base=api_base,
             version=version,
+            response_cost=response_cost,
             model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
             fastest_response_batch_completion=None,
         )
@@ -3976,6 +3998,7 @@ async def audio_transcriptions(
         model_id = hidden_params.get("model_id", None) or ""
         cache_key = hidden_params.get("cache_key", None) or ""
         api_base = hidden_params.get("api_base", None) or ""
+        response_cost = hidden_params.get("response_cost", None) or ""
 
         fastapi_response.headers.update(
             get_custom_headers(
@@ -3984,6 +4007,7 @@ async def audio_transcriptions(
                 cache_key=cache_key,
                 api_base=api_base,
                 version=version,
+                response_cost=response_cost,
                 model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
             )
         )
@@ -6284,7 +6308,7 @@ async def model_info_v2(
         raise HTTPException(
             status_code=500,
             detail={
-                "error": f"Invalid llm model list. llm_model_list={llm_model_list}"
+                "error": f"No model list passed, models={llm_model_list}. You can add a model through the config.yaml or on the LiteLLM Admin UI."
             },
         )
 

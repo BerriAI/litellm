@@ -413,6 +413,7 @@ openai_compatible_providers: List = [
     "mistral",
     "groq",
     "nvidia_nim",
+    "volcengine",
     "codestral",
     "deepseek",
     "deepinfra",
@@ -643,6 +644,7 @@ provider_list: List = [
     "mistral",
     "groq",
     "nvidia_nim",
+    "volcengine",
     "codestral",
     "text-completion-codestral",
     "deepseek",
@@ -736,6 +738,7 @@ openai_image_generation_models = ["dall-e-2", "dall-e-3"]
 from .timeout import timeout
 from .cost_calculator import completion_cost
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.token_counter import get_modified_max_tokens
 from .utils import (
     client,
     exception_type,
@@ -817,6 +820,8 @@ from .llms.openai import (
     AzureAIStudioConfig,
 )
 from .llms.nvidia_nim import NvidiaNimConfig
+from .llms.fireworks_ai import FireworksAIConfig
+from .llms.volcengine import VolcEngineConfig
 from .llms.text_completion_codestral import MistralTextCompletionConfig
 from .llms.azure import (
     AzureOpenAIConfig,
