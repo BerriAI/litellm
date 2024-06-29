@@ -71,6 +71,7 @@ class ModelInfo(TypedDict, total=False):
     ]
     supported_openai_params: Required[Optional[List[str]]]
     supports_system_messages: Optional[bool]
+    supports_response_schema: Optional[bool]
 
 
 class GenericStreamingChunk(TypedDict):
