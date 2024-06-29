@@ -1,20 +1,32 @@
 # @pytest.mark.skip(reason="AWS Suspended Account")
-import sys, os
+import os
+import sys
 import traceback
+
 from dotenv import load_dotenv
 
 load_dotenv()
-import os, io
+import io
+import os
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
+from unittest.mock import AsyncMock, Mock, patch
+
 import pytest
+
 import litellm
-from litellm import embedding, completion, completion_cost, Timeout, ModelResponse
-from litellm import RateLimitError
-from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
-from unittest.mock import patch, AsyncMock, Mock
+from litellm import (
+    ModelResponse,
+    RateLimitError,
+    Timeout,
+    completion,
+    completion_cost,
+    embedding,
+)
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+
 from litellm.llms.bedrock_httpx import BedrockLLM
 
 # litellm.num_retries = 3
@@ -708,7 +720,10 @@ def test_completion_claude_3_base64():
 def test_provisioned_throughput():
     try:
         litellm.set_verbose = True
-        import botocore, json, io
+        import io
+        import json
+
+        import botocore
         import botocore.session
         from botocore.stub import Stubber
 
@@ -764,7 +779,6 @@ def test_completion_bedrock_mistral_completion_auth():
     # aws_access_key_id = os.environ["AWS_ACCESS_KEY_ID"]
     # aws_secret_access_key = os.environ["AWS_SECRET_ACCESS_KEY"]
     # aws_region_name = os.environ["AWS_REGION_NAME"]
-
     # os.environ.pop("AWS_ACCESS_KEY_ID", None)
     # os.environ.pop("AWS_SECRET_ACCESS_KEY", None)
     # os.environ.pop("AWS_REGION_NAME", None)
@@ -850,4 +864,49 @@ async def test_bedrock_extra_headers():
         print(f"mock_client_post.call_args: {mock_client_post.call_args}")
         assert "test" in mock_client_post.call_args.kwargs["headers"]
         assert mock_client_post.call_args.kwargs["headers"]["test"] == "hello world"
+        mock_client_post.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_bedrock_custom_prompt_template():
+    """
+    Check if custom prompt template used for bedrock models
+
+    Reference: https://github.com/BerriAI/litellm/issues/4415
+    """
+    client = AsyncHTTPHandler()
+
+    with patch.object(client, "post", new=AsyncMock()) as mock_client_post:
+        import json
+
+        try:
+            response = await litellm.acompletion(
+                model="bedrock/mistral.OpenOrca",
+                messages=[{"role": "user", "content": "What's AWS?"}],
+                client=client,
+                roles={
+                    "system": {
+                        "pre_message": "<|im_start|>system\n",
+                        "post_message": "<|im_end|>",
+                    },
+                    "assistant": {
+                        "pre_message": "<|im_start|>assistant\n",
+                        "post_message": "<|im_end|>",
+                    },
+                    "user": {
+                        "pre_message": "<|im_start|>user\n",
+                        "post_message": "<|im_end|>",
+                    },
+                },
+                bos_token="<s>",
+                eos_token="<|im_end|>",
+            )
+        except Exception as e:
+            pass
+
+        print(f"mock_client_post.call_args: {mock_client_post.call_args}")
+        assert "prompt" in mock_client_post.call_args.kwargs["data"]
+
+        prompt = json.loads(mock_client_post.call_args.kwargs["data"])["prompt"]
+        assert prompt == "<|im_start|>user\nWhat's AWS?<|im_end|>"
         mock_client_post.assert_called_once()

@@ -663,19 +663,23 @@ def convert_url_to_base64(url):
         image_bytes = response.content
         base64_image = base64.b64encode(image_bytes).decode("utf-8")
 
-        img_type = url.split(".")[-1].lower()
-        if img_type == "jpg" or img_type == "jpeg":
-            img_type = "image/jpeg"
-        elif img_type == "png":
-            img_type = "image/png"
-        elif img_type == "gif":
-            img_type = "image/gif"
-        elif img_type == "webp":
-            img_type = "image/webp"
+        image_type = response.headers.get("Content-Type", None)
+        if image_type is not None and image_type.startswith("image/"):
+            img_type = image_type
         else:
-            raise Exception(
-                f"Error: Unsupported image format. Format={img_type}. Supported types = ['image/jpeg', 'image/png', 'image/gif', 'image/webp']"
-            )
+            img_type = url.split(".")[-1].lower()
+            if img_type == "jpg" or img_type == "jpeg":
+                img_type = "image/jpeg"
+            elif img_type == "png":
+                img_type = "image/png"
+            elif img_type == "gif":
+                img_type = "image/gif"
+            elif img_type == "webp":
+                img_type = "image/webp"
+            else:
+                raise Exception(
+                    f"Error: Unsupported image format. Format={img_type}. Supported types = ['image/jpeg', 'image/png', 'image/gif', 'image/webp']"
+                )
 
         return f"data:{img_type};base64,{base64_image}"
     else:
