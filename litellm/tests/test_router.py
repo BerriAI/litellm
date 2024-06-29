@@ -812,6 +812,7 @@ def test_router_context_window_check_pre_call_check():
                     "base_model": "azure/gpt-35-turbo",
                     "mock_response": "Hello world 1!",
                 },
+                "model_info": {"base_model": "azure/gpt-35-turbo"},
             },
             {
                 "model_name": "gpt-3.5-turbo",  # openai model name
