@@ -645,6 +645,86 @@ assert isinstance(
 ```
 
 
+## Usage - PDF / Videos / etc. Files 
+
+Pass any file supported by Vertex AI, through LiteLLM. 
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+
+response = completion(
+    model="vertex_ai/gemini-1.5-flash",
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "You are a very professional document summarization specialist. Please summarize the given document."},
+                {
+                    "type": "image_url",
+                    "image_url": "gs://cloud-samples-data/generative-ai/pdf/2403.05530.pdf",
+                },
+            ],
+        }
+    ],
+    max_tokens=300,
+)
+
+print(response.choices[0])
+
+```
+</TabItem>
+<TabItem value="proxy" lable="PROXY">
+
+1. Add model to config 
+
+```yaml
+- model_name: gemini-1.5-flash
+  litellm_params:
+    model: vertex_ai/gemini-1.5-flash
+    vertex_credentials: "/path/to/service_account.json"
+```
+
+2. Start Proxy
+
+```
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <YOUR-LITELLM-KEY>" \
+  -d '{
+    "model": "gemini-1.5-flash",
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "You are a very professional document summarization specialist. Please summarize the given document"
+          },
+          {
+                "type": "image_url",
+                "image_url": "gs://cloud-samples-data/generative-ai/pdf/2403.05530.pdf",
+            },
+          }
+        ]
+      }
+    ],
+    "max_tokens": 300
+  }'
+
+```
+
+</TabItem>
+</Tabs>
+
 ## Chat Models
 | Model Name       | Function Call                        |
 |------------------|--------------------------------------|
