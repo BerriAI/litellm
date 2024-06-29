@@ -150,13 +150,13 @@ Navigate to the Usage Tab on the LiteLLM UI (found on https://your-proxy-endpoin
 </TabItem>
 </Tabs>
 
-## API Endpoints to get Spend
+## ✨ (Enterprise) API Endpoints to get Spend
 #### Getting Spend Reports - To Charge Other Teams, Customers
 
 Use the `/global/spend/report` endpoint to get daily spend report per 
-- team
-- customer [this is `user` passed to `/chat/completions` request](#how-to-track-spend-with-litellm)
-- key
+- Team
+- Customer [this is `user` passed to `/chat/completions` request](#how-to-track-spend-with-litellm)
+- [LiteLLM API key](virtual_keys.md)
 
 <Tabs>
 
