@@ -152,3 +152,31 @@ POST /api/public/ingestion HTTP/1.1" 207 Multi-Status
 ```
 
 
+## `pass_through_endpoints` Spec on config.yaml
+
+All possible values for `pass_through_endpoints` and what they mean 
+
+**Example config**
+```yaml
+general_settings:
+  pass_through_endpoints:
+    - path: "/v1/rerank"                                  # route you want to add to LiteLLM Proxy Server
+      target: "https://api.cohere.com/v1/rerank"          # URL this route should forward requests to
+      headers:                                            # headers to forward to this URL
+        Authorization: "bearer os.environ/COHERE_API_KEY" # (Optional) Auth Header to forward to your Endpoint
+        content-type: application/json                    # (Optional) Extra Headers to pass to this endpoint 
+        accept: application/json
+```
+
+**Spec**
+
+* `pass_through_endpoints` *list*: A collection of endpoint configurations for request forwarding.
+  * `path` *string*: The route to be added to the LiteLLM Proxy Server.
+  * `target` *string*: The URL to which requests for this path should be forwarded.
+  * `headers` *object*: Key-value pairs of headers to be forwarded with the request. You can set any key value pair here and it will be forwarded to your target endpoint
+    * `Authorization` *string*: The authentication header for the target API.
+    * `content-type` *string*: The format specification for the request body.
+    * `accept` *string*: The expected response format from the server.
+    * `LANGFUSE_PUBLIC_KEY` *string*: Your Langfuse account public key - only set this when forwarding to Langfuse.
+    * `LANGFUSE_SECRET_KEY` *string*: Your Langfuse account secret key - only set this when forwarding to Langfuse.
+    * `<your-custom-header>` *string*: Pass any custom header key/value pair 
