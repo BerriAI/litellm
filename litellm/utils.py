@@ -1879,8 +1879,7 @@ def supports_response_schema(model: str, custom_llm_provider: Optional[str]) -> 
     Returns:
     bool: True if the model supports response_schema, False otherwise.
 
-    Raises:
-    Exception: If the given model is not found in model_prices_and_context_window.json.
+    Does not raise error. Defaults to 'False'. Outputs logging.error.
     """
     try:
         ## GET LLM PROVIDER ##
@@ -1900,9 +1899,10 @@ def supports_response_schema(model: str, custom_llm_provider: Optional[str]) -> 
             return True
         return False
     except Exception:
-        raise Exception(
+        verbose_logger.error(
             f"Model not in model_prices_and_context_window.json. You passed model={model}, custom_llm_provider={custom_llm_provider}."
         )
+        return False
 
 
 def supports_function_calling(model: str) -> bool:
