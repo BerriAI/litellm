@@ -11,17 +11,26 @@ To get a license, get in touch with us [here](https://calendly.com/d/4mp-gd3-k5k
 :::
 
 Features: 
-- ✅ [SSO for Admin UI](./ui.md#✨-enterprise-features)
-- ✅ [Audit Logs](#audit-logs)
-- ✅ [Tracking Spend for Custom Tags](#tracking-spend-for-custom-tags)
-- ✅ [Control available public, private routes](#control-available-public-private-routes)
-- ✅ [Content Moderation with LLM Guard, LlamaGuard, Secret Detection, Google Text Moderations](#content-moderation)
-- ✅ [Prompt Injection Detection (with LakeraAI API)](#prompt-injection-detection---lakeraai)
-- ✅ [Custom Branding + Routes on Swagger Docs](#swagger-docs---custom-routes--branding)
-- ✅ [Enforce Required Params for LLM Requests (ex. Reject requests missing ["metadata"]["generation_name"])](#enforce-required-params-for-llm-requests)
-- ✅ Reject calls from Blocked User list 
-- ✅ Reject calls (incoming / outgoing) with Banned Keywords (e.g. competitors)
-- [[BETA] AWS Key Manager v2 - Key Decryption](#beta-aws-key-manager---key-decryption)
+
+- **Security**
+    - ✅ [SSO for Admin UI](./ui.md#✨-enterprise-features)
+    - ✅ [Audit Logs with retention policy](#audit-logs)
+    - ✅ [JWT-Auth](../docs/proxy/token_auth.md)
+    - ✅ [Control available public, private routes](#control-available-public-private-routes)
+    - ✅ [[BETA] AWS Key Manager v2 - Key Decryption](#beta-aws-key-manager---key-decryption)
+    - ✅ [Use LiteLLM keys/authentication on Pass Through Endpoints](pass_through#✨-enterprise---use-litellm-keysauthentication-on-pass-through-endpoints)
+    - ✅ [Enforce Required Params for LLM Requests (ex. Reject requests missing ["metadata"]["generation_name"])](#enforce-required-params-for-llm-requests)
+- **Spend Tracking**
+    - ✅ [Tracking Spend for Custom Tags](#tracking-spend-for-custom-tags)
+- **Guardrails, PII Masking, Content Moderation**
+    - ✅ [Content Moderation with LLM Guard, LlamaGuard, Secret Detection, Google Text Moderations](#content-moderation)
+    - ✅ [Prompt Injection Detection (with LakeraAI API)](#prompt-injection-detection---lakeraai)
+    - ✅ Reject calls from Blocked User list 
+    - ✅ Reject calls (incoming / outgoing) with Banned Keywords (e.g. competitors)
+- **Custom Branding**
+    - ✅ [Custom Branding + Routes on Swagger Docs](#swagger-docs---custom-routes--branding)
+    - ✅ [Public Model Hub](../docs/proxy/enterprise.md#public-model-hub)
+    - ✅ [Custom Email Branding](../docs/proxy/email.md#customizing-email-branding)
 
 ## Audit Logs
 
