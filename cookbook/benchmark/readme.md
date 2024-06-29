@@ -79,7 +79,7 @@
 | claude-3.5-sonnet                               | anthropic                  | 0.000018                          |
 | claude-3-opus                                   | anthropic                  | 0.00009                           |
 | claude-3-haiku                                  | anthropic                  | 0.0000015                         |
-| claude-3.5-sonnet                               | anthropic                  | 0.000018                          |
+| claude-3-sonnet                                 | anthropic                  | 0.000018                          |
 | openrouter/anthropic/claude-instant-v1          | openrouter                 | 0.00000714                        |
 | anthropic.claude-instant-v1                     | bedrock                    | 0.00000714                        |
 | openrouter/mancer/weaver                        | openrouter                 | 0.00001125                        |
