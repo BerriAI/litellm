@@ -1,6 +1,11 @@
+import asyncio
+import os
+import traceback
+from typing import Any, Mapping, Optional, Union
+
+import httpx
+
 import litellm
-import httpx, asyncio, traceback, os
-from typing import Optional, Union, Mapping, Any
 
 # https://www.python-httpx.org/advanced/timeouts
 _DEFAULT_TIMEOUT = httpx.Timeout(timeout=5.0, connect=5.0)
@@ -93,7 +98,7 @@ class AsyncHTTPHandler:
             response = await self.client.send(req, stream=stream)
             response.raise_for_status()
             return response
-        except httpx.RemoteProtocolError:
+        except (httpx.RemoteProtocolError, httpx.ConnectError):
             # Retry the request with a new session if there is a connection error
             new_client = self.create_client(timeout=self.timeout, concurrent_limit=1)
             try:
@@ -109,6 +114,11 @@ class AsyncHTTPHandler:
             finally:
                 await new_client.aclose()
         except httpx.HTTPStatusError as e:
+            setattr(e, "status_code", e.response.status_code)
+            if stream is True:
+                setattr(e, "message", await e.response.aread())
+            else:
+                setattr(e, "message", e.response.text)
             raise e
         except Exception as e:
             raise e
@@ -208,6 +218,7 @@ class HTTPHandler:
         headers: Optional[dict] = None,
         stream: bool = False,
     ):
+
         req = self.client.build_request(
             "POST", url, data=data, json=json, params=params, headers=headers  # type: ignore
         )

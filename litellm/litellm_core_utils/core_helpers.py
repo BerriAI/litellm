@@ -1,5 +1,5 @@
 # What is this?
-## Helper utilities for the model response objects
+## Helper utilities
 
 
 def map_finish_reason(

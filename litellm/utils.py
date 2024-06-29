@@ -54,6 +54,7 @@ from litellm.litellm_core_utils.llm_request_utils import _ensure_extra_body_is_s
 from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_logging,
 )
+from litellm.litellm_core_utils.token_counter import get_modified_max_tokens
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.utils import (
     CallTypes,
@@ -813,7 +814,7 @@ def client(original_function):
                 kwargs.get("max_tokens", None) is not None
                 and model is not None
                 and litellm.modify_params
-                == True  # user is okay with params being modified
+                is True  # user is okay with params being modified
                 and (
                     call_type == CallTypes.acompletion.value
                     or call_type == CallTypes.completion.value
@@ -823,28 +824,19 @@ def client(original_function):
                     base_model = model
                     if kwargs.get("hf_model_name", None) is not None:
                         base_model = f"huggingface/{kwargs.get('hf_model_name')}"
-                    max_output_tokens = (
-                        get_max_tokens(model=base_model) or 4096
-                    )  # assume min context window is 4k tokens
-                    user_max_tokens = kwargs.get("max_tokens")
-                    ## Scenario 1: User limit + prompt > model limit
                     messages = None
                     if len(args) > 1:
                         messages = args[1]
                     elif kwargs.get("messages", None):
                         messages = kwargs["messages"]
-                    input_tokens = token_counter(model=base_model, messages=messages)
-                    input_tokens += max(
-                        0.1 * input_tokens, 10
-                    )  # give at least a 10 token buffer. token counting can be imprecise.
-                    if input_tokens > max_output_tokens:
-                        pass  # allow call to fail normally
-                    elif user_max_tokens + input_tokens > max_output_tokens:
-                        user_max_tokens = max_output_tokens - input_tokens
-                    print_verbose(f"user_max_tokens: {user_max_tokens}")
-                    kwargs["max_tokens"] = int(
-                        round(user_max_tokens)
-                    )  # make sure max tokens is always an int
+                    user_max_tokens = kwargs.get("max_tokens")
+                    modified_max_tokens = get_modified_max_tokens(
+                        model=model,
+                        base_model=base_model,
+                        messages=messages,
+                        user_max_tokens=user_max_tokens,
+                    )
+                    kwargs["max_tokens"] = modified_max_tokens
                 except Exception as e:
                     print_verbose(f"Error while checking max token limit: {str(e)}")
             # MODEL CALL
@@ -898,6 +890,17 @@ def client(original_function):
                 result._hidden_params["api_base"] = get_api_base(
                     model=model,
                     optional_params=getattr(logging_obj, "optional_params", {}),
+                )
+                result._hidden_params["response_cost"] = (
+                    litellm.response_cost_calculator(
+                        response_object=result,
+                        model=getattr(logging_obj, "model", ""),
+                        custom_llm_provider=getattr(
+                            logging_obj, "custom_llm_provider", None
+                        ),
+                        call_type=getattr(logging_obj, "call_type", "completion"),
+                        optional_params=getattr(logging_obj, "optional_params", {}),
+                    )
                 )
             result._response_ms = (
                 end_time - start_time
@@ -1291,6 +1294,17 @@ def client(original_function):
                 result._hidden_params["api_base"] = get_api_base(
                     model=model,
                     optional_params=kwargs,
+                )
+                result._hidden_params["response_cost"] = (
+                    litellm.response_cost_calculator(
+                        response_object=result,
+                        model=getattr(logging_obj, "model", ""),
+                        custom_llm_provider=getattr(
+                            logging_obj, "custom_llm_provider", None
+                        ),
+                        call_type=getattr(logging_obj, "call_type", "completion"),
+                        optional_params=getattr(logging_obj, "optional_params", {}),
+                    )
                 )
             if (
                 isinstance(result, ModelResponse)
@@ -1833,9 +1847,10 @@ def supports_system_messages(model: str, custom_llm_provider: Optional[str]) -> 
 
     Parameters:
     model (str): The model name to be checked.
+    custom_llm_provider (str): The provider to be checked.
 
     Returns:
-    bool: True if the model supports function calling, False otherwise.
+    bool: True if the model supports system messages, False otherwise.
 
     Raises:
     Exception: If the given model is not found in model_prices_and_context_window.json.
@@ -1845,6 +1860,43 @@ def supports_system_messages(model: str, custom_llm_provider: Optional[str]) -> 
             model=model, custom_llm_provider=custom_llm_provider
         )
         if model_info.get("supports_system_messages", False) is True:
+            return True
+        return False
+    except Exception:
+        raise Exception(
+            f"Model not in model_prices_and_context_window.json. You passed model={model}, custom_llm_provider={custom_llm_provider}."
+        )
+
+
+def supports_response_schema(model: str, custom_llm_provider: Optional[str]) -> bool:
+    """
+    Check if the given model + provider supports 'response_schema' as a param.
+
+    Parameters:
+    model (str): The model name to be checked.
+    custom_llm_provider (str): The provider to be checked.
+
+    Returns:
+    bool: True if the model supports response_schema, False otherwise.
+
+    Raises:
+    Exception: If the given model is not found in model_prices_and_context_window.json.
+    """
+    try:
+        ## GET LLM PROVIDER ##
+        model, custom_llm_provider, _, _ = get_llm_provider(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+
+        if custom_llm_provider == "predibase":  # predibase supports this globally
+            return True
+
+        ## GET MODEL INFO
+        model_info = litellm.get_model_info(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+
+        if model_info.get("supports_response_schema", False) is True:
             return True
         return False
     except Exception:
@@ -2413,6 +2465,7 @@ def get_optional_params(
             and custom_llm_provider != "together_ai"
             and custom_llm_provider != "groq"
             and custom_llm_provider != "nvidia_nim"
+            and custom_llm_provider != "volcengine"
             and custom_llm_provider != "deepseek"
             and custom_llm_provider != "codestral"
             and custom_llm_provider != "mistral"
@@ -2741,6 +2794,11 @@ def get_optional_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
+            drop_params=(
+                drop_params
+                if drop_params is not None and isinstance(drop_params, bool)
+                else False
+            ),
         )
     elif (
         custom_llm_provider == "vertex_ai" and model in litellm.vertex_anthropic_models
@@ -3079,6 +3137,27 @@ def get_optional_params(
         optional_params = litellm.NvidiaNimConfig().map_openai_params(
             non_default_params=non_default_params, optional_params=optional_params
         )
+    elif custom_llm_provider == "fireworks_ai":
+        supported_params = get_supported_openai_params(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+        _check_valid_arg(supported_params=supported_params)
+        optional_params = litellm.FireworksAIConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+        )
+    elif custom_llm_provider == "volcengine":
+        supported_params = get_supported_openai_params(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+        _check_valid_arg(supported_params=supported_params)
+        optional_params = litellm.VolcEngineConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+        )
+
     elif custom_llm_provider == "groq":
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider
@@ -3645,8 +3724,12 @@ def get_supported_openai_params(
         return litellm.OllamaChatConfig().get_supported_openai_params()
     elif custom_llm_provider == "anthropic":
         return litellm.AnthropicConfig().get_supported_openai_params()
+    elif custom_llm_provider == "fireworks_ai":
+        return litellm.FireworksAIConfig().get_supported_openai_params()
     elif custom_llm_provider == "nvidia_nim":
         return litellm.NvidiaNimConfig().get_supported_openai_params()
+    elif custom_llm_provider == "volcengine":
+        return litellm.VolcEngineConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "groq":
         return [
             "temperature",
@@ -3658,6 +3741,8 @@ def get_supported_openai_params(
             "tool_choice",
             "response_format",
             "seed",
+            "extra_headers",
+            "extra_body",
         ]
     elif custom_llm_provider == "deepseek":
         return [
@@ -4011,6 +4096,10 @@ def get_llm_provider(
                 # nvidia_nim is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.endpoints.anyscale.com/v1
                 api_base = "https://integrate.api.nvidia.com/v1"
                 dynamic_api_key = get_secret("NVIDIA_NIM_API_KEY")
+            elif custom_llm_provider == "volcengine":
+                # volcengine is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.endpoints.anyscale.com/v1
+                api_base = "https://ark.cn-beijing.volces.com/api/v3"
+                dynamic_api_key = get_secret("VOLCENGINE_API_KEY")
             elif custom_llm_provider == "codestral":
                 # codestral is openai compatible, we just need to set this to custom_openai and have the api_base be https://codestral.mistral.ai/v1
                 api_base = "https://codestral.mistral.ai/v1"
@@ -4320,7 +4409,7 @@ def get_utc_datetime():
         return datetime.utcnow()  # type: ignore
 
 
-def get_max_tokens(model: str):
+def get_max_tokens(model: str) -> Optional[int]:
     """
     Get the maximum number of output tokens allowed for a given model.
 
@@ -4374,7 +4463,8 @@ def get_max_tokens(model: str):
                 return litellm.model_cost[model]["max_tokens"]
         else:
             raise Exception()
-    except:
+        return None
+    except Exception:
         raise Exception(
             f"Model {model} isn't mapped yet. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
         )
@@ -4382,8 +4472,7 @@ def get_max_tokens(model: str):
 
 def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> ModelInfo:
     """
-    Get a dict for the maximum tokens (context window),
-    input_cost_per_token, output_cost_per_token  for a given model.
+    Get a dict for the maximum tokens (context window), input_cost_per_token, output_cost_per_token  for a given model.
 
     Parameters:
     - model (str): The name of the model.
@@ -4468,6 +4557,7 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
                 mode="chat",
                 supported_openai_params=supported_openai_params,
                 supports_system_messages=None,
+                supports_response_schema=None,
             )
         else:
             """
@@ -4489,36 +4579,6 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
                         pass
                     else:
                         raise Exception
-                return ModelInfo(
-                    max_tokens=_model_info.get("max_tokens", None),
-                    max_input_tokens=_model_info.get("max_input_tokens", None),
-                    max_output_tokens=_model_info.get("max_output_tokens", None),
-                    input_cost_per_token=_model_info.get("input_cost_per_token", 0),
-                    input_cost_per_character=_model_info.get(
-                        "input_cost_per_character", None
-                    ),
-                    input_cost_per_token_above_128k_tokens=_model_info.get(
-                        "input_cost_per_token_above_128k_tokens", None
-                    ),
-                    output_cost_per_token=_model_info.get("output_cost_per_token", 0),
-                    output_cost_per_character=_model_info.get(
-                        "output_cost_per_character", None
-                    ),
-                    output_cost_per_token_above_128k_tokens=_model_info.get(
-                        "output_cost_per_token_above_128k_tokens", None
-                    ),
-                    output_cost_per_character_above_128k_tokens=_model_info.get(
-                        "output_cost_per_character_above_128k_tokens", None
-                    ),
-                    litellm_provider=_model_info.get(
-                        "litellm_provider", custom_llm_provider
-                    ),
-                    mode=_model_info.get("mode"),
-                    supported_openai_params=supported_openai_params,
-                    supports_system_messages=_model_info.get(
-                        "supports_system_messages", None
-                    ),
-                )
             elif model in litellm.model_cost:
                 _model_info = litellm.model_cost[model]
                 _model_info["supported_openai_params"] = supported_openai_params
@@ -4532,36 +4592,6 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
                         pass
                     else:
                         raise Exception
-                return ModelInfo(
-                    max_tokens=_model_info.get("max_tokens", None),
-                    max_input_tokens=_model_info.get("max_input_tokens", None),
-                    max_output_tokens=_model_info.get("max_output_tokens", None),
-                    input_cost_per_token=_model_info.get("input_cost_per_token", 0),
-                    input_cost_per_character=_model_info.get(
-                        "input_cost_per_character", None
-                    ),
-                    input_cost_per_token_above_128k_tokens=_model_info.get(
-                        "input_cost_per_token_above_128k_tokens", None
-                    ),
-                    output_cost_per_token=_model_info.get("output_cost_per_token", 0),
-                    output_cost_per_character=_model_info.get(
-                        "output_cost_per_character", None
-                    ),
-                    output_cost_per_token_above_128k_tokens=_model_info.get(
-                        "output_cost_per_token_above_128k_tokens", None
-                    ),
-                    output_cost_per_character_above_128k_tokens=_model_info.get(
-                        "output_cost_per_character_above_128k_tokens", None
-                    ),
-                    litellm_provider=_model_info.get(
-                        "litellm_provider", custom_llm_provider
-                    ),
-                    mode=_model_info.get("mode"),
-                    supported_openai_params=supported_openai_params,
-                    supports_system_messages=_model_info.get(
-                        "supports_system_messages", None
-                    ),
-                )
             elif split_model in litellm.model_cost:
                 _model_info = litellm.model_cost[split_model]
                 _model_info["supported_openai_params"] = supported_openai_params
@@ -4575,40 +4605,48 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
                         pass
                     else:
                         raise Exception
-                return ModelInfo(
-                    max_tokens=_model_info.get("max_tokens", None),
-                    max_input_tokens=_model_info.get("max_input_tokens", None),
-                    max_output_tokens=_model_info.get("max_output_tokens", None),
-                    input_cost_per_token=_model_info.get("input_cost_per_token", 0),
-                    input_cost_per_character=_model_info.get(
-                        "input_cost_per_character", None
-                    ),
-                    input_cost_per_token_above_128k_tokens=_model_info.get(
-                        "input_cost_per_token_above_128k_tokens", None
-                    ),
-                    output_cost_per_token=_model_info.get("output_cost_per_token", 0),
-                    output_cost_per_character=_model_info.get(
-                        "output_cost_per_character", None
-                    ),
-                    output_cost_per_token_above_128k_tokens=_model_info.get(
-                        "output_cost_per_token_above_128k_tokens", None
-                    ),
-                    output_cost_per_character_above_128k_tokens=_model_info.get(
-                        "output_cost_per_character_above_128k_tokens", None
-                    ),
-                    litellm_provider=_model_info.get(
-                        "litellm_provider", custom_llm_provider
-                    ),
-                    mode=_model_info.get("mode"),
-                    supported_openai_params=supported_openai_params,
-                    supports_system_messages=_model_info.get(
-                        "supports_system_messages", None
-                    ),
-                )
             else:
                 raise ValueError(
                     "This model isn't mapped yet. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
                 )
+
+            ## PROVIDER-SPECIFIC INFORMATION
+            if custom_llm_provider == "predibase":
+                _model_info["supports_response_schema"] = True
+
+            return ModelInfo(
+                max_tokens=_model_info.get("max_tokens", None),
+                max_input_tokens=_model_info.get("max_input_tokens", None),
+                max_output_tokens=_model_info.get("max_output_tokens", None),
+                input_cost_per_token=_model_info.get("input_cost_per_token", 0),
+                input_cost_per_character=_model_info.get(
+                    "input_cost_per_character", None
+                ),
+                input_cost_per_token_above_128k_tokens=_model_info.get(
+                    "input_cost_per_token_above_128k_tokens", None
+                ),
+                output_cost_per_token=_model_info.get("output_cost_per_token", 0),
+                output_cost_per_character=_model_info.get(
+                    "output_cost_per_character", None
+                ),
+                output_cost_per_token_above_128k_tokens=_model_info.get(
+                    "output_cost_per_token_above_128k_tokens", None
+                ),
+                output_cost_per_character_above_128k_tokens=_model_info.get(
+                    "output_cost_per_character_above_128k_tokens", None
+                ),
+                litellm_provider=_model_info.get(
+                    "litellm_provider", custom_llm_provider
+                ),
+                mode=_model_info.get("mode"),
+                supported_openai_params=supported_openai_params,
+                supports_system_messages=_model_info.get(
+                    "supports_system_messages", None
+                ),
+                supports_response_schema=_model_info.get(
+                    "supports_response_schema", None
+                ),
+            )
     except Exception:
         raise Exception(
             "This model isn't mapped yet. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
@@ -4933,6 +4971,11 @@ def validate_environment(model: Optional[str] = None) -> dict:
                 keys_in_environment = True
             else:
                 missing_keys.append("NVIDIA_NIM_API_KEY")
+        elif custom_llm_provider == "volcengine":
+            if "VOLCENGINE_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("VOLCENGINE_API_KEY")
         elif (
             custom_llm_provider == "codestral"
             or custom_llm_provider == "text-completion-codestral"
@@ -5221,6 +5264,27 @@ def convert_to_model_response_object(
     hidden_params: Optional[dict] = None,
 ):
     received_args = locals()
+    ### CHECK IF ERROR IN RESPONSE ### - openrouter returns these in the dictionary
+    if (
+        response_object is not None
+        and "error" in response_object
+        and response_object["error"] is not None
+    ):
+        error_args = {"status_code": 422, "message": "Error in response object"}
+        if isinstance(response_object["error"], dict):
+            if "code" in response_object["error"]:
+                error_args["status_code"] = response_object["error"]["code"]
+            if "message" in response_object["error"]:
+                if isinstance(response_object["error"]["message"], dict):
+                    message_str = json.dumps(response_object["error"]["message"])
+                else:
+                    message_str = str(response_object["error"]["message"])
+                error_args["message"] = message_str
+        raised_exception = Exception()
+        setattr(raised_exception, "status_code", error_args["status_code"])
+        setattr(raised_exception, "message", error_args["message"])
+        raise raised_exception
+
     try:
         if response_type == "completion" and (
             model_response_object is None
@@ -5676,7 +5740,10 @@ def exception_type(
         print()  # noqa
     try:
         if model:
-            error_str = str(original_exception)
+            if hasattr(original_exception, "message"):
+                error_str = str(original_exception.message)
+            else:
+                error_str = str(original_exception)
             if isinstance(original_exception, BaseException):
                 exception_type = type(original_exception).__name__
             else:
@@ -6084,11 +6151,18 @@ def exception_type(
                         )
                     elif (
                         original_exception.status_code == 400
-                        or original_exception.status_code == 422
                         or original_exception.status_code == 413
                     ):
                         exception_mapping_worked = True
                         raise BadRequestError(
+                            message=f"ReplicateException - {original_exception.message}",
+                            model=model,
+                            llm_provider="replicate",
+                            response=original_exception.response,
+                        )
+                    elif original_exception.status_code == 422:
+                        exception_mapping_worked = True
+                        raise UnprocessableEntityError(
                             message=f"ReplicateException - {original_exception.message}",
                             model=model,
                             llm_provider="replicate",
@@ -7768,6 +7842,7 @@ class CustomStreamWrapper:
             "<s>",
             "</s>",
             "<|im_end|>",
+            "<|im_start|>",
         ]
         self.holding_chunk = ""
         self.complete_response = ""
@@ -8289,7 +8364,7 @@ class CustomStreamWrapper:
             logprobs = None
             usage = None
             original_chunk = None  # this is used for function/tool calling
-            if len(str_line.choices) > 0:
+            if str_line and str_line.choices and len(str_line.choices) > 0:
                 if (
                     str_line.choices[0].delta is not None
                     and str_line.choices[0].delta.content is not None

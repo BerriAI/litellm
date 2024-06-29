@@ -442,6 +442,20 @@ def run_server(
 
         db_connection_pool_limit = 100
         db_connection_timeout = 60
+        ### DECRYPT ENV VAR ###
+
+        from litellm.proxy.secret_managers.aws_secret_manager import decrypt_env_var
+
+        if (
+            os.getenv("USE_AWS_KMS", None) is not None
+            and os.getenv("USE_AWS_KMS") == "True"
+        ):
+            ## V2 IMPLEMENTATION OF AWS KMS - USER WANTS TO DECRYPT MULTIPLE KEYS IN THEIR ENV
+            new_env_var = decrypt_env_var()
+
+            for k, v in new_env_var.items():
+                os.environ[k] = v
+
         if config is not None:
             """
             Allow user to pass in db url via config
@@ -459,6 +473,7 @@ def run_server(
 
             proxy_config = ProxyConfig()
             _config = asyncio.run(proxy_config.get_config(config_file_path=config))
+
             ### LITELLM SETTINGS ###
             litellm_settings = _config.get("litellm_settings", None)
             if (
