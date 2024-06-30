@@ -7511,7 +7511,9 @@ async def login(request: Request):
         # Non SSO -> If user is using UI_USERNAME and UI_PASSWORD they are Proxy admin
         user_role = LitellmUserRoles.PROXY_ADMIN
         user_id = username
-        key_user_id = user_id
+
+        # we want the key created to have PROXY_ADMIN_PERMISSIONS
+        key_user_id = litellm_proxy_admin_name
         if (
             os.getenv("PROXY_ADMIN_ID", None) is not None
             and os.environ["PROXY_ADMIN_ID"] == user_id
@@ -7531,7 +7533,17 @@ async def login(request: Request):
         if os.getenv("DATABASE_URL") is not None:
             response = await generate_key_helper_fn(
                 request_type="key",
-                **{"user_role": LitellmUserRoles.PROXY_ADMIN, "duration": "2hr", "key_max_budget": 5, "models": [], "aliases": {}, "config": {}, "spend": 0, "user_id": key_user_id, "team_id": "litellm-dashboard"},  # type: ignore
+                **{
+                    "user_role": LitellmUserRoles.PROXY_ADMIN,
+                    "duration": "2hr",
+                    "key_max_budget": 5,
+                    "models": [],
+                    "aliases": {},
+                    "config": {},
+                    "spend": 0,
+                    "user_id": key_user_id,
+                    "team_id": "litellm-dashboard",
+                },  # type: ignore
             )
         else:
             raise ProxyException(
