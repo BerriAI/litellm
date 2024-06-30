@@ -25,6 +25,7 @@ from litellm import (
     completion_cost,
     embedding,
 )
+from litellm.llms.bedrock_httpx import BedrockLLM
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
 # litellm.num_retries = 3
@@ -211,6 +212,234 @@ def test_completion_bedrock_claude_sts_client_auth():
         )
         # Add any assertions here to check the response
         print(response)
+    except RateLimitError:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.fixture()
+def bedrock_session_token_creds():
+    print("\ncalling oidc auto to get aws_session_token credentials")
+    import os
+
+    aws_region_name = os.environ["AWS_REGION_NAME"]
+    aws_session_token = os.environ.get("AWS_SESSION_TOKEN")
+
+    bllm = BedrockLLM()
+    if aws_session_token is not None:
+        # For local testing
+        creds = bllm.get_credentials(
+            aws_region_name=aws_region_name,
+            aws_access_key_id=os.environ["AWS_ACCESS_KEY_ID"],
+            aws_secret_access_key=os.environ["AWS_SECRET_ACCESS_KEY"],
+            aws_session_token=aws_session_token,
+        )
+    else:
+        # For circle-ci testing
+        # aws_role_name = os.environ["AWS_TEMP_ROLE_NAME"]
+        # TODO: This is using ai.moda's IAM role, we should use LiteLLM's IAM role eventually
+        aws_role_name = (
+            "arn:aws:iam::335785316107:role/litellm-github-unit-tests-circleci"
+        )
+        aws_web_identity_token = "oidc/circleci_v2/"
+
+        creds = bllm.get_credentials(
+            aws_region_name=aws_region_name,
+            aws_web_identity_token=aws_web_identity_token,
+            aws_role_name=aws_role_name,
+            aws_session_name="my-test-session",
+        )
+    return creds
+
+
+def process_stream_response(res, messages):
+    import types
+
+    if isinstance(res, litellm.utils.CustomStreamWrapper):
+        chunks = []
+        for part in res:
+            chunks.append(part)
+            text = part.choices[0].delta.content or ""
+            print(text, end="")
+        res = litellm.stream_chunk_builder(chunks, messages=messages)
+    else:
+        raise ValueError("Response object is not a streaming response")
+
+    return res
+
+
+@pytest.mark.skipif(
+    os.environ.get("CIRCLE_OIDC_TOKEN_V2") is None,
+    reason="Cannot run without being in CircleCI Runner",
+)
+def test_completion_bedrock_claude_aws_session_token(bedrock_session_token_creds):
+    print("\ncalling bedrock claude with aws_session_token auth")
+
+    import os
+
+    aws_region_name = os.environ["AWS_REGION_NAME"]
+    aws_access_key_id = bedrock_session_token_creds.access_key
+    aws_secret_access_key = bedrock_session_token_creds.secret_key
+    aws_session_token = bedrock_session_token_creds.token
+
+    try:
+        litellm.set_verbose = True
+
+        response_1 = completion(
+            model="bedrock/anthropic.claude-3-haiku-20240307-v1:0",
+            messages=messages,
+            max_tokens=10,
+            temperature=0.1,
+            aws_region_name=aws_region_name,
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
+            aws_session_token=aws_session_token,
+        )
+        print(response_1)
+        assert len(response_1.choices) > 0
+        assert len(response_1.choices[0].message.content) > 0
+
+        # This second call is to verify that the cache isn't breaking anything
+        response_2 = completion(
+            model="bedrock/anthropic.claude-3-haiku-20240307-v1:0",
+            messages=messages,
+            max_tokens=5,
+            temperature=0.2,
+            aws_region_name=aws_region_name,
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
+            aws_session_token=aws_session_token,
+        )
+        print(response_2)
+        assert len(response_2.choices) > 0
+        assert len(response_2.choices[0].message.content) > 0
+
+        # This third call is to verify that the cache isn't used for a different region
+        response_3 = completion(
+            model="bedrock/anthropic.claude-3-haiku-20240307-v1:0",
+            messages=messages,
+            max_tokens=6,
+            temperature=0.3,
+            aws_region_name="us-east-1",
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
+            aws_session_token=aws_session_token,
+        )
+        print(response_3)
+        assert len(response_3.choices) > 0
+        assert len(response_3.choices[0].message.content) > 0
+
+        # This fourth call is to verify streaming api works
+        response_4 = completion(
+            model="bedrock/anthropic.claude-3-haiku-20240307-v1:0",
+            messages=messages,
+            max_tokens=6,
+            temperature=0.3,
+            aws_region_name="us-east-1",
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
+            aws_session_token=aws_session_token,
+            stream=True,
+        )
+        response_4 = process_stream_response(response_4, messages)
+        print(response_4)
+        assert len(response_4.choices) > 0
+        assert len(response_4.choices[0].message.content) > 0
+
+    except RateLimitError:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.skipif(
+    os.environ.get("CIRCLE_OIDC_TOKEN_V2") is None,
+    reason="Cannot run without being in CircleCI Runner",
+)
+def test_completion_bedrock_claude_aws_bedrock_client(bedrock_session_token_creds):
+    print("\ncalling bedrock claude with aws_session_token auth")
+
+    import os
+
+    import boto3
+    from botocore.client import Config
+
+    aws_region_name = os.environ["AWS_REGION_NAME"]
+    aws_access_key_id = bedrock_session_token_creds.access_key
+    aws_secret_access_key = bedrock_session_token_creds.secret_key
+    aws_session_token = bedrock_session_token_creds.token
+
+    aws_bedrock_client_west = boto3.client(
+        service_name="bedrock-runtime",
+        region_name=aws_region_name,
+        aws_access_key_id=aws_access_key_id,
+        aws_secret_access_key=aws_secret_access_key,
+        aws_session_token=aws_session_token,
+        config=Config(read_timeout=600),
+    )
+
+    try:
+        litellm.set_verbose = True
+
+        response_1 = completion(
+            model="bedrock/anthropic.claude-3-haiku-20240307-v1:0",
+            messages=messages,
+            max_tokens=10,
+            temperature=0.1,
+            aws_bedrock_client=aws_bedrock_client_west,
+        )
+        print(response_1)
+        assert len(response_1.choices) > 0
+        assert len(response_1.choices[0].message.content) > 0
+
+        # This second call is to verify that the cache isn't breaking anything
+        response_2 = completion(
+            model="bedrock/anthropic.claude-3-haiku-20240307-v1:0",
+            messages=messages,
+            max_tokens=5,
+            temperature=0.2,
+            aws_bedrock_client=aws_bedrock_client_west,
+        )
+        print(response_2)
+        assert len(response_2.choices) > 0
+        assert len(response_2.choices[0].message.content) > 0
+
+        # This third call is to verify that the cache isn't used for a different region
+        aws_bedrock_client_east = boto3.client(
+            service_name="bedrock-runtime",
+            region_name="us-east-1",
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
+            aws_session_token=aws_session_token,
+            config=Config(read_timeout=600),
+        )
+
+        response_3 = completion(
+            model="bedrock/anthropic.claude-3-haiku-20240307-v1:0",
+            messages=messages,
+            max_tokens=6,
+            temperature=0.3,
+            aws_bedrock_client=aws_bedrock_client_east,
+        )
+        print(response_3)
+        assert len(response_3.choices) > 0
+        assert len(response_3.choices[0].message.content) > 0
+
+        # This fourth call is to verify streaming api works
+        response_4 = completion(
+            model="bedrock/anthropic.claude-3-haiku-20240307-v1:0",
+            messages=messages,
+            max_tokens=6,
+            temperature=0.3,
+            aws_bedrock_client=aws_bedrock_client_east,
+            stream=True,
+        )
+        response_4 = process_stream_response(response_4, messages)
+        print(response_4)
+        assert len(response_4.choices) > 0
+        assert len(response_4.choices[0].message.content) > 0
+
     except RateLimitError:
         pass
     except Exception as e:
@@ -487,61 +716,6 @@ def test_completion_claude_3_base64():
             pass
         else:
             pytest.fail(f"An exception occurred - {str(e)}")
-
-
-def test_provisioned_throughput():
-    try:
-        litellm.set_verbose = True
-        import io
-        import json
-
-        import botocore
-        import botocore.session
-        from botocore.stub import Stubber
-
-        bedrock_client = botocore.session.get_session().create_client(
-            "bedrock-runtime", region_name="us-east-1"
-        )
-
-        expected_params = {
-            "accept": "application/json",
-            "body": '{"prompt": "\\n\\nHuman: Hello, how are you?\\n\\nAssistant: ", '
-            '"max_tokens_to_sample": 256}',
-            "contentType": "application/json",
-            "modelId": "provisioned-model-arn",
-        }
-        response_from_bedrock = {
-            "body": io.StringIO(
-                json.dumps(
-                    {
-                        "completion": " Here is a short poem about the sky:",
-                        "stop_reason": "max_tokens",
-                        "stop": None,
-                    }
-                )
-            ),
-            "contentType": "contentType",
-            "ResponseMetadata": {"HTTPStatusCode": 200},
-        }
-
-        with Stubber(bedrock_client) as stubber:
-            stubber.add_response(
-                "invoke_model",
-                service_response=response_from_bedrock,
-                expected_params=expected_params,
-            )
-            response = litellm.completion(
-                model="bedrock/anthropic.claude-instant-v1",
-                model_id="provisioned-model-arn",
-                messages=[{"content": "Hello, how are you?", "role": "user"}],
-                aws_bedrock_client=bedrock_client,
-            )
-            print("response stubbed", response)
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-# test_provisioned_throughput()
 
 
 def test_completion_bedrock_mistral_completion_auth():
