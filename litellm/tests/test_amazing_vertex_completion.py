@@ -993,10 +993,10 @@ def vertex_httpx_mock_post_invalid_schema_response(*args, **kwargs):
 
 
 @pytest.mark.parametrize(
-    "model, supports_response_schema",
+    "model, vertex_location, supports_response_schema",
     [
-        ("vertex_ai_beta/gemini-1.5-pro-001", True),
-        ("vertex_ai_beta/gemini-1.5-flash", False),
+        ("vertex_ai_beta/gemini-1.5-pro-001", "us-central1", True),
+        ("vertex_ai_beta/gemini-1.5-flash", "us-central1", False),
     ],
 )
 @pytest.mark.parametrize(
@@ -1009,7 +1009,11 @@ def vertex_httpx_mock_post_invalid_schema_response(*args, **kwargs):
 )
 @pytest.mark.asyncio
 async def test_gemini_pro_json_schema_args_sent_httpx(
-    model, supports_response_schema, invalid_response, enforce_validation
+    model,
+    supports_response_schema,
+    vertex_location,
+    invalid_response,
+    enforce_validation,
 ):
     load_vertex_ai_credentials()
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
@@ -1049,12 +1053,13 @@ async def test_gemini_pro_json_schema_args_sent_httpx(
                     "response_schema": response_schema,
                     "enforce_validation": enforce_validation,
                 },
+                vertex_location=vertex_location,
                 client=client,
             )
             if invalid_response is True and enforce_validation is True:
                 pytest.fail("Expected this to fail")
         except litellm.JSONSchemaValidationError as e:
-            if invalid_response is False:
+            if invalid_response is False and "claude-3" not in model:
                 pytest.fail("Expected this to pass. Got={}".format(e))
 
         mock_call.assert_called_once()
