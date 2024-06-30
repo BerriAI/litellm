@@ -84,15 +84,18 @@ class CustomHTTPTransport(httpx.HTTPTransport):
         self,
         request: httpx.Request,
     ) -> httpx.Response:
-        if "images/generations" in request.url.path and request.url.params[
-            "api-version"
-        ] in [  # dall-e-3 starts from `2023-12-01-preview` so we should be able to avoid conflict
-            "2023-06-01-preview",
-            "2023-07-01-preview",
-            "2023-08-01-preview",
-            "2023-09-01-preview",
-            "2023-10-01-preview",
-        ]:
+        _api_version = request.url.params.get("api-version", "")
+        if (
+            "images/generations" in request.url.path
+            and _api_version
+            in [  # dall-e-3 starts from `2023-12-01-preview` so we should be able to avoid conflict
+                "2023-06-01-preview",
+                "2023-07-01-preview",
+                "2023-08-01-preview",
+                "2023-09-01-preview",
+                "2023-10-01-preview",
+            ]
+        ):
             request.url = request.url.copy_with(
                 path="/openai/images/generations:submit"
             )
