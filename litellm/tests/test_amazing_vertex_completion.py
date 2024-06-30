@@ -1003,9 +1003,17 @@ def vertex_httpx_mock_post_invalid_schema_response(*args, **kwargs):
     "invalid_response",
     [True, False],
 )
+@pytest.mark.parametrize(
+    "enforce_validation",
+    [True, False],
+)
 @pytest.mark.asyncio
 async def test_gemini_pro_json_schema_args_sent_httpx(
-    model, supports_response_schema, vertex_location, invalid_response
+    model,
+    supports_response_schema,
+    vertex_location,
+    invalid_response,
+    enforce_validation,
 ):
     load_vertex_ai_credentials()
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
@@ -1015,27 +1023,17 @@ async def test_gemini_pro_json_schema_args_sent_httpx(
     messages = [{"role": "user", "content": "List 5 cookie recipes"}]
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
-    # response_schema = {
-    #     "type": "array",
-    #     "items": {
-    #         "type": "object",
-    #         "properties": {
-    #             "recipe_name": {
-    #                 "type": "string",
-    #             },
-    #         },
-    #         "required": ["recipe_name"],
-    #     },
-    # }
     response_schema = {
-        "type": "object",
-        "properties": {
-            "recipe_name": {"type": "string"},
-            "ingredients": {"type": "array", "items": {"type": "string"}},
-            "prep_time": {"type": "number"},
-            "difficulty": {"type": "string", "enum": ["easy", "medium", "hard"]},
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "recipe_name": {
+                    "type": "string",
+                },
+            },
+            "required": ["recipe_name"],
         },
-        "required": ["recipe_name", "ingredients", "prep_time"],
     }
 
     client = HTTPHandler()
@@ -1053,11 +1051,12 @@ async def test_gemini_pro_json_schema_args_sent_httpx(
                 response_format={
                     "type": "json_object",
                     "response_schema": response_schema,
+                    "enforce_validation": enforce_validation,
                 },
                 vertex_location=vertex_location,
                 client=client,
             )
-            if invalid_response is True:
+            if invalid_response is True and enforce_validation is True:
                 pytest.fail("Expected this to fail")
         except litellm.JSONSchemaValidationError as e:
             if invalid_response is False and "claude-3" not in model:
