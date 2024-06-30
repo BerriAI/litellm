@@ -2868,12 +2868,7 @@ def get_optional_params(
                             optional_params=optional_params,
                         )
                     )
-                else:
-                    optional_params = litellm.AmazonAnthropicConfig().map_openai_params(
-                        non_default_params=non_default_params,
-                        optional_params=optional_params,
-                    )
-            else:  # bedrock httpx route
+            elif model in litellm.BEDROCK_CONVERSE_MODELS:
                 optional_params = litellm.AmazonConverseConfig().map_openai_params(
                     model=model,
                     non_default_params=non_default_params,
@@ -2883,6 +2878,11 @@ def get_optional_params(
                         if drop_params is not None and isinstance(drop_params, bool)
                         else False
                     ),
+                )
+            else:
+                optional_params = litellm.AmazonAnthropicConfig().map_openai_params(
+                    non_default_params=non_default_params,
+                    optional_params=optional_params,
                 )
         elif "amazon" in model:  # amazon titan llms
             _check_valid_arg(supported_params=supported_params)
