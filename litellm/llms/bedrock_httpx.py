@@ -305,6 +305,7 @@ class BedrockLLM(BaseLLM):
         self,
         aws_access_key_id: Optional[str] = None,
         aws_secret_access_key: Optional[str] = None,
+        aws_session_token: Optional[str] = None,
         aws_region_name: Optional[str] = None,
         aws_session_name: Optional[str] = None,
         aws_profile_name: Optional[str] = None,
@@ -320,6 +321,7 @@ class BedrockLLM(BaseLLM):
         params_to_check: List[Optional[str]] = [
             aws_access_key_id,
             aws_secret_access_key,
+            aws_session_token,
             aws_region_name,
             aws_session_name,
             aws_profile_name,
@@ -337,6 +339,7 @@ class BedrockLLM(BaseLLM):
         (
             aws_access_key_id,
             aws_secret_access_key,
+            aws_session_token,
             aws_region_name,
             aws_session_name,
             aws_profile_name,
@@ -430,6 +433,18 @@ class BedrockLLM(BaseLLM):
             client = boto3.Session(profile_name=aws_profile_name)
 
             return client.get_credentials()
+        elif (
+            aws_access_key_id is not None
+            and aws_secret_access_key is not None
+            and aws_session_token is not None
+        ): ### CHECK FOR AWS SESSION TOKEN ###
+            from botocore.credentials import Credentials
+            credentials = Credentials(
+                access_key=aws_access_key_id,
+                secret_key=aws_secret_access_key,
+                token=aws_session_token,
+            )
+            return credentials        
         else:
             session = boto3.Session(
                 aws_access_key_id=aws_access_key_id,
@@ -734,9 +749,10 @@ class BedrockLLM(BaseLLM):
         provider = model.split(".")[0]
 
         ## CREDENTIALS ##
-        # pop aws_secret_access_key, aws_access_key_id, aws_region_name from kwargs, since completion calls fail with them
+        # pop aws_secret_access_key, aws_access_key_id, aws_session_token, aws_region_name from kwargs, since completion calls fail with them
         aws_secret_access_key = optional_params.pop("aws_secret_access_key", None)
         aws_access_key_id = optional_params.pop("aws_access_key_id", None)
+        aws_session_token = optional_params.pop("aws_session_token", None)
         aws_region_name = optional_params.pop("aws_region_name", None)
         aws_role_name = optional_params.pop("aws_role_name", None)
         aws_session_name = optional_params.pop("aws_session_name", None)
@@ -768,6 +784,7 @@ class BedrockLLM(BaseLLM):
         credentials: Credentials = self.get_credentials(
             aws_access_key_id=aws_access_key_id,
             aws_secret_access_key=aws_secret_access_key,
+            aws_session_token=aws_session_token,
             aws_region_name=aws_region_name,
             aws_session_name=aws_session_name,
             aws_profile_name=aws_profile_name,
@@ -1422,6 +1439,7 @@ class BedrockConverseLLM(BaseLLM):
         self,
         aws_access_key_id: Optional[str] = None,
         aws_secret_access_key: Optional[str] = None,
+        aws_session_token: Optional[str] = None,
         aws_region_name: Optional[str] = None,
         aws_session_name: Optional[str] = None,
         aws_profile_name: Optional[str] = None,
@@ -1437,6 +1455,7 @@ class BedrockConverseLLM(BaseLLM):
         params_to_check: List[Optional[str]] = [
             aws_access_key_id,
             aws_secret_access_key,
+            aws_session_token,
             aws_region_name,
             aws_session_name,
             aws_profile_name,
@@ -1454,6 +1473,7 @@ class BedrockConverseLLM(BaseLLM):
         (
             aws_access_key_id,
             aws_secret_access_key,
+            aws_session_token,
             aws_region_name,
             aws_session_name,
             aws_profile_name,
@@ -1547,6 +1567,18 @@ class BedrockConverseLLM(BaseLLM):
             client = boto3.Session(profile_name=aws_profile_name)
 
             return client.get_credentials()
+        elif (
+            aws_access_key_id is not None
+            and aws_secret_access_key is not None
+            and aws_session_token is not None
+        ): ### CHECK FOR AWS SESSION TOKEN ###
+            from botocore.credentials import Credentials
+            credentials = Credentials(
+                access_key=aws_access_key_id,
+                secret_key=aws_secret_access_key,
+                token=aws_session_token,
+            )
+            return credentials        
         else:
             session = boto3.Session(
                 aws_access_key_id=aws_access_key_id,
@@ -1682,6 +1714,7 @@ class BedrockConverseLLM(BaseLLM):
         # pop aws_secret_access_key, aws_access_key_id, aws_region_name from kwargs, since completion calls fail with them
         aws_secret_access_key = optional_params.pop("aws_secret_access_key", None)
         aws_access_key_id = optional_params.pop("aws_access_key_id", None)
+        aws_session_token = optional_params.pop("aws_session_token", None)
         aws_region_name = optional_params.pop("aws_region_name", None)
         aws_role_name = optional_params.pop("aws_role_name", None)
         aws_session_name = optional_params.pop("aws_session_name", None)
@@ -1713,6 +1746,7 @@ class BedrockConverseLLM(BaseLLM):
         credentials: Credentials = self.get_credentials(
             aws_access_key_id=aws_access_key_id,
             aws_secret_access_key=aws_secret_access_key,
+            aws_session_token=aws_session_token,
             aws_region_name=aws_region_name,
             aws_session_name=aws_session_name,
             aws_profile_name=aws_profile_name,
