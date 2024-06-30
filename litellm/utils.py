@@ -51,6 +51,7 @@ import litellm.litellm_core_utils
 import litellm.litellm_core_utils.json_validation_rule
 from litellm.caching import DualCache
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.litellm_core_utils.exception_mapping_utils import get_error_message
 from litellm.litellm_core_utils.llm_request_utils import _ensure_extra_body_is_safe
 from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_logging,
@@ -2910,12 +2911,7 @@ def get_optional_params(
                             optional_params=optional_params,
                         )
                     )
-                else:
-                    optional_params = litellm.AmazonAnthropicConfig().map_openai_params(
-                        non_default_params=non_default_params,
-                        optional_params=optional_params,
-                    )
-            else:  # bedrock httpx route
+            elif model in litellm.BEDROCK_CONVERSE_MODELS:
                 optional_params = litellm.AmazonConverseConfig().map_openai_params(
                     model=model,
                     non_default_params=non_default_params,
@@ -2925,6 +2921,11 @@ def get_optional_params(
                         if drop_params is not None and isinstance(drop_params, bool)
                         else False
                     ),
+                )
+            else:
+                optional_params = litellm.AmazonAnthropicConfig().map_openai_params(
+                    non_default_params=non_default_params,
+                    optional_params=optional_params,
                 )
         elif "amazon" in model:  # amazon titan llms
             _check_valid_arg(supported_params=supported_params)
@@ -5858,10 +5859,13 @@ def exception_type(
                 or custom_llm_provider in litellm.openai_compatible_providers
             ):
                 # custom_llm_provider is openai, make it OpenAI
-                if hasattr(original_exception, "message"):
-                    message = original_exception.message
-                else:
-                    message = str(original_exception)
+                message = get_error_message(error_obj=original_exception)
+                if message is None:
+                    if hasattr(original_exception, "message"):
+                        message = original_exception.message
+                    else:
+                        message = str(original_exception)
+
                 if message is not None and isinstance(message, str):
                     message = message.replace("OPENAI", custom_llm_provider.upper())
                     message = message.replace("openai", custom_llm_provider)
@@ -7314,10 +7318,17 @@ def exception_type(
                             request=original_exception.request,
                         )
             elif custom_llm_provider == "azure":
+                message = get_error_message(error_obj=original_exception)
+                if message is None:
+                    if hasattr(original_exception, "message"):
+                        message = original_exception.message
+                    else:
+                        message = str(original_exception)
+
                 if "Internal server error" in error_str:
                     exception_mapping_worked = True
                     raise litellm.InternalServerError(
-                        message=f"AzureException Internal server error - {original_exception.message}",
+                        message=f"AzureException Internal server error - {message}",
                         llm_provider="azure",
                         model=model,
                         litellm_debug_info=extra_information,
@@ -7330,7 +7341,7 @@ def exception_type(
                 elif "This model's maximum context length is" in error_str:
                     exception_mapping_worked = True
                     raise ContextWindowExceededError(
-                        message=f"AzureException ContextWindowExceededError - {original_exception.message}",
+                        message=f"AzureException ContextWindowExceededError - {message}",
                         llm_provider="azure",
                         model=model,
                         litellm_debug_info=extra_information,
@@ -7339,7 +7350,7 @@ def exception_type(
                 elif "DeploymentNotFound" in error_str:
                     exception_mapping_worked = True
                     raise NotFoundError(
-                        message=f"AzureException NotFoundError - {original_exception.message}",
+                        message=f"AzureException NotFoundError - {message}",
                         llm_provider="azure",
                         model=model,
                         litellm_debug_info=extra_information,
@@ -7359,7 +7370,7 @@ def exception_type(
                 ):
                     exception_mapping_worked = True
                     raise ContentPolicyViolationError(
-                        message=f"litellm.ContentPolicyViolationError: AzureException - {original_exception.message}",
+                        message=f"litellm.ContentPolicyViolationError: AzureException - {message}",
                         llm_provider="azure",
                         model=model,
                         litellm_debug_info=extra_information,
@@ -7368,7 +7379,7 @@ def exception_type(
                 elif "invalid_request_error" in error_str:
                     exception_mapping_worked = True
                     raise BadRequestError(
-                        message=f"AzureException BadRequestError - {original_exception.message}",
+                        message=f"AzureException BadRequestError - {message}",
                         llm_provider="azure",
                         model=model,
                         litellm_debug_info=extra_information,
@@ -7380,7 +7391,7 @@ def exception_type(
                 ):
                     exception_mapping_worked = True
                     raise AuthenticationError(
-                        message=f"{exception_provider} AuthenticationError - {original_exception.message}",
+                        message=f"{exception_provider} AuthenticationError - {message}",
                         llm_provider=custom_llm_provider,
                         model=model,
                         litellm_debug_info=extra_information,
@@ -7391,7 +7402,7 @@ def exception_type(
                     if original_exception.status_code == 400:
                         exception_mapping_worked = True
                         raise BadRequestError(
-                            message=f"AzureException - {original_exception.message}",
+                            message=f"AzureException - {message}",
                             llm_provider="azure",
                             model=model,
                             litellm_debug_info=extra_information,
@@ -7400,7 +7411,7 @@ def exception_type(
                     elif original_exception.status_code == 401:
                         exception_mapping_worked = True
                         raise AuthenticationError(
-                            message=f"AzureException AuthenticationError - {original_exception.message}",
+                            message=f"AzureException AuthenticationError - {message}",
                             llm_provider="azure",
                             model=model,
                             litellm_debug_info=extra_information,
@@ -7409,7 +7420,7 @@ def exception_type(
                     elif original_exception.status_code == 408:
                         exception_mapping_worked = True
                         raise Timeout(
-                            message=f"AzureException Timeout - {original_exception.message}",
+                            message=f"AzureException Timeout - {message}",
                             model=model,
                             litellm_debug_info=extra_information,
                             llm_provider="azure",
@@ -7417,7 +7428,7 @@ def exception_type(
                     elif original_exception.status_code == 422:
                         exception_mapping_worked = True
                         raise BadRequestError(
-                            message=f"AzureException BadRequestError - {original_exception.message}",
+                            message=f"AzureException BadRequestError - {message}",
                             model=model,
                             llm_provider="azure",
                             litellm_debug_info=extra_information,
@@ -7426,7 +7437,7 @@ def exception_type(
                     elif original_exception.status_code == 429:
                         exception_mapping_worked = True
                         raise RateLimitError(
-                            message=f"AzureException RateLimitError - {original_exception.message}",
+                            message=f"AzureException RateLimitError - {message}",
                             model=model,
                             llm_provider="azure",
                             litellm_debug_info=extra_information,
@@ -7435,7 +7446,7 @@ def exception_type(
                     elif original_exception.status_code == 503:
                         exception_mapping_worked = True
                         raise ServiceUnavailableError(
-                            message=f"AzureException ServiceUnavailableError - {original_exception.message}",
+                            message=f"AzureException ServiceUnavailableError - {message}",
                             model=model,
                             llm_provider="azure",
                             litellm_debug_info=extra_information,
@@ -7444,7 +7455,7 @@ def exception_type(
                     elif original_exception.status_code == 504:  # gateway timeout error
                         exception_mapping_worked = True
                         raise Timeout(
-                            message=f"AzureException Timeout - {original_exception.message}",
+                            message=f"AzureException Timeout - {message}",
                             model=model,
                             litellm_debug_info=extra_information,
                             llm_provider="azure",
@@ -7453,7 +7464,7 @@ def exception_type(
                         exception_mapping_worked = True
                         raise APIError(
                             status_code=original_exception.status_code,
-                            message=f"AzureException APIError - {original_exception.message}",
+                            message=f"AzureException APIError - {message}",
                             llm_provider="azure",
                             litellm_debug_info=extra_information,
                             model=model,

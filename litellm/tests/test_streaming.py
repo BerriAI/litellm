@@ -1226,6 +1226,7 @@ async def test_completion_replicate_llama3_streaming(sync_mode):
                 messages=messages,
                 max_tokens=10,  # type: ignore
                 stream=True,
+                num_retries=3,
             )
             complete_response = ""
             # Add any assertions here to check the response
@@ -1247,6 +1248,7 @@ async def test_completion_replicate_llama3_streaming(sync_mode):
                 messages=messages,
                 max_tokens=100,  # type: ignore
                 stream=True,
+                num_retries=3,
             )
             complete_response = ""
             # Add any assertions here to check the response
