@@ -749,6 +749,7 @@ from .utils import (
     create_pretrained_tokenizer,
     create_tokenizer,
     supports_function_calling,
+    supports_response_schema,
     supports_parallel_function_calling,
     supports_vision,
     supports_system_messages,
@@ -852,6 +853,7 @@ from .exceptions import (
     APIResponseValidationError,
     UnprocessableEntityError,
     InternalServerError,
+    JSONSchemaValidationError,
     LITELLM_EXCEPTION_TYPES,
 )
 from .budget_manager import BudgetManager
