@@ -1111,48 +1111,6 @@ async def test_gemini_pro_httpx_custom_api_base(provider):
         assert "hello" in mock_call.call_args.kwargs["headers"]
 
 
-@pytest.mark.parametrize("sync_mode", [True, False])
-@pytest.mark.parametrize("provider", ["vertex_ai_beta"])  # "vertex_ai",
-@pytest.mark.asyncio
-async def test_gemini_pro_httpx_custom_api_base_streaming_real_call(
-    provider, sync_mode
-):
-    load_vertex_ai_credentials()
-    import random
-
-    litellm.set_verbose = True
-    messages = [
-        {
-            "role": "user",
-            "content": "Hey, how's it going?",
-        }
-    ]
-
-    vertex_region = random.sample(["asia-southeast1", "us-central1"], k=1)[0]
-    if sync_mode is True:
-        response = completion(
-            model="vertex_ai_beta/gemini-1.5-flash",
-            messages=messages,
-            api_base="https://gateway.ai.cloudflare.com/v1/fa4cdcab1f32b95ca3b53fd36043d691/test/google-vertex-ai/v1/projects/adroit-crow-413218/locations/us-central1/publishers/google/models/gemini-1.5-flash",
-            stream=True,
-            vertex_region=vertex_region,
-        )
-
-        for chunk in response:
-            print(chunk)
-    else:
-        response = await litellm.acompletion(
-            model="vertex_ai_beta/gemini-1.5-flash",
-            messages=messages,
-            api_base="https://gateway.ai.cloudflare.com/v1/fa4cdcab1f32b95ca3b53fd36043d691/test/google-vertex-ai/v1/projects/adroit-crow-413218/locations/us-central1/publishers/google/models/gemini-1.5-flash",
-            stream=True,
-            vertex_region=vertex_region,
-        )
-
-        async for chunk in response:
-            print(chunk)
-
-
 @pytest.mark.skip(reason="exhausted vertex quota. need to refactor to mock the call")
 @pytest.mark.parametrize("sync_mode", [True])
 @pytest.mark.parametrize("provider", ["vertex_ai"])
