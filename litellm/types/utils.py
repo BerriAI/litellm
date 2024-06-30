@@ -995,3 +995,8 @@ class GenericImageParsingChunk(TypedDict):
     type: str
     media_type: str
     data: str
+
+
+class ResponseFormatChunk(TypedDict, total=False):
+    type: Required[Literal["json_object", "text"]]
+    response_schema: dict
