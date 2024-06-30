@@ -25,9 +25,8 @@ from litellm import (
     completion_cost,
     embedding,
 )
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-
 from litellm.llms.bedrock_httpx import BedrockLLM
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
 # litellm.num_retries = 3
 litellm.cache = None
@@ -218,6 +217,7 @@ def test_completion_bedrock_claude_sts_client_auth():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+
 @pytest.fixture()
 def bedrock_session_token_creds():
     print("\ncalling oidc auto to get aws_session_token credentials")
@@ -231,15 +231,17 @@ def bedrock_session_token_creds():
         # For local testing
         creds = bllm.get_credentials(
             aws_region_name=aws_region_name,
-            aws_access_key_id=os.environ['AWS_ACCESS_KEY_ID'],
-            aws_secret_access_key=os.environ['AWS_SECRET_ACCESS_KEY'],
-            aws_session_token=aws_session_token
+            aws_access_key_id=os.environ["AWS_ACCESS_KEY_ID"],
+            aws_secret_access_key=os.environ["AWS_SECRET_ACCESS_KEY"],
+            aws_session_token=aws_session_token,
         )
     else:
         # For circle-ci testing
         # aws_role_name = os.environ["AWS_TEMP_ROLE_NAME"]
         # TODO: This is using ai.moda's IAM role, we should use LiteLLM's IAM role eventually
-        aws_role_name = "arn:aws:iam::335785316107:role/litellm-github-unit-tests-circleci"
+        aws_role_name = (
+            "arn:aws:iam::335785316107:role/litellm-github-unit-tests-circleci"
+        )
         aws_web_identity_token = "oidc/circleci_v2/"
 
         creds = bllm.get_credentials(
@@ -250,8 +252,10 @@ def bedrock_session_token_creds():
         )
     return creds
 
+
 def process_stream_response(res, messages):
     import types
+
     if isinstance(res, litellm.utils.CustomStreamWrapper):
         chunks = []
         for part in res:
@@ -261,8 +265,9 @@ def process_stream_response(res, messages):
         res = litellm.stream_chunk_builder(chunks, messages=messages)
     else:
         raise ValueError("Response object is not a streaming response")
-    
+
     return res
+
 
 @pytest.mark.skipif(
     os.environ.get("CIRCLE_OIDC_TOKEN_V2") is None,
@@ -270,8 +275,9 @@ def process_stream_response(res, messages):
 )
 def test_completion_bedrock_claude_aws_session_token(bedrock_session_token_creds):
     print("\ncalling bedrock claude with aws_session_token auth")
-    
+
     import os
+
     aws_region_name = os.environ["AWS_REGION_NAME"]
     aws_access_key_id = bedrock_session_token_creds.access_key
     aws_secret_access_key = bedrock_session_token_creds.secret_key
@@ -334,7 +340,7 @@ def test_completion_bedrock_claude_aws_session_token(bedrock_session_token_creds
             aws_access_key_id=aws_access_key_id,
             aws_secret_access_key=aws_secret_access_key,
             aws_session_token=aws_session_token,
-            stream=True
+            stream=True,
         )
         response_4 = process_stream_response(response_4, messages)
         print(response_4)
@@ -346,14 +352,16 @@ def test_completion_bedrock_claude_aws_session_token(bedrock_session_token_creds
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+
 @pytest.mark.skipif(
     os.environ.get("CIRCLE_OIDC_TOKEN_V2") is None,
     reason="Cannot run without being in CircleCI Runner",
 )
 def test_completion_bedrock_claude_aws_bedrock_client(bedrock_session_token_creds):
     print("\ncalling bedrock claude with aws_session_token auth")
-    
+
     import os
+
     import boto3
     from botocore.client import Config
 
@@ -368,11 +376,8 @@ def test_completion_bedrock_claude_aws_bedrock_client(bedrock_session_token_cred
         aws_access_key_id=aws_access_key_id,
         aws_secret_access_key=aws_secret_access_key,
         aws_session_token=aws_session_token,
-        config= Config(
-            read_timeout=600
-        )
+        config=Config(read_timeout=600),
     )
-
 
     try:
         litellm.set_verbose = True
@@ -407,9 +412,7 @@ def test_completion_bedrock_claude_aws_bedrock_client(bedrock_session_token_cred
             aws_access_key_id=aws_access_key_id,
             aws_secret_access_key=aws_secret_access_key,
             aws_session_token=aws_session_token,
-            config= Config(
-                read_timeout=600
-            )
+            config=Config(read_timeout=600),
         )
 
         response_3 = completion(
@@ -430,19 +433,17 @@ def test_completion_bedrock_claude_aws_bedrock_client(bedrock_session_token_cred
             max_tokens=6,
             temperature=0.3,
             aws_bedrock_client=aws_bedrock_client_east,
-            stream=True
+            stream=True,
         )
         response_4 = process_stream_response(response_4, messages)
         print(response_4)
         assert len(response_4.choices) > 0
         assert len(response_4.choices[0].message.content) > 0
 
-
     except RateLimitError:
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-
 
 
 # test_completion_bedrock_claude_sts_client_auth()
@@ -715,61 +716,6 @@ def test_completion_claude_3_base64():
             pass
         else:
             pytest.fail(f"An exception occurred - {str(e)}")
-
-
-def test_provisioned_throughput():
-    try:
-        litellm.set_verbose = True
-        import io
-        import json
-
-        import botocore
-        import botocore.session
-        from botocore.stub import Stubber
-
-        bedrock_client = botocore.session.get_session().create_client(
-            "bedrock-runtime", region_name="us-east-1"
-        )
-
-        expected_params = {
-            "accept": "application/json",
-            "body": '{"prompt": "\\n\\nHuman: Hello, how are you?\\n\\nAssistant: ", '
-            '"max_tokens_to_sample": 256}',
-            "contentType": "application/json",
-            "modelId": "provisioned-model-arn",
-        }
-        response_from_bedrock = {
-            "body": io.StringIO(
-                json.dumps(
-                    {
-                        "completion": " Here is a short poem about the sky:",
-                        "stop_reason": "max_tokens",
-                        "stop": None,
-                    }
-                )
-            ),
-            "contentType": "contentType",
-            "ResponseMetadata": {"HTTPStatusCode": 200},
-        }
-
-        with Stubber(bedrock_client) as stubber:
-            stubber.add_response(
-                "invoke_model",
-                service_response=response_from_bedrock,
-                expected_params=expected_params,
-            )
-            response = litellm.completion(
-                model="bedrock/anthropic.claude-instant-v1",
-                model_id="provisioned-model-arn",
-                messages=[{"content": "Hello, how are you?", "role": "user"}],
-                aws_bedrock_client=bedrock_client,
-            )
-            print("response stubbed", response)
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-# test_provisioned_throughput()
 
 
 def test_completion_bedrock_mistral_completion_auth():
