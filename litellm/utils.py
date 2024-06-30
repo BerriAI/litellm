@@ -1351,7 +1351,9 @@ def client(original_function):
                 ).total_seconds() * 1000  # return response latency in ms like openai
 
             ### POST-CALL RULES ###
-            post_call_processing(original_response=result, model=model)
+            post_call_processing(
+                original_response=result, model=model, optional_params=kwargs
+            )
 
             # [OPTIONAL] ADD TO CACHE
             if (
