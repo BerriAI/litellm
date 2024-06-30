@@ -1081,7 +1081,7 @@ async def test_aimg_gen_on_router():
             {
                 "model_name": "dall-e-3",
                 "litellm_params": {
-                    "model": "openai/dall-e-3",
+                    "model": "dall-e-3",
                 },
             },
             {
@@ -1137,7 +1137,7 @@ def test_img_gen_on_router():
     try:
         model_list = [
             {
-                "model_name": "openai/dall-e-3",
+                "model_name": "dall-e-3",
                 "litellm_params": {
                     "model": "dall-e-3",
                 },
