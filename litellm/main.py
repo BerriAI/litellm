@@ -2200,8 +2200,7 @@ def completion(
             # boto3 reads keys from .env
             custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
 
-                
-            if ("aws_bedrock_client" in optional_params):  
+            if "aws_bedrock_client" in optional_params:
                 # Extract credentials for legacy boto3 client and pass thru to httpx
                 aws_bedrock_client = optional_params.pop("aws_bedrock_client")
                 creds = aws_bedrock_client._get_credentials().get_frozen_credentials()
@@ -2210,9 +2209,9 @@ def completion(
                 if creds.secret_key:
                     optional_params["aws_secret_access_key"] = creds.secret_key
                 if creds.token:
-                    optional_params["aws_session_token"] = creds.token  
+                    optional_params["aws_session_token"] = creds.token
 
-            if model.startswith("anthropic"):
+            if model in litellm.BEDROCK_CONVERSE_MODELS:
                 response = bedrock_converse_chat_completion.completion(
                     model=model,
                     messages=messages,
