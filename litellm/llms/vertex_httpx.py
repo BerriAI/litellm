@@ -12,7 +12,6 @@ from functools import partial
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
 import httpx  # type: ignore
-import ijson
 import requests  # type: ignore
 
 import litellm
@@ -21,7 +20,10 @@ import litellm.litellm_core_utils.litellm_logging
 from litellm import verbose_logger
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.llms.prompt_templates.factory import convert_url_to_base64
+from litellm.llms.prompt_templates.factory import (
+    convert_url_to_base64,
+    response_schema_prompt,
+)
 from litellm.llms.vertex_ai import _gemini_convert_messages_with_history
 from litellm.types.llms.openai import (
     ChatCompletionResponseMessage,
@@ -1011,35 +1013,53 @@ class VertexLLM(BaseLLM):
             if len(system_prompt_indices) > 0:
                 for idx in reversed(system_prompt_indices):
                     messages.pop(idx)
-        content = _gemini_convert_messages_with_history(messages=messages)
-        tools: Optional[Tools] = optional_params.pop("tools", None)
-        tool_choice: Optional[ToolConfig] = optional_params.pop("tool_choice", None)
-        safety_settings: Optional[List[SafetSettingsConfig]] = optional_params.pop(
-            "safety_settings", None
-        )  # type: ignore
-        generation_config: Optional[GenerationConfig] = GenerationConfig(
-            **optional_params
-        )
-        data = RequestBody(contents=content)
-        if len(system_content_blocks) > 0:
-            system_instructions = SystemInstructions(parts=system_content_blocks)
-            data["system_instruction"] = system_instructions
-        if tools is not None:
-            data["tools"] = tools
-        if tool_choice is not None:
-            data["toolConfig"] = tool_choice
-        if safety_settings is not None:
-            data["safetySettings"] = safety_settings
-        if generation_config is not None:
-            data["generationConfig"] = generation_config
 
-        headers = {
-            "Content-Type": "application/json",
-        }
-        if auth_header is not None:
-            headers["Authorization"] = f"Bearer {auth_header}"
-        if extra_headers is not None:
-            headers.update(extra_headers)
+        # Checks for 'response_schema' support - if passed in
+        if "response_schema" in optional_params:
+            supports_response_schema = litellm.supports_response_schema(
+                model=model, custom_llm_provider="vertex_ai"
+            )
+            if supports_response_schema is False:
+                user_response_schema_message = response_schema_prompt(
+                    model=model, response_schema=optional_params.get("response_schema")  # type: ignore
+                )
+                messages.append(
+                    {"role": "user", "content": user_response_schema_message}
+                )
+                optional_params.pop("response_schema")
+
+        try:
+            content = _gemini_convert_messages_with_history(messages=messages)
+            tools: Optional[Tools] = optional_params.pop("tools", None)
+            tool_choice: Optional[ToolConfig] = optional_params.pop("tool_choice", None)
+            safety_settings: Optional[List[SafetSettingsConfig]] = optional_params.pop(
+                "safety_settings", None
+            )  # type: ignore
+            generation_config: Optional[GenerationConfig] = GenerationConfig(
+                **optional_params
+            )
+            data = RequestBody(contents=content)
+            if len(system_content_blocks) > 0:
+                system_instructions = SystemInstructions(parts=system_content_blocks)
+                data["system_instruction"] = system_instructions
+            if tools is not None:
+                data["tools"] = tools
+            if tool_choice is not None:
+                data["toolConfig"] = tool_choice
+            if safety_settings is not None:
+                data["safetySettings"] = safety_settings
+            if generation_config is not None:
+                data["generationConfig"] = generation_config
+
+            headers = {
+                "Content-Type": "application/json",
+            }
+            if auth_header is not None:
+                headers["Authorization"] = f"Bearer {auth_header}"
+            if extra_headers is not None:
+                headers.update(extra_headers)
+        except Exception as e:
+            raise e
 
         ## LOGGING
         logging_obj.pre_call(
