@@ -621,8 +621,14 @@ def client(original_function):
                                         ],
                                         dict,
                                     )
+                                    and "enforce_validation"
+                                    in optional_params["response_format"]
+                                    and optional_params["response_format"][
+                                        "enforce_validation"
+                                    ]
+                                    is True
                                 ):
-                                    # schema given, json response expected
+                                    # schema given, json response expected, and validation enforced
                                     litellm.litellm_core_utils.json_validation_rule.validate_schema(
                                         schema=optional_params["response_format"][
                                             "response_schema"
