@@ -869,8 +869,9 @@ async def get_global_spend_report(
             )
 
         if premium_user is not True:
+            verbose_proxy_logger.debug("accessing /spend/report but not a premium user")
             raise ValueError(
-                "/spend/report endpoint" + CommonProxyErrors.not_premium_user.value
+                "/spend/report endpoint " + CommonProxyErrors.not_premium_user.value
             )
 
         if group_by == "team":
