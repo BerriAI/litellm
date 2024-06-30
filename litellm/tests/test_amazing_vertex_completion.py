@@ -1003,9 +1003,13 @@ def vertex_httpx_mock_post_invalid_schema_response(*args, **kwargs):
     "invalid_response",
     [True, False],
 )
+@pytest.mark.parametrize(
+    "enforce_validation",
+    [True, False],
+)
 @pytest.mark.asyncio
 async def test_gemini_pro_json_schema_args_sent_httpx(
-    model, supports_response_schema, invalid_response
+    model, supports_response_schema, invalid_response, enforce_validation
 ):
     load_vertex_ai_credentials()
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
@@ -1043,10 +1047,11 @@ async def test_gemini_pro_json_schema_args_sent_httpx(
                 response_format={
                     "type": "json_object",
                     "response_schema": response_schema,
+                    "enforce_validation": enforce_validation,
                 },
                 client=client,
             )
-            if invalid_response is True:
+            if invalid_response is True and enforce_validation is True:
                 pytest.fail("Expected this to fail")
         except litellm.JSONSchemaValidationError as e:
             if invalid_response is False:
