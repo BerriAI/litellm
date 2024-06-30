@@ -800,7 +800,11 @@ from .llms.sagemaker import SagemakerConfig
 from .llms.ollama import OllamaConfig
 from .llms.ollama_chat import OllamaChatConfig
 from .llms.maritalk import MaritTalkConfig
-from .llms.bedrock_httpx import AmazonCohereChatConfig, AmazonConverseConfig
+from .llms.bedrock_httpx import (
+    AmazonCohereChatConfig,
+    AmazonConverseConfig,
+    BEDROCK_CONVERSE_MODELS,
+)
 from .llms.bedrock import (
     AmazonTitanConfig,
     AmazonAI21Config,
