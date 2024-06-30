@@ -64,6 +64,10 @@ BEDROCK_CONVERSE_MODELS = [
     "anthropic.claude-3-opus-20240229-v1:0",
     "anthropic.claude-3-sonnet-20240229-v1:0",
     "anthropic.claude-3-haiku-20240307-v1:0",
+    "anthropic.claude-v2",
+    "anthropic.claude-v2:1",
+    "anthropic.claude-v1",
+    "anthropic.claude-instant-v1",
 ]
 
 iam_cache = DualCache()
