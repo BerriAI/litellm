@@ -14,7 +14,7 @@ LiteLLM supports all models on Azure AI Studio
 ### ENV VAR
 ```python
 import os 
-os.environ["AZURE_API_API_KEY"] = ""
+os.environ["AZURE_AI_API_KEY"] = ""
 os.environ["AZURE_AI_API_BASE"] = ""
 ```
 
@@ -24,7 +24,7 @@ os.environ["AZURE_AI_API_BASE"] = ""
 from litellm import completion
 import os
 ## set ENV variables
-os.environ["AZURE_API_API_KEY"] = "azure ai key"
+os.environ["AZURE_AI_API_KEY"] = "azure ai key"
 os.environ["AZURE_AI_API_BASE"] = "azure ai base url" # e.g.: https://Mistral-large-dfgfj-serverless.eastus2.inference.ai.azure.com/
 
 # predibase llama-3 call
