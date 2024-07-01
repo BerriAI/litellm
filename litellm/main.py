@@ -476,6 +476,15 @@ def mock_completion(
                 model=model,  # type: ignore
                 request=httpx.Request(method="POST", url="https://api.openai.com/v1/"),
             )
+        elif (
+            isinstance(mock_response, str) and mock_response == "litellm.RateLimitError"
+        ):
+            raise litellm.RateLimitError(
+                message="this is a mock rate limit error",
+                status_code=getattr(mock_response, "status_code", 429),  # type: ignore
+                llm_provider=getattr(mock_response, "llm_provider", custom_llm_provider or "openai"),  # type: ignore
+                model=model,
+            )
         time_delay = kwargs.get("mock_delay", None)
         if time_delay is not None:
             time.sleep(time_delay)
