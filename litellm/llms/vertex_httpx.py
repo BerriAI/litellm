@@ -748,10 +748,12 @@ class VertexLLM(BaseLLM):
             if project_id is None:
                 project_id = creds.project_id
         else:
-            creds, project_id = google_auth.default(
+            creds, creds_project_id = google_auth.default(
                 quota_project_id=project_id,
                 scopes=["https://www.googleapis.com/auth/cloud-platform"],
             )
+            if project_id is None:
+                project_id = creds_project_id
 
         creds.refresh(Request())
 
@@ -974,7 +976,7 @@ class VertexLLM(BaseLLM):
         api_base: Optional[str] = None,
     ) -> Union[ModelResponse, CustomStreamWrapper]:
         stream: Optional[bool] = optional_params.pop("stream", None)  # type: ignore
-
+        
         auth_header, url = self._get_token_and_url(
             model=model,
             gemini_api_key=gemini_api_key,

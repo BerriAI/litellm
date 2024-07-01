@@ -106,7 +106,7 @@ aleph_alpha_key: Optional[str] = None
 nlp_cloud_key: Optional[str] = None
 common_cloud_provider_auth_params: dict = {
     "params": ["project", "region_name", "token"],
-    "providers": ["vertex_ai", "bedrock", "watsonx", "azure"],
+    "providers": ["vertex_ai", "bedrock", "watsonx", "azure", "vertex_ai_beta"],
 }
 use_client: bool = False
 ssl_verify: bool = True
