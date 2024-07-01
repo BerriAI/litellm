@@ -277,6 +277,54 @@ curl --location 'http://0.0.0.0:4000/v1/model/info' \
 --data ''
 ```
 
+## Wildcard Model Name (Add ALL MODELS from env)
+
+Dynamically call any model from any given provider without the need to predefine it in the config YAML file. As long as the relevant keys are in the environment (see [providers list](../providers/)), LiteLLM will make the call correctly.
+
+
+
+1. Setup config.yaml
+```
+model_list:
+  - model_name: "*"             # all requests where model not in your config go to this deployment
+    litellm_params:
+      model: "openai/*"           # passes our validation check that a real provider is given
+```
+
+2. Start LiteLLM proxy 
+
+```
+litellm --config /path/to/config.yaml
+```
+
+3. Try claude 3-5 sonnet from anthropic 
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-D '{
+  "model": "claude-3-5-sonnet-20240620",
+  "messages": [
+        {"role": "user", "content": "Hey, how'\''s it going?"},
+        {
+            "role": "assistant",
+            "content": "I'\''m doing well. Would like to hear the rest of the story?"
+        },
+        {"role": "user", "content": "Na"},
+        {
+            "role": "assistant",
+            "content": "No problem, is there anything else i can help you with today?"
+        },
+        {
+            "role": "user",
+            "content": "I think you'\''re getting cut off sometimes"
+        }
+    ]
+}
+'
+```
+
 ## Load Balancing 
 
 :::info
