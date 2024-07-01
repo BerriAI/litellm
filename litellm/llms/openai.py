@@ -678,17 +678,17 @@ class OpenAIChatCompletion(BaseLLM):
             if headers:
                 optional_params["extra_headers"] = headers
             if model is None or messages is None:
-                raise OpenAIError(status_code=422, message=f"Missing model or messages")
+                raise OpenAIError(status_code=422, message="Missing model or messages")
 
             if not isinstance(timeout, float) and not isinstance(
                 timeout, httpx.Timeout
             ):
                 raise OpenAIError(
                     status_code=422,
-                    message=f"Timeout needs to be a float or httpx.Timeout",
+                    message="Timeout needs to be a float or httpx.Timeout",
                 )
 
-            if custom_llm_provider != "openai":
+            if custom_llm_provider is not None and custom_llm_provider != "openai":
                 model_response.model = f"{custom_llm_provider}/{model}"
                 # process all OpenAI compatible provider logic here
                 if custom_llm_provider == "mistral":

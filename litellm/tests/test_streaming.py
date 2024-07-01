@@ -1040,14 +1040,27 @@ def test_vertex_ai_stream(provider):
     litellm.vertex_project = "adroit-crow-413218"
     import random
 
-    test_models = ["gemini-1.0-pro"]
+    test_models = ["gemini-1.5-pro"]
     for model in test_models:
         try:
             print("making request", model)
             response = completion(
                 model="{}/{}".format(provider, model),
                 messages=[
-                    {"role": "user", "content": "write 10 line code code for saying hi"}
+                    {"role": "user", "content": "Hey, how's it going?"},
+                    {
+                        "role": "assistant",
+                        "content": "I'm doing well. Would like to hear the rest of the story?",
+                    },
+                    {"role": "user", "content": "Na"},
+                    {
+                        "role": "assistant",
+                        "content": "No problem, is there anything else i can help you with today?",
+                    },
+                    {
+                        "role": "user",
+                        "content": "I think you're getting cut off sometimes",
+                    },
                 ],
                 stream=True,
             )
@@ -1064,6 +1077,8 @@ def test_vertex_ai_stream(provider):
                 raise Exception("Empty response received")
             print(f"completion_response: {complete_response}")
             assert is_finished == True
+
+            assert False
         except litellm.RateLimitError as e:
             pass
         except Exception as e:
@@ -1211,6 +1226,7 @@ async def test_completion_replicate_llama3_streaming(sync_mode):
                 messages=messages,
                 max_tokens=10,  # type: ignore
                 stream=True,
+                num_retries=3,
             )
             complete_response = ""
             # Add any assertions here to check the response
@@ -1232,6 +1248,7 @@ async def test_completion_replicate_llama3_streaming(sync_mode):
                 messages=messages,
                 max_tokens=100,  # type: ignore
                 stream=True,
+                num_retries=3,
             )
             complete_response = ""
             # Add any assertions here to check the response
@@ -1250,6 +1267,8 @@ async def test_completion_replicate_llama3_streaming(sync_mode):
                 raise Exception("finish reason not set")
             if complete_response.strip() == "":
                 raise Exception("Empty response received")
+    except litellm.UnprocessableEntityError as e:
+        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 

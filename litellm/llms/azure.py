@@ -717,11 +717,32 @@ class AzureChatCompletion(BaseLLM):
                 model_response_object=model_response,
             )
         except AzureOpenAIError as e:
+            ## LOGGING
+            logging_obj.post_call(
+                input=data["messages"],
+                api_key=api_key,
+                additional_args={"complete_input_dict": data},
+                original_response=str(e),
+            )
             exception_mapping_worked = True
             raise e
         except asyncio.CancelledError as e:
+            ## LOGGING
+            logging_obj.post_call(
+                input=data["messages"],
+                api_key=api_key,
+                additional_args={"complete_input_dict": data},
+                original_response=str(e),
+            )
             raise AzureOpenAIError(status_code=500, message=str(e))
         except Exception as e:
+            ## LOGGING
+            logging_obj.post_call(
+                input=data["messages"],
+                api_key=api_key,
+                additional_args={"complete_input_dict": data},
+                original_response=str(e),
+            )
             if hasattr(e, "status_code"):
                 raise e
             else:
