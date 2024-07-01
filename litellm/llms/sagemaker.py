@@ -185,7 +185,8 @@ def completion(
         # I assume majority of users use .env for auth
         region_name = (
             get_secret("AWS_REGION_NAME")
-            or "us-west-2"  # default to us-west-2 if user not specified
+            or aws_region_name  # get region from config file if specified
+            or "us-west-2"  # default to us-west-2 if region not specified
         )
         client = boto3.client(
             service_name="sagemaker-runtime",
@@ -439,7 +440,8 @@ async def async_streaming(
         # I assume majority of users use .env for auth
         region_name = (
             get_secret("AWS_REGION_NAME")
-            or "us-west-2"  # default to us-west-2 if user not specified
+            or aws_region_name  # get region from config file if specified
+            or "us-west-2"  # default to us-west-2 if region not specified
         )
         _client = session.client(
             service_name="sagemaker-runtime",
@@ -506,7 +508,8 @@ async def async_completion(
         # I assume majority of users use .env for auth
         region_name = (
             get_secret("AWS_REGION_NAME")
-            or "us-west-2"  # default to us-west-2 if user not specified
+            or aws_region_name  # get region from config file if specified
+            or "us-west-2"  # default to us-west-2 if region not specified
         )
         _client = session.client(
             service_name="sagemaker-runtime",
@@ -661,7 +664,8 @@ def embedding(
         # I assume majority of users use .env for auth
         region_name = (
             get_secret("AWS_REGION_NAME")
-            or "us-west-2"  # default to us-west-2 if user not specified
+            or aws_region_name  # get region from config file if specified
+            or "us-west-2"  # default to us-west-2 if region not specified
         )
         client = boto3.client(
             service_name="sagemaker-runtime",
