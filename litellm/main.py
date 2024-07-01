@@ -676,6 +676,8 @@ def completion(
     client = kwargs.get("client", None)
     ### Admin Controls ###
     no_log = kwargs.get("no-log", False)
+    ### COPY MESSAGES ### - related issue https://github.com/BerriAI/litellm/discussions/4489
+    messages = deepcopy(messages)
     ######## end of unpacking kwargs ###########
     openai_params = [
         "functions",
