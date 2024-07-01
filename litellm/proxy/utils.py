@@ -95,6 +95,32 @@ def safe_deep_copy(data):
     return new_data
 
 
+def update_and_prune_dict(original: dict, updated: dict) -> dict:
+    """Similar to `dict.update()`, but also prunes keys from `original` that are not
+    present in `updated`.
+
+    Use this instead of `original = updated` to avoid overwriting the memory reference.
+
+    Example:
+    ```python
+    og_dict = {"a": 1, "b": 2, "c": 3}
+    updated_dict = {"a": 0, "c": 3, "d": 4}
+
+    merge_and_prune_dict(og_dict, updated_dict) -> {"a": 0, "c": 3, "d": 4}
+    ```
+
+    :param original: The original dictionary to update and prune.
+    :type original: dict
+    :param updated: The dictionary to update `original` with.
+    :type updated: dict
+    :return: The updated and pruned dictionary.
+    """
+    for key in set(original.keys()) - set(updated.keys()):
+        del original[key]
+
+    original.update(updated)
+
+
 def log_to_opentelemetry(func):
     @wraps(func)
     async def wrapper(*args, **kwargs):

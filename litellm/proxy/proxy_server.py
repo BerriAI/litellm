@@ -190,6 +190,7 @@ from litellm.proxy.utils import (
     missing_keys_html_form,
     reset_budget,
     send_email,
+    update_and_prune_dict,
     update_spend,
 )
 from litellm.router import (
@@ -2971,12 +2972,13 @@ async def chat_completion(
 
         ## LOGGING OBJECT ## - initialize logging object for logging success/failure events for call
         data["litellm_call_id"] = str(uuid.uuid4())
-        logging_obj, data = litellm.utils.function_setup(
+        logging_obj, updated_data = litellm.utils.function_setup(
             original_function="acompletion",
             rules_obj=litellm.utils.Rules(),
             start_time=datetime.now(),
             **data,
         )
+        update_and_prune_dict(data, updated_data)
 
         data["litellm_logging_obj"] = logging_obj
 
