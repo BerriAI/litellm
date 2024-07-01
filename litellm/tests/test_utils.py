@@ -28,12 +28,14 @@ from litellm.utils import (
     get_llm_provider,
     get_max_tokens,
     get_supported_openai_params,
+    shorten_message_to_fit_limit,
     get_token_count,
     get_valid_models,
     token_counter,
     trim_messages,
     validate_environment,
 )
+
 
 # Assuming your trim_messages, shorten_message_to_fit_limit, and get_token_count functions are all in a module named 'message_utils'
 
@@ -184,6 +186,24 @@ def test_trimming_should_not_change_original_messages():
     messages_copy = copy.deepcopy(messages)
     trimmed_messages = trim_messages(messages, max_tokens=12, model="gpt-4-0613")
     assert messages == messages_copy
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        {"role": "system", "content": "       "},
+        {"role": "system", "content": "This is a short message"},
+        {"role": "system", "content": "This is a medium message " * 100},
+    ],
+)
+@pytest.mark.parametrize("max_tokens", [5, 50])
+@pytest.mark.parametrize("model_name", ["deepseek", "gpt-4-0125-preview"])
+@pytest.mark.timeout(10)
+def test_exit_at_shorten_message_to_fit_limit(
+    message: dict, max_tokens: int, model_name: str
+) -> None:
+    # ensures the trim function does not fall into infinite loop
+    shorten_message_to_fit_limit(message, tokens_needed=max_tokens, model=model_name)
 
 
 @pytest.mark.parametrize("model", ["gpt-4-0125-preview", "claude-3-opus-20240229"])
