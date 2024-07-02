@@ -8762,7 +8762,7 @@ class CustomStreamWrapper:
             completion_tokens = len(encoding.encode(text))
             return {
                 "text": text,
-                "is_finished": True,
+                "is_finished": False,
             }
         except:
             verbose_logger.error(
@@ -9639,6 +9639,7 @@ class CustomStreamWrapper:
                 or self.custom_llm_provider == "predibase"
                 or self.custom_llm_provider == "databricks"
                 or self.custom_llm_provider == "bedrock"
+                or self.custom_llm_provider == "clarifai"
                 or self.custom_llm_provider in litellm.openai_compatible_endpoints
             ):
                 async for chunk in self.completion_stream:
