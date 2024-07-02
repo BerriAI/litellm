@@ -1182,9 +1182,13 @@ async def _run_background_health_check():
     Update health_check_results, based on this.
     """
     global health_check_results, llm_model_list, health_check_interval
+
+    # make 1 deep copy of llm_model_list -> use this for all background health checks
+    _llm_model_list = copy.deepcopy(llm_model_list)
+
     while True:
         healthy_endpoints, unhealthy_endpoints = await perform_health_check(
-            model_list=llm_model_list
+            model_list=_llm_model_list
         )
 
         # Update the global variable with the health check results
