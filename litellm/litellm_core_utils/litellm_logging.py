@@ -1354,11 +1354,16 @@ class Logging:
                             end_time=end_time,
                         )
                 if isinstance(callback, CustomLogger):  # custom logger class
-                    if self.stream == True:
+                    if self.stream is True:
                         if (
                             "async_complete_streaming_response"
                             in self.model_call_details
                         ):
+                            print_verbose(
+                                "Enters async log success event for streaming call for callback={}".format(
+                                    callback
+                                )
+                            )
                             await callback.async_log_success_event(
                                 kwargs=self.model_call_details,
                                 response_obj=self.model_call_details[
@@ -1366,6 +1371,11 @@ class Logging:
                                 ],
                                 start_time=start_time,
                                 end_time=end_time,
+                            )
+                            print_verbose(
+                                "Successfully logs async success event for streaming call for callback={}".format(
+                                    callback
+                                )
                             )
                         else:
                             await callback.async_log_stream_event(  # [TODO]: move this to being an async log stream event function
