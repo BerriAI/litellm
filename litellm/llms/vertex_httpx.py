@@ -1035,6 +1035,9 @@ class VertexLLM(BaseLLM):
             safety_settings: Optional[List[SafetSettingsConfig]] = optional_params.pop(
                 "safety_settings", None
             )  # type: ignore
+            cached_content: Optional[str] = optional_params.pop(
+                "cached_content", None
+            )
             generation_config: Optional[GenerationConfig] = GenerationConfig(
                 **optional_params
             )
@@ -1050,6 +1053,8 @@ class VertexLLM(BaseLLM):
                 data["safetySettings"] = safety_settings
             if generation_config is not None:
                 data["generationConfig"] = generation_config
+            if cached_content is not None:
+                data["cachedContent"] = cached_content
 
             headers = {
                 "Content-Type": "application/json",
