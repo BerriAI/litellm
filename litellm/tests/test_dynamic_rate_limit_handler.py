@@ -118,8 +118,47 @@ async def test_available_tpm(num_projects, dynamic_rate_limit_handler):
     assert availability == expected_availability
 
 
+@pytest.mark.parametrize("num_projects", [1, 2, 100])
 @pytest.mark.asyncio
-async def test_rate_limit_raised(dynamic_rate_limit_handler, user_api_key_auth):
+async def test_available_rpm(num_projects, dynamic_rate_limit_handler):
+    model = "my-fake-model"
+    ## SET CACHE W/ ACTIVE PROJECTS
+    projects = [str(uuid.uuid4()) for _ in range(num_projects)]
+
+    await dynamic_rate_limit_handler.internal_usage_cache.async_set_cache_sadd(
+        model=model, value=projects
+    )
+
+    model_rpm = 100
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": model,
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "my-key",
+                    "api_base": "my-base",
+                    "rpm": model_rpm,
+                },
+            }
+        ]
+    )
+    dynamic_rate_limit_handler.update_variables(llm_router=llm_router)
+
+    ## CHECK AVAILABLE rpm PER PROJECT
+
+    resp = await dynamic_rate_limit_handler.check_available_usage(model=model)
+
+    availability = resp[1]
+
+    expected_availability = int(model_rpm / num_projects)
+
+    assert availability == expected_availability
+
+
+@pytest.mark.parametrize("usage", ["rpm", "tpm"])
+@pytest.mark.asyncio
+async def test_rate_limit_raised(dynamic_rate_limit_handler, user_api_key_auth, usage):
     """
     Unit test. Tests if rate limit error raised when quota exhausted.
     """
@@ -133,7 +172,7 @@ async def test_rate_limit_raised(dynamic_rate_limit_handler, user_api_key_auth):
         model=model, value=projects
     )
 
-    model_tpm = 0
+    model_usage = 0
     llm_router = Router(
         model_list=[
             {
@@ -142,7 +181,7 @@ async def test_rate_limit_raised(dynamic_rate_limit_handler, user_api_key_auth):
                     "model": "gpt-3.5-turbo",
                     "api_key": "my-key",
                     "api_base": "my-base",
-                    "tpm": model_tpm,
+                    usage: model_usage,
                 },
             }
         ]
@@ -153,9 +192,12 @@ async def test_rate_limit_raised(dynamic_rate_limit_handler, user_api_key_auth):
 
     resp = await dynamic_rate_limit_handler.check_available_usage(model=model)
 
-    availability = resp[0]
+    if usage == "tpm":
+        availability = resp[0]
+    else:
+        availability = resp[1]
 
-    expected_availability = int(model_tpm / 1)
+    expected_availability = 0
 
     assert availability == expected_availability
 
