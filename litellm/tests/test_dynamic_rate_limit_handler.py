@@ -109,9 +109,9 @@ async def test_available_tpm(num_projects, dynamic_rate_limit_handler):
 
     ## CHECK AVAILABLE TPM PER PROJECT
 
-    availability, _, _ = await dynamic_rate_limit_handler.check_available_tpm(
-        model=model
-    )
+    resp = await dynamic_rate_limit_handler.check_available_usage(model=model)
+
+    availability = resp[0]
 
     expected_availability = int(model_tpm / num_projects)
 
@@ -151,9 +151,9 @@ async def test_rate_limit_raised(dynamic_rate_limit_handler, user_api_key_auth):
 
     ## CHECK AVAILABLE TPM PER PROJECT
 
-    availability, _, _ = await dynamic_rate_limit_handler.check_available_tpm(
-        model=model
-    )
+    resp = await dynamic_rate_limit_handler.check_available_usage(model=model)
+
+    availability = resp[0]
 
     expected_availability = int(model_tpm / 1)
 
@@ -217,9 +217,9 @@ async def test_base_case(dynamic_rate_limit_handler, mock_response):
     for _ in range(2):
         try:
             # check availability
-            availability, _, _ = await dynamic_rate_limit_handler.check_available_tpm(
-                model=model
-            )
+            resp = await dynamic_rate_limit_handler.check_available_usage(model=model)
+
+            availability = resp[0]
 
             print(
                 "prev_availability={}, availability={}".format(
@@ -273,9 +273,9 @@ async def test_update_cache(
     dynamic_rate_limit_handler.update_variables(llm_router=llm_router)
 
     ## INITIAL ACTIVE PROJECTS - ASSERT NONE
-    _, _, active_projects = await dynamic_rate_limit_handler.check_available_tpm(
-        model=model
-    )
+    resp = await dynamic_rate_limit_handler.check_available_usage(model=model)
+
+    active_projects = resp[-1]
 
     assert active_projects is None
 
@@ -289,9 +289,9 @@ async def test_update_cache(
 
     await asyncio.sleep(2)
     ## INITIAL ACTIVE PROJECTS - ASSERT 1
-    _, _, active_projects = await dynamic_rate_limit_handler.check_available_tpm(
-        model=model
-    )
+    resp = await dynamic_rate_limit_handler.check_available_usage(model=model)
+
+    active_projects = resp[-1]
 
     assert active_projects == 1
 
@@ -357,9 +357,9 @@ async def test_multiple_projects(
     for i in range(expected_runs + 1):
         # check availability
 
-        availability, _, _ = await dynamic_rate_limit_handler.check_available_tpm(
-            model=model
-        )
+        resp = await dynamic_rate_limit_handler.check_available_usage(model=model)
+
+        availability = resp[0]
 
         ## assert availability updated
         if prev_availability is not None and availability is not None:
@@ -389,9 +389,10 @@ async def test_multiple_projects(
         await asyncio.sleep(3)
 
     # check availability
-    availability, _, _ = await dynamic_rate_limit_handler.check_available_tpm(
-        model=model
-    )
+    resp = await dynamic_rate_limit_handler.check_available_usage(model=model)
+
+    availability = resp[0]
+
     assert availability == 0
 
 
@@ -456,9 +457,9 @@ async def test_multiple_projects_e2e(
     print("expected_runs: {}".format(expected_runs))
     for i in range(expected_runs + 1):
         # check availability
-        availability, _, _ = await dynamic_rate_limit_handler.check_available_tpm(
-            model=model
-        )
+        resp = await dynamic_rate_limit_handler.check_available_usage(model=model)
+
+        availability = resp[0]
 
         ## assert availability updated
         if prev_availability is not None and availability is not None:
@@ -488,7 +489,7 @@ async def test_multiple_projects_e2e(
         await asyncio.sleep(3)
 
     # check availability
-    availability, _, _ = await dynamic_rate_limit_handler.check_available_tpm(
-        model=model
-    )
+    resp = await dynamic_rate_limit_handler.check_available_usage(model=model)
+
+    availability = resp[0]
     assert availability == 0
