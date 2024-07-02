@@ -609,3 +609,83 @@ def test_logging_trace_id(langfuse_trace_id, langfuse_existing_trace_id):
             litellm_logging_obj._get_trace_id(service_name="langfuse")
             == litellm_call_id
         )
+
+
+def test_convert_model_response_object():
+    """
+    Unit test to ensure model response object correctly handles openrouter errors.
+    """
+    args = {
+        "response_object": {
+            "id": None,
+            "choices": None,
+            "created": None,
+            "model": None,
+            "object": None,
+            "service_tier": None,
+            "system_fingerprint": None,
+            "usage": None,
+            "error": {
+                "message": '{"type":"error","error":{"type":"invalid_request_error","message":"Output blocked by content filtering policy"}}',
+                "code": 400,
+            },
+        },
+        "model_response_object": litellm.ModelResponse(
+            id="chatcmpl-b88ce43a-7bfc-437c-b8cc-e90d59372cfb",
+            choices=[
+                litellm.Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=litellm.Message(content="default", role="assistant"),
+                )
+            ],
+            created=1719376241,
+            model="openrouter/anthropic/claude-3.5-sonnet",
+            object="chat.completion",
+            system_fingerprint=None,
+            usage=litellm.Usage(),
+        ),
+        "response_type": "completion",
+        "stream": False,
+        "start_time": None,
+        "end_time": None,
+        "hidden_params": None,
+    }
+
+    try:
+        litellm.convert_to_model_response_object(**args)
+        pytest.fail("Expected this to fail")
+    except Exception as e:
+        assert hasattr(e, "status_code")
+        assert e.status_code == 400
+        assert hasattr(e, "message")
+        assert (
+            e.message
+            == '{"type":"error","error":{"type":"invalid_request_error","message":"Output blocked by content filtering policy"}}'
+        )
+
+
+@pytest.mark.parametrize(
+    "model, expected_bool",
+    [
+        ("vertex_ai/gemini-1.5-pro", True),
+        ("gemini/gemini-1.5-pro", True),
+        ("predibase/llama3-8b-instruct", True),
+        ("gpt-4o", False),
+    ],
+)
+def test_supports_response_schema(model, expected_bool):
+    """
+    Unit tests for 'supports_response_schema' helper function.
+
+    Should be true for gemini-1.5-pro on google ai studio / vertex ai AND predibase models
+    Should be false otherwise
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    from litellm.utils import supports_response_schema
+
+    response = supports_response_schema(model=model, custom_llm_provider=None)
+
+    assert expected_bool == response

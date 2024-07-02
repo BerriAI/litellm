@@ -476,6 +476,15 @@ def mock_completion(
                 model=model,  # type: ignore
                 request=httpx.Request(method="POST", url="https://api.openai.com/v1/"),
             )
+        elif (
+            isinstance(mock_response, str) and mock_response == "litellm.RateLimitError"
+        ):
+            raise litellm.RateLimitError(
+                message="this is a mock rate limit error",
+                status_code=getattr(mock_response, "status_code", 429),  # type: ignore
+                llm_provider=getattr(mock_response, "llm_provider", custom_llm_provider or "openai"),  # type: ignore
+                model=model,
+            )
         time_delay = kwargs.get("mock_delay", None)
         if time_delay is not None:
             time.sleep(time_delay)
@@ -676,6 +685,8 @@ def completion(
     client = kwargs.get("client", None)
     ### Admin Controls ###
     no_log = kwargs.get("no-log", False)
+    ### COPY MESSAGES ### - related issue https://github.com/BerriAI/litellm/discussions/4489
+    messages = deepcopy(messages)
     ######## end of unpacking kwargs ###########
     openai_params = [
         "functions",
@@ -1828,6 +1839,7 @@ def completion(
                 logging_obj=logging,
                 acompletion=acompletion,
                 timeout=timeout,  # type: ignore
+                custom_llm_provider="openrouter",
             )
             ## LOGGING
             logging.post_call(
@@ -2199,13 +2211,33 @@ def completion(
             # boto3 reads keys from .env
             custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
 
-            if (
-                "aws_bedrock_client" in optional_params
-            ):  # use old bedrock flow for aws_bedrock_client users.
-                response = bedrock.completion(
+            if "aws_bedrock_client" in optional_params:
+                verbose_logger.warning(
+                    "'aws_bedrock_client' is a deprecated param. Please move to another auth method - https://docs.litellm.ai/docs/providers/bedrock#boto3---authentication."
+                )
+                # Extract credentials for legacy boto3 client and pass thru to httpx
+                aws_bedrock_client = optional_params.pop("aws_bedrock_client")
+                creds = aws_bedrock_client._get_credentials().get_frozen_credentials()
+
+                if creds.access_key:
+                    optional_params["aws_access_key_id"] = creds.access_key
+                if creds.secret_key:
+                    optional_params["aws_secret_access_key"] = creds.secret_key
+                if creds.token:
+                    optional_params["aws_session_token"] = creds.token
+                if (
+                    "aws_region_name" not in optional_params
+                    or optional_params["aws_region_name"] is None
+                ):
+                    optional_params["aws_region_name"] = (
+                        aws_bedrock_client.meta.region_name
+                    )
+
+            if model in litellm.BEDROCK_CONVERSE_MODELS:
+                response = bedrock_converse_chat_completion.completion(
                     model=model,
                     messages=messages,
-                    custom_prompt_dict=litellm.custom_prompt_dict,
+                    custom_prompt_dict=custom_prompt_dict,
                     model_response=model_response,
                     print_verbose=print_verbose,
                     optional_params=optional_params,
@@ -2215,63 +2247,27 @@ def completion(
                     logging_obj=logging,
                     extra_headers=extra_headers,
                     timeout=timeout,
+                    acompletion=acompletion,
+                    client=client,
+                )
+            else:
+                response = bedrock_chat_completion.completion(
+                    model=model,
+                    messages=messages,
+                    custom_prompt_dict=custom_prompt_dict,
+                    model_response=model_response,
+                    print_verbose=print_verbose,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    logger_fn=logger_fn,
+                    encoding=encoding,
+                    logging_obj=logging,
+                    extra_headers=extra_headers,
+                    timeout=timeout,
+                    acompletion=acompletion,
+                    client=client,
                 )
 
-                if (
-                    "stream" in optional_params
-                    and optional_params["stream"] == True
-                    and not isinstance(response, CustomStreamWrapper)
-                ):
-                    # don't try to access stream object,
-                    if "ai21" in model:
-                        response = CustomStreamWrapper(
-                            response,
-                            model,
-                            custom_llm_provider="bedrock",
-                            logging_obj=logging,
-                        )
-                    else:
-                        response = CustomStreamWrapper(
-                            iter(response),
-                            model,
-                            custom_llm_provider="bedrock",
-                            logging_obj=logging,
-                        )
-            else:
-                if model.startswith("anthropic"):
-                    response = bedrock_converse_chat_completion.completion(
-                        model=model,
-                        messages=messages,
-                        custom_prompt_dict=custom_prompt_dict,
-                        model_response=model_response,
-                        print_verbose=print_verbose,
-                        optional_params=optional_params,
-                        litellm_params=litellm_params,
-                        logger_fn=logger_fn,
-                        encoding=encoding,
-                        logging_obj=logging,
-                        extra_headers=extra_headers,
-                        timeout=timeout,
-                        acompletion=acompletion,
-                        client=client,
-                    )
-                else:
-                    response = bedrock_chat_completion.completion(
-                        model=model,
-                        messages=messages,
-                        custom_prompt_dict=custom_prompt_dict,
-                        model_response=model_response,
-                        print_verbose=print_verbose,
-                        optional_params=optional_params,
-                        litellm_params=litellm_params,
-                        logger_fn=logger_fn,
-                        encoding=encoding,
-                        logging_obj=logging,
-                        extra_headers=extra_headers,
-                        timeout=timeout,
-                        acompletion=acompletion,
-                        client=client,
-                    )
             if optional_params.get("stream", False):
                 ## LOGGING
                 logging.post_call(
