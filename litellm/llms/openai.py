@@ -1026,17 +1026,43 @@ class OpenAIChatCompletion(BaseLLM):
                 else:
                     raise OpenAIError(status_code=500, message=f"{str(e)}")
 
+    # Embedding
+    async def make_openai_embedding_request(
+        self,
+        openai_aclient: AsyncOpenAI,
+        data: dict,
+        timeout: Union[float, httpx.Timeout],
+    ):
+        """
+        Helper to:
+        - call embeddings.create.with_raw_response when litellm.return_response_headers is True
+        - call embeddings.create by default
+        """
+        try:
+            if litellm.return_response_headers is True:
+                raw_response = await openai_aclient.embeddings.with_raw_response.create(
+                    **data, timeout=timeout
+                )  # type: ignore
+                headers = dict(raw_response.headers)
+                response = raw_response.parse()
+                return headers, response
+            else:
+                response = await openai_aclient.embeddings.create(**data, timeout=timeout)  # type: ignore
+                return None, response
+        except Exception as e:
+            raise e
+
     async def aembedding(
         self,
         input: list,
         data: dict,
         model_response: litellm.utils.EmbeddingResponse,
         timeout: float,
+        logging_obj: LiteLLMLoggingObj,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
         client: Optional[AsyncOpenAI] = None,
         max_retries=None,
-        logging_obj=None,
     ):
         response = None
         try:
@@ -1048,7 +1074,10 @@ class OpenAIChatCompletion(BaseLLM):
                 max_retries=max_retries,
                 client=client,
             )
-            response = await openai_aclient.embeddings.create(**data, timeout=timeout)  # type: ignore
+            headers, response = await self.make_openai_embedding_request(
+                openai_aclient=openai_aclient, data=data, timeout=timeout
+            )
+            logging_obj.model_call_details["response_headers"] = headers
             stringified_response = response.model_dump()
             ## LOGGING
             logging_obj.post_call(
@@ -1263,6 +1292,34 @@ class OpenAIChatCompletion(BaseLLM):
             else:
                 raise OpenAIError(status_code=500, message=str(e))
 
+    # Audio Transcriptions
+    async def make_openai_audio_transcriptions_request(
+        self,
+        openai_aclient: AsyncOpenAI,
+        data: dict,
+        timeout: Union[float, httpx.Timeout],
+    ):
+        """
+        Helper to:
+        - call openai_aclient.audio.transcriptions.with_raw_response when litellm.return_response_headers is True
+        - call openai_aclient.audio.transcriptions.create by default
+        """
+        try:
+            if litellm.return_response_headers is True:
+                raw_response = (
+                    await openai_aclient.audio.transcriptions.with_raw_response.create(
+                        **data, timeout=timeout
+                    )
+                )  # type: ignore
+                headers = dict(raw_response.headers)
+                response = raw_response.parse()
+                return headers, response
+            else:
+                response = await openai_aclient.audio.transcriptions.create(**data, timeout=timeout)  # type: ignore
+                return None, response
+        except Exception as e:
+            raise e
+
     def audio_transcriptions(
         self,
         model: str,
@@ -1320,11 +1377,11 @@ class OpenAIChatCompletion(BaseLLM):
         data: dict,
         model_response: TranscriptionResponse,
         timeout: float,
+        logging_obj: LiteLLMLoggingObj,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
         client=None,
         max_retries=None,
-        logging_obj=None,
     ):
         try:
             openai_aclient = self._get_openai_client(
@@ -1336,9 +1393,12 @@ class OpenAIChatCompletion(BaseLLM):
                 client=client,
             )
 
-            response = await openai_aclient.audio.transcriptions.create(
-                **data, timeout=timeout
-            )  # type: ignore
+            headers, response = await self.make_openai_audio_transcriptions_request(
+                openai_aclient=openai_aclient,
+                data=data,
+                timeout=timeout,
+            )
+            logging_obj.model_call_details["response_headers"] = headers
             stringified_response = response.model_dump()
             ## LOGGING
             logging_obj.post_call(
