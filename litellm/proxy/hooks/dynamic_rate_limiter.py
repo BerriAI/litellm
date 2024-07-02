@@ -236,7 +236,7 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
                         "x-ratelimit-remaining-litellm-project-tokens": available_tpm,
                         "x-ratelimit-remaining-litellm-project-requests": available_rpm,
                         "x-ratelimit-remaining-model-tokens": model_tpm,
-                        "x-ratelimit-remaining-model-requests": model_tpm,
+                        "x-ratelimit-remaining-model-requests": model_rpm,
                         "x-ratelimit-current-active-projects": active_projects,
                     }
                 )
