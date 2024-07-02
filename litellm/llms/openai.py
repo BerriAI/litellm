@@ -652,6 +652,31 @@ class OpenAIChatCompletion(BaseLLM):
         else:
             return client
 
+    async def make_openai_chat_completion_request(
+        self,
+        openai_aclient: AsyncOpenAI,
+        data: dict,
+        timeout: Union[float, httpx.Timeout],
+    ):
+        try:
+            if litellm.return_response_headers is True:
+                raw_response = (
+                    await openai_aclient.chat.completions.with_raw_response.create(
+                        **data, timeout=timeout
+                    )
+                )
+
+                headers = dict(raw_response.headers)
+                response = raw_response.parse()
+                return headers, response
+            else:
+                response = await openai_aclient.chat.completions.create(
+                    **data, timeout=timeout
+                )
+                return None, response
+        except Exception as e:
+            raise e
+
     def completion(
         self,
         model_response: ModelResponse,
@@ -869,8 +894,8 @@ class OpenAIChatCompletion(BaseLLM):
                 },
             )
 
-            response = await openai_aclient.chat.completions.create(
-                **data, timeout=timeout
+            headers, response = await self.make_openai_chat_completion_request(
+                openai_aclient=openai_aclient, data=data, timeout=timeout
             )
             stringified_response = response.model_dump()
             logging_obj.post_call(
@@ -965,8 +990,8 @@ class OpenAIChatCompletion(BaseLLM):
                 },
             )
 
-            response = await openai_aclient.chat.completions.create(
-                **data, timeout=timeout
+            headers, response = await self.make_openai_chat_completion_request(
+                openai_aclient=openai_aclient, data=data, timeout=timeout
             )
             streamwrapper = CustomStreamWrapper(
                 completion_stream=response,
