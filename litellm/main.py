@@ -2212,15 +2212,26 @@ def completion(
             custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
 
             if "aws_bedrock_client" in optional_params:
+                verbose_logger.warning(
+                    "'aws_bedrock_client' is a deprecated param. Please move to another auth method - https://docs.litellm.ai/docs/providers/bedrock#boto3---authentication."
+                )
                 # Extract credentials for legacy boto3 client and pass thru to httpx
                 aws_bedrock_client = optional_params.pop("aws_bedrock_client")
                 creds = aws_bedrock_client._get_credentials().get_frozen_credentials()
+
                 if creds.access_key:
                     optional_params["aws_access_key_id"] = creds.access_key
                 if creds.secret_key:
                     optional_params["aws_secret_access_key"] = creds.secret_key
                 if creds.token:
                     optional_params["aws_session_token"] = creds.token
+                if (
+                    "aws_region_name" not in optional_params
+                    or optional_params["aws_region_name"] is None
+                ):
+                    optional_params["aws_region_name"] = (
+                        aws_bedrock_client.meta.region_name
+                    )
 
             if model in litellm.BEDROCK_CONVERSE_MODELS:
                 response = bedrock_converse_chat_completion.completion(
