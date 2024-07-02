@@ -438,6 +438,56 @@ async def test_multiple_projects(
     assert availability == 0
 
 
+@pytest.mark.parametrize("num_projects", [1, 2, 100])
+@pytest.mark.asyncio
+async def test_priority_reservation(num_projects, dynamic_rate_limit_handler):
+    """
+    If reservation is set + `mock_testing_reservation` passed in
+
+    assert correct rpm is reserved
+    """
+    model = "my-fake-model"
+    ## SET CACHE W/ ACTIVE PROJECTS
+    projects = [str(uuid.uuid4()) for _ in range(num_projects)]
+
+    await dynamic_rate_limit_handler.internal_usage_cache.async_set_cache_sadd(
+        model=model, value=projects
+    )
+
+    litellm.priority_reservation = {"dev": 0.1, "prod": 0.9}
+
+    model_usage = 100
+
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": model,
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "my-key",
+                    "api_base": "my-base",
+                    "rpm": model_usage,
+                },
+            }
+        ]
+    )
+    dynamic_rate_limit_handler.update_variables(llm_router=llm_router)
+
+    ## CHECK AVAILABLE TPM PER PROJECT
+
+    resp = await dynamic_rate_limit_handler.check_available_usage(
+        model=model, priority="prod"
+    )
+
+    availability = resp[1]
+
+    expected_availability = int(
+        model_usage * litellm.priority_reservation["prod"] / num_projects
+    )
+
+    assert availability == expected_availability
+
+
 @pytest.mark.skip(
     reason="Unstable on ci/cd due to curr minute changes. Refactor to handle minute changing"
 )
