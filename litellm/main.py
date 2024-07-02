@@ -48,6 +48,7 @@ from litellm import (  # type: ignore
     get_litellm_params,
     get_optional_params,
 )
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.utils import (
     CustomStreamWrapper,
     Usage,
@@ -4251,7 +4252,7 @@ def transcription(
     api_base: Optional[str] = None,
     api_version: Optional[str] = None,
     max_retries: Optional[int] = None,
-    litellm_logging_obj=None,
+    litellm_logging_obj: Optional[LiteLLMLoggingObj] = None,
     custom_llm_provider=None,
     **kwargs,
 ):
@@ -4266,6 +4267,18 @@ def transcription(
     proxy_server_request = kwargs.get("proxy_server_request", None)
     model_info = kwargs.get("model_info", None)
     metadata = kwargs.get("metadata", {})
+    client: Optional[
+        Union[
+            openai.AsyncOpenAI,
+            openai.OpenAI,
+            openai.AzureOpenAI,
+            openai.AsyncAzureOpenAI,
+        ]
+    ] = kwargs.pop("client", None)
+
+    if litellm_logging_obj:
+        litellm_logging_obj.model_call_details["client"] = str(client)
+
     if max_retries is None:
         max_retries = openai.DEFAULT_MAX_RETRIES
 
@@ -4305,6 +4318,7 @@ def transcription(
             optional_params=optional_params,
             model_response=model_response,
             atranscription=atranscription,
+            client=client,
             timeout=timeout,
             logging_obj=litellm_logging_obj,
             api_base=api_base,
@@ -4338,6 +4352,7 @@ def transcription(
             optional_params=optional_params,
             model_response=model_response,
             atranscription=atranscription,
+            client=client,
             timeout=timeout,
             logging_obj=litellm_logging_obj,
             max_retries=max_retries,
