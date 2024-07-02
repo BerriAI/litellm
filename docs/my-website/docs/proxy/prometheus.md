@@ -1,3 +1,6 @@
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
 # 📈 Prometheus metrics [BETA]
 
 LiteLLM Exposes a `/metrics` endpoint for Prometheus to Poll
@@ -77,6 +80,25 @@ litellm_settings:
 | `litellm_remaining_tokens`                | Track `x-ratelimit-remaining-tokens` return from LLM API Deployment |
 
 Example Metric
+<Tabs>
+
+<TabItem value="Remaining Requests" label="Remaining Requests">
+
+```shell
+litellm_remaining_requests
+{
+  api_base="https://api.openai.com/v1",
+  api_provider="openai",
+  litellm_model_name="gpt-3.5-turbo",
+  model_group="gpt-3.5-turbo"
+} 
+8998.0
+```
+
+</TabItem>
+
+<TabItem value="Requests" label="Remaining Tokens">
+
 ```shell
 litellm_remaining_tokens
 {
@@ -87,6 +109,11 @@ litellm_remaining_tokens
 } 
 999981.0
 ```
+
+</TabItem>
+
+</Tabs>
+
 ## Monitor System Health
 
 To monitor the health of litellm adjacent services (redis / postgres), do:
