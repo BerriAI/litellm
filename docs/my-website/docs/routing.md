@@ -815,6 +815,35 @@ model_list:
 </TabItem>
 </Tabs>
 
+**Expected Response**
+
+```
+No deployments available for selected model, Try again in 60 seconds. Passed model=claude-3-5-sonnet. pre-call-checks=False, allowed_model_region=n/a.
+```
+
+#### **Disable cooldowns**
+
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import Router 
+
+
+router = Router(..., disable_cooldowns=True)
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```yaml
+router_settings:
+	disable_cooldowns: True
+```
+
+</TabItem>
+</Tabs>
+
 ### Retries
 
 For both async + sync functions, we support retrying failed requests. 
