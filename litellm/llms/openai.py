@@ -21,6 +21,7 @@ from pydantic import BaseModel
 from typing_extensions import overload, override
 
 import litellm
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.types.utils import ProviderField
 from litellm.utils import (
     Choices,
@@ -866,13 +867,13 @@ class OpenAIChatCompletion(BaseLLM):
         self,
         data: dict,
         model_response: ModelResponse,
+        logging_obj: LiteLLMLoggingObj,
         timeout: Union[float, httpx.Timeout],
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
         organization: Optional[str] = None,
         client=None,
         max_retries=None,
-        logging_obj=None,
         headers=None,
     ):
         response = None
@@ -909,9 +910,11 @@ class OpenAIChatCompletion(BaseLLM):
                 original_response=stringified_response,
                 additional_args={"complete_input_dict": data},
             )
+            logging_obj.model_call_details["response_headers"] = headers
             return convert_to_model_response_object(
                 response_object=stringified_response,
                 model_response_object=model_response,
+                hidden_params={"headers": headers},
             )
         except Exception as e:
             raise e
@@ -961,10 +964,10 @@ class OpenAIChatCompletion(BaseLLM):
 
     async def async_streaming(
         self,
-        logging_obj,
         timeout: Union[float, httpx.Timeout],
         data: dict,
         model: str,
+        logging_obj: LiteLLMLoggingObj,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
         organization: Optional[str] = None,
@@ -998,6 +1001,7 @@ class OpenAIChatCompletion(BaseLLM):
             headers, response = await self.make_openai_chat_completion_request(
                 openai_aclient=openai_aclient, data=data, timeout=timeout
             )
+            logging_obj.model_call_details["response_headers"] = headers
             streamwrapper = CustomStreamWrapper(
                 completion_stream=response,
                 model=model,
@@ -1527,9 +1531,9 @@ class OpenAITextCompletion(BaseLLM):
         model: str,
         messages: list,
         timeout: float,
+        logging_obj: LiteLLMLoggingObj,
         print_verbose: Optional[Callable] = None,
         api_base: Optional[str] = None,
-        logging_obj=None,
         acompletion: bool = False,
         optional_params=None,
         litellm_params=None,
