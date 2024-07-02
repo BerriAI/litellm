@@ -23,6 +23,7 @@ from typing_extensions import overload
 import litellm
 from litellm import OpenAIConfig
 from litellm.caching import DualCache
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.utils import (
     Choices,
     CustomStreamWrapper,
@@ -500,7 +501,7 @@ class AzureChatCompletion(BaseLLM):
         azure_ad_token: str,
         print_verbose: Callable,
         timeout: Union[float, httpx.Timeout],
-        logging_obj,
+        logging_obj: LiteLLMLoggingObj,
         optional_params,
         litellm_params,
         logger_fn,
@@ -679,9 +680,9 @@ class AzureChatCompletion(BaseLLM):
         data: dict,
         timeout: Any,
         model_response: ModelResponse,
+        logging_obj: LiteLLMLoggingObj,
         azure_ad_token: Optional[str] = None,
         client=None,  # this is the AsyncAzureOpenAI
-        logging_obj=None,
     ):
         response = None
         try:
@@ -737,6 +738,7 @@ class AzureChatCompletion(BaseLLM):
                 data=data,
                 timeout=timeout,
             )
+            logging_obj.model_call_details["response_headers"] = headers
 
             stringified_response = response.model_dump()
             logging_obj.post_call(
@@ -845,7 +847,7 @@ class AzureChatCompletion(BaseLLM):
 
     async def async_streaming(
         self,
-        logging_obj,
+        logging_obj: LiteLLMLoggingObj,
         api_base: str,
         api_key: str,
         api_version: str,
@@ -900,6 +902,7 @@ class AzureChatCompletion(BaseLLM):
                 data=data,
                 timeout=timeout,
             )
+            logging_obj.model_call_details["response_headers"] = headers
 
             # return response
             streamwrapper = CustomStreamWrapper(
