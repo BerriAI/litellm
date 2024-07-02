@@ -161,6 +161,9 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     router as key_management_router,
 )
 from litellm.proxy.management_endpoints.team_endpoints import router as team_router
+from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+    initialize_pass_through_endpoints,
+)
 from litellm.proxy.secret_managers.aws_secret_manager import (
     load_aws_kms,
     load_aws_secret_manager,
@@ -590,7 +593,7 @@ async def _PROXY_failure_handler(
         _model_id = _metadata.get("model_info", {}).get("id", "")
         _model_group = _metadata.get("model_group", "")
         api_base = litellm.get_api_base(model=_model, optional_params=_litellm_params)
-        _exception_string = str(_exception)[:500]
+        _exception_string = str(_exception)
 
         error_log = LiteLLM_ErrorLogs(
             request_id=str(uuid.uuid4()),
@@ -1855,6 +1858,11 @@ class ProxyConfig:
             if custom_key_generate is not None:
                 user_custom_key_generate = get_instance_fn(
                     value=custom_key_generate, config_file_path=config_file_path
+                )
+            ## pass through endpoints
+            if general_settings.get("pass_through_endpoints", None) is not None:
+                await initialize_pass_through_endpoints(
+                    pass_through_endpoints=general_settings["pass_through_endpoints"]
                 )
             ## dynamodb
             database_type = general_settings.get("database_type", None)
@@ -7503,7 +7511,9 @@ async def login(request: Request):
         # Non SSO -> If user is using UI_USERNAME and UI_PASSWORD they are Proxy admin
         user_role = LitellmUserRoles.PROXY_ADMIN
         user_id = username
-        key_user_id = user_id
+
+        # we want the key created to have PROXY_ADMIN_PERMISSIONS
+        key_user_id = litellm_proxy_admin_name
         if (
             os.getenv("PROXY_ADMIN_ID", None) is not None
             and os.environ["PROXY_ADMIN_ID"] == user_id
@@ -7523,7 +7533,17 @@ async def login(request: Request):
         if os.getenv("DATABASE_URL") is not None:
             response = await generate_key_helper_fn(
                 request_type="key",
-                **{"user_role": LitellmUserRoles.PROXY_ADMIN, "duration": "2hr", "key_max_budget": 5, "models": [], "aliases": {}, "config": {}, "spend": 0, "user_id": key_user_id, "team_id": "litellm-dashboard"},  # type: ignore
+                **{
+                    "user_role": LitellmUserRoles.PROXY_ADMIN,
+                    "duration": "2hr",
+                    "key_max_budget": 5,
+                    "models": [],
+                    "aliases": {},
+                    "config": {},
+                    "spend": 0,
+                    "user_id": key_user_id,
+                    "team_id": "litellm-dashboard",
+                },  # type: ignore
             )
         else:
             raise ProxyException(

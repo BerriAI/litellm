@@ -12,7 +12,6 @@ from functools import partial
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
 import httpx  # type: ignore
-import ijson
 import requests  # type: ignore
 
 import litellm
@@ -21,7 +20,10 @@ import litellm.litellm_core_utils.litellm_logging
 from litellm import verbose_logger
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.llms.prompt_templates.factory import convert_url_to_base64
+from litellm.llms.prompt_templates.factory import (
+    convert_url_to_base64,
+    response_schema_prompt,
+)
 from litellm.llms.vertex_ai import _gemini_convert_messages_with_history
 from litellm.types.llms.openai import (
     ChatCompletionResponseMessage,
@@ -183,10 +185,17 @@ class GoogleAIStudioGeminiConfig:  # key diff from VertexAI - 'frequency_penalty
             if param == "tools" and isinstance(value, list):
                 gtool_func_declarations = []
                 for tool in value:
+                    _parameters = tool.get("function", {}).get("parameters", {})
+                    _properties = _parameters.get("properties", {})
+                    if isinstance(_properties, dict):
+                        for _, _property in _properties.items():
+                            if "enum" in _property and "format" not in _property:
+                                _property["format"] = "enum"
+
                     gtool_func_declaration = FunctionDeclaration(
                         name=tool["function"]["name"],
                         description=tool["function"].get("description", ""),
-                        parameters=tool["function"].get("parameters", {}),
+                        parameters=_parameters,
                     )
                     gtool_func_declarations.append(gtool_func_declaration)
                 optional_params["tools"] = [
@@ -349,6 +358,7 @@ class VertexGeminiConfig:
         model: str,
         non_default_params: dict,
         optional_params: dict,
+        drop_params: bool,
     ):
         for param, value in non_default_params.items():
             if param == "temperature":
@@ -368,8 +378,13 @@ class VertexGeminiConfig:
                     optional_params["stop_sequences"] = value
             if param == "max_tokens":
                 optional_params["max_output_tokens"] = value
-            if param == "response_format" and value["type"] == "json_object":  # type: ignore
-                optional_params["response_mime_type"] = "application/json"
+            if param == "response_format" and isinstance(value, dict):  # type: ignore
+                if value["type"] == "json_object":
+                    optional_params["response_mime_type"] = "application/json"
+                elif value["type"] == "text":
+                    optional_params["response_mime_type"] = "text/plain"
+                if "response_schema" in value:
+                    optional_params["response_schema"] = value["response_schema"]
             if param == "frequency_penalty":
                 optional_params["frequency_penalty"] = value
             if param == "presence_penalty":
@@ -460,7 +475,7 @@ async def make_call(
         raise VertexAIError(status_code=response.status_code, message=response.text)
 
     completion_stream = ModelResponseIterator(
-        streaming_response=response.aiter_bytes(), sync_stream=False
+        streaming_response=response.aiter_lines(), sync_stream=False
     )
     # LOGGING
     logging_obj.post_call(
@@ -491,7 +506,7 @@ def make_sync_call(
         raise VertexAIError(status_code=response.status_code, message=response.read())
 
     completion_stream = ModelResponseIterator(
-        streaming_response=response.iter_bytes(chunk_size=2056), sync_stream=True
+        streaming_response=response.iter_lines(), sync_stream=True
     )
 
     # LOGGING
@@ -813,12 +828,13 @@ class VertexLLM(BaseLLM):
             endpoint = "generateContent"
             if stream is True:
                 endpoint = "streamGenerateContent"
-
-            url = (
-                "https://generativelanguage.googleapis.com/v1beta/{}:{}?key={}".format(
+                url = "https://generativelanguage.googleapis.com/v1beta/{}:{}?key={}&alt=sse".format(
                     _gemini_model_name, endpoint, gemini_api_key
                 )
-            )
+            else:
+                url = "https://generativelanguage.googleapis.com/v1beta/{}:{}?key={}".format(
+                    _gemini_model_name, endpoint, gemini_api_key
+                )
         else:
             auth_header, vertex_project = self._ensure_access_token(
                 credentials=vertex_credentials, project_id=vertex_project
@@ -829,7 +845,9 @@ class VertexLLM(BaseLLM):
             endpoint = "generateContent"
             if stream is True:
                 endpoint = "streamGenerateContent"
-            url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}"
+                url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}?alt=sse"
+            else:
+                url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}"
 
         if (
             api_base is not None
@@ -841,6 +859,9 @@ class VertexLLM(BaseLLM):
                 )
             else:
                 url = "{}:{}".format(api_base, endpoint)
+
+            if stream is True:
+                url = url + "?alt=sse"
 
         return auth_header, url
 
@@ -994,35 +1015,53 @@ class VertexLLM(BaseLLM):
             if len(system_prompt_indices) > 0:
                 for idx in reversed(system_prompt_indices):
                     messages.pop(idx)
-        content = _gemini_convert_messages_with_history(messages=messages)
-        tools: Optional[Tools] = optional_params.pop("tools", None)
-        tool_choice: Optional[ToolConfig] = optional_params.pop("tool_choice", None)
-        safety_settings: Optional[List[SafetSettingsConfig]] = optional_params.pop(
-            "safety_settings", None
-        )  # type: ignore
-        generation_config: Optional[GenerationConfig] = GenerationConfig(
-            **optional_params
-        )
-        data = RequestBody(contents=content)
-        if len(system_content_blocks) > 0:
-            system_instructions = SystemInstructions(parts=system_content_blocks)
-            data["system_instruction"] = system_instructions
-        if tools is not None:
-            data["tools"] = tools
-        if tool_choice is not None:
-            data["toolConfig"] = tool_choice
-        if safety_settings is not None:
-            data["safetySettings"] = safety_settings
-        if generation_config is not None:
-            data["generationConfig"] = generation_config
 
-        headers = {
-            "Content-Type": "application/json; charset=utf-8",
-        }
-        if auth_header is not None:
-            headers["Authorization"] = f"Bearer {auth_header}"
-        if extra_headers is not None:
-            headers.update(extra_headers)
+        # Checks for 'response_schema' support - if passed in
+        if "response_schema" in optional_params:
+            supports_response_schema = litellm.supports_response_schema(
+                model=model, custom_llm_provider="vertex_ai"
+            )
+            if supports_response_schema is False:
+                user_response_schema_message = response_schema_prompt(
+                    model=model, response_schema=optional_params.get("response_schema")  # type: ignore
+                )
+                messages.append(
+                    {"role": "user", "content": user_response_schema_message}
+                )
+                optional_params.pop("response_schema")
+
+        try:
+            content = _gemini_convert_messages_with_history(messages=messages)
+            tools: Optional[Tools] = optional_params.pop("tools", None)
+            tool_choice: Optional[ToolConfig] = optional_params.pop("tool_choice", None)
+            safety_settings: Optional[List[SafetSettingsConfig]] = optional_params.pop(
+                "safety_settings", None
+            )  # type: ignore
+            generation_config: Optional[GenerationConfig] = GenerationConfig(
+                **optional_params
+            )
+            data = RequestBody(contents=content)
+            if len(system_content_blocks) > 0:
+                system_instructions = SystemInstructions(parts=system_content_blocks)
+                data["system_instruction"] = system_instructions
+            if tools is not None:
+                data["tools"] = tools
+            if tool_choice is not None:
+                data["toolConfig"] = tool_choice
+            if safety_settings is not None:
+                data["safetySettings"] = safety_settings
+            if generation_config is not None:
+                data["generationConfig"] = generation_config
+
+            headers = {
+                "Content-Type": "application/json",
+            }
+            if auth_header is not None:
+                headers["Authorization"] = f"Bearer {auth_header}"
+            if extra_headers is not None:
+                headers.update(extra_headers)
+        except Exception as e:
+            raise e
 
         ## LOGGING
         logging_obj.pre_call(
@@ -1270,11 +1309,6 @@ class VertexLLM(BaseLLM):
 class ModelResponseIterator:
     def __init__(self, streaming_response, sync_stream: bool):
         self.streaming_response = streaming_response
-        if sync_stream:
-            self.response_iterator = iter(self.streaming_response)
-
-        self.events = ijson.sendable_list()
-        self.coro = ijson.items_coro(self.events, "item")
 
     def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
         try:
@@ -1304,9 +1338,9 @@ class ModelResponseIterator:
             if "usageMetadata" in processed_chunk:
                 usage = ChatCompletionUsageBlock(
                     prompt_tokens=processed_chunk["usageMetadata"]["promptTokenCount"],
-                    completion_tokens=processed_chunk["usageMetadata"][
-                        "candidatesTokenCount"
-                    ],
+                    completion_tokens=processed_chunk["usageMetadata"].get(
+                        "candidatesTokenCount", 0
+                    ),
                     total_tokens=processed_chunk["usageMetadata"]["totalTokenCount"],
                 )
 
@@ -1324,31 +1358,36 @@ class ModelResponseIterator:
 
     # Sync iterator
     def __iter__(self):
+        self.response_iterator = self.streaming_response
         return self
 
     def __next__(self):
         try:
             chunk = self.response_iterator.__next__()
-            self.coro.send(chunk)
-            if self.events:
-                event = self.events.pop(0)
-                json_chunk = event
-                return self.chunk_parser(chunk=json_chunk)
-            return GenericStreamingChunk(
-                text="",
-                is_finished=False,
-                finish_reason="",
-                usage=None,
-                index=0,
-                tool_use=None,
-            )
         except StopIteration:
-            if self.events:  # flush the events
-                event = self.events.pop(0)  # Remove the first event
-                return self.chunk_parser(chunk=event)
             raise StopIteration
         except ValueError as e:
-            raise RuntimeError(f"Error parsing chunk: {e}")
+            raise RuntimeError(f"Error receiving chunk from stream: {e}")
+
+        try:
+            chunk = chunk.replace("data:", "")
+            chunk = chunk.strip()
+            if len(chunk) > 0:
+                json_chunk = json.loads(chunk)
+                return self.chunk_parser(chunk=json_chunk)
+            else:
+                return GenericStreamingChunk(
+                    text="",
+                    is_finished=False,
+                    finish_reason="",
+                    usage=None,
+                    index=0,
+                    tool_use=None,
+                )
+        except StopIteration:
+            raise StopIteration
+        except ValueError as e:
+            raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
 
     # Async iterator
     def __aiter__(self):
@@ -1358,23 +1397,27 @@ class ModelResponseIterator:
     async def __anext__(self):
         try:
             chunk = await self.async_response_iterator.__anext__()
-            self.coro.send(chunk)
-            if self.events:
-                event = self.events.pop(0)
-                json_chunk = event
-                return self.chunk_parser(chunk=json_chunk)
-            return GenericStreamingChunk(
-                text="",
-                is_finished=False,
-                finish_reason="",
-                usage=None,
-                index=0,
-                tool_use=None,
-            )
         except StopAsyncIteration:
-            if self.events:  # flush the events
-                event = self.events.pop(0)  # Remove the first event
-                return self.chunk_parser(chunk=event)
             raise StopAsyncIteration
         except ValueError as e:
-            raise RuntimeError(f"Error parsing chunk: {e}")
+            raise RuntimeError(f"Error receiving chunk from stream: {e}")
+
+        try:
+            chunk = chunk.replace("data:", "")
+            chunk = chunk.strip()
+            if len(chunk) > 0:
+                json_chunk = json.loads(chunk)
+                return self.chunk_parser(chunk=json_chunk)
+            else:
+                return GenericStreamingChunk(
+                    text="",
+                    is_finished=False,
+                    finish_reason="",
+                    usage=None,
+                    index=0,
+                    tool_use=None,
+                )
+        except StopAsyncIteration:
+            raise StopAsyncIteration
+        except ValueError as e:
+            raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
