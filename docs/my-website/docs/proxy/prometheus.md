@@ -61,6 +61,32 @@ http://localhost:4000/metrics
 | `litellm_remaining_api_key_budget_metric`                | Remaining Budget for API Key (A key Created on LiteLLM)|
 
 
+### ✨ (Enterprise) LLM Remaining Requests and Remaining Tokens
+Set this on your config.yaml to allow you to track how close you are to hitting your TPM / RPM limits on each model group 
+
+```yaml
+litellm_settings:
+  success_callback: ["prometheus"]
+  failure_callback: ["prometheus"]
+  return_response_headers: true # ensures the LLM API calls track the response headers
+```
+
+| Metric Name          | Description                          |
+|----------------------|--------------------------------------|
+| `litellm_remaining_requests_metric`             | Track `x-ratelimit-remaining-requests` returned from LLM API Deployment |
+| `litellm_remaining_tokens`                | Track `x-ratelimit-remaining-tokens` return from LLM API Deployment |
+
+Example Metric
+```shell
+litellm_remaining_tokens
+{
+  api_base="https://api.openai.com/v1",
+  api_provider="openai",
+  litellm_model_name="gpt-3.5-turbo",
+  model_group="gpt-3.5-turbo"
+} 
+999981.0
+```
 ## Monitor System Health
 
 To monitor the health of litellm adjacent services (redis / postgres), do:
