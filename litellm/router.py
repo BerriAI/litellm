@@ -4191,25 +4191,42 @@ class Router:
 
         return model_group_info
 
-    async def get_model_group_usage(self, model_group: str) -> Optional[int]:
+    async def get_model_group_usage(
+        self, model_group: str
+    ) -> Tuple[Optional[int], Optional[int]]:
         """
-        Returns remaining tpm quota for model group
+        Returns remaining tpm/rpm quota for model group
+
+        Returns:
+        - usage: Tuple[tpm, rpm]
         """
         dt = get_utc_datetime()
         current_minute = dt.strftime(
             "%H-%M"
         )  # use the same timezone regardless of system clock
         tpm_keys: List[str] = []
+        rpm_keys: List[str] = []
         for model in self.model_list:
             if "model_name" in model and model["model_name"] == model_group:
                 tpm_keys.append(
                     f"global_router:{model['model_info']['id']}:tpm:{current_minute}"
                 )
+                rpm_keys.append(
+                    f"global_router:{model['model_info']['id']}:rpm:{current_minute}"
+                )
+        combined_tpm_rpm_keys = tpm_keys + rpm_keys
+
+        combined_tpm_rpm_values = await self.cache.async_batch_get_cache(
+            keys=combined_tpm_rpm_keys
+        )
+
+        if combined_tpm_rpm_values is None:
+            return None, None
+
+        tpm_usage_list: Optional[List] = combined_tpm_rpm_values[: len(tpm_keys)]
+        rpm_usage_list: Optional[List] = combined_tpm_rpm_values[len(tpm_keys) :]
 
         ## TPM
-        tpm_usage_list: Optional[List] = await self.cache.async_batch_get_cache(
-            keys=tpm_keys
-        )
         tpm_usage: Optional[int] = None
         if tpm_usage_list is not None:
             for t in tpm_usage_list:
@@ -4217,8 +4234,15 @@ class Router:
                     if tpm_usage is None:
                         tpm_usage = 0
                     tpm_usage += t
-
-        return tpm_usage
+        ## RPM
+        rpm_usage: Optional[int] = None
+        if rpm_usage_list is not None:
+            for t in rpm_usage_list:
+                if isinstance(t, int):
+                    if rpm_usage is None:
+                        rpm_usage = 0
+                    rpm_usage += t
+        return tpm_usage, rpm_usage
 
     def get_model_ids(self) -> List[str]:
         """
