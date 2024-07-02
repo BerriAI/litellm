@@ -23,6 +23,8 @@ Features:
 - **Spend Tracking**
     - ✅ [Tracking Spend for Custom Tags](#tracking-spend-for-custom-tags)
     - ✅ [API Endpoints to get Spend Reports per Team, API Key, Customer](cost_tracking.md#✨-enterprise-api-endpoints-to-get-spend)
+- **Advanced Metrics**
+    - ✅ [`x-ratelimit-remaining-requests`, `x-ratelimit-remaining-tokens` for LLM APIs on Prometheus](prometheus#✨-enterprise-llm-remaining-requests-and-remaining-tokens)
 - **Guardrails, PII Masking, Content Moderation**
     - ✅ [Content Moderation with LLM Guard, LlamaGuard, Secret Detection, Google Text Moderations](#content-moderation)
     - ✅ [Prompt Injection Detection (with LakeraAI API)](#prompt-injection-detection---lakeraai)
