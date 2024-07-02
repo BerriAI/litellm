@@ -658,6 +658,11 @@ class OpenAIChatCompletion(BaseLLM):
         data: dict,
         timeout: Union[float, httpx.Timeout],
     ):
+        """
+        Helper to:
+        - call chat.completions.create.with_raw_response when litellm.return_response_headers is True
+        - call chat.completions.create by default
+        """
         try:
             if litellm.return_response_headers is True:
                 raw_response = (
