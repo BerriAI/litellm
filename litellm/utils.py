@@ -4815,6 +4815,12 @@ def function_to_dict(input_function):  # noqa: C901
     return result
 
 
+def modify_url(original_url, new_path):
+    url = httpx.URL(original_url)
+    modified_url = url.copy_with(path=new_path)
+    return str(modified_url)
+
+
 def load_test_model(
     model: str,
     custom_llm_provider: str = "",
