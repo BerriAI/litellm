@@ -153,6 +153,27 @@ print(response)
 ```
 
 </TabItem>
+<TabItem value="langchain js" label="Langchain JS">
+
+```js
+import { ChatOpenAI } from "@langchain/openai";
+
+
+const model = new ChatOpenAI({
+  modelName: "gpt-4",
+  openAIApiKey: "sk-1234",
+  modelKwargs: {"metadata": "hello world"} // 👈 PASS Additional params here
+}, {
+  basePath: "http://0.0.0.0:4000",
+});
+
+const message = await model.invoke("Hi there!");
+
+console.log(message);
+
+```
+
+</TabItem>
 </Tabs>
 
 ### Response Format
