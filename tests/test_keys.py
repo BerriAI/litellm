@@ -73,6 +73,7 @@ async def generate_key(
         "Authorization": f"Bearer {calling_key}",
         "Content-Type": "application/json",
     }
+
     data = {
         "models": models,
         "aliases": {"mistral-7b": "gpt-3.5-turbo"},
