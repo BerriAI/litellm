@@ -36,6 +36,7 @@ general_settings:
         LANGFUSE_SECRET_KEY: "os.environ/LANGFUSE_DEV_SK_KEY"
 
 litellm_settings:
+  return_response_headers: true
   success_callback: ["prometheus"]
   callbacks: ["otel", "hide_secrets"]
   failure_callback: ["prometheus"]
