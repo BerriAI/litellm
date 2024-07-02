@@ -102,78 +102,89 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
             - remaining_model_rpm: int or null. If available rpm is int, then this will be too.
             - active_projects: int or null
         """
-        weight: float = 1
-        if (
-            litellm.priority_reservation is None
-            or priority not in litellm.priority_reservation
-        ):
+        try:
+            weight: float = 1
+            if (
+                litellm.priority_reservation is None
+                or priority not in litellm.priority_reservation
+            ):
+                verbose_proxy_logger.error(
+                    "Priority Reservation not set. priority={}, but litellm.priority_reservation is {}.".format(
+                        priority, litellm.priority_reservation
+                    )
+                )
+            elif priority is not None and litellm.priority_reservation is not None:
+                if os.getenv("LITELLM_LICENSE", None) is None:
+                    verbose_proxy_logger.error(
+                        "PREMIUM FEATURE: Reserving tpm/rpm by priority is a premium feature. Please add a 'LITELLM_LICENSE' to your .env to enable this.\nGet a license: https://docs.litellm.ai/docs/proxy/enterprise."
+                    )
+                else:
+                    weight = litellm.priority_reservation[priority]
+
+            active_projects = await self.internal_usage_cache.async_get_cache(
+                model=model
+            )
+            current_model_tpm, current_model_rpm = (
+                await self.llm_router.get_model_group_usage(model_group=model)
+            )
+            model_group_info: Optional[ModelGroupInfo] = (
+                self.llm_router.get_model_group_info(model_group=model)
+            )
+            total_model_tpm: Optional[int] = None
+            total_model_rpm: Optional[int] = None
+            if model_group_info is not None:
+                if model_group_info.tpm is not None:
+                    total_model_tpm = model_group_info.tpm
+                if model_group_info.rpm is not None:
+                    total_model_rpm = model_group_info.rpm
+
+            remaining_model_tpm: Optional[int] = None
+            if total_model_tpm is not None and current_model_tpm is not None:
+                remaining_model_tpm = total_model_tpm - current_model_tpm
+            elif total_model_tpm is not None:
+                remaining_model_tpm = total_model_tpm
+
+            remaining_model_rpm: Optional[int] = None
+            if total_model_rpm is not None and current_model_rpm is not None:
+                remaining_model_rpm = total_model_rpm - current_model_rpm
+            elif total_model_rpm is not None:
+                remaining_model_rpm = total_model_rpm
+
+            available_tpm: Optional[int] = None
+
+            if remaining_model_tpm is not None:
+                if active_projects is not None:
+                    available_tpm = int(remaining_model_tpm * weight / active_projects)
+                else:
+                    available_tpm = int(remaining_model_tpm * weight)
+
+            if available_tpm is not None and available_tpm < 0:
+                available_tpm = 0
+
+            available_rpm: Optional[int] = None
+
+            if remaining_model_rpm is not None:
+                if active_projects is not None:
+                    available_rpm = int(remaining_model_rpm * weight / active_projects)
+                else:
+                    available_rpm = int(remaining_model_rpm * weight)
+
+            if available_rpm is not None and available_rpm < 0:
+                available_rpm = 0
+            return (
+                available_tpm,
+                available_rpm,
+                remaining_model_tpm,
+                remaining_model_rpm,
+                active_projects,
+            )
+        except Exception as e:
             verbose_proxy_logger.error(
-                "Priority Reservation not set. priority={}, but litellm.priority_reservation is {}.".format(
-                    priority, litellm.priority_reservation
+                "litellm.proxy.hooks.dynamic_rate_limiter.py::check_available_usage: Exception occurred - {}\n{}".format(
+                    str(e), traceback.format_exc()
                 )
             )
-        elif priority is not None and litellm.priority_reservation is not None:
-            if os.getenv("LITELLM_LICENSE", None) is None:
-                verbose_proxy_logger.error(
-                    "PREMIUM FEATURE: Reserving tpm/rpm by priority is a premium feature. Please add a 'LITELLM_LICENSE' to your .env to enable this.\nGet a license: https://docs.litellm.ai/docs/proxy/enterprise."
-                )
-            else:
-                weight = litellm.priority_reservation[priority]
-        active_projects = await self.internal_usage_cache.async_get_cache(model=model)
-        current_model_tpm, current_model_rpm = (
-            await self.llm_router.get_model_group_usage(model_group=model)
-        )
-        model_group_info: Optional[ModelGroupInfo] = (
-            self.llm_router.get_model_group_info(model_group=model)
-        )
-        total_model_tpm: Optional[int] = None
-        total_model_rpm: Optional[int] = None
-        if model_group_info is not None:
-            if model_group_info.tpm is not None:
-                total_model_tpm = model_group_info.tpm
-            if model_group_info.rpm is not None:
-                total_model_rpm = model_group_info.rpm
-
-        remaining_model_tpm: Optional[int] = None
-        if total_model_tpm is not None and current_model_tpm is not None:
-            remaining_model_tpm = total_model_tpm - current_model_tpm
-        elif total_model_tpm is not None:
-            remaining_model_tpm = total_model_tpm
-
-        remaining_model_rpm: Optional[int] = None
-        if total_model_rpm is not None and current_model_rpm is not None:
-            remaining_model_rpm = total_model_rpm - current_model_rpm
-        elif total_model_rpm is not None:
-            remaining_model_rpm = total_model_rpm
-
-        available_tpm: Optional[int] = None
-
-        if remaining_model_tpm is not None:
-            if active_projects is not None:
-                available_tpm = int(remaining_model_tpm * weight / active_projects)
-            else:
-                available_tpm = int(remaining_model_tpm * weight)
-
-        if available_tpm is not None and available_tpm < 0:
-            available_tpm = 0
-
-        available_rpm: Optional[int] = None
-
-        if remaining_model_rpm is not None:
-            if active_projects is not None:
-                available_rpm = int(remaining_model_rpm * weight / active_projects)
-            else:
-                available_rpm = int(remaining_model_rpm * weight)
-
-        if available_rpm is not None and available_rpm < 0:
-            available_rpm = 0
-        return (
-            available_tpm,
-            available_rpm,
-            remaining_model_tpm,
-            remaining_model_rpm,
-            active_projects,
-        )
+            return None, None, None, None, None
 
     async def async_pre_call_hook(
         self,
