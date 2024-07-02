@@ -532,7 +532,7 @@ def test_sagemaker_default_region(mocker):
         pass  # expected serialization exception because AWS client was replaced with a Mock
     assert mock_client.call_args.kwargs["region_name"] == "us-west-2"
 
-# test_sagemaker_provided_region()
+# test_sagemaker_default_region()
 
 
 def test_sagemaker_environment_region(mocker):
