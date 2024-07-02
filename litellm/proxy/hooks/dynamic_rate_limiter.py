@@ -3,6 +3,7 @@
 ## Tracks num active projects per minute
 
 import asyncio
+import os
 import sys
 import traceback
 from datetime import datetime
@@ -82,12 +83,16 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
         self.llm_router = llm_router
 
     async def check_available_usage(
-        self, model: str
+        self, model: str, priority: Optional[str] = None
     ) -> Tuple[
         Optional[int], Optional[int], Optional[int], Optional[int], Optional[int]
     ]:
         """
         For a given model, get its available tpm
+
+        Params:
+        - model: str, the name of the model in the router model_list
+        - priority: Optional[str], the priority for the request.
 
         Returns
         - Tuple[available_tpm, available_tpm, model_tpm, model_rpm, active_projects]
@@ -97,6 +102,23 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
             - remaining_model_rpm: int or null. If available rpm is int, then this will be too.
             - active_projects: int or null
         """
+        weight: float = 1
+        if (
+            litellm.priority_reservation is None
+            or priority not in litellm.priority_reservation
+        ):
+            verbose_proxy_logger.error(
+                "Priority Reservation not set. priority={}, but litellm.priority_reservation is {}.".format(
+                    priority, litellm.priority_reservation
+                )
+            )
+        elif priority is not None and litellm.priority_reservation is not None:
+            if os.getenv("LITELLM_LICENSE", None) is None:
+                verbose_proxy_logger.error(
+                    "PREMIUM FEATURE: Reserving tpm/rpm by priority is a premium feature. Please add a 'LITELLM_LICENSE' to your .env to enable this.\nGet a license: https://docs.litellm.ai/docs/proxy/enterprise."
+                )
+            else:
+                weight = litellm.priority_reservation[priority]
         active_projects = await self.internal_usage_cache.async_get_cache(model=model)
         current_model_tpm, current_model_rpm = (
             await self.llm_router.get_model_group_usage(model_group=model)
@@ -128,9 +150,9 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
 
         if remaining_model_tpm is not None:
             if active_projects is not None:
-                available_tpm = int(remaining_model_tpm / active_projects)
+                available_tpm = int(remaining_model_tpm * weight / active_projects)
             else:
-                available_tpm = remaining_model_tpm
+                available_tpm = int(remaining_model_tpm * weight)
 
         if available_tpm is not None and available_tpm < 0:
             available_tpm = 0
@@ -139,9 +161,9 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
 
         if remaining_model_rpm is not None:
             if active_projects is not None:
-                available_rpm = int(remaining_model_rpm / active_projects)
+                available_rpm = int(remaining_model_rpm * weight / active_projects)
             else:
-                available_rpm = remaining_model_rpm
+                available_rpm = int(remaining_model_rpm * weight)
 
         if available_rpm is not None and available_rpm < 0:
             available_rpm = 0
@@ -175,8 +197,13 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
         - Raise RateLimitError if no tpm/rpm available
         """
         if "model" in data:
+            key_priority: Optional[str] = user_api_key_dict.metadata.get(
+                "priority", None
+            )
             available_tpm, available_rpm, model_tpm, model_rpm, active_projects = (
-                await self.check_available_usage(model=data["model"])
+                await self.check_available_usage(
+                    model=data["model"], priority=key_priority
+                )
             )
             ### CHECK TPM ###
             if available_tpm is not None and available_tpm == 0:
@@ -227,8 +254,13 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
                 ), "Model info for model with id={} is None".format(
                     response._hidden_params["model_id"]
                 )
+                key_priority: Optional[str] = user_api_key_dict.metadata.get(
+                    "priority", None
+                )
                 available_tpm, available_rpm, model_tpm, model_rpm, active_projects = (
-                    await self.check_available_usage(model=model_info["model_name"])
+                    await self.check_available_usage(
+                        model=model_info["model_name"], priority=key_priority
+                    )
                 )
                 response._hidden_params["additional_headers"] = (
                     {  # Add additional response headers - easier debugging
