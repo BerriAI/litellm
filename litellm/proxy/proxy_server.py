@@ -1465,6 +1465,8 @@ class ProxyConfig:
                                 open_telemetry_logger = OpenTelemetry()
 
                                 imported_list.append(open_telemetry_logger)
+
+                                litellm.service_callback.append("otel")
                             elif isinstance(callback, str) and callback == "presidio":
                                 from litellm.proxy.hooks.presidio_pii_masking import (
                                     _OPTIONAL_PresidioPIIMasking,
