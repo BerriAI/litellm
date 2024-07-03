@@ -240,6 +240,8 @@ default_user_params: Optional[Dict] = None
 default_team_settings: Optional[List] = None
 max_user_budget: Optional[float] = None
 max_end_user_budget: Optional[float] = None
+#### REQUEST PRIORITIZATION ####
+priority_reservation: Optional[Dict[str, float]] = None
 #### RELIABILITY ####
 request_timeout: float = 6000
 module_level_aclient = AsyncHTTPHandler(timeout=request_timeout)
