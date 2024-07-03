@@ -113,6 +113,8 @@ ssl_verify: bool = True
 ssl_certificate: Optional[str] = None
 disable_streaming_logging: bool = False
 in_memory_llm_clients_cache: dict = {}
+### DEFAULT AZURE API VERSION ###
+AZURE_DEFAULT_API_VERSION = "2024-02-01"  # this is updated to the latest
 ### GUARDRAILS ###
 llamaguard_model_name: Optional[str] = None
 openai_moderations_model_name: Optional[str] = None
