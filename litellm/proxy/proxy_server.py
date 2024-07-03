@@ -1182,9 +1182,13 @@ async def _run_background_health_check():
     Update health_check_results, based on this.
     """
     global health_check_results, llm_model_list, health_check_interval
+
+    # make 1 deep copy of llm_model_list -> use this for all background health checks
+    _llm_model_list = copy.deepcopy(llm_model_list)
+
     while True:
         healthy_endpoints, unhealthy_endpoints = await perform_health_check(
-            model_list=llm_model_list
+            model_list=_llm_model_list
         )
 
         # Update the global variable with the health check results
@@ -3066,8 +3070,11 @@ async def chat_completion(
         # Post Call Processing
         if llm_router is not None:
             data["deployment"] = llm_router.get_deployment(model_id=model_id)
-        data["litellm_status"] = "success"  # used for alerting
-
+        asyncio.create_task(
+            proxy_logging_obj.update_request_status(
+                litellm_call_id=data.get("litellm_call_id", ""), status="success"
+            )
+        )
         if (
             "stream" in data and data["stream"] == True
         ):  # use generate_responses to stream responses
@@ -3117,7 +3124,6 @@ async def chat_completion(
         return response
     except RejectedRequestError as e:
         _data = e.request_data
-        _data["litellm_status"] = "fail"  # used for alerting
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
             original_exception=e,
@@ -3150,7 +3156,6 @@ async def chat_completion(
         _chat_response.usage = _usage  # type: ignore
         return _chat_response
     except Exception as e:
-        data["litellm_status"] = "fail"  # used for alerting
         verbose_proxy_logger.error(
             "litellm.proxy.proxy_server.chat_completion(): Exception occured - {}\n{}".format(
                 get_error_message_str(e=e), traceback.format_exc()
@@ -3306,7 +3311,11 @@ async def completion(
         response_cost = hidden_params.get("response_cost", None) or ""
 
         ### ALERTING ###
-        data["litellm_status"] = "success"  # used for alerting
+        asyncio.create_task(
+            proxy_logging_obj.update_request_status(
+                litellm_call_id=data.get("litellm_call_id", ""), status="success"
+            )
+        )
 
         verbose_proxy_logger.debug("final response: %s", response)
         if (
@@ -3345,7 +3354,6 @@ async def completion(
         return response
     except RejectedRequestError as e:
         _data = e.request_data
-        _data["litellm_status"] = "fail"  # used for alerting
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
             original_exception=e,
@@ -3384,7 +3392,6 @@ async def completion(
             _response.choices[0].text = e.message
             return _response
     except Exception as e:
-        data["litellm_status"] = "fail"  # used for alerting
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
@@ -3536,7 +3543,11 @@ async def embeddings(
             )
 
         ### ALERTING ###
-        data["litellm_status"] = "success"  # used for alerting
+        asyncio.create_task(
+            proxy_logging_obj.update_request_status(
+                litellm_call_id=data.get("litellm_call_id", ""), status="success"
+            )
+        )
 
         ### RESPONSE HEADERS ###
         hidden_params = getattr(response, "_hidden_params", {}) or {}
@@ -3559,7 +3570,6 @@ async def embeddings(
 
         return response
     except Exception as e:
-        data["litellm_status"] = "fail"  # used for alerting
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
@@ -3687,8 +3697,11 @@ async def image_generation(
             )
 
         ### ALERTING ###
-        data["litellm_status"] = "success"  # used for alerting
-
+        asyncio.create_task(
+            proxy_logging_obj.update_request_status(
+                litellm_call_id=data.get("litellm_call_id", ""), status="success"
+            )
+        )
         ### RESPONSE HEADERS ###
         hidden_params = getattr(response, "_hidden_params", {}) or {}
         model_id = hidden_params.get("model_id", None) or ""
@@ -3710,7 +3723,6 @@ async def image_generation(
 
         return response
     except Exception as e:
-        data["litellm_status"] = "fail"  # used for alerting
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
@@ -3825,7 +3837,11 @@ async def audio_speech(
             )
 
         ### ALERTING ###
-        data["litellm_status"] = "success"  # used for alerting
+        asyncio.create_task(
+            proxy_logging_obj.update_request_status(
+                litellm_call_id=data.get("litellm_call_id", ""), status="success"
+            )
+        )
 
         ### RESPONSE HEADERS ###
         hidden_params = getattr(response, "_hidden_params", {}) or {}
@@ -3991,7 +4007,11 @@ async def audio_transcriptions(
                 os.remove(file.filename)  # Delete the saved file
 
         ### ALERTING ###
-        data["litellm_status"] = "success"  # used for alerting
+        asyncio.create_task(
+            proxy_logging_obj.update_request_status(
+                litellm_call_id=data.get("litellm_call_id", ""), status="success"
+            )
+        )
 
         ### RESPONSE HEADERS ###
         hidden_params = getattr(response, "_hidden_params", {}) or {}
@@ -4014,7 +4034,6 @@ async def audio_transcriptions(
 
         return response
     except Exception as e:
-        data["litellm_status"] = "fail"  # used for alerting
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
@@ -4093,7 +4112,11 @@ async def get_assistants(
         response = await llm_router.aget_assistants(**data)
 
         ### ALERTING ###
-        data["litellm_status"] = "success"  # used for alerting
+        asyncio.create_task(
+            proxy_logging_obj.update_request_status(
+                litellm_call_id=data.get("litellm_call_id", ""), status="success"
+            )
+        )
 
         ### RESPONSE HEADERS ###
         hidden_params = getattr(response, "_hidden_params", {}) or {}
@@ -4114,7 +4137,6 @@ async def get_assistants(
 
         return response
     except Exception as e:
-        data["litellm_status"] = "fail"  # used for alerting
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
@@ -4185,7 +4207,11 @@ async def create_threads(
         response = await llm_router.acreate_thread(**data)
 
         ### ALERTING ###
-        data["litellm_status"] = "success"  # used for alerting
+        asyncio.create_task(
+            proxy_logging_obj.update_request_status(
+                litellm_call_id=data.get("litellm_call_id", ""), status="success"
+            )
+        )
 
         ### RESPONSE HEADERS ###
         hidden_params = getattr(response, "_hidden_params", {}) or {}
@@ -4206,7 +4232,6 @@ async def create_threads(
 
         return response
     except Exception as e:
-        data["litellm_status"] = "fail"  # used for alerting
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
@@ -4276,7 +4301,11 @@ async def get_thread(
         response = await llm_router.aget_thread(thread_id=thread_id, **data)
 
         ### ALERTING ###
-        data["litellm_status"] = "success"  # used for alerting
+        asyncio.create_task(
+            proxy_logging_obj.update_request_status(
+                litellm_call_id=data.get("litellm_call_id", ""), status="success"
+            )
+        )
 
         ### RESPONSE HEADERS ###
         hidden_params = getattr(response, "_hidden_params", {}) or {}
@@ -4297,7 +4326,6 @@ async def get_thread(
 
         return response
     except Exception as e:
-        data["litellm_status"] = "fail"  # used for alerting
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
@@ -4370,7 +4398,11 @@ async def add_messages(
         response = await llm_router.a_add_message(thread_id=thread_id, **data)
 
         ### ALERTING ###
-        data["litellm_status"] = "success"  # used for alerting
+        asyncio.create_task(
+            proxy_logging_obj.update_request_status(
+                litellm_call_id=data.get("litellm_call_id", ""), status="success"
+            )
+        )
 
         ### RESPONSE HEADERS ###
         hidden_params = getattr(response, "_hidden_params", {}) or {}
@@ -4391,7 +4423,6 @@ async def add_messages(
 
         return response
     except Exception as e:
-        data["litellm_status"] = "fail"  # used for alerting
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
@@ -4460,7 +4491,11 @@ async def get_messages(
         response = await llm_router.aget_messages(thread_id=thread_id, **data)
 
         ### ALERTING ###
-        data["litellm_status"] = "success"  # used for alerting
+        asyncio.create_task(
+            proxy_logging_obj.update_request_status(
+                litellm_call_id=data.get("litellm_call_id", ""), status="success"
+            )
+        )
 
         ### RESPONSE HEADERS ###
         hidden_params = getattr(response, "_hidden_params", {}) or {}
@@ -4481,7 +4516,6 @@ async def get_messages(
 
         return response
     except Exception as e:
-        data["litellm_status"] = "fail"  # used for alerting
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
@@ -4564,7 +4598,11 @@ async def run_thread(
             )
 
         ### ALERTING ###
-        data["litellm_status"] = "success"  # used for alerting
+        asyncio.create_task(
+            proxy_logging_obj.update_request_status(
+                litellm_call_id=data.get("litellm_call_id", ""), status="success"
+            )
+        )
 
         ### RESPONSE HEADERS ###
         hidden_params = getattr(response, "_hidden_params", {}) or {}
@@ -4585,7 +4623,6 @@ async def run_thread(
 
         return response
     except Exception as e:
-        data["litellm_status"] = "fail"  # used for alerting
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
@@ -4675,7 +4712,11 @@ async def create_batch(
         )
 
         ### ALERTING ###
-        data["litellm_status"] = "success"  # used for alerting
+        asyncio.create_task(
+            proxy_logging_obj.update_request_status(
+                litellm_call_id=data.get("litellm_call_id", ""), status="success"
+            )
+        )
 
         ### RESPONSE HEADERS ###
         hidden_params = getattr(response, "_hidden_params", {}) or {}
@@ -4696,7 +4737,6 @@ async def create_batch(
 
         return response
     except Exception as e:
-        data["litellm_status"] = "fail"  # used for alerting
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
@@ -4781,7 +4821,11 @@ async def retrieve_batch(
         )
 
         ### ALERTING ###
-        data["litellm_status"] = "success"  # used for alerting
+        asyncio.create_task(
+            proxy_logging_obj.update_request_status(
+                litellm_call_id=data.get("litellm_call_id", ""), status="success"
+            )
+        )
 
         ### RESPONSE HEADERS ###
         hidden_params = getattr(response, "_hidden_params", {}) or {}
@@ -4802,7 +4846,6 @@ async def retrieve_batch(
 
         return response
     except Exception as e:
-        data["litellm_status"] = "fail"  # used for alerting
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
@@ -4897,7 +4940,11 @@ async def create_file(
         )
 
         ### ALERTING ###
-        data["litellm_status"] = "success"  # used for alerting
+        asyncio.create_task(
+            proxy_logging_obj.update_request_status(
+                litellm_call_id=data.get("litellm_call_id", ""), status="success"
+            )
+        )
 
         ### RESPONSE HEADERS ###
         hidden_params = getattr(response, "_hidden_params", {}) or {}
@@ -4918,7 +4965,6 @@ async def create_file(
 
         return response
     except Exception as e:
-        data["litellm_status"] = "fail"  # used for alerting
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
@@ -5041,7 +5087,11 @@ async def moderations(
             response = await litellm.amoderation(**data)
 
         ### ALERTING ###
-        data["litellm_status"] = "success"  # used for alerting
+        asyncio.create_task(
+            proxy_logging_obj.update_request_status(
+                litellm_call_id=data.get("litellm_call_id", ""), status="success"
+            )
+        )
 
         ### RESPONSE HEADERS ###
         hidden_params = getattr(response, "_hidden_params", {}) or {}
@@ -5062,7 +5112,6 @@ async def moderations(
 
         return response
     except Exception as e:
-        data["litellm_status"] = "fail"  # used for alerting
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )

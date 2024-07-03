@@ -1,3 +1,6 @@
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
 # 📈 Prometheus metrics [BETA]
 
 LiteLLM Exposes a `/metrics` endpoint for Prometheus to Poll
@@ -60,6 +63,56 @@ http://localhost:4000/metrics
 | `litellm_remaining_team_budget_metric`             | Remaining Budget for Team (A team created on LiteLLM) |
 | `litellm_remaining_api_key_budget_metric`                | Remaining Budget for API Key (A key Created on LiteLLM)|
 
+
+### ✨ (Enterprise) LLM Remaining Requests and Remaining Tokens
+Set this on your config.yaml to allow you to track how close you are to hitting your TPM / RPM limits on each model group 
+
+```yaml
+litellm_settings:
+  success_callback: ["prometheus"]
+  failure_callback: ["prometheus"]
+  return_response_headers: true # ensures the LLM API calls track the response headers
+```
+
+| Metric Name          | Description                          |
+|----------------------|--------------------------------------|
+| `litellm_remaining_requests_metric`             | Track `x-ratelimit-remaining-requests` returned from LLM API Deployment |
+| `litellm_remaining_tokens`                | Track `x-ratelimit-remaining-tokens` return from LLM API Deployment |
+
+Example Metric
+<Tabs>
+
+<TabItem value="Remaining Requests" label="Remaining Requests">
+
+```shell
+litellm_remaining_requests
+{
+  api_base="https://api.openai.com/v1",
+  api_provider="openai",
+  litellm_model_name="gpt-3.5-turbo",
+  model_group="gpt-3.5-turbo"
+} 
+8998.0
+```
+
+</TabItem>
+
+<TabItem value="Requests" label="Remaining Tokens">
+
+```shell
+litellm_remaining_tokens
+{
+  api_base="https://api.openai.com/v1",
+  api_provider="openai",
+  litellm_model_name="gpt-3.5-turbo",
+  model_group="gpt-3.5-turbo"
+} 
+999981.0
+```
+
+</TabItem>
+
+</Tabs>
 
 ## Monitor System Health
 

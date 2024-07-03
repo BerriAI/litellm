@@ -48,6 +48,7 @@ from litellm import (  # type: ignore
     get_litellm_params,
     get_optional_params,
 )
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.utils import (
     CustomStreamWrapper,
     Usage,
@@ -475,6 +476,15 @@ def mock_completion(
                 llm_provider=getattr(mock_response, "llm_provider", custom_llm_provider or "openai"),  # type: ignore
                 model=model,  # type: ignore
                 request=httpx.Request(method="POST", url="https://api.openai.com/v1/"),
+            )
+        elif (
+            isinstance(mock_response, str) and mock_response == "litellm.RateLimitError"
+        ):
+            raise litellm.RateLimitError(
+                message="this is a mock rate limit error",
+                status_code=getattr(mock_response, "status_code", 429),  # type: ignore
+                llm_provider=getattr(mock_response, "llm_provider", custom_llm_provider or "openai"),  # type: ignore
+                model=model,
             )
         time_delay = kwargs.get("mock_delay", None)
         if time_delay is not None:
@@ -2203,15 +2213,26 @@ def completion(
             custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
 
             if "aws_bedrock_client" in optional_params:
+                verbose_logger.warning(
+                    "'aws_bedrock_client' is a deprecated param. Please move to another auth method - https://docs.litellm.ai/docs/providers/bedrock#boto3---authentication."
+                )
                 # Extract credentials for legacy boto3 client and pass thru to httpx
                 aws_bedrock_client = optional_params.pop("aws_bedrock_client")
                 creds = aws_bedrock_client._get_credentials().get_frozen_credentials()
+
                 if creds.access_key:
                     optional_params["aws_access_key_id"] = creds.access_key
                 if creds.secret_key:
                     optional_params["aws_secret_access_key"] = creds.secret_key
                 if creds.token:
                     optional_params["aws_session_token"] = creds.token
+                if (
+                    "aws_region_name" not in optional_params
+                    or optional_params["aws_region_name"] is None
+                ):
+                    optional_params["aws_region_name"] = (
+                        aws_bedrock_client.meta.region_name
+                    )
 
             if model in litellm.BEDROCK_CONVERSE_MODELS:
                 response = bedrock_converse_chat_completion.completion(
@@ -4242,7 +4263,7 @@ def transcription(
     api_base: Optional[str] = None,
     api_version: Optional[str] = None,
     max_retries: Optional[int] = None,
-    litellm_logging_obj=None,
+    litellm_logging_obj: Optional[LiteLLMLoggingObj] = None,
     custom_llm_provider=None,
     **kwargs,
 ):
@@ -4257,6 +4278,18 @@ def transcription(
     proxy_server_request = kwargs.get("proxy_server_request", None)
     model_info = kwargs.get("model_info", None)
     metadata = kwargs.get("metadata", {})
+    client: Optional[
+        Union[
+            openai.AsyncOpenAI,
+            openai.OpenAI,
+            openai.AzureOpenAI,
+            openai.AsyncAzureOpenAI,
+        ]
+    ] = kwargs.pop("client", None)
+
+    if litellm_logging_obj:
+        litellm_logging_obj.model_call_details["client"] = str(client)
+
     if max_retries is None:
         max_retries = openai.DEFAULT_MAX_RETRIES
 
@@ -4296,6 +4329,7 @@ def transcription(
             optional_params=optional_params,
             model_response=model_response,
             atranscription=atranscription,
+            client=client,
             timeout=timeout,
             logging_obj=litellm_logging_obj,
             api_base=api_base,
@@ -4329,6 +4363,7 @@ def transcription(
             optional_params=optional_params,
             model_response=model_response,
             atranscription=atranscription,
+            client=client,
             timeout=timeout,
             logging_obj=litellm_logging_obj,
             max_retries=max_retries,
