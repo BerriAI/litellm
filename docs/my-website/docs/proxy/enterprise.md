@@ -28,6 +28,7 @@ Features:
 - **Guardrails, PII Masking, Content Moderation**
     - ✅ [Content Moderation with LLM Guard, LlamaGuard, Secret Detection, Google Text Moderations](#content-moderation)
     - ✅ [Prompt Injection Detection (with LakeraAI API)](#prompt-injection-detection---lakeraai)
+    - ✅ [Switch LakerAI on / off per request](prompt_injection.md#✨-enterprise-switch-lakeraai-on--off-per-api-call)
     - ✅ Reject calls from Blocked User list 
     - ✅ Reject calls (incoming / outgoing) with Banned Keywords (e.g. competitors)
 - **Custom Branding**
@@ -946,6 +947,11 @@ curl --location 'http://localhost:4000/chat/completions' \
     ]
 }'
 ```
+
+:::info
+
+Need to control LakeraAI per Request ? Doc here 👉: [Switch LakerAI on / off per request](prompt_injection.md#✨-enterprise-switch-lakeraai-on--off-per-api-call)
+:::
 
 ## Swagger Docs - Custom Routes + Branding 
 
