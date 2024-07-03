@@ -1,23 +1,28 @@
-import os, types
+import copy
 import json
-from enum import Enum
-import requests, copy  # type: ignore
+import os
 import time
+import types
+from enum import Enum
 from functools import partial
-from typing import Callable, Optional, List, Union
-import litellm.litellm_core_utils
-from litellm.utils import ModelResponse, Usage, CustomStreamWrapper
-from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from typing import Callable, List, Optional, Union
+
+import httpx  # type: ignore
+import requests  # type: ignore
+
 import litellm
-from .prompt_templates.factory import prompt_factory, custom_prompt
+import litellm.litellm_core_utils
+from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     _get_async_httpx_client,
     _get_httpx_client,
 )
-from .base import BaseLLM
-import httpx  # type: ignore
 from litellm.types.llms.anthropic import AnthropicMessagesToolChoice
+from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
+
+from .base import BaseLLM
+from .prompt_templates.factory import custom_prompt, prompt_factory
 
 
 class AnthropicConstants(Enum):
@@ -179,10 +184,19 @@ async def make_call(
     if client is None:
         client = _get_async_httpx_client()  # Create a new client if none provided
 
-    response = await client.post(api_base, headers=headers, data=data, stream=True)
+    try:
+        response = await client.post(api_base, headers=headers, data=data, stream=True)
+    except httpx.HTTPStatusError as e:
+        raise AnthropicError(
+            status_code=e.response.status_code, message=await e.response.aread()
+        )
+    except Exception as e:
+        raise AnthropicError(status_code=500, message=str(e))
 
     if response.status_code != 200:
-        raise AnthropicError(status_code=response.status_code, message=response.text)
+        raise AnthropicError(
+            status_code=response.status_code, message=await response.aread()
+        )
 
     completion_stream = response.aiter_lines()
 

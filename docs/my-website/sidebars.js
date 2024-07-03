@@ -48,6 +48,7 @@ const sidebars = {
         "proxy/billing",
         "proxy/user_keys",
         "proxy/virtual_keys",
+        "proxy/token_auth",
         "proxy/alerting",
         {
           type: "category",
@@ -56,11 +57,11 @@ const sidebars = {
         },
         "proxy/ui",
         "proxy/prometheus",
+        "proxy/pass_through",
         "proxy/email",
         "proxy/multiple_admins",
         "proxy/team_based_routing",
         "proxy/customer_routing",
-        "proxy/token_auth",
         {
           type: "category",
           label: "Extra Load Balancing",
@@ -147,6 +148,7 @@ const sidebars = {
         "providers/watsonx",
         "providers/predibase",
         "providers/nvidia_nim", 
+        "providers/volcano", 
         "providers/triton-inference-server",
         "providers/ollama", 
         "providers/perplexity", 

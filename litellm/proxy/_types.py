@@ -1622,7 +1622,7 @@ class ProxyException(Exception):
         }
 
 
-class CommonProxyErrors(enum.Enum):
+class CommonProxyErrors(str, enum.Enum):
     db_not_connected_error = "DB not connected"
     no_llm_router = "No models configured on proxy"
     not_allowed_access = "Admin-only endpoint. Not allowed to access this."

@@ -71,6 +71,7 @@ class ModelInfo(TypedDict, total=False):
     ]
     supported_openai_params: Required[Optional[List[str]]]
     supports_system_messages: Optional[bool]
+    supports_response_schema: Optional[bool]
 
 
 class GenericStreamingChunk(TypedDict):
@@ -168,11 +169,13 @@ class Function(OpenAIObject):
 
     def __init__(
         self,
-        arguments: Union[Dict, str],
+        arguments: Optional[Union[Dict, str]],
         name: Optional[str] = None,
         **params,
     ):
-        if isinstance(arguments, Dict):
+        if arguments is None:
+            arguments = ""
+        elif isinstance(arguments, Dict):
             arguments = json.dumps(arguments)
         else:
             arguments = arguments
@@ -992,3 +995,8 @@ class GenericImageParsingChunk(TypedDict):
     type: str
     media_type: str
     data: str
+
+
+class ResponseFormatChunk(TypedDict, total=False):
+    type: Required[Literal["json_object", "text"]]
+    response_schema: dict
