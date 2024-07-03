@@ -46,10 +46,6 @@ from litellm._logging import verbose_router_logger
 from litellm.caching import DualCache, InMemoryCache, RedisCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.azure import get_azure_ad_token_from_oidc
-from litellm.llms.custom_httpx.azure_dall_e_2 import (
-    AsyncCustomHTTPTransport,
-    CustomHTTPTransport,
-)
 from litellm.router_strategy.least_busy import LeastBusyLoggingHandler
 from litellm.router_strategy.lowest_cost import LowestCostLoggingHandler
 from litellm.router_strategy.lowest_latency import LowestLatencyLoggingHandler
@@ -3452,12 +3448,10 @@ class Router:
                         timeout=timeout,
                         max_retries=max_retries,
                         http_client=httpx.AsyncClient(
-                            transport=AsyncCustomHTTPTransport(
-                                limits=httpx.Limits(
-                                    max_connections=1000, max_keepalive_connections=100
-                                ),
-                                verify=litellm.ssl_verify,
+                            limits=httpx.Limits(
+                                max_connections=1000, max_keepalive_connections=100
                             ),
+                            verify=litellm.ssl_verify,
                             mounts=async_proxy_mounts,
                         ),  # type: ignore
                     )
@@ -3477,13 +3471,11 @@ class Router:
                         timeout=timeout,
                         max_retries=max_retries,
                         http_client=httpx.Client(
-                            transport=CustomHTTPTransport(
-                                limits=httpx.Limits(
-                                    max_connections=1000, max_keepalive_connections=100
-                                ),
-                                verify=litellm.ssl_verify,
-                            ),
                             mounts=sync_proxy_mounts,
+                            limits=httpx.Limits(
+                                max_connections=1000, max_keepalive_connections=100
+                            ),
+                            verify=litellm.ssl_verify,
                         ),  # type: ignore
                     )
                     self.cache.set_cache(
@@ -3502,12 +3494,10 @@ class Router:
                         timeout=stream_timeout,
                         max_retries=max_retries,
                         http_client=httpx.AsyncClient(
-                            transport=AsyncCustomHTTPTransport(
-                                limits=httpx.Limits(
-                                    max_connections=1000, max_keepalive_connections=100
-                                ),
-                                verify=litellm.ssl_verify,
+                            limits=httpx.Limits(
+                                max_connections=1000, max_keepalive_connections=100
                             ),
+                            verify=litellm.ssl_verify,
                             mounts=async_proxy_mounts,
                         ),  # type: ignore
                     )
@@ -3527,13 +3517,11 @@ class Router:
                         timeout=stream_timeout,
                         max_retries=max_retries,
                         http_client=httpx.Client(
-                            transport=CustomHTTPTransport(
-                                limits=httpx.Limits(
-                                    max_connections=1000, max_keepalive_connections=100
-                                ),
-                                verify=litellm.ssl_verify,
-                            ),
                             mounts=sync_proxy_mounts,
+                            limits=httpx.Limits(
+                                max_connections=1000, max_keepalive_connections=100
+                            ),
+                            verify=litellm.ssl_verify,
                         ),  # type: ignore
                     )
                     self.cache.set_cache(
@@ -3570,12 +3558,10 @@ class Router:
                         timeout=timeout,
                         max_retries=max_retries,
                         http_client=httpx.AsyncClient(
-                            transport=AsyncCustomHTTPTransport(
-                                limits=httpx.Limits(
-                                    max_connections=1000, max_keepalive_connections=100
-                                ),
-                                verify=litellm.ssl_verify,
+                            limits=httpx.Limits(
+                                max_connections=1000, max_keepalive_connections=100
                             ),
+                            verify=litellm.ssl_verify,
                             mounts=async_proxy_mounts,
                         ),  # type: ignore
                     )
@@ -3592,13 +3578,11 @@ class Router:
                         timeout=timeout,
                         max_retries=max_retries,
                         http_client=httpx.Client(
-                            transport=CustomHTTPTransport(
-                                verify=litellm.ssl_verify,
-                                limits=httpx.Limits(
-                                    max_connections=1000, max_keepalive_connections=100
-                                ),
-                            ),
                             mounts=sync_proxy_mounts,
+                            limits=httpx.Limits(
+                                max_connections=1000, max_keepalive_connections=100
+                            ),
+                            verify=litellm.ssl_verify,
                         ),  # type: ignore
                     )
                     self.cache.set_cache(
@@ -3615,14 +3599,12 @@ class Router:
                         timeout=stream_timeout,
                         max_retries=max_retries,
                         http_client=httpx.AsyncClient(
-                            transport=AsyncCustomHTTPTransport(
-                                limits=httpx.Limits(
-                                    max_connections=1000, max_keepalive_connections=100
-                                ),
-                                verify=litellm.ssl_verify,
+                            limits=httpx.Limits(
+                                max_connections=1000, max_keepalive_connections=100
                             ),
+                            verify=litellm.ssl_verify,
                             mounts=async_proxy_mounts,
-                        ),
+                        ),  # type: ignore
                     )
                     self.cache.set_cache(
                         key=cache_key,
@@ -3637,13 +3619,11 @@ class Router:
                         timeout=stream_timeout,
                         max_retries=max_retries,
                         http_client=httpx.Client(
-                            transport=CustomHTTPTransport(
-                                limits=httpx.Limits(
-                                    max_connections=1000, max_keepalive_connections=100
-                                ),
-                                verify=litellm.ssl_verify,
-                            ),
                             mounts=sync_proxy_mounts,
+                            limits=httpx.Limits(
+                                max_connections=1000, max_keepalive_connections=100
+                            ),
+                            verify=litellm.ssl_verify,
                         ),
                     )
                     self.cache.set_cache(
@@ -3669,12 +3649,10 @@ class Router:
                     max_retries=max_retries,
                     organization=organization,
                     http_client=httpx.AsyncClient(
-                        transport=AsyncCustomHTTPTransport(
-                            limits=httpx.Limits(
-                                max_connections=1000, max_keepalive_connections=100
-                            ),
-                            verify=litellm.ssl_verify,
+                        limits=httpx.Limits(
+                            max_connections=1000, max_keepalive_connections=100
                         ),
+                        verify=litellm.ssl_verify,
                         mounts=async_proxy_mounts,
                     ),  # type: ignore
                 )
@@ -3693,13 +3671,11 @@ class Router:
                     max_retries=max_retries,
                     organization=organization,
                     http_client=httpx.Client(
-                        transport=CustomHTTPTransport(
-                            limits=httpx.Limits(
-                                max_connections=1000, max_keepalive_connections=100
-                            ),
-                            verify=litellm.ssl_verify,
-                        ),
                         mounts=sync_proxy_mounts,
+                        limits=httpx.Limits(
+                            max_connections=1000, max_keepalive_connections=100
+                        ),
+                        verify=litellm.ssl_verify,
                     ),  # type: ignore
                 )
                 self.cache.set_cache(
@@ -3718,12 +3694,10 @@ class Router:
                     max_retries=max_retries,
                     organization=organization,
                     http_client=httpx.AsyncClient(
-                        transport=AsyncCustomHTTPTransport(
-                            limits=httpx.Limits(
-                                max_connections=1000, max_keepalive_connections=100
-                            ),
-                            verify=litellm.ssl_verify,
+                        limits=httpx.Limits(
+                            max_connections=1000, max_keepalive_connections=100
                         ),
+                        verify=litellm.ssl_verify,
                         mounts=async_proxy_mounts,
                     ),  # type: ignore
                 )
@@ -3743,13 +3717,11 @@ class Router:
                     max_retries=max_retries,
                     organization=organization,
                     http_client=httpx.Client(
-                        transport=CustomHTTPTransport(
-                            limits=httpx.Limits(
-                                max_connections=1000, max_keepalive_connections=100
-                            ),
-                            verify=litellm.ssl_verify,
-                        ),
                         mounts=sync_proxy_mounts,
+                        limits=httpx.Limits(
+                            max_connections=1000, max_keepalive_connections=100
+                        ),
+                        verify=litellm.ssl_verify,
                     ),  # type: ignore
                 )
                 self.cache.set_cache(
