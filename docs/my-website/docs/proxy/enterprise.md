@@ -605,9 +605,12 @@ https://api.groq.com/openai/v1/ \
 
 **Step 1** Create Key with `hide_secrets` Off 
 
-👉 Set `"permissions": {"secret_detection": false}`
+👉 Set `"permissions": {"secret_detection": false}` with either `/key/generate` or `/key/update`
 
 This means the `hide_secrets` guardrail is off for all requests from this API Key
+
+<Tabs>
+<TabItem value="/key/generate" label="/key/generate">
 
 ```shell
 curl --location 'http://0.0.0.0:4000/key/generate' \
@@ -621,6 +624,26 @@ curl --location 'http://0.0.0.0:4000/key/generate' \
 ```shell
 # {"permissions":{"hide_secrets":false},"key":"sk-jNm1Zar7XfNdZXp49Z1kSQ"}  
 ```
+
+</TabItem>
+<TabItem value="/key/update" label="/key/update">
+
+```shell
+curl --location 'http://0.0.0.0:4000/key/update' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'Content-Type: application/json' \
+    --data '{
+        "key": "sk-jNm1Zar7XfNdZXp49Z1kSQ",
+        "permissions": {"hide_secrets": false}
+}'
+```
+
+```shell
+# {"permissions":{"hide_secrets":false},"key":"sk-jNm1Zar7XfNdZXp49Z1kSQ"}  
+```
+
+</TabItem>
+</Tabs>
 
 **Step 2** Test it with new key
 
