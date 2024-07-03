@@ -599,6 +599,77 @@ https://api.groq.com/openai/v1/ \
 }
 ```
 
+### Secret Detection On/Off per API Key
+
+❓ Use this when you need to switch guardrails on/off per API Key
+
+**Step 1** Create Key with `hide_secrets` Off 
+
+👉 Set `"permissions": {"secret_detection": false}` with either `/key/generate` or `/key/update`
+
+This means the `hide_secrets` guardrail is off for all requests from this API Key
+
+<Tabs>
+<TabItem value="/key/generate" label="/key/generate">
+
+```shell
+curl --location 'http://0.0.0.0:4000/key/generate' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'Content-Type: application/json' \
+    --data '{
+        "permissions": {"hide_secrets": false}
+}'
+```
+
+```shell
+# {"permissions":{"hide_secrets":false},"key":"sk-jNm1Zar7XfNdZXp49Z1kSQ"}  
+```
+
+</TabItem>
+<TabItem value="/key/update" label="/key/update">
+
+```shell
+curl --location 'http://0.0.0.0:4000/key/update' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'Content-Type: application/json' \
+    --data '{
+        "key": "sk-jNm1Zar7XfNdZXp49Z1kSQ",
+        "permissions": {"hide_secrets": false}
+}'
+```
+
+```shell
+# {"permissions":{"hide_secrets":false},"key":"sk-jNm1Zar7XfNdZXp49Z1kSQ"}  
+```
+
+</TabItem>
+</Tabs>
+
+**Step 2** Test it with new key
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Authorization: Bearer sk-jNm1Zar7XfNdZXp49Z1kSQ' \
+    --header 'Content-Type: application/json' \
+    --data '{
+    "model": "llama3",
+    "messages": [
+        {
+        "role": "user",
+        "content": "does my openai key look well formatted OpenAI_API_KEY=sk-1234777"
+        }
+    ]
+}'
+```
+
+Expect to see `sk-1234777` in your server logs on your callback. 
+
+:::info
+The `hide_secrets` guardrail check did not run on this request because api key=sk-jNm1Zar7XfNdZXp49Z1kSQ has `"permissions": {"hide_secrets": false}`
+:::
+
+
+
 ### Content Moderation with LLM Guard
 
 Set the LLM Guard API Base in your environment 
