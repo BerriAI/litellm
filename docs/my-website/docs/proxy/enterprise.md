@@ -506,10 +506,7 @@ curl --request POST \
 🎉 Expect this endpoint to work without an `Authorization / Bearer Token`
 
 
-
-
-## Content Moderation
-### Content Moderation - Secret Detection
+## Guardrails - Secret Detection/Redaction
 ❓ Use this to REDACT API Keys, Secrets sent in requests to an LLM. 
 
 Example if you want to redact the value of `OPENAI_API_KEY` in the following request
@@ -606,7 +603,7 @@ https://api.groq.com/openai/v1/ \
 
 **Step 1** Create Key with `hide_secrets` Off 
 
-👉 Set `"permissions": {"secret_detection": false}` with either `/key/generate` or `/key/update`
+👉 Set `"permissions": {"hide_secrets": false}` with either `/key/generate` or `/key/update`
 
 This means the `hide_secrets` guardrail is off for all requests from this API Key
 
@@ -670,7 +667,7 @@ The `hide_secrets` guardrail check did not run on this request because api key=s
 :::
 
 
-
+## Content Moderation
 ### Content Moderation with LLM Guard
 
 Set the LLM Guard API Base in your environment 
