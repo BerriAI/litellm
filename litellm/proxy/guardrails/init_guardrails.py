@@ -31,7 +31,7 @@ def initialize_guardrails(
                 all_guardrails.append(guardrail_item)
 
         # set appropriate callbacks if they are default on
-        default_on_callbacks = []
+        default_on_callbacks = set()
         for guardrail in all_guardrails:
             verbose_proxy_logger.debug(guardrail.guardrail_name)
             verbose_proxy_logger.debug(guardrail.default_on)
@@ -40,11 +40,12 @@ def initialize_guardrails(
                 # add these to litellm callbacks if they don't exist
                 for callback in guardrail.callbacks:
                     if callback not in litellm.callbacks:
-                        default_on_callbacks.append(callback)
+                        default_on_callbacks.add(callback)
 
-        if len(default_on_callbacks) > 0:
+        default_on_callbacks_list = list(default_on_callbacks)
+        if len(default_on_callbacks_list) > 0:
             initialize_callbacks_on_proxy(
-                value=default_on_callbacks,
+                value=default_on_callbacks_list,
                 premium_user=premium_user,
                 config_file_path=config_file_path,
                 litellm_settings=litellm_settings,
