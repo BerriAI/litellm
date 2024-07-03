@@ -1888,13 +1888,12 @@ async def test_router_model_usage(mock_response):
                 raise e
 
 
-
 @pytest.mark.asyncio
 async def test_is_proxy_set():
     """
     Assert if proxy is set
     """
-    from httpcore import AsyncHTTPProxy
+    from httpx import AsyncHTTPTransport
 
     os.environ["HTTPS_PROXY"] = "https://proxy.example.com:8080"
     from openai import AsyncAzureOpenAI
@@ -1902,7 +1901,11 @@ async def test_is_proxy_set():
     # Function to check if a proxy is set on the client
     # Function to check if a proxy is set on the client
     def check_proxy(client: httpx.AsyncClient) -> bool:
-        return isinstance(client._transport.__dict__["_pool"], AsyncHTTPProxy)
+        print(f"client._mounts: {client._mounts}")
+        assert len(client._mounts) == 1
+        for k, v in client._mounts.items():
+            assert isinstance(v, AsyncHTTPTransport)
+        return True
 
     llm_router = Router(
         model_list=[
@@ -1924,7 +1927,8 @@ async def test_is_proxy_set():
         deployment=_deployment, kwargs={}, client_type="async"
     )  # type: ignore
 
-    assert check_proxy(client=model_client._client) is True
+    assert check_proxy(client=model_client._client)
+
 
 @pytest.mark.parametrize(
     "model, base_model, llm_provider",
@@ -2027,4 +2031,3 @@ def test_router_context_window_pre_call_check(model, base_model, llm_provider):
                 pass
     except Exception as e:
         pytest.fail(f"Got unexpected exception on router! - {str(e)}")
-
