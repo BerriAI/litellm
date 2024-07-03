@@ -517,7 +517,7 @@ def test_sagemaker_default_region(mocker):
     """
     If no regions are specified in config or in environment, the default region is us-west-2
     """
-    mock_client = mocker.patch("litellm.llms.sagemaker.boto3.client")
+    mock_client = mocker.patch("boto3.client")
     try:
         response = litellm.completion(
             model="sagemaker/mock-endpoint",
@@ -541,7 +541,7 @@ def test_sagemaker_environment_region(mocker):
     """
     expected_region = "us-east-1"
     os.environ["AWS_REGION_NAME"] = expected_region
-    mock_client = mocker.patch("litellm.llms.sagemaker.boto3.client")
+    mock_client = mocker.patch("boto3.client")
     try:
         response = litellm.completion(
             model="sagemaker/mock-endpoint",
@@ -566,7 +566,7 @@ def test_sagemaker_config_region(mocker):
     part of the config file, then use that region instead of us-west-2
     """
     expected_region = "us-east-1"
-    mock_client = mocker.patch("litellm.llms.sagemaker.boto3.client")
+    mock_client = mocker.patch("boto3.client")
     try:
         response = litellm.completion(
             model="sagemaker/mock-endpoint",
@@ -592,7 +592,7 @@ def test_sagemaker_config_and_environment_region(mocker):
     expected_region = "us-east-1"
     unexpected_region = "us-east-2"
     os.environ["AWS_REGION_NAME"] = expected_region
-    mock_client = mocker.patch("litellm.llms.sagemaker.boto3.client")
+    mock_client = mocker.patch("boto3.client")
     try:
         response = litellm.completion(
             model="sagemaker/mock-endpoint",
