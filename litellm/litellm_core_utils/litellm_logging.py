@@ -426,13 +426,22 @@ class Logging:
             self.model_call_details["additional_args"] = additional_args
             self.model_call_details["log_event_type"] = "post_api_call"
 
-            verbose_logger.debug(
-                "RAW RESPONSE:\n{}\n\n".format(
-                    self.model_call_details.get(
-                        "original_response", self.model_call_details
+            if json_logs:
+                verbose_logger.debug(
+                    "RAW RESPONSE:\n{}\n\n".format(
+                        self.model_call_details.get(
+                            "original_response", self.model_call_details
+                        )
+                    ),
+                )
+            else:
+                print_verbose(
+                    "RAW RESPONSE:\n{}\n\n".format(
+                        self.model_call_details.get(
+                            "original_response", self.model_call_details
+                        )
                     )
-                ),
-            )
+                )
             if self.logger_fn and callable(self.logger_fn):
                 try:
                     self.logger_fn(
