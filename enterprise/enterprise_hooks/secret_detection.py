@@ -464,6 +464,14 @@ class _ENTERPRISE_SecretDetection(CustomLogger):
 
         return detected_secrets
 
+    async def should_run_check(self, user_api_key_dict: UserAPIKeyAuth) -> bool:
+        if user_api_key_dict.permissions is not None:
+            if "secret_detection" in user_api_key_dict.permissions:
+                if user_api_key_dict.permissions["secret_detection"] is False:
+                    return False
+
+        return True
+
     #### CALL HOOKS - proxy only ####
     async def async_pre_call_hook(
         self,
@@ -474,6 +482,9 @@ class _ENTERPRISE_SecretDetection(CustomLogger):
     ):
         from detect_secrets import SecretsCollection
         from detect_secrets.settings import default_settings
+
+        if await self.should_run_check(user_api_key_dict) is False:
+            return
 
         if "messages" in data and isinstance(data["messages"], list):
             for message in data["messages"]:
