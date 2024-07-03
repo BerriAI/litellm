@@ -1865,7 +1865,10 @@ async def test_router_model_usage(mock_response):
             )
             await asyncio.sleep(3)
 
-            initial_usage = await llm_router.get_model_group_usage(model_group=model)
+            initial_usage_tuple = await llm_router.get_model_group_usage(
+                model_group=model
+            )
+            initial_usage = initial_usage_tuple[0]
 
             # completion call - 10 tokens
             _ = await llm_router.acompletion(
@@ -1873,7 +1876,10 @@ async def test_router_model_usage(mock_response):
             )
 
             await asyncio.sleep(3)
-            updated_usage = await llm_router.get_model_group_usage(model_group=model)
+            updated_usage_tuple = await llm_router.get_model_group_usage(
+                model_group=model
+            )
+            updated_usage = updated_usage_tuple[0]
 
             assert updated_usage == initial_usage + 10  # type: ignore
             break
