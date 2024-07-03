@@ -153,7 +153,7 @@ def decrypt_env_var() -> Dict[str, Any]:
         ) or (v is not None and isinstance(v, str) and v.startswith("aws_kms/")):
             decrypted_value = aws_kms.decrypt_value(secret_name=k)
             # reset env var
-            k = re.sub("litellm_secret_aws_kms", "", k, flags=re.IGNORECASE)
+            k = re.sub("litellm_secret_aws_kms_", "", k, flags=re.IGNORECASE)
             new_values[k] = decrypted_value
 
     return new_values

@@ -125,6 +125,9 @@ llm_guard_mode: Literal["all", "key-specific", "request-specific"] = "all"
 ##################
 ### PREVIEW FEATURES ###
 enable_preview_features: bool = False
+return_response_headers: bool = (
+    False  # get response headers from LLM Api providers - example x-remaining-requests,
+)
 ##################
 logging: bool = True
 caching: bool = (

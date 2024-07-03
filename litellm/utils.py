@@ -4815,6 +4815,12 @@ def function_to_dict(input_function):  # noqa: C901
     return result
 
 
+def modify_url(original_url, new_path):
+    url = httpx.URL(original_url)
+    modified_url = url.copy_with(path=new_path)
+    return str(modified_url)
+
+
 def load_test_model(
     model: str,
     custom_llm_provider: str = "",
@@ -5810,6 +5816,18 @@ def exception_type(
                 _model_group = _metadata.get("model_group")
                 _deployment = _metadata.get("deployment")
                 extra_information = f"\nModel: {model}"
+
+                exception_provider = "Unknown"
+                if (
+                    isinstance(custom_llm_provider, str)
+                    and len(custom_llm_provider) > 0
+                ):
+                    exception_provider = (
+                        custom_llm_provider[0].upper()
+                        + custom_llm_provider[1:]
+                        + "Exception"
+                    )
+
                 if _api_base:
                     extra_information += f"\nAPI Base: `{_api_base}`"
                 if (
