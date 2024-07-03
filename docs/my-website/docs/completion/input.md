@@ -50,7 +50,7 @@ Use `litellm.get_supported_openai_params()` for an updated list of params for ea
 |Huggingface| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |   |    |
 |Openrouter| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | | | | | ✅ | | | | |
 |AI21| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |
-|VertexAI| ✅ | ✅ |  | ✅ | ✅ |  |  |  |  |   | | | | | ✅ | | |
+|VertexAI| ✅ | ✅ |  | ✅ | ✅ |  |  |  |  |   | | | | ✅ | ✅ | | |
 |Bedrock| ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |  |   | | | | | ✅ (for anthropic) | |
 |Sagemaker| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |
 |TogetherAI| ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |  |   | ✅ |

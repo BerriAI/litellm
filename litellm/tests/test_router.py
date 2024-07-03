@@ -16,6 +16,7 @@ sys.path.insert(
 import os
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 from dotenv import load_dotenv
@@ -811,6 +812,7 @@ def test_router_context_window_check_pre_call_check():
                     "base_model": "azure/gpt-35-turbo",
                     "mock_response": "Hello world 1!",
                 },
+                "model_info": {"base_model": "azure/gpt-35-turbo"},
             },
             {
                 "model_name": "gpt-3.5-turbo",  # openai model name
@@ -1886,6 +1888,7 @@ async def test_router_model_usage(mock_response):
                 raise e
 
 
+
 @pytest.mark.asyncio
 async def test_is_proxy_set():
     """
@@ -1922,3 +1925,106 @@ async def test_is_proxy_set():
     )  # type: ignore
 
     assert check_proxy(client=model_client._client) is True
+
+@pytest.mark.parametrize(
+    "model, base_model, llm_provider",
+    [
+        ("azure/gpt-4", None, "azure"),
+        ("azure/gpt-4", "azure/gpt-4-0125-preview", "azure"),
+        ("gpt-4", None, "openai"),
+    ],
+)
+def test_router_get_model_info(model, base_model, llm_provider):
+    """
+    Test if router get model info works based on provider
+
+    For azure -> only if base model set
+    For openai -> use model=
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": model,
+                    "api_key": "my-fake-key",
+                    "api_base": "my-fake-base",
+                },
+                "model_info": {"base_model": base_model, "id": "1"},
+            }
+        ]
+    )
+
+    deployment = router.get_deployment(model_id="1")
+
+    assert deployment is not None
+
+    if llm_provider == "openai" or (base_model is not None and llm_provider == "azure"):
+        router.get_router_model_info(deployment=deployment.to_json())
+    else:
+        try:
+            router.get_router_model_info(deployment=deployment.to_json())
+            pytest.fail("Expected this to raise model not mapped error")
+        except Exception as e:
+            if "This model isn't mapped yet" in str(e):
+                pass
+
+
+@pytest.mark.parametrize(
+    "model, base_model, llm_provider",
+    [
+        ("azure/gpt-4", None, "azure"),
+        ("azure/gpt-4", "azure/gpt-4-0125-preview", "azure"),
+        ("gpt-4", None, "openai"),
+    ],
+)
+def test_router_context_window_pre_call_check(model, base_model, llm_provider):
+    """
+    - For an azure model
+    - if no base model set
+    - don't enforce context window limits
+    """
+    try:
+        model_list = [
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": model,
+                    "api_key": "my-fake-key",
+                    "api_base": "my-fake-base",
+                },
+                "model_info": {"base_model": base_model, "id": "1"},
+            }
+        ]
+        router = Router(
+            model_list=model_list,
+            set_verbose=True,
+            enable_pre_call_checks=True,
+            num_retries=0,
+        )
+
+        litellm.token_counter = MagicMock()
+
+        def token_counter_side_effect(*args, **kwargs):
+            # Process args and kwargs if needed
+            return 1000000
+
+        litellm.token_counter.side_effect = token_counter_side_effect
+        try:
+            updated_list = router._pre_call_checks(
+                model="gpt-4",
+                healthy_deployments=model_list,
+                messages=[{"role": "user", "content": "Hey, how's it going?"}],
+            )
+            if llm_provider == "azure" and base_model is None:
+                assert len(updated_list) == 1
+            else:
+                pytest.fail("Expected to raise an error. Got={}".format(updated_list))
+        except Exception as e:
+            if (
+                llm_provider == "azure" and base_model is not None
+            ) or llm_provider == "openai":
+                pass
+    except Exception as e:
+        pytest.fail(f"Got unexpected exception on router! - {str(e)}")
+

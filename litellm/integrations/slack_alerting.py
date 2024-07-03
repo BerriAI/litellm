@@ -606,6 +606,13 @@ class SlackAlerting(CustomLogger):
                 and request_data.get("litellm_status", "") != "success"
                 and request_data.get("litellm_status", "") != "fail"
             ):
+                ## CHECK IF CACHE IS UPDATED
+                litellm_call_id = request_data.get("litellm_call_id", "")
+                status: Optional[str] = await self.internal_usage_cache.async_get_cache(
+                    key="request_status:{}".format(litellm_call_id), local_only=True
+                )
+                if status is not None and (status == "success" or status == "fail"):
+                    return
                 if request_data.get("deployment", None) is not None and isinstance(
                     request_data["deployment"], dict
                 ):

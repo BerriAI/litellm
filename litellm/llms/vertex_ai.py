@@ -12,6 +12,7 @@ import requests  # type: ignore
 from pydantic import BaseModel
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.prompt_templates.factory import (
     convert_to_anthropic_image_obj,
@@ -328,80 +329,86 @@ def _gemini_convert_messages_with_history(messages: list) -> List[ContentType]:
     contents: List[ContentType] = []
 
     msg_i = 0
-    while msg_i < len(messages):
-        user_content: List[PartType] = []
-        init_msg_i = msg_i
-        ## MERGE CONSECUTIVE USER CONTENT ##
-        while msg_i < len(messages) and messages[msg_i]["role"] in user_message_types:
-            if isinstance(messages[msg_i]["content"], list):
-                _parts: List[PartType] = []
-                for element in messages[msg_i]["content"]:
-                    if isinstance(element, dict):
-                        if element["type"] == "text" and len(element["text"]) > 0:
-                            _part = PartType(text=element["text"])
-                            _parts.append(_part)
-                        elif element["type"] == "image_url":
-                            image_url = element["image_url"]["url"]
-                            _part = _process_gemini_image(image_url=image_url)
-                            _parts.append(_part)  # type: ignore
-                user_content.extend(_parts)
-            elif (
-                isinstance(messages[msg_i]["content"], str)
-                and len(messages[msg_i]["content"]) > 0
+    try:
+        while msg_i < len(messages):
+            user_content: List[PartType] = []
+            init_msg_i = msg_i
+            ## MERGE CONSECUTIVE USER CONTENT ##
+            while (
+                msg_i < len(messages) and messages[msg_i]["role"] in user_message_types
             ):
-                _part = PartType(text=messages[msg_i]["content"])
-                user_content.append(_part)
+                if isinstance(messages[msg_i]["content"], list):
+                    _parts: List[PartType] = []
+                    for element in messages[msg_i]["content"]:
+                        if isinstance(element, dict):
+                            if element["type"] == "text" and len(element["text"]) > 0:
+                                _part = PartType(text=element["text"])
+                                _parts.append(_part)
+                            elif element["type"] == "image_url":
+                                image_url = element["image_url"]["url"]
+                                _part = _process_gemini_image(image_url=image_url)
+                                _parts.append(_part)  # type: ignore
+                    user_content.extend(_parts)
+                elif (
+                    isinstance(messages[msg_i]["content"], str)
+                    and len(messages[msg_i]["content"]) > 0
+                ):
+                    _part = PartType(text=messages[msg_i]["content"])
+                    user_content.append(_part)
 
-            msg_i += 1
+                msg_i += 1
 
-        if user_content:
-            contents.append(ContentType(role="user", parts=user_content))
-        assistant_content = []
-        ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
-        while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
-            if isinstance(messages[msg_i]["content"], list):
-                _parts = []
-                for element in messages[msg_i]["content"]:
-                    if isinstance(element, dict):
-                        if element["type"] == "text":
-                            _part = PartType(text=element["text"])
-                            _parts.append(_part)
-                        elif element["type"] == "image_url":
-                            image_url = element["image_url"]["url"]
-                            _part = _process_gemini_image(image_url=image_url)
-                            _parts.append(_part)  # type: ignore
-                assistant_content.extend(_parts)
-            elif messages[msg_i].get(
-                "tool_calls", []
-            ):  # support assistant tool invoke conversion
-                assistant_content.extend(
-                    convert_to_gemini_tool_call_invoke(messages[msg_i]["tool_calls"])
+            if user_content:
+                contents.append(ContentType(role="user", parts=user_content))
+            assistant_content = []
+            ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
+            while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
+                if isinstance(messages[msg_i]["content"], list):
+                    _parts = []
+                    for element in messages[msg_i]["content"]:
+                        if isinstance(element, dict):
+                            if element["type"] == "text":
+                                _part = PartType(text=element["text"])
+                                _parts.append(_part)
+                            elif element["type"] == "image_url":
+                                image_url = element["image_url"]["url"]
+                                _part = _process_gemini_image(image_url=image_url)
+                                _parts.append(_part)  # type: ignore
+                    assistant_content.extend(_parts)
+                elif messages[msg_i].get(
+                    "tool_calls", []
+                ):  # support assistant tool invoke conversion
+                    assistant_content.extend(
+                        convert_to_gemini_tool_call_invoke(
+                            messages[msg_i]["tool_calls"]
+                        )
+                    )
+                else:
+                    assistant_text = (
+                        messages[msg_i].get("content") or ""
+                    )  # either string or none
+                    if assistant_text:
+                        assistant_content.append(PartType(text=assistant_text))
+
+                msg_i += 1
+
+            if assistant_content:
+                contents.append(ContentType(role="model", parts=assistant_content))
+
+            ## APPEND TOOL CALL MESSAGES ##
+            if msg_i < len(messages) and messages[msg_i]["role"] == "tool":
+                _part = convert_to_gemini_tool_call_result(messages[msg_i])
+                contents.append(ContentType(parts=[_part]))  # type: ignore
+                msg_i += 1
+            if msg_i == init_msg_i:  # prevent infinite loops
+                raise Exception(
+                    "Invalid Message passed in - {}. File an issue https://github.com/BerriAI/litellm/issues".format(
+                        messages[msg_i]
+                    )
                 )
-            else:
-                assistant_text = (
-                    messages[msg_i].get("content") or ""
-                )  # either string or none
-                if assistant_text:
-                    assistant_content.append(PartType(text=assistant_text))
-
-            msg_i += 1
-
-        if assistant_content:
-            contents.append(ContentType(role="model", parts=assistant_content))
-
-        ## APPEND TOOL CALL MESSAGES ##
-        if msg_i < len(messages) and messages[msg_i]["role"] == "tool":
-            _part = convert_to_gemini_tool_call_result(messages[msg_i])
-            contents.append(ContentType(parts=[_part]))  # type: ignore
-            msg_i += 1
-        if msg_i == init_msg_i:  # prevent infinite loops
-            raise Exception(
-                "Invalid Message passed in - {}. File an issue https://github.com/BerriAI/litellm/issues".format(
-                    messages[msg_i]
-                )
-            )
-
-    return contents
+        return contents
+    except Exception as e:
+        raise e
 
 
 def _get_client_cache_key(model: str, vertex_project: str, vertex_location: str):
@@ -437,7 +444,7 @@ def completion(
     except:
         raise VertexAIError(
             status_code=400,
-            message="vertexai import failed please run `pip install google-cloud-aiplatform`",
+            message="vertexai import failed please run `pip install google-cloud-aiplatform`. This is required for the 'vertex_ai/' route on LiteLLM",
         )
 
     if not (

@@ -48,6 +48,7 @@ from litellm import (  # type: ignore
     get_litellm_params,
     get_optional_params,
 )
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.utils import (
     CustomStreamWrapper,
     Usage,
@@ -349,6 +350,7 @@ async def acompletion(
             or custom_llm_provider == "perplexity"
             or custom_llm_provider == "groq"
             or custom_llm_provider == "nvidia_nim"
+            or custom_llm_provider == "volcengine"
             or custom_llm_provider == "codestral"
             or custom_llm_provider == "text-completion-codestral"
             or custom_llm_provider == "deepseek"
@@ -474,6 +476,15 @@ def mock_completion(
                 llm_provider=getattr(mock_response, "llm_provider", custom_llm_provider or "openai"),  # type: ignore
                 model=model,  # type: ignore
                 request=httpx.Request(method="POST", url="https://api.openai.com/v1/"),
+            )
+        elif (
+            isinstance(mock_response, str) and mock_response == "litellm.RateLimitError"
+        ):
+            raise litellm.RateLimitError(
+                message="this is a mock rate limit error",
+                status_code=getattr(mock_response, "status_code", 429),  # type: ignore
+                llm_provider=getattr(mock_response, "llm_provider", custom_llm_provider or "openai"),  # type: ignore
+                model=model,
             )
         time_delay = kwargs.get("mock_delay", None)
         if time_delay is not None:
@@ -675,6 +686,8 @@ def completion(
     client = kwargs.get("client", None)
     ### Admin Controls ###
     no_log = kwargs.get("no-log", False)
+    ### COPY MESSAGES ### - related issue https://github.com/BerriAI/litellm/discussions/4489
+    messages = deepcopy(messages)
     ######## end of unpacking kwargs ###########
     openai_params = [
         "functions",
@@ -1024,7 +1037,7 @@ def completion(
                 client=client,  # pass AsyncAzureOpenAI, AzureOpenAI client
             )
 
-            if optional_params.get("stream", False) or acompletion == True:
+            if optional_params.get("stream", False):
                 ## LOGGING
                 logging.post_call(
                     input=messages,
@@ -1192,6 +1205,7 @@ def completion(
             or custom_llm_provider == "perplexity"
             or custom_llm_provider == "groq"
             or custom_llm_provider == "nvidia_nim"
+            or custom_llm_provider == "volcengine"
             or custom_llm_provider == "codestral"
             or custom_llm_provider == "deepseek"
             or custom_llm_provider == "anyscale"
@@ -1826,6 +1840,7 @@ def completion(
                 logging_obj=logging,
                 acompletion=acompletion,
                 timeout=timeout,  # type: ignore
+                custom_llm_provider="openrouter",
             )
             ## LOGGING
             logging.post_call(
@@ -2197,13 +2212,33 @@ def completion(
             # boto3 reads keys from .env
             custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
 
-            if (
-                "aws_bedrock_client" in optional_params
-            ):  # use old bedrock flow for aws_bedrock_client users.
-                response = bedrock.completion(
+            if "aws_bedrock_client" in optional_params:
+                verbose_logger.warning(
+                    "'aws_bedrock_client' is a deprecated param. Please move to another auth method - https://docs.litellm.ai/docs/providers/bedrock#boto3---authentication."
+                )
+                # Extract credentials for legacy boto3 client and pass thru to httpx
+                aws_bedrock_client = optional_params.pop("aws_bedrock_client")
+                creds = aws_bedrock_client._get_credentials().get_frozen_credentials()
+
+                if creds.access_key:
+                    optional_params["aws_access_key_id"] = creds.access_key
+                if creds.secret_key:
+                    optional_params["aws_secret_access_key"] = creds.secret_key
+                if creds.token:
+                    optional_params["aws_session_token"] = creds.token
+                if (
+                    "aws_region_name" not in optional_params
+                    or optional_params["aws_region_name"] is None
+                ):
+                    optional_params["aws_region_name"] = (
+                        aws_bedrock_client.meta.region_name
+                    )
+
+            if model in litellm.BEDROCK_CONVERSE_MODELS:
+                response = bedrock_converse_chat_completion.completion(
                     model=model,
                     messages=messages,
-                    custom_prompt_dict=litellm.custom_prompt_dict,
+                    custom_prompt_dict=custom_prompt_dict,
                     model_response=model_response,
                     print_verbose=print_verbose,
                     optional_params=optional_params,
@@ -2213,63 +2248,27 @@ def completion(
                     logging_obj=logging,
                     extra_headers=extra_headers,
                     timeout=timeout,
+                    acompletion=acompletion,
+                    client=client,
+                )
+            else:
+                response = bedrock_chat_completion.completion(
+                    model=model,
+                    messages=messages,
+                    custom_prompt_dict=custom_prompt_dict,
+                    model_response=model_response,
+                    print_verbose=print_verbose,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    logger_fn=logger_fn,
+                    encoding=encoding,
+                    logging_obj=logging,
+                    extra_headers=extra_headers,
+                    timeout=timeout,
+                    acompletion=acompletion,
+                    client=client,
                 )
 
-                if (
-                    "stream" in optional_params
-                    and optional_params["stream"] == True
-                    and not isinstance(response, CustomStreamWrapper)
-                ):
-                    # don't try to access stream object,
-                    if "ai21" in model:
-                        response = CustomStreamWrapper(
-                            response,
-                            model,
-                            custom_llm_provider="bedrock",
-                            logging_obj=logging,
-                        )
-                    else:
-                        response = CustomStreamWrapper(
-                            iter(response),
-                            model,
-                            custom_llm_provider="bedrock",
-                            logging_obj=logging,
-                        )
-            else:
-                if model.startswith("anthropic"):
-                    response = bedrock_converse_chat_completion.completion(
-                        model=model,
-                        messages=messages,
-                        custom_prompt_dict=custom_prompt_dict,
-                        model_response=model_response,
-                        print_verbose=print_verbose,
-                        optional_params=optional_params,
-                        litellm_params=litellm_params,
-                        logger_fn=logger_fn,
-                        encoding=encoding,
-                        logging_obj=logging,
-                        extra_headers=extra_headers,
-                        timeout=timeout,
-                        acompletion=acompletion,
-                        client=client,
-                    )
-                else:
-                    response = bedrock_chat_completion.completion(
-                        model=model,
-                        messages=messages,
-                        custom_prompt_dict=custom_prompt_dict,
-                        model_response=model_response,
-                        print_verbose=print_verbose,
-                        optional_params=optional_params,
-                        litellm_params=litellm_params,
-                        logger_fn=logger_fn,
-                        encoding=encoding,
-                        logging_obj=logging,
-                        extra_headers=extra_headers,
-                        timeout=timeout,
-                        acompletion=acompletion,
-                        client=client,
-                    )
             if optional_params.get("stream", False):
                 ## LOGGING
                 logging.post_call(
@@ -2954,6 +2953,7 @@ async def aembedding(*args, **kwargs) -> EmbeddingResponse:
             or custom_llm_provider == "perplexity"
             or custom_llm_provider == "groq"
             or custom_llm_provider == "nvidia_nim"
+            or custom_llm_provider == "volcengine"
             or custom_llm_provider == "deepseek"
             or custom_llm_provider == "fireworks_ai"
             or custom_llm_provider == "ollama"
@@ -3533,6 +3533,7 @@ async def atext_completion(
             or custom_llm_provider == "perplexity"
             or custom_llm_provider == "groq"
             or custom_llm_provider == "nvidia_nim"
+            or custom_llm_provider == "volcengine"
             or custom_llm_provider == "text-completion-codestral"
             or custom_llm_provider == "deepseek"
             or custom_llm_provider == "fireworks_ai"
@@ -4262,7 +4263,7 @@ def transcription(
     api_base: Optional[str] = None,
     api_version: Optional[str] = None,
     max_retries: Optional[int] = None,
-    litellm_logging_obj=None,
+    litellm_logging_obj: Optional[LiteLLMLoggingObj] = None,
     custom_llm_provider=None,
     **kwargs,
 ):
@@ -4277,6 +4278,18 @@ def transcription(
     proxy_server_request = kwargs.get("proxy_server_request", None)
     model_info = kwargs.get("model_info", None)
     metadata = kwargs.get("metadata", {})
+    client: Optional[
+        Union[
+            openai.AsyncOpenAI,
+            openai.OpenAI,
+            openai.AzureOpenAI,
+            openai.AsyncAzureOpenAI,
+        ]
+    ] = kwargs.pop("client", None)
+
+    if litellm_logging_obj:
+        litellm_logging_obj.model_call_details["client"] = str(client)
+
     if max_retries is None:
         max_retries = openai.DEFAULT_MAX_RETRIES
 
@@ -4316,6 +4329,7 @@ def transcription(
             optional_params=optional_params,
             model_response=model_response,
             atranscription=atranscription,
+            client=client,
             timeout=timeout,
             logging_obj=litellm_logging_obj,
             api_base=api_base,
@@ -4349,6 +4363,7 @@ def transcription(
             optional_params=optional_params,
             model_response=model_response,
             atranscription=atranscription,
+            client=client,
             timeout=timeout,
             logging_obj=litellm_logging_obj,
             max_retries=max_retries,
@@ -4406,6 +4421,7 @@ def speech(
     voice: str,
     api_key: Optional[str] = None,
     api_base: Optional[str] = None,
+    api_version: Optional[str] = None,
     organization: Optional[str] = None,
     project: Optional[str] = None,
     max_retries: Optional[int] = None,
@@ -4474,6 +4490,45 @@ def speech(
             api_base=api_base,
             organization=organization,
             project=project,
+            max_retries=max_retries,
+            timeout=timeout,
+            client=client,  # pass AsyncOpenAI, OpenAI client
+            aspeech=aspeech,
+        )
+    elif custom_llm_provider == "azure":
+        # azure configs
+        api_base = api_base or litellm.api_base or get_secret("AZURE_API_BASE")  # type: ignore
+
+        api_version = (
+            api_version or litellm.api_version or get_secret("AZURE_API_VERSION")
+        )  # type: ignore
+
+        api_key = (
+            api_key
+            or litellm.api_key
+            or litellm.azure_key
+            or get_secret("AZURE_OPENAI_API_KEY")
+            or get_secret("AZURE_API_KEY")
+        )  # type: ignore
+
+        azure_ad_token: Optional[str] = optional_params.get("extra_body", {}).pop(  # type: ignore
+            "azure_ad_token", None
+        ) or get_secret(
+            "AZURE_AD_TOKEN"
+        )
+
+        headers = headers or litellm.headers
+
+        response = azure_chat_completions.audio_speech(
+            model=model,
+            input=input,
+            voice=voice,
+            optional_params=optional_params,
+            api_key=api_key,
+            api_base=api_base,
+            api_version=api_version,
+            azure_ad_token=azure_ad_token,
+            organization=organization,
             max_retries=max_retries,
             timeout=timeout,
             client=client,  # pass AsyncOpenAI, OpenAI client

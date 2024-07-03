@@ -64,16 +64,55 @@ class BaseCache:
 
 
 class InMemoryCache(BaseCache):
-    def __init__(self):
-        # if users don't provider one, use the default litellm cache
-        self.cache_dict = {}
-        self.ttl_dict = {}
+    def __init__(
+        self,
+        max_size_in_memory: Optional[int] = 200,
+        default_ttl: Optional[
+            int
+        ] = 600,  # default ttl is 10 minutes. At maximum litellm rate limiting logic requires objects to be in memory for 1 minute
+    ):
+        """
+        max_size_in_memory [int]: Maximum number of items in cache. done to prevent memory leaks. Use 200 items as a default
+        """
+        self.max_size_in_memory = (
+            max_size_in_memory or 200
+        )  # set an upper bound of 200 items in-memory
+        self.default_ttl = default_ttl or 600
+
+        # in-memory cache
+        self.cache_dict: dict = {}
+        self.ttl_dict: dict = {}
+
+    def evict_cache(self):
+        """
+        Eviction policy:
+        - check if any items in ttl_dict are expired -> remove them from ttl_dict and cache_dict
+
+
+        This guarantees the following:
+        - 1. When item ttl not set: At minimumm each item will remain in memory for 5 minutes
+        - 2. When ttl is set: the item will remain in memory for at least that amount of time
+        - 3. the size of in-memory cache is bounded
+
+        """
+        for key in list(self.ttl_dict.keys()):
+            if time.time() > self.ttl_dict[key]:
+                self.cache_dict.pop(key, None)
+                self.ttl_dict.pop(key, None)
 
     def set_cache(self, key, value, **kwargs):
-        print_verbose("InMemoryCache: set_cache")
+        print_verbose(
+            "InMemoryCache: set_cache. current size= {}".format(len(self.cache_dict))
+        )
+        if len(self.cache_dict) >= self.max_size_in_memory:
+            # only evict when cache is full
+            self.evict_cache()
+
         self.cache_dict[key] = value
         if "ttl" in kwargs:
             self.ttl_dict[key] = time.time() + kwargs["ttl"]
+        else:
+            self.ttl_dict[key] = time.time() + self.default_ttl
 
     async def async_set_cache(self, key, value, **kwargs):
         self.set_cache(key=key, value=value, **kwargs)
@@ -139,6 +178,7 @@ class InMemoryCache(BaseCache):
         init_value = await self.async_get_cache(key=key) or 0
         value = init_value + value
         await self.async_set_cache(key, value, **kwargs)
+
         return value
 
     def flush_cache(self):

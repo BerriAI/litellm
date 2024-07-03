@@ -6,21 +6,34 @@ import TabItem from '@theme/TabItem';
 
 :::tip
 
-Get in touch with us [here](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+To get a license, get in touch with us [here](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
 
 :::
 
 Features: 
-- ✅ [SSO for Admin UI](./ui.md#✨-enterprise-features)
-- ✅ [Audit Logs](#audit-logs)
-- ✅ [Tracking Spend for Custom Tags](#tracking-spend-for-custom-tags)
-- ✅ [Control available public, private routes](#control-available-public-private-routes)
-- ✅ [Content Moderation with LLM Guard, LlamaGuard, Secret Detection, Google Text Moderations](#content-moderation)
-- ✅ [Prompt Injection Detection (with LakeraAI API)](#prompt-injection-detection---lakeraai)
-- ✅ [Custom Branding + Routes on Swagger Docs](#swagger-docs---custom-routes--branding)
-- ✅ [Enforce Required Params for LLM Requests (ex. Reject requests missing ["metadata"]["generation_name"])](#enforce-required-params-for-llm-requests)
-- ✅ Reject calls from Blocked User list 
-- ✅ Reject calls (incoming / outgoing) with Banned Keywords (e.g. competitors)
+
+- **Security**
+    - ✅ [SSO for Admin UI](./ui.md#✨-enterprise-features)
+    - ✅ [Audit Logs with retention policy](#audit-logs)
+    - ✅ [JWT-Auth](../docs/proxy/token_auth.md)
+    - ✅ [Control available public, private routes](#control-available-public-private-routes)
+    - ✅ [[BETA] AWS Key Manager v2 - Key Decryption](#beta-aws-key-manager---key-decryption)
+    - ✅ [Use LiteLLM keys/authentication on Pass Through Endpoints](pass_through#✨-enterprise---use-litellm-keysauthentication-on-pass-through-endpoints)
+    - ✅ [Enforce Required Params for LLM Requests (ex. Reject requests missing ["metadata"]["generation_name"])](#enforce-required-params-for-llm-requests)
+- **Spend Tracking**
+    - ✅ [Tracking Spend for Custom Tags](#tracking-spend-for-custom-tags)
+    - ✅ [API Endpoints to get Spend Reports per Team, API Key, Customer](cost_tracking.md#✨-enterprise-api-endpoints-to-get-spend)
+- **Advanced Metrics**
+    - ✅ [`x-ratelimit-remaining-requests`, `x-ratelimit-remaining-tokens` for LLM APIs on Prometheus](prometheus#✨-enterprise-llm-remaining-requests-and-remaining-tokens)
+- **Guardrails, PII Masking, Content Moderation**
+    - ✅ [Content Moderation with LLM Guard, LlamaGuard, Secret Detection, Google Text Moderations](#content-moderation)
+    - ✅ [Prompt Injection Detection (with LakeraAI API)](#prompt-injection-detection---lakeraai)
+    - ✅ Reject calls from Blocked User list 
+    - ✅ Reject calls (incoming / outgoing) with Banned Keywords (e.g. competitors)
+- **Custom Branding**
+    - ✅ [Custom Branding + Routes on Swagger Docs](#swagger-docs---custom-routes--branding)
+    - ✅ [Public Model Hub](../docs/proxy/enterprise.md#public-model-hub)
+    - ✅ [Custom Email Branding](../docs/proxy/email.md#customizing-email-branding)
 
 ## Audit Logs
 
@@ -1020,3 +1033,34 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 Share a public page of available models for users
 
 <Image img={require('../../img/model_hub.png')} style={{ width: '900px', height: 'auto' }}/>
+
+
+## [BETA] AWS Key Manager - Key Decryption
+
+This is a beta feature, and subject to changes.
+
+
+**Step 1.** Add `USE_AWS_KMS` to env
+
+```env
+USE_AWS_KMS="True"
+```
+
+**Step 2.** Add `aws_kms/` to encrypted keys in env 
+
+```env
+DATABASE_URL="aws_kms/AQICAH.."
+```
+
+**Step 3.** Start proxy 
+
+```
+$ litellm
+```
+
+How it works? 
+- Key Decryption runs before server starts up. [**Code**](https://github.com/BerriAI/litellm/blob/8571cb45e80cc561dc34bc6aa89611eb96b9fe3e/litellm/proxy/proxy_cli.py#L445)
+- It adds the decrypted value to the `os.environ` for the python process. 
+
+**Note:** Setting an environment variable within a Python script using os.environ will not make that variable accessible via SSH sessions or any other new processes that are started independently of the Python script. Environment variables set this way only affect the current process and its child processes.
+
