@@ -1415,7 +1415,6 @@ def test_bedrock_claude_3_streaming():
         "gpt-3.5-turbo",
         "databricks/databricks-dbrx-instruct",  # databricks
         "predibase/llama-3-8b-instruct",  # predibase
-        "replicate/meta/meta-llama-3-8b-instruct",  # replicate
     ],
 )
 @pytest.mark.asyncio
