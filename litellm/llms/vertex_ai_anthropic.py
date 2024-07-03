@@ -15,6 +15,7 @@ import requests  # type: ignore
 import litellm
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.types.llms.anthropic import AnthropicMessagesToolChoice
 from litellm.types.utils import ResponseFormatChunk
 from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
 
@@ -121,6 +122,17 @@ class VertexAIAnthropicConfig:
                 optional_params["max_tokens"] = value
             if param == "tools":
                 optional_params["tools"] = value
+            if param == "tool_choice":
+                _tool_choice: Optional[AnthropicMessagesToolChoice] = None
+                if value == "auto":
+                    _tool_choice = {"type": "auto"}
+                elif value == "required":
+                    _tool_choice = {"type": "any"}
+                elif isinstance(value, dict):
+                    _tool_choice = {"type": "tool", "name": value["function"]["name"]}
+
+                if _tool_choice is not None:
+                    optional_params["tool_choice"] = _tool_choice
             if param == "stream":
                 optional_params["stream"] = value
             if param == "stop":
@@ -177,15 +189,27 @@ def get_vertex_client(
         _credentials, cred_project_id = VertexLLM().load_auth(
             credentials=vertex_credentials, project_id=vertex_project
         )
+
         vertex_ai_client = AnthropicVertex(
             project_id=vertex_project or cred_project_id,
             region=vertex_location or "us-central1",
             access_token=_credentials.token,
         )
+        access_token = _credentials.token
     else:
         vertex_ai_client = client
+        access_token = client.access_token
 
     return vertex_ai_client, access_token
+
+
+def create_vertex_anthropic_url(
+    vertex_location: str, vertex_project: str, model: str, stream: bool
+) -> str:
+    if stream is True:
+        return f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/anthropic/models/{model}:streamRawPredict"
+    else:
+        return f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/anthropic/models/{model}:rawPredict"
 
 
 def completion(
@@ -196,6 +220,8 @@ def completion(
     encoding,
     logging_obj,
     optional_params: dict,
+    custom_prompt_dict: dict,
+    headers: Optional[dict],
     vertex_project=None,
     vertex_location=None,
     vertex_credentials=None,
@@ -207,6 +233,9 @@ def completion(
     try:
         import vertexai
         from anthropic import AnthropicVertex
+
+        from litellm.llms.anthropic import AnthropicChatCompletion
+        from litellm.llms.vertex_httpx import VertexLLM
     except:
         raise VertexAIError(
             status_code=400,
@@ -222,18 +251,57 @@ def completion(
         )
     try:
 
-        vertex_ai_client, access_token = get_vertex_client(
-            client=client,
-            vertex_project=vertex_project,
-            vertex_location=vertex_location,
-            vertex_credentials=vertex_credentials,
+        vertex_httpx_logic = VertexLLM()
+
+        access_token, project_id = vertex_httpx_logic._ensure_access_token(
+            credentials=vertex_credentials, project_id=vertex_project
         )
+
+        anthropic_chat_completions = AnthropicChatCompletion()
 
         ## Load Config
         config = litellm.VertexAIAnthropicConfig.get_config()
         for k, v in config.items():
             if k not in optional_params:
                 optional_params[k] = v
+
+        ## CONSTRUCT API BASE
+        stream = optional_params.get("stream", False)
+
+        api_base = create_vertex_anthropic_url(
+            vertex_location=vertex_location or "us-central1",
+            vertex_project=vertex_project or project_id,
+            model=model,
+            stream=stream,
+        )
+
+        if headers is not None:
+            vertex_headers = headers
+        else:
+            vertex_headers = {}
+
+        vertex_headers.update({"Authorization": "Bearer {}".format(access_token)})
+
+        optional_params.update(
+            {"anthropic_version": "vertex-2023-10-16", "is_vertex_request": True}
+        )
+
+        return anthropic_chat_completions.completion(
+            model=model,
+            messages=messages,
+            api_base=api_base,
+            custom_prompt_dict=custom_prompt_dict,
+            model_response=model_response,
+            print_verbose=print_verbose,
+            encoding=encoding,
+            api_key=access_token,
+            logging_obj=logging_obj,
+            optional_params=optional_params,
+            acompletion=acompletion,
+            litellm_params=litellm_params,
+            logger_fn=logger_fn,
+            headers=vertex_headers,
+        )
 
         ## Format Prompt
         _is_function_call = False
@@ -363,7 +431,10 @@ def completion(
             },
         )
 
-        message = vertex_ai_client.messages.create(**data)  # type: ignore
+        vertex_ai_client: Optional[AnthropicVertex] = None
+        vertex_ai_client = AnthropicVertex()
+        if vertex_ai_client is not None:
+            message = vertex_ai_client.messages.create(**data)  # type: ignore
 
         ## LOGGING
         logging_obj.post_call(
