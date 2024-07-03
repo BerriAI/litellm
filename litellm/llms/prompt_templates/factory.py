@@ -1052,6 +1052,9 @@ def convert_to_gemini_tool_call_result(
             if msg_tool_call_id and prev_tool_call_id and msg_tool_call_id == prev_tool_call_id:
                 name = tool.get("function", {}).get("name", "")
 
+    if not name:
+        raise Exception("Missing corresponding tool call for tool response message")
+
     # We can't determine from openai message format whether it's a successful or
     # error call result so default to the successful result template
     inferred_content_value = infer_protocol_value(value=content)
