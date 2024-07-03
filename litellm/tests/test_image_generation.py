@@ -1,20 +1,23 @@
 # What this tests?
 ## This tests the litellm support for the openai /generations endpoint
 
-import sys, os
-import traceback
-from dotenv import load_dotenv
 import logging
+import os
+import sys
+import traceback
+
+from dotenv import load_dotenv
 
 logging.basicConfig(level=logging.DEBUG)
 load_dotenv()
-import os
 import asyncio
+import os
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import pytest
+
 import litellm
 
 
@@ -39,13 +42,25 @@ def test_image_generation_openai():
 # test_image_generation_openai()
 
 
-def test_image_generation_azure():
+@pytest.mark.parametrize(
+    "sync_mode",
+    [True, False],
+)  #
+@pytest.mark.asyncio
+async def test_image_generation_azure(sync_mode):
     try:
-        response = litellm.image_generation(
-            prompt="A cute baby sea otter",
-            model="azure/",
-            api_version="2023-06-01-preview",
-        )
+        if sync_mode:
+            response = litellm.image_generation(
+                prompt="A cute baby sea otter",
+                model="azure/",
+                api_version="2023-06-01-preview",
+            )
+        else:
+            response = await litellm.aimage_generation(
+                prompt="A cute baby sea otter",
+                model="azure/",
+                api_version="2023-06-01-preview",
+            )
         print(f"response: {response}")
         assert len(response.data) > 0
     except litellm.RateLimitError as e:
