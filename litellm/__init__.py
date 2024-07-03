@@ -125,6 +125,9 @@ llm_guard_mode: Literal["all", "key-specific", "request-specific"] = "all"
 ##################
 ### PREVIEW FEATURES ###
 enable_preview_features: bool = False
+return_response_headers: bool = (
+    False  # get response headers from LLM Api providers - example x-remaining-requests,
+)
 ##################
 logging: bool = True
 caching: bool = (
@@ -413,6 +416,7 @@ openai_compatible_providers: List = [
     "mistral",
     "groq",
     "nvidia_nim",
+    "volcengine",
     "codestral",
     "deepseek",
     "deepinfra",
@@ -643,6 +647,7 @@ provider_list: List = [
     "mistral",
     "groq",
     "nvidia_nim",
+    "volcengine",
     "codestral",
     "text-completion-codestral",
     "deepseek",
@@ -736,6 +741,7 @@ openai_image_generation_models = ["dall-e-2", "dall-e-3"]
 from .timeout import timeout
 from .cost_calculator import completion_cost
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.token_counter import get_modified_max_tokens
 from .utils import (
     client,
     exception_type,
@@ -746,6 +752,7 @@ from .utils import (
     create_pretrained_tokenizer,
     create_tokenizer,
     supports_function_calling,
+    supports_response_schema,
     supports_parallel_function_calling,
     supports_vision,
     supports_system_messages,
@@ -796,7 +803,11 @@ from .llms.sagemaker import SagemakerConfig
 from .llms.ollama import OllamaConfig
 from .llms.ollama_chat import OllamaChatConfig
 from .llms.maritalk import MaritTalkConfig
-from .llms.bedrock_httpx import AmazonCohereChatConfig, AmazonConverseConfig
+from .llms.bedrock_httpx import (
+    AmazonCohereChatConfig,
+    AmazonConverseConfig,
+    BEDROCK_CONVERSE_MODELS,
+)
 from .llms.bedrock import (
     AmazonTitanConfig,
     AmazonAI21Config,
@@ -818,6 +829,7 @@ from .llms.openai import (
 )
 from .llms.nvidia_nim import NvidiaNimConfig
 from .llms.fireworks_ai import FireworksAIConfig
+from .llms.volcengine import VolcEngineConfig
 from .llms.text_completion_codestral import MistralTextCompletionConfig
 from .llms.azure import (
     AzureOpenAIConfig,
@@ -844,6 +856,7 @@ from .exceptions import (
     APIResponseValidationError,
     UnprocessableEntityError,
     InternalServerError,
+    JSONSchemaValidationError,
     LITELLM_EXCEPTION_TYPES,
 )
 from .budget_manager import BudgetManager

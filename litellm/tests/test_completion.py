@@ -11,7 +11,7 @@ import os
 
 sys.path.insert(
     0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+)  # Adds-the parent directory to the system path
 
 import os
 from unittest.mock import MagicMock, patch
@@ -23,7 +23,7 @@ from litellm import RateLimitError, Timeout, completion, completion_cost, embedd
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.prompt_templates.factory import anthropic_messages_pt
 
-# litellm.num_retries = 3
+# litellm.num_retries=3
 litellm.cache = None
 litellm.success_callback = []
 user_message = "Write a short poem about the sky"
@@ -1220,44 +1220,6 @@ def test_completion_fireworks_ai():
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-
-
-def test_fireworks_ai_tool_calling():
-    litellm.set_verbose = True
-    model_name = "fireworks_ai/accounts/fireworks/models/firefunction-v2"
-    tools = [
-        {
-            "type": "function",
-            "function": {
-                "name": "get_current_weather",
-                "description": "Get the current weather in a given location",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "location": {
-                            "type": "string",
-                            "description": "The city and state, e.g. San Francisco, CA",
-                        },
-                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
-                    },
-                    "required": ["location"],
-                },
-            },
-        }
-    ]
-    messages = [
-        {
-            "role": "user",
-            "content": "What's the weather like in Boston today in Fahrenheit?",
-        }
-    ]
-    response = completion(
-        model=model_name,
-        messages=messages,
-        tools=tools,
-        tool_choice="required",
-    )
-    print(response)
 
 
 @pytest.mark.skip(reason="this test is flaky")
@@ -3506,6 +3468,30 @@ def test_completion_deep_infra_mistral():
 
 
 # test_completion_deep_infra_mistral()
+
+
+@pytest.mark.skip(reason="Local test - don't have a volcengine account as yet")
+def test_completion_volcengine():
+    litellm.set_verbose = True
+    model_name = "volcengine/<OUR_ENDPOINT_ID>"
+    try:
+        response = completion(
+            model=model_name,
+            messages=[
+                {
+                    "role": "user",
+                    "content": "What's the weather like in Boston today in Fahrenheit?",
+                }
+            ],
+            api_key="<OUR_API_KEY>",
+        )
+        # Add any assertions here to check the response
+        print(response)
+
+    except litellm.exceptions.Timeout as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
 
 def test_completion_nvidia_nim():

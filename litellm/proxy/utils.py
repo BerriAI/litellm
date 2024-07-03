@@ -272,6 +272,16 @@ class ProxyLogging:
                 callback_list=callback_list
             )
 
+    async def update_request_status(
+        self, litellm_call_id: str, status: Literal["success", "fail"]
+    ):
+        await self.internal_usage_cache.async_set_cache(
+            key="request_status:{}".format(litellm_call_id),
+            value=status,
+            local_only=True,
+            ttl=3600,
+        )
+
     # The actual implementation of the function
     async def pre_call_hook(
         self,
@@ -560,6 +570,9 @@ class ProxyLogging:
         """
 
         ### ALERTING ###
+        await self.update_request_status(
+            litellm_call_id=request_data.get("litellm_call_id", ""), status="fail"
+        )
         if "llm_exceptions" in self.alert_types and not isinstance(
             original_exception, HTTPException
         ):
@@ -611,6 +624,7 @@ class ProxyLogging:
         Covers:
         1. /chat/completions
         """
+
         for callback in litellm.callbacks:
             try:
                 _callback: Optional[CustomLogger] = None
