@@ -42,14 +42,25 @@ def test_image_generation_openai():
 # test_image_generation_openai()
 
 
+@pytest.mark.parametrize(
+    "sync_mode",
+    [True, False],
+)  #
 @pytest.mark.asyncio
-async def test_image_generation_azure():
+async def test_image_generation_azure(sync_mode):
     try:
-        response = await litellm.aimage_generation(
-            prompt="A cute baby sea otter",
-            model="azure/",
-            api_version="2023-06-01-preview",
-        )
+        if sync_mode:
+            response = litellm.image_generation(
+                prompt="A cute baby sea otter",
+                model="azure/",
+                api_version="2023-06-01-preview",
+            )
+        else:
+            response = await litellm.aimage_generation(
+                prompt="A cute baby sea otter",
+                model="azure/",
+                api_version="2023-06-01-preview",
+            )
         print(f"response: {response}")
         assert len(response.data) > 0
     except litellm.RateLimitError as e:
