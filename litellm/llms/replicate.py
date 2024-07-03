@@ -295,7 +295,15 @@ def handle_prediction_response_streaming(prediction_url, api_token, print_verbos
             response_data = response.json()
             status = response_data["status"]
             if "output" in response_data:
-                output_string = "".join(response_data["output"])
+                try:
+                    output_string = "".join(response_data["output"])
+                except Exception as e:
+                    raise ReplicateError(
+                        status_code=422,
+                        message="Unable to parse response. Got={}".format(
+                            response_data["output"]
+                        ),
+                    )
                 new_output = output_string[len(previous_output) :]
                 print_verbose(f"New chunk: {new_output}")
                 yield {"output": new_output, "status": status}
