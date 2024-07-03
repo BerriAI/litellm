@@ -8,6 +8,10 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy.common_utils.init_callbacks import initialize_callbacks_on_proxy
 from litellm.types.guardrails import GuardrailItem
 
+all_guardrails: List[GuardrailItem] = []
+
+guardrail_name_config_map: Dict[str, GuardrailItem] = {}
+
 
 def initialize_guardrails(
     guardrails_config: list,
@@ -17,8 +21,7 @@ def initialize_guardrails(
 ):
     try:
         verbose_proxy_logger.debug(f"validating  guardrails passed {guardrails_config}")
-
-        all_guardrails: List[GuardrailItem] = []
+        global all_guardrails
         for item in guardrails_config:
             """
             one item looks like this:
@@ -29,6 +32,7 @@ def initialize_guardrails(
             for k, v in item.items():
                 guardrail_item = GuardrailItem(**v, guardrail_name=k)
                 all_guardrails.append(guardrail_item)
+                guardrail_name_config_map[k] = guardrail_item
 
         # set appropriate callbacks if they are default on
         default_on_callbacks = set()
