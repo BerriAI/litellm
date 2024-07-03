@@ -58,6 +58,22 @@ curl --location 'http://localhost:4000/chat/completions' \
 👉 Pass `"metadata": {"guardrails": []}` 
 
 <Tabs>
+<TabItem value="js" label="Langchain JS">
+
+```js
+const model = new ChatOpenAI({
+  modelName: "llama3",
+  openAIApiKey: "sk-1234",
+  modelKwargs: {"metadata": {"guardrails": []}}
+}, {
+  basePath: "http://0.0.0.0:4000",
+});
+
+const message = await model.invoke("Hi there!");
+console.log(message);
+```
+</TabItem>
+
 <TabItem value="curl" label="Curl">
 
 ```shell
