@@ -3634,7 +3634,7 @@ def get_model_region(
             model=_model,
             api_key=litellm_params.api_key,
             api_base=litellm_params.api_base,
-            api_version=litellm_params.api_version or "2023-07-01-preview",
+            api_version=litellm_params.api_version or litellm.AZURE_DEFAULT_API_VERSION,
             timeout=10,
             mode=mode or "chat",
         )
