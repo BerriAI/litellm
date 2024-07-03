@@ -3437,7 +3437,7 @@ class Router:
                     if azure_ad_token.startswith("oidc/"):
                         azure_ad_token = get_azure_ad_token_from_oidc(azure_ad_token)
                 if api_version is None:
-                    api_version = "2023-07-01-preview"
+                    api_version = litellm.AZURE_DEFAULT_API_VERSION
 
                 if "gateway.ai.cloudflare.com" in api_base:
                     if not api_base.endswith("/"):
