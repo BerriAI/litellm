@@ -905,7 +905,7 @@
     },
     "deepseek-coder": {
         "max_tokens": 4096,
-        "max_input_tokens": 32000,
+        "max_input_tokens": 128000,
         "max_output_tokens": 4096,
         "input_cost_per_token": 0.00000014,
         "output_cost_per_token": 0.00000028,
