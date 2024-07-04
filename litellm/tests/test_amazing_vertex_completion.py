@@ -1159,8 +1159,7 @@ async def test_gemini_pro_function_calling(provider, sync_mode):
             # The result of the tool call is added to the history
             {
                 "role": "tool",
-                "tool_call_id": "call_123",
-                "name": "get_weather",
+                "tool_call_id": "call_123", 
                 "content": "27 degrees celsius and clear in San Francisco, CA",
             },
             # Now the assistant can reply with the result of the tool call.
@@ -1382,6 +1381,52 @@ async def test_vertexai_aembedding():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+@pytest.mark.asyncio
+def test_tool_name_conversion():
+    messages = [
+        {
+            "role": "system",
+            "content": "Your name is Litellm Bot, you are a helpful assistant",
+        },
+        # User asks for their name and weather in San Francisco
+        {
+            "role": "user",
+            "content": "Hello, what is your name and can you tell me the weather?",
+        },
+        # Assistant replies with a tool call
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_123",
+                    "type": "function",
+                    "index": 0,
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": '{"location":"San Francisco, CA"}',
+                    },
+                }
+            ],
+        },
+        # The result of the tool call is added to the history
+        {
+            "role": "tool",
+            "tool_call_id": "call_123",
+            "content": "27 degrees celsius and clear in San Francisco, CA",
+        },
+        # Now the assistant can reply with the result of the tool call.
+    ]
+
+    translated_messages = _gemini_convert_messages_with_history(messages=messages)
+
+    print(f"\n\ntranslated_messages: {translated_messages}\ntranslated_messages")
+
+    # assert that the last tool response has the corresponding tool name
+    assert (
+        translated_messages[-1]["parts"][0]["function_response"]["name"] == "get_weather"
+    )
+
 
 # Extra gemini Vision tests for completion + stream, async, async + stream
 # if we run into issues with gemini, we will also add these to our ci/cd pipeline
@@ -1531,7 +1576,6 @@ def test_prompt_factory():
         {
             "role": "tool",
             "tool_call_id": "call_123",
-            "name": "get_weather",
             "content": "27 degrees celsius and clear in San Francisco, CA",
         },
         # Now the assistant can reply with the result of the tool call.
@@ -1540,7 +1584,6 @@ def test_prompt_factory():
     translated_messages = _gemini_convert_messages_with_history(messages=messages)
 
     print(f"\n\ntranslated_messages: {translated_messages}\ntranslated_messages")
-
 
 def test_prompt_factory_nested():
     messages = [

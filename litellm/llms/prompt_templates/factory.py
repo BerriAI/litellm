@@ -1026,16 +1026,17 @@ def convert_to_gemini_tool_call_invoke(
 
 def convert_to_gemini_tool_call_result(
     message: dict,
+    last_message_with_tool_calls: dict|None,
 ) -> litellm.types.llms.vertex_ai.PartType:
     """
     OpenAI message with a tool result looks like:
     {
         "tool_call_id": "tool_1",
-        "role": "tool",
-        "name": "get_current_weather",
+        "role": "tool", 
         "content": "function result goes here",
     },
 
+    # NOTE: Function messages have been deprecated
     OpenAI message with a function call result looks like:
     {
         "role": "function",
@@ -1044,7 +1045,19 @@ def convert_to_gemini_tool_call_result(
     }
     """
     content = message.get("content", "")
-    name = message.get("name", "")
+    name = ""
+
+    # Recover name from last message with tool calls
+    if last_message_with_tool_calls:
+        tools = last_message_with_tool_calls.get("tool_calls", [])
+        msg_tool_call_id = message.get("tool_call_id", None)
+        for tool in tools:
+            prev_tool_call_id = tool.get("id", None)
+            if msg_tool_call_id and prev_tool_call_id and msg_tool_call_id == prev_tool_call_id:
+                name = tool.get("function", {}).get("name", "")
+
+    if not name:
+        raise Exception("Missing corresponding tool call for tool response message")
 
     # We can't determine from openai message format whether it's a successful or
     # error call result so default to the successful result template
