@@ -531,7 +531,6 @@ def format_prompt_togetherai(messages, prompt_format, chat_template):
 ### IBM Granite
 
 
-
 def ibm_granite_pt(messages: list):
     """
     IBM's Granite models uses the template:
@@ -1026,13 +1025,13 @@ def convert_to_gemini_tool_call_invoke(
 
 def convert_to_gemini_tool_call_result(
     message: dict,
-    last_message_with_tool_calls: dict|None,
+    last_message_with_tool_calls: Optional[dict],
 ) -> litellm.types.llms.vertex_ai.PartType:
     """
     OpenAI message with a tool result looks like:
     {
         "tool_call_id": "tool_1",
-        "role": "tool", 
+        "role": "tool",
         "content": "function result goes here",
     },
 
@@ -1053,7 +1052,11 @@ def convert_to_gemini_tool_call_result(
         msg_tool_call_id = message.get("tool_call_id", None)
         for tool in tools:
             prev_tool_call_id = tool.get("id", None)
-            if msg_tool_call_id and prev_tool_call_id and msg_tool_call_id == prev_tool_call_id:
+            if (
+                msg_tool_call_id
+                and prev_tool_call_id
+                and msg_tool_call_id == prev_tool_call_id
+            ):
                 name = tool.get("function", {}).get("name", "")
 
     if not name:
