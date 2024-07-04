@@ -12,6 +12,7 @@ import ViewKeyTable from "./view_key_table";
 import ViewUserSpend from "./view_user_spend";
 import ViewUserTeam from "./view_user_team";
 import DashboardTeam from "./dashboard_default_team";
+import Onboarding from "../app/onboarding/page";
 import { useSearchParams, useRouter } from "next/navigation";
 import { jwtDecode } from "jwt-decode";
 import { Typography } from "antd";
@@ -75,6 +76,8 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   const router = useRouter();
 
   const token = getCookie('token');
+
+  const invitation_id = searchParams.get("invitation_id");
 
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [teamSpend, setTeamSpend] = useState<number | null>(null);
@@ -257,7 +260,13 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   }, [selectedTeam]);
 
   if (userID == null || token == null) {
-    // Now you can construct the full URL
+    // user is not logged in as yet 
+    if (invitation_id != null) {
+      return (
+        <Onboarding></Onboarding>
+
+      )
+    }
     const url = proxyBaseUrl
       ? `${proxyBaseUrl}/sso/key/generate`
       : `/sso/key/generate`;
