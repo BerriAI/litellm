@@ -7704,22 +7704,12 @@ async def claim_onboarding_link(data: InvitationClaim):
         )
 
     #### CHECK IF CLAIMED
-    ##### if claimed - check if within valid session (within 10 minutes of being claimed)
+    ##### if claimed - accept
     ##### if unclaimed - reject
 
-    current_time = litellm.utils.get_utc_datetime()
-
-    if invite_obj.is_accepted == True:
-        time_difference = current_time - invite_obj.updated_at
-
-        # Check if the difference is within 10 minutes
-        if time_difference > timedelta(minutes=10):
-            raise HTTPException(
-                status_code=401,
-                detail={
-                    "error": "The invitation link has already been claimed. Please ask your admin for a new invite link."
-                },
-            )
+    if invite_obj.is_accepted is True:
+        # this is a valid invite that was accepted
+        pass
     else:
         raise HTTPException(
             status_code=401,
