@@ -43,4 +43,7 @@ async def should_proceed_based_on_metadata(data: dict, guardrail_name: str) -> b
             if guardrail_name in requested_callback_names:
                 return True
 
-    return False
+            # Do no proceeed if - "metadata": { "guardrails": { "lakera_prompt_injection": false } }
+            return False
+
+    return True
