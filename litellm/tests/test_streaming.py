@@ -2020,7 +2020,7 @@ def test_openai_chat_completion_complete_response_call():
 # test_openai_chat_completion_complete_response_call()
 @pytest.mark.parametrize(
     "model",
-    ["gpt-3.5-turbo", "azure/chatgpt-v-2"],
+    ["gpt-3.5-turbo", "azure/chatgpt-v-2", "claude-3-haiku-20240307"],  #
 )
 @pytest.mark.parametrize(
     "sync",
@@ -2028,14 +2028,14 @@ def test_openai_chat_completion_complete_response_call():
 )
 @pytest.mark.asyncio
 async def test_openai_stream_options_call(model, sync):
-    litellm.set_verbose = False
+    litellm.set_verbose = True
     usage = None
     chunks = []
     if sync:
         response = litellm.completion(
             model=model,
             messages=[
-                {"role": "system", "content": "say GM - we're going to make it "}
+                {"role": "user", "content": "say GM - we're going to make it "},
             ],
             stream=True,
             stream_options={"include_usage": True},
@@ -2047,9 +2047,7 @@ async def test_openai_stream_options_call(model, sync):
     else:
         response = await litellm.acompletion(
             model=model,
-            messages=[
-                {"role": "system", "content": "say GM - we're going to make it "}
-            ],
+            messages=[{"role": "user", "content": "say GM - we're going to make it "}],
             stream=True,
             stream_options={"include_usage": True},
             max_tokens=10,
@@ -2746,7 +2744,7 @@ class Chunk2(BaseModel):
     object: str
     created: int
     model: str
-    system_fingerprint: str
+    system_fingerprint: Optional[str]
     choices: List[Choices2]
 
 
@@ -3001,7 +2999,7 @@ def test_completion_claude_3_function_call_with_streaming():
             model="claude-3-opus-20240229",
             messages=messages,
             tools=tools,
-            tool_choice="auto",
+            tool_choice="required",
             stream=True,
         )
         idx = 0
@@ -3060,7 +3058,7 @@ async def test_acompletion_claude_3_function_call_with_streaming():
             model="claude-3-opus-20240229",
             messages=messages,
             tools=tools,
-            tool_choice="auto",
+            tool_choice="required",
             stream=True,
         )
         idx = 0
