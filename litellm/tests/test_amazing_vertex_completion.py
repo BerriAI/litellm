@@ -203,7 +203,7 @@ def test_vertex_ai_anthropic():
 # )
 def test_vertex_ai_anthropic_streaming():
     try:
-        # load_vertex_ai_credentials()
+        load_vertex_ai_credentials()
 
         # litellm.set_verbose = True
 
@@ -223,8 +223,9 @@ def test_vertex_ai_anthropic_streaming():
             stream=True,
         )
         # print("\nModel Response", response)
-        for chunk in response:
+        for idx, chunk in enumerate(response):
             print(f"chunk: {chunk}")
+            streaming_format_tests(idx=idx, chunk=chunk)
 
     # raise Exception("it worked!")
     except litellm.RateLimitError as e:
@@ -294,8 +295,10 @@ async def test_vertex_ai_anthropic_async_streaming():
             stream=True,
         )
 
+        idx = 0
         async for chunk in response:
-            print(f"chunk: {chunk}")
+            streaming_format_tests(idx=idx, chunk=chunk)
+            idx += 1
     except litellm.RateLimitError as e:
         pass
     except Exception as e:
