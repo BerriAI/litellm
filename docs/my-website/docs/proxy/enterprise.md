@@ -28,7 +28,7 @@ Features:
 - **Guardrails, PII Masking, Content Moderation**
     - ✅ [Content Moderation with LLM Guard, LlamaGuard, Secret Detection, Google Text Moderations](#content-moderation)
     - ✅ [Prompt Injection Detection (with LakeraAI API)](#prompt-injection-detection---lakeraai)
-    - ✅ [Switch LakerAI on / off per request](prompt_injection.md#✨-enterprise-switch-lakeraai-on--off-per-api-call)
+    - ✅ [Switch LakeraAI on / off per request](guardrails#control-guardrails-onoff-per-request)
     - ✅ Reject calls from Blocked User list 
     - ✅ Reject calls (incoming / outgoing) with Banned Keywords (e.g. competitors)
 - **Custom Branding**
