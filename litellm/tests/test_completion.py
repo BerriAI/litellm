@@ -410,17 +410,21 @@ def test_completion_claude_3_function_call(model):
 
 @pytest.mark.parametrize("sync_mode", [True])
 @pytest.mark.parametrize(
-    "model",
+    "model, api_key, api_base",
     [
-        "gpt-3.5-turbo",
-        "claude-3-opus-20240229",
-        "command-r",
-        "anthropic.claude-3-sonnet-20240229-v1:0",
-        # "azure_ai/command-r-plus"
+        ("gpt-3.5-turbo", None, None),
+        ("claude-3-opus-20240229", None, None),
+        ("command-r", None, None),
+        ("anthropic.claude-3-sonnet-20240229-v1:0", None, None),
+        (
+            "azure_ai/command-r-plus",
+            os.getenv("AZURE_COHERE_API_KEY"),
+            os.getenv("AZURE_COHERE_API_BASE"),
+        ),
     ],
 )
 @pytest.mark.asyncio
-async def test_model_function_invoke(model, sync_mode):
+async def test_model_function_invoke(model, sync_mode, api_key, api_base):
     try:
         litellm.set_verbose = True
 
@@ -445,7 +449,7 @@ async def test_model_function_invoke(model, sync_mode):
                         "index": 0,
                         "function": {
                             "name": "get_weather",
-                            "arguments": '{"location":"San Francisco, CA"}',
+                            "arguments": '{"location": "San Francisco, CA"}',
                         },
                     }
                 ],
@@ -483,6 +487,8 @@ async def test_model_function_invoke(model, sync_mode):
             "model": model,
             "messages": messages,
             "tools": tools,
+            "api_key": api_key,
+            "api_base": api_base,
         }
         if sync_mode:
             response = litellm.completion(**data)
