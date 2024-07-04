@@ -397,7 +397,7 @@ class IBMWatsonXAI(BaseLLM):
         }
 
     def _process_text_gen_response(
-        self, json_resp: dict, model_response: Union[ModelResponse, None] = None
+        self, json_resp: dict, model_response = None
     ) -> ModelResponse:
         if "results" not in json_resp:
             raise WatsonXAIError(
@@ -430,7 +430,7 @@ class IBMWatsonXAI(BaseLLM):
         model: str,
         messages: list,
         custom_prompt_dict: dict,
-        model_response: ModelResponse,
+        model_response,
         print_verbose: Callable,
         encoding,
         logging_obj,
@@ -545,7 +545,7 @@ class IBMWatsonXAI(BaseLLM):
         except Exception as e:
             raise WatsonXAIError(status_code=500, message=str(e))
         
-    def _process_embedding_response(self, json_resp: dict, model_response:Union[ModelResponse,None]=None) -> ModelResponse:
+    def _process_embedding_response(self, json_resp: dict, model_response=None) -> ModelResponse:
         if model_response is None:
             model_response = ModelResponse(model=json_resp.get("model_id", None))
         results = json_resp.get("results", [])
