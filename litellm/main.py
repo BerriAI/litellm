@@ -4367,6 +4367,8 @@ def transcription(
 
     model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider, api_base=api_base)  # type: ignore
 
+    if dynamic_api_key is not None:
+        api_key = dynamic_api_key
     optional_params = {
         "language": language,
         "prompt": prompt,
@@ -4408,7 +4410,7 @@ def transcription(
             azure_ad_token=azure_ad_token,
             max_retries=max_retries,
         )
-    elif custom_llm_provider == "openai":
+    elif custom_llm_provider == "openai" or custom_llm_provider == "groq":
         api_base = (
             api_base
             or litellm.api_base
