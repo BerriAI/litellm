@@ -431,20 +431,6 @@ class AnthropicChatCompletion(BaseLLM):
         headers={},
     ):
         data["stream"] = True
-        # async_handler = AsyncHTTPHandler(
-        #     timeout=httpx.Timeout(timeout=600.0, connect=20.0)
-        # )
-
-        # response = await async_handler.post(
-        #     api_base, headers=headers, json=data, stream=True
-        # )
-
-        # if response.status_code != 200:
-        #     raise AnthropicError(
-        #         status_code=response.status_code, message=response.text
-        #     )
-
-        # completion_stream = response.aiter_lines()
 
         streamwrapper = CustomStreamWrapper(
             completion_stream=None,
@@ -484,7 +470,17 @@ class AnthropicChatCompletion(BaseLLM):
         headers={},
     ) -> Union[ModelResponse, CustomStreamWrapper]:
         async_handler = _get_async_httpx_client()
-        response = await async_handler.post(api_base, headers=headers, json=data)
+        try:
+            response = await async_handler.post(api_base, headers=headers, json=data)
+        except Exception as e:
+            ## LOGGING
+            logging_obj.post_call(
+                input=messages,
+                api_key=api_key,
+                original_response=str(e),
+                additional_args={"complete_input_dict": data},
+            )
+            raise e
         if stream and _is_function_call:
             return self.process_streaming_response(
                 model=model,
@@ -588,12 +584,15 @@ class AnthropicChatCompletion(BaseLLM):
             optional_params["tools"] = anthropic_tools
 
         stream = optional_params.pop("stream", None)
+        is_vertex_request: bool = optional_params.pop("is_vertex_request", False)
 
         data = {
-            "model": model,
             "messages": messages,
             **optional_params,
         }
+
+        if is_vertex_request is False:
+            data["model"] = model
 
         ## LOGGING
         logging_obj.pre_call(
@@ -678,10 +677,27 @@ class AnthropicChatCompletion(BaseLLM):
                 return streaming_response
 
             else:
-                response = requests.post(
-                    api_base, headers=headers, data=json.dumps(data)
-                )
+                try:
+                    response = requests.post(
+                        api_base, headers=headers, data=json.dumps(data)
+                    )
+                except Exception as e:
+                    ## LOGGING
+                    logging_obj.post_call(
+                        input=messages,
+                        api_key=api_key,
+                        original_response=str(e),
+                        additional_args={"complete_input_dict": data},
+                    )
+                    raise e
                 if response.status_code != 200:
+                    ## LOGGING
+                    logging_obj.post_call(
+                        input=messages,
+                        api_key=api_key,
+                        original_response=response.text,
+                        additional_args={"complete_input_dict": data},
+                    )
                     raise AnthropicError(
                         status_code=response.status_code, message=response.text
                     )
