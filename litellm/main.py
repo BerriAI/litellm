@@ -2028,18 +2028,18 @@ def completion(
                     acompletion=acompletion,
                 )
 
-            if (
-                "stream" in optional_params
-                and optional_params["stream"] == True
-                and acompletion == False
-            ):
-                response = CustomStreamWrapper(
-                    model_response,
-                    model,
-                    custom_llm_provider="vertex_ai",
-                    logging_obj=logging,
-                )
-                return response
+                if (
+                    "stream" in optional_params
+                    and optional_params["stream"] == True
+                    and acompletion == False
+                ):
+                    response = CustomStreamWrapper(
+                        model_response,
+                        model,
+                        custom_llm_provider="vertex_ai",
+                        logging_obj=logging,
+                    )
+                    return response
             response = model_response
         elif custom_llm_provider == "predibase":
             tenant_id = (
