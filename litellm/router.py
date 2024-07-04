@@ -67,6 +67,7 @@ from litellm.types.llms.openai import (
     Thread,
 )
 from litellm.types.router import (
+    SPECIAL_MODEL_INFO_PARAMS,
     AlertingConfig,
     AllowedFailsPolicy,
     AssistantsTypedDict,
@@ -3794,7 +3795,7 @@ class Router:
         deployment = Deployment(
             **model,
             model_name=_model_name,
-            litellm_params=_litellm_params,  # type: ignore
+            litellm_params=LiteLLM_Params(**_litellm_params),
             model_info=_model_info,
         )
 
