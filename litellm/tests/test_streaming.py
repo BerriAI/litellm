@@ -2559,9 +2559,16 @@ def streaming_and_function_calling_format_tests(idx, chunk):
 
 
 @pytest.mark.parametrize(
-    "model", ["gpt-3.5-turbo", "anthropic.claude-3-sonnet-20240229-v1:0"]
+    "model",
+    [
+        "gpt-3.5-turbo",
+        "anthropic.claude-3-sonnet-20240229-v1:0",
+        "claude-3-haiku-20240307",
+    ],
 )
 def test_streaming_and_function_calling(model):
+    import json
+
     tools = [
         {
             "type": "function",
@@ -2594,6 +2601,7 @@ def test_streaming_and_function_calling(model):
             tool_choice="required",
         )  # type: ignore
         # Add any assertions here to check the response
+        json_str = ""
         for idx, chunk in enumerate(response):
             # continue
             print("\n{}\n".format(chunk))
@@ -2604,7 +2612,10 @@ def test_streaming_and_function_calling(model):
                 assert isinstance(
                     chunk.choices[0].delta.tool_calls[0].function.arguments, str
                 )
-        # assert False
+            if chunk.choices[0].delta.tool_calls is not None:
+                json_str += chunk.choices[0].delta.tool_calls[0].function.arguments
+
+        print(json.loads(json_str))
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
         raise e
