@@ -601,12 +601,15 @@ class AnthropicChatCompletion(BaseLLM):
             optional_params["tools"] = anthropic_tools
 
         stream = optional_params.pop("stream", None)
+        is_vertex_request: bool = optional_params.pop("is_vertex_request", False)
 
         data = {
-            "model": model,
             "messages": messages,
             **optional_params,
         }
+
+        if is_vertex_request is False:
+            data["model"] = model
 
         ## LOGGING
         logging_obj.pre_call(
