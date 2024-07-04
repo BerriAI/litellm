@@ -67,13 +67,13 @@ const OnboardingModal: React.FC<OnboardingProps> = ({
       <div className="flex justify-between pt-5 pb-2">
         <Text>Invitation Link</Text>
         <Text>
-          {baseUrl}/ui/onboarding?id={invitationLinkData?.id}
+          {baseUrl}/ui?invitation_id={invitationLinkData?.id}
         </Text>
       </div>
       <div className="flex justify-end mt-5">
         <div></div>
         <CopyToClipboard
-          text={`${baseUrl}/ui/onboarding?id=${invitationLinkData?.id}`}
+          text={`${baseUrl}/ui?invitation_id=${invitationLinkData?.id}`}
           onCopy={() => message.success("Copied!")}
         >
           <Button variant="primary">Copy invitation link</Button>
