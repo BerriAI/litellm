@@ -729,9 +729,6 @@ class VertexLLM(BaseLLM):
     def load_auth(
         self, credentials: Optional[str], project_id: Optional[str]
     ) -> Tuple[Any, str]:
-        """
-        Returns Credentials, project_id
-        """
         import google.auth as google_auth
         from google.auth.credentials import Credentials  # type: ignore[import-untyped]
         from google.auth.transport.requests import (
@@ -1038,7 +1035,9 @@ class VertexLLM(BaseLLM):
             safety_settings: Optional[List[SafetSettingsConfig]] = optional_params.pop(
                 "safety_settings", None
             )  # type: ignore
-            cached_content: Optional[str] = optional_params.pop("cached_content", None)
+            cached_content: Optional[str] = optional_params.pop(
+                "cached_content", None
+            )
             generation_config: Optional[GenerationConfig] = GenerationConfig(
                 **optional_params
             )
