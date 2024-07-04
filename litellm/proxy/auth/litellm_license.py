@@ -67,11 +67,14 @@ class LicenseCheck:
         try:
             if self.license_str is None:
                 return False
-            elif self.verify_license_without_api_request(
-                public_key=self.public_key, license_key=self.license_str
+            elif (
+                self.verify_license_without_api_request(
+                    public_key=self.public_key, license_key=self.license_str
+                )
+                is True
             ):
                 return True
-            elif self._verify(license_str=self.license_str):
+            elif self._verify(license_str=self.license_str) is True:
                 return True
             return False
         except Exception as e:

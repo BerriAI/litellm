@@ -17,12 +17,9 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.integrations.custom_logger import CustomLogger
 from fastapi import HTTPException
 from litellm._logging import verbose_proxy_logger
-from litellm.utils import (
-    ModelResponse,
-    EmbeddingResponse,
-    ImageResponse,
-    StreamingChoices,
-)
+from litellm.proxy.guardrails.init_guardrails import all_guardrails
+from litellm.proxy.guardrails.guardrail_helpers import should_proceed_based_on_metadata
+
 from datetime import datetime
 import aiohttp, asyncio
 from litellm._logging import verbose_proxy_logger
@@ -43,19 +40,6 @@ class _ENTERPRISE_lakeraAI_Moderation(CustomLogger):
         self.lakera_api_key = os.environ["LAKERA_API_KEY"]
         pass
 
-    async def should_proceed(self, data: dict) -> bool:
-        """
-        checks if this guardrail should be applied to this call
-        """
-        if "metadata" in data and isinstance(data["metadata"], dict):
-            if "guardrails" in data["metadata"]:
-                # if guardrails passed in metadata -> this is a list of guardrails the user wants to run on the call
-                if GUARDRAIL_NAME not in data["metadata"]["guardrails"]:
-                    return False
-
-        # in all other cases it should proceed
-        return True
-
     #### CALL HOOKS - proxy only ####
 
     async def async_moderation_hook(  ### 👈 KEY CHANGE ###
@@ -65,7 +49,13 @@ class _ENTERPRISE_lakeraAI_Moderation(CustomLogger):
         call_type: Literal["completion", "embeddings", "image_generation"],
     ):
 
-        if await self.should_proceed(data=data) is False:
+        if (
+            await should_proceed_based_on_metadata(
+                data=data,
+                guardrail_name=GUARDRAIL_NAME,
+            )
+            is False
+        ):
             return
 
         if "messages" in data and isinstance(data["messages"], list):

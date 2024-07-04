@@ -531,6 +531,7 @@ def format_prompt_togetherai(messages, prompt_format, chat_template):
 ### IBM Granite
 
 
+
 def ibm_granite_pt(messages: list):
     """
     IBM's Granite models uses the template:
@@ -547,10 +548,13 @@ def ibm_granite_pt(messages: list):
             },
             "user": {
                 "pre_message": "<|user|>\n",
-                "post_message": "\n",
+                # Assistant tag is needed in the prompt after the user message
+                # to avoid the model completing the users sentence before it answers
+                # https://www.ibm.com/docs/en/watsonx/w-and-w/2.0.x?topic=models-granite-13b-chat-v2-prompting-tips#chat
+                "post_message": "\n<|assistant|>\n",
             },
             "assistant": {
-                "pre_message": "<|assistant|>\n",
+                "pre_message": "",
                 "post_message": "\n",
             },
         },
