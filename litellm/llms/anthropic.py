@@ -12,6 +12,7 @@ import requests  # type: ignore
 
 import litellm
 import litellm.litellm_core_utils
+from litellm import verbose_logger
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -730,6 +731,7 @@ class ModelResponseIterator:
 
     def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
         try:
+            verbose_logger.debug(f"\n\nRaw chunk:\n{chunk}\n")
             type_chunk = chunk.get("type", "") or ""
 
             text = ""
@@ -770,9 +772,7 @@ class ModelResponseIterator:
                         "type": "function",
                         "function": {
                             "name": content_block_start["content_block"]["name"],
-                            "arguments": json.dumps(
-                                content_block_start["content_block"]["input"]
-                            ),
+                            "arguments": "",
                         },
                     }
             elif type_chunk == "message_delta":
