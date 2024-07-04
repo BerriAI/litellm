@@ -259,14 +259,15 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
     }
   }, [selectedTeam]);
 
+
+  if (invitation_id != null) {
+    return (
+      <Onboarding></Onboarding>
+    )
+  }
+
   if (userID == null || token == null) {
     // user is not logged in as yet 
-    if (invitation_id != null) {
-      return (
-        <Onboarding></Onboarding>
-
-      )
-    }
     const url = proxyBaseUrl
       ? `${proxyBaseUrl}/sso/key/generate`
       : `/sso/key/generate`;
