@@ -8786,11 +8786,11 @@ class CustomStreamWrapper:
             # return this for all models
             completion_obj = {"content": ""}
             if self.custom_llm_provider and self.custom_llm_provider == "anthropic":
-                from litellm.types.llms.bedrock import GenericStreamingChunk
+                from litellm.types.utils import GenericStreamingChunk as GChunk
 
                 if self.received_finish_reason is not None:
                     raise StopIteration
-                response_obj: GenericStreamingChunk = chunk
+                response_obj: GChunk = chunk
                 completion_obj["content"] = response_obj["text"]
                 if response_obj["is_finished"]:
                     self.received_finish_reason = response_obj["finish_reason"]
@@ -8802,9 +8802,9 @@ class CustomStreamWrapper:
                 ):
                     self.sent_stream_usage = True
                     model_response.usage = litellm.Usage(
-                        prompt_tokens=response_obj["usage"]["inputTokens"],
-                        completion_tokens=response_obj["usage"]["outputTokens"],
-                        total_tokens=response_obj["usage"]["totalTokens"],
+                        prompt_tokens=response_obj["usage"]["prompt_tokens"],
+                        completion_tokens=response_obj["usage"]["completion_tokens"],
+                        total_tokens=response_obj["usage"]["total_tokens"],
                     )
 
                 if "tool_use" in response_obj and response_obj["tool_use"] is not None:
