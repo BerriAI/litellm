@@ -6648,13 +6648,11 @@ async def model_metrics_exceptions(
 
 @router.get(
     "/model/info",
-    description="Provides more info about each model in /models, including config.yaml descriptions (except api key and api base)",
     tags=["model management"],
     dependencies=[Depends(user_api_key_auth)],
 )
 @router.get(
     "/v1/model/info",
-    description="Provides more info about each model in /models, including config.yaml descriptions (except api key and api base)",
     tags=["model management"],
     dependencies=[Depends(user_api_key_auth)],
 )
@@ -6662,6 +6660,38 @@ async def model_info_v1(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     litellm_model_id: Optional[str] = None,
 ):
+    """
+    Provides more info about each model in /models, including config.yaml descriptions (except api key and api base)
+
+    Parameters:
+        litellm_model_id: Optional[str] = None (this is the value of `x-litellm-model-id` returned in response headers)
+
+        - When litellm_model_id is passed, it will return the info for that specific model
+        - When litellm_model_id is not passed, it will return the info for all models
+
+    Returns:
+        Returns a dictionary containing information about each model.
+
+    Example Response:
+    ```json
+    {
+        "data": [
+                    {
+                        "model_name": "fake-openai-endpoint",
+                        "litellm_params": {
+                            "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                            "model": "openai/fake"
+                        },
+                        "model_info": {
+                            "id": "112f74fab24a7a5245d2ced3536dd8f5f9192c57ee6e332af0f0512e08bed5af",
+                            "db_model": false
+                        }
+                    }
+                ]
+    }
+
+    ```
+    """
     global llm_model_list, general_settings, user_config_file_path, proxy_config, llm_router
 
     if llm_model_list is None:
