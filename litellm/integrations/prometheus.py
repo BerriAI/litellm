@@ -34,6 +34,7 @@ class PrometheusLogger:
                 labelnames=[
                     "end_user",
                     "hashed_api_key",
+                    "api_key_alias",
                     "model",
                     "team",
                     "team_alias",
@@ -47,6 +48,7 @@ class PrometheusLogger:
                 labelnames=[
                     "end_user",
                     "hashed_api_key",
+                    "api_key_alias",
                     "model",
                     "team",
                     "team_alias",
@@ -61,6 +63,7 @@ class PrometheusLogger:
                 labelnames=[
                     "end_user",
                     "hashed_api_key",
+                    "api_key_alias",
                     "model",
                     "team",
                     "team_alias",
@@ -75,6 +78,7 @@ class PrometheusLogger:
                 labelnames=[
                     "end_user",
                     "hashed_api_key",
+                    "api_key_alias",
                     "model",
                     "team",
                     "team_alias",
@@ -204,6 +208,7 @@ class PrometheusLogger:
             self.litellm_requests_metric.labels(
                 end_user_id,
                 user_api_key,
+                user_api_key_alias,
                 model,
                 user_api_team,
                 user_api_team_alias,
@@ -212,6 +217,7 @@ class PrometheusLogger:
             self.litellm_spend_metric.labels(
                 end_user_id,
                 user_api_key,
+                user_api_key_alias,
                 model,
                 user_api_team,
                 user_api_team_alias,
@@ -220,6 +226,7 @@ class PrometheusLogger:
             self.litellm_tokens_metric.labels(
                 end_user_id,
                 user_api_key,
+                user_api_key_alias,
                 model,
                 user_api_team,
                 user_api_team_alias,
@@ -243,6 +250,7 @@ class PrometheusLogger:
                 self.litellm_llm_api_failed_requests_metric.labels(
                     end_user_id,
                     user_api_key,
+                    user_api_key_alias,
                     model,
                     user_api_team,
                     user_api_team_alias,
