@@ -2746,7 +2746,7 @@ class Chunk2(BaseModel):
     object: str
     created: int
     model: str
-    system_fingerprint: str
+    system_fingerprint: Optional[str]
     choices: List[Choices2]
 
 
@@ -3001,7 +3001,7 @@ def test_completion_claude_3_function_call_with_streaming():
             model="claude-3-opus-20240229",
             messages=messages,
             tools=tools,
-            tool_choice="auto",
+            tool_choice="required",
             stream=True,
         )
         idx = 0
@@ -3060,7 +3060,7 @@ async def test_acompletion_claude_3_function_call_with_streaming():
             model="claude-3-opus-20240229",
             messages=messages,
             tools=tools,
-            tool_choice="auto",
+            tool_choice="required",
             stream=True,
         )
         idx = 0
