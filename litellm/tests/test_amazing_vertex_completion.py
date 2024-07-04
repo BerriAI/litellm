@@ -1121,7 +1121,7 @@ async def test_gemini_pro_httpx_custom_api_base(provider):
         assert "hello" in mock_call.call_args.kwargs["headers"]
 
 
-@pytest.mark.skip(reason="exhausted vertex quota. need to refactor to mock the call")
+# @pytest.mark.skip(reason="exhausted vertex quota. need to refactor to mock the call")
 @pytest.mark.parametrize("sync_mode", [True])
 @pytest.mark.parametrize("provider", ["vertex_ai"])
 @pytest.mark.asyncio
@@ -1159,7 +1159,7 @@ async def test_gemini_pro_function_calling(provider, sync_mode):
             # The result of the tool call is added to the history
             {
                 "role": "tool",
-                "tool_call_id": "call_123", 
+                "tool_call_id": "call_123",
                 "content": "27 degrees celsius and clear in San Francisco, CA",
             },
             # Now the assistant can reply with the result of the tool call.
@@ -1381,6 +1381,7 @@ async def test_vertexai_aembedding():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+
 @pytest.mark.asyncio
 def test_tool_name_conversion():
     messages = [
@@ -1424,7 +1425,8 @@ def test_tool_name_conversion():
 
     # assert that the last tool response has the corresponding tool name
     assert (
-        translated_messages[-1]["parts"][0]["function_response"]["name"] == "get_weather"
+        translated_messages[-1]["parts"][0]["function_response"]["name"]
+        == "get_weather"
     )
 
 
@@ -1584,6 +1586,7 @@ def test_prompt_factory():
     translated_messages = _gemini_convert_messages_with_history(messages=messages)
 
     print(f"\n\ntranslated_messages: {translated_messages}\ntranslated_messages")
+
 
 def test_prompt_factory_nested():
     messages = [
