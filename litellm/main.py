@@ -2026,18 +2026,18 @@ def completion(
                     acompletion=acompletion,
                 )
 
-            if (
-                "stream" in optional_params
-                and optional_params["stream"] == True
-                and acompletion == False
-            ):
-                response = CustomStreamWrapper(
-                    model_response,
-                    model,
-                    custom_llm_provider="vertex_ai",
-                    logging_obj=logging,
-                )
-                return response
+                if (
+                    "stream" in optional_params
+                    and optional_params["stream"] == True
+                    and acompletion == False
+                ):
+                    response = CustomStreamWrapper(
+                        model_response,
+                        model,
+                        custom_llm_provider="vertex_ai",
+                        logging_obj=logging,
+                    )
+                    return response
             response = model_response
         elif custom_llm_provider == "predibase":
             tenant_id = (
@@ -4944,14 +4944,23 @@ def stream_chunk_builder(
     else:
         completion_output = ""
     # # Update usage information if needed
+    prompt_tokens = 0
+    completion_tokens = 0
+    for chunk in chunks:
+        if "usage" in chunk:
+            if "prompt_tokens" in chunk["usage"]:
+                prompt_tokens += chunk["usage"].get("prompt_tokens", 0) or 0
+            if "completion_tokens" in chunk["usage"]:
+                completion_tokens += chunk["usage"].get("completion_tokens", 0) or 0
+
     try:
-        response["usage"]["prompt_tokens"] = token_counter(
+        response["usage"]["prompt_tokens"] = prompt_tokens or token_counter(
             model=model, messages=messages
         )
     except:  # don't allow this failing to block a complete streaming response from being returned
         print_verbose(f"token_counter failed, assuming prompt tokens is 0")
         response["usage"]["prompt_tokens"] = 0
-    response["usage"]["completion_tokens"] = token_counter(
+    response["usage"]["completion_tokens"] = completion_tokens or token_counter(
         model=model,
         text=completion_output,
         count_response_tokens=True,  # count_response_tokens is a Flag to tell token counter this is a response, No need to add extra tokens we do for input messages
