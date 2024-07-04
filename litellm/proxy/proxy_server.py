@@ -143,6 +143,9 @@ from litellm.proxy.caching_routes import router as caching_router
 from litellm.proxy.common_utils.debug_utils import router as debugging_endpoints_router
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.proxy.common_utils.init_callbacks import initialize_callbacks_on_proxy
+from litellm.proxy.common_utils.openai_endpoint_utils import (
+    remove_sensitive_info_from_deployment,
+)
 from litellm.proxy.guardrails.init_guardrails import initialize_guardrails
 from litellm.proxy.health_check import perform_health_check
 from litellm.proxy.health_endpoints._health_endpoints import router as health_router
@@ -6657,13 +6660,38 @@ async def model_metrics_exceptions(
 )
 async def model_info_v1(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    litellm_model_id: Optional[str] = None,
 ):
-    global llm_model_list, general_settings, user_config_file_path, proxy_config
+    global llm_model_list, general_settings, user_config_file_path, proxy_config, llm_router
 
     if llm_model_list is None:
         raise HTTPException(
             status_code=500, detail={"error": "LLM Model List not loaded in"}
         )
+
+    if llm_router is None:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "LLM Router is not loaded in. Make sure you passed models in your config.yaml or on the LiteLLM Admin UI."
+            },
+        )
+
+    if litellm_model_id is not None:
+        # user is trying to get specific model from litellm router
+        deployment_info = llm_router.get_deployment(model_id=litellm_model_id)
+        if deployment_info is None:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": f"Model id = {litellm_model_id} not found on litellm proxy"
+                },
+            )
+        _deployment_info_dict = deployment_info.model_dump()
+        _deployment_info_dict = remove_sensitive_info_from_deployment(
+            deployment_dict=_deployment_info_dict
+        )
+        return {"data": _deployment_info_dict}
 
     all_models: List[dict] = []
     ## CHECK IF MODEL RESTRICTIONS ARE SET AT KEY/TEAM LEVEL ##
@@ -6726,10 +6754,7 @@ async def model_info_v1(
                 model_info[k] = v
         model["model_info"] = model_info
         # don't return the llm credentials
-        model["litellm_params"].pop("api_key", None)
-        model["litellm_params"].pop("vertex_credentials", None)
-        model["litellm_params"].pop("aws_access_key_id", None)
-        model["litellm_params"].pop("aws_secret_access_key", None)
+        model = remove_sensitive_info_from_deployment(deployment_dict=model)
 
     verbose_proxy_logger.debug("all_models: %s", all_models)
     return {"data": all_models}
