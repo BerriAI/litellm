@@ -1279,7 +1279,9 @@ def anthropic_messages_pt(messages: list):
             )
         else:
             raise Exception(
-                "Invalid first message. Should always start with 'role'='user' for Anthropic. System prompt is sent separately for Anthropic. set 'litellm.modify_params = True' or 'litellm_settings:modify_params = True' on proxy, to insert a placeholder user message - '.' as the first message, "
+                "Invalid first message={}. Should always start with 'role'='user' for Anthropic. System prompt is sent separately for Anthropic. set 'litellm.modify_params = True' or 'litellm_settings:modify_params = True' on proxy, to insert a placeholder user message - '.' as the first message, ".format(
+                    new_messages
+                )
             )
 
     if new_messages[-1]["role"] == "assistant":
