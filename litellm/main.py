@@ -2008,8 +2008,6 @@ def completion(
                     vertex_credentials=vertex_credentials,
                     logging_obj=logging,
                     acompletion=acompletion,
-                    headers=headers,
-                    custom_prompt_dict=custom_prompt_dict,
                 )
             else:
                 model_response = vertex_ai.completion(
