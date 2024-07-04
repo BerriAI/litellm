@@ -127,7 +127,7 @@ def test_anthropic_messages_pt():
     messages = []
     with pytest.raises(Exception) as err:
         anthropic_messages_pt(messages)
-    assert "Invalid first message." in str(err.value)
+    assert "Invalid first message" in str(err.value)
 
 
 # codellama_prompt_format()
