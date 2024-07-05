@@ -2313,7 +2313,7 @@ def _bedrock_tools_pt(tools: List) -> List[BedrockToolBlock]:
             parameters = function.get("parameters", None)
             name = function.get("name", "")
             description = function.get("description", "")
-        else: # Antropic
+        else: # Anthropic
             parameters = tool.get("input_schema", None)
             name = tool.get("name", "")
             description = tool.get("description", "")        
