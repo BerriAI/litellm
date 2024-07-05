@@ -976,7 +976,7 @@ class VertexLLM(BaseLLM):
         api_base: Optional[str] = None,
     ) -> Union[ModelResponse, CustomStreamWrapper]:
         stream: Optional[bool] = optional_params.pop("stream", None)  # type: ignore
-        
+
         auth_header, url = self._get_token_and_url(
             model=model,
             gemini_api_key=gemini_api_key,
@@ -1037,9 +1037,7 @@ class VertexLLM(BaseLLM):
             safety_settings: Optional[List[SafetSettingsConfig]] = optional_params.pop(
                 "safety_settings", None
             )  # type: ignore
-            cached_content: Optional[str] = optional_params.pop(
-                "cached_content", None
-            )
+            cached_content: Optional[str] = optional_params.pop("cached_content", None)
             generation_config: Optional[GenerationConfig] = GenerationConfig(
                 **optional_params
             )
