@@ -155,6 +155,7 @@ class VertexAIConfig:
             "response_format",
             "n",
             "stop",
+            "extra_headers",
         ]
 
     def map_openai_params(self, non_default_params: dict, optional_params: dict):
@@ -400,7 +401,9 @@ def _gemini_convert_messages_with_history(messages: list) -> List[ContentType]:
 
             ## APPEND TOOL CALL MESSAGES ##
             if msg_i < len(messages) and messages[msg_i]["role"] == "tool":
-                _part = convert_to_gemini_tool_call_result(messages[msg_i], last_message_with_tool_calls)
+                _part = convert_to_gemini_tool_call_result(
+                    messages[msg_i], last_message_with_tool_calls
+                )
                 contents.append(ContentType(parts=[_part]))  # type: ignore
                 msg_i += 1
             if msg_i == init_msg_i:  # prevent infinite loops
