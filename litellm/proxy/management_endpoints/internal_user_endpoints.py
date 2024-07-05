@@ -709,3 +709,66 @@ async def delete_user(
     Parameters:
     - user_ids: List[str] - The list of user id's to be deleted.
     """
+    from litellm.proxy.proxy_server import (
+        _duration_in_seconds,
+        create_audit_log_for_update,
+        litellm_proxy_admin_name,
+        prisma_client,
+        user_api_key_cache,
+    )
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail={"error": "No db connected"})
+
+    if data.user_ids is None:
+        raise HTTPException(status_code=400, detail={"error": "No user id passed in"})
+
+    # check that all teams passed exist
+    for user_id in data.user_ids:
+        user_row = await prisma_client.db.litellm_usertable.find_unique(
+            where={"user_id": user_id}
+        )
+
+        if user_row is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": f"User not found, passed user_id={user_id}"},
+            )
+        else:
+            # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
+            # we do this after the first for loop, since first for loop is for validation. we only want this inserted after validation passes
+            if litellm.store_audit_logs is True:
+                # make an audit log for each team deleted
+                _user_row = user_row.json(exclude_none=True)
+
+                asyncio.create_task(
+                    create_audit_log_for_update(
+                        request_data=LiteLLM_AuditLogs(
+                            id=str(uuid.uuid4()),
+                            updated_at=datetime.now(timezone.utc),
+                            changed_by=litellm_changed_by
+                            or user_api_key_dict.user_id
+                            or litellm_proxy_admin_name,
+                            changed_by_api_key=user_api_key_dict.api_key,
+                            table_name=LitellmTableNames.USER_TABLE_NAME,
+                            object_id=user_id,
+                            action="deleted",
+                            updated_values="{}",
+                            before_value=_user_row,
+                        )
+                    )
+                )
+
+    # End of Audit logging
+
+    ## DELETE ASSOCIATED KEYS
+    await prisma_client.db.litellm_verificationtoken.delete_many(
+        where={"user_id": {"in": data.user_ids}}
+    )
+
+    ## DELETE USERS
+    deleted_users = await prisma_client.db.litellm_usertable.delete_many(
+        where={"user_id": {"in": data.user_ids}}
+    )
+
+    return deleted_users
