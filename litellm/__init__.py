@@ -37,7 +37,9 @@ input_callback: List[Union[str, Callable]] = []
 success_callback: List[Union[str, Callable]] = []
 failure_callback: List[Union[str, Callable]] = []
 service_callback: List[Union[str, Callable]] = []
-_custom_logger_compatible_callbacks_literal = Literal["lago", "openmeter", "logfire"]
+_custom_logger_compatible_callbacks_literal = Literal[
+    "lago", "openmeter", "logfire", "dynamic_rate_limiter"
+]
 callbacks: List[Union[Callable, _custom_logger_compatible_callbacks_literal]] = []
 _langfuse_default_tags: Optional[
     List[
@@ -104,13 +106,15 @@ aleph_alpha_key: Optional[str] = None
 nlp_cloud_key: Optional[str] = None
 common_cloud_provider_auth_params: dict = {
     "params": ["project", "region_name", "token"],
-    "providers": ["vertex_ai", "bedrock", "watsonx", "azure"],
+    "providers": ["vertex_ai", "bedrock", "watsonx", "azure", "vertex_ai_beta"],
 }
 use_client: bool = False
 ssl_verify: bool = True
 ssl_certificate: Optional[str] = None
 disable_streaming_logging: bool = False
 in_memory_llm_clients_cache: dict = {}
+### DEFAULT AZURE API VERSION ###
+AZURE_DEFAULT_API_VERSION = "2024-02-01"  # this is updated to the latest
 ### GUARDRAILS ###
 llamaguard_model_name: Optional[str] = None
 openai_moderations_model_name: Optional[str] = None
@@ -123,6 +127,9 @@ llm_guard_mode: Literal["all", "key-specific", "request-specific"] = "all"
 ##################
 ### PREVIEW FEATURES ###
 enable_preview_features: bool = False
+return_response_headers: bool = (
+    False  # get response headers from LLM Api providers - example x-remaining-requests,
+)
 ##################
 logging: bool = True
 caching: bool = (
@@ -235,6 +242,8 @@ default_user_params: Optional[Dict] = None
 default_team_settings: Optional[List] = None
 max_user_budget: Optional[float] = None
 max_end_user_budget: Optional[float] = None
+#### REQUEST PRIORITIZATION ####
+priority_reservation: Optional[Dict[str, float]] = None
 #### RELIABILITY ####
 request_timeout: float = 6000
 module_level_aclient = AsyncHTTPHandler(timeout=request_timeout)
@@ -399,8 +408,10 @@ openai_compatible_endpoints: List = [
     "codestral.mistral.ai/v1/chat/completions",
     "codestral.mistral.ai/v1/fim/completions",
     "api.groq.com/openai/v1",
+    "https://integrate.api.nvidia.com/v1",
     "api.deepseek.com/v1",
     "api.together.xyz/v1",
+    "inference.friendli.ai/v1",
 ]
 
 # this is maintained for Exception Mapping
@@ -408,6 +419,8 @@ openai_compatible_providers: List = [
     "anyscale",
     "mistral",
     "groq",
+    "nvidia_nim",
+    "volcengine",
     "codestral",
     "deepseek",
     "deepinfra",
@@ -415,6 +428,7 @@ openai_compatible_providers: List = [
     "xinference",
     "together_ai",
     "fireworks_ai",
+    "friendliai",
     "azure_ai",
 ]
 
@@ -636,6 +650,8 @@ provider_list: List = [
     "anyscale",
     "mistral",
     "groq",
+    "nvidia_nim",
+    "volcengine",
     "codestral",
     "text-completion-codestral",
     "deepseek",
@@ -644,6 +660,7 @@ provider_list: List = [
     "cloudflare",
     "xinference",
     "fireworks_ai",
+    "friendliai",
     "watsonx",
     "triton",
     "predibase",
@@ -728,15 +745,18 @@ openai_image_generation_models = ["dall-e-2", "dall-e-3"]
 from .timeout import timeout
 from .cost_calculator import completion_cost
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.token_counter import get_modified_max_tokens
 from .utils import (
     client,
     exception_type,
     get_optional_params,
+    get_response_string,
     modify_integration,
     token_counter,
     create_pretrained_tokenizer,
     create_tokenizer,
     supports_function_calling,
+    supports_response_schema,
     supports_parallel_function_calling,
     supports_vision,
     supports_system_messages,
@@ -780,14 +800,18 @@ from .llms.gemini import GeminiConfig
 from .llms.nlp_cloud import NLPCloudConfig
 from .llms.aleph_alpha import AlephAlphaConfig
 from .llms.petals import PetalsConfig
-from .llms.vertex_httpx import VertexGeminiConfig
+from .llms.vertex_httpx import VertexGeminiConfig, GoogleAIStudioGeminiConfig
 from .llms.vertex_ai import VertexAIConfig, VertexAITextEmbeddingConfig
 from .llms.vertex_ai_anthropic import VertexAIAnthropicConfig
 from .llms.sagemaker import SagemakerConfig
 from .llms.ollama import OllamaConfig
 from .llms.ollama_chat import OllamaChatConfig
 from .llms.maritalk import MaritTalkConfig
-from .llms.bedrock_httpx import AmazonCohereChatConfig, AmazonConverseConfig
+from .llms.bedrock_httpx import (
+    AmazonCohereChatConfig,
+    AmazonConverseConfig,
+    BEDROCK_CONVERSE_MODELS,
+)
 from .llms.bedrock import (
     AmazonTitanConfig,
     AmazonAI21Config,
@@ -807,6 +831,9 @@ from .llms.openai import (
     DeepInfraConfig,
     AzureAIStudioConfig,
 )
+from .llms.nvidia_nim import NvidiaNimConfig
+from .llms.fireworks_ai import FireworksAIConfig
+from .llms.volcengine import VolcEngineConfig
 from .llms.text_completion_codestral import MistralTextCompletionConfig
 from .llms.azure import (
     AzureOpenAIConfig,
@@ -833,6 +860,7 @@ from .exceptions import (
     APIResponseValidationError,
     UnprocessableEntityError,
     InternalServerError,
+    JSONSchemaValidationError,
     LITELLM_EXCEPTION_TYPES,
 )
 from .budget_manager import BudgetManager

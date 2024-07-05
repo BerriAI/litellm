@@ -188,6 +188,9 @@ class LiteLLMRoutes(enum.Enum):
         # audio transcription
         "/audio/transcriptions",
         "/v1/audio/transcriptions",
+        # audio Speech
+        "/audio/speech",
+        "/v1/audio/speech",
         # moderations
         "/moderations",
         "/v1/moderations",
@@ -215,6 +218,7 @@ class LiteLLMRoutes(enum.Enum):
         "/v2/model/info",
         "/v2/key/info",
         "/model_group/info",
+        "/health",
     ]
 
     # NOTE: ROUTES ONLY FOR MASTER KEY - only the Master Key should be able to Reset Spend
@@ -665,6 +669,10 @@ class UpdateUserRequest(GenerateRequestBase):
         if values.get("user_id") is None and values.get("user_email") is None:
             raise ValueError("Either user id or user email must be provided")
         return values
+
+
+class DeleteUserRequest(LiteLLMBase):
+    user_ids: List[str]  # required
 
 
 class NewCustomerRequest(LiteLLMBase):
@@ -1619,8 +1627,14 @@ class ProxyException(Exception):
         }
 
 
-class CommonProxyErrors(enum.Enum):
+class CommonProxyErrors(str, enum.Enum):
     db_not_connected_error = "DB not connected"
     no_llm_router = "No models configured on proxy"
     not_allowed_access = "Admin-only endpoint. Not allowed to access this."
     not_premium_user = "You must be a LiteLLM Enterprise user to use this feature. If you have a license please set `LITELLM_LICENSE` in your env. If you want to obtain a license meet with us here: https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat"
+
+
+class SpendCalculateRequest(LiteLLMBase):
+    model: Optional[str] = None
+    messages: Optional[List] = None
+    completion_response: Optional[dict] = None

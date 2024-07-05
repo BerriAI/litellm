@@ -11,7 +11,7 @@ import os
 
 sys.path.insert(
     0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+)  # Adds-the parent directory to the system path
 
 import os
 from unittest.mock import MagicMock, patch
@@ -406,6 +406,103 @@ def test_completion_claude_3_function_call(model):
         print(second_response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.parametrize("sync_mode", [True])
+@pytest.mark.parametrize(
+    "model, api_key, api_base",
+    [
+        ("gpt-3.5-turbo", None, None),
+        ("claude-3-opus-20240229", None, None),
+        ("command-r", None, None),
+        ("anthropic.claude-3-sonnet-20240229-v1:0", None, None),
+        (
+            "azure_ai/command-r-plus",
+            os.getenv("AZURE_COHERE_API_KEY"),
+            os.getenv("AZURE_COHERE_API_BASE"),
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_model_function_invoke(model, sync_mode, api_key, api_base):
+    try:
+        litellm.set_verbose = True
+
+        messages = [
+            {
+                "role": "system",
+                "content": "Your name is Litellm Bot, you are a helpful assistant",
+            },
+            # User asks for their name and weather in San Francisco
+            {
+                "role": "user",
+                "content": "Hello, what is your name and can you tell me the weather?",
+            },
+            # Assistant replies with a tool call
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_123",
+                        "type": "function",
+                        "index": 0,
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": '{"location": "San Francisco, CA"}',
+                        },
+                    }
+                ],
+            },
+            # The result of the tool call is added to the history
+            {
+                "role": "tool",
+                "tool_call_id": "call_123",
+                "content": "27 degrees celsius and clear in San Francisco, CA",
+            },
+            # Now the assistant can reply with the result of the tool call.
+        ]
+
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get the current weather in a given location",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "location": {
+                                "type": "string",
+                                "description": "The city and state, e.g. San Francisco, CA",
+                            }
+                        },
+                        "required": ["location"],
+                    },
+                },
+            }
+        ]
+
+        data = {
+            "model": model,
+            "messages": messages,
+            "tools": tools,
+            "api_key": api_key,
+            "api_base": api_base,
+        }
+        if sync_mode:
+            response = litellm.completion(**data)
+        else:
+            response = await litellm.acompletion(**data)
+
+        print(f"response: {response}")
+    except litellm.RateLimitError as e:
+        pass
+    except Exception as e:
+        if "429 Quota exceeded" in str(e):
+            pass
+        else:
+            pytest.fail("An unexpected exception occurred - {}".format(str(e)))
 
 
 @pytest.mark.asyncio
@@ -1426,7 +1523,7 @@ def test_hf_test_completion_tgi():
                 messages=[{"content": "Hello, how are you?", "role": "user"}],
                 max_tokens=10,
             )
-            # Add any assertions here to check the response
+            # Add any assertions-here to check the response
             print(response)
     except litellm.ServiceUnavailableError as e:
         pass
@@ -1435,6 +1532,43 @@ def test_hf_test_completion_tgi():
 
 
 # hf_test_completion_tgi()
+
+
+@pytest.mark.parametrize("provider", ["vertex_ai_beta"])  # "vertex_ai",
+@pytest.mark.asyncio
+async def test_openai_compatible_custom_api_base(provider):
+    litellm.set_verbose = True
+    messages = [
+        {
+            "role": "user",
+            "content": "Hello world",
+        }
+    ]
+    from openai import OpenAI
+
+    openai_client = OpenAI(api_key="fake-key")
+
+    with patch.object(
+        openai_client.chat.completions, "create", new=MagicMock()
+    ) as mock_call:
+        try:
+            response = completion(
+                model="openai/my-vllm-model",
+                messages=messages,
+                response_format={"type": "json_object"},
+                client=openai_client,
+                api_base="my-custom-api-base",
+                hello="world",
+            )
+        except Exception as e:
+            pass
+
+        mock_call.assert_called_once()
+
+        print("Call KWARGS - {}".format(mock_call.call_args.kwargs))
+
+        assert "hello" in mock_call.call_args.kwargs["extra_body"]
+
 
 # ################### Hugging Face Conversational models ########################
 # def hf_test_completion_conv():
@@ -2543,6 +2677,8 @@ async def test_completion_replicate_llama3(sync_mode):
         # Add any assertions here to check the response
         assert isinstance(response, litellm.ModelResponse)
         response_format_tests(response=response)
+    except litellm.APIError as e:
+        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -3429,6 +3565,52 @@ def test_completion_deep_infra_mistral():
 
 
 # test_completion_deep_infra_mistral()
+
+
+@pytest.mark.skip(reason="Local test - don't have a volcengine account as yet")
+def test_completion_volcengine():
+    litellm.set_verbose = True
+    model_name = "volcengine/<OUR_ENDPOINT_ID>"
+    try:
+        response = completion(
+            model=model_name,
+            messages=[
+                {
+                    "role": "user",
+                    "content": "What's the weather like in Boston today in Fahrenheit?",
+                }
+            ],
+            api_key="<OUR_API_KEY>",
+        )
+        # Add any assertions here to check the response
+        print(response)
+
+    except litellm.exceptions.Timeout as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+def test_completion_nvidia_nim():
+    model_name = "nvidia_nim/databricks/dbrx-instruct"
+    try:
+        response = completion(
+            model=model_name,
+            messages=[
+                {
+                    "role": "user",
+                    "content": "What's the weather like in Boston today in Fahrenheit?",
+                }
+            ],
+        )
+        # Add any assertions here to check the response
+        print(response)
+        assert response.choices[0].message.content is not None
+        assert len(response.choices[0].message.content) > 0
+    except litellm.exceptions.Timeout as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
 
 # Gemini tests

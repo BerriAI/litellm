@@ -1,23 +1,42 @@
-import os, types
+import copy
 import json
-from enum import Enum
-import requests, copy  # type: ignore
+import os
 import time
+import types
+from enum import Enum
 from functools import partial
-from typing import Callable, Optional, List, Union
-import litellm.litellm_core_utils
-from litellm.utils import ModelResponse, Usage, CustomStreamWrapper
-from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from typing import Callable, List, Optional, Union
+
+import httpx  # type: ignore
+import requests  # type: ignore
+
 import litellm
-from .prompt_templates.factory import prompt_factory, custom_prompt
+import litellm.litellm_core_utils
+from litellm import verbose_logger
+from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     _get_async_httpx_client,
     _get_httpx_client,
 )
+from litellm.types.llms.anthropic import (
+    AnthropicMessagesToolChoice,
+    ContentBlockDelta,
+    ContentBlockStart,
+    MessageBlockDelta,
+    MessageStartBlock,
+)
+from litellm.types.llms.openai import (
+    ChatCompletionResponseMessage,
+    ChatCompletionToolCallChunk,
+    ChatCompletionToolCallFunctionChunk,
+    ChatCompletionUsageBlock,
+)
+from litellm.types.utils import GenericStreamingChunk
+from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
+
 from .base import BaseLLM
-import httpx  # type: ignore
-from litellm.types.llms.anthropic import AnthropicMessagesToolChoice
+from .prompt_templates.factory import custom_prompt, prompt_factory
 
 
 class AnthropicConstants(Enum):
@@ -179,12 +198,23 @@ async def make_call(
     if client is None:
         client = _get_async_httpx_client()  # Create a new client if none provided
 
-    response = await client.post(api_base, headers=headers, data=data, stream=True)
+    try:
+        response = await client.post(api_base, headers=headers, data=data, stream=True)
+    except httpx.HTTPStatusError as e:
+        raise AnthropicError(
+            status_code=e.response.status_code, message=await e.response.aread()
+        )
+    except Exception as e:
+        raise AnthropicError(status_code=500, message=str(e))
 
     if response.status_code != 200:
-        raise AnthropicError(status_code=response.status_code, message=response.text)
+        raise AnthropicError(
+            status_code=response.status_code, message=await response.aread()
+        )
 
-    completion_stream = response.aiter_lines()
+    completion_stream = ModelResponseIterator(
+        streaming_response=response.aiter_lines(), sync_stream=False
+    )
 
     # LOGGING
     logging_obj.post_call(
@@ -201,120 +231,120 @@ class AnthropicChatCompletion(BaseLLM):
     def __init__(self) -> None:
         super().__init__()
 
-    def process_streaming_response(
-        self,
-        model: str,
-        response: Union[requests.Response, httpx.Response],
-        model_response: ModelResponse,
-        stream: bool,
-        logging_obj: litellm.litellm_core_utils.litellm_logging.Logging,
-        optional_params: dict,
-        api_key: str,
-        data: Union[dict, str],
-        messages: List,
-        print_verbose,
-        encoding,
-    ) -> CustomStreamWrapper:
-        """
-        Return stream object for tool-calling + streaming
-        """
-        ## LOGGING
-        logging_obj.post_call(
-            input=messages,
-            api_key=api_key,
-            original_response=response.text,
-            additional_args={"complete_input_dict": data},
-        )
-        print_verbose(f"raw model_response: {response.text}")
-        ## RESPONSE OBJECT
-        try:
-            completion_response = response.json()
-        except:
-            raise AnthropicError(
-                message=response.text, status_code=response.status_code
-            )
-        text_content = ""
-        tool_calls = []
-        for content in completion_response["content"]:
-            if content["type"] == "text":
-                text_content += content["text"]
-            ## TOOL CALLING
-            elif content["type"] == "tool_use":
-                tool_calls.append(
-                    {
-                        "id": content["id"],
-                        "type": "function",
-                        "function": {
-                            "name": content["name"],
-                            "arguments": json.dumps(content["input"]),
-                        },
-                    }
-                )
-        if "error" in completion_response:
-            raise AnthropicError(
-                message=str(completion_response["error"]),
-                status_code=response.status_code,
-            )
-        _message = litellm.Message(
-            tool_calls=tool_calls,
-            content=text_content or None,
-        )
-        model_response.choices[0].message = _message  # type: ignore
-        model_response._hidden_params["original_response"] = completion_response[
-            "content"
-        ]  # allow user to access raw anthropic tool calling response
+    # def process_streaming_response(
+    #     self,
+    #     model: str,
+    #     response: Union[requests.Response, httpx.Response],
+    #     model_response: ModelResponse,
+    #     stream: bool,
+    #     logging_obj: litellm.litellm_core_utils.litellm_logging.Logging,
+    #     optional_params: dict,
+    #     api_key: str,
+    #     data: Union[dict, str],
+    #     messages: List,
+    #     print_verbose,
+    #     encoding,
+    # ) -> CustomStreamWrapper:
+    #     """
+    #     Return stream object for tool-calling + streaming
+    #     """
+    #     ## LOGGING
+    #     logging_obj.post_call(
+    #         input=messages,
+    #         api_key=api_key,
+    #         original_response=response.text,
+    #         additional_args={"complete_input_dict": data},
+    #     )
+    #     print_verbose(f"raw model_response: {response.text}")
+    #     ## RESPONSE OBJECT
+    #     try:
+    #         completion_response = response.json()
+    #     except:
+    #         raise AnthropicError(
+    #             message=response.text, status_code=response.status_code
+    #         )
+    #     text_content = ""
+    #     tool_calls = []
+    #     for content in completion_response["content"]:
+    #         if content["type"] == "text":
+    #             text_content += content["text"]
+    #         ## TOOL CALLING
+    #         elif content["type"] == "tool_use":
+    #             tool_calls.append(
+    #                 {
+    #                     "id": content["id"],
+    #                     "type": "function",
+    #                     "function": {
+    #                         "name": content["name"],
+    #                         "arguments": json.dumps(content["input"]),
+    #                     },
+    #                 }
+    #             )
+    #     if "error" in completion_response:
+    #         raise AnthropicError(
+    #             message=str(completion_response["error"]),
+    #             status_code=response.status_code,
+    #         )
+    #     _message = litellm.Message(
+    #         tool_calls=tool_calls,
+    #         content=text_content or None,
+    #     )
+    #     model_response.choices[0].message = _message  # type: ignore
+    #     model_response._hidden_params["original_response"] = completion_response[
+    #         "content"
+    #     ]  # allow user to access raw anthropic tool calling response
 
-        model_response.choices[0].finish_reason = map_finish_reason(
-            completion_response["stop_reason"]
-        )
+    #     model_response.choices[0].finish_reason = map_finish_reason(
+    #         completion_response["stop_reason"]
+    #     )
 
-        print_verbose("INSIDE ANTHROPIC STREAMING TOOL CALLING CONDITION BLOCK")
-        # return an iterator
-        streaming_model_response = ModelResponse(stream=True)
-        streaming_model_response.choices[0].finish_reason = model_response.choices[  # type: ignore
-            0
-        ].finish_reason
-        # streaming_model_response.choices = [litellm.utils.StreamingChoices()]
-        streaming_choice = litellm.utils.StreamingChoices()
-        streaming_choice.index = model_response.choices[0].index
-        _tool_calls = []
-        print_verbose(
-            f"type of model_response.choices[0]: {type(model_response.choices[0])}"
-        )
-        print_verbose(f"type of streaming_choice: {type(streaming_choice)}")
-        if isinstance(model_response.choices[0], litellm.Choices):
-            if getattr(
-                model_response.choices[0].message, "tool_calls", None
-            ) is not None and isinstance(
-                model_response.choices[0].message.tool_calls, list
-            ):
-                for tool_call in model_response.choices[0].message.tool_calls:
-                    _tool_call = {**tool_call.dict(), "index": 0}
-                    _tool_calls.append(_tool_call)
-            delta_obj = litellm.utils.Delta(
-                content=getattr(model_response.choices[0].message, "content", None),
-                role=model_response.choices[0].message.role,
-                tool_calls=_tool_calls,
-            )
-            streaming_choice.delta = delta_obj
-            streaming_model_response.choices = [streaming_choice]
-            completion_stream = ModelResponseIterator(
-                model_response=streaming_model_response
-            )
-            print_verbose(
-                "Returns anthropic CustomStreamWrapper with 'cached_response' streaming object"
-            )
-            return CustomStreamWrapper(
-                completion_stream=completion_stream,
-                model=model,
-                custom_llm_provider="cached_response",
-                logging_obj=logging_obj,
-            )
-        else:
-            raise AnthropicError(
-                status_code=422,
-                message="Unprocessable response object - {}".format(response.text),
-            )
+    #     print_verbose("INSIDE ANTHROPIC STREAMING TOOL CALLING CONDITION BLOCK")
+    #     # return an iterator
+    #     streaming_model_response = ModelResponse(stream=True)
+    #     streaming_model_response.choices[0].finish_reason = model_response.choices[  # type: ignore
+    #         0
+    #     ].finish_reason
+    #     # streaming_model_response.choices = [litellm.utils.StreamingChoices()]
+    #     streaming_choice = litellm.utils.StreamingChoices()
+    #     streaming_choice.index = model_response.choices[0].index
+    #     _tool_calls = []
+    #     print_verbose(
+    #         f"type of model_response.choices[0]: {type(model_response.choices[0])}"
+    #     )
+    #     print_verbose(f"type of streaming_choice: {type(streaming_choice)}")
+    #     if isinstance(model_response.choices[0], litellm.Choices):
+    #         if getattr(
+    #             model_response.choices[0].message, "tool_calls", None
+    #         ) is not None and isinstance(
+    #             model_response.choices[0].message.tool_calls, list
+    #         ):
+    #             for tool_call in model_response.choices[0].message.tool_calls:
+    #                 _tool_call = {**tool_call.dict(), "index": 0}
+    #                 _tool_calls.append(_tool_call)
+    #         delta_obj = litellm.utils.Delta(
+    #             content=getattr(model_response.choices[0].message, "content", None),
+    #             role=model_response.choices[0].message.role,
+    #             tool_calls=_tool_calls,
+    #         )
+    #         streaming_choice.delta = delta_obj
+    #         streaming_model_response.choices = [streaming_choice]
+    #         completion_stream = ModelResponseIterator(
+    #             model_response=streaming_model_response
+    #         )
+    #         print_verbose(
+    #             "Returns anthropic CustomStreamWrapper with 'cached_response' streaming object"
+    #         )
+    #         return CustomStreamWrapper(
+    #             completion_stream=completion_stream,
+    #             model=model,
+    #             custom_llm_provider="cached_response",
+    #             logging_obj=logging_obj,
+    #         )
+    #     else:
+    #         raise AnthropicError(
+    #             status_code=422,
+    #             message="Unprocessable response object - {}".format(response.text),
+    #         )
 
     def process_response(
         self,
@@ -470,21 +500,19 @@ class AnthropicChatCompletion(BaseLLM):
         headers={},
     ) -> Union[ModelResponse, CustomStreamWrapper]:
         async_handler = _get_async_httpx_client()
-        response = await async_handler.post(api_base, headers=headers, json=data)
-        if stream and _is_function_call:
-            return self.process_streaming_response(
-                model=model,
-                response=response,
-                model_response=model_response,
-                stream=stream,
-                logging_obj=logging_obj,
+
+        try:
+            response = await async_handler.post(api_base, headers=headers, json=data)
+        except Exception as e:
+            ## LOGGING
+            logging_obj.post_call(
+                input=messages,
                 api_key=api_key,
-                data=data,
-                messages=messages,
-                print_verbose=print_verbose,
-                optional_params=optional_params,
-                encoding=encoding,
+                original_response=str(e),
+                additional_args={"complete_input_dict": data},
             )
+            raise e
+
         return self.process_response(
             model=model,
             response=response,
@@ -574,12 +602,15 @@ class AnthropicChatCompletion(BaseLLM):
             optional_params["tools"] = anthropic_tools
 
         stream = optional_params.pop("stream", None)
+        is_vertex_request: bool = optional_params.pop("is_vertex_request", False)
 
         data = {
-            "model": model,
             "messages": messages,
             **optional_params,
         }
+
+        if is_vertex_request is False:
+            data["model"] = model
 
         ## LOGGING
         logging_obj.pre_call(
@@ -594,7 +625,7 @@ class AnthropicChatCompletion(BaseLLM):
         print_verbose(f"_is_function_call: {_is_function_call}")
         if acompletion == True:
             if (
-                stream and not _is_function_call
+                stream is True
             ):  # if function call - fake the streaming (need complete blocks for output parsing in openai format)
                 print_verbose("makes async anthropic streaming POST request")
                 data["stream"] = stream
@@ -638,7 +669,7 @@ class AnthropicChatCompletion(BaseLLM):
         else:
             ## COMPLETION CALL
             if (
-                stream and not _is_function_call
+                stream is True
             ):  # if function call - fake the streaming (need complete blocks for output parsing in openai format)
                 print_verbose("makes anthropic streaming POST request")
                 data["stream"] = stream
@@ -654,7 +685,9 @@ class AnthropicChatCompletion(BaseLLM):
                         status_code=response.status_code, message=response.text
                     )
 
-                completion_stream = response.iter_lines()
+                completion_stream = ModelResponseIterator(
+                    streaming_response=response.iter_lines(), sync_stream=True
+                )
                 streaming_response = CustomStreamWrapper(
                     completion_stream=completion_stream,
                     model=model,
@@ -672,20 +705,6 @@ class AnthropicChatCompletion(BaseLLM):
                         status_code=response.status_code, message=response.text
                     )
 
-        if stream and _is_function_call:
-            return self.process_streaming_response(
-                model=model,
-                response=response,
-                model_response=model_response,
-                stream=stream,
-                logging_obj=logging_obj,
-                api_key=api_key,
-                data=data,
-                messages=messages,
-                print_verbose=print_verbose,
-                optional_params=optional_params,
-                encoding=encoding,
-            )
         return self.process_response(
             model=model,
             response=response,
@@ -706,26 +725,194 @@ class AnthropicChatCompletion(BaseLLM):
 
 
 class ModelResponseIterator:
-    def __init__(self, model_response):
-        self.model_response = model_response
-        self.is_done = False
+    def __init__(self, streaming_response, sync_stream: bool):
+        self.streaming_response = streaming_response
+        self.response_iterator = self.streaming_response
+
+    def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
+        try:
+            verbose_logger.debug(f"\n\nRaw chunk:\n{chunk}\n")
+            type_chunk = chunk.get("type", "") or ""
+
+            text = ""
+            tool_use: Optional[ChatCompletionToolCallChunk] = None
+            is_finished = False
+            finish_reason = ""
+            usage: Optional[ChatCompletionUsageBlock] = None
+
+            index = int(chunk.get("index", 0))
+            if type_chunk == "content_block_delta":
+                """
+                Anthropic content chunk
+                chunk = {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': 'Hello'}}
+                """
+                content_block = ContentBlockDelta(**chunk)  # type: ignore
+                if "text" in content_block["delta"]:
+                    text = content_block["delta"]["text"]
+                elif "partial_json" in content_block["delta"]:
+                    tool_use = {
+                        "id": None,
+                        "type": "function",
+                        "function": {
+                            "name": None,
+                            "arguments": content_block["delta"]["partial_json"],
+                        },
+                    }
+            elif type_chunk == "content_block_start":
+                """
+                event: content_block_start
+                data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_01T1x1fJ34qAmk2tNTrN7Up6","name":"get_weather","input":{}}}
+                """
+                content_block_start = ContentBlockStart(**chunk)  # type: ignore
+                if content_block_start["content_block"]["type"] == "text":
+                    text = content_block_start["content_block"]["text"]
+                elif content_block_start["content_block"]["type"] == "tool_use":
+                    tool_use = {
+                        "id": content_block_start["content_block"]["id"],
+                        "type": "function",
+                        "function": {
+                            "name": content_block_start["content_block"]["name"],
+                            "arguments": "",
+                        },
+                    }
+            elif type_chunk == "message_delta":
+                """
+                Anthropic
+                chunk = {'type': 'message_delta', 'delta': {'stop_reason': 'max_tokens', 'stop_sequence': None}, 'usage': {'output_tokens': 10}}
+                """
+                # TODO - get usage from this chunk, set in response
+                message_delta = MessageBlockDelta(**chunk)  # type: ignore
+                finish_reason = map_finish_reason(
+                    finish_reason=message_delta["delta"].get("stop_reason", "stop")
+                    or "stop"
+                )
+                usage = ChatCompletionUsageBlock(
+                    prompt_tokens=message_delta["usage"].get("input_tokens", 0),
+                    completion_tokens=message_delta["usage"].get("output_tokens", 0),
+                    total_tokens=message_delta["usage"].get("input_tokens", 0)
+                    + message_delta["usage"].get("output_tokens", 0),
+                )
+                is_finished = True
+            elif type_chunk == "message_start":
+                """
+                Anthropic
+                chunk = {
+                    "type": "message_start",
+                    "message": {
+                        "id": "msg_vrtx_011PqREFEMzd3REdCoUFAmdG",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": "claude-3-sonnet-20240229",
+                        "content": [],
+                        "stop_reason": null,
+                        "stop_sequence": null,
+                        "usage": {
+                            "input_tokens": 270,
+                            "output_tokens": 1
+                        }
+                    }
+                }
+                """
+                message_start_block = MessageStartBlock(**chunk)  # type: ignore
+                usage = ChatCompletionUsageBlock(
+                    prompt_tokens=message_start_block["message"]
+                    .get("usage", {})
+                    .get("input_tokens", 0),
+                    completion_tokens=message_start_block["message"]
+                    .get("usage", {})
+                    .get("output_tokens", 0),
+                    total_tokens=message_start_block["message"]
+                    .get("usage", {})
+                    .get("input_tokens", 0)
+                    + message_start_block["message"]
+                    .get("usage", {})
+                    .get("output_tokens", 0),
+                )
+            returned_chunk = GenericStreamingChunk(
+                text=text,
+                tool_use=tool_use,
+                is_finished=is_finished,
+                finish_reason=finish_reason,
+                usage=usage,
+                index=index,
+            )
+
+            return returned_chunk
+
+        except json.JSONDecodeError:
+            raise ValueError(f"Failed to decode JSON from chunk: {chunk}")
 
     # Sync iterator
     def __iter__(self):
         return self
 
     def __next__(self):
-        if self.is_done:
+        try:
+            chunk = self.response_iterator.__next__()
+        except StopIteration:
             raise StopIteration
-        self.is_done = True
-        return self.model_response
+        except ValueError as e:
+            raise RuntimeError(f"Error receiving chunk from stream: {e}")
+
+        try:
+            str_line = chunk
+            if isinstance(chunk, bytes):  # Handle binary data
+                str_line = chunk.decode("utf-8")  # Convert bytes to string
+                index = str_line.find("data:")
+                if index != -1:
+                    str_line = str_line[index:]
+
+            if str_line.startswith("data:"):
+                data_json = json.loads(str_line[5:])
+                return self.chunk_parser(chunk=data_json)
+            else:
+                return GenericStreamingChunk(
+                    text="",
+                    is_finished=False,
+                    finish_reason="",
+                    usage=None,
+                    index=0,
+                    tool_use=None,
+                )
+        except StopIteration:
+            raise StopIteration
+        except ValueError as e:
+            raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
 
     # Async iterator
     def __aiter__(self):
+        self.async_response_iterator = self.streaming_response.__aiter__()
         return self
 
     async def __anext__(self):
-        if self.is_done:
+        try:
+            chunk = await self.async_response_iterator.__anext__()
+        except StopAsyncIteration:
             raise StopAsyncIteration
-        self.is_done = True
-        return self.model_response
+        except ValueError as e:
+            raise RuntimeError(f"Error receiving chunk from stream: {e}")
+
+        try:
+            str_line = chunk
+            if isinstance(chunk, bytes):  # Handle binary data
+                str_line = chunk.decode("utf-8")  # Convert bytes to string
+                index = str_line.find("data:")
+                if index != -1:
+                    str_line = str_line[index:]
+
+            if str_line.startswith("data:"):
+                data_json = json.loads(str_line[5:])
+                return self.chunk_parser(chunk=data_json)
+            else:
+                return GenericStreamingChunk(
+                    text="",
+                    is_finished=False,
+                    finish_reason="",
+                    usage=None,
+                    index=0,
+                    tool_use=None,
+                )
+        except StopAsyncIteration:
+            raise StopAsyncIteration
+        except ValueError as e:
+            raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")

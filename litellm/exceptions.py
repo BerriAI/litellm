@@ -9,9 +9,10 @@
 
 ## LiteLLM versions of the OpenAI Exception Types
 
-import openai
-import httpx
 from typing import Optional
+
+import httpx
+import openai
 
 
 class AuthenticationError(openai.AuthenticationError):  # type: ignore
@@ -550,7 +551,7 @@ class APIError(openai.APIError):  # type: ignore
         message,
         llm_provider,
         model,
-        request: httpx.Request,
+        request: Optional[httpx.Request] = None,
         litellm_debug_info: Optional[str] = None,
         max_retries: Optional[int] = None,
         num_retries: Optional[int] = None,
@@ -562,6 +563,8 @@ class APIError(openai.APIError):  # type: ignore
         self.litellm_debug_info = litellm_debug_info
         self.max_retries = max_retries
         self.num_retries = num_retries
+        if request is None:
+            request = httpx.Request(method="POST", url="https://api.openai.com/v1")
         super().__init__(self.message, request=request, body=None)  # type: ignore
 
     def __str__(self):
@@ -658,16 +661,25 @@ class APIResponseValidationError(openai.APIResponseValidationError):  # type: ig
 
 
 class OpenAIError(openai.OpenAIError):  # type: ignore
-    def __init__(self, original_exception):
-        self.status_code = original_exception.http_status
-        super().__init__(
-            http_body=original_exception.http_body,
-            http_status=original_exception.http_status,
-            json_body=original_exception.json_body,
-            headers=original_exception.headers,
-            code=original_exception.code,
-        )
+    def __init__(self, original_exception=None):
+        super().__init__()
         self.llm_provider = "openai"
+
+
+class JSONSchemaValidationError(APIError):
+    def __init__(
+        self, model: str, llm_provider: str, raw_response: str, schema: str
+    ) -> None:
+        self.raw_response = raw_response
+        self.schema = schema
+        self.model = model
+        message = "litellm.JSONSchemaValidationError: model={}, returned an invalid response={}, for schema={}.\nAccess raw response with `e.raw_response`".format(
+            model, raw_response, schema
+        )
+        self.message = message
+        super().__init__(
+            model=model, message=message, llm_provider=llm_provider, status_code=500
+        )
 
 
 LITELLM_EXCEPTION_TYPES = [
@@ -688,6 +700,7 @@ LITELLM_EXCEPTION_TYPES = [
     APIResponseValidationError,
     OpenAIError,
     InternalServerError,
+    JSONSchemaValidationError,
 ]
 
 

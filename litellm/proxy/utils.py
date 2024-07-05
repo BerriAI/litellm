@@ -199,7 +199,7 @@ class ProxyLogging:
         alerting_args: Optional[dict] = None,
     ):
         updated_slack_alerting: bool = False
-        if self.alerting is not None:
+        if alerting is not None:
             self.alerting = alerting
             updated_slack_alerting = True
         if alerting_threshold is not None:
@@ -229,31 +229,32 @@ class ProxyLogging:
         if redis_cache is not None:
             self.internal_usage_cache.redis_cache = redis_cache
 
-    def _init_litellm_callbacks(self):
-        print_verbose("INITIALIZING LITELLM CALLBACKS!")
+    def _init_litellm_callbacks(self, llm_router: Optional[litellm.Router] = None):
         self.service_logging_obj = ServiceLogging()
-        litellm.callbacks.append(self.max_parallel_request_limiter)
-        litellm.callbacks.append(self.max_budget_limiter)
-        litellm.callbacks.append(self.cache_control_check)
-        litellm.callbacks.append(self.service_logging_obj)
+        litellm.callbacks.append(self.max_parallel_request_limiter)  # type: ignore
+        litellm.callbacks.append(self.max_budget_limiter)  # type: ignore
+        litellm.callbacks.append(self.cache_control_check)  # type: ignore
+        litellm.callbacks.append(self.service_logging_obj)  # type: ignore
         litellm.success_callback.append(
             self.slack_alerting_instance.response_taking_too_long_callback
         )
         for callback in litellm.callbacks:
             if isinstance(callback, str):
-                callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(
-                    callback
+                callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(  # type: ignore
+                    callback,
+                    internal_usage_cache=self.internal_usage_cache,
+                    llm_router=llm_router,
                 )
             if callback not in litellm.input_callback:
-                litellm.input_callback.append(callback)
+                litellm.input_callback.append(callback)  # type: ignore
             if callback not in litellm.success_callback:
-                litellm.success_callback.append(callback)
+                litellm.success_callback.append(callback)  # type: ignore
             if callback not in litellm.failure_callback:
-                litellm.failure_callback.append(callback)
+                litellm.failure_callback.append(callback)  # type: ignore
             if callback not in litellm._async_success_callback:
-                litellm._async_success_callback.append(callback)
+                litellm._async_success_callback.append(callback)  # type: ignore
             if callback not in litellm._async_failure_callback:
-                litellm._async_failure_callback.append(callback)
+                litellm._async_failure_callback.append(callback)  # type: ignore
 
         if (
             len(litellm.input_callback) > 0
@@ -270,6 +271,16 @@ class ProxyLogging:
             litellm.litellm_core_utils.litellm_logging.set_callbacks(
                 callback_list=callback_list
             )
+
+    async def update_request_status(
+        self, litellm_call_id: str, status: Literal["success", "fail"]
+    ):
+        await self.internal_usage_cache.async_set_cache(
+            key="request_status:{}".format(litellm_call_id),
+            value=status,
+            local_only=True,
+            ttl=3600,
+        )
 
     # The actual implementation of the function
     async def pre_call_hook(
@@ -301,10 +312,19 @@ class ProxyLogging:
 
         try:
             for callback in litellm.callbacks:
-                if isinstance(callback, CustomLogger) and "async_pre_call_hook" in vars(
-                    callback.__class__
+                _callback: Optional[CustomLogger] = None
+                if isinstance(callback, str):
+                    _callback = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
+                        callback
+                    )
+                else:
+                    _callback = callback  # type: ignore
+                if (
+                    _callback is not None
+                    and isinstance(_callback, CustomLogger)
+                    and "async_pre_call_hook" in vars(_callback.__class__)
                 ):
-                    response = await callback.async_pre_call_hook(
+                    response = await _callback.async_pre_call_hook(
                         user_api_key_dict=user_api_key_dict,
                         cache=self.call_details["user_api_key_cache"],
                         data=data,
@@ -462,9 +482,11 @@ class ProxyLogging:
         extra_kwargs = {}
         alerting_metadata = {}
         if request_data is not None:
-            _url = self.slack_alerting_instance._add_langfuse_trace_id_to_alert(
+
+            _url = await self.slack_alerting_instance._add_langfuse_trace_id_to_alert(
                 request_data=request_data
             )
+
             if _url is not None:
                 extra_kwargs["🪢 Langfuse Trace"] = _url
                 formatted_message += "\n\n🪢 Langfuse Trace: {}".format(_url)
@@ -548,6 +570,9 @@ class ProxyLogging:
         """
 
         ### ALERTING ###
+        await self.update_request_status(
+            litellm_call_id=request_data.get("litellm_call_id", ""), status="fail"
+        )
         if "llm_exceptions" in self.alert_types and not isinstance(
             original_exception, HTTPException
         ):
@@ -572,8 +597,15 @@ class ProxyLogging:
 
         for callback in litellm.callbacks:
             try:
-                if isinstance(callback, CustomLogger):
-                    await callback.async_post_call_failure_hook(
+                _callback: Optional[CustomLogger] = None
+                if isinstance(callback, str):
+                    _callback = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
+                        callback
+                    )
+                else:
+                    _callback = callback  # type: ignore
+                if _callback is not None and isinstance(_callback, CustomLogger):
+                    await _callback.async_post_call_failure_hook(
                         user_api_key_dict=user_api_key_dict,
                         original_exception=original_exception,
                     )
@@ -592,10 +624,18 @@ class ProxyLogging:
         Covers:
         1. /chat/completions
         """
+
         for callback in litellm.callbacks:
             try:
-                if isinstance(callback, CustomLogger):
-                    await callback.async_post_call_success_hook(
+                _callback: Optional[CustomLogger] = None
+                if isinstance(callback, str):
+                    _callback = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
+                        callback
+                    )
+                else:
+                    _callback = callback  # type: ignore
+                if _callback is not None and isinstance(_callback, CustomLogger):
+                    await _callback.async_post_call_success_hook(
                         user_api_key_dict=user_api_key_dict, response=response
                     )
             except Exception as e:
@@ -613,14 +653,25 @@ class ProxyLogging:
         Covers:
         1. /chat/completions
         """
-        for callback in litellm.callbacks:
-            try:
-                if isinstance(callback, CustomLogger):
-                    await callback.async_post_call_streaming_hook(
-                        user_api_key_dict=user_api_key_dict, response=response
-                    )
-            except Exception as e:
-                raise e
+        response_str: Optional[str] = None
+        if isinstance(response, ModelResponse):
+            response_str = litellm.get_response_string(response_obj=response)
+        if response_str is not None:
+            for callback in litellm.callbacks:
+                try:
+                    _callback: Optional[CustomLogger] = None
+                    if isinstance(callback, str):
+                        _callback = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
+                            callback
+                        )
+                    else:
+                        _callback = callback  # type: ignore
+                    if _callback is not None and isinstance(_callback, CustomLogger):
+                        await _callback.async_post_call_streaming_hook(
+                            user_api_key_dict=user_api_key_dict, response=response_str
+                        )
+                except Exception as e:
+                    raise e
         return response
 
     async def post_call_streaming_hook(
@@ -691,7 +742,7 @@ class PrismaClient:
             finally:
                 os.chdir(original_dir)
             # Now you can import the Prisma Client
-            from prisma import Prisma
+            from prisma import Prisma  # type: ignore
 
         self.db = Prisma()  # Client to connect to Prisma db
 
@@ -2001,121 +2052,6 @@ def hash_token(token: str):
     hashed_token = hashlib.sha256(token.encode()).hexdigest()
 
     return hashed_token
-
-
-def get_logging_payload(
-    kwargs, response_obj, start_time, end_time, end_user_id: Optional[str]
-) -> SpendLogsPayload:
-    from pydantic import Json
-
-    from litellm.proxy._types import LiteLLM_SpendLogs
-
-    verbose_proxy_logger.debug(
-        f"SpendTable: get_logging_payload - kwargs: {kwargs}\n\n"
-    )
-
-    if kwargs is None:
-        kwargs = {}
-    # standardize this function to be used across, s3, dynamoDB, langfuse logging
-    litellm_params = kwargs.get("litellm_params", {})
-    metadata = (
-        litellm_params.get("metadata", {}) or {}
-    )  # if litellm_params['metadata'] == None
-    completion_start_time = kwargs.get("completion_start_time", end_time)
-    call_type = kwargs.get("call_type")
-    cache_hit = kwargs.get("cache_hit", False)
-    usage = response_obj["usage"]
-    if type(usage) == litellm.Usage:
-        usage = dict(usage)
-    id = response_obj.get("id", kwargs.get("litellm_call_id"))
-    api_key = metadata.get("user_api_key", "")
-    if api_key is not None and isinstance(api_key, str) and api_key.startswith("sk-"):
-        # hash the api_key
-        api_key = hash_token(api_key)
-
-    _model_id = metadata.get("model_info", {}).get("id", "")
-    _model_group = metadata.get("model_group", "")
-
-    # clean up litellm metadata
-    clean_metadata = SpendLogsMetadata(
-        user_api_key=None,
-        user_api_key_alias=None,
-        user_api_key_team_id=None,
-        user_api_key_user_id=None,
-        user_api_key_team_alias=None,
-        spend_logs_metadata=None,
-    )
-    if isinstance(metadata, dict):
-        verbose_proxy_logger.debug(
-            "getting payload for SpendLogs, available keys in metadata: "
-            + str(list(metadata.keys()))
-        )
-
-        # Filter the metadata dictionary to include only the specified keys
-        clean_metadata = SpendLogsMetadata(
-            **{  # type: ignore
-                key: metadata[key]
-                for key in SpendLogsMetadata.__annotations__.keys()
-                if key in metadata
-            }
-        )
-
-    if litellm.cache is not None:
-        cache_key = litellm.cache.get_cache_key(**kwargs)
-    else:
-        cache_key = "Cache OFF"
-    if cache_hit is True:
-        import time
-
-        id = f"{id}_cache_hit{time.time()}"  # SpendLogs does not allow duplicate request_id
-
-    try:
-        payload: SpendLogsPayload = SpendLogsPayload(
-            request_id=str(id),
-            call_type=call_type or "",
-            api_key=str(api_key),
-            cache_hit=str(cache_hit),
-            startTime=start_time,
-            endTime=end_time,
-            completionStartTime=completion_start_time,
-            model=kwargs.get("model", "") or "",
-            user=kwargs.get("litellm_params", {})
-            .get("metadata", {})
-            .get("user_api_key_user_id", "")
-            or "",
-            team_id=kwargs.get("litellm_params", {})
-            .get("metadata", {})
-            .get("user_api_key_team_id", "")
-            or "",
-            metadata=json.dumps(clean_metadata),
-            cache_key=cache_key,
-            spend=kwargs.get("response_cost", 0),
-            total_tokens=usage.get("total_tokens", 0),
-            prompt_tokens=usage.get("prompt_tokens", 0),
-            completion_tokens=usage.get("completion_tokens", 0),
-            request_tags=(
-                json.dumps(metadata.get("tags", []))
-                if isinstance(metadata.get("tags", []), dict)
-                else "[]"
-            ),
-            end_user=end_user_id or "",
-            api_base=litellm_params.get("api_base", ""),
-            model_group=_model_group,
-            model_id=_model_id,
-        )
-
-        verbose_proxy_logger.debug(
-            "SpendTable: created payload - payload: %s\n\n", payload
-        )
-
-        return payload
-    except Exception as e:
-        verbose_proxy_logger.error(
-            "Error creating spendlogs object - {}\n{}".format(
-                str(e), traceback.format_exc()
-            )
-        )
-        raise e
 
 
 def _extract_from_regex(duration: str) -> Tuple[int, str]:
