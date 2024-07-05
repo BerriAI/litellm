@@ -15,8 +15,18 @@ import APIRef from "@/components/api_ref";
 import ChatUI from "@/components/chat_ui";
 import Sidebar from "../components/leftnav";
 import Usage from "../components/usage";
+import CacheDashboard from "@/components/cache_dashboard";
 import { jwtDecode } from "jwt-decode";
 import { Typography } from "antd";
+
+function getCookie(name: string) {
+  console.log("COOKIES", document.cookie)
+  const cookieValue = document.cookie
+      .split('; ')
+      .find(row => row.startsWith(name + '='));
+  return cookieValue ? cookieValue.split('=')[1] : null;
+}
+
 
 function formatUserRole(userRole: string) {
   if (!userRole) {
@@ -67,7 +77,8 @@ const CreateKeyPage = () => {
   const searchParams = useSearchParams();
   const [modelData, setModelData] = useState<any>({ data: [] });
   const userID = searchParams.get("userID");
-  const token = searchParams.get("token");
+  const invitation_id = searchParams.get("invitation_id");
+  const token = getCookie('token');
 
   const [page, setPage] = useState("api-keys");
   const [accessToken, setAccessToken] = useState<string | null>(null);
@@ -118,7 +129,23 @@ const CreateKeyPage = () => {
 
   return (
     <Suspense fallback={<div>Loading...</div>}>
-      <div className="flex flex-col min-h-screen">
+      {
+        invitation_id ? (
+          <UserDashboard
+              userID={userID}
+              userRole={userRole}
+              teams={teams}
+              keys={keys}
+              setUserRole={setUserRole}
+              userEmail={userEmail}
+              setUserEmail={setUserEmail}
+              setTeams={setTeams}
+              setKeys={setKeys}
+              setProxySettings={setProxySettings}
+              proxySettings={proxySettings}
+            />
+        ) : (
+        <div className="flex flex-col min-h-screen">
         <Navbar
           userID={userID}
           userRole={userRole}
@@ -130,11 +157,11 @@ const CreateKeyPage = () => {
         />
         <div className="flex flex-1 overflow-auto">
           <div className="mt-8">
-            <Sidebar
-              setPage={setPage}
-              userRole={userRole}
-              defaultSelectedKey={null}
-            />
+                <Sidebar
+                setPage={setPage}
+                userRole={userRole}
+                defaultSelectedKey={null}
+              />            
           </div>
 
           {page == "api-keys" ? (
@@ -221,6 +248,14 @@ const CreateKeyPage = () => {
               publicPage={false}
               premiumUser={premiumUser}
             />
+          ) : page == "caching" ? (
+            <CacheDashboard
+              userID={userID}
+              userRole={userRole}
+              token={token}
+              accessToken={accessToken}
+              premiumUser={premiumUser}
+            />
           ) : (
             <Usage
               userID={userID}
@@ -232,7 +267,10 @@ const CreateKeyPage = () => {
             />
           )}
         </div>
-      </div>
+      </div>         
+        )
+      }
+      
     </Suspense>
   );
 };

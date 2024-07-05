@@ -123,6 +123,182 @@ print(completion(**data))
 
 ### **JSON Schema**
 
+From v`1.40.1+` LiteLLM supports sending `response_schema` as a param for Gemini-1.5-Pro on Vertex AI. For other models (e.g. `gemini-1.5-flash` or `claude-3-5-sonnet`), LiteLLM adds the schema to the message list with a user-controlled prompt.
+
+**Response Schema**
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion 
+import json 
+
+## SETUP ENVIRONMENT
+# !gcloud auth application-default login - run this to add vertex credentials to your env
+
+messages = [
+    {
+        "role": "user",
+        "content": "List 5 popular cookie recipes."
+    }
+]
+
+response_schema = {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "recipe_name": {
+                    "type": "string",
+                },
+            },
+            "required": ["recipe_name"],
+        },
+    }
+
+
+completion(
+    model="vertex_ai_beta/gemini-1.5-pro", 
+    messages=messages, 
+    response_format={"type": "json_object", "response_schema": response_schema} # 👈 KEY CHANGE
+    )
+
+print(json.loads(completion.choices[0].message.content))
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Add model to config.yaml
+```yaml
+model_list:
+  - model_name: gemini-pro
+    litellm_params:
+      model: vertex_ai_beta/gemini-1.5-pro
+      vertex_project: "project-id"
+      vertex_location: "us-central1"
+      vertex_credentials: "/path/to/service_account.json" # [OPTIONAL] Do this OR `!gcloud auth application-default login` - run this to add vertex credentials to your env
+```
+
+2. Start Proxy 
+
+```
+$ litellm --config /path/to/config.yaml
+```
+
+3. Make Request!
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-D '{
+  "model": "gemini-pro",
+  "messages": [
+        {"role": "user", "content": "List 5 popular cookie recipes."}
+    ],
+  "response_format": {"type": "json_object", "response_schema": { 
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "recipe_name": {
+                    "type": "string",
+                },
+            },
+            "required": ["recipe_name"],
+        },
+    }}
+}
+'
+```
+
+</TabItem>
+</Tabs>
+
+**Validate Schema**
+
+To validate the response_schema, set `enforce_validation: true`.
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion, JSONSchemaValidationError
+try: 
+	completion(
+    model="vertex_ai_beta/gemini-1.5-pro", 
+    messages=messages, 
+    response_format={
+        "type": "json_object", 
+        "response_schema": response_schema,
+        "enforce_validation": true # 👈 KEY CHANGE
+    }
+	)
+except JSONSchemaValidationError as e: 
+	print("Raw Response: {}".format(e.raw_response))
+	raise e
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Add model to config.yaml
+```yaml
+model_list:
+  - model_name: gemini-pro
+    litellm_params:
+      model: vertex_ai_beta/gemini-1.5-pro
+      vertex_project: "project-id"
+      vertex_location: "us-central1"
+      vertex_credentials: "/path/to/service_account.json" # [OPTIONAL] Do this OR `!gcloud auth application-default login` - run this to add vertex credentials to your env
+```
+
+2. Start Proxy 
+
+```
+$ litellm --config /path/to/config.yaml
+```
+
+3. Make Request!
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-D '{
+  "model": "gemini-pro",
+  "messages": [
+        {"role": "user", "content": "List 5 popular cookie recipes."}
+    ],
+  "response_format": {"type": "json_object", "response_schema": { 
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "recipe_name": {
+                    "type": "string",
+                },
+            },
+            "required": ["recipe_name"],
+        },
+    }, 
+    "enforce_validation": true
+    }
+}
+'
+```
+
+</TabItem>
+</Tabs>
+
+LiteLLM will validate the response against the schema, and raise a `JSONSchemaValidationError` if the response does not match the schema. 
+
+JSONSchemaValidationError inherits from `openai.APIError` 
+
+Access the raw response with `e.raw_response`
+
+**Add to prompt yourself**
+
 ```python 
 from litellm import completion 
 
@@ -400,6 +576,7 @@ litellm.vertex_location = "us-central1 # Your Location
 | Model Name       | Function Call                        |
 |------------------|--------------------------------------|
 | claude-3-opus@20240229   | `completion('vertex_ai/claude-3-opus@20240229', messages)` |
+| claude-3-5-sonnet@20240620  | `completion('vertex_ai/claude-3-5-sonnet@20240620', messages)` |
 | claude-3-sonnet@20240229   | `completion('vertex_ai/claude-3-sonnet@20240229', messages)` |
 | claude-3-haiku@20240307   | `completion('vertex_ai/claude-3-haiku@20240307', messages)` |
 
@@ -643,6 +820,86 @@ assert isinstance(
 
 ```
 
+
+## Usage - PDF / Videos / etc. Files 
+
+Pass any file supported by Vertex AI, through LiteLLM. 
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+
+response = completion(
+    model="vertex_ai/gemini-1.5-flash",
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "You are a very professional document summarization specialist. Please summarize the given document."},
+                {
+                    "type": "image_url",
+                    "image_url": "gs://cloud-samples-data/generative-ai/pdf/2403.05530.pdf",
+                },
+            ],
+        }
+    ],
+    max_tokens=300,
+)
+
+print(response.choices[0])
+
+```
+</TabItem>
+<TabItem value="proxy" lable="PROXY">
+
+1. Add model to config 
+
+```yaml
+- model_name: gemini-1.5-flash
+  litellm_params:
+    model: vertex_ai/gemini-1.5-flash
+    vertex_credentials: "/path/to/service_account.json"
+```
+
+2. Start Proxy
+
+```
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <YOUR-LITELLM-KEY>" \
+  -d '{
+    "model": "gemini-1.5-flash",
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "You are a very professional document summarization specialist. Please summarize the given document"
+          },
+          {
+                "type": "image_url",
+                "image_url": "gs://cloud-samples-data/generative-ai/pdf/2403.05530.pdf",
+            },
+          }
+        ]
+      }
+    ],
+    "max_tokens": 300
+  }'
+
+```
+
+</TabItem>
+</Tabs>
 
 ## Chat Models
 | Model Name       | Function Call                        |

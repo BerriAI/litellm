@@ -95,7 +95,7 @@ print(response)
 - `router.image_generation()` - completion calls in OpenAI `/v1/images/generations` endpoint format
 - `router.aimage_generation()` - async image generation calls
 
-## Advanced - Routing Strategies
+## Advanced - Routing Strategies ⭐️
 #### Routing Strategies - Weighted Pick, Rate Limit Aware, Least Busy, Latency Based, Cost Based
 
 Router provides 4 strategies for routing your calls across multiple deployments: 
@@ -262,7 +262,7 @@ if response is not None:
 	)
 ```
 
-### Set Time Window 
+#### Set Time Window 
 
 Set time window for how far back to consider when averaging latency for a deployment. 
 
@@ -278,7 +278,7 @@ router_settings:
 	routing_strategy_args: {"ttl": 10}
 ```
 
-### Set Lowest Latency Buffer
+#### Set Lowest Latency Buffer
 
 Set a buffer within which deployments are candidates for making calls to. 
 
@@ -468,6 +468,122 @@ asyncio.run(router_acompletion())
 ```
 
 </TabItem>
+
+<TabItem value="custom" label="Custom Routing Strategy">
+
+**Plugin a custom routing strategy to select deployments**
+
+
+Step 1. Define your custom routing strategy
+
+```python
+
+from litellm.router import CustomRoutingStrategyBase
+class CustomRoutingStrategy(CustomRoutingStrategyBase):
+    async def async_get_available_deployment(
+        self,
+        model: str,
+        messages: Optional[List[Dict[str, str]]] = None,
+        input: Optional[Union[str, List]] = None,
+        specific_deployment: Optional[bool] = False,
+        request_kwargs: Optional[Dict] = None,
+    ):
+        """
+        Asynchronously retrieves the available deployment based on the given parameters.
+
+        Args:
+            model (str): The name of the model.
+            messages (Optional[List[Dict[str, str]]], optional): The list of messages for a given request. Defaults to None.
+            input (Optional[Union[str, List]], optional): The input for a given embedding request. Defaults to None.
+            specific_deployment (Optional[bool], optional): Whether to retrieve a specific deployment. Defaults to False.
+            request_kwargs (Optional[Dict], optional): Additional request keyword arguments. Defaults to None.
+
+        Returns:
+            Returns an element from litellm.router.model_list
+
+        """
+        print("In CUSTOM async get available deployment")
+        model_list = router.model_list
+        print("router model list=", model_list)
+        for model in model_list:
+            if isinstance(model, dict):
+                if model["litellm_params"]["model"] == "openai/very-special-endpoint":
+                    return model
+        pass
+
+    def get_available_deployment(
+        self,
+        model: str,
+        messages: Optional[List[Dict[str, str]]] = None,
+        input: Optional[Union[str, List]] = None,
+        specific_deployment: Optional[bool] = False,
+        request_kwargs: Optional[Dict] = None,
+    ):
+        """
+        Synchronously retrieves the available deployment based on the given parameters.
+
+        Args:
+            model (str): The name of the model.
+            messages (Optional[List[Dict[str, str]]], optional): The list of messages for a given request. Defaults to None.
+            input (Optional[Union[str, List]], optional): The input for a given embedding request. Defaults to None.
+            specific_deployment (Optional[bool], optional): Whether to retrieve a specific deployment. Defaults to False.
+            request_kwargs (Optional[Dict], optional): Additional request keyword arguments. Defaults to None.
+
+        Returns:
+            Returns an element from litellm.router.model_list
+
+        """
+        pass
+```
+
+Step 2. Initialize Router with custom routing strategy
+```python
+from litellm import Router
+
+router = Router(
+    model_list=[
+        {
+            "model_name": "azure-model",
+            "litellm_params": {
+                "model": "openai/very-special-endpoint",
+                "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",  # If you are Krrish, this is OpenAI Endpoint3 on our Railway endpoint :)
+                "api_key": "fake-key",
+            },
+            "model_info": {"id": "very-special-endpoint"},
+        },
+        {
+            "model_name": "azure-model",
+            "litellm_params": {
+                "model": "openai/fast-endpoint",
+                "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                "api_key": "fake-key",
+            },
+            "model_info": {"id": "fast-endpoint"},
+        },
+    ],
+    set_verbose=True,
+    debug_level="DEBUG",
+    timeout=1,
+)  # type: ignore
+
+router.set_custom_routing_strategy(CustomRoutingStrategy()) # 👈 Set your routing strategy here
+```
+
+Step 3. Test your routing strategy. Expect your custom routing strategy to be called when running `router.acompletion` requests
+```python
+for _ in range(10):
+	response = await router.acompletion(
+		model="azure-model", messages=[{"role": "user", "content": "hello"}]
+	)
+	print(response)
+	_picked_model_id = response._hidden_params["model_id"]
+	print("picked model=", _picked_model_id)
+```
+
+
+
+</TabItem>
+
 <TabItem value="lowest-cost" label="Lowest Cost Routing (Async)">
 
 Picks a deployment based on the lowest cost
@@ -563,7 +679,6 @@ asyncio.run(router_acompletion())
 ```
 
 </TabItem>
-
 </Tabs>
 
 ## Basic Reliability
@@ -647,6 +762,9 @@ asyncio.run(router_acompletion())
 
 Set the limit for how many calls a model is allowed to fail in a minute, before being cooled down for a minute. 
 
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
 ```python
 from litellm import Router
 
@@ -664,8 +782,67 @@ messages = [{"content": user_message, "role": "user"}]
 response = router.completion(model="gpt-3.5-turbo", messages=messages)
 
 print(f"response: {response}")
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+**Set Global Value**
+
+```yaml
+router_settings:
+	allowed_fails: 3 # cooldown model if it fails > 1 call in a minute. 
+  	cooldown_time: 30 # (in seconds) how long to cooldown model if fails/min > allowed_fails
+```
+
+Defaults:
+- allowed_fails: 0
+- cooldown_time: 60s 
+
+**Set Per Model**
+
+```yaml
+model_list:
+- model_name: fake-openai-endpoint
+  litellm_params:
+    model: predibase/llama-3-8b-instruct
+    api_key: os.environ/PREDIBASE_API_KEY
+    tenant_id: os.environ/PREDIBASE_TENANT_ID
+    max_new_tokens: 256
+    cooldown_time: 0 # 👈 KEY CHANGE
+```
+
+</TabItem>
+</Tabs>
+
+**Expected Response**
 
 ```
+No deployments available for selected model, Try again in 60 seconds. Passed model=claude-3-5-sonnet. pre-call-checks=False, allowed_model_region=n/a.
+```
+
+#### **Disable cooldowns**
+
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import Router 
+
+
+router = Router(..., disable_cooldowns=True)
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```yaml
+router_settings:
+	disable_cooldowns: True
+```
+
+</TabItem>
+</Tabs>
 
 ### Retries
 
@@ -785,6 +962,39 @@ response = await router.acompletion(
 ### Fallbacks 
 
 If a call fails after num_retries, fall back to another model group. 
+
+### Quick Start 
+
+```python
+from litellm import Router 
+router = Router(
+	model_list=[
+		{ # bad model
+			"model_name": "bad-model",
+			"litellm_params": {
+				"model": "openai/my-bad-model",
+				"api_key": "my-bad-api-key",
+				"mock_response": "Bad call"
+			},
+		},
+		{ # good model
+			"model_name": "my-good-model",
+			"litellm_params": {
+				"model": "gpt-4o",
+				"api_key": os.getenv("OPENAI_API_KEY"),
+				"mock_response": "Good call"
+			},
+		},
+	],
+	fallbacks=[{"bad-model": ["my-good-model"]}] # 👈 KEY CHANGE
+)
+
+response = router.completion(
+	model="bad-model",
+	messages=[{"role": "user", "content": "Hey, how's it going?"}],
+	mock_testing_fallbacks=True,
+)
+```
 
 If the error is a context window exceeded error, fall back to a larger model group (if given). 
 

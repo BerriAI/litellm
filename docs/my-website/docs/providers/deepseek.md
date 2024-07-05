@@ -49,6 +49,6 @@ We support ALL Deepseek models, just set `deepseek/` as a prefix when sending co
 | Model Name               | Function Call                                                                                                                                                      |
 |--------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | deepseek-chat | `completion(model="deepseek/deepseek-chat", messages)` | 
-| deepseek-coder | `completion(model="deepseek/deepseek-chat", messages)` | 
+| deepseek-coder | `completion(model="deepseek/deepseek-coder", messages)` | 
 
 

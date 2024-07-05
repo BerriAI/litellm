@@ -249,6 +249,25 @@ def test_completion_azure_exception():
 # test_completion_azure_exception()
 
 
+def test_azure_embedding_exceptions():
+    try:
+
+        response = litellm.embedding(
+            model="azure/azure-embedding-model",
+            input="hello",
+            messages="hello",
+        )
+        pytest.fail(f"Bad request this should have failed but got {response}")
+
+    except Exception as e:
+        print(vars(e))
+        # CRUCIAL Test - Ensures our exceptions are readable and not overly complicated. some users have complained exceptions will randomly have another exception raised in our exception mapping
+        assert (
+            e.message
+            == "litellm.APIError: AzureException APIError - Embeddings.create() got an unexpected keyword argument 'messages'"
+        )
+
+
 async def asynctest_completion_azure_exception():
     try:
         import openai
@@ -670,7 +689,7 @@ def test_litellm_predibase_exception():
 # print(f"accuracy_score: {accuracy_score}")
 
 
-@pytest.mark.parametrize("provider", ["predibase", "vertex_ai_beta"])
+@pytest.mark.parametrize("provider", ["predibase", "vertex_ai_beta", "anthropic"])
 def test_exception_mapping(provider):
     """
     For predibase, run through a set of mock exceptions
@@ -712,3 +731,27 @@ def test_exception_mapping(provider):
         )
 
     pass
+
+
+def test_anthropic_tool_calling_exception():
+    """
+    Related - https://github.com/BerriAI/litellm/issues/4348
+    """
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {},
+            },
+        }
+    ]
+    try:
+        litellm.completion(
+            model="claude-3-5-sonnet-20240620",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+            tools=tools,
+        )
+    except litellm.BadRequestError:
+        pass

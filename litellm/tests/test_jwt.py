@@ -61,7 +61,6 @@ async def test_token_single_public_key():
     import jwt
 
     jwt_handler = JWTHandler()
-
     backend_keys = {
         "keys": [
             {

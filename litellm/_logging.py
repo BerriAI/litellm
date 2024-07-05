@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import traceback
+from datetime import datetime
 from logging import Formatter
 
 set_verbose = False
@@ -22,11 +23,16 @@ class JsonFormatter(Formatter):
     def __init__(self):
         super(JsonFormatter, self).__init__()
 
+    def formatTime(self, record, datefmt=None):
+        # Use datetime to format the timestamp in ISO 8601 format
+        dt = datetime.fromtimestamp(record.created)
+        return dt.isoformat()
+
     def format(self, record):
         json_record = {
             "message": record.getMessage(),
             "level": record.levelname,
-            "timestamp": self.formatTime(record, self.datefmt),
+            "timestamp": self.formatTime(record),
         }
 
         return json.dumps(json_record)

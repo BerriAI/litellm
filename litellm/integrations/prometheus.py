@@ -2,13 +2,19 @@
 #### What this does ####
 #    On success, log events to Prometheus
 
-import dotenv, os
-import requests  # type: ignore
+import datetime
+import os
+import subprocess
+import sys
 import traceback
-import datetime, subprocess, sys
-import litellm, uuid
-from litellm._logging import print_verbose, verbose_logger
+import uuid
 from typing import Optional, Union
+
+import dotenv
+import requests  # type: ignore
+
+import litellm
+from litellm._logging import print_verbose, verbose_logger
 
 
 class PrometheusLogger:
@@ -20,12 +26,15 @@ class PrometheusLogger:
         try:
             from prometheus_client import Counter, Gauge
 
+            from litellm.proxy.proxy_server import premium_user
+
             self.litellm_llm_api_failed_requests_metric = Counter(
                 name="litellm_llm_api_failed_requests_metric",
                 documentation="Total number of failed LLM API calls via litellm",
                 labelnames=[
                     "end_user",
                     "hashed_api_key",
+                    "api_key_alias",
                     "model",
                     "team",
                     "team_alias",
@@ -39,6 +48,7 @@ class PrometheusLogger:
                 labelnames=[
                     "end_user",
                     "hashed_api_key",
+                    "api_key_alias",
                     "model",
                     "team",
                     "team_alias",
@@ -53,6 +63,7 @@ class PrometheusLogger:
                 labelnames=[
                     "end_user",
                     "hashed_api_key",
+                    "api_key_alias",
                     "model",
                     "team",
                     "team_alias",
@@ -67,6 +78,7 @@ class PrometheusLogger:
                 labelnames=[
                     "end_user",
                     "hashed_api_key",
+                    "api_key_alias",
                     "model",
                     "team",
                     "team_alias",
@@ -88,6 +100,31 @@ class PrometheusLogger:
                 labelnames=["hashed_api_key", "api_key_alias"],
             )
 
+            # Litellm-Enterprise Metrics
+            if premium_user is True:
+                # Remaining Rate Limit for model
+                self.litellm_remaining_requests_metric = Gauge(
+                    "litellm_remaining_requests",
+                    "remaining requests for model, returned from LLM API Provider",
+                    labelnames=[
+                        "model_group",
+                        "api_provider",
+                        "api_base",
+                        "litellm_model_name",
+                    ],
+                )
+
+                self.litellm_remaining_tokens_metric = Gauge(
+                    "litellm_remaining_tokens",
+                    "remaining tokens for model, returned from LLM API Provider",
+                    labelnames=[
+                        "model_group",
+                        "api_provider",
+                        "api_base",
+                        "litellm_model_name",
+                    ],
+                )
+
         except Exception as e:
             print_verbose(f"Got exception on init prometheus client {str(e)}")
             raise e
@@ -104,6 +141,8 @@ class PrometheusLogger:
     ):
         try:
             # Define prometheus client
+            from litellm.proxy.proxy_server import premium_user
+
             verbose_logger.debug(
                 f"prometheus Logging - Enters logging function for model {kwargs}"
             )
@@ -169,6 +208,7 @@ class PrometheusLogger:
             self.litellm_requests_metric.labels(
                 end_user_id,
                 user_api_key,
+                user_api_key_alias,
                 model,
                 user_api_team,
                 user_api_team_alias,
@@ -177,6 +217,7 @@ class PrometheusLogger:
             self.litellm_spend_metric.labels(
                 end_user_id,
                 user_api_key,
+                user_api_key_alias,
                 model,
                 user_api_team,
                 user_api_team_alias,
@@ -185,6 +226,7 @@ class PrometheusLogger:
             self.litellm_tokens_metric.labels(
                 end_user_id,
                 user_api_key,
+                user_api_key_alias,
                 model,
                 user_api_team,
                 user_api_team_alias,
@@ -199,11 +241,16 @@ class PrometheusLogger:
                 user_api_key, user_api_key_alias
             ).set(_remaining_api_key_budget)
 
+            # set x-ratelimit headers
+            if premium_user is True:
+                self.set_remaining_tokens_requests_metric(kwargs)
+
             ### FAILURE INCREMENT ###
             if "exception" in kwargs:
                 self.litellm_llm_api_failed_requests_metric.labels(
                     end_user_id,
                     user_api_key,
+                    user_api_key_alias,
                     model,
                     user_api_team,
                     user_api_team_alias,
@@ -215,6 +262,58 @@ class PrometheusLogger:
             )
             verbose_logger.debug(traceback.format_exc())
             pass
+
+    def set_remaining_tokens_requests_metric(self, request_kwargs: dict):
+        try:
+            verbose_logger.debug("setting remaining tokens requests metric")
+            _response_headers = request_kwargs.get("response_headers")
+            _litellm_params = request_kwargs.get("litellm_params", {}) or {}
+            _metadata = _litellm_params.get("metadata", {})
+            litellm_model_name = request_kwargs.get("model", None)
+            model_group = _metadata.get("model_group", None)
+            api_base = _metadata.get("api_base", None)
+            llm_provider = _litellm_params.get("custom_llm_provider", None)
+
+            remaining_requests = None
+            remaining_tokens = None
+            # OpenAI / OpenAI Compatible headers
+            if (
+                _response_headers
+                and "x-ratelimit-remaining-requests" in _response_headers
+            ):
+                remaining_requests = _response_headers["x-ratelimit-remaining-requests"]
+            if (
+                _response_headers
+                and "x-ratelimit-remaining-tokens" in _response_headers
+            ):
+                remaining_tokens = _response_headers["x-ratelimit-remaining-tokens"]
+            verbose_logger.debug(
+                f"remaining requests: {remaining_requests}, remaining tokens: {remaining_tokens}"
+            )
+
+            if remaining_requests:
+                """
+                "model_group",
+                "api_provider",
+                "api_base",
+                "litellm_model_name"
+                """
+                self.litellm_remaining_requests_metric.labels(
+                    model_group, llm_provider, api_base, litellm_model_name
+                ).set(remaining_requests)
+
+            if remaining_tokens:
+                self.litellm_remaining_tokens_metric.labels(
+                    model_group, llm_provider, api_base, litellm_model_name
+                ).set(remaining_tokens)
+
+        except Exception as e:
+            verbose_logger.error(
+                "Prometheus Error: set_remaining_tokens_requests_metric. Exception occured - {}".format(
+                    str(e)
+                )
+            )
+            return
 
 
 def safe_get_remaining_budget(
