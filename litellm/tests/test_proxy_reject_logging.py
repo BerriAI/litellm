@@ -51,7 +51,8 @@ from litellm.router import Router
 class testLogger(CustomLogger):
 
     def __init__(self):
-        self.reaches_failure_event = False
+        self.reaches_sync_failure_event = False
+        self.reaches_async_failure_event = False
 
     async def async_pre_call_hook(
         self,
@@ -72,10 +73,10 @@ class testLogger(CustomLogger):
         )
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        self.reaches_async_failure_event = True
+
+    def log_failure_event(self, kwargs, response_obj, start_time, end_time):
         self.reaches_failure_event = True
-        return await super().async_log_failure_event(
-            kwargs, response_obj, start_time, end_time
-        )
 
 
 router = Router(
@@ -184,4 +185,5 @@ async def test_chat_completion_request_with_redaction(route, body):
         pass
     await asyncio.sleep(3)
 
-    assert _test_logger.reaches_failure_event is True
+    assert _test_logger.reaches_async_failure_event is True
+    assert _test_logger.reaches_sync_failure_event is True
