@@ -3,6 +3,7 @@
 import base64
 import json
 import os
+import traceback
 from datetime import datetime
 
 from litellm._logging import verbose_proxy_logger
@@ -54,9 +55,13 @@ class LicenseCheck:
             premium = response_json["verify"]
 
             assert isinstance(premium, bool)
-
             return premium
         except Exception as e:
+            verbose_proxy_logger.error(
+                "litellm.proxy.auth.litellm_license.py::_verify - Unable to verify License via api. - {}".format(
+                    str(e)
+                )
+            )
             return False
 
     def is_premium(self) -> bool:
@@ -116,5 +121,9 @@ class LicenseCheck:
             return True
 
         except Exception as e:
-            verbose_proxy_logger.error(str(e))
+            verbose_proxy_logger.debug(
+                "litellm.proxy.auth.litellm_license.py::verify_license_without_api_request - Unable to verify License locally. - {}".format(
+                    str(e)
+                )
+            )
             return False
