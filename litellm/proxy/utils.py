@@ -7,6 +7,7 @@ import os
 import re
 import smtplib
 import subprocess
+import threading
 import time
 import traceback
 from datetime import datetime, timedelta
@@ -583,6 +584,7 @@ class ProxyLogging:
                     start_time=datetime.now(),
                     **request_data,
                 )
+
             # log the custom exception
             await litellm_logging_obj.async_failure_handler(
                 exception=original_exception,
@@ -590,6 +592,16 @@ class ProxyLogging:
                 start_time=time.time(),
                 end_time=time.time(),
             )
+
+            threading.Thread(
+                target=litellm_logging_obj.failure_handler,
+                args=(
+                    original_exception,
+                    traceback.format_exc(),
+                    time.time(),
+                    time.time(),
+                ),
+            ).start()
 
         for callback in litellm.callbacks:
             try:
