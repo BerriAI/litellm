@@ -757,6 +757,7 @@ class ModelResponseIterator:
                             "name": None,
                             "arguments": content_block["delta"]["partial_json"],
                         },
+                        "index": content_block["index"],
                     }
             elif type_chunk == "content_block_start":
                 """
@@ -774,6 +775,7 @@ class ModelResponseIterator:
                             "name": content_block_start["content_block"]["name"],
                             "arguments": "",
                         },
+                        "index": content_block_start["index"],
                     }
             elif type_chunk == "message_delta":
                 """
