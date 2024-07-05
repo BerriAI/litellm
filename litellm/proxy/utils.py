@@ -49,6 +49,7 @@ from litellm.proxy.hooks.max_budget_limiter import _PROXY_MaxBudgetLimiter
 from litellm.proxy.hooks.parallel_request_limiter import (
     _PROXY_MaxParallelRequestsHandler,
 )
+from litellm.types.utils import CallTypes
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -354,35 +355,6 @@ class ProxyLogging:
             print_verbose(f"final data being sent to {call_type} call: {data}")
             return data
         except Exception as e:
-            if "litellm_logging_obj" in data:
-                logging_obj: litellm.litellm_core_utils.litellm_logging.Logging = data[
-                    "litellm_logging_obj"
-                ]
-
-                ## ASYNC FAILURE HANDLER ##
-                error_message = ""
-                if isinstance(e, HTTPException):
-                    if isinstance(e.detail, str):
-                        error_message = e.detail
-                    elif isinstance(e.detail, dict):
-                        error_message = json.dumps(e.detail)
-                    else:
-                        error_message = str(e)
-                else:
-                    error_message = str(e)
-                error_raised = Exception(f"{error_message}")
-                await logging_obj.async_failure_handler(
-                    exception=error_raised,
-                    traceback_exception=traceback.format_exc(),
-                )
-
-                ## SYNC FAILURE HANDLER ##
-                try:
-                    logging_obj.failure_handler(
-                        error_raised, traceback.format_exc()
-                    )  # DO NOT MAKE THREADED - router retry fallback relies on this!
-                except Exception as error_val:
-                    pass
             raise e
 
     async def during_call_hook(
@@ -597,12 +569,14 @@ class ProxyLogging:
             )
 
         ### LOGGING ###
-        litellm_logging_obj: Optional[Logging] = request_data.get(
-            "litellm_logging_obj", None
-        )
-
         if isinstance(original_exception, HTTPException):
+            litellm_logging_obj: Optional[Logging] = request_data.get(
+                "litellm_logging_obj", None
+            )
             if litellm_logging_obj is None:
+                import uuid
+
+                request_data["litellm_call_id"] = str(uuid.uuid4())
                 litellm_logging_obj, data = litellm.utils.function_setup(
                     original_function="IGNORE_THIS",
                     rules_obj=litellm.utils.Rules(),

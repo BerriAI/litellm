@@ -23,6 +23,8 @@ import os
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
+from typing import Literal
+
 import pytest
 from fastapi import Request, Response
 from starlette.datastructures import URL
@@ -51,7 +53,20 @@ class testLogger(CustomLogger):
     def __init__(self):
         self.reaches_failure_event = False
 
-    async def async_pre_call_check(self, deployment: dict):
+    async def async_pre_call_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        cache: DualCache,
+        data: dict,
+        call_type: Literal[
+            "completion",
+            "text_completion",
+            "embeddings",
+            "image_generation",
+            "moderation",
+            "audio_transcription",
+        ],
+    ):
         raise HTTPException(
             status_code=429, detail={"error": "Max parallel request limit reached"}
         )
@@ -92,15 +107,15 @@ router = Router(
                 ],
             },
         ),
-        # ("/v1/completions", {"model": "fake-model", "prompt": "ping"}),
-        # (
-        #     "/v1/embeddings",
-        #     {
-        #         "input": "The food was delicious and the waiter...",
-        #         "model": "text-embedding-ada-002",
-        #         "encoding_format": "float",
-        #     },
-        # ),
+        ("/v1/completions", {"model": "fake-model", "prompt": "ping"}),
+        (
+            "/v1/embeddings",
+            {
+                "input": "The food was delicious and the waiter...",
+                "model": "text-embedding-ada-002",
+                "encoding_format": "float",
+            },
+        ),
     ],
 )
 @pytest.mark.asyncio
