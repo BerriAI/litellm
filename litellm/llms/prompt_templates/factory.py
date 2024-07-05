@@ -2263,6 +2263,25 @@ def _bedrock_tools_pt(tools: List) -> List[BedrockToolBlock]:
     ]
     """
     """
+    Anthropic tools looks like:
+    tools = [
+        {
+            "name": "web_search",
+            "description": "A tool to retrieve up to date information on a given topic by searching the web",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "topic": {
+                        "type": "string",
+                        "description": "The topic to search the web for"
+                    },
+                },
+                "required": ["topic"]
+            }
+        }
+    ]
+    """
+    """
     Bedrock toolConfig looks like: 
     "tools": [
         {
@@ -2289,9 +2308,15 @@ def _bedrock_tools_pt(tools: List) -> List[BedrockToolBlock]:
     """
     tool_block_list: List[BedrockToolBlock] = []
     for tool in tools:
-        parameters = tool.get("function", {}).get("parameters", None)
-        name = tool.get("function", {}).get("name", "")
-        description = tool.get("function", {}).get("description", "")
+        function = tool.get("function", None)
+        if function: # OpenAI
+            parameters = function.get("parameters", None)
+            name = function.get("name", "")
+            description = function.get("description", "")
+        else: # Antropic
+            parameters = tool.get("input_schema", None)
+            name = tool.get("name", "")
+            description = tool.get("description", "")        
         tool_input_schema = BedrockToolInputSchemaBlock(json=parameters)
         tool_spec = BedrockToolSpecBlock(
             inputSchema=tool_input_schema, name=name, description=description
