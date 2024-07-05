@@ -15,10 +15,11 @@ class LLMResponse(BaseModel):
     num_input_tokens: int
     num_output_tokens: int
     output_logprobs: Optional[Dict[str, Any]] = Field(
-        description="Optional. When available, logprobs are used to compute Uncertainty."
+        default=None,
+        description="Optional. When available, logprobs are used to compute Uncertainty.",
     )
-    created_at: datetime = Field(
+    created_at: str = Field(
         ..., description='timestamp constructed in "%Y-%m-%dT%H:%M:%S" format'
     )
-    tags: List[str]
-    user_metadata: Dict[str, Any]
+    tags: Optional[List[str]] = None
+    user_metadata: Optional[Dict[str, Any]] = None
