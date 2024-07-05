@@ -61,6 +61,7 @@ class ModelInfo(TypedDict, total=False):
         float
     ]  # only for vertex ai models
     output_cost_per_image: Optional[float]
+    output_vector_size: Optional[int]
     output_cost_per_video_per_second: Optional[float]  # only for vertex ai models
     output_cost_per_audio_per_second: Optional[float]  # only for vertex ai models
     litellm_provider: Required[str]
