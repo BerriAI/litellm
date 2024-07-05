@@ -687,6 +687,7 @@ class VertexLLM(BaseLLM):
                         id=f"call_{str(uuid.uuid4())}",
                         type="function",
                         function=_function_chunk,
+                        index=candidate.get("index", idx),
                     )
                     tools.append(_tool_response_chunk)
 
