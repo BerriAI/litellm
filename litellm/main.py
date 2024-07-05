@@ -985,6 +985,7 @@ def completion(
                 mock_delay=kwargs.get("mock_delay", None),
                 custom_llm_provider=custom_llm_provider,
             )
+
         if custom_llm_provider == "azure":
             # azure configs
             api_type = get_secret("AZURE_API_TYPE") or "azure"
