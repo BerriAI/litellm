@@ -601,10 +601,14 @@ class ProxyLogging:
             "litellm_logging_obj", None
         )
 
-        if (
-            isinstance(original_exception, HTTPException)
-            and litellm_logging_obj is not None
-        ):
+        if isinstance(original_exception, HTTPException):
+            if litellm_logging_obj is None:
+                litellm_logging_obj, data = litellm.utils.function_setup(
+                    original_function="IGNORE_THIS",
+                    rules_obj=litellm.utils.Rules(),
+                    start_time=datetime.now(),
+                    **request_data,
+                )
             # log the custom exception
             await litellm_logging_obj.async_failure_handler(
                 exception=original_exception,
