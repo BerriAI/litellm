@@ -576,7 +576,7 @@ def test_together_ai_qwen_completion_cost():
 
 
 @pytest.mark.parametrize("above_128k", [False, True])
-@pytest.mark.parametrize("provider", ["vertex_ai", "gemini"])
+@pytest.mark.parametrize("provider", ["gemini"])
 def test_gemini_completion_cost(above_128k, provider):
     """
     Check if cost correctly calculated for gemini models based on context window
@@ -628,3 +628,114 @@ def test_gemini_completion_cost(above_128k, provider):
 
     assert calculated_input_cost == input_cost
     assert calculated_output_cost == output_cost
+
+
+def _count_characters(text):
+    # Remove white spaces and count characters
+    filtered_text = "".join(char for char in text if not char.isspace())
+    return len(filtered_text)
+
+
+def test_vertex_ai_completion_cost():
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    text = "The quick brown fox jumps over the lazy dog."
+    characters = _count_characters(text=text)
+
+    model_info = litellm.get_model_info(model="gemini-1.5-flash")
+
+    print("\nExpected model info:\n{}\n\n".format(model_info))
+
+    expected_input_cost = characters * model_info["input_cost_per_character"]
+
+    ## CALCULATED COST
+    calculated_input_cost, calculated_output_cost = cost_per_token(
+        model="gemini-1.5-flash",
+        custom_llm_provider="vertex_ai",
+        prompt_characters=characters,
+        completion_characters=0,
+    )
+
+    assert round(expected_input_cost, 6) == round(calculated_input_cost, 6)
+    print("expected_input_cost: {}".format(expected_input_cost))
+    print("calculated_input_cost: {}".format(calculated_input_cost))
+
+
+def test_vertex_ai_claude_completion_cost():
+    from litellm import Choices, Message, ModelResponse
+    from litellm.utils import Usage
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    litellm.set_verbose = True
+    input_tokens = litellm.token_counter(
+        model="vertex_ai/claude-3-sonnet@20240229",
+        messages=[{"role": "user", "content": "Hey, how's it going?"}],
+    )
+    print(f"input_tokens: {input_tokens}")
+    output_tokens = litellm.token_counter(
+        model="vertex_ai/claude-3-sonnet@20240229",
+        text="It's all going well",
+        count_response_tokens=True,
+    )
+    print(f"output_tokens: {output_tokens}")
+    response = ModelResponse(
+        id="chatcmpl-e41836bb-bb8b-4df2-8e70-8f3e160155ac",
+        choices=[
+            Choices(
+                finish_reason=None,
+                index=0,
+                message=Message(
+                    content="It's all going well",
+                    role="assistant",
+                ),
+            )
+        ],
+        created=1700775391,
+        model="vertex_ai/claude-3-sonnet@20240229",
+        object="chat.completion",
+        system_fingerprint=None,
+        usage=Usage(
+            prompt_tokens=input_tokens,
+            completion_tokens=output_tokens,
+            total_tokens=input_tokens + output_tokens,
+        ),
+    )
+    cost = litellm.completion_cost(
+        model="vertex_ai/claude-3-sonnet@20240229",
+        completion_response=response,
+        messages=[{"role": "user", "content": "Hey, how's it going?"}],
+    )
+    predicted_cost = input_tokens * 0.000003 + 0.000015 * output_tokens
+    assert cost == predicted_cost
+
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_completion_cost_hidden_params(sync_mode):
+    if sync_mode:
+        response = litellm.completion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+            mock_response="Hello world",
+        )
+    else:
+        response = await litellm.acompletion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+            mock_response="Hello world",
+        )
+
+    assert "response_cost" in response._hidden_params
+    assert isinstance(response._hidden_params["response_cost"], float)
+
+def test_vertex_ai_gemini_predict_cost():
+    model = "gemini-1.5-flash"
+    messages = [{"role": "user", "content": "Hey, hows it going???"}]
+    predictive_cost = completion_cost(model=model, messages=messages)
+
+    assert predictive_cost > 0
+

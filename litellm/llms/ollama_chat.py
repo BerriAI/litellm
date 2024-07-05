@@ -434,7 +434,7 @@ async def ollama_async_streaming(
                         {
                             "id": f"call_{str(uuid.uuid4())}",
                             "function": {
-                                "name": function_call["name"],
+                                "name": function_call.get("name", function_call.get("function", None)),
                                 "arguments": json.dumps(function_call["arguments"]),
                             },
                             "type": "function",
@@ -501,8 +501,10 @@ async def ollama_acompletion(
                         {
                             "id": f"call_{str(uuid.uuid4())}",
                             "function": {
-                                "name": function_call["name"],
-                                "arguments": json.dumps(function_call["arguments"]),
+                                "name": function_call.get("name", function_name),
+                                "arguments": json.dumps(
+                                    function_call.get("arguments", function_call)
+                                ),
                             },
                             "type": "function",
                         }

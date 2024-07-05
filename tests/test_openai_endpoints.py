@@ -73,6 +73,27 @@ async def new_user(session):
         return await response.json()
 
 
+async def moderation(session, key):
+    url = "http://0.0.0.0:4000/moderations"
+    headers = {
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+    }
+    data = {"input": "I want to kill the cat."}
+
+    async with session.post(url, headers=headers, json=data) as response:
+        status = response.status
+        response_text = await response.text()
+
+        print(response_text)
+        print()
+
+        if status != 200:
+            raise Exception(f"Request did not return a 200 status code: {status}")
+
+        return await response.json()
+
+
 async def chat_completion(session, key, model: Union[str, List] = "gpt-4"):
     url = "http://0.0.0.0:4000/chat/completions"
     headers = {
@@ -465,3 +486,22 @@ async def test_batch_chat_completions():
 
         assert len(response) == 2
         assert isinstance(response, list)
+
+
+@pytest.mark.asyncio
+async def test_moderations_endpoint():
+    """
+    - Make chat completion call using
+
+    """
+    async with aiohttp.ClientSession() as session:
+
+        # call chat/completions with a model that the key was not created for + the model is not on the config.yaml
+        response = await moderation(
+            session=session,
+            key="sk-1234",
+        )
+
+        print(f"response: {response}")
+
+        assert "results" in response

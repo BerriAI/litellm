@@ -155,6 +155,16 @@ class ToolConfig(TypedDict):
     functionCallingConfig: FunctionCallingConfig
 
 
+class TTL(TypedDict, total=False):
+    seconds: Required[float]
+    nano: float
+
+
+class CachedContent(TypedDict, total=False):
+    ttl: TTL
+    expire_time: str
+
+
 class RequestBody(TypedDict, total=False):
     contents: Required[List[ContentType]]
     system_instruction: SystemInstructions
@@ -162,6 +172,7 @@ class RequestBody(TypedDict, total=False):
     toolConfig: ToolConfig
     safetySettings: List[SafetSettingsConfig]
     generationConfig: GenerationConfig
+    cachedContent: str
 
 
 class SafetyRatings(TypedDict):
@@ -227,9 +238,9 @@ class PromptFeedback(TypedDict):
     blockReasonMessage: str
 
 
-class UsageMetadata(TypedDict):
-    promptTokenCount: int
-    totalTokenCount: int
+class UsageMetadata(TypedDict, total=False):
+    promptTokenCount: Required[int]
+    totalTokenCount: Required[int]
     candidatesTokenCount: int
 
 

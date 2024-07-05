@@ -62,6 +62,14 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 You can:
 - Add budgets to Teams
 
+:::info
+
+**Step-by step tutorial on setting, resetting budgets on Teams here (API or using Admin UI)**
+
+👉 [https://docs.litellm.ai/docs/proxy/team_budgets](https://docs.litellm.ai/docs/proxy/team_budgets)
+
+:::
+
 
 #### **Add budgets to teams**
 ```shell 
@@ -458,6 +466,17 @@ curl 'http://0.0.0.0:4000/team/new' \
 ```
 </TabItem>
 </Tabs>
+
+**Note:** By default, the server checks for resets every 10 minutes, to minimize DB calls.
+
+To change this, set `proxy_budget_rescheduler_min_time` and `proxy_budget_rescheduler_max_time`
+
+E.g.: Check every 1 seconds
+```yaml
+general_settings: 
+  proxy_budget_rescheduler_min_time: 1
+  proxy_budget_rescheduler_max_time: 1
+```
 
 ## Set Rate Limits 
 

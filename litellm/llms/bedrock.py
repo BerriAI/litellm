@@ -1,3 +1,8 @@
+####################################
+######### DEPRECATED FILE ##########
+####################################
+# logic moved to `bedrock_httpx.py` #
+
 import copy
 import json
 import os

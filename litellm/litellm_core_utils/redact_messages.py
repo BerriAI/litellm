@@ -9,6 +9,7 @@
 
 import copy
 from typing import TYPE_CHECKING, Any
+
 import litellm
 
 if TYPE_CHECKING:
@@ -28,8 +29,25 @@ def redact_message_input_output_from_logging(
     Removes messages, prompts, input, response from logging. This modifies the data in-place
     only redacts when litellm.turn_off_message_logging == True
     """
+    _request_headers = (
+        litellm_logging_obj.model_call_details.get("litellm_params", {}).get(
+            "metadata", {}
+        )
+        or {}
+    )
+
+    request_headers = _request_headers.get("headers", {})
+
     # check if user opted out of logging message/response to callbacks
-    if litellm.turn_off_message_logging is not True:
+    if (
+        litellm.turn_off_message_logging is not True
+        and request_headers.get("litellm-enable-message-redaction", False) is not True
+    ):
+        return result
+
+    if request_headers and request_headers.get(
+        "litellm-disable-message-redaction", False
+    ):
         return result
 
     # remove messages, prompts, input, response from logging

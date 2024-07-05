@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import time
 import types
 import uuid
 from typing import (
@@ -21,8 +22,10 @@ from openai import AsyncAzureOpenAI, AzureOpenAI
 from typing_extensions import overload
 
 import litellm
-from litellm import OpenAIConfig
+from litellm import ImageResponse, OpenAIConfig
 from litellm.caching import DualCache
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.utils import (
     Choices,
     CustomStreamWrapper,
@@ -32,6 +35,7 @@ from litellm.utils import (
     UnsupportedParamsError,
     convert_to_model_response_object,
     get_secret,
+    modify_url,
 )
 
 from ..types.llms.openai import (
@@ -42,6 +46,7 @@ from ..types.llms.openai import (
     AsyncAssistantEventHandler,
     AsyncAssistantStreamManager,
     AsyncCursorPage,
+    HttpxBinaryResponseContent,
     MessageData,
     OpenAICreateThreadParamsMessage,
     OpenAIMessage,
@@ -414,6 +419,79 @@ class AzureChatCompletion(BaseLLM):
             headers["Authorization"] = f"Bearer {azure_ad_token}"
         return headers
 
+    def _get_sync_azure_client(
+        self,
+        api_version: Optional[str],
+        api_base: Optional[str],
+        api_key: Optional[str],
+        azure_ad_token: Optional[str],
+        model: str,
+        max_retries: int,
+        timeout: Union[float, httpx.Timeout],
+        client: Optional[Any],
+        client_type: Literal["sync", "async"],
+    ):
+        # init AzureOpenAI Client
+        azure_client_params = {
+            "api_version": api_version,
+            "azure_endpoint": api_base,
+            "azure_deployment": model,
+            "http_client": litellm.client_session,
+            "max_retries": max_retries,
+            "timeout": timeout,
+        }
+        azure_client_params = select_azure_base_url_or_endpoint(
+            azure_client_params=azure_client_params
+        )
+        if api_key is not None:
+            azure_client_params["api_key"] = api_key
+        elif azure_ad_token is not None:
+            if azure_ad_token.startswith("oidc/"):
+                azure_ad_token = get_azure_ad_token_from_oidc(azure_ad_token)
+            azure_client_params["azure_ad_token"] = azure_ad_token
+        if client is None:
+            if client_type == "sync":
+                azure_client = AzureOpenAI(**azure_client_params)  # type: ignore
+            elif client_type == "async":
+                azure_client = AsyncAzureOpenAI(**azure_client_params)  # type: ignore
+        else:
+            azure_client = client
+            if api_version is not None and isinstance(azure_client._custom_query, dict):
+                # set api_version to version passed by user
+                azure_client._custom_query.setdefault("api-version", api_version)
+
+        return azure_client
+
+    async def make_azure_openai_chat_completion_request(
+        self,
+        azure_client: AsyncAzureOpenAI,
+        data: dict,
+        timeout: Union[float, httpx.Timeout],
+    ):
+        """
+        Helper to:
+        - call chat.completions.create.with_raw_response when litellm.return_response_headers is True
+        - call chat.completions.create by default
+        """
+        try:
+            if litellm.return_response_headers is True:
+                raw_response = (
+                    await azure_client.chat.completions.with_raw_response.create(
+                        **data, timeout=timeout
+                    )
+                )
+
+                headers = dict(raw_response.headers)
+                response = raw_response.parse()
+                return headers, response
+            else:
+                response = await azure_client.chat.completions.create(
+                    **data, timeout=timeout
+                )
+                return None, response
+        except Exception as e:
+            raise e
+
     def completion(
         self,
         model: str,
@@ -426,7 +504,7 @@ class AzureChatCompletion(BaseLLM):
         azure_ad_token: str,
         print_verbose: Callable,
         timeout: Union[float, httpx.Timeout],
-        logging_obj,
+        logging_obj: LiteLLMLoggingObj,
         optional_params,
         litellm_params,
         logger_fn,
@@ -605,9 +683,9 @@ class AzureChatCompletion(BaseLLM):
         data: dict,
         timeout: Any,
         model_response: ModelResponse,
+        logging_obj: LiteLLMLoggingObj,
         azure_ad_token: Optional[str] = None,
         client=None,  # this is the AsyncAzureOpenAI
-        logging_obj=None,
     ):
         response = None
         try:
@@ -657,19 +735,52 @@ class AzureChatCompletion(BaseLLM):
                     "complete_input_dict": data,
                 },
             )
-            response = await azure_client.chat.completions.create(
-                **data, timeout=timeout
+
+            headers, response = await self.make_azure_openai_chat_completion_request(
+                azure_client=azure_client,
+                data=data,
+                timeout=timeout,
+            )
+            logging_obj.model_call_details["response_headers"] = headers
+
+            stringified_response = response.model_dump()
+            logging_obj.post_call(
+                input=data["messages"],
+                api_key=api_key,
+                original_response=stringified_response,
+                additional_args={"complete_input_dict": data},
             )
             return convert_to_model_response_object(
-                response_object=response.model_dump(),
+                response_object=stringified_response,
                 model_response_object=model_response,
             )
         except AzureOpenAIError as e:
+            ## LOGGING
+            logging_obj.post_call(
+                input=data["messages"],
+                api_key=api_key,
+                additional_args={"complete_input_dict": data},
+                original_response=str(e),
+            )
             exception_mapping_worked = True
             raise e
         except asyncio.CancelledError as e:
+            ## LOGGING
+            logging_obj.post_call(
+                input=data["messages"],
+                api_key=api_key,
+                additional_args={"complete_input_dict": data},
+                original_response=str(e),
+            )
             raise AzureOpenAIError(status_code=500, message=str(e))
         except Exception as e:
+            ## LOGGING
+            logging_obj.post_call(
+                input=data["messages"],
+                api_key=api_key,
+                additional_args={"complete_input_dict": data},
+                original_response=str(e),
+            )
             if hasattr(e, "status_code"):
                 raise e
             else:
@@ -739,7 +850,7 @@ class AzureChatCompletion(BaseLLM):
 
     async def async_streaming(
         self,
-        logging_obj,
+        logging_obj: LiteLLMLoggingObj,
         api_base: str,
         api_key: str,
         api_version: str,
@@ -788,9 +899,14 @@ class AzureChatCompletion(BaseLLM):
                     "complete_input_dict": data,
                 },
             )
-            response = await azure_client.chat.completions.create(
-                **data, timeout=timeout
+
+            headers, response = await self.make_azure_openai_chat_completion_request(
+                azure_client=azure_client,
+                data=data,
+                timeout=timeout,
             )
+            logging_obj.model_call_details["response_headers"] = headers
+
             # return response
             streamwrapper = CustomStreamWrapper(
                 completion_stream=response,
@@ -812,7 +928,7 @@ class AzureChatCompletion(BaseLLM):
         azure_client_params: dict,
         api_key: str,
         input: list,
-        client=None,
+        client: Optional[AsyncAzureOpenAI] = None,
         logging_obj=None,
         timeout=None,
     ):
@@ -902,7 +1018,7 @@ class AzureChatCompletion(BaseLLM):
                 },
             )
 
-            if aembedding == True:
+            if aembedding is True:
                 response = self.aembedding(
                     data=data,
                     input=input,
@@ -911,6 +1027,7 @@ class AzureChatCompletion(BaseLLM):
                     model_response=model_response,
                     azure_client_params=azure_client_params,
                     timeout=timeout,
+                    client=client,
                 )
                 return response
             if client is None:
@@ -937,6 +1054,246 @@ class AzureChatCompletion(BaseLLM):
             else:
                 raise AzureOpenAIError(status_code=500, message=str(e))
 
+    async def make_async_azure_httpx_request(
+        self,
+        client: Optional[AsyncHTTPHandler],
+        timeout: Optional[Union[float, httpx.Timeout]],
+        api_base: str,
+        api_version: str,
+        api_key: str,
+        data: dict,
+    ) -> httpx.Response:
+        """
+        Implemented for azure dall-e-2 image gen calls
+
+        Alternative to needing a custom transport implementation
+        """
+        if client is None:
+            _params = {}
+            if timeout is not None:
+                if isinstance(timeout, float) or isinstance(timeout, int):
+                    _httpx_timeout = httpx.Timeout(timeout)
+                    _params["timeout"] = _httpx_timeout
+            else:
+                _params["timeout"] = httpx.Timeout(timeout=600.0, connect=5.0)
+
+            async_handler = AsyncHTTPHandler(**_params)  # type: ignore
+        else:
+            async_handler = client  # type: ignore
+
+        if (
+            "images/generations" in api_base
+            and api_version
+            in [  # dall-e-3 starts from `2023-12-01-preview` so we should be able to avoid conflict
+                "2023-06-01-preview",
+                "2023-07-01-preview",
+                "2023-08-01-preview",
+                "2023-09-01-preview",
+                "2023-10-01-preview",
+            ]
+        ):  # CREATE + POLL for azure dall-e-2 calls
+
+            api_base = modify_url(
+                original_url=api_base, new_path="/openai/images/generations:submit"
+            )
+
+            data.pop(
+                "model", None
+            )  # REMOVE 'model' from dall-e-2 arg https://learn.microsoft.com/en-us/azure/ai-services/openai/reference#request-a-generated-image-dall-e-2-preview
+            response = await async_handler.post(
+                url=api_base,
+                data=json.dumps(data),
+                headers={
+                    "Content-Type": "application/json",
+                    "api-key": api_key,
+                },
+            )
+            operation_location_url = response.headers["operation-location"]
+            response = await async_handler.get(
+                url=operation_location_url,
+                headers={
+                    "api-key": api_key,
+                },
+            )
+
+            await response.aread()
+
+            timeout_secs: int = 120
+            start_time = time.time()
+            if "status" not in response.json():
+                raise Exception(
+                    "Expected 'status' in response. Got={}".format(response.json())
+                )
+            while response.json()["status"] not in ["succeeded", "failed"]:
+                if time.time() - start_time > timeout_secs:
+                    timeout_msg = {
+                        "error": {
+                            "code": "Timeout",
+                            "message": "Operation polling timed out.",
+                        }
+                    }
+
+                    raise AzureOpenAIError(
+                        status_code=408, message="Operation polling timed out."
+                    )
+
+                await asyncio.sleep(int(response.headers.get("retry-after") or 10))
+                response = await async_handler.get(
+                    url=operation_location_url,
+                    headers={
+                        "api-key": api_key,
+                    },
+                )
+                await response.aread()
+
+            if response.json()["status"] == "failed":
+                error_data = response.json()
+                raise AzureOpenAIError(status_code=400, message=json.dumps(error_data))
+
+            result = response.json()["result"]
+            return httpx.Response(
+                status_code=200,
+                headers=response.headers,
+                content=json.dumps(result).encode("utf-8"),
+                request=httpx.Request(method="POST", url="https://api.openai.com/v1"),
+            )
+        return await async_handler.post(
+            url=api_base,
+            json=data,
+            headers={
+                "Content-Type": "application/json;",
+                "api-key": api_key,
+            },
+        )
+
+    def make_sync_azure_httpx_request(
+        self,
+        client: Optional[HTTPHandler],
+        timeout: Optional[Union[float, httpx.Timeout]],
+        api_base: str,
+        api_version: str,
+        api_key: str,
+        data: dict,
+    ) -> httpx.Response:
+        """
+        Implemented for azure dall-e-2 image gen calls
+
+        Alternative to needing a custom transport implementation
+        """
+        if client is None:
+            _params = {}
+            if timeout is not None:
+                if isinstance(timeout, float) or isinstance(timeout, int):
+                    _httpx_timeout = httpx.Timeout(timeout)
+                    _params["timeout"] = _httpx_timeout
+            else:
+                _params["timeout"] = httpx.Timeout(timeout=600.0, connect=5.0)
+
+            sync_handler = HTTPHandler(**_params)  # type: ignore
+        else:
+            sync_handler = client  # type: ignore
+
+        if (
+            "images/generations" in api_base
+            and api_version
+            in [  # dall-e-3 starts from `2023-12-01-preview` so we should be able to avoid conflict
+                "2023-06-01-preview",
+                "2023-07-01-preview",
+                "2023-08-01-preview",
+                "2023-09-01-preview",
+                "2023-10-01-preview",
+            ]
+        ):  # CREATE + POLL for azure dall-e-2 calls
+
+            api_base = modify_url(
+                original_url=api_base, new_path="/openai/images/generations:submit"
+            )
+
+            data.pop(
+                "model", None
+            )  # REMOVE 'model' from dall-e-2 arg https://learn.microsoft.com/en-us/azure/ai-services/openai/reference#request-a-generated-image-dall-e-2-preview
+            response = sync_handler.post(
+                url=api_base,
+                data=json.dumps(data),
+                headers={
+                    "Content-Type": "application/json",
+                    "api-key": api_key,
+                },
+            )
+            operation_location_url = response.headers["operation-location"]
+            response = sync_handler.get(
+                url=operation_location_url,
+                headers={
+                    "api-key": api_key,
+                },
+            )
+
+            response.read()
+
+            timeout_secs: int = 120
+            start_time = time.time()
+            if "status" not in response.json():
+                raise Exception(
+                    "Expected 'status' in response. Got={}".format(response.json())
+                )
+            while response.json()["status"] not in ["succeeded", "failed"]:
+                if time.time() - start_time > timeout_secs:
+                    raise AzureOpenAIError(
+                        status_code=408, message="Operation polling timed out."
+                    )
+
+                time.sleep(int(response.headers.get("retry-after") or 10))
+                response = sync_handler.get(
+                    url=operation_location_url,
+                    headers={
+                        "api-key": api_key,
+                    },
+                )
+                response.read()
+
+            if response.json()["status"] == "failed":
+                error_data = response.json()
+                raise AzureOpenAIError(status_code=400, message=json.dumps(error_data))
+
+            result = response.json()["result"]
+            return httpx.Response(
+                status_code=200,
+                headers=response.headers,
+                content=json.dumps(result).encode("utf-8"),
+                request=httpx.Request(method="POST", url="https://api.openai.com/v1"),
+            )
+        return sync_handler.post(
+            url=api_base,
+            json=data,
+            headers={
+                "Content-Type": "application/json;",
+                "api-key": api_key,
+            },
+        )
+
+    def create_azure_base_url(
+        self, azure_client_params: dict, model: Optional[str]
+    ) -> str:
+
+        api_base: str = azure_client_params.get(
+            "azure_endpoint", ""
+        )  # "https://example-endpoint.openai.azure.com"
+        if api_base.endswith("/"):
+            api_base = api_base.rstrip("/")
+        api_version: str = azure_client_params.get("api_version", "")
+        if model is None:
+            model = ""
+        new_api_base = (
+            api_base
+            + "/openai/deployments/"
+            + model
+            + "/images/generations"
+            + "?api-version="
+            + api_version
+        )
+
+        return new_api_base
+
     async def aimage_generation(
         self,
         data: dict,
@@ -948,30 +1305,40 @@ class AzureChatCompletion(BaseLLM):
         logging_obj=None,
         timeout=None,
     ):
-        response = None
+        response: Optional[dict] = None
         try:
-            if client is None:
-                client_session = litellm.aclient_session or httpx.AsyncClient(
-                    transport=AsyncCustomHTTPTransport(),
-                )
-                azure_client = AsyncAzureOpenAI(
-                    http_client=client_session, **azure_client_params
-                )
-            else:
-                azure_client = client
+            # response = await azure_client.images.generate(**data, timeout=timeout)
+            api_base: str = azure_client_params.get(
+                "api_base", ""
+            )  # "https://example-endpoint.openai.azure.com"
+            if api_base.endswith("/"):
+                api_base = api_base.rstrip("/")
+            api_version: str = azure_client_params.get("api_version", "")
+            img_gen_api_base = self.create_azure_base_url(
+                azure_client_params=azure_client_params, model=data.get("model", "")
+            )
+
             ## LOGGING
             logging_obj.pre_call(
                 input=data["prompt"],
-                api_key=azure_client.api_key,
+                api_key=api_key,
                 additional_args={
-                    "headers": {"api_key": azure_client.api_key},
-                    "api_base": azure_client._base_url._uri_reference,
-                    "acompletion": True,
                     "complete_input_dict": data,
+                    "api_base": img_gen_api_base,
+                    "headers": {"api_key": api_key},
                 },
             )
-            response = await azure_client.images.generate(**data, timeout=timeout)
-            stringified_response = response.model_dump()
+            httpx_response: httpx.Response = await self.make_async_azure_httpx_request(
+                client=None,
+                timeout=timeout,
+                api_base=img_gen_api_base,
+                api_version=api_version,
+                api_key=api_key,
+                data=data,
+            )
+            response = httpx_response.json()
+
+            stringified_response = response
             ## LOGGING
             logging_obj.post_call(
                 input=input,
@@ -1054,28 +1421,30 @@ class AzureChatCompletion(BaseLLM):
                 response = self.aimage_generation(data=data, input=input, logging_obj=logging_obj, model_response=model_response, api_key=api_key, client=client, azure_client_params=azure_client_params, timeout=timeout)  # type: ignore
                 return response
 
-            if client is None:
-                client_session = litellm.client_session or httpx.Client(
-                    transport=CustomHTTPTransport(),
-                )
-                azure_client = AzureOpenAI(http_client=client_session, **azure_client_params)  # type: ignore
-            else:
-                azure_client = client
+            img_gen_api_base = self.create_azure_base_url(
+                azure_client_params=azure_client_params, model=data.get("model", "")
+            )
 
             ## LOGGING
             logging_obj.pre_call(
-                input=prompt,
-                api_key=azure_client.api_key,
+                input=data["prompt"],
+                api_key=api_key,
                 additional_args={
-                    "headers": {"api_key": azure_client.api_key},
-                    "api_base": azure_client._base_url._uri_reference,
-                    "acompletion": False,
                     "complete_input_dict": data,
+                    "api_base": img_gen_api_base,
+                    "headers": {"api_key": api_key},
                 },
             )
+            httpx_response: httpx.Response = self.make_sync_azure_httpx_request(
+                client=None,
+                timeout=timeout,
+                api_base=img_gen_api_base,
+                api_version=api_version or "",
+                api_key=api_key or "",
+                data=data,
+            )
+            response = httpx_response.json()
 
-            ## COMPLETION CALL
-            response = azure_client.images.generate(**data, timeout=timeout)  # type: ignore
             ## LOGGING
             logging_obj.post_call(
                 input=prompt,
@@ -1084,7 +1453,7 @@ class AzureChatCompletion(BaseLLM):
                 original_response=response,
             )
             # return response
-            return convert_to_model_response_object(response_object=response.model_dump(), model_response_object=model_response, response_type="image_generation")  # type: ignore
+            return convert_to_model_response_object(response_object=response, model_response_object=model_response, response_type="image_generation")  # type: ignore
         except AzureOpenAIError as e:
             exception_mapping_worked = True
             raise e
@@ -1246,6 +1615,96 @@ class AzureChatCompletion(BaseLLM):
                 original_response=str(e),
             )
             raise e
+
+    def audio_speech(
+        self,
+        model: str,
+        input: str,
+        voice: str,
+        optional_params: dict,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        api_version: Optional[str],
+        organization: Optional[str],
+        max_retries: int,
+        timeout: Union[float, httpx.Timeout],
+        azure_ad_token: Optional[str] = None,
+        aspeech: Optional[bool] = None,
+        client=None,
+    ) -> HttpxBinaryResponseContent:
+
+        max_retries = optional_params.pop("max_retries", 2)
+
+        if aspeech is not None and aspeech is True:
+            return self.async_audio_speech(
+                model=model,
+                input=input,
+                voice=voice,
+                optional_params=optional_params,
+                api_key=api_key,
+                api_base=api_base,
+                api_version=api_version,
+                azure_ad_token=azure_ad_token,
+                max_retries=max_retries,
+                timeout=timeout,
+                client=client,
+            )  # type: ignore
+
+        azure_client: AzureOpenAI = self._get_sync_azure_client(
+            api_base=api_base,
+            api_version=api_version,
+            api_key=api_key,
+            azure_ad_token=azure_ad_token,
+            model=model,
+            max_retries=max_retries,
+            timeout=timeout,
+            client=client,
+            client_type="sync",
+        )  # type: ignore
+
+        response = azure_client.audio.speech.create(
+            model=model,
+            voice=voice,  # type: ignore
+            input=input,
+            **optional_params,
+        )
+        return response
+
+    async def async_audio_speech(
+        self,
+        model: str,
+        input: str,
+        voice: str,
+        optional_params: dict,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        api_version: Optional[str],
+        azure_ad_token: Optional[str],
+        max_retries: int,
+        timeout: Union[float, httpx.Timeout],
+        client=None,
+    ) -> HttpxBinaryResponseContent:
+
+        azure_client: AsyncAzureOpenAI = self._get_sync_azure_client(
+            api_base=api_base,
+            api_version=api_version,
+            api_key=api_key,
+            azure_ad_token=azure_ad_token,
+            model=model,
+            max_retries=max_retries,
+            timeout=timeout,
+            client=client,
+            client_type="async",
+        )  # type: ignore
+
+        response = await azure_client.audio.speech.create(
+            model=model,
+            voice=voice,  # type: ignore
+            input=input,
+            **optional_params,
+        )
+
+        return response
 
     def get_headers(
         self,

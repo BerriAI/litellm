@@ -1373,6 +1373,47 @@ export const adminGlobalActivity = async (
   }
 };
 
+export const adminGlobalCacheActivity = async (
+  accessToken: String,
+  startTime: String | undefined,
+  endTime: String | undefined
+) => {
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/global/activity/cache_hits`
+      : `/global/activity/cache_hits`;
+
+    if (startTime && endTime) {
+      url += `?start_date=${startTime}&end_date=${endTime}`;
+    }
+
+    const requestOptions: {
+      method: string;
+      headers: {
+        Authorization: string;
+      };
+    } = {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+    };
+
+    const response = await fetch(url, requestOptions);
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      throw new Error("Network response was not ok");
+    }
+    const data = await response.json();
+    console.log(data);
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch spend data:", error);
+    throw error;
+  }
+};
+
 export const adminGlobalActivityPerModel = async (
   accessToken: String,
   startTime: String | undefined,
