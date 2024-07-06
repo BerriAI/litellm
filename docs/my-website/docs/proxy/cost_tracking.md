@@ -151,12 +151,9 @@ Navigate to the Usage Tab on the LiteLLM UI (found on https://your-proxy-endpoin
 </Tabs>
 
 ## ✨ (Enterprise) API Endpoints to get Spend
-#### Getting Spend Reports - To Charge Other Teams, Customers
+#### Getting Spend Reports - To Charge Other Teams, Customers, Users
 
-Use the `/global/spend/report` endpoint to get daily spend report per 
-- Team
-- Customer [this is `user` passed to `/chat/completions` request](#how-to-track-spend-with-litellm)
-- [LiteLLM API key](virtual_keys.md)
+Use the `/global/spend/report` endpoint to get spend reports
 
 <Tabs>
 
@@ -285,6 +282,16 @@ Output from script
 
 <TabItem value="per customer" label="Spend Per Customer">
 
+:::info
+
+Customer This is the value of `user_id` passed when calling [`/key/generate`](https://litellm-api.up.railway.app/#/key%20management/generate_key_fn_key_generate_post)
+
+[this is `user` passed to `/chat/completions` request](#how-to-track-spend-with-litellm)
+- [LiteLLM API key](virtual_keys.md)
+
+
+:::
+
 ##### Example Request
 
 👉 Key Change: Specify `group_by=customer`
@@ -341,14 +348,14 @@ curl -X GET 'http://localhost:4000/global/spend/report?start_date=2024-04-01&end
 
 </TabItem>
 
-<TabItem value="per key" label="Spend Per API Key">
+<TabItem value="per key" label="Spend for Specific API Key">
 
 
-👉 Key Change: Specify `group_by=api_key`
+👉 Key Change: Specify `api_key=sk-1234`
 
 
 ```shell
-curl -X GET 'http://localhost:4000/global/spend/report?start_date=2024-04-01&end_date=2024-06-30&group_by=api_key' \
+curl -X GET 'http://localhost:4000/global/spend/report?start_date=2024-04-01&end_date=2024-06-30&api_key=sk-1234' \
   -H 'Authorization: Bearer sk-1234'
 ```
 
@@ -358,36 +365,103 @@ curl -X GET 'http://localhost:4000/global/spend/report?start_date=2024-04-01&end
 ```shell
 [
   {
-    "api_key": "ad64768847d05d978d62f623d872bff0f9616cc14b9c1e651c84d14fe3b9f539",
-    "total_cost": 0.0002157,
-    "total_input_tokens": 45.0,
-    "total_output_tokens": 1375.0,
-    "model_details": [
-      {
-        "model": "gpt-3.5-turbo",
-        "total_cost": 0.0001095,
-        "total_input_tokens": 9,
-        "total_output_tokens": 70
-      },
-      {
-        "model": "llama3-8b-8192",
-        "total_cost": 0.0001062,
-        "total_input_tokens": 36,
-        "total_output_tokens": 1305
-      }
-    ]
-  },
-  {
     "api_key": "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",
-    "total_cost": 0.00012924,
+    "total_cost": 0.3201286305151999,
     "total_input_tokens": 36.0,
     "total_output_tokens": 1593.0,
     "model_details": [
+      {
+        "model": "dall-e-3",
+        "total_cost": 0.31999939051519993,
+        "total_input_tokens": 0,
+        "total_output_tokens": 0
+      },
       {
         "model": "llama3-8b-8192",
         "total_cost": 0.00012924,
         "total_input_tokens": 36,
         "total_output_tokens": 1593
+      }
+    ]
+  }
+]
+```
+
+</TabItem>
+
+<TabItem value="per user" label="Spend for Internal User (Key Owner)">
+
+:::info
+
+Internal User (Key Owner): This is the value of `user_id` passed when calling [`/key/generate`](https://litellm-api.up.railway.app/#/key%20management/generate_key_fn_key_generate_post)
+
+:::
+
+
+👉 Key Change: Specify `internal_user_id=ishaan`
+
+
+```shell
+curl -X GET 'http://localhost:4000/global/spend/report?start_date=2024-04-01&end_date=2024-12-30&internal_user_id=ishaan' \
+  -H 'Authorization: Bearer sk-1234'
+```
+
+##### Example Response
+
+
+```shell
+[
+  {
+    "api_key": "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",
+    "total_cost": 0.00013132,
+    "total_input_tokens": 105.0,
+    "total_output_tokens": 872.0,
+    "model_details": [
+      {
+        "model": "gpt-3.5-turbo-instruct",
+        "total_cost": 5.85e-05,
+        "total_input_tokens": 15,
+        "total_output_tokens": 18
+      },
+      {
+        "model": "llama3-8b-8192",
+        "total_cost": 7.282000000000001e-05,
+        "total_input_tokens": 90,
+        "total_output_tokens": 854
+      }
+    ]
+  },
+  {
+    "api_key": "151e85e46ab8c9c7fad090793e3fe87940213f6ae665b543ca633b0b85ba6dc6",
+    "total_cost": 5.2699999999999993e-05,
+    "total_input_tokens": 26.0,
+    "total_output_tokens": 27.0,
+    "model_details": [
+      {
+        "model": "gpt-3.5-turbo",
+        "total_cost": 5.2499999999999995e-05,
+        "total_input_tokens": 24,
+        "total_output_tokens": 27
+      },
+      {
+        "model": "text-embedding-ada-002",
+        "total_cost": 2e-07,
+        "total_input_tokens": 2,
+        "total_output_tokens": 0
+      }
+    ]
+  },
+  {
+    "api_key": "60cb83a2dcbf13531bd27a25f83546ecdb25a1a6deebe62d007999dc00e1e32a",
+    "total_cost": 9.42e-06,
+    "total_input_tokens": 30.0,
+    "total_output_tokens": 99.0,
+    "model_details": [
+      {
+        "model": "llama3-8b-8192",
+        "total_cost": 9.42e-06,
+        "total_input_tokens": 30,
+        "total_output_tokens": 99
       }
     ]
   }
