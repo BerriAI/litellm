@@ -29,8 +29,6 @@ else:
 LITELLM_TRACER_NAME = os.getenv("OTEL_TRACER_NAME", "litellm")
 LITELLM_RESOURCE = {
     "service.name": os.getenv("OTEL_SERVICE_NAME", "litellm"),
-}
-LITELLM_ENVIRONMENT = {
     "deployment.environment": os.getenv("OTEL_ENVIRONMENT_NAME", "production"),
 }
 RAW_REQUEST_SPAN_NAME = "raw_gen_ai_request"
@@ -73,9 +71,7 @@ class OpenTelemetry(CustomLogger):
         self.OTEL_EXPORTER = self.config.exporter
         self.OTEL_ENDPOINT = self.config.endpoint
         self.OTEL_HEADERS = self.config.headers
-        provider = TracerProvider(
-            resource=Resource(attributes={**LITELLM_RESOURCE, **LITELLM_ENVIRONMENT})
-        )
+        provider = TracerProvider(resource=Resource(attributes=LITELLM_RESOURCE))
         provider.add_span_processor(self._get_span_processor())
 
         trace.set_tracer_provider(provider)
