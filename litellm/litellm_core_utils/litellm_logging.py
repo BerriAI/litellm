@@ -2019,10 +2019,13 @@ def get_custom_logger_compatible_class(
     return None
 
 
-def use_custom_pricing_for_model(litellm_params: dict) -> bool:
-    model_info: Optional[dict] = litellm_params.get("metadata", {}).get(
-        "model_info", {}
-    )
+def use_custom_pricing_for_model(litellm_params: Optional[dict]) -> bool:
+    if litellm_params is None:
+        return False
+    metadata: Optional[dict] = litellm_params.get("metadata", {})
+    if metadata is None:
+        return False
+    model_info: Optional[dict] = metadata.get("model_info", {})
     if model_info is not None:
         for k, v in model_info.items():
             if k in SPECIAL_MODEL_INFO_PARAMS:
