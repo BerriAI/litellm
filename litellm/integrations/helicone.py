@@ -4,11 +4,12 @@ import dotenv, os
 import requests  # type: ignore
 import litellm
 import traceback
+from litellm._logging import verbose_logger
 
 
 class HeliconeLogger:
     # Class variables or attributes
-    helicone_model_list = ["gpt", "claude"]
+    helicone_model_list = ["gpt", "claude", "command-r", "command-r-plus", "command-light", "command-medium", "command-medium-beta", "command-xlarge-nightly", "command-nightly	"]
 
     def __init__(self):
         # Instance variables
@@ -37,15 +38,58 @@ class HeliconeLogger:
         }
 
         return claude_provider_request, claude_response_obj
+    
+    @staticmethod
+    def add_metadata_from_header(litellm_params: dict, metadata: dict) -> dict:
+        """
+        Adds metadata from proxy request headers to Helicone logging if keys start with "helicone_"
+        and overwrites litellm_params.metadata if already included.
+
+        For example if you want to add custom property to your request, send
+        `headers: { ..., helicone-property-something: 1234 }` via proxy request.
+        """
+        if litellm_params is None:
+            return metadata
+
+        if litellm_params.get("proxy_server_request") is None:
+            return metadata
+
+        if metadata is None:
+            metadata = {}
+
+        proxy_headers = (
+            litellm_params.get("proxy_server_request", {}).get("headers", {}) or {}
+        )
+
+        for metadata_param_key in proxy_headers:
+            if metadata_param_key.startswith("helicone_"):
+                trace_param_key = metadata_param_key.replace("helicone_", "", 1)
+                if trace_param_key in metadata:
+                    verbose_logger.warning(
+                        f"Overwriting Helicone `{trace_param_key}` from request header"
+                    )
+                else:
+                    verbose_logger.debug(
+                        f"Found Helicone `{trace_param_key}` in request header"
+                    )
+                metadata[trace_param_key] = proxy_headers.get(metadata_param_key)
+
+        return metadata
 
     def log_success(
-        self, model, messages, response_obj, start_time, end_time, print_verbose
+        self, model, messages, response_obj, start_time, end_time, print_verbose, kwargs
     ):
         # Method definition
         try:
             print_verbose(
                 f"Helicone Logging - Enters logging function for model {model}"
             )
+            litellm_params = kwargs.get("litellm_params", {})
+            litellm_call_id = kwargs.get("litellm_call_id", None)
+            metadata = (
+                litellm_params.get("metadata", {}) or {}
+            )
+            metadata = self.add_metadata_from_header(litellm_params, metadata)
             model = (
                 model
                 if any(
@@ -73,6 +117,8 @@ class HeliconeLogger:
 
             # Code to be executed
             url = "https://api.hconeai.com/oai/v1/log"
+            if model.startswith("command"):
+                url = "https://api.hconeai.com/custom/v1/log"
             headers = {
                 "Authorization": f"Bearer {self.key}",
                 "Content-Type": "application/json",
