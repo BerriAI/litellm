@@ -31,10 +31,12 @@ def initialize_callbacks_on_proxy(
                 imported_list.append(callback)
             elif isinstance(callback, str) and callback == "otel":
                 from litellm.integrations.opentelemetry import OpenTelemetry
+                from litellm.proxy import proxy_server
 
                 open_telemetry_logger = OpenTelemetry()
 
                 imported_list.append(open_telemetry_logger)
+                setattr(proxy_server, "open_telemetry_logger", open_telemetry_logger)
             elif isinstance(callback, str) and callback == "presidio":
                 from litellm.proxy.hooks.presidio_pii_masking import (
                     _OPTIONAL_PresidioPIIMasking,
