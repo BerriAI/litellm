@@ -207,6 +207,7 @@ from litellm.router import ModelInfo as RouterModelInfo
 from litellm.router import updateDeployment
 from litellm.scheduler import DefaultPriorities, FlowItem, Scheduler
 from litellm.types.llms.openai import HttpxBinaryResponseContent
+from litellm.types.router import RouterGeneralSettings
 
 try:
     from litellm._version import version
@@ -1765,7 +1766,11 @@ class ProxyConfig:
                 if k in available_args:
                     router_params[k] = v
         router = litellm.Router(
-            **router_params, assistants_config=assistants_config
+            **router_params,
+            assistants_config=assistants_config,
+            router_general_settings=RouterGeneralSettings(
+                async_only_mode=True  # only init async clients
+            ),
         )  # type:ignore
         return router, router.get_model_list(), general_settings
 
@@ -1957,7 +1962,12 @@ class ProxyConfig:
                     )
                 if len(_model_list) > 0:
                     verbose_proxy_logger.debug(f"_model_list: {_model_list}")
-                    llm_router = litellm.Router(model_list=_model_list)
+                    llm_router = litellm.Router(
+                        model_list=_model_list,
+                        router_general_settings=RouterGeneralSettings(
+                            async_only_mode=True  # only init async clients
+                        ),
+                    )
                     verbose_proxy_logger.debug(f"updated llm_router: {llm_router}")
             else:
                 verbose_proxy_logger.debug(f"len new_models: {len(new_models)}")
