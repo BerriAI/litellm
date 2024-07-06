@@ -56,6 +56,7 @@ from ..integrations.clickhouse import ClickhouseLogger
 from ..integrations.custom_logger import CustomLogger
 from ..integrations.datadog import DataDogLogger
 from ..integrations.dynamodb import DyanmoDBLogger
+from ..integrations.galileo import GalileoObserve
 from ..integrations.greenscale import GreenscaleLogger
 from ..integrations.helicone import HeliconeLogger
 from ..integrations.lago import LagoLogger
@@ -1925,6 +1926,15 @@ def _init_custom_logger_compatible_class(
         _openmeter_logger = OpenMeterLogger()
         _in_memory_loggers.append(_openmeter_logger)
         return _openmeter_logger  # type: ignore
+
+    elif logging_integration == "galileo":
+        for callback in _in_memory_loggers:
+            if isinstance(callback, GalileoObserve):
+                return callback  # type: ignore
+
+        galileo_logger = GalileoObserve()
+        _in_memory_loggers.append(galileo_logger)
+        return galileo_logger  # type: ignore
     elif logging_integration == "logfire":
         if "LOGFIRE_TOKEN" not in os.environ:
             raise ValueError("LOGFIRE_TOKEN not found in environment variables")
@@ -1980,6 +1990,10 @@ def get_custom_logger_compatible_class(
     elif logging_integration == "openmeter":
         for callback in _in_memory_loggers:
             if isinstance(callback, OpenMeterLogger):
+                return callback
+    elif logging_integration == "galileo":
+        for callback in _in_memory_loggers:
+            if isinstance(callback, GalileoObserve):
                 return callback
     elif logging_integration == "logfire":
         if "LOGFIRE_TOKEN" not in os.environ:

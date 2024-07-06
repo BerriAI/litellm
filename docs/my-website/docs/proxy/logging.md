@@ -7,10 +7,13 @@ import TabItem from '@theme/TabItem';
 
 Log Proxy Input, Output, Exceptions using Langfuse, OpenTelemetry, Custom Callbacks, DataDog, DynamoDB, s3 Bucket
 
+## Table of Contents
+
 - [Logging to Langfuse](#logging-proxy-inputoutput---langfuse)
 - [Logging with OpenTelemetry (OpenTelemetry)](#logging-proxy-inputoutput-in-opentelemetry-format)
 - [Async Custom Callbacks](#custom-callback-class-async)
 - [Async Custom Callback APIs](#custom-callback-apis-async)
+- [Logging to Galileo](#logging-llm-io-to-galielo)
 - [Logging to OpenMeter](#logging-proxy-inputoutput---langfuse)
 - [Logging to s3 Buckets](#logging-proxy-inputoutput---s3-buckets)
 - [Logging to DataDog](#logging-proxy-inputoutput---datadog)
@@ -1055,6 +1058,67 @@ litellm_settings:
 ```
 
 Start the LiteLLM Proxy and make a test request to verify the logs reached your callback API 
+
+
+## [Beta] Logging LLM I/O to Galileo
+
+Log LLM I/O on [www.rungalileo.io](https://www.rungalileo.io/)
+
+:::info
+
+Beta Integration
+
+:::
+
+**Required Env Variables**
+
+```bash
+export GALILEO_BASE_URL=""  # For most users, this is the same as their console URL except with the word 'console' replaced by 'api' (e.g. http://www.console.galileo.myenterprise.com -> http://www.api.galileo.myenterprise.com)
+export GALILEO_PROJECT_ID=""
+export GALILEO_USERNAME=""
+export GALILEO_PASSWORD=""
+```
+
+### Quick Start 
+
+1. Add to Config.yaml
+```yaml
+model_list:
+- litellm_params:
+    api_base: https://exampleopenaiendpoint-production.up.railway.app/
+    api_key: my-fake-key
+    model: openai/my-fake-model
+  model_name: fake-openai-endpoint
+
+litellm_settings:
+  success_callback: ["galileo"] # 👈 KEY CHANGE
+```
+
+2. Start Proxy
+
+```
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+--header 'Content-Type: application/json' \
+--data ' {
+      "model": "fake-openai-endpoint",
+      "messages": [
+        {
+          "role": "user",
+          "content": "what llm are you"
+        }
+      ],
+    }
+'
+```
+
+
+🎉 That's it - Expect to see your Logs on your Galileo Dashboard
 
 ## Logging Proxy Cost + Usage - OpenMeter
 
