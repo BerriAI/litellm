@@ -1060,7 +1060,8 @@ litellm_settings:
 Start the LiteLLM Proxy and make a test request to verify the logs reached your callback API 
 
 
-## [Beta] Logging LLM I/O to Galileo
+## Logging LLM I/O to Galileo
+[BETA]
 
 Log LLM I/O on [www.rungalileo.io](https://www.rungalileo.io/)
 
