@@ -473,9 +473,10 @@ def completion_cost(
         prompt_characters = 0
         completion_tokens = 0
         completion_characters = 0
-        if completion_response is not None and isinstance(
-            completion_response, BaseModel
-        ):
+        if completion_response is not None and (
+            isinstance(completion_response, BaseModel)
+            or isinstance(completion_response, dict)
+        ):  # tts returns a custom class
             # get input/output tokens from completion_response
             prompt_tokens = completion_response.get("usage", {}).get("prompt_tokens", 0)
             completion_tokens = completion_response.get("usage", {}).get(
