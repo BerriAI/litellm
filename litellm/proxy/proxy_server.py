@@ -1244,6 +1244,7 @@ class ProxyConfig:
         ## DB
         if prisma_client is not None and (
             general_settings.get("store_model_in_db", False) == True
+            or store_model_in_db is True
         ):
             _tasks = []
             keys = [
