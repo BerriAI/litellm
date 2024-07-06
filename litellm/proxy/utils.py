@@ -585,23 +585,24 @@ class ProxyLogging:
                     **request_data,
                 )
 
-            # log the custom exception
-            await litellm_logging_obj.async_failure_handler(
-                exception=original_exception,
-                traceback_exception=traceback.format_exc(),
-                start_time=time.time(),
-                end_time=time.time(),
-            )
+            if litellm_logging_obj is not None:
+                # log the custom exception
+                await litellm_logging_obj.async_failure_handler(
+                    exception=original_exception,
+                    traceback_exception=traceback.format_exc(),
+                    start_time=time.time(),
+                    end_time=time.time(),
+                )
 
-            threading.Thread(
-                target=litellm_logging_obj.failure_handler,
-                args=(
-                    original_exception,
-                    traceback.format_exc(),
-                    time.time(),
-                    time.time(),
-                ),
-            ).start()
+                threading.Thread(
+                    target=litellm_logging_obj.failure_handler,
+                    args=(
+                        original_exception,
+                        traceback.format_exc(),
+                        time.time(),
+                        time.time(),
+                    ),
+                ).start()
 
         for callback in litellm.callbacks:
             try:
