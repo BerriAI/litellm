@@ -397,7 +397,27 @@
         "input_cost_per_second": 0,
         "output_cost_per_second": 0.0001, 
         "litellm_provider": "openai"
-    }, 
+    },
+    "tts-1": {
+        "mode": "audio_speech", 
+        "input_cost_per_character": 0.000015,
+        "litellm_provider": "openai"
+    },
+    "tts-1-hd": {
+        "mode": "audio_speech", 
+        "input_cost_per_character": 0.000030,
+        "litellm_provider": "openai"
+    },
+    "azure/tts-1": {
+        "mode": "audio_speech", 
+        "input_cost_per_character": 0.000015,
+        "litellm_provider": "azure"
+    },
+    "azure/tts-1-hd": {
+        "mode": "audio_speech", 
+        "input_cost_per_character": 0.000030,
+        "litellm_provider": "azure"
+    },
     "azure/whisper-1": {
         "mode": "audio_transcription",
         "input_cost_per_second": 0, 
