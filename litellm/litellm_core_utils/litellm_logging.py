@@ -153,11 +153,6 @@ class Logging:
         langfuse_secret=None,
         langfuse_host=None,
     ):
-        if call_type not in [item.value for item in CallTypes]:
-            allowed_values = ", ".join([item.value for item in CallTypes])
-            raise ValueError(
-                f"Invalid call_type {call_type}. Allowed values: {allowed_values}"
-            )
         if messages is not None:
             if isinstance(messages, str):
                 messages = [
@@ -1612,6 +1607,7 @@ class Logging:
                         )
                         == False
                     ):  # custom logger class
+
                         callback.log_failure_event(
                             start_time=start_time,
                             end_time=end_time,
