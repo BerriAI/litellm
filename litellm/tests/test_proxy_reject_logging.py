@@ -76,7 +76,7 @@ class testLogger(CustomLogger):
         self.reaches_async_failure_event = True
 
     def log_failure_event(self, kwargs, response_obj, start_time, end_time):
-        self.reaches_failure_event = True
+        self.reaches_sync_failure_event = True
 
 
 router = Router(
@@ -186,4 +186,5 @@ async def test_chat_completion_request_with_redaction(route, body):
     await asyncio.sleep(3)
 
     assert _test_logger.reaches_async_failure_event is True
+
     assert _test_logger.reaches_sync_failure_event is True
