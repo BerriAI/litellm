@@ -3602,6 +3602,8 @@ def test_completion_nvidia_nim():
                     "content": "What's the weather like in Boston today in Fahrenheit?",
                 }
             ],
+            presence_penalty=0.5,
+            frequency_penalty=0.1,
         )
         # Add any assertions here to check the response
         print(response)
