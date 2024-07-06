@@ -517,3 +517,9 @@ class CustomRoutingStrategyBase:
 
         """
         pass
+
+
+class RouterGeneralSettings(BaseModel):
+    async_only_mode: bool = Field(
+        default=False
+    )  # this will only initialize async clients. Good for memory utils
