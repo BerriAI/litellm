@@ -140,6 +140,10 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 ## Import All Misc routes here ##
 from litellm.proxy.caching_routes import router as caching_router
+from litellm.proxy.common_utils.admin_ui_utils import (
+    html_form,
+    show_missing_vars_in_env,
+)
 from litellm.proxy.common_utils.debug_utils import router as debugging_endpoints_router
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
@@ -193,8 +197,6 @@ from litellm.proxy.utils import (
     get_error_message_str,
     get_instance_fn,
     hash_token,
-    html_form,
-    missing_keys_html_form,
     reset_budget,
     send_email,
     update_spend,
@@ -7169,10 +7171,9 @@ async def google_login(request: Request):
             )
 
     ####### Detect DB + MASTER KEY in .env #######
-    if prisma_client is None or master_key is None:
-        from fastapi.responses import HTMLResponse
-
-        return HTMLResponse(content=missing_keys_html_form, status_code=200)
+    missing_env_vars = show_missing_vars_in_env()
+    if missing_env_vars is not None:
+        return missing_env_vars
 
     # get url from request
     redirect_url = os.getenv("PROXY_BASE_URL", str(request.base_url))
