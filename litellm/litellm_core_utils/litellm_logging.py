@@ -600,8 +600,7 @@ class Logging:
                         verbose_logger.error(
                             "LiteLLM.LoggingError: [Non-Blocking] Exception occurred while building complete streaming response in success logging {}\n{}".format(
                                 str(e), traceback.format_exc()
-                            ),
-                            log_level="ERROR",
+                            )
                         )
                         complete_streaming_response = None
                 else:
