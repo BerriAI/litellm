@@ -32,7 +32,6 @@ import {
   allTagNamesCall,
   modelMetricsCall,
   modelAvailableCall,
-  modelInfoCall,
   adminspendByProvider,
   adminGlobalActivity,
   adminGlobalActivityPerModel,
