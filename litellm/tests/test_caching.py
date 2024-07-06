@@ -1607,7 +1607,17 @@ def test_caching_redis_simple(caplog):
         print(m)
     print(time.time() - s2)
 
+    redis_async_caching_error = False
+    redis_service_logging_error = False
     captured_logs = [rec.message for rec in caplog.records]
 
-    assert "LiteLLM Redis Caching: async set" not in captured_logs
-    assert "ServiceLogging.async_service_success_hook" not in captured_logs
+    print(f"captured_logs: {captured_logs}")
+    for item in captured_logs:
+        if "Error connecting to Async Redis client" in item:
+            redis_async_caching_error = True
+
+        if "ServiceLogging.async_service_success_hook" in item:
+            redis_service_logging_error = True
+
+    assert redis_async_caching_error is False
+    assert redis_service_logging_error is False
