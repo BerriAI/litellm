@@ -13,7 +13,7 @@ Log Proxy Input, Output, Exceptions using Langfuse, OpenTelemetry, Custom Callba
 - [Logging with OpenTelemetry (OpenTelemetry)](#logging-proxy-inputoutput-in-opentelemetry-format)
 - [Async Custom Callbacks](#custom-callback-class-async)
 - [Async Custom Callback APIs](#custom-callback-apis-async)
-- [Logging to Galileo](#logging-llm-io-to-galielo)
+- [Logging to Galileo](#logging-llm-io-to-galileo)
 - [Logging to OpenMeter](#logging-proxy-inputoutput---langfuse)
 - [Logging to s3 Buckets](#logging-proxy-inputoutput---s3-buckets)
 - [Logging to DataDog](#logging-proxy-inputoutput---datadog)
@@ -1060,7 +1060,7 @@ litellm_settings:
 Start the LiteLLM Proxy and make a test request to verify the logs reached your callback API 
 
 
-## Logging LLM I/O to Galileo
+## Logging LLM IO to Galileo
 [BETA]
 
 Log LLM I/O on [www.rungalileo.io](https://www.rungalileo.io/)
