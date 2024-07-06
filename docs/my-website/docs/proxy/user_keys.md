@@ -174,6 +174,37 @@ console.log(message);
 ```
 
 </TabItem>
+<TabItem value="instructor" label="Instructor">
+
+```python
+from openai import OpenAI
+import instructor
+from pydantic import BaseModel
+
+my_proxy_api_key = "" # e.g. sk-1234
+my_proxy_base_url = "" # e.g. http://0.0.0.0:4000
+
+# This enables response_model keyword
+# from client.chat.completions.create
+client = instructor.from_openai(OpenAI(api_key=my_proxy_api_key, base_url=my_proxy_base_url))
+
+class UserDetail(BaseModel):
+    name: str
+    age: int
+
+user = client.chat.completions.create(
+    model="gemini-pro-flash",
+    response_model=UserDetail,
+    messages=[
+        {"role": "user", "content": "Extract Jason is 25 years old"},
+    ]
+)
+
+assert isinstance(user, UserDetail)
+assert user.name == "Jason"
+assert user.age == 25
+```
+</TabItem>
 </Tabs>
 
 ### Response Format
