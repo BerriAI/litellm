@@ -28,10 +28,6 @@ def decrypt_value_helper(value: str):
             decoded_b64 = base64.b64decode(value)
             value = decrypt_value(value=decoded_b64, master_key=master_key)  # type: ignore
             return value
-        else:
-            raise ValueError(
-                f"Invalid value passed to decrypt_value: {value}\n Value must be a string. but passed value type is: {type(value)}"
-            )
     except Exception as e:
         verbose_proxy_logger.error(f"Error decrypting value: {value}\nError: {str(e)}")
         # [Non-Blocking Exception. - this should not block decrypting other values]
