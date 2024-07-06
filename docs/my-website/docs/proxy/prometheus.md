@@ -132,3 +132,9 @@ litellm_settings:
 | `litellm_redis_latency`         | histogram latency for redis calls     |
 | `litellm_redis_fails`         | Number of failed redis calls    |
 | `litellm_self_latency`         | Histogram latency for successful litellm api call    |
+
+## 🔥 Community Maintained Grafana Dashboards 
+
+Link to Grafana Dashboards made by LiteLLM community 
+
+https://github.com/BerriAI/litellm/tree/main/cookbook/litellm_proxy_server/grafana_dashboard
