@@ -2,6 +2,7 @@ import os
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+import httpx
 from pydantic import BaseModel, Field
 
 import litellm
@@ -38,7 +39,9 @@ class GalileoObserve(CustomLogger):
         self.base_url = os.getenv("GALILEO_BASE_URL", None)
         self.project_id = os.getenv("GALILEO_PROJECT_ID", None)
         self.headers = None
-        self.async_httpx_handler = AsyncHTTPHandler()
+        self.async_httpx_handler = AsyncHTTPHandler(
+            timeout=httpx.Timeout(timeout=600.0, connect=5.0)
+        )
         pass
 
     def set_galileo_headers(self):
