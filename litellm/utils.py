@@ -4707,7 +4707,9 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
             )
     except Exception:
         raise Exception(
-            "This model isn't mapped yet. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
+            "This model isn't mapped yet. model={}, custom_llm_provider={}. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json".format(
+                model, custom_llm_provider
+            )
         )
 
 
