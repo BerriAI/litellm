@@ -12,11 +12,19 @@ export interface Model {
   model_info: Object | null;
 }
 
-export const modelCostMap = async () => {
+export const modelCostMap = async (
+  accessToken: string,
+) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/get/litellm_model_cost_map` : `/get/litellm_model_cost_map`;
     const response = await fetch(
-      url
+      url, {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+      }
     );
     const jsonData = await response.json();
     console.log(`received litellm model cost data: ${jsonData}`);
