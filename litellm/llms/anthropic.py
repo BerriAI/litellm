@@ -49,7 +49,7 @@ class AnthropicConstants(Enum):
 class AnthropicError(Exception):
     def __init__(self, status_code, message):
         self.status_code = status_code
-        self.message = message
+        self.message: str = message
         self.request = httpx.Request(
             method="POST", url="https://api.anthropic.com/v1/messages"
         )
@@ -829,6 +829,16 @@ class ModelResponseIterator:
                     + message_start_block["message"]
                     .get("usage", {})
                     .get("output_tokens", 0),
+                )
+            elif type_chunk == "error":
+                """
+                {"type":"error","error":{"details":null,"type":"api_error","message":"Internal server error"}      }
+                """
+                _error_dict = chunk.get("error", {}) or {}
+                message = _error_dict.get("message", None) or str(chunk)
+                raise AnthropicError(
+                    message=message,
+                    status_code=500,  # it looks like Anthropic API does not return a status code in the chunk error - default to 500
                 )
             returned_chunk = GenericStreamingChunk(
                 text=text,
