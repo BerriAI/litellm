@@ -324,7 +324,12 @@ class DeploymentTypedDict(TypedDict):
     litellm_params: LiteLLMParamsTypedDict
 
 
-SPECIAL_MODEL_INFO_PARAMS = ["input_cost_per_token", "output_cost_per_token"]
+SPECIAL_MODEL_INFO_PARAMS = [
+    "input_cost_per_token",
+    "output_cost_per_token",
+    "input_cost_per_character",
+    "output_cost_per_character",
+]
 
 
 class Deployment(BaseModel):
