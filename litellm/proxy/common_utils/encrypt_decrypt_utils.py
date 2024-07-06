@@ -4,6 +4,9 @@ import os
 from litellm._logging import verbose_proxy_logger
 
 LITELLM_SALT_KEY = os.getenv("LITELLM_SALT_KEY", None)
+verbose_proxy_logger.debug(
+    "LITELLM_SALT_KEY is None using master_key to encrypt/decrypt secrets stored in DB"
+)
 
 
 def encrypt_value_helper(value: str):
@@ -11,9 +14,6 @@ def encrypt_value_helper(value: str):
 
     signing_key = LITELLM_SALT_KEY
     if LITELLM_SALT_KEY is None:
-        verbose_proxy_logger.debug(
-            "LITELLM_SALT_KEY is None using master_key to encrypt value"
-        )
         signing_key = master_key
 
     try:
@@ -35,9 +35,6 @@ def decrypt_value_helper(value: str):
 
     signing_key = LITELLM_SALT_KEY
     if LITELLM_SALT_KEY is None:
-        verbose_proxy_logger.debug(
-            "LITELLM_SALT_KEY is None using master_key to decrypt value"
-        )
         signing_key = master_key
 
     try:
