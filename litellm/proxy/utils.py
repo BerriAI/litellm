@@ -2888,6 +2888,11 @@ def get_error_message_str(e: Exception) -> str:
             error_message = e.detail
         elif isinstance(e.detail, dict):
             error_message = json.dumps(e.detail)
+        elif hasattr(e, "message"):
+            if isinstance(e.message, "str"):
+                error_message = e.message
+            elif isinstance(e.message, dict):
+                error_message = json.dumps(e.message)
         else:
             error_message = str(e)
     else:
