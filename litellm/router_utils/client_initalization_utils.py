@@ -33,11 +33,15 @@ def should_initialize_sync_client(
     if litellm_router_instance is None:
         return False
 
-    if (
-        litellm_router_instance.router_general_settings is not None
-        and litellm_router_instance.router_general_settings.async_only_mode is True
-    ):
-        return False
+    if litellm_router_instance.router_general_settings is not None:
+        if (
+            hasattr(litellm_router_instance, "router_general_settings")
+            and hasattr(
+                litellm_router_instance.router_general_settings, "async_only_mode"
+            )
+            and litellm_router_instance.router_general_settings.async_only_mode is True
+        ):
+            return False
 
     return True
 
