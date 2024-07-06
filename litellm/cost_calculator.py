@@ -4,6 +4,8 @@ import time
 import traceback
 from typing import List, Literal, Optional, Tuple, Union
 
+from pydantic import BaseModel
+
 import litellm
 import litellm._logging
 from litellm import verbose_logger
@@ -14,6 +16,9 @@ from litellm.litellm_core_utils.llm_cost_calc.google import (
     cost_per_token as google_cost_per_token,
 )
 from litellm.litellm_core_utils.llm_cost_calc.utils import _generic_cost_per_character
+from litellm.types.llms.openai import HttpxBinaryResponseContent
+from litellm.types.router import SPECIAL_MODEL_INFO_PARAMS
+
 from litellm.utils import (
     CallTypes,
     CostPerToken,
@@ -469,7 +474,10 @@ def completion_cost(
         prompt_characters = 0
         completion_tokens = 0
         completion_characters = 0
-        if completion_response is not None:
+        if completion_response is not None and (
+            isinstance(completion_response, BaseModel)
+            or isinstance(completion_response, dict)
+        ):  # tts returns a custom class
             # get input/output tokens from completion_response
             prompt_tokens = completion_response.get("usage", {}).get("prompt_tokens", 0)
             completion_tokens = completion_response.get("usage", {}).get(
@@ -654,6 +662,7 @@ def response_cost_calculator(
         ImageResponse,
         TranscriptionResponse,
         TextCompletionResponse,
+        HttpxBinaryResponseContent,
     ],
     model: str,
     custom_llm_provider: Optional[str],
@@ -687,7 +696,8 @@ def response_cost_calculator(
         if cache_hit is not None and cache_hit is True:
             response_cost = 0.0
         else:
-            response_object._hidden_params["optional_params"] = optional_params
+            if isinstance(response_object, BaseModel):
+                response_object._hidden_params["optional_params"] = optional_params
             if isinstance(response_object, ImageResponse):
                 response_cost = completion_cost(
                     completion_response=response_object,
@@ -697,12 +707,11 @@ def response_cost_calculator(
                 )
             else:
                 if (
-                    model in litellm.model_cost
-                    and custom_pricing is not None
-                    and custom_llm_provider is True
+                    model in litellm.model_cost or custom_pricing is True
                 ):  # override defaults if custom pricing is set
                     base_model = model
                 # base_model defaults to None if not set on model_info
+
                 response_cost = completion_cost(
                     completion_response=response_object,
                     call_type=call_type,
