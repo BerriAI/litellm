@@ -1607,6 +1607,7 @@ class Logging:
                         )
                         == False
                     ):  # custom logger class
+
                         callback.log_failure_event(
                             start_time=start_time,
                             end_time=end_time,
