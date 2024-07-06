@@ -3382,8 +3382,9 @@ async def embeddings(
         )
         verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
+            message = get_error_message_str(e)
             raise ProxyException(
-                message=getattr(e, "message", str(e)),
+                message=message,
                 type=getattr(e, "type", "None"),
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
