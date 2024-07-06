@@ -531,6 +531,8 @@ def function_setup(
             call_type == CallTypes.aspeech.value or call_type == CallTypes.speech.value
         ):
             messages = kwargs.get("input", "speech")
+        else:
+            messages = "default-message-value"
         stream = True if "stream" in kwargs and kwargs["stream"] == True else False
         logging_obj = litellm.litellm_core_utils.litellm_logging.Logging(
             model=model,
@@ -561,10 +563,8 @@ def function_setup(
         )
         return logging_obj, kwargs
     except Exception as e:
-        import logging
-
-        logging.debug(
-            f"[Non-Blocking] {traceback.format_exc()}; args - {args}; kwargs - {kwargs}"
+        verbose_logger.error(
+            f"litellm.utils.py::function_setup() - [Non-Blocking] {traceback.format_exc()}; args - {args}; kwargs - {kwargs}"
         )
         raise e
 
