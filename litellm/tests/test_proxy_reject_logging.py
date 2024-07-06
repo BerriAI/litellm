@@ -23,6 +23,8 @@ import os
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
+from typing import Literal
+
 import pytest
 from fastapi import Request, Response
 from starlette.datastructures import URL
@@ -49,18 +51,32 @@ from litellm.router import Router
 class testLogger(CustomLogger):
 
     def __init__(self):
-        self.reaches_failure_event = False
+        self.reaches_sync_failure_event = False
+        self.reaches_async_failure_event = False
 
-    async def async_pre_call_check(self, deployment: dict):
+    async def async_pre_call_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        cache: DualCache,
+        data: dict,
+        call_type: Literal[
+            "completion",
+            "text_completion",
+            "embeddings",
+            "image_generation",
+            "moderation",
+            "audio_transcription",
+        ],
+    ):
         raise HTTPException(
             status_code=429, detail={"error": "Max parallel request limit reached"}
         )
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
-        self.reaches_failure_event = True
-        return await super().async_log_failure_event(
-            kwargs, response_obj, start_time, end_time
-        )
+        self.reaches_async_failure_event = True
+
+    def log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        self.reaches_sync_failure_event = True
 
 
 router = Router(
@@ -92,15 +108,15 @@ router = Router(
                 ],
             },
         ),
-        # ("/v1/completions", {"model": "fake-model", "prompt": "ping"}),
-        # (
-        #     "/v1/embeddings",
-        #     {
-        #         "input": "The food was delicious and the waiter...",
-        #         "model": "text-embedding-ada-002",
-        #         "encoding_format": "float",
-        #     },
-        # ),
+        ("/v1/completions", {"model": "fake-model", "prompt": "ping"}),
+        (
+            "/v1/embeddings",
+            {
+                "input": "The food was delicious and the waiter...",
+                "model": "text-embedding-ada-002",
+                "encoding_format": "float",
+            },
+        ),
     ],
 )
 @pytest.mark.asyncio
@@ -169,4 +185,6 @@ async def test_chat_completion_request_with_redaction(route, body):
         pass
     await asyncio.sleep(3)
 
-    assert _test_logger.reaches_failure_event is True
+    assert _test_logger.reaches_async_failure_event is True
+
+    assert _test_logger.reaches_sync_failure_event is True
