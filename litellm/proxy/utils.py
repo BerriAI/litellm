@@ -2705,47 +2705,6 @@ def _is_valid_team_configs(team_id=None, team_config=None, request_data=None):
     return
 
 
-def encrypt_value(value: str, master_key: str):
-    import hashlib
-
-    import nacl.secret
-    import nacl.utils
-
-    # get 32 byte master key #
-    hash_object = hashlib.sha256(master_key.encode())
-    hash_bytes = hash_object.digest()
-
-    # initialize secret box #
-    box = nacl.secret.SecretBox(hash_bytes)
-
-    # encode message #
-    value_bytes = value.encode("utf-8")
-
-    encrypted = box.encrypt(value_bytes)
-
-    return encrypted
-
-
-def decrypt_value(value: bytes, master_key: str) -> str:
-    import hashlib
-
-    import nacl.secret
-    import nacl.utils
-
-    # get 32 byte master key #
-    hash_object = hashlib.sha256(master_key.encode())
-    hash_bytes = hash_object.digest()
-
-    # initialize secret box #
-    box = nacl.secret.SecretBox(hash_bytes)
-
-    # Convert the bytes object to a string
-    plaintext = box.decrypt(value)
-
-    plaintext = plaintext.decode("utf-8")  # type: ignore
-    return plaintext  # type: ignore
-
-
 # LiteLLM Admin UI - Non SSO Login
 url_to_redirect_to = os.getenv("PROXY_BASE_URL", "")
 url_to_redirect_to += "/login"
