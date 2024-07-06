@@ -1,14 +1,24 @@
 import base64
+import os
 
 from litellm._logging import verbose_proxy_logger
+
+LITELLM_SALT_KEY = os.getenv("LITELLM_SALT_KEY", None)
 
 
 def encrypt_value_helper(value: str):
     from litellm.proxy.proxy_server import master_key
 
+    signing_key = LITELLM_SALT_KEY
+    if LITELLM_SALT_KEY is None:
+        verbose_proxy_logger.debug(
+            "LITELLM_SALT_KEY is None using master_key to encrypt value"
+        )
+        signing_key = master_key
+
     try:
         if isinstance(value, str):
-            encrypted_value = encrypt_value(value=value, master_key=master_key)  # type: ignore
+            encrypted_value = encrypt_value(value=value, signing_key=signing_key)  # type: ignore
             encrypted_value = base64.b64encode(encrypted_value).decode("utf-8")
 
             return encrypted_value
@@ -23,10 +33,17 @@ def encrypt_value_helper(value: str):
 def decrypt_value_helper(value: str):
     from litellm.proxy.proxy_server import master_key
 
+    signing_key = LITELLM_SALT_KEY
+    if LITELLM_SALT_KEY is None:
+        verbose_proxy_logger.debug(
+            "LITELLM_SALT_KEY is None using master_key to decrypt value"
+        )
+        signing_key = master_key
+
     try:
         if isinstance(value, str):
             decoded_b64 = base64.b64decode(value)
-            value = decrypt_value(value=decoded_b64, master_key=master_key)  # type: ignore
+            value = decrypt_value(value=decoded_b64, signing_key=signing_key)  # type: ignore
             return value
     except Exception as e:
         verbose_proxy_logger.error(f"Error decrypting value: {value}\nError: {str(e)}")
@@ -34,14 +51,14 @@ def decrypt_value_helper(value: str):
         pass
 
 
-def encrypt_value(value: str, master_key: str):
+def encrypt_value(value: str, signing_key: str):
     import hashlib
 
     import nacl.secret
     import nacl.utils
 
     # get 32 byte master key #
-    hash_object = hashlib.sha256(master_key.encode())
+    hash_object = hashlib.sha256(signing_key.encode())
     hash_bytes = hash_object.digest()
 
     # initialize secret box #
@@ -55,14 +72,14 @@ def encrypt_value(value: str, master_key: str):
     return encrypted
 
 
-def decrypt_value(value: bytes, master_key: str) -> str:
+def decrypt_value(value: bytes, signing_key: str) -> str:
     import hashlib
 
     import nacl.secret
     import nacl.utils
 
     # get 32 byte master key #
-    hash_object = hashlib.sha256(master_key.encode())
+    hash_object = hashlib.sha256(signing_key.encode())
     hash_bytes = hash_object.digest()
 
     # initialize secret box #
