@@ -741,6 +741,7 @@ class BedrockLLM(BaseLLM):
         logger_fn=None,
         extra_headers: Optional[dict] = None,
         client: Optional[Union[AsyncHTTPHandler, HTTPHandler]] = None,
+        api_base: Optional[str] = None,
     ) -> Union[ModelResponse, CustomStreamWrapper]:
         try:
             import boto3
@@ -818,10 +819,17 @@ class BedrockLLM(BaseLLM):
         else:
             endpoint_url = f"https://bedrock-runtime.{aws_region_name}.amazonaws.com"
 
-        if (stream is not None and stream == True) and provider != "ai21":
-            endpoint_url = f"{endpoint_url}/model/{modelId}/invoke-with-response-stream"
-        else:
-            endpoint_url = f"{endpoint_url}/model/{modelId}/invoke"
+        # If there's no provided api_base, use the endpoint_url
+        if api_base is None:
+            api_base = endpoint_url
+
+        # Determine the suffix based on conditions
+        suffix = "/invoke-with-response-stream" if (stream is not None and stream is True and provider != "ai21") else "/invoke"
+
+        # Apply the suffix to both endpoint_url and api_base in one step
+        formatted_path = f"/model/{modelId}{suffix}"
+        endpoint_url += formatted_path
+        api_base += formatted_path
 
         sigv4 = SigV4Auth(credentials, "bedrock", aws_region_name)
 
@@ -982,7 +990,7 @@ class BedrockLLM(BaseLLM):
             api_key="",
             additional_args={
                 "complete_input_dict": data,
-                "api_base": prepped.url,
+                "api_base": api_base,
                 "headers": prepped.headers,
             },
         )
@@ -996,7 +1004,7 @@ class BedrockLLM(BaseLLM):
                     model=model,
                     messages=messages,
                     data=data,
-                    api_base=prepped.url,
+                    api_base=api_base,
                     model_response=model_response,
                     print_verbose=print_verbose,
                     encoding=encoding,
@@ -1014,7 +1022,7 @@ class BedrockLLM(BaseLLM):
                 model=model,
                 messages=messages,
                 data=data,
-                api_base=prepped.url,
+                api_base=api_base,
                 model_response=model_response,
                 print_verbose=print_verbose,
                 encoding=encoding,
@@ -1039,7 +1047,7 @@ class BedrockLLM(BaseLLM):
             self.client = client
         if (stream is not None and stream == True) and provider != "ai21":
             response = self.client.post(
-                url=prepped.url,
+                url=api_base,
                 headers=prepped.headers,  # type: ignore
                 data=data,
                 stream=stream,
@@ -1070,7 +1078,7 @@ class BedrockLLM(BaseLLM):
             return streaming_response
 
         try:
-            response = self.client.post(url=prepped.url, headers=prepped.headers, data=data)  # type: ignore
+            response = self.client.post(url=api_base, headers=prepped.headers, data=data)  # type: ignore
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code = err.response.status_code
@@ -1705,6 +1713,7 @@ class BedrockConverseLLM(BaseLLM):
         logger_fn=None,
         extra_headers: Optional[dict] = None,
         client: Optional[Union[AsyncHTTPHandler, HTTPHandler]] = None,
+        api_base: Optional[str] = None,
     ):
         try:
             import boto3
@@ -1782,10 +1791,17 @@ class BedrockConverseLLM(BaseLLM):
         else:
             endpoint_url = f"https://bedrock-runtime.{aws_region_name}.amazonaws.com"
 
-        if (stream is not None and stream is True) and provider != "ai21":
-            endpoint_url = f"{endpoint_url}/model/{modelId}/converse-stream"
-        else:
-            endpoint_url = f"{endpoint_url}/model/{modelId}/converse"
+        # If there's no provided api_base, use the endpoint_url
+        if api_base is None:
+            api_base = endpoint_url
+
+        # Determine the suffix based on conditions
+        suffix = "/converse-stream" if (stream is not None and stream is True and provider != "ai21") else "/converse"
+
+        # Apply the suffix to both endpoint_url and api_base in one step
+        formatted_path = f"/model/{modelId}{suffix}"
+        endpoint_url += formatted_path
+        api_base += formatted_path
 
         sigv4 = SigV4Auth(credentials, "bedrock", aws_region_name)
 
@@ -1861,7 +1877,7 @@ class BedrockConverseLLM(BaseLLM):
             api_key="",
             additional_args={
                 "complete_input_dict": data,
-                "api_base": prepped.url,
+                "api_base": api_base,
                 "headers": prepped.headers,
             },
         )
@@ -1875,7 +1891,7 @@ class BedrockConverseLLM(BaseLLM):
                     model=model,
                     messages=messages,
                     data=data,
-                    api_base=prepped.url,
+                    api_base=api_base,
                     model_response=model_response,
                     print_verbose=print_verbose,
                     encoding=encoding,
@@ -1893,7 +1909,7 @@ class BedrockConverseLLM(BaseLLM):
                 model=model,
                 messages=messages,
                 data=data,
-                api_base=prepped.url,
+                api_base=api_base,
                 model_response=model_response,
                 print_verbose=print_verbose,
                 encoding=encoding,
@@ -1914,7 +1930,7 @@ class BedrockConverseLLM(BaseLLM):
                 make_call=partial(
                     make_sync_call,
                     client=None,
-                    api_base=prepped.url,
+                    api_base=api_base,
                     headers=prepped.headers,  # type: ignore
                     data=data,
                     model=model,
@@ -1939,7 +1955,7 @@ class BedrockConverseLLM(BaseLLM):
         else:
             client = client
         try:
-            response = client.post(url=prepped.url, headers=prepped.headers, data=data)  # type: ignore
+            response = client.post(url=api_base, headers=prepped.headers, data=data)  # type: ignore
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code = err.response.status_code
