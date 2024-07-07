@@ -300,7 +300,7 @@ class ListBatchRequest(TypedDict, total=False):
     timeout: Optional[float]
 
 
-class ChatCompletionToolCallFunctionChunk(TypedDict):
+class ChatCompletionToolCallFunctionChunk(TypedDict, total=False):
     name: Optional[str]
     arguments: str
 
@@ -312,7 +312,7 @@ class ChatCompletionToolCallChunk(TypedDict):
     index: int
 
 
-class ChatCompletionDeltaToolCallChunk(TypedDict):
+class ChatCompletionDeltaToolCallChunk(TypedDict, total=False):
     id: str
     type: Literal["function"]
     function: ChatCompletionToolCallFunctionChunk
