@@ -42,6 +42,8 @@ import httpx
 import openai
 import requests
 import tiktoken
+from httpx import Proxy
+from httpx._utils import get_environment_proxies
 from pydantic import BaseModel
 from tokenizers import Tokenizer
 
@@ -531,6 +533,8 @@ def function_setup(
             call_type == CallTypes.aspeech.value or call_type == CallTypes.speech.value
         ):
             messages = kwargs.get("input", "speech")
+        else:
+            messages = "default-message-value"
         stream = True if "stream" in kwargs and kwargs["stream"] == True else False
         logging_obj = litellm.litellm_core_utils.litellm_logging.Logging(
             model=model,
@@ -561,10 +565,8 @@ def function_setup(
         )
         return logging_obj, kwargs
     except Exception as e:
-        import logging
-
-        logging.debug(
-            f"[Non-Blocking] {traceback.format_exc()}; args - {args}; kwargs - {kwargs}"
+        verbose_logger.error(
+            f"litellm.utils.py::function_setup() - [Non-Blocking] {traceback.format_exc()}; args - {args}; kwargs - {kwargs}"
         )
         raise e
 
@@ -2412,7 +2414,7 @@ def get_optional_params(
         ):  # allow dynamically setting vertex ai init logic
             continue
         passed_params[k] = v
-                
+
     optional_params: Dict = {}
 
     common_auth_dict = litellm.common_cloud_provider_auth_params
@@ -2431,7 +2433,10 @@ def get_optional_params(
                     non_default_params=passed_params, optional_params=optional_params
                 )
             )
-        elif custom_llm_provider == "vertex_ai" or custom_llm_provider == "vertex_ai_beta":
+        elif (
+            custom_llm_provider == "vertex_ai"
+            or custom_llm_provider == "vertex_ai_beta"
+        ):
             optional_params = litellm.VertexAIConfig().map_special_auth_params(
                 non_default_params=passed_params, optional_params=optional_params
             )
@@ -2551,6 +2556,24 @@ def get_optional_params(
                     status_code=500,
                     message=f"Function calling is not supported by {custom_llm_provider}.",
                 )
+
+    if "tools" in non_default_params:
+        tools = non_default_params["tools"]
+        for (
+            tool
+        ) in (
+            tools
+        ):  # clean out 'additionalProperties = False'. Causes vertexai/gemini OpenAI API Schema errors - https://github.com/langchain-ai/langchainjs/issues/5240
+            tool_function = tool.get("function", {})
+            parameters = tool_function.get("parameters", None)
+            if parameters is not None:
+                new_parameters = copy.deepcopy(parameters)
+                if (
+                    "additionalProperties" in new_parameters
+                    and new_parameters["additionalProperties"] is False
+                ):
+                    new_parameters.pop("additionalProperties", None)
+                tool_function["parameters"] = new_parameters
 
     def _check_valid_arg(supported_params):
         verbose_logger.debug(
@@ -3181,7 +3204,9 @@ def get_optional_params(
         )
         _check_valid_arg(supported_params=supported_params)
         optional_params = litellm.NvidiaNimConfig().map_openai_params(
-            non_default_params=non_default_params, optional_params=optional_params
+            model=model,
+            non_default_params=non_default_params,
+            optional_params=optional_params,
         )
     elif custom_llm_provider == "fireworks_ai":
         supported_params = get_supported_openai_params(
@@ -3773,7 +3798,7 @@ def get_supported_openai_params(
     elif custom_llm_provider == "fireworks_ai":
         return litellm.FireworksAIConfig().get_supported_openai_params()
     elif custom_llm_provider == "nvidia_nim":
-        return litellm.NvidiaNimConfig().get_supported_openai_params()
+        return litellm.NvidiaNimConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "volcengine":
         return litellm.VolcEngineConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "groq":
@@ -3856,6 +3881,8 @@ def get_supported_openai_params(
             "top_logprobs",
             "response_format",
             "stop",
+            "tools",
+            "tool_choice",
         ]
     elif custom_llm_provider == "mistral" or custom_llm_provider == "codestral":
         # mistal and codestral api have the exact same params
@@ -4700,7 +4727,9 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
             )
     except Exception:
         raise Exception(
-            "This model isn't mapped yet. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
+            "This model isn't mapped yet. model={}, custom_llm_provider={}. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json".format(
+                model, custom_llm_provider
+            )
         )
 
 
@@ -4884,6 +4913,34 @@ def get_provider_fields(custom_llm_provider: str) -> List[ProviderField]:
 
     else:
         return []
+
+
+def create_proxy_transport_and_mounts():
+    proxies = {
+        key: None if url is None else Proxy(url=url)
+        for key, url in get_environment_proxies().items()
+    }
+
+    sync_proxy_mounts = {}
+    async_proxy_mounts = {}
+
+    # Retrieve NO_PROXY environment variable
+    no_proxy = os.getenv("NO_PROXY", None)
+    no_proxy_urls = no_proxy.split(",") if no_proxy else []
+
+    for key, proxy in proxies.items():
+        if proxy is None:
+            sync_proxy_mounts[key] = httpx.HTTPTransport()
+            async_proxy_mounts[key] = httpx.AsyncHTTPTransport()
+        else:
+            sync_proxy_mounts[key] = httpx.HTTPTransport(proxy=proxy)
+            async_proxy_mounts[key] = httpx.AsyncHTTPTransport(proxy=proxy)
+
+    for url in no_proxy_urls:
+        sync_proxy_mounts[url] = httpx.HTTPTransport()
+        async_proxy_mounts[url] = httpx.AsyncHTTPTransport()
+
+    return sync_proxy_mounts, async_proxy_mounts
 
 
 def validate_environment(model: Optional[str] = None) -> dict:
@@ -7512,7 +7569,7 @@ def exception_type(
                     if original_exception.status_code == 400:
                         exception_mapping_worked = True
                         raise BadRequestError(
-                            message=f"{exception_provider} - {message}",
+                            message=f"{exception_provider} - {error_str}",
                             llm_provider=custom_llm_provider,
                             model=model,
                             response=original_exception.response,
@@ -7521,7 +7578,7 @@ def exception_type(
                     elif original_exception.status_code == 401:
                         exception_mapping_worked = True
                         raise AuthenticationError(
-                            message=f"AuthenticationError: {exception_provider} - {message}",
+                            message=f"AuthenticationError: {exception_provider} - {error_str}",
                             llm_provider=custom_llm_provider,
                             model=model,
                             response=original_exception.response,
@@ -7530,7 +7587,7 @@ def exception_type(
                     elif original_exception.status_code == 404:
                         exception_mapping_worked = True
                         raise NotFoundError(
-                            message=f"NotFoundError: {exception_provider} - {message}",
+                            message=f"NotFoundError: {exception_provider} - {error_str}",
                             model=model,
                             llm_provider=custom_llm_provider,
                             response=original_exception.response,
@@ -7539,7 +7596,7 @@ def exception_type(
                     elif original_exception.status_code == 408:
                         exception_mapping_worked = True
                         raise Timeout(
-                            message=f"Timeout Error: {exception_provider} - {message}",
+                            message=f"Timeout Error: {exception_provider} - {error_str}",
                             model=model,
                             llm_provider=custom_llm_provider,
                             litellm_debug_info=extra_information,
@@ -7547,7 +7604,7 @@ def exception_type(
                     elif original_exception.status_code == 422:
                         exception_mapping_worked = True
                         raise BadRequestError(
-                            message=f"BadRequestError: {exception_provider} - {message}",
+                            message=f"BadRequestError: {exception_provider} - {error_str}",
                             model=model,
                             llm_provider=custom_llm_provider,
                             response=original_exception.response,
@@ -7556,7 +7613,7 @@ def exception_type(
                     elif original_exception.status_code == 429:
                         exception_mapping_worked = True
                         raise RateLimitError(
-                            message=f"RateLimitError: {exception_provider} - {message}",
+                            message=f"RateLimitError: {exception_provider} - {error_str}",
                             model=model,
                             llm_provider=custom_llm_provider,
                             response=original_exception.response,
@@ -7565,7 +7622,7 @@ def exception_type(
                     elif original_exception.status_code == 503:
                         exception_mapping_worked = True
                         raise ServiceUnavailableError(
-                            message=f"ServiceUnavailableError: {exception_provider} - {message}",
+                            message=f"ServiceUnavailableError: {exception_provider} - {error_str}",
                             model=model,
                             llm_provider=custom_llm_provider,
                             response=original_exception.response,
@@ -7574,7 +7631,7 @@ def exception_type(
                     elif original_exception.status_code == 504:  # gateway timeout error
                         exception_mapping_worked = True
                         raise Timeout(
-                            message=f"Timeout Error: {exception_provider} - {message}",
+                            message=f"Timeout Error: {exception_provider} - {error_str}",
                             model=model,
                             llm_provider=custom_llm_provider,
                             litellm_debug_info=extra_information,
@@ -7583,7 +7640,7 @@ def exception_type(
                         exception_mapping_worked = True
                         raise APIError(
                             status_code=original_exception.status_code,
-                            message=f"APIError: {exception_provider} - {message}",
+                            message=f"APIError: {exception_provider} - {error_str}",
                             llm_provider=custom_llm_provider,
                             model=model,
                             request=original_exception.request,
@@ -7592,7 +7649,7 @@ def exception_type(
                 else:
                     # if no status code then it is an APIConnectionError: https://github.com/openai/openai-python#handling-errors
                     raise APIConnectionError(
-                        message=f"APIConnectionError: {exception_provider} - {message}",
+                        message=f"APIConnectionError: {exception_provider} - {error_str}",
                         llm_provider=custom_llm_provider,
                         model=model,
                         litellm_debug_info=extra_information,
@@ -7943,6 +8000,7 @@ class CustomStreamWrapper:
         )
         self.messages = getattr(logging_obj, "messages", None)
         self.sent_stream_usage = False
+        self.tool_call = False
         self.chunks: List = (
             []
         )  # keep track of the returned chunks - used for calculating the input/output tokens for stream options
@@ -9185,9 +9243,16 @@ class CustomStreamWrapper:
                     "is_finished": True,
                     "finish_reason": chunk.choices[0].finish_reason,
                     "original_chunk": chunk,
+                    "tool_calls": (
+                        chunk.choices[0].delta.tool_calls
+                        if hasattr(chunk.choices[0].delta, "tool_calls")
+                        else None
+                    ),
                 }
 
                 completion_obj["content"] = response_obj["text"]
+                if response_obj["tool_calls"] is not None:
+                    completion_obj["tool_calls"] = response_obj["tool_calls"]
                 print_verbose(f"completion obj content: {completion_obj['content']}")
                 if hasattr(chunk, "id"):
                     model_response.id = chunk.id
@@ -9344,6 +9409,10 @@ class CustomStreamWrapper:
                 f"model_response.choices[0].delta: {model_response.choices[0].delta}; completion_obj: {completion_obj}"
             )
             print_verbose(f"self.sent_first_chunk: {self.sent_first_chunk}")
+
+            ## CHECK FOR TOOL USE
+            if "tool_calls" in completion_obj and len(completion_obj["tool_calls"]) > 0:
+                self.tool_call = True
 
             ## RETURN ARG
             if (
@@ -9523,6 +9592,12 @@ class CustomStreamWrapper:
             )
         else:
             model_response.choices[0].finish_reason = "stop"
+
+        ## if tool use
+        if (
+            model_response.choices[0].finish_reason == "stop" and self.tool_call
+        ):  # don't overwrite for other - potential error finish reasons
+            model_response.choices[0].finish_reason = "tool_calls"
         return model_response
 
     def __next__(self):
@@ -9576,7 +9651,7 @@ class CustomStreamWrapper:
                     return response
 
         except StopIteration:
-            if self.sent_last_chunk == True:
+            if self.sent_last_chunk is True:
                 if (
                     self.sent_stream_usage == False
                     and self.stream_options is not None

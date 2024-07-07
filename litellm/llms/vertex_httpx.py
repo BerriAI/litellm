@@ -603,15 +603,15 @@ class VertexLLM(BaseLLM):
 
                 ## GET USAGE ##
                 usage = litellm.Usage(
-                    prompt_tokens=completion_response["usageMetadata"][
-                        "promptTokenCount"
-                    ],
+                    prompt_tokens=completion_response["usageMetadata"].get(
+                        "promptTokenCount", 0
+                    ),
                     completion_tokens=completion_response["usageMetadata"].get(
                         "candidatesTokenCount", 0
                     ),
-                    total_tokens=completion_response["usageMetadata"][
-                        "totalTokenCount"
-                    ],
+                    total_tokens=completion_response["usageMetadata"].get(
+                        "totalTokenCount", 0
+                    ),
                 )
 
                 setattr(model_response, "usage", usage)
@@ -647,15 +647,15 @@ class VertexLLM(BaseLLM):
 
                 ## GET USAGE ##
                 usage = litellm.Usage(
-                    prompt_tokens=completion_response["usageMetadata"][
-                        "promptTokenCount"
-                    ],
+                    prompt_tokens=completion_response["usageMetadata"].get(
+                        "promptTokenCount", 0
+                    ),
                     completion_tokens=completion_response["usageMetadata"].get(
                         "candidatesTokenCount", 0
                     ),
-                    total_tokens=completion_response["usageMetadata"][
-                        "totalTokenCount"
-                    ],
+                    total_tokens=completion_response["usageMetadata"].get(
+                        "totalTokenCount", 0
+                    ),
                 )
 
                 setattr(model_response, "usage", usage)
@@ -687,6 +687,7 @@ class VertexLLM(BaseLLM):
                         id=f"call_{str(uuid.uuid4())}",
                         type="function",
                         function=_function_chunk,
+                        index=candidate.get("index", idx),
                     )
                     tools.append(_tool_response_chunk)
 
@@ -705,11 +706,15 @@ class VertexLLM(BaseLLM):
 
             ## GET USAGE ##
             usage = litellm.Usage(
-                prompt_tokens=completion_response["usageMetadata"]["promptTokenCount"],
+                prompt_tokens=completion_response["usageMetadata"].get(
+                    "promptTokenCount", 0
+                ),
                 completion_tokens=completion_response["usageMetadata"].get(
                     "candidatesTokenCount", 0
                 ),
-                total_tokens=completion_response["usageMetadata"]["totalTokenCount"],
+                total_tokens=completion_response["usageMetadata"].get(
+                    "totalTokenCount", 0
+                ),
             )
 
             setattr(model_response, "usage", usage)
@@ -1325,26 +1330,43 @@ class ModelResponseIterator:
 
             gemini_chunk = processed_chunk["candidates"][0]
 
-            if (
-                "content" in gemini_chunk
-                and "text" in gemini_chunk["content"]["parts"][0]
-            ):
-                text = gemini_chunk["content"]["parts"][0]["text"]
+            if "content" in gemini_chunk:
+                if "text" in gemini_chunk["content"]["parts"][0]:
+                    text = gemini_chunk["content"]["parts"][0]["text"]
+                elif "functionCall" in gemini_chunk["content"]["parts"][0]:
+                    function_call = ChatCompletionToolCallFunctionChunk(
+                        name=gemini_chunk["content"]["parts"][0]["functionCall"][
+                            "name"
+                        ],
+                        arguments=json.dumps(
+                            gemini_chunk["content"]["parts"][0]["functionCall"]["args"]
+                        ),
+                    )
+                    tool_use = ChatCompletionToolCallChunk(
+                        id=str(uuid.uuid4()),
+                        type="function",
+                        function=function_call,
+                        index=0,
+                    )
 
             if "finishReason" in gemini_chunk:
                 finish_reason = map_finish_reason(
                     finish_reason=gemini_chunk["finishReason"]
                 )
-                ## DO NOT SET 'finish_reason' = True
+                ## DO NOT SET 'is_finished' = True
                 ## GEMINI SETS FINISHREASON ON EVERY CHUNK!
 
             if "usageMetadata" in processed_chunk:
                 usage = ChatCompletionUsageBlock(
-                    prompt_tokens=processed_chunk["usageMetadata"]["promptTokenCount"],
+                    prompt_tokens=processed_chunk["usageMetadata"].get(
+                        "promptTokenCount", 0
+                    ),
                     completion_tokens=processed_chunk["usageMetadata"].get(
                         "candidatesTokenCount", 0
                     ),
-                    total_tokens=processed_chunk["usageMetadata"]["totalTokenCount"],
+                    total_tokens=processed_chunk["usageMetadata"].get(
+                        "totalTokenCount", 0
+                    ),
                 )
 
             returned_chunk = GenericStreamingChunk(

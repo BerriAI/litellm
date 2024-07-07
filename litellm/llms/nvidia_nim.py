@@ -58,21 +58,80 @@ class NvidiaNimConfig:
             and v is not None
         }
 
-    def get_supported_openai_params(self):
-        return [
-            "stream",
-            "temperature",
-            "top_p",
-            "frequency_penalty",
-            "presence_penalty",
-            "max_tokens",
-            "stop",
-        ]
+    def get_supported_openai_params(self, model: str) -> list:
+        """
+        Get the supported OpenAI params for the given model
+
+
+        Updated on July 5th, 2024 - based on https://docs.api.nvidia.com/nim/reference
+        """
+        if model in [
+            "google/recurrentgemma-2b",
+            "google/gemma-2-27b-it",
+            "google/gemma-2-9b-it",
+            "gemma-2-9b-it",
+        ]:
+            return ["stream", "temperature", "top_p", "max_tokens", "stop", "seed"]
+        elif model == "nvidia/nemotron-4-340b-instruct":
+            return [
+                "stream",
+                "temperature",
+                "top_p",
+                "max_tokens",
+            ]
+        elif model == "nvidia/nemotron-4-340b-reward":
+            return [
+                "stream",
+            ]
+        elif model in ["google/codegemma-1.1-7b"]:
+            # most params - but no 'seed' :(
+            return [
+                "stream",
+                "temperature",
+                "top_p",
+                "frequency_penalty",
+                "presence_penalty",
+                "max_tokens",
+                "stop",
+            ]
+        else:
+            # DEFAULT Case - The vast majority of Nvidia NIM Models lie here
+            # "upstage/solar-10.7b-instruct",
+            # "snowflake/arctic",
+            # "seallms/seallm-7b-v2.5",
+            # "nvidia/llama3-chatqa-1.5-8b",
+            # "nvidia/llama3-chatqa-1.5-70b",
+            # "mistralai/mistral-large",
+            # "mistralai/mixtral-8x22b-instruct-v0.1",
+            # "mistralai/mixtral-8x7b-instruct-v0.1",
+            # "mistralai/mistral-7b-instruct-v0.3",
+            # "mistralai/mistral-7b-instruct-v0.2",
+            # "mistralai/codestral-22b-instruct-v0.1",
+            # "microsoft/phi-3-small-8k-instruct",
+            # "microsoft/phi-3-small-128k-instruct",
+            # "microsoft/phi-3-mini-4k-instruct",
+            # "microsoft/phi-3-mini-128k-instruct",
+            # "microsoft/phi-3-medium-4k-instruct",
+            # "microsoft/phi-3-medium-128k-instruct",
+            # "meta/llama3-70b-instruct",
+            # "meta/llama3-8b-instruct",
+            # "meta/llama2-70b",
+            # "meta/codellama-70b",
+            return [
+                "stream",
+                "temperature",
+                "top_p",
+                "frequency_penalty",
+                "presence_penalty",
+                "max_tokens",
+                "stop",
+                "seed",
+            ]
 
     def map_openai_params(
-        self, non_default_params: dict, optional_params: dict
+        self, model: str, non_default_params: dict, optional_params: dict
     ) -> dict:
-        supported_openai_params = self.get_supported_openai_params()
+        supported_openai_params = self.get_supported_openai_params(model=model)
         for param, value in non_default_params.items():
             if param in supported_openai_params:
                 optional_params[param] = value
