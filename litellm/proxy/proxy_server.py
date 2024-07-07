@@ -2720,6 +2720,10 @@ async def chat_completion(
         except:
             data = json.loads(body_str)
 
+        verbose_proxy_logger.debug(
+            "Request received by LiteLLM:\n{}".format(json.dumps(data, indent=4)),
+        )
+
         data = await add_litellm_data_to_request(
             data=data,
             request=request,

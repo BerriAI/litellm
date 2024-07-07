@@ -353,7 +353,7 @@ class ProxyLogging:
                                 raise HTTPException(
                                     status_code=400, detail={"error": response}
                                 )
-            print_verbose(f"final data being sent to {call_type} call: {data}")
+
             return data
         except Exception as e:
             raise e

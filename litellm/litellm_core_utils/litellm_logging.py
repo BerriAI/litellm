@@ -1799,7 +1799,6 @@ def set_callbacks(callback_list, function_id=None):
 
     try:
         for callback in callback_list:
-            print_verbose(f"init callback list: {callback}")
             if callback == "sentry":
                 try:
                     import sentry_sdk
