@@ -896,7 +896,7 @@ def completion(
         if (
             supports_system_message is not None
             and isinstance(supports_system_message, bool)
-            and supports_system_message == False
+            and supports_system_message is False
         ):
             messages = map_system_message_pt(messages=messages)
         model_api_key = get_api_key(
@@ -5028,10 +5028,9 @@ def stream_chunk_builder(
     for chunk in chunks:
         if "usage" in chunk:
             if "prompt_tokens" in chunk["usage"]:
-                prompt_tokens += chunk["usage"].get("prompt_tokens", 0) or 0
+                prompt_tokens = chunk["usage"].get("prompt_tokens", 0) or 0
             if "completion_tokens" in chunk["usage"]:
-                completion_tokens += chunk["usage"].get("completion_tokens", 0) or 0
-
+                completion_tokens = chunk["usage"].get("completion_tokens", 0) or 0
     try:
         response["usage"]["prompt_tokens"] = prompt_tokens or token_counter(
             model=model, messages=messages
