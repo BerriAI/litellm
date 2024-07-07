@@ -848,8 +848,12 @@ from .llms.gemini import GeminiConfig
 from .llms.nlp_cloud import NLPCloudConfig
 from .llms.aleph_alpha import AlephAlphaConfig
 from .llms.petals import PetalsConfig
-from .llms.vertex_httpx import VertexGeminiConfig, GoogleAIStudioGeminiConfig
-from .llms.vertex_ai import VertexAIConfig, VertexAITextEmbeddingConfig
+from .llms.vertex_httpx import (
+    VertexGeminiConfig,
+    GoogleAIStudioGeminiConfig,
+    VertexAIConfig,
+)
+from .llms.vertex_ai import VertexAITextEmbeddingConfig
 from .llms.vertex_ai_anthropic import VertexAIAnthropicConfig
 from .llms.vertex_ai_partner import VertexAILlama3Config
 from .llms.sagemaker import SagemakerConfig

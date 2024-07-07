@@ -3180,7 +3180,6 @@ def get_optional_params(
         or model in litellm.vertex_text_models
         or model in litellm.vertex_code_text_models
         or model in litellm.vertex_language_models
-        or model in litellm.vertex_embedding_models
         or model in litellm.vertex_vision_models
     ):
         ## check if unsupported param passed in
@@ -3189,9 +3188,15 @@ def get_optional_params(
         )
         _check_valid_arg(supported_params=supported_params)
 
-        optional_params = litellm.VertexAIConfig().map_openai_params(
+        optional_params = litellm.VertexGeminiConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
+            model=model,
+            drop_params=(
+                drop_params
+                if drop_params is not None and isinstance(drop_params, bool)
+                else False
+            ),
         )
 
         if litellm.vertex_ai_safety_settings is not None:
@@ -3206,6 +3211,7 @@ def get_optional_params(
             optional_params=optional_params,
             model=model,
         )
+    elif custom_llm_provider == "vertex_ai_beta":
     elif custom_llm_provider == "vertex_ai_beta":
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider
@@ -4359,20 +4365,12 @@ def get_supported_openai_params(
         return litellm.GoogleAIStudioGeminiConfig().get_supported_openai_params()
     elif custom_llm_provider == "vertex_ai":
         if request_type == "chat_completion":
-            if model.startswith("meta/"):
-                return litellm.VertexAILlama3Config().get_supported_openai_params()
-            if model.startswith("mistral"):
-                return litellm.MistralConfig().get_supported_openai_params()
-            if model.startswith("codestral"):
-                return (
-                    litellm.MistralTextCompletionConfig().get_supported_openai_params()
-                )
-            return litellm.VertexAIConfig().get_supported_openai_params()
+            return litellm.VertexGeminiConfig().get_supported_openai_params()
         elif request_type == "embeddings":
             return litellm.VertexAITextEmbeddingConfig().get_supported_openai_params()
     elif custom_llm_provider == "vertex_ai_beta":
         if request_type == "chat_completion":
-            return litellm.VertexAIConfig().get_supported_openai_params()
+            return litellm.VertexGeminiConfig().get_supported_openai_params()
         elif request_type == "embeddings":
             return litellm.VertexAITextEmbeddingConfig().get_supported_openai_params()
     elif custom_llm_provider == "sagemaker":
