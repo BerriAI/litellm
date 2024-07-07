@@ -1,7 +1,7 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Use with Langchain, OpenAI SDK, LlamaIndex, Curl
+# Use with Langchain, OpenAI SDK, LlamaIndex, Instructor, Curl
 
 :::info
 
@@ -235,6 +235,97 @@ assert user.age == 25
 }
 
 ```
+
+### Function Calling 
+
+Here's some examples of doing function calling with the proxy. 
+
+You can use the proxy for function calling with **any** openai-compatible project. 
+
+<Tabs>
+<TabItem value="curl" label="curl">
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+-H "Content-Type: application/json" \
+-H "Authorization: Bearer $OPTIONAL_YOUR_PROXY_KEY" \
+-d '{
+  "model": "gpt-4-turbo",
+  "messages": [
+    {
+      "role": "user",
+      "content": "What'\''s the weather like in Boston today?"
+    }
+  ],
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_current_weather",
+        "description": "Get the current weather in a given location",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "location": {
+              "type": "string",
+              "description": "The city and state, e.g. San Francisco, CA"
+            },
+            "unit": {
+              "type": "string",
+              "enum": ["celsius", "fahrenheit"]
+            }
+          },
+          "required": ["location"]
+        }
+      }
+    }
+  ],
+  "tool_choice": "auto"
+}'
+```
+</TabItem>
+<TabItem value="sdk" label="SDK">
+
+```python 
+from openai import OpenAI
+client = OpenAI(
+    api_key="sk-1234", # [OPTIONAL] set if you set one on proxy, else set ""
+    base_url="http://0.0.0.0:4000",
+)
+
+tools = [
+  {
+    "type": "function",
+    "function": {
+      "name": "get_current_weather",
+      "description": "Get the current weather in a given location",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "location": {
+            "type": "string",
+            "description": "The city and state, e.g. San Francisco, CA",
+          },
+          "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+        },
+        "required": ["location"],
+      },
+    }
+  }
+]
+messages = [{"role": "user", "content": "What's the weather like in Boston today?"}]
+completion = client.chat.completions.create(
+  model="gpt-4o", # use 'model_name' from config.yaml
+  messages=messages,
+  tools=tools,
+  tool_choice="auto"
+)
+
+print(completion)
+
+```
+</TabItem>
+</Tabs>
 
 ## `/embeddings`
 
