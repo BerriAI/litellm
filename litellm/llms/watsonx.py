@@ -1,6 +1,7 @@
-from enum import Enum
 import json, types, time  # noqa: E401
 import asyncio
+from datetime import datetime
+from enum import Enum
 from contextlib import asynccontextmanager, contextmanager
 from typing import (
     Callable,
@@ -286,7 +287,10 @@ class IBMWatsonXAI(BaseLLM):
         )
 
     def _get_api_params(
-        self, params: dict, print_verbose: Optional[Callable] = None
+        self, 
+        params: dict, 
+        print_verbose: Optional[Callable] = None,
+        generate_token: Optional[bool] = True,
     ) -> dict:
         """
         Find watsonx.ai credentials in the params or environment variables and return the headers for authentication.
@@ -366,7 +370,7 @@ class IBMWatsonXAI(BaseLLM):
                 status_code=401,
                 message="Error: Watsonx URL not set. Set WX_URL in environment variables or pass in as a parameter.",
             )
-        if token is None and api_key is not None:
+        if token is None and api_key is not None and generate_token:
             # generate the auth token
             if print_verbose is not None:
                 print_verbose("Generating IAM token for Watsonx.ai")
@@ -436,7 +440,7 @@ class IBMWatsonXAI(BaseLLM):
         acompletion=None,
         litellm_params=None,
         logger_fn=None,
-        timeout=None,
+        timeout=None
     ):
         """
         Send a text generation request to the IBM Watsonx.ai API.
@@ -456,27 +460,7 @@ class IBMWatsonXAI(BaseLLM):
         prompt = convert_messages_to_prompt(
             model, messages, provider, custom_prompt_dict
         )
-
-        def process_text_gen_response(json_resp: dict) -> ModelResponse:
-            if "results" not in json_resp:
-                raise WatsonXAIError(
-                    status_code=500,
-                    message=f"Error: Invalid response from Watsonx.ai API: {json_resp}",
-                )
-            generated_text = json_resp["results"][0]["generated_text"]
-            prompt_tokens = json_resp["results"][0]["input_token_count"]
-            completion_tokens = json_resp["results"][0]["generated_token_count"]
-            model_response["choices"][0]["message"]["content"] = generated_text
-            model_response["finish_reason"] = json_resp["results"][0]["stop_reason"]
-            model_response["created"] = int(time.time())
-            model_response["model"] = model
-            usage = Usage(
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
-                total_tokens=prompt_tokens + completion_tokens,
-            )
-            setattr(model_response, "usage", usage)
-            return model_response
+        model_response["model"] = model
 
         def process_stream_response(
             stream_resp: Union[Iterator[str], AsyncIterator],
@@ -500,7 +484,7 @@ class IBMWatsonXAI(BaseLLM):
             ) as resp:
                 json_resp = resp.json()
 
-            return process_text_gen_response(json_resp)
+            return self._process_text_gen_response(json_resp, model_response)
 
         async def handle_text_request_async(request_params: dict) -> ModelResponse:
             async with self.request_manager.async_request(
@@ -509,7 +493,7 @@ class IBMWatsonXAI(BaseLLM):
                 timeout=timeout,
             ) as resp:
                 json_resp = resp.json()
-            return process_text_gen_response(json_resp)
+            return self._process_text_gen_response(json_resp, model_response)
 
         def handle_stream_request(request_params: dict) -> litellm.CustomStreamWrapper:
             # stream the response - generated chunks will be handled
@@ -523,7 +507,9 @@ class IBMWatsonXAI(BaseLLM):
                 streamwrapper = process_stream_response(resp.iter_lines())
             return streamwrapper
 
-        async def handle_stream_request_async(request_params: dict) -> litellm.CustomStreamWrapper:
+        async def handle_stream_request_async(
+            request_params: dict,
+        ) -> litellm.CustomStreamWrapper:
             # stream the response - generated chunks will be handled
             # by litellm.utils.CustomStreamWrapper.handle_watsonx_stream
             async with self.request_manager.async_request(
@@ -550,7 +536,7 @@ class IBMWatsonXAI(BaseLLM):
             elif stream:
                 # streaming text generation
                 return handle_stream_request(req_params)
-            elif (acompletion is True):
+            elif acompletion is True:
                 # async text generation
                 return handle_text_request_async(req_params)
             else:
@@ -560,7 +546,7 @@ class IBMWatsonXAI(BaseLLM):
             raise e
         except Exception as e:
             raise WatsonXAIError(status_code=500, message=str(e))
-    
+
     def _process_embedding_response(self, json_resp: dict, model_response:Union[ModelResponse,None]=None) -> ModelResponse:
         if model_response is None:
             model_response = ModelResponse(model=json_resp.get("model_id", None))
@@ -593,7 +579,8 @@ class IBMWatsonXAI(BaseLLM):
         model_response=None,
         optional_params=None,
         encoding=None,
-        aembedding=None,
+        print_verbose=None,
+        aembedding=None
     ):
         """
         Send a text embedding request to the IBM Watsonx.ai API.
@@ -606,6 +593,8 @@ class IBMWatsonXAI(BaseLLM):
             if k not in optional_params:
                 optional_params[k] = v
 
+        model_response['model'] = model
+        
         # Load auth variables from environment variables
         if isinstance(input, str):
             input = [input]
@@ -637,43 +626,23 @@ class IBMWatsonXAI(BaseLLM):
         }
         request_manager = RequestManager(logging_obj)
 
-        def process_embedding_response(json_resp: dict) -> ModelResponse:
-            results = json_resp.get("results", [])
-            embedding_response = []
-            for idx, result in enumerate(results):
-                embedding_response.append(
-                    {
-                        "object": "embedding",
-                        "index": idx,
-                        "embedding": result["embedding"],
-                    }
-                )
-            model_response["object"] = "list"
-            model_response["data"] = embedding_response
-            model_response["model"] = model
-            input_tokens = json_resp.get("input_token_count", 0)
-            model_response.usage = Usage(
-                prompt_tokens=input_tokens,
-                completion_tokens=0,
-                total_tokens=input_tokens,
-            )
-            return model_response
-
         def handle_embedding(request_params: dict) -> ModelResponse:
             with request_manager.request(request_params, input=input) as resp:
                 json_resp = resp.json()
-            return process_embedding_response(json_resp)
+            return self._process_embedding_response(json_resp, model_response)
 
         async def handle_aembedding(request_params: dict) -> ModelResponse:
-            async with request_manager.async_request(request_params, input=input) as resp:
+            async with request_manager.async_request(
+                request_params, input=input
+            ) as resp:
                 json_resp = resp.json()
-            return process_embedding_response(json_resp)
+            return self._process_embedding_response(json_resp, model_response)
 
         try:
             if aembedding is True:
-                return handle_embedding(req_params)
-            else:
                 return handle_aembedding(req_params)
+            else:
+                return handle_embedding(req_params)
         except WatsonXAIError as e:
             raise e
         except Exception as e:
@@ -718,8 +687,7 @@ class IBMWatsonXAI(BaseLLM):
 
 class RequestManager:
     """
-    Returns a context manager that manages the response from the request.
-    if async_ is True, returns an async context manager, otherwise returns a regular context manager.
+    A class to handle sync/async HTTP requests to the IBM Watsonx.ai API.
 
     Usage:
     ```python
@@ -803,6 +771,7 @@ class RequestManager:
         if not stream:
             self.post_call(resp, request_params)
 
+    @asynccontextmanager
     async def async_request(
         self,
         request_params: dict,
