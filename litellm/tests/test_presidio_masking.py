@@ -1,8 +1,13 @@
 # What is this?
 ## Unit test for presidio pii masking
-import sys, os, asyncio, time, random
-from datetime import datetime
+import asyncio
+import os
+import random
+import sys
+import time
 import traceback
+from datetime import datetime
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -12,12 +17,32 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import pytest
+
 import litellm
-from litellm.proxy.hooks.presidio_pii_masking import _OPTIONAL_PresidioPIIMasking
 from litellm import Router, mock_completion
-from litellm.proxy.utils import ProxyLogging
-from litellm.proxy._types import UserAPIKeyAuth
 from litellm.caching import DualCache
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.hooks.presidio_pii_masking import _OPTIONAL_PresidioPIIMasking
+from litellm.proxy.utils import ProxyLogging
+
+
+def test_validate_environment_missing_http():
+    pii_masking = _OPTIONAL_PresidioPIIMasking(mock_testing=True)
+
+    os.environ["PRESIDIO_ANALYZER_API_BASE"] = "presidio-analyzer-s3pa:10000/analyze"
+    os.environ["PRESIDIO_ANONYMIZER_API_BASE"] = (
+        "presidio-analyzer-s3pa:10000/anonymize"
+    )
+    pii_masking.validate_environment()
+
+    assert (
+        pii_masking.presidio_anonymizer_api_base
+        == "http://presidio-analyzer-s3pa:10000/anonymize/"
+    )
+    assert (
+        pii_masking.presidio_analyzer_api_base
+        == "http://presidio-analyzer-s3pa:10000/analyze/"
+    )
 
 
 @pytest.mark.asyncio
