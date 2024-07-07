@@ -1330,17 +1330,30 @@ class ModelResponseIterator:
 
             gemini_chunk = processed_chunk["candidates"][0]
 
-            if (
-                "content" in gemini_chunk
-                and "text" in gemini_chunk["content"]["parts"][0]
-            ):
-                text = gemini_chunk["content"]["parts"][0]["text"]
+            if "content" in gemini_chunk:
+                if "text" in gemini_chunk["content"]["parts"][0]:
+                    text = gemini_chunk["content"]["parts"][0]["text"]
+                elif "functionCall" in gemini_chunk["content"]["parts"][0]:
+                    function_call = ChatCompletionToolCallFunctionChunk(
+                        name=gemini_chunk["content"]["parts"][0]["functionCall"][
+                            "name"
+                        ],
+                        arguments=json.dumps(
+                            gemini_chunk["content"]["parts"][0]["functionCall"]["args"]
+                        ),
+                    )
+                    tool_use = ChatCompletionToolCallChunk(
+                        id=str(uuid.uuid4()),
+                        type="function",
+                        function=function_call,
+                        index=0,
+                    )
 
             if "finishReason" in gemini_chunk:
                 finish_reason = map_finish_reason(
                     finish_reason=gemini_chunk["finishReason"]
                 )
-                ## DO NOT SET 'finish_reason' = True
+                ## DO NOT SET 'is_finished' = True
                 ## GEMINI SETS FINISHREASON ON EVERY CHUNK!
 
             if "usageMetadata" in processed_chunk:
