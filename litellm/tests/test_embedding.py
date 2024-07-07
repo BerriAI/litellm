@@ -518,28 +518,25 @@ def test_watsonx_embeddings():
 async def test_watsonx_aembeddings():
 
     def mock_async_client(*args, **kwargs):
+
+        mocked_client = MagicMock()
         
-        class MockedAsyncClient:
-            def __init__(*args, **kwargs):
-                pass
-
-            async def send(self, request, *args, stream: bool = False, **kwags):
-                mock_response = MagicMock()
-                mock_response.status_code = 200
-                mock_response.headers = {"Content-Type": "application/json"}
-                mock_response.json.return_value = {
-                        "model_id": "ibm/slate-30m-english-rtrvr",
-                        "created_at": "2024-01-01T00:00:00.00Z",
-                        "results": [ {"embedding": [0.0]*254} ],
-                        "input_token_count": 8
-                }
-                mock_response.is_error = False
-                return mock_response
+        async def mock_send(request, *args, stream: bool = False, **kwags):
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.headers = {"Content-Type": "application/json"}
+            mock_response.json.return_value = {
+                    "model_id": "ibm/slate-30m-english-rtrvr",
+                    "created_at": "2024-01-01T00:00:00.00Z",
+                    "results": [ {"embedding": [0.0]*254} ],
+                    "input_token_count": 8
+            }
+            mock_response.is_error = False
+            return mock_response
             
-            def build_request(*args, **kwargs):
-                pass
+        mocked_client.send = mock_send
 
-        return MockedAsyncClient(*args, **kwargs)
+        return mocked_client
 
     try:
         litellm.set_verbose = True
