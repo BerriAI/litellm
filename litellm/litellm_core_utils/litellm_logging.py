@@ -24,6 +24,8 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_logging,
 )
+from litellm.types.llms.openai import HttpxBinaryResponseContent
+from litellm.types.router import SPECIAL_MODEL_INFO_PARAMS
 from litellm.types.utils import (
     CallTypes,
     EmbeddingResponse,
@@ -56,6 +58,7 @@ from ..integrations.clickhouse import ClickhouseLogger
 from ..integrations.custom_logger import CustomLogger
 from ..integrations.datadog import DataDogLogger
 from ..integrations.dynamodb import DyanmoDBLogger
+from ..integrations.galileo import GalileoObserve
 from ..integrations.greenscale import GreenscaleLogger
 from ..integrations.helicone import HeliconeLogger
 from ..integrations.lago import LagoLogger
@@ -153,11 +156,6 @@ class Logging:
         langfuse_secret=None,
         langfuse_host=None,
     ):
-        if call_type not in [item.value for item in CallTypes]:
-            allowed_values = ", ".join([item.value for item in CallTypes])
-            raise ValueError(
-                f"Invalid call_type {call_type}. Allowed values: {allowed_values}"
-            )
         if messages is not None:
             if isinstance(messages, str):
                 messages = [
@@ -426,13 +424,22 @@ class Logging:
             self.model_call_details["additional_args"] = additional_args
             self.model_call_details["log_event_type"] = "post_api_call"
 
-            verbose_logger.debug(
-                "RAW RESPONSE:\n{}\n\n".format(
-                    self.model_call_details.get(
-                        "original_response", self.model_call_details
+            if json_logs:
+                verbose_logger.debug(
+                    "RAW RESPONSE:\n{}\n\n".format(
+                        self.model_call_details.get(
+                            "original_response", self.model_call_details
+                        )
+                    ),
+                )
+            else:
+                print_verbose(
+                    "RAW RESPONSE:\n{}\n\n".format(
+                        self.model_call_details.get(
+                            "original_response", self.model_call_details
+                        )
                     )
-                ),
-            )
+                )
             if self.logger_fn and callable(self.logger_fn):
                 try:
                     self.logger_fn(
@@ -512,33 +519,36 @@ class Logging:
             self.model_call_details["cache_hit"] = cache_hit
             ## if model in model cost map - log the response cost
             ## else set cost to None
-            verbose_logger.debug(f"Model={self.model};")
             if (
-                result is not None
-                and (
+                result is not None and self.stream is not True
+            ):  # handle streaming separately
+                if (
                     isinstance(result, ModelResponse)
                     or isinstance(result, EmbeddingResponse)
                     or isinstance(result, ImageResponse)
                     or isinstance(result, TranscriptionResponse)
                     or isinstance(result, TextCompletionResponse)
-                )
-                and self.stream != True
-            ):  # handle streaming separately
-                self.model_call_details["response_cost"] = (
-                    litellm.response_cost_calculator(
-                        response_object=result,
-                        model=self.model,
-                        cache_hit=self.model_call_details.get("cache_hit", False),
-                        custom_llm_provider=self.model_call_details.get(
-                            "custom_llm_provider", None
-                        ),
-                        base_model=_get_base_model_from_metadata(
-                            model_call_details=self.model_call_details
-                        ),
-                        call_type=self.call_type,
-                        optional_params=self.optional_params,
+                    or isinstance(result, HttpxBinaryResponseContent)  # tts
+                ):
+                    custom_pricing = use_custom_pricing_for_model(
+                        litellm_params=self.litellm_params
                     )
-                )
+                    self.model_call_details["response_cost"] = (
+                        litellm.response_cost_calculator(
+                            response_object=result,
+                            model=self.model,
+                            cache_hit=self.model_call_details.get("cache_hit", False),
+                            custom_llm_provider=self.model_call_details.get(
+                                "custom_llm_provider", None
+                            ),
+                            base_model=_get_base_model_from_metadata(
+                                model_call_details=self.model_call_details
+                            ),
+                            call_type=self.call_type,
+                            optional_params=self.optional_params,
+                            custom_pricing=custom_pricing,
+                        )
+                    )
             else:  # streaming chunks + image gen.
                 self.model_call_details["response_cost"] = None
 
@@ -595,8 +605,7 @@ class Logging:
                         verbose_logger.error(
                             "LiteLLM.LoggingError: [Non-Blocking] Exception occurred while building complete streaming response in success logging {}\n{}".format(
                                 str(e), traceback.format_exc()
-                            ),
-                            log_level="ERROR",
+                            )
                         )
                         complete_streaming_response = None
                 else:
@@ -621,7 +630,11 @@ class Logging:
                             model_call_details=self.model_call_details
                         ),
                         call_type=self.call_type,
-                        optional_params=self.optional_params,
+                        optional_params=(
+                            self.optional_params
+                            if hasattr(self, "optional_params")
+                            else {}
+                        ),
                     )
                 )
             if self.dynamic_success_callbacks is not None and isinstance(
@@ -1603,6 +1616,7 @@ class Logging:
                         )
                         == False
                     ):  # custom logger class
+
                         callback.log_failure_event(
                             start_time=start_time,
                             end_time=end_time,
@@ -1789,7 +1803,6 @@ def set_callbacks(callback_list, function_id=None):
 
     try:
         for callback in callback_list:
-            print_verbose(f"init callback list: {callback}")
             if callback == "sentry":
                 try:
                     import sentry_sdk
@@ -1920,6 +1933,15 @@ def _init_custom_logger_compatible_class(
         _openmeter_logger = OpenMeterLogger()
         _in_memory_loggers.append(_openmeter_logger)
         return _openmeter_logger  # type: ignore
+
+    elif logging_integration == "galileo":
+        for callback in _in_memory_loggers:
+            if isinstance(callback, GalileoObserve):
+                return callback  # type: ignore
+
+        galileo_logger = GalileoObserve()
+        _in_memory_loggers.append(galileo_logger)
+        return galileo_logger  # type: ignore
     elif logging_integration == "logfire":
         if "LOGFIRE_TOKEN" not in os.environ:
             raise ValueError("LOGFIRE_TOKEN not found in environment variables")
@@ -1976,6 +1998,10 @@ def get_custom_logger_compatible_class(
         for callback in _in_memory_loggers:
             if isinstance(callback, OpenMeterLogger):
                 return callback
+    elif logging_integration == "galileo":
+        for callback in _in_memory_loggers:
+            if isinstance(callback, GalileoObserve):
+                return callback
     elif logging_integration == "logfire":
         if "LOGFIRE_TOKEN" not in os.environ:
             raise ValueError("LOGFIRE_TOKEN not found in environment variables")
@@ -1994,3 +2020,17 @@ def get_custom_logger_compatible_class(
             if isinstance(callback, _PROXY_DynamicRateLimitHandler):
                 return callback  # type: ignore
     return None
+
+
+def use_custom_pricing_for_model(litellm_params: Optional[dict]) -> bool:
+    if litellm_params is None:
+        return False
+    metadata: Optional[dict] = litellm_params.get("metadata", {})
+    if metadata is None:
+        return False
+    model_info: Optional[dict] = metadata.get("model_info", {})
+    if model_info is not None:
+        for k, v in model_info.items():
+            if k in SPECIAL_MODEL_INFO_PARAMS:
+                return True
+    return False

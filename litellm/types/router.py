@@ -324,6 +324,14 @@ class DeploymentTypedDict(TypedDict):
     litellm_params: LiteLLMParamsTypedDict
 
 
+SPECIAL_MODEL_INFO_PARAMS = [
+    "input_cost_per_token",
+    "output_cost_per_token",
+    "input_cost_per_character",
+    "output_cost_per_character",
+]
+
+
 class Deployment(BaseModel):
     model_name: str
     litellm_params: LiteLLM_Params
@@ -342,6 +350,16 @@ class Deployment(BaseModel):
             model_info = ModelInfo()
         elif isinstance(model_info, dict):
             model_info = ModelInfo(**model_info)
+
+        for (
+            key
+        ) in (
+            SPECIAL_MODEL_INFO_PARAMS
+        ):  # ensures custom pricing info is consistently in 'model_info'
+            field = getattr(litellm_params, key, None)
+            if field is not None:
+                setattr(model_info, key, field)
+
         super().__init__(
             model_info=model_info,
             model_name=model_name,
@@ -504,3 +522,9 @@ class CustomRoutingStrategyBase:
 
         """
         pass
+
+
+class RouterGeneralSettings(BaseModel):
+    async_only_mode: bool = Field(
+        default=False
+    )  # this will only initialize async clients. Good for memory utils

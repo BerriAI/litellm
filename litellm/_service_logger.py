@@ -75,16 +75,16 @@ class ServiceLogging(CustomLogger):
                 await self.prometheusServicesLogger.async_service_success_hook(
                     payload=payload
                 )
+            elif callback == "otel":
+                from litellm.proxy.proxy_server import open_telemetry_logger
 
-        from litellm.proxy.proxy_server import open_telemetry_logger
-
-        if parent_otel_span is not None and open_telemetry_logger is not None:
-            await open_telemetry_logger.async_service_success_hook(
-                payload=payload,
-                parent_otel_span=parent_otel_span,
-                start_time=start_time,
-                end_time=end_time,
-            )
+                if parent_otel_span is not None and open_telemetry_logger is not None:
+                    await open_telemetry_logger.async_service_success_hook(
+                        payload=payload,
+                        parent_otel_span=parent_otel_span,
+                        start_time=start_time,
+                        end_time=end_time,
+                    )
 
     async def async_service_failure_hook(
         self,

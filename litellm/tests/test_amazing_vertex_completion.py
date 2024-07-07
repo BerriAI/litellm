@@ -203,7 +203,7 @@ def test_vertex_ai_anthropic():
 # )
 def test_vertex_ai_anthropic_streaming():
     try:
-        # load_vertex_ai_credentials()
+        load_vertex_ai_credentials()
 
         # litellm.set_verbose = True
 
@@ -223,8 +223,9 @@ def test_vertex_ai_anthropic_streaming():
             stream=True,
         )
         # print("\nModel Response", response)
-        for chunk in response:
+        for idx, chunk in enumerate(response):
             print(f"chunk: {chunk}")
+            streaming_format_tests(idx=idx, chunk=chunk)
 
     # raise Exception("it worked!")
     except litellm.RateLimitError as e:
@@ -294,8 +295,10 @@ async def test_vertex_ai_anthropic_async_streaming():
             stream=True,
         )
 
+        idx = 0
         async for chunk in response:
-            print(f"chunk: {chunk}")
+            streaming_format_tests(idx=idx, chunk=chunk)
+            idx += 1
     except litellm.RateLimitError as e:
         pass
     except Exception as e:
@@ -637,11 +640,13 @@ def test_gemini_pro_vision_base64():
             pytest.fail(f"An exception occurred - {str(e)}")
 
 
-@pytest.mark.skip(reason="exhausted vertex quota. need to refactor to mock the call")
-@pytest.mark.parametrize("provider", ["vertex_ai_beta"])  # "vertex_ai",
+# @pytest.mark.skip(reason="exhausted vertex quota. need to refactor to mock the call")
+@pytest.mark.parametrize(
+    "model", ["vertex_ai_beta/gemini-1.5-pro", "vertex_ai/claude-3-sonnet@20240229"]
+)  # "vertex_ai",
 @pytest.mark.parametrize("sync_mode", [True])  # "vertex_ai",
 @pytest.mark.asyncio
-async def test_gemini_pro_function_calling_httpx(provider, sync_mode):
+async def test_gemini_pro_function_calling_httpx(model, sync_mode):
     try:
         load_vertex_ai_credentials()
         litellm.set_verbose = True
@@ -679,7 +684,7 @@ async def test_gemini_pro_function_calling_httpx(provider, sync_mode):
         ]
 
         data = {
-            "model": "{}/gemini-1.5-pro".format(provider),
+            "model": model,
             "messages": messages,
             "tools": tools,
             "tool_choice": "required",
@@ -1108,7 +1113,7 @@ async def test_gemini_pro_httpx_custom_api_base(provider):
                 extra_headers={"hello": "world"},
             )
         except Exception as e:
-            pass
+            print("Receives error - {}\n{}".format(str(e), traceback.format_exc()))
 
         mock_call.assert_called_once()
 
@@ -1116,7 +1121,7 @@ async def test_gemini_pro_httpx_custom_api_base(provider):
         assert "hello" in mock_call.call_args.kwargs["headers"]
 
 
-@pytest.mark.skip(reason="exhausted vertex quota. need to refactor to mock the call")
+# @pytest.mark.skip(reason="exhausted vertex quota. need to refactor to mock the call")
 @pytest.mark.parametrize("sync_mode", [True])
 @pytest.mark.parametrize("provider", ["vertex_ai"])
 @pytest.mark.asyncio
@@ -1155,7 +1160,6 @@ async def test_gemini_pro_function_calling(provider, sync_mode):
             {
                 "role": "tool",
                 "tool_call_id": "call_123",
-                "name": "get_weather",
                 "content": "27 degrees celsius and clear in San Francisco, CA",
             },
             # Now the assistant can reply with the result of the tool call.
@@ -1378,6 +1382,54 @@ async def test_vertexai_aembedding():
         pytest.fail(f"Error occurred: {e}")
 
 
+@pytest.mark.asyncio
+def test_tool_name_conversion():
+    messages = [
+        {
+            "role": "system",
+            "content": "Your name is Litellm Bot, you are a helpful assistant",
+        },
+        # User asks for their name and weather in San Francisco
+        {
+            "role": "user",
+            "content": "Hello, what is your name and can you tell me the weather?",
+        },
+        # Assistant replies with a tool call
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_123",
+                    "type": "function",
+                    "index": 0,
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": '{"location":"San Francisco, CA"}',
+                    },
+                }
+            ],
+        },
+        # The result of the tool call is added to the history
+        {
+            "role": "tool",
+            "tool_call_id": "call_123",
+            "content": "27 degrees celsius and clear in San Francisco, CA",
+        },
+        # Now the assistant can reply with the result of the tool call.
+    ]
+
+    translated_messages = _gemini_convert_messages_with_history(messages=messages)
+
+    print(f"\n\ntranslated_messages: {translated_messages}\ntranslated_messages")
+
+    # assert that the last tool response has the corresponding tool name
+    assert (
+        translated_messages[-1]["parts"][0]["function_response"]["name"]
+        == "get_weather"
+    )
+
+
 # Extra gemini Vision tests for completion + stream, async, async + stream
 # if we run into issues with gemini, we will also add these to our ci/cd pipeline
 # def test_gemini_pro_vision_stream():
@@ -1526,7 +1578,6 @@ def test_prompt_factory():
         {
             "role": "tool",
             "tool_call_id": "call_123",
-            "name": "get_weather",
             "content": "27 degrees celsius and clear in San Francisco, CA",
         },
         # Now the assistant can reply with the result of the tool call.

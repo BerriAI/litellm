@@ -712,7 +712,6 @@ def test_vertex_ai_claude_completion_cost():
     assert cost == predicted_cost
 
 
-
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_completion_cost_hidden_params(sync_mode):
@@ -732,6 +731,7 @@ async def test_completion_cost_hidden_params(sync_mode):
     assert "response_cost" in response._hidden_params
     assert isinstance(response._hidden_params["response_cost"], float)
 
+
 def test_vertex_ai_gemini_predict_cost():
     model = "gemini-1.5-flash"
     messages = [{"role": "user", "content": "Hey, hows it going???"}]
@@ -739,3 +739,16 @@ def test_vertex_ai_gemini_predict_cost():
 
     assert predictive_cost > 0
 
+
+@pytest.mark.parametrize("model", ["openai/tts-1", "azure/tts-1"])
+def test_completion_cost_tts(model):
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    cost = completion_cost(
+        model=model,
+        prompt="the quick brown fox jumped over the lazy dogs",
+        call_type="speech",
+    )
+
+    assert cost > 0

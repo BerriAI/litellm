@@ -19,7 +19,6 @@ model_list:
       model: mistral/mistral-embed
 
 general_settings:
-  master_key: sk-1234
   pass_through_endpoints:
     - path: "/v1/rerank"
       target: "https://api.cohere.com/v1/rerank"
@@ -36,15 +35,14 @@ general_settings:
         LANGFUSE_SECRET_KEY: "os.environ/LANGFUSE_DEV_SK_KEY"
 
 litellm_settings:
-  return_response_headers: true
-  success_callback: ["prometheus"]
-  callbacks: ["otel", "hide_secrets"]
-  failure_callback: ["prometheus"]
-  store_audit_logs: true
-  redact_messages_in_exceptions: True
-  enforced_params:  
-    - user
-    - metadata
-    - metadata.generation_name
+  callbacks: ["otel"]
+  guardrails:
+    - prompt_injection:
+        callbacks: [lakera_prompt_injection, hide_secrets]
+        default_on: true
+    - hide_secrets:
+        callbacks: [hide_secrets]
+        default_on: true
+    
 
 

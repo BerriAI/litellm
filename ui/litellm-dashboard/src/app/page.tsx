@@ -77,6 +77,7 @@ const CreateKeyPage = () => {
   const searchParams = useSearchParams();
   const [modelData, setModelData] = useState<any>({ data: [] });
   const userID = searchParams.get("userID");
+  const invitation_id = searchParams.get("invitation_id");
   const token = getCookie('token');
 
   const [page, setPage] = useState("api-keys");
@@ -128,7 +129,23 @@ const CreateKeyPage = () => {
 
   return (
     <Suspense fallback={<div>Loading...</div>}>
-      <div className="flex flex-col min-h-screen">
+      {
+        invitation_id ? (
+          <UserDashboard
+              userID={userID}
+              userRole={userRole}
+              teams={teams}
+              keys={keys}
+              setUserRole={setUserRole}
+              userEmail={userEmail}
+              setUserEmail={setUserEmail}
+              setTeams={setTeams}
+              setKeys={setKeys}
+              setProxySettings={setProxySettings}
+              proxySettings={proxySettings}
+            />
+        ) : (
+        <div className="flex flex-col min-h-screen">
         <Navbar
           userID={userID}
           userRole={userRole}
@@ -140,11 +157,11 @@ const CreateKeyPage = () => {
         />
         <div className="flex flex-1 overflow-auto">
           <div className="mt-8">
-            <Sidebar
-              setPage={setPage}
-              userRole={userRole}
-              defaultSelectedKey={null}
-            />
+                <Sidebar
+                setPage={setPage}
+                userRole={userRole}
+                defaultSelectedKey={null}
+              />            
           </div>
 
           {page == "api-keys" ? (
@@ -250,7 +267,10 @@ const CreateKeyPage = () => {
             />
           )}
         </div>
-      </div>
+      </div>         
+        )
+      }
+      
     </Suspense>
   );
 };
