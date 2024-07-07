@@ -28,6 +28,7 @@ Features:
 - **Guardrails, PII Masking, Content Moderation**
     - ✅ [Content Moderation with LLM Guard, LlamaGuard, Secret Detection, Google Text Moderations](#content-moderation)
     - ✅ [Prompt Injection Detection (with LakeraAI API)](#prompt-injection-detection---lakeraai)
+    - ✅ [Switch LakeraAI on / off per request](guardrails#control-guardrails-onoff-per-request)
     - ✅ Reject calls from Blocked User list 
     - ✅ Reject calls (incoming / outgoing) with Banned Keywords (e.g. competitors)
 - **Custom Branding**
@@ -505,10 +506,7 @@ curl --request POST \
 🎉 Expect this endpoint to work without an `Authorization / Bearer Token`
 
 
-
-
-## Content Moderation
-### Content Moderation - Secret Detection
+## Guardrails - Secret Detection/Redaction
 ❓ Use this to REDACT API Keys, Secrets sent in requests to an LLM. 
 
 Example if you want to redact the value of `OPENAI_API_KEY` in the following request
@@ -599,6 +597,77 @@ https://api.groq.com/openai/v1/ \
 }
 ```
 
+### Secret Detection On/Off per API Key
+
+❓ Use this when you need to switch guardrails on/off per API Key
+
+**Step 1** Create Key with `hide_secrets` Off 
+
+👉 Set `"permissions": {"hide_secrets": false}` with either `/key/generate` or `/key/update`
+
+This means the `hide_secrets` guardrail is off for all requests from this API Key
+
+<Tabs>
+<TabItem value="/key/generate" label="/key/generate">
+
+```shell
+curl --location 'http://0.0.0.0:4000/key/generate' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'Content-Type: application/json' \
+    --data '{
+        "permissions": {"hide_secrets": false}
+}'
+```
+
+```shell
+# {"permissions":{"hide_secrets":false},"key":"sk-jNm1Zar7XfNdZXp49Z1kSQ"}  
+```
+
+</TabItem>
+<TabItem value="/key/update" label="/key/update">
+
+```shell
+curl --location 'http://0.0.0.0:4000/key/update' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'Content-Type: application/json' \
+    --data '{
+        "key": "sk-jNm1Zar7XfNdZXp49Z1kSQ",
+        "permissions": {"hide_secrets": false}
+}'
+```
+
+```shell
+# {"permissions":{"hide_secrets":false},"key":"sk-jNm1Zar7XfNdZXp49Z1kSQ"}  
+```
+
+</TabItem>
+</Tabs>
+
+**Step 2** Test it with new key
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Authorization: Bearer sk-jNm1Zar7XfNdZXp49Z1kSQ' \
+    --header 'Content-Type: application/json' \
+    --data '{
+    "model": "llama3",
+    "messages": [
+        {
+        "role": "user",
+        "content": "does my openai key look well formatted OpenAI_API_KEY=sk-1234777"
+        }
+    ]
+}'
+```
+
+Expect to see `sk-1234777` in your server logs on your callback. 
+
+:::info
+The `hide_secrets` guardrail check did not run on this request because api key=sk-jNm1Zar7XfNdZXp49Z1kSQ has `"permissions": {"hide_secrets": false}`
+:::
+
+
+## Content Moderation
 ### Content Moderation with LLM Guard
 
 Set the LLM Guard API Base in your environment 
@@ -876,6 +945,11 @@ curl --location 'http://localhost:4000/chat/completions' \
 }'
 ```
 
+:::info
+
+Need to control LakeraAI per Request ? Doc here 👉: [Switch LakerAI on / off per request](prompt_injection.md#✨-enterprise-switch-lakeraai-on--off-per-api-call)
+:::
+
 ## Swagger Docs - Custom Routes + Branding 
 
 :::info 
@@ -1046,11 +1120,13 @@ This is a beta feature, and subject to changes.
 USE_AWS_KMS="True"
 ```
 
-**Step 2.** Add `aws_kms/` to encrypted keys in env 
+**Step 2.** Add `LITELLM_SECRET_AWS_KMS_` to encrypted keys in env 
 
 ```env
-DATABASE_URL="aws_kms/AQICAH.."
+LITELLM_SECRET_AWS_KMS_DATABASE_URL="AQICAH.."
 ```
+
+LiteLLM will find this and use the decrypted `DATABASE_URL="postgres://.."` value in runtime.
 
 **Step 3.** Start proxy 
 

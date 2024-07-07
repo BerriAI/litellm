@@ -1394,7 +1394,7 @@ class BedrockConverseLLM(BaseLLM):
         content_str = ""
         tools: List[ChatCompletionToolCallChunk] = []
         if message is not None:
-            for content in message["content"]:
+            for idx, content in enumerate(message["content"]):
                 """
                 - Content is either a tool response or text
                 """
@@ -1409,6 +1409,7 @@ class BedrockConverseLLM(BaseLLM):
                         id=content["toolUse"]["toolUseId"],
                         type="function",
                         function=_function_chunk,
+                        index=idx,
                     )
                     tools.append(_tool_response_chunk)
         chat_completion_message["content"] = content_str
@@ -2001,6 +2002,7 @@ class AWSEventStreamDecoder:
                             "name": start_obj["toolUse"]["name"],
                             "arguments": "",
                         },
+                        "index": index,
                     }
             elif "delta" in chunk_data:
                 delta_obj = ContentBlockDeltaEvent(**chunk_data["delta"])
@@ -2014,6 +2016,7 @@ class AWSEventStreamDecoder:
                             "name": None,
                             "arguments": delta_obj["toolUse"]["input"],
                         },
+                        "index": index,
                     }
             elif "stopReason" in chunk_data:
                 finish_reason = map_finish_reason(chunk_data.get("stopReason", "stop"))

@@ -106,13 +106,15 @@ aleph_alpha_key: Optional[str] = None
 nlp_cloud_key: Optional[str] = None
 common_cloud_provider_auth_params: dict = {
     "params": ["project", "region_name", "token"],
-    "providers": ["vertex_ai", "bedrock", "watsonx", "azure"],
+    "providers": ["vertex_ai", "bedrock", "watsonx", "azure", "vertex_ai_beta"],
 }
 use_client: bool = False
 ssl_verify: bool = True
 ssl_certificate: Optional[str] = None
 disable_streaming_logging: bool = False
 in_memory_llm_clients_cache: dict = {}
+### DEFAULT AZURE API VERSION ###
+AZURE_DEFAULT_API_VERSION = "2024-02-01"  # this is updated to the latest
 ### GUARDRAILS ###
 llamaguard_model_name: Optional[str] = None
 openai_moderations_model_name: Optional[str] = None
@@ -240,6 +242,8 @@ default_user_params: Optional[Dict] = None
 default_team_settings: Optional[List] = None
 max_user_budget: Optional[float] = None
 max_end_user_budget: Optional[float] = None
+#### REQUEST PRIORITIZATION ####
+priority_reservation: Optional[Dict[str, float]] = None
 #### RELIABILITY ####
 request_timeout: float = 6000
 module_level_aclient = AsyncHTTPHandler(timeout=request_timeout)

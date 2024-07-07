@@ -3,6 +3,7 @@
 ## Tracks num active projects per minute
 
 import asyncio
+import os
 import sys
 import traceback
 from datetime import datetime
@@ -81,46 +82,109 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
     def update_variables(self, llm_router: Router):
         self.llm_router = llm_router
 
-    async def check_available_tpm(
-        self, model: str
-    ) -> Tuple[Optional[int], Optional[int], Optional[int]]:
+    async def check_available_usage(
+        self, model: str, priority: Optional[str] = None
+    ) -> Tuple[
+        Optional[int], Optional[int], Optional[int], Optional[int], Optional[int]
+    ]:
         """
         For a given model, get its available tpm
 
+        Params:
+        - model: str, the name of the model in the router model_list
+        - priority: Optional[str], the priority for the request.
+
         Returns
-        - Tuple[available_tpm, model_tpm, active_projects]
+        - Tuple[available_tpm, available_tpm, model_tpm, model_rpm, active_projects]
+            - available_tpm: int or null - always 0 or positive.
             - available_tpm: int or null - always 0 or positive.
             - remaining_model_tpm: int or null. If available tpm is int, then this will be too.
+            - remaining_model_rpm: int or null. If available rpm is int, then this will be too.
             - active_projects: int or null
         """
-        active_projects = await self.internal_usage_cache.async_get_cache(model=model)
-        current_model_tpm: Optional[int] = await self.llm_router.get_model_group_usage(
-            model_group=model
-        )
-        model_group_info: Optional[ModelGroupInfo] = (
-            self.llm_router.get_model_group_info(model_group=model)
-        )
-        total_model_tpm: Optional[int] = None
-        if model_group_info is not None and model_group_info.tpm is not None:
-            total_model_tpm = model_group_info.tpm
+        try:
+            weight: float = 1
+            if (
+                litellm.priority_reservation is None
+                or priority not in litellm.priority_reservation
+            ):
+                verbose_proxy_logger.error(
+                    "Priority Reservation not set. priority={}, but litellm.priority_reservation is {}.".format(
+                        priority, litellm.priority_reservation
+                    )
+                )
+            elif priority is not None and litellm.priority_reservation is not None:
+                if os.getenv("LITELLM_LICENSE", None) is None:
+                    verbose_proxy_logger.error(
+                        "PREMIUM FEATURE: Reserving tpm/rpm by priority is a premium feature. Please add a 'LITELLM_LICENSE' to your .env to enable this.\nGet a license: https://docs.litellm.ai/docs/proxy/enterprise."
+                    )
+                else:
+                    weight = litellm.priority_reservation[priority]
 
-        remaining_model_tpm: Optional[int] = None
-        if total_model_tpm is not None and current_model_tpm is not None:
-            remaining_model_tpm = total_model_tpm - current_model_tpm
-        elif total_model_tpm is not None:
-            remaining_model_tpm = total_model_tpm
+            active_projects = await self.internal_usage_cache.async_get_cache(
+                model=model
+            )
+            current_model_tpm, current_model_rpm = (
+                await self.llm_router.get_model_group_usage(model_group=model)
+            )
+            model_group_info: Optional[ModelGroupInfo] = (
+                self.llm_router.get_model_group_info(model_group=model)
+            )
+            total_model_tpm: Optional[int] = None
+            total_model_rpm: Optional[int] = None
+            if model_group_info is not None:
+                if model_group_info.tpm is not None:
+                    total_model_tpm = model_group_info.tpm
+                if model_group_info.rpm is not None:
+                    total_model_rpm = model_group_info.rpm
 
-        available_tpm: Optional[int] = None
+            remaining_model_tpm: Optional[int] = None
+            if total_model_tpm is not None and current_model_tpm is not None:
+                remaining_model_tpm = total_model_tpm - current_model_tpm
+            elif total_model_tpm is not None:
+                remaining_model_tpm = total_model_tpm
 
-        if remaining_model_tpm is not None:
-            if active_projects is not None:
-                available_tpm = int(remaining_model_tpm / active_projects)
-            else:
-                available_tpm = remaining_model_tpm
+            remaining_model_rpm: Optional[int] = None
+            if total_model_rpm is not None and current_model_rpm is not None:
+                remaining_model_rpm = total_model_rpm - current_model_rpm
+            elif total_model_rpm is not None:
+                remaining_model_rpm = total_model_rpm
 
-        if available_tpm is not None and available_tpm < 0:
-            available_tpm = 0
-        return available_tpm, remaining_model_tpm, active_projects
+            available_tpm: Optional[int] = None
+
+            if remaining_model_tpm is not None:
+                if active_projects is not None:
+                    available_tpm = int(remaining_model_tpm * weight / active_projects)
+                else:
+                    available_tpm = int(remaining_model_tpm * weight)
+
+            if available_tpm is not None and available_tpm < 0:
+                available_tpm = 0
+
+            available_rpm: Optional[int] = None
+
+            if remaining_model_rpm is not None:
+                if active_projects is not None:
+                    available_rpm = int(remaining_model_rpm * weight / active_projects)
+                else:
+                    available_rpm = int(remaining_model_rpm * weight)
+
+            if available_rpm is not None and available_rpm < 0:
+                available_rpm = 0
+            return (
+                available_tpm,
+                available_rpm,
+                remaining_model_tpm,
+                remaining_model_rpm,
+                active_projects,
+            )
+        except Exception as e:
+            verbose_proxy_logger.error(
+                "litellm.proxy.hooks.dynamic_rate_limiter.py::check_available_usage: Exception occurred - {}\n{}".format(
+                    str(e), traceback.format_exc()
+                )
+            )
+            return None, None, None, None, None
 
     async def async_pre_call_hook(
         self,
@@ -140,13 +204,19 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
     ]:  # raise exception if invalid, return a str for the user to receive - if rejected, or return a modified dictionary for passing into litellm
         """
         - For a model group
-        - Check if tpm available
-        - Raise RateLimitError if no tpm available
+        - Check if tpm/rpm available
+        - Raise RateLimitError if no tpm/rpm available
         """
         if "model" in data:
-            available_tpm, model_tpm, active_projects = await self.check_available_tpm(
-                model=data["model"]
+            key_priority: Optional[str] = user_api_key_dict.metadata.get(
+                "priority", None
             )
+            available_tpm, available_rpm, model_tpm, model_rpm, active_projects = (
+                await self.check_available_usage(
+                    model=data["model"], priority=key_priority
+                )
+            )
+            ### CHECK TPM ###
             if available_tpm is not None and available_tpm == 0:
                 raise HTTPException(
                     status_code=429,
@@ -159,7 +229,20 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
                         )
                     },
                 )
-            elif available_tpm is not None:
+            ### CHECK RPM ###
+            elif available_rpm is not None and available_rpm == 0:
+                raise HTTPException(
+                    status_code=429,
+                    detail={
+                        "error": "Key={} over available RPM={}. Model RPM={}, Active keys={}".format(
+                            user_api_key_dict.api_key,
+                            available_rpm,
+                            model_rpm,
+                            active_projects,
+                        )
+                    },
+                )
+            elif available_rpm is not None or available_tpm is not None:
                 ## UPDATE CACHE WITH ACTIVE PROJECT
                 asyncio.create_task(
                     self.internal_usage_cache.async_set_cache_sadd(  # this is a set
@@ -182,15 +265,24 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
                 ), "Model info for model with id={} is None".format(
                     response._hidden_params["model_id"]
                 )
-                available_tpm, remaining_model_tpm, active_projects = (
-                    await self.check_available_tpm(model=model_info["model_name"])
+                key_priority: Optional[str] = user_api_key_dict.metadata.get(
+                    "priority", None
                 )
-                response._hidden_params["additional_headers"] = {
-                    "x-litellm-model_group": model_info["model_name"],
-                    "x-ratelimit-remaining-litellm-project-tokens": available_tpm,
-                    "x-ratelimit-remaining-model-tokens": remaining_model_tpm,
-                    "x-ratelimit-current-active-projects": active_projects,
-                }
+                available_tpm, available_rpm, model_tpm, model_rpm, active_projects = (
+                    await self.check_available_usage(
+                        model=model_info["model_name"], priority=key_priority
+                    )
+                )
+                response._hidden_params["additional_headers"] = (
+                    {  # Add additional response headers - easier debugging
+                        "x-litellm-model_group": model_info["model_name"],
+                        "x-ratelimit-remaining-litellm-project-tokens": available_tpm,
+                        "x-ratelimit-remaining-litellm-project-requests": available_rpm,
+                        "x-ratelimit-remaining-model-tokens": model_tpm,
+                        "x-ratelimit-remaining-model-requests": model_rpm,
+                        "x-ratelimit-current-active-projects": active_projects,
+                    }
+                )
 
                 return response
             return await super().async_post_call_success_hook(

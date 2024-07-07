@@ -218,6 +218,7 @@ class LiteLLMRoutes(enum.Enum):
         "/v2/model/info",
         "/v2/key/info",
         "/model_group/info",
+        "/health",
     ]
 
     # NOTE: ROUTES ONLY FOR MASTER KEY - only the Master Key should be able to Reset Spend
@@ -668,6 +669,10 @@ class UpdateUserRequest(GenerateRequestBase):
         if values.get("user_id") is None and values.get("user_email") is None:
             raise ValueError("Either user id or user email must be provided")
         return values
+
+
+class DeleteUserRequest(LiteLLMBase):
+    user_ids: List[str]  # required
 
 
 class NewCustomerRequest(LiteLLMBase):
