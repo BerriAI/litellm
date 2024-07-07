@@ -9,10 +9,6 @@ import openai
 import litellm
 from litellm._logging import verbose_router_logger
 from litellm.llms.azure import get_azure_ad_token_from_oidc
-from litellm.llms.custom_httpx.azure_dall_e_2 import (
-    AsyncCustomHTTPTransport,
-    CustomHTTPTransport,
-)
 from litellm.utils import calculate_max_parallel_requests
 
 if TYPE_CHECKING:
