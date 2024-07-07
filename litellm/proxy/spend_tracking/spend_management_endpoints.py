@@ -821,6 +821,14 @@ async def get_global_spend_report(
         default="team",
         description="Group spend by internal team or customer or api_key",
     ),
+    api_key: Optional[str] = fastapi.Query(
+        default=None,
+        description="View spend for a specific api_key. Example api_key='sk-1234",
+    ),
+    internal_user_id: Optional[str] = fastapi.Query(
+        default=None,
+        description="View spend for a specific internal_user_id. Example internal_user_id='1234",
+    ),
 ):
     """
     Get Daily Spend per Team, based on specific startTime and endTime. Per team, view usage by each key, model
@@ -873,6 +881,96 @@ async def get_global_spend_report(
             raise ValueError(
                 "/spend/report endpoint " + CommonProxyErrors.not_premium_user.value
             )
+        if api_key is not None:
+            verbose_proxy_logger.debug("Getting /spend for api_key: %s", api_key)
+            if api_key.startswith("sk-"):
+                api_key = hash_token(token=api_key)
+            sql_query = """
+                WITH SpendByModelApiKey AS (
+                    SELECT
+                        sl.api_key,
+                        sl.model,
+                        SUM(sl.spend) AS model_cost,
+                        SUM(sl.prompt_tokens) AS model_input_tokens,
+                        SUM(sl.completion_tokens) AS model_output_tokens
+                    FROM
+                        "LiteLLM_SpendLogs" sl
+                    WHERE
+                        sl."startTime" BETWEEN $1::date AND $2::date AND sl.api_key = $3
+                    GROUP BY
+                        sl.api_key,
+                        sl.model
+                )
+                SELECT
+                    api_key,
+                    SUM(model_cost) AS total_cost,
+                    SUM(model_input_tokens) AS total_input_tokens,
+                    SUM(model_output_tokens) AS total_output_tokens,
+                    jsonb_agg(jsonb_build_object(
+                        'model', model,
+                        'total_cost', model_cost,
+                        'total_input_tokens', model_input_tokens,
+                        'total_output_tokens', model_output_tokens
+                    )) AS model_details
+                FROM
+                    SpendByModelApiKey
+                GROUP BY
+                    api_key
+                ORDER BY
+                    total_cost DESC;
+            """
+            db_response = await prisma_client.db.query_raw(
+                sql_query, start_date_obj, end_date_obj, api_key
+            )
+            if db_response is None:
+                return []
+
+            return db_response
+        elif internal_user_id is not None:
+            verbose_proxy_logger.debug(
+                "Getting /spend for internal_user_id: %s", internal_user_id
+            )
+            sql_query = """
+                WITH SpendByModelApiKey AS (
+                    SELECT
+                        sl.api_key,
+                        sl.model,
+                        SUM(sl.spend) AS model_cost,
+                        SUM(sl.prompt_tokens) AS model_input_tokens,
+                        SUM(sl.completion_tokens) AS model_output_tokens
+                    FROM
+                        "LiteLLM_SpendLogs" sl
+                    WHERE
+                        sl."startTime" BETWEEN $1::date AND $2::date AND sl.user = $3
+                    GROUP BY
+                        sl.api_key,
+                        sl.model
+                )
+                SELECT
+                    api_key,
+                    SUM(model_cost) AS total_cost,
+                    SUM(model_input_tokens) AS total_input_tokens,
+                    SUM(model_output_tokens) AS total_output_tokens,
+                    jsonb_agg(jsonb_build_object(
+                        'model', model,
+                        'total_cost', model_cost,
+                        'total_input_tokens', model_input_tokens,
+                        'total_output_tokens', model_output_tokens
+                    )) AS model_details
+                FROM
+                    SpendByModelApiKey
+                GROUP BY
+                    api_key
+                ORDER BY
+                    total_cost DESC;
+            """
+            db_response = await prisma_client.db.query_raw(
+                sql_query, start_date_obj, end_date_obj, internal_user_id
+            )
+            if db_response is None:
+                return []
+
+            return db_response
 
         if group_by == "team":
             # first get data from spend logs -> SpendByModelApiKey

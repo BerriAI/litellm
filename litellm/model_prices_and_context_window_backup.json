@@ -2022,10 +2022,10 @@
         "max_tokens": 8192,
         "max_input_tokens": 2097152,
         "max_output_tokens": 8192,
-        "input_cost_per_token": 0.00000035, 
-        "input_cost_per_token_above_128k_tokens": 0.0000007, 
-        "output_cost_per_token": 0.00000105, 
-        "output_cost_per_token_above_128k_tokens": 0.0000021, 
+        "input_cost_per_token": 0.0000035, 
+        "input_cost_per_token_above_128k_tokens": 0.000007, 
+        "output_cost_per_token": 0.0000105, 
+        "output_cost_per_token_above_128k_tokens": 0.000021, 
         "litellm_provider": "gemini",
         "mode": "chat",
         "supports_system_messages": true,
@@ -2033,16 +2033,16 @@
         "supports_vision": true,
         "supports_tool_choice": true, 
         "supports_response_schema": true, 
-        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
+        "source": "https://ai.google.dev/pricing"
     },
     "gemini/gemini-1.5-pro-latest": {
         "max_tokens": 8192,
         "max_input_tokens": 1048576,
         "max_output_tokens": 8192,
-        "input_cost_per_token": 0.00000035, 
-        "input_cost_per_token_above_128k_tokens": 0.0000007, 
+        "input_cost_per_token": 0.0000035, 
+        "input_cost_per_token_above_128k_tokens": 0.000007, 
         "output_cost_per_token": 0.00000105, 
-        "output_cost_per_token_above_128k_tokens": 0.0000021, 
+        "output_cost_per_token_above_128k_tokens": 0.000021, 
         "litellm_provider": "gemini",
         "mode": "chat",
         "supports_system_messages": true,
@@ -2050,7 +2050,7 @@
         "supports_vision": true,
         "supports_tool_choice": true, 
         "supports_response_schema": true, 
-        "source": "https://ai.google.dev/models/gemini"
+        "source": "https://ai.google.dev/pricing"
     },
     "gemini/gemini-pro-vision": {
         "max_tokens": 2048,

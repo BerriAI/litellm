@@ -289,7 +289,8 @@ jobs:
                 repo: context.repo.repo,
                 release_id: process.env.RELEASE_ID,
               });
-              return response.data.body;
+              const formattedBody = JSON.stringify(response.data.body).slice(1, -1);
+              return formattedBody;
             } catch (error) {
               core.setFailed(error.message);
             }
@@ -302,14 +303,15 @@ jobs:
           RELEASE_NOTES: ${{ steps.release-notes.outputs.result }}
         run: |
           curl -H "Content-Type: application/json" -X POST -d '{
-            "content": "New LiteLLM release ${{ env.RELEASE_TAG }}",
+            "content": "New LiteLLM release '"${RELEASE_TAG}"'",
             "username": "Release Changelog",
             "avatar_url": "https://cdn.discordapp.com/avatars/487431320314576937/bd64361e4ba6313d561d54e78c9e7171.png",
             "embeds": [
               {
-                "title": "Changelog for LiteLLM ${{ env.RELEASE_TAG }}",
-                "description": "${{ env.RELEASE_NOTES }}",
+                "title": "Changelog for LiteLLM '"${RELEASE_TAG}"'",
+                "description": "'"${RELEASE_NOTES}"'",
                 "color": 2105893
               }
             ]
           }' $WEBHOOK_URL
+
