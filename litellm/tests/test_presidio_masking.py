@@ -26,23 +26,31 @@ from litellm.proxy.hooks.presidio_pii_masking import _OPTIONAL_PresidioPIIMaskin
 from litellm.proxy.utils import ProxyLogging
 
 
-def test_validate_environment_missing_http():
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "presidio-analyzer-s3pa:10000",
+        "https://presidio-analyzer-s3pa:10000",
+        "http://presidio-analyzer-s3pa:10000",
+    ],
+)
+def test_validate_environment_missing_http(base_url):
     pii_masking = _OPTIONAL_PresidioPIIMasking(mock_testing=True)
 
-    os.environ["PRESIDIO_ANALYZER_API_BASE"] = "presidio-analyzer-s3pa:10000/analyze"
-    os.environ["PRESIDIO_ANONYMIZER_API_BASE"] = (
-        "presidio-analyzer-s3pa:10000/anonymize"
-    )
+    os.environ["PRESIDIO_ANALYZER_API_BASE"] = f"{base_url}/analyze"
+    os.environ["PRESIDIO_ANONYMIZER_API_BASE"] = f"{base_url}/anonymize"
     pii_masking.validate_environment()
 
+    expected_url = base_url
+    if not (base_url.startswith("https://") or base_url.startswith("http://")):
+        expected_url = "http://" + base_url
+
     assert (
-        pii_masking.presidio_anonymizer_api_base
-        == "http://presidio-analyzer-s3pa:10000/anonymize/"
+        pii_masking.presidio_anonymizer_api_base == f"{expected_url}/anonymize/"
+    ), "Got={}, Expected={}".format(
+        pii_masking.presidio_anonymizer_api_base, f"{expected_url}/anonymize/"
     )
-    assert (
-        pii_masking.presidio_analyzer_api_base
-        == "http://presidio-analyzer-s3pa:10000/analyze/"
-    )
+    assert pii_masking.presidio_analyzer_api_base == f"{expected_url}/analyze/"
 
 
 @pytest.mark.asyncio
