@@ -1,16 +1,22 @@
 # What is this?
 ## Tests `litellm.transcription` endpoint. Outside litellm module b/c of audio file used in testing (it's ~700kb).
 
-import pytest
-import asyncio, time
-import aiohttp, traceback
-from openai import AsyncOpenAI
-import sys, os, dotenv
-from typing import Optional
-from dotenv import load_dotenv
-from litellm.integrations.custom_logger import CustomLogger
-import litellm
+import asyncio
 import logging
+import os
+import sys
+import time
+import traceback
+from typing import Optional
+
+import aiohttp
+import dotenv
+import pytest
+from dotenv import load_dotenv
+from openai import AsyncOpenAI
+
+import litellm
+from litellm.integrations.custom_logger import CustomLogger
 
 # Get the current directory of the file being run
 pwd = os.path.dirname(os.path.realpath(__file__))
@@ -36,6 +42,19 @@ def test_transcription():
     )
     print(f"transcript: {transcript.model_dump()}")
     print(f"transcript: {transcript._hidden_params}")
+
+
+# test_transcription()
+
+
+def test_transcription_groq():
+    litellm.set_verbose = True
+    transcript = litellm.transcription(
+        model="groq/whisper-large-v3",
+        file=audio_file,
+    )
+    print(f"response=: {transcript.model_dump()}")
+    print(f"hidden_params: {transcript._hidden_params}")
 
 
 # test_transcription()

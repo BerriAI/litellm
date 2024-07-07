@@ -48,6 +48,7 @@ const sidebars = {
         "proxy/billing",
         "proxy/user_keys",
         "proxy/virtual_keys",
+        "proxy/guardrails",
         "proxy/token_auth",
         "proxy/alerting",
         {

@@ -248,9 +248,15 @@ class RedisCache(BaseCache):
             # asyncio.get_running_loop().create_task(self.ping())
             result = asyncio.get_running_loop().create_task(self.ping())
         except Exception as e:
-            verbose_logger.error(
-                "Error connecting to Async Redis client", extra={"error": str(e)}
-            )
+            if "no running event loop" in str(e):
+                verbose_logger.debug(
+                    "Ignoring async redis ping. No running event loop."
+                )
+            else:
+                verbose_logger.error(
+                    "Error connecting to Async Redis client - {}".format(str(e)),
+                    extra={"error": str(e)},
+                )
 
         ### SYNC HEALTH PING ###
         try:

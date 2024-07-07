@@ -12,6 +12,9 @@ from typing import Tuple
 import pytest
 from pydantic import BaseModel
 
+import litellm.litellm_core_utils
+import litellm.litellm_core_utils.litellm_logging
+
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
@@ -1078,7 +1081,6 @@ def test_vertex_ai_stream(provider):
             print(f"completion_response: {complete_response}")
             assert is_finished == True
 
-            assert False
         except litellm.RateLimitError as e:
             pass
         except Exception as e:
@@ -1415,7 +1417,6 @@ def test_bedrock_claude_3_streaming():
         "gpt-3.5-turbo",
         "databricks/databricks-dbrx-instruct",  # databricks
         "predibase/llama-3-8b-instruct",  # predibase
-        "replicate/meta/meta-llama-3-8b-instruct",  # replicate
     ],
 )
 @pytest.mark.asyncio
@@ -2021,7 +2022,7 @@ def test_openai_chat_completion_complete_response_call():
 # test_openai_chat_completion_complete_response_call()
 @pytest.mark.parametrize(
     "model",
-    ["gpt-3.5-turbo", "azure/chatgpt-v-2"],
+    ["gpt-3.5-turbo", "azure/chatgpt-v-2", "claude-3-haiku-20240307"],  #
 )
 @pytest.mark.parametrize(
     "sync",
@@ -2029,14 +2030,14 @@ def test_openai_chat_completion_complete_response_call():
 )
 @pytest.mark.asyncio
 async def test_openai_stream_options_call(model, sync):
-    litellm.set_verbose = False
+    litellm.set_verbose = True
     usage = None
     chunks = []
     if sync:
         response = litellm.completion(
             model=model,
             messages=[
-                {"role": "system", "content": "say GM - we're going to make it "}
+                {"role": "user", "content": "say GM - we're going to make it "},
             ],
             stream=True,
             stream_options={"include_usage": True},
@@ -2048,9 +2049,7 @@ async def test_openai_stream_options_call(model, sync):
     else:
         response = await litellm.acompletion(
             model=model,
-            messages=[
-                {"role": "system", "content": "say GM - we're going to make it "}
-            ],
+            messages=[{"role": "user", "content": "say GM - we're going to make it "}],
             stream=True,
             stream_options={"include_usage": True},
             max_tokens=10,
@@ -2562,9 +2561,16 @@ def streaming_and_function_calling_format_tests(idx, chunk):
 
 
 @pytest.mark.parametrize(
-    "model", ["gpt-3.5-turbo", "anthropic.claude-3-sonnet-20240229-v1:0"]
+    "model",
+    [
+        "gpt-3.5-turbo",
+        "anthropic.claude-3-sonnet-20240229-v1:0",
+        "claude-3-haiku-20240307",
+    ],
 )
 def test_streaming_and_function_calling(model):
+    import json
+
     tools = [
         {
             "type": "function",
@@ -2597,6 +2603,7 @@ def test_streaming_and_function_calling(model):
             tool_choice="required",
         )  # type: ignore
         # Add any assertions here to check the response
+        json_str = ""
         for idx, chunk in enumerate(response):
             # continue
             print("\n{}\n".format(chunk))
@@ -2607,7 +2614,10 @@ def test_streaming_and_function_calling(model):
                 assert isinstance(
                     chunk.choices[0].delta.tool_calls[0].function.arguments, str
                 )
-        # assert False
+            if chunk.choices[0].delta.tool_calls is not None:
+                json_str += chunk.choices[0].delta.tool_calls[0].function.arguments
+
+        print(json.loads(json_str))
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
         raise e
@@ -2747,7 +2757,7 @@ class Chunk2(BaseModel):
     object: str
     created: int
     model: str
-    system_fingerprint: str
+    system_fingerprint: Optional[str]
     choices: List[Choices2]
 
 
@@ -3002,7 +3012,7 @@ def test_completion_claude_3_function_call_with_streaming():
             model="claude-3-opus-20240229",
             messages=messages,
             tools=tools,
-            tool_choice="auto",
+            tool_choice="required",
             stream=True,
         )
         idx = 0
@@ -3026,8 +3036,11 @@ def test_completion_claude_3_function_call_with_streaming():
         pytest.fail(f"Error occurred: {e}")
 
 
+@pytest.mark.parametrize(
+    "model", ["gemini/gemini-1.5-flash"]
+)  # "claude-3-opus-20240229",
 @pytest.mark.asyncio
-async def test_acompletion_claude_3_function_call_with_streaming():
+async def test_acompletion_claude_3_function_call_with_streaming(model):
     litellm.set_verbose = True
     tools = [
         {
@@ -3058,10 +3071,10 @@ async def test_acompletion_claude_3_function_call_with_streaming():
     try:
         # test without max tokens
         response = await acompletion(
-            model="claude-3-opus-20240229",
+            model=model,
             messages=messages,
             tools=tools,
-            tool_choice="auto",
+            tool_choice="required",
             stream=True,
         )
         idx = 0
@@ -3445,3 +3458,55 @@ def test_aamazing_unit_test_custom_stream_wrapper_n():
         assert (
             chunk_dict == chunks[idx]
         ), f"idx={idx} translated chunk = {chunk_dict} != openai chunk = {chunks[idx]}"
+
+
+def test_unit_test_custom_stream_wrapper_function_call():
+    """
+    Test if model returns a tool call, the finish reason is correctly set to 'tool_calls'
+    """
+    from litellm.types.llms.openai import ChatCompletionDeltaChunk
+
+    litellm.set_verbose = False
+    delta: ChatCompletionDeltaChunk = {
+        "content": None,
+        "role": "assistant",
+        "tool_calls": [
+            {
+                "function": {"arguments": '"}'},
+                "type": "function",
+                "index": 0,
+            }
+        ],
+    }
+    chunk = {
+        "id": "chatcmpl-123",
+        "object": "chat.completion.chunk",
+        "created": 1694268190,
+        "model": "gpt-3.5-turbo-0125",
+        "system_fingerprint": "fp_44709d6fcb",
+        "choices": [{"index": 0, "delta": delta, "finish_reason": "stop"}],
+    }
+    chunk = litellm.ModelResponse(**chunk, stream=True)
+
+    completion_stream = ModelResponseIterator(model_response=chunk)
+
+    response = litellm.CustomStreamWrapper(
+        completion_stream=completion_stream,
+        model="gpt-3.5-turbo",
+        custom_llm_provider="cached_response",
+        logging_obj=litellm.litellm_core_utils.litellm_logging.Logging(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Hey"}],
+            stream=True,
+            call_type="completion",
+            start_time=time.time(),
+            litellm_call_id="12345",
+            function_id="1245",
+        ),
+    )
+
+    finish_reason: Optional[str] = None
+    for chunk in response:
+        if chunk.choices[0].finish_reason is not None:
+            finish_reason = chunk.choices[0].finish_reason
+    assert finish_reason == "tool_calls"

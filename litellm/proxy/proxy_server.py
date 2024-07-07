@@ -140,8 +140,21 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 ## Import All Misc routes here ##
 from litellm.proxy.caching_routes import router as caching_router
+from litellm.proxy.common_utils.admin_ui_utils import (
+    html_form,
+    show_missing_vars_in_env,
+)
 from litellm.proxy.common_utils.debug_utils import router as debugging_endpoints_router
+from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+    decrypt_value_helper,
+    encrypt_value_helper,
+)
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+from litellm.proxy.common_utils.init_callbacks import initialize_callbacks_on_proxy
+from litellm.proxy.common_utils.openai_endpoint_utils import (
+    remove_sensitive_info_from_deployment,
+)
+from litellm.proxy.guardrails.init_guardrails import initialize_guardrails
 from litellm.proxy.health_check import perform_health_check
 from litellm.proxy.health_endpoints._health_endpoints import router as health_router
 from litellm.proxy.hooks.prompt_injection_detection import (
@@ -181,13 +194,9 @@ from litellm.proxy.utils import (
     _get_projected_spend_over_limit,
     _is_projected_spend_over_limit,
     _is_valid_team_configs,
-    decrypt_value,
-    encrypt_value,
     get_error_message_str,
     get_instance_fn,
     hash_token,
-    html_form,
-    missing_keys_html_form,
     reset_budget,
     send_email,
     update_spend,
@@ -202,6 +211,7 @@ from litellm.router import ModelInfo as RouterModelInfo
 from litellm.router import updateDeployment
 from litellm.scheduler import DefaultPriorities, FlowItem, Scheduler
 from litellm.types.llms.openai import HttpxBinaryResponseContent
+from litellm.types.router import RouterGeneralSettings
 
 try:
     from litellm._version import version
@@ -1237,6 +1247,7 @@ class ProxyConfig:
         ## DB
         if prisma_client is not None and (
             general_settings.get("store_model_in_db", False) == True
+            or store_model_in_db is True
         ):
             _tasks = []
             keys = [
@@ -1443,248 +1454,28 @@ class ProxyConfig:
                         )
                 elif key == "cache" and value == False:
                     pass
-                elif key == "callbacks":
-                    if isinstance(value, list):
-                        imported_list: List[Any] = []
-                        known_compatible_callbacks = list(
-                            get_args(
-                                litellm._custom_logger_compatible_callbacks_literal
-                            )
+                elif key == "guardrails":
+                    if premium_user is not True:
+                        raise ValueError(
+                            "Trying to use `guardrails` on config.yaml "
+                            + CommonProxyErrors.not_premium_user.value
                         )
-                        for callback in value:  # ["presidio", <my-custom-callback>]
-                            if (
-                                isinstance(callback, str)
-                                and callback in known_compatible_callbacks
-                            ):
-                                imported_list.append(callback)
-                            elif isinstance(callback, str) and callback == "otel":
-                                from litellm.integrations.opentelemetry import (
-                                    OpenTelemetry,
-                                )
 
-                                open_telemetry_logger = OpenTelemetry()
-
-                                imported_list.append(open_telemetry_logger)
-                            elif isinstance(callback, str) and callback == "presidio":
-                                from litellm.proxy.hooks.presidio_pii_masking import (
-                                    _OPTIONAL_PresidioPIIMasking,
-                                )
-
-                                pii_masking_object = _OPTIONAL_PresidioPIIMasking()
-                                imported_list.append(pii_masking_object)
-                            elif (
-                                isinstance(callback, str)
-                                and callback == "llamaguard_moderations"
-                            ):
-                                from enterprise.enterprise_hooks.llama_guard import (
-                                    _ENTERPRISE_LlamaGuard,
-                                )
-
-                                if premium_user != True:
-                                    raise Exception(
-                                        "Trying to use Llama Guard"
-                                        + CommonProxyErrors.not_premium_user.value
-                                    )
-
-                                llama_guard_object = _ENTERPRISE_LlamaGuard()
-                                imported_list.append(llama_guard_object)
-                            elif (
-                                isinstance(callback, str) and callback == "hide_secrets"
-                            ):
-                                from enterprise.enterprise_hooks.secret_detection import (
-                                    _ENTERPRISE_SecretDetection,
-                                )
-
-                                if premium_user != True:
-                                    raise Exception(
-                                        "Trying to use secret hiding"
-                                        + CommonProxyErrors.not_premium_user.value
-                                    )
-
-                                _secret_detection_object = _ENTERPRISE_SecretDetection()
-                                imported_list.append(_secret_detection_object)
-                            elif (
-                                isinstance(callback, str)
-                                and callback == "openai_moderations"
-                            ):
-                                from enterprise.enterprise_hooks.openai_moderation import (
-                                    _ENTERPRISE_OpenAI_Moderation,
-                                )
-
-                                if premium_user != True:
-                                    raise Exception(
-                                        "Trying to use OpenAI Moderations Check"
-                                        + CommonProxyErrors.not_premium_user.value
-                                    )
-
-                                openai_moderations_object = (
-                                    _ENTERPRISE_OpenAI_Moderation()
-                                )
-                                imported_list.append(openai_moderations_object)
-                            elif (
-                                isinstance(callback, str)
-                                and callback == "lakera_prompt_injection"
-                            ):
-                                from enterprise.enterprise_hooks.lakera_ai import (
-                                    _ENTERPRISE_lakeraAI_Moderation,
-                                )
-
-                                if premium_user != True:
-                                    raise Exception(
-                                        "Trying to use LakeraAI Prompt Injection"
-                                        + CommonProxyErrors.not_premium_user.value
-                                    )
-
-                                lakera_moderations_object = (
-                                    _ENTERPRISE_lakeraAI_Moderation()
-                                )
-                                imported_list.append(lakera_moderations_object)
-                            elif (
-                                isinstance(callback, str)
-                                and callback == "google_text_moderation"
-                            ):
-                                from enterprise.enterprise_hooks.google_text_moderation import (
-                                    _ENTERPRISE_GoogleTextModeration,
-                                )
-
-                                if premium_user != True:
-                                    raise Exception(
-                                        "Trying to use Google Text Moderation"
-                                        + CommonProxyErrors.not_premium_user.value
-                                    )
-
-                                google_text_moderation_obj = (
-                                    _ENTERPRISE_GoogleTextModeration()
-                                )
-                                imported_list.append(google_text_moderation_obj)
-                            elif (
-                                isinstance(callback, str)
-                                and callback == "llmguard_moderations"
-                            ):
-                                from enterprise.enterprise_hooks.llm_guard import (
-                                    _ENTERPRISE_LLMGuard,
-                                )
-
-                                if premium_user != True:
-                                    raise Exception(
-                                        "Trying to use Llm Guard"
-                                        + CommonProxyErrors.not_premium_user.value
-                                    )
-
-                                llm_guard_moderation_obj = _ENTERPRISE_LLMGuard()
-                                imported_list.append(llm_guard_moderation_obj)
-                            elif (
-                                isinstance(callback, str)
-                                and callback == "blocked_user_check"
-                            ):
-                                from enterprise.enterprise_hooks.blocked_user_list import (
-                                    _ENTERPRISE_BlockedUserList,
-                                )
-
-                                if premium_user != True:
-                                    raise Exception(
-                                        "Trying to use ENTERPRISE BlockedUser"
-                                        + CommonProxyErrors.not_premium_user.value
-                                    )
-
-                                blocked_user_list = _ENTERPRISE_BlockedUserList(
-                                    prisma_client=prisma_client
-                                )
-                                imported_list.append(blocked_user_list)
-                            elif (
-                                isinstance(callback, str)
-                                and callback == "banned_keywords"
-                            ):
-                                from enterprise.enterprise_hooks.banned_keywords import (
-                                    _ENTERPRISE_BannedKeywords,
-                                )
-
-                                if premium_user != True:
-                                    raise Exception(
-                                        "Trying to use ENTERPRISE BannedKeyword"
-                                        + CommonProxyErrors.not_premium_user.value
-                                    )
-
-                                banned_keywords_obj = _ENTERPRISE_BannedKeywords()
-                                imported_list.append(banned_keywords_obj)
-                            elif (
-                                isinstance(callback, str)
-                                and callback == "detect_prompt_injection"
-                            ):
-                                from litellm.proxy.hooks.prompt_injection_detection import (
-                                    _OPTIONAL_PromptInjectionDetection,
-                                )
-
-                                prompt_injection_params = None
-                                if "prompt_injection_params" in litellm_settings:
-                                    prompt_injection_params_in_config = (
-                                        litellm_settings["prompt_injection_params"]
-                                    )
-                                    prompt_injection_params = (
-                                        LiteLLMPromptInjectionParams(
-                                            **prompt_injection_params_in_config
-                                        )
-                                    )
-
-                                prompt_injection_detection_obj = (
-                                    _OPTIONAL_PromptInjectionDetection(
-                                        prompt_injection_params=prompt_injection_params,
-                                    )
-                                )
-                                imported_list.append(prompt_injection_detection_obj)
-                            elif (
-                                isinstance(callback, str)
-                                and callback == "batch_redis_requests"
-                            ):
-                                from litellm.proxy.hooks.batch_redis_get import (
-                                    _PROXY_BatchRedisRequests,
-                                )
-
-                                batch_redis_obj = _PROXY_BatchRedisRequests()
-                                imported_list.append(batch_redis_obj)
-                            elif (
-                                isinstance(callback, str)
-                                and callback == "azure_content_safety"
-                            ):
-                                from litellm.proxy.hooks.azure_content_safety import (
-                                    _PROXY_AzureContentSafety,
-                                )
-
-                                azure_content_safety_params = litellm_settings[
-                                    "azure_content_safety_params"
-                                ]
-                                for k, v in azure_content_safety_params.items():
-                                    if (
-                                        v is not None
-                                        and isinstance(v, str)
-                                        and v.startswith("os.environ/")
-                                    ):
-                                        azure_content_safety_params[k] = (
-                                            litellm.get_secret(v)
-                                        )
-
-                                azure_content_safety_obj = _PROXY_AzureContentSafety(
-                                    **azure_content_safety_params,
-                                )
-                                imported_list.append(azure_content_safety_obj)
-                            else:
-                                imported_list.append(
-                                    get_instance_fn(
-                                        value=callback,
-                                        config_file_path=config_file_path,
-                                    )
-                                )
-                        litellm.callbacks = imported_list  # type: ignore
-                    else:
-                        litellm.callbacks = [
-                            get_instance_fn(
-                                value=value,
-                                config_file_path=config_file_path,
-                            )
-                        ]
-                    verbose_proxy_logger.debug(
-                        f"{blue_color_code} Initialized Callbacks - {litellm.callbacks} {reset_color_code}"
+                    initialize_guardrails(
+                        guardrails_config=value,
+                        premium_user=premium_user,
+                        config_file_path=config_file_path,
+                        litellm_settings=litellm_settings,
                     )
+                elif key == "callbacks":
+
+                    initialize_callbacks_on_proxy(
+                        value=value,
+                        premium_user=premium_user,
+                        config_file_path=config_file_path,
+                        litellm_settings=litellm_settings,
+                    )
+
                 elif key == "post_call_rules":
                     litellm.post_call_rules = [
                         get_instance_fn(value=value, config_file_path=config_file_path)
@@ -1980,7 +1771,11 @@ class ProxyConfig:
                 if k in available_args:
                     router_params[k] = v
         router = litellm.Router(
-            **router_params, assistants_config=assistants_config
+            **router_params,
+            assistants_config=assistants_config,
+            router_general_settings=RouterGeneralSettings(
+                async_only_mode=True  # only init async clients
+            ),
         )  # type:ignore
         return router, router.get_model_list(), general_settings
 
@@ -2095,16 +1890,8 @@ class ProxyConfig:
                 # decrypt values
                 for k, v in _litellm_params.items():
                     if isinstance(v, str):
-                        # decode base64
-                        try:
-                            decoded_b64 = base64.b64decode(v)
-                        except Exception as e:
-                            verbose_proxy_logger.error(
-                                "Error decoding value - {}".format(v)
-                            )
-                            continue
                         # decrypt value
-                        _value = decrypt_value(value=decoded_b64, master_key=master_key)
+                        _value = decrypt_value_helper(value=v)
                         # sanity check if string > size 0
                         if len(_value) > 0:
                             _litellm_params[k] = _value
@@ -2148,13 +1935,8 @@ class ProxyConfig:
                     if isinstance(_litellm_params, dict):
                         # decrypt values
                         for k, v in _litellm_params.items():
-                            if isinstance(v, str):
-                                # decode base64
-                                decoded_b64 = base64.b64decode(v)
-                                # decrypt value
-                                _litellm_params[k] = decrypt_value(
-                                    value=decoded_b64, master_key=master_key  # type: ignore
-                                )
+                            decrypted_value = decrypt_value_helper(value=v)
+                            _litellm_params[k] = decrypted_value
                         _litellm_params = LiteLLM_Params(**_litellm_params)
                     else:
                         verbose_proxy_logger.error(
@@ -2172,7 +1954,12 @@ class ProxyConfig:
                     )
                 if len(_model_list) > 0:
                     verbose_proxy_logger.debug(f"_model_list: {_model_list}")
-                    llm_router = litellm.Router(model_list=_model_list)
+                    llm_router = litellm.Router(
+                        model_list=_model_list,
+                        router_general_settings=RouterGeneralSettings(
+                            async_only_mode=True  # only init async clients
+                        ),
+                    )
                     verbose_proxy_logger.debug(f"updated llm_router: {llm_router}")
             else:
                 verbose_proxy_logger.debug(f"len new_models: {len(new_models)}")
@@ -2210,10 +1997,8 @@ class ProxyConfig:
         environment_variables = config_data.get("environment_variables", {})
         for k, v in environment_variables.items():
             try:
-                if v is not None:
-                    decoded_b64 = base64.b64decode(v)
-                    value = decrypt_value(value=decoded_b64, master_key=master_key)  # type: ignore
-                    os.environ[k] = value
+                decrypted_value = decrypt_value_helper(value=v)
+                os.environ[k] = decrypted_value
             except Exception as e:
                 verbose_proxy_logger.error(
                     "Error setting env variable: %s - %s", k, str(e)
@@ -2935,6 +2720,10 @@ async def chat_completion(
         except:
             data = json.loads(body_str)
 
+        verbose_proxy_logger.debug(
+            "Request received by LiteLLM:\n{}".format(json.dumps(data, indent=4)),
+        )
+
         data = await add_litellm_data_to_request(
             data=data,
             request=request,
@@ -2974,6 +2763,7 @@ async def chat_completion(
         )
 
         ## LOGGING OBJECT ## - initialize logging object for logging success/failure events for call
+        ## IMPORTANT Note: - initialize this before running pre-call checks. Ensures we log rejected requests to langfuse.
         data["litellm_call_id"] = str(uuid.uuid4())
         logging_obj, data = litellm.utils.function_setup(
             original_function="acompletion",
@@ -3586,8 +3376,9 @@ async def embeddings(
         )
         verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
+            message = get_error_message_str(e)
             raise ProxyException(
-                message=getattr(e, "message", str(e)),
+                message=message,
                 type=getattr(e, "type", "None"),
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
@@ -6144,11 +5935,8 @@ async def add_new_model(
             _litellm_params_dict = model_params.litellm_params.dict(exclude_none=True)
             _orignal_litellm_model_name = model_params.litellm_params.model
             for k, v in _litellm_params_dict.items():
-                if isinstance(v, str):
-                    encrypted_value = encrypt_value(value=v, master_key=master_key)  # type: ignore
-                    model_params.litellm_params[k] = base64.b64encode(
-                        encrypted_value
-                    ).decode("utf-8")
+                encrypted_value = encrypt_value_helper(value=v)
+                model_params.litellm_params[k] = encrypted_value
             _data: dict = {
                 "model_id": model_params.model_info.id,
                 "model_name": model_params.model_name,
@@ -6279,11 +6067,8 @@ async def update_model(
 
             ### ENCRYPT PARAMS ###
             for k, v in _new_litellm_params_dict.items():
-                if isinstance(v, str):
-                    encrypted_value = encrypt_value(value=v, master_key=master_key)  # type: ignore
-                    model_params.litellm_params[k] = base64.b64encode(
-                        encrypted_value
-                    ).decode("utf-8")
+                encrypted_value = encrypt_value_helper(value=v)
+                model_params.litellm_params[k] = encrypted_value
 
             ### MERGE WITH EXISTING DATA ###
             merged_dictionary = {}
@@ -6863,25 +6648,80 @@ async def model_metrics_exceptions(
 
 @router.get(
     "/model/info",
-    description="Provides more info about each model in /models, including config.yaml descriptions (except api key and api base)",
     tags=["model management"],
     dependencies=[Depends(user_api_key_auth)],
 )
 @router.get(
     "/v1/model/info",
-    description="Provides more info about each model in /models, including config.yaml descriptions (except api key and api base)",
     tags=["model management"],
     dependencies=[Depends(user_api_key_auth)],
 )
 async def model_info_v1(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    litellm_model_id: Optional[str] = None,
 ):
-    global llm_model_list, general_settings, user_config_file_path, proxy_config
+    """
+    Provides more info about each model in /models, including config.yaml descriptions (except api key and api base)
+
+    Parameters:
+        litellm_model_id: Optional[str] = None (this is the value of `x-litellm-model-id` returned in response headers)
+
+        - When litellm_model_id is passed, it will return the info for that specific model
+        - When litellm_model_id is not passed, it will return the info for all models
+
+    Returns:
+        Returns a dictionary containing information about each model.
+
+    Example Response:
+    ```json
+    {
+        "data": [
+                    {
+                        "model_name": "fake-openai-endpoint",
+                        "litellm_params": {
+                            "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                            "model": "openai/fake"
+                        },
+                        "model_info": {
+                            "id": "112f74fab24a7a5245d2ced3536dd8f5f9192c57ee6e332af0f0512e08bed5af",
+                            "db_model": false
+                        }
+                    }
+                ]
+    }
+
+    ```
+    """
+    global llm_model_list, general_settings, user_config_file_path, proxy_config, llm_router
 
     if llm_model_list is None:
         raise HTTPException(
             status_code=500, detail={"error": "LLM Model List not loaded in"}
         )
+
+    if llm_router is None:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "LLM Router is not loaded in. Make sure you passed models in your config.yaml or on the LiteLLM Admin UI."
+            },
+        )
+
+    if litellm_model_id is not None:
+        # user is trying to get specific model from litellm router
+        deployment_info = llm_router.get_deployment(model_id=litellm_model_id)
+        if deployment_info is None:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": f"Model id = {litellm_model_id} not found on litellm proxy"
+                },
+            )
+        _deployment_info_dict = deployment_info.model_dump()
+        _deployment_info_dict = remove_sensitive_info_from_deployment(
+            deployment_dict=_deployment_info_dict
+        )
+        return {"data": _deployment_info_dict}
 
     all_models: List[dict] = []
     ## CHECK IF MODEL RESTRICTIONS ARE SET AT KEY/TEAM LEVEL ##
@@ -6944,10 +6784,7 @@ async def model_info_v1(
                 model_info[k] = v
         model["model_info"] = model_info
         # don't return the llm credentials
-        model["litellm_params"].pop("api_key", None)
-        model["litellm_params"].pop("vertex_credentials", None)
-        model["litellm_params"].pop("aws_access_key_id", None)
-        model["litellm_params"].pop("aws_secret_access_key", None)
+        model = remove_sensitive_info_from_deployment(deployment_dict=model)
 
     verbose_proxy_logger.debug("all_models: %s", all_models)
     return {"data": all_models}
@@ -7349,10 +7186,9 @@ async def google_login(request: Request):
             )
 
     ####### Detect DB + MASTER KEY in .env #######
-    if prisma_client is None or master_key is None:
-        from fastapi.responses import HTMLResponse
-
-        return HTMLResponse(content=missing_keys_html_form, status_code=200)
+    missing_env_vars = show_missing_vars_in_env()
+    if missing_env_vars is not None:
+        return missing_env_vars
 
     # get url from request
     redirect_url = os.getenv("PROXY_BASE_URL", str(request.base_url))
@@ -7867,22 +7703,12 @@ async def claim_onboarding_link(data: InvitationClaim):
         )
 
     #### CHECK IF CLAIMED
-    ##### if claimed - check if within valid session (within 10 minutes of being claimed)
+    ##### if claimed - accept
     ##### if unclaimed - reject
 
-    current_time = litellm.utils.get_utc_datetime()
-
-    if invite_obj.is_accepted == True:
-        time_difference = current_time - invite_obj.updated_at
-
-        # Check if the difference is within 10 minutes
-        if time_difference > timedelta(minutes=10):
-            raise HTTPException(
-                status_code=401,
-                detail={
-                    "error": "The invitation link has already been claimed. Please ask your admin for a new invite link."
-                },
-            )
+    if invite_obj.is_accepted is True:
+        # this is a valid invite that was accepted
+        pass
     else:
         raise HTTPException(
             status_code=401,
@@ -8565,11 +8391,8 @@ async def update_config(config_info: ConfigYAML):
 
             # encrypt updated_environment_variables #
             for k, v in _updated_environment_variables.items():
-                if isinstance(v, str):
-                    encrypted_value = encrypt_value(value=v, master_key=master_key)  # type: ignore
-                    _updated_environment_variables[k] = base64.b64encode(
-                        encrypted_value
-                    ).decode("utf-8")
+                encrypted_value = encrypt_value_helper(value=v)
+                _updated_environment_variables[k] = encrypted_value
 
             _existing_env_variables = config["environment_variables"]
 
@@ -8986,11 +8809,8 @@ async def get_config():
                         env_vars_dict[_var] = None
                     else:
                         # decode + decrypt the value
-                        decoded_b64 = base64.b64decode(env_variable)
-                        _decrypted_value = decrypt_value(
-                            value=decoded_b64, master_key=master_key
-                        )
-                        env_vars_dict[_var] = _decrypted_value
+                        decrypted_value = decrypt_value_helper(value=env_variable)
+                        env_vars_dict[_var] = decrypted_value
 
                 _data_to_return.append({"name": _callback, "variables": env_vars_dict})
             elif _callback == "langfuse":
@@ -9006,11 +8826,8 @@ async def get_config():
                         _langfuse_env_vars[_var] = None
                     else:
                         # decode + decrypt the value
-                        decoded_b64 = base64.b64decode(env_variable)
-                        _decrypted_value = decrypt_value(
-                            value=decoded_b64, master_key=master_key
-                        )
-                        _langfuse_env_vars[_var] = _decrypted_value
+                        decrypted_value = decrypt_value_helper(value=env_variable)
+                        _langfuse_env_vars[_var] = decrypted_value
 
                 _data_to_return.append(
                     {"name": _callback, "variables": _langfuse_env_vars}
@@ -9031,10 +8848,7 @@ async def get_config():
                     _slack_env_vars[_var] = _value
                 else:
                     # decode + decrypt the value
-                    decoded_b64 = base64.b64decode(env_variable)
-                    _decrypted_value = decrypt_value(
-                        value=decoded_b64, master_key=master_key
-                    )
+                    _decrypted_value = decrypt_value_helper(value=env_variable)
                     _slack_env_vars[_var] = _decrypted_value
 
             _alerting_types = proxy_logging_obj.slack_alerting_instance.alert_types
@@ -9070,10 +8884,7 @@ async def get_config():
                 _email_env_vars[_var] = None
             else:
                 # decode + decrypt the value
-                decoded_b64 = base64.b64decode(env_variable)
-                _decrypted_value = decrypt_value(
-                    value=decoded_b64, master_key=master_key
-                )
+                _decrypted_value = decrypt_value_helper(value=env_variable)
                 _email_env_vars[_var] = _decrypted_value
 
         alerting_data.append(

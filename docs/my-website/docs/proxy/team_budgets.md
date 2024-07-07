@@ -152,11 +152,11 @@ litellm_remaining_team_budget_metric{team_alias="QA Prod Bot",team_id="de35b29e-
 ```
 
 
-### Dynamic TPM Allocation 
+### Dynamic TPM/RPM Allocation 
 
-Prevent projects from gobbling too much quota. 
+Prevent projects from gobbling too much tpm/rpm.
 
-Dynamically allocate TPM quota to api keys, based on active keys in that minute. [**See Code**](https://github.com/BerriAI/litellm/blob/9bffa9a48e610cc6886fc2dce5c1815aeae2ad46/litellm/proxy/hooks/dynamic_rate_limiter.py#L125)
+Dynamically allocate TPM/RPM quota to api keys, based on active keys in that minute. [**See Code**](https://github.com/BerriAI/litellm/blob/9bffa9a48e610cc6886fc2dce5c1815aeae2ad46/litellm/proxy/hooks/dynamic_rate_limiter.py#L125)
 
 1. Setup config.yaml 
 
@@ -247,4 +247,90 @@ except RateLimitError as e:
 
 ```
 This was rate limited b/c - Error code: 429 - {'error': {'message': {'error': 'Key=<hashed_token> over available TPM=0. Model TPM=0, Active keys=2'}, 'type': 'None', 'param': 'None', 'code': 429}}
+```
+
+
+#### ✨ [BETA] Set Priority / Reserve Quota
+
+Reserve tpm/rpm capacity for projects in prod.
+
+:::tip
+
+Reserving tpm/rpm on keys based on priority is a premium feature. Please [get an enterprise license](./enterprise.md) for it. 
+:::
+
+
+1. Setup config.yaml
+
+```yaml 
+model_list:
+  - model_name: gpt-3.5-turbo             
+    litellm_params:
+      model: "gpt-3.5-turbo"       
+      api_key: os.environ/OPENAI_API_KEY 
+      rpm: 100   
+
+litellm_settings:
+  callbacks: ["dynamic_rate_limiter"]
+  priority_reservation: {"dev": 0, "prod": 1}
+
+general_settings:
+  master_key: sk-1234 # OR set `LITELLM_MASTER_KEY=".."` in your .env
+  database_url: postgres://.. # OR set `DATABASE_URL=".."` in your .env
+```
+
+
+priority_reservation: 
+- Dict[str, float]
+  - str: can be any string
+  - float: from 0 to 1. Specify the % of tpm/rpm to reserve for keys of this priority.
+
+**Start Proxy**
+
+```
+litellm --config /path/to/config.yaml
+```
+
+2. Create a key with that priority
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/key/generate' \
+-H 'Authorization: Bearer <your-master-key>' \
+-H 'Content-Type: application/json' \
+-D '{
+	"metadata": {"priority": "dev"} # 👈 KEY CHANGE
+}'
+```
+
+**Expected Response**
+
+```
+{
+  ...
+  "key": "sk-.."
+}
+```
+
+
+3. Test it!
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+  -H 'Content-Type: application/json' \
+  -H 'Authorization: sk-...' \ # 👈 key from step 2.
+  -D '{
+  "model": "gpt-3.5-turbo",
+  "messages": [
+      {
+      "role": "user",
+      "content": "what llm are you"
+      }
+  ],
+}'
+```
+
+**Expected Response**
+
+```
+Key=... over available RPM=0. Model RPM=100, Active keys=None
 ```

@@ -29,6 +29,7 @@ else:
 LITELLM_TRACER_NAME = os.getenv("OTEL_TRACER_NAME", "litellm")
 LITELLM_RESOURCE = {
     "service.name": os.getenv("OTEL_SERVICE_NAME", "litellm"),
+    "deployment.environment": os.getenv("OTEL_ENVIRONMENT_NAME", "production"),
 }
 RAW_REQUEST_SPAN_NAME = "raw_gen_ai_request"
 LITELLM_REQUEST_SPAN_NAME = "litellm_request"
@@ -447,13 +448,24 @@ class OpenTelemetry(CustomLogger):
             # cast sr -> dict
             import json
 
-            _raw_response = json.loads(_raw_response)
-            for param, val in _raw_response.items():
-                if not isinstance(val, str):
-                    val = str(val)
+            try:
+                _raw_response = json.loads(_raw_response)
+                for param, val in _raw_response.items():
+                    if not isinstance(val, str):
+                        val = str(val)
+                    span.set_attribute(
+                        f"llm.{custom_llm_provider}.{param}",
+                        val,
+                    )
+            except json.JSONDecodeError:
+                verbose_logger.debug(
+                    "litellm.integrations.opentelemetry.py::set_raw_request_attributes() - raw_response not json string - {}".format(
+                        _raw_response
+                    )
+                )
                 span.set_attribute(
-                    f"llm.{custom_llm_provider}.{param}",
-                    val,
+                    f"llm.{custom_llm_provider}.stringified_raw_response",
+                    _raw_response,
                 )
 
         pass

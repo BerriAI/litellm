@@ -7,6 +7,17 @@ Interested in Enterprise? Schedule a meeting with us here 👉
 
 :::
 
+## [AWS Marketplace Listing](https://aws.amazon.com/marketplace/pp/prodview-gdm3gswgjhgjo?sr=0-1&ref_=beagle&applicationId=AWSMPContessa)
+
+Deploy managed LiteLLM Proxy within your VPC.
+
+Includes all enterprise features.
+
+[**View Listing**](https://aws.amazon.com/marketplace/pp/prodview-gdm3gswgjhgjo?sr=0-1&ref_=beagle&applicationId=AWSMPContessa)
+
+[**Get early access**](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+
+
 This covers: 
 - **Enterprise Features**
     - **Security**
@@ -36,15 +47,6 @@ This covers:
 - ✅ **Professional Support - Dedicated discord + slack**
 
 
-
-
-## [COMING SOON] AWS Marketplace Support
-
-Deploy managed LiteLLM Proxy within your VPC.
-
-Includes all enterprise features.
-
-[**Get early access**](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
 
 ## Frequently Asked Questions
 

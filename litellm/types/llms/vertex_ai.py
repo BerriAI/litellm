@@ -239,8 +239,8 @@ class PromptFeedback(TypedDict):
 
 
 class UsageMetadata(TypedDict, total=False):
-    promptTokenCount: Required[int]
-    totalTokenCount: Required[int]
+    promptTokenCount: int
+    totalTokenCount: int
     candidatesTokenCount: int
 
 

@@ -1,16 +1,22 @@
 # this tests if the router is initialized correctly
-import sys, os, time
-import traceback, asyncio
+import asyncio
+import os
+import sys
+import time
+import traceback
+
 import pytest
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
+from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
+
+from dotenv import load_dotenv
+
 import litellm
 from litellm import Router
-from concurrent.futures import ThreadPoolExecutor
-from collections import defaultdict
-from dotenv import load_dotenv
 
 load_dotenv()
 
@@ -24,6 +30,7 @@ load_dotenv()
 def test_init_clients():
     litellm.set_verbose = True
     import logging
+
     from litellm._logging import verbose_router_logger
 
     verbose_router_logger.setLevel(logging.DEBUG)
@@ -489,6 +496,7 @@ def test_init_clients_azure_command_r_plus():
     # For azure/command-r-plus we need to use openai.OpenAI because of how the Azure provider requires requests being sent
     litellm.set_verbose = True
     import logging
+
     from litellm._logging import verbose_router_logger
 
     verbose_router_logger.setLevel(logging.DEBUG)
@@ -583,5 +591,48 @@ async def test_text_completion_with_organization():
         )
         print("working response: ", response)
 
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+def test_init_clients_async_mode():
+    litellm.set_verbose = True
+    import logging
+
+    from litellm._logging import verbose_router_logger
+    from litellm.types.router import RouterGeneralSettings
+
+    verbose_router_logger.setLevel(logging.DEBUG)
+    try:
+        print("testing init 4 clients with diff timeouts")
+        model_list = [
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "azure/chatgpt-v-2",
+                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "api_base": os.getenv("AZURE_API_BASE"),
+                    "timeout": 0.01,
+                    "stream_timeout": 0.000_001,
+                    "max_retries": 7,
+                },
+            },
+        ]
+        router = Router(
+            model_list=model_list,
+            set_verbose=True,
+            router_general_settings=RouterGeneralSettings(async_only_mode=True),
+        )
+        for elem in router.model_list:
+            model_id = elem["model_info"]["id"]
+
+            # sync clients not initialized in async_only_mode=True
+            assert router.cache.get_cache(f"{model_id}_client") is None
+            assert router.cache.get_cache(f"{model_id}_stream_client") is None
+
+            # only async clients initialized in async_only_mode=True
+            assert router.cache.get_cache(f"{model_id}_async_client") is not None
+            assert router.cache.get_cache(f"{model_id}_stream_async_client") is not None
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")

@@ -158,3 +158,20 @@ if tool_calls:
     )  # get a new response from the model where it can see the function response
     print("second response\n", second_response)
 ```
+
+## Speech to Text - Whisper
+
+```python
+os.environ["GROQ_API_KEY"] = ""
+audio_file = open("/path/to/audio.mp3", "rb")
+
+transcript = litellm.transcription(
+    model="groq/whisper-large-v3",
+    file=audio_file,
+    prompt="Specify context or spelling",
+    temperature=0,
+    response_format="json"
+)
+
+print("response=", transcript)
+```

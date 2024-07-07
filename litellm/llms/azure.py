@@ -1149,7 +1149,13 @@ class AzureChatCompletion(BaseLLM):
                 error_data = response.json()
                 raise AzureOpenAIError(status_code=400, message=json.dumps(error_data))
 
-            return response
+            result = response.json()["result"]
+            return httpx.Response(
+                status_code=200,
+                headers=response.headers,
+                content=json.dumps(result).encode("utf-8"),
+                request=httpx.Request(method="POST", url="https://api.openai.com/v1"),
+            )
         return await async_handler.post(
             url=api_base,
             json=data,
@@ -1248,7 +1254,13 @@ class AzureChatCompletion(BaseLLM):
                 error_data = response.json()
                 raise AzureOpenAIError(status_code=400, message=json.dumps(error_data))
 
-            return response
+            result = response.json()["result"]
+            return httpx.Response(
+                status_code=200,
+                headers=response.headers,
+                content=json.dumps(result).encode("utf-8"),
+                request=httpx.Request(method="POST", url="https://api.openai.com/v1"),
+            )
         return sync_handler.post(
             url=api_base,
             json=data,
@@ -1323,7 +1335,7 @@ class AzureChatCompletion(BaseLLM):
                 api_key=api_key,
                 data=data,
             )
-            response = httpx_response.json()["result"]
+            response = httpx_response.json()
 
             stringified_response = response
             ## LOGGING
@@ -1430,7 +1442,7 @@ class AzureChatCompletion(BaseLLM):
                 api_key=api_key or "",
                 data=data,
             )
-            response = httpx_response.json()["result"]
+            response = httpx_response.json()
 
             ## LOGGING
             logging_obj.post_call(

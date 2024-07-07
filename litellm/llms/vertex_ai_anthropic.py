@@ -15,6 +15,7 @@ import requests  # type: ignore
 import litellm
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.types.llms.anthropic import AnthropicMessagesToolChoice
 from litellm.types.utils import ResponseFormatChunk
 from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
 
@@ -121,6 +122,17 @@ class VertexAIAnthropicConfig:
                 optional_params["max_tokens"] = value
             if param == "tools":
                 optional_params["tools"] = value
+            if param == "tool_choice":
+                _tool_choice: Optional[AnthropicMessagesToolChoice] = None
+                if value == "auto":
+                    _tool_choice = {"type": "auto"}
+                elif value == "required":
+                    _tool_choice = {"type": "any"}
+                elif isinstance(value, dict):
+                    _tool_choice = {"type": "tool", "name": value["function"]["name"]}
+
+                if _tool_choice is not None:
+                    optional_params["tool_choice"] = _tool_choice
             if param == "stream":
                 optional_params["stream"] = value
             if param == "stop":
@@ -177,15 +189,27 @@ def get_vertex_client(
         _credentials, cred_project_id = VertexLLM().load_auth(
             credentials=vertex_credentials, project_id=vertex_project
         )
+
         vertex_ai_client = AnthropicVertex(
             project_id=vertex_project or cred_project_id,
             region=vertex_location or "us-central1",
             access_token=_credentials.token,
         )
+        access_token = _credentials.token
     else:
         vertex_ai_client = client
+        access_token = client.access_token
 
     return vertex_ai_client, access_token
+
+
+def create_vertex_anthropic_url(
+    vertex_location: str, vertex_project: str, model: str, stream: bool
+) -> str:
+    if stream is True:
+        return f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/anthropic/models/{model}:streamRawPredict"
+    else:
+        return f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/anthropic/models/{model}:rawPredict"
 
 
 def completion(
@@ -196,6 +220,8 @@ def completion(
     encoding,
     logging_obj,
     optional_params: dict,
+    custom_prompt_dict: dict,
+    headers: Optional[dict],
     vertex_project=None,
     vertex_location=None,
     vertex_credentials=None,
@@ -207,6 +233,9 @@ def completion(
     try:
         import vertexai
         from anthropic import AnthropicVertex
+
+        from litellm.llms.anthropic import AnthropicChatCompletion
+        from litellm.llms.vertex_httpx import VertexLLM
     except:
         raise VertexAIError(
             status_code=400,
@@ -222,12 +251,13 @@ def completion(
         )
     try:
 
-        vertex_ai_client, access_token = get_vertex_client(
-            client=client,
-            vertex_project=vertex_project,
-            vertex_location=vertex_location,
-            vertex_credentials=vertex_credentials,
+        vertex_httpx_logic = VertexLLM()
+
+        access_token, project_id = vertex_httpx_logic._ensure_access_token(
+            credentials=vertex_credentials, project_id=vertex_project
         )
+
+        anthropic_chat_completions = AnthropicChatCompletion()
 
         ## Load Config
         config = litellm.VertexAIAnthropicConfig.get_config()
@@ -235,190 +265,44 @@ def completion(
             if k not in optional_params:
                 optional_params[k] = v
 
-        ## Format Prompt
-        _is_function_call = False
-        _is_json_schema = False
-        messages = copy.deepcopy(messages)
-        optional_params = copy.deepcopy(optional_params)
-        # Separate system prompt from rest of message
-        system_prompt_indices = []
-        system_prompt = ""
-        for idx, message in enumerate(messages):
-            if message["role"] == "system":
-                system_prompt += message["content"]
-                system_prompt_indices.append(idx)
-        if len(system_prompt_indices) > 0:
-            for idx in reversed(system_prompt_indices):
-                messages.pop(idx)
-        if len(system_prompt) > 0:
-            optional_params["system"] = system_prompt
-        # Checks for 'response_schema' support - if passed in
-        if "response_format" in optional_params:
-            response_format_chunk = ResponseFormatChunk(
-                **optional_params["response_format"]  # type: ignore
-            )
-            supports_response_schema = litellm.supports_response_schema(
-                model=model, custom_llm_provider="vertex_ai"
-            )
-            if (
-                supports_response_schema is False
-                and response_format_chunk["type"] == "json_object"
-                and "response_schema" in response_format_chunk
-            ):
-                _is_json_schema = True
-                user_response_schema_message = response_schema_prompt(
-                    model=model,
-                    response_schema=response_format_chunk["response_schema"],
-                )
-                messages.append(
-                    {"role": "user", "content": user_response_schema_message}
-                )
-                messages.append({"role": "assistant", "content": "{"})
-                optional_params.pop("response_format")
-        # Format rest of message according to anthropic guidelines
-        try:
-            messages = prompt_factory(
-                model=model, messages=messages, custom_llm_provider="anthropic_xml"
-            )
-        except Exception as e:
-            raise VertexAIError(status_code=400, message=str(e))
+        ## CONSTRUCT API BASE
+        stream = optional_params.get("stream", False)
 
-        ## Handle Tool Calling
-        if "tools" in optional_params:
-            _is_function_call = True
-            tool_calling_system_prompt = construct_tool_use_system_prompt(
-                tools=optional_params["tools"]
-            )
-            optional_params["system"] = (
-                optional_params.get("system", "\n") + tool_calling_system_prompt
-            )  # add the anthropic tool calling prompt to the system prompt
-            optional_params.pop("tools")
-
-        stream = optional_params.pop("stream", None)
-
-        data = {
-            "model": model,
-            "messages": messages,
-            **optional_params,
-        }
-        print_verbose(f"_is_function_call: {_is_function_call}")
-
-        ## Completion Call
-
-        print_verbose(
-            f"VERTEX AI: vertex_project={vertex_project}; vertex_location={vertex_location}; vertex_credentials={vertex_credentials}"
+        api_base = create_vertex_anthropic_url(
+            vertex_location=vertex_location or "us-central1",
+            vertex_project=vertex_project or project_id,
+            model=model,
+            stream=stream,
         )
 
-        if acompletion == True:
-            """
-            - async streaming
-            - async completion
-            """
-            if stream is not None and stream == True:
-                return async_streaming(
-                    model=model,
-                    messages=messages,
-                    data=data,
-                    print_verbose=print_verbose,
-                    model_response=model_response,
-                    logging_obj=logging_obj,
-                    vertex_project=vertex_project,
-                    vertex_location=vertex_location,
-                    optional_params=optional_params,
-                    client=client,
-                    access_token=access_token,
-                )
-            else:
-                return async_completion(
-                    model=model,
-                    messages=messages,
-                    data=data,
-                    print_verbose=print_verbose,
-                    model_response=model_response,
-                    logging_obj=logging_obj,
-                    vertex_project=vertex_project,
-                    vertex_location=vertex_location,
-                    optional_params=optional_params,
-                    client=client,
-                    access_token=access_token,
-                )
-        if stream is not None and stream == True:
-            ## LOGGING
-            logging_obj.pre_call(
-                input=messages,
-                api_key=None,
-                additional_args={
-                    "complete_input_dict": optional_params,
-                },
-            )
-            response = vertex_ai_client.messages.create(**data, stream=True)  # type: ignore
-            return response
-
-        ## LOGGING
-        logging_obj.pre_call(
-            input=messages,
-            api_key=None,
-            additional_args={
-                "complete_input_dict": optional_params,
-            },
-        )
-
-        message = vertex_ai_client.messages.create(**data)  # type: ignore
-
-        ## LOGGING
-        logging_obj.post_call(
-            input=messages,
-            api_key="",
-            original_response=message,
-            additional_args={"complete_input_dict": data},
-        )
-
-        text_content: str = message.content[0].text
-        ## TOOL CALLING - OUTPUT PARSE
-        if text_content is not None and contains_tag("invoke", text_content):
-            function_name = extract_between_tags("tool_name", text_content)[0]
-            function_arguments_str = extract_between_tags("invoke", text_content)[
-                0
-            ].strip()
-            function_arguments_str = f"<invoke>{function_arguments_str}</invoke>"
-            function_arguments = parse_xml_params(function_arguments_str)
-            _message = litellm.Message(
-                tool_calls=[
-                    {
-                        "id": f"call_{uuid.uuid4()}",
-                        "type": "function",
-                        "function": {
-                            "name": function_name,
-                            "arguments": json.dumps(function_arguments),
-                        },
-                    }
-                ],
-                content=None,
-            )
-            model_response.choices[0].message = _message  # type: ignore
+        if headers is not None:
+            vertex_headers = headers
         else:
-            if (
-                _is_json_schema
-            ):  # follows https://github.com/anthropics/anthropic-cookbook/blob/main/misc/how_to_enable_json_mode.ipynb
-                json_response = "{" + text_content[: text_content.rfind("}") + 1]
-                model_response.choices[0].message.content = json_response  # type: ignore
-            else:
-                model_response.choices[0].message.content = text_content  # type: ignore
-        model_response.choices[0].finish_reason = map_finish_reason(message.stop_reason)
+            vertex_headers = {}
 
-        ## CALCULATING USAGE
-        prompt_tokens = message.usage.input_tokens
-        completion_tokens = message.usage.output_tokens
+        vertex_headers.update({"Authorization": "Bearer {}".format(access_token)})
 
-        model_response["created"] = int(time.time())
-        model_response["model"] = model
-        usage = Usage(
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            total_tokens=prompt_tokens + completion_tokens,
+        optional_params.update(
+            {"anthropic_version": "vertex-2023-10-16", "is_vertex_request": True}
         )
-        setattr(model_response, "usage", usage)
-        return model_response
+
+        return anthropic_chat_completions.completion(
+            model=model,
+            messages=messages,
+            api_base=api_base,
+            custom_prompt_dict=custom_prompt_dict,
+            model_response=model_response,
+            print_verbose=print_verbose,
+            encoding=encoding,
+            api_key=access_token,
+            logging_obj=logging_obj,
+            optional_params=optional_params,
+            acompletion=acompletion,
+            litellm_params=litellm_params,
+            logger_fn=logger_fn,
+            headers=vertex_headers,
+        )
+
     except Exception as e:
         raise VertexAIError(status_code=500, message=str(e))
 
