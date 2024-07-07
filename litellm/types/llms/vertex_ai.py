@@ -145,6 +145,7 @@ class GenerationConfig(TypedDict, total=False):
     presence_penalty: float
     frequency_penalty: float
     response_mime_type: Literal["text/plain", "application/json"]
+    seed: int
 
 
 class Tools(TypedDict):
