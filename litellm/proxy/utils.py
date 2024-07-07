@@ -353,7 +353,7 @@ class ProxyLogging:
                                 raise HTTPException(
                                     status_code=400, detail={"error": response}
                                 )
-            print_verbose(f"final data being sent to {call_type} call: {data}")
+
             return data
         except Exception as e:
             raise e
@@ -2705,178 +2705,6 @@ def _is_valid_team_configs(team_id=None, team_config=None, request_data=None):
     return
 
 
-def encrypt_value(value: str, master_key: str):
-    import hashlib
-
-    import nacl.secret
-    import nacl.utils
-
-    # get 32 byte master key #
-    hash_object = hashlib.sha256(master_key.encode())
-    hash_bytes = hash_object.digest()
-
-    # initialize secret box #
-    box = nacl.secret.SecretBox(hash_bytes)
-
-    # encode message #
-    value_bytes = value.encode("utf-8")
-
-    encrypted = box.encrypt(value_bytes)
-
-    return encrypted
-
-
-def decrypt_value(value: bytes, master_key: str) -> str:
-    import hashlib
-
-    import nacl.secret
-    import nacl.utils
-
-    # get 32 byte master key #
-    hash_object = hashlib.sha256(master_key.encode())
-    hash_bytes = hash_object.digest()
-
-    # initialize secret box #
-    box = nacl.secret.SecretBox(hash_bytes)
-
-    # Convert the bytes object to a string
-    plaintext = box.decrypt(value)
-
-    plaintext = plaintext.decode("utf-8")  # type: ignore
-    return plaintext  # type: ignore
-
-
-# LiteLLM Admin UI - Non SSO Login
-url_to_redirect_to = os.getenv("PROXY_BASE_URL", "")
-url_to_redirect_to += "/login"
-html_form = f"""
-<!DOCTYPE html>
-<html>
-<head>
-    <title>LiteLLM Login</title>
-    <style>
-        body {{
-            font-family: Arial, sans-serif;
-            background-color: #f4f4f4;
-            margin: 0;
-            padding: 0;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            height: 100vh;
-        }}
-
-        form {{
-            background-color: #fff;
-            padding: 20px;
-            border-radius: 8px;
-            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
-        }}
-
-        label {{
-            display: block;
-            margin-bottom: 8px;
-        }}
-
-        input {{
-            width: 100%;
-            padding: 8px;
-            margin-bottom: 16px;
-            box-sizing: border-box;
-            border: 1px solid #ccc;
-            border-radius: 4px;
-        }}
-
-        input[type="submit"] {{
-            background-color: #4caf50;
-            color: #fff;
-            cursor: pointer;
-        }}
-
-        input[type="submit"]:hover {{
-            background-color: #45a049;
-        }}
-    </style>
-</head>
-<body>
-    <form action="{url_to_redirect_to}" method="post">
-        <h2>LiteLLM Login</h2>
-
-        <p>By default Username is "admin" and Password is your set LiteLLM Proxy `MASTER_KEY`</p>
-        <p>If you need to set UI credentials / SSO docs here: <a href="https://docs.litellm.ai/docs/proxy/ui" target="_blank">https://docs.litellm.ai/docs/proxy/ui</a></p>
-        <br>
-        <label for="username">Username:</label>
-        <input type="text" id="username" name="username" required>
-        <label for="password">Password:</label>
-        <input type="password" id="password" name="password" required>
-        <input type="submit" value="Submit">
-    </form>
-"""
-
-
-missing_keys_html_form = """
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <style>
-            body {
-                font-family: Arial, sans-serif;
-                background-color: #f4f4f9;
-                color: #333;
-                margin: 20px;
-                line-height: 1.6;
-            }
-            .container {
-                max-width: 600px;
-                margin: auto;
-                padding: 20px;
-                background: #fff;
-                border: 1px solid #ddd;
-                border-radius: 5px;
-                box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
-            }
-            h1 {
-                font-size: 24px;
-                margin-bottom: 20px;
-            }
-            pre {
-                background: #f8f8f8;
-                padding: 10px;
-                border: 1px solid #ccc;
-                border-radius: 4px;
-                overflow-x: auto;
-                font-size: 14px;
-            }
-            .env-var {
-                font-weight: normal;
-            }
-            .comment {
-                font-weight: normal;
-                color: #777;
-            }
-        </style>
-        <title>Environment Setup Instructions</title>
-    </head>
-    <body>
-        <div class="container">
-            <h1>Environment Setup Instructions</h1>
-            <p>Please add the following configurations to your environment variables:</p>
-            <pre>
-<span class="env-var">LITELLM_MASTER_KEY="sk-1234"</span> <span class="comment"># make this unique. must start with `sk-`.</span>
-<span class="env-var">DATABASE_URL="postgres://..."</span> <span class="comment"># Need a postgres database? (Check out Supabase, Neon, etc)</span>
-
-<span class="comment">## OPTIONAL ##</span>
-<span class="env-var">PORT=4000</span> <span class="comment"># DO THIS FOR RENDER/RAILWAY</span>
-<span class="env-var">STORE_MODEL_IN_DB="True"</span> <span class="comment"># Allow storing models in db</span>
-            </pre>
-        </div>
-    </body>
-    </html>
-    """
-
-
 def _to_ns(dt):
     return int(dt.timestamp() * 1e9)
 
@@ -2888,6 +2716,11 @@ def get_error_message_str(e: Exception) -> str:
             error_message = e.detail
         elif isinstance(e.detail, dict):
             error_message = json.dumps(e.detail)
+        elif hasattr(e, "message"):
+            if isinstance(e.message, "str"):
+                error_message = e.message
+            elif isinstance(e.message, dict):
+                error_message = json.dumps(e.message)
         else:
             error_message = str(e)
     else:
