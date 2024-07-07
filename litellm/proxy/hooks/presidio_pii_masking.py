@@ -70,15 +70,16 @@ class _OPTIONAL_PresidioPIIMasking(CustomLogger):
         )  # type: ignore
         self.presidio_anonymizer_api_base: Optional[str] = litellm.get_secret(
             "PRESIDIO_ANONYMIZER_API_BASE", None
-        )
+        )  # type: ignore
 
         if self.presidio_analyzer_api_base is None:
             raise Exception("Missing `PRESIDIO_ANALYZER_API_BASE` from environment")
         if not self.presidio_analyzer_api_base.endswith("/"):
             self.presidio_analyzer_api_base += "/"
-        if not self.presidio_analyzer_api_base.startswith(
-            "http://"
-        ) or self.presidio_analyzer_api_base.startswith("https://"):
+        if not (
+            self.presidio_analyzer_api_base.startswith("http://")
+            or self.presidio_analyzer_api_base.startswith("https://")
+        ):
             # add http:// if unset, assume communicating over private network - e.g. render
             self.presidio_analyzer_api_base = (
                 "http://" + self.presidio_analyzer_api_base
@@ -88,9 +89,10 @@ class _OPTIONAL_PresidioPIIMasking(CustomLogger):
             raise Exception("Missing `PRESIDIO_ANONYMIZER_API_BASE` from environment")
         if not self.presidio_anonymizer_api_base.endswith("/"):
             self.presidio_anonymizer_api_base += "/"
-        if not self.presidio_anonymizer_api_base.startswith(
-            "http://"
-        ) or self.presidio_anonymizer_api_base.startswith("https://"):
+        if not (
+            self.presidio_anonymizer_api_base.startswith("http://")
+            or self.presidio_anonymizer_api_base.startswith("https://")
+        ):
             # add http:// if unset, assume communicating over private network - e.g. render
             self.presidio_anonymizer_api_base = (
                 "http://" + self.presidio_anonymizer_api_base

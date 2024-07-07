@@ -32,6 +32,12 @@ class LangFuseLogger:
         self.langfuse_host = langfuse_host or os.getenv(
             "LANGFUSE_HOST", "https://cloud.langfuse.com"
         )
+        if not (
+            self.langfuse_host.startswith("http://")
+            or self.langfuse_host.startswith("https://")
+        ):
+            # add http:// if unset, assume communicating over private network - e.g. render
+            self.langfuse_host = "http://" + self.langfuse_host
         self.langfuse_release = os.getenv("LANGFUSE_RELEASE")
         self.langfuse_debug = os.getenv("LANGFUSE_DEBUG")
 
