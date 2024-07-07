@@ -46,10 +46,6 @@ from litellm._logging import verbose_router_logger
 from litellm.caching import DualCache, InMemoryCache, RedisCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.azure import get_azure_ad_token_from_oidc
-from litellm.llms.custom_httpx.azure_dall_e_2 import (
-    AsyncCustomHTTPTransport,
-    CustomHTTPTransport,
-)
 from litellm.router_strategy.least_busy import LeastBusyLoggingHandler
 from litellm.router_strategy.lowest_cost import LowestCostLoggingHandler
 from litellm.router_strategy.lowest_latency import LowestLatencyLoggingHandler
@@ -93,6 +89,7 @@ from litellm.utils import (
     ModelResponse,
     _is_region_eu,
     calculate_max_parallel_requests,
+    create_proxy_transport_and_mounts,
     get_utc_datetime,
 )
 

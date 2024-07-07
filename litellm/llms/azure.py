@@ -55,7 +55,6 @@ from ..types.llms.openai import (
     Thread,
 )
 from .base import BaseLLM
-from .custom_httpx.azure_dall_e_2 import AsyncCustomHTTPTransport, CustomHTTPTransport
 
 azure_ad_cache = DualCache()
 
@@ -1718,9 +1717,7 @@ class AzureChatCompletion(BaseLLM):
         input: Optional[list] = None,
         prompt: Optional[str] = None,
     ) -> dict:
-        client_session = litellm.client_session or httpx.Client(
-            transport=CustomHTTPTransport(),  # handle dall-e-2 calls
-        )
+        client_session = litellm.client_session or httpx.Client()
         if "gateway.ai.cloudflare.com" in api_base:
             ## build base url - assume api base includes resource name
             if not api_base.endswith("/"):
@@ -1793,9 +1790,10 @@ class AzureChatCompletion(BaseLLM):
         input: Optional[list] = None,
         prompt: Optional[str] = None,
     ) -> dict:
-        client_session = litellm.aclient_session or httpx.AsyncClient(
-            transport=AsyncCustomHTTPTransport(),  # handle dall-e-2 calls
-        )
+        client_session = (
+            litellm.aclient_session or httpx.AsyncClient()
+        )  # handle dall-e-2 calls
+
         if "gateway.ai.cloudflare.com" in api_base:
             ## build base url - assume api base includes resource name
             if not api_base.endswith("/"):

@@ -893,7 +893,7 @@ def completion(
         if (
             supports_system_message is not None
             and isinstance(supports_system_message, bool)
-            and supports_system_message == False
+            and supports_system_message is False
         ):
             messages = map_system_message_pt(messages=messages)
         model_api_key = get_api_key(
