@@ -630,7 +630,11 @@ class Logging:
                             model_call_details=self.model_call_details
                         ),
                         call_type=self.call_type,
-                        optional_params=self.optional_params,
+                        optional_params=(
+                            self.optional_params
+                            if hasattr(self, "optional_params")
+                            else {}
+                        ),
                     )
                 )
             if self.dynamic_success_callbacks is not None and isinstance(
