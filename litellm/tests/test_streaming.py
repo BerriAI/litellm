@@ -1081,7 +1081,6 @@ def test_vertex_ai_stream(provider):
             print(f"completion_response: {complete_response}")
             assert is_finished == True
 
-            assert False
         except litellm.RateLimitError as e:
             pass
         except Exception as e:

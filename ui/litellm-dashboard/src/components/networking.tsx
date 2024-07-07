@@ -12,11 +12,19 @@ export interface Model {
   model_info: Object | null;
 }
 
-export const modelCostMap = async () => {
+export const modelCostMap = async (
+  accessToken: string,
+) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/get/litellm_model_cost_map` : `/get/litellm_model_cost_map`;
     const response = await fetch(
-      url
+      url, {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+      }
     );
     const jsonData = await response.json();
     console.log(`received litellm model cost data: ${jsonData}`);
@@ -693,6 +701,9 @@ export const claimOnboardingToken = async (
     throw error;
   }
 };
+let ModelListerrorShown = false;
+let errorTimer: NodeJS.Timeout | null = null;
+
 export const modelInfoCall = async (
   accessToken: String,
   userID: String,
@@ -714,8 +725,21 @@ export const modelInfoCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      message.error(errorData, 10);
+      let errorData = await response.text();
+      errorData += `error shown=${ModelListerrorShown}`
+      if (!ModelListerrorShown) {
+        if (errorData.includes("No model list passed")) {
+          errorData = "No Models Exist. Click Add Model to get started.";
+        }
+        message.info(errorData, 10);
+        ModelListerrorShown = true;
+        
+        if (errorTimer) clearTimeout(errorTimer);
+        errorTimer = setTimeout(() => {
+          ModelListerrorShown = false;
+        }, 10000);
+      }
+
       throw new Error("Network response was not ok");
     }
 
@@ -750,7 +774,6 @@ export const modelHubCall = async (accessToken: String) => {
 
     if (!response.ok) {
       const errorData = await response.text();
-      message.error(errorData, 10);
       throw new Error("Network response was not ok");
     }
 
