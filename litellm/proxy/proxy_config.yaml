@@ -35,6 +35,7 @@ general_settings:
         LANGFUSE_SECRET_KEY: "os.environ/LANGFUSE_DEV_SK_KEY"
 
 litellm_settings:
+  callbacks: ["otel"]
   guardrails:
     - prompt_injection:
         callbacks: [lakera_prompt_injection, hide_secrets]

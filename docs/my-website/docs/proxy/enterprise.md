@@ -1120,11 +1120,13 @@ This is a beta feature, and subject to changes.
 USE_AWS_KMS="True"
 ```
 
-**Step 2.** Add `aws_kms/` to encrypted keys in env 
+**Step 2.** Add `LITELLM_SECRET_AWS_KMS_` to encrypted keys in env 
 
 ```env
-DATABASE_URL="aws_kms/AQICAH.."
+LITELLM_SECRET_AWS_KMS_DATABASE_URL="AQICAH.."
 ```
+
+LiteLLM will find this and use the decrypted `DATABASE_URL="postgres://.."` value in runtime.
 
 **Step 3.** Start proxy 
 
