@@ -289,7 +289,8 @@ jobs:
                 repo: context.repo.repo,
                 release_id: process.env.RELEASE_ID,
               });
-              return response.data.body;
+              const formattedBody = JSON.stringify(response.data.body).slice(1, -1);
+              return formattedBody;
             } catch (error) {
               core.setFailed(error.message);
             }
