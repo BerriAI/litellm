@@ -1,7 +1,9 @@
 import asyncio
+import os
 import traceback
 from typing import TYPE_CHECKING, Any
 
+import httpx
 import openai
 
 import litellm
@@ -169,39 +171,6 @@ def set_client(litellm_router_instance: LitellmRouter, model: dict):
             max_retries = litellm.get_secret(max_retries_env_name)
             litellm_params["max_retries"] = max_retries
 
-        # proxy support
-        import os
-
-        import httpx
-
-        # Check if the HTTP_PROXY and HTTPS_PROXY environment variables are set and use them accordingly.
-        http_proxy = os.getenv("HTTP_PROXY", None)
-        https_proxy = os.getenv("HTTPS_PROXY", None)
-        no_proxy = os.getenv("NO_PROXY", None)
-
-        # Create the proxies dictionary only if the environment variables are set.
-        sync_proxy_mounts = None
-        async_proxy_mounts = None
-        if http_proxy is not None and https_proxy is not None:
-            sync_proxy_mounts = {
-                "http://": httpx.HTTPTransport(proxy=httpx.Proxy(url=http_proxy)),
-                "https://": httpx.HTTPTransport(proxy=httpx.Proxy(url=https_proxy)),
-            }
-            async_proxy_mounts = {
-                "http://": httpx.AsyncHTTPTransport(proxy=httpx.Proxy(url=http_proxy)),
-                "https://": httpx.AsyncHTTPTransport(
-                    proxy=httpx.Proxy(url=https_proxy)
-                ),
-            }
-
-            # assume no_proxy is a list of comma separated urls
-            if no_proxy is not None and isinstance(no_proxy, str):
-                no_proxy_urls = no_proxy.split(",")
-
-                for url in no_proxy_urls:  # set no-proxy support for specific urls
-                    sync_proxy_mounts[url] = None  # type: ignore
-                    async_proxy_mounts[url] = None  # type: ignore
-
         organization = litellm_params.get("organization", None)
         if isinstance(organization, str) and organization.startswith("os.environ/"):
             organization_env_name = organization.replace("os.environ/", "")
@@ -241,13 +210,10 @@ def set_client(litellm_router_instance: LitellmRouter, model: dict):
                     timeout=timeout,
                     max_retries=max_retries,
                     http_client=httpx.AsyncClient(
-                        transport=AsyncCustomHTTPTransport(
-                            limits=httpx.Limits(
-                                max_connections=1000, max_keepalive_connections=100
-                            ),
-                            verify=litellm.ssl_verify,
+                        limits=httpx.Limits(
+                            max_connections=1000, max_keepalive_connections=100
                         ),
-                        mounts=async_proxy_mounts,
+                        verify=litellm.ssl_verify,
                     ),  # type: ignore
                 )
                 litellm_router_instance.cache.set_cache(
@@ -269,13 +235,10 @@ def set_client(litellm_router_instance: LitellmRouter, model: dict):
                         timeout=timeout,
                         max_retries=max_retries,
                         http_client=httpx.Client(
-                            transport=CustomHTTPTransport(
-                                limits=httpx.Limits(
-                                    max_connections=1000, max_keepalive_connections=100
-                                ),
-                                verify=litellm.ssl_verify,
+                            limits=httpx.Limits(
+                                max_connections=1000, max_keepalive_connections=100
                             ),
-                            mounts=sync_proxy_mounts,
+                            verify=litellm.ssl_verify,
                         ),  # type: ignore
                     )
                     litellm_router_instance.cache.set_cache(
@@ -294,13 +257,10 @@ def set_client(litellm_router_instance: LitellmRouter, model: dict):
                     timeout=stream_timeout,
                     max_retries=max_retries,
                     http_client=httpx.AsyncClient(
-                        transport=AsyncCustomHTTPTransport(
-                            limits=httpx.Limits(
-                                max_connections=1000, max_keepalive_connections=100
-                            ),
-                            verify=litellm.ssl_verify,
+                        limits=httpx.Limits(
+                            max_connections=1000, max_keepalive_connections=100
                         ),
-                        mounts=async_proxy_mounts,
+                        verify=litellm.ssl_verify,
                     ),  # type: ignore
                 )
                 litellm_router_instance.cache.set_cache(
@@ -322,13 +282,10 @@ def set_client(litellm_router_instance: LitellmRouter, model: dict):
                         timeout=stream_timeout,
                         max_retries=max_retries,
                         http_client=httpx.Client(
-                            transport=CustomHTTPTransport(
-                                limits=httpx.Limits(
-                                    max_connections=1000, max_keepalive_connections=100
-                                ),
-                                verify=litellm.ssl_verify,
+                            limits=httpx.Limits(
+                                max_connections=1000, max_keepalive_connections=100
                             ),
-                            mounts=sync_proxy_mounts,
+                            verify=litellm.ssl_verify,
                         ),  # type: ignore
                     )
                     litellm_router_instance.cache.set_cache(
@@ -365,13 +322,10 @@ def set_client(litellm_router_instance: LitellmRouter, model: dict):
                     timeout=timeout,
                     max_retries=max_retries,
                     http_client=httpx.AsyncClient(
-                        transport=AsyncCustomHTTPTransport(
-                            limits=httpx.Limits(
-                                max_connections=1000, max_keepalive_connections=100
-                            ),
-                            verify=litellm.ssl_verify,
+                        limits=httpx.Limits(
+                            max_connections=1000, max_keepalive_connections=100
                         ),
-                        mounts=async_proxy_mounts,
+                        verify=litellm.ssl_verify,
                     ),  # type: ignore
                 )
                 litellm_router_instance.cache.set_cache(
@@ -389,13 +343,10 @@ def set_client(litellm_router_instance: LitellmRouter, model: dict):
                         timeout=timeout,
                         max_retries=max_retries,
                         http_client=httpx.Client(
-                            transport=CustomHTTPTransport(
-                                verify=litellm.ssl_verify,
-                                limits=httpx.Limits(
-                                    max_connections=1000, max_keepalive_connections=100
-                                ),
+                            limits=httpx.Limits(
+                                max_connections=1000, max_keepalive_connections=100
                             ),
-                            mounts=sync_proxy_mounts,
+                            verify=litellm.ssl_verify,
                         ),  # type: ignore
                     )
                     litellm_router_instance.cache.set_cache(
@@ -412,13 +363,10 @@ def set_client(litellm_router_instance: LitellmRouter, model: dict):
                     timeout=stream_timeout,
                     max_retries=max_retries,
                     http_client=httpx.AsyncClient(
-                        transport=AsyncCustomHTTPTransport(
-                            limits=httpx.Limits(
-                                max_connections=1000, max_keepalive_connections=100
-                            ),
-                            verify=litellm.ssl_verify,
+                        limits=httpx.Limits(
+                            max_connections=1000, max_keepalive_connections=100
                         ),
-                        mounts=async_proxy_mounts,
+                        verify=litellm.ssl_verify,
                     ),
                 )
                 litellm_router_instance.cache.set_cache(
@@ -437,13 +385,10 @@ def set_client(litellm_router_instance: LitellmRouter, model: dict):
                         timeout=stream_timeout,
                         max_retries=max_retries,
                         http_client=httpx.Client(
-                            transport=CustomHTTPTransport(
-                                limits=httpx.Limits(
-                                    max_connections=1000, max_keepalive_connections=100
-                                ),
-                                verify=litellm.ssl_verify,
+                            limits=httpx.Limits(
+                                max_connections=1000, max_keepalive_connections=100
                             ),
-                            mounts=sync_proxy_mounts,
+                            verify=litellm.ssl_verify,
                         ),
                     )
                     litellm_router_instance.cache.set_cache(
@@ -469,13 +414,10 @@ def set_client(litellm_router_instance: LitellmRouter, model: dict):
                 max_retries=max_retries,
                 organization=organization,
                 http_client=httpx.AsyncClient(
-                    transport=AsyncCustomHTTPTransport(
-                        limits=httpx.Limits(
-                            max_connections=1000, max_keepalive_connections=100
-                        ),
-                        verify=litellm.ssl_verify,
+                    limits=httpx.Limits(
+                        max_connections=1000, max_keepalive_connections=100
                     ),
-                    mounts=async_proxy_mounts,
+                    verify=litellm.ssl_verify,
                 ),  # type: ignore
             )
             litellm_router_instance.cache.set_cache(
@@ -496,13 +438,10 @@ def set_client(litellm_router_instance: LitellmRouter, model: dict):
                     max_retries=max_retries,
                     organization=organization,
                     http_client=httpx.Client(
-                        transport=CustomHTTPTransport(
-                            limits=httpx.Limits(
-                                max_connections=1000, max_keepalive_connections=100
-                            ),
-                            verify=litellm.ssl_verify,
+                        limits=httpx.Limits(
+                            max_connections=1000, max_keepalive_connections=100
                         ),
-                        mounts=sync_proxy_mounts,
+                        verify=litellm.ssl_verify,
                     ),  # type: ignore
                 )
                 litellm_router_instance.cache.set_cache(
@@ -521,13 +460,10 @@ def set_client(litellm_router_instance: LitellmRouter, model: dict):
                 max_retries=max_retries,
                 organization=organization,
                 http_client=httpx.AsyncClient(
-                    transport=AsyncCustomHTTPTransport(
-                        limits=httpx.Limits(
-                            max_connections=1000, max_keepalive_connections=100
-                        ),
-                        verify=litellm.ssl_verify,
+                    limits=httpx.Limits(
+                        max_connections=1000, max_keepalive_connections=100
                     ),
-                    mounts=async_proxy_mounts,
+                    verify=litellm.ssl_verify,
                 ),  # type: ignore
             )
             litellm_router_instance.cache.set_cache(
@@ -549,13 +485,10 @@ def set_client(litellm_router_instance: LitellmRouter, model: dict):
                     max_retries=max_retries,
                     organization=organization,
                     http_client=httpx.Client(
-                        transport=CustomHTTPTransport(
-                            limits=httpx.Limits(
-                                max_connections=1000, max_keepalive_connections=100
-                            ),
-                            verify=litellm.ssl_verify,
+                        limits=httpx.Limits(
+                            max_connections=1000, max_keepalive_connections=100
                         ),
-                        mounts=sync_proxy_mounts,
+                        verify=litellm.ssl_verify,
                     ),  # type: ignore
                 )
                 litellm_router_instance.cache.set_cache(
