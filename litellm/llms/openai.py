@@ -445,6 +445,7 @@ class OpenAIConfig:
             "functions",
             "max_retries",
             "extra_headers",
+            "parallel_tool_calls",
         ]  # works across all models
 
         model_specific_params = []
