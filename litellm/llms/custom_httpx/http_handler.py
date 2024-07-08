@@ -7,6 +7,15 @@ import httpx
 
 import litellm
 
+try:
+    from litellm._version import version
+except:
+    version = "0.0.0"
+
+headers = {
+    "User-Agent": f"litellm/{version}",
+}
+
 # https://www.python-httpx.org/advanced/timeouts
 _DEFAULT_TIMEOUT = httpx.Timeout(timeout=5.0, connect=5.0)
 
@@ -44,6 +53,7 @@ class AsyncHTTPHandler:
             ),
             verify=ssl_verify,
             cert=cert,
+            headers=headers,
         )
 
     async def close(self):
@@ -159,6 +169,7 @@ class HTTPHandler:
                 ),
                 verify=ssl_verify,
                 cert=cert,
+                headers=headers,
             )
         else:
             self.client = client
