@@ -1,4 +1,4 @@
-# Helicone Tutorial 
+# 🧠 Helicone - OSS LLM Observability Platform
 
 :::tip
 
@@ -7,47 +7,52 @@ https://github.com/BerriAI/litellm
 
 :::
 
-
 [Helicone](https://helicone.ai/) is an open source observability platform that proxies your OpenAI traffic and provides you key insights into your spend, latency and usage.
 
 ## Use Helicone to log requests across all LLM Providers (OpenAI, Azure, Anthropic, Cohere, Replicate, PaLM)
-liteLLM provides `success_callbacks` and `failure_callbacks`, making it easy for you to send data to a particular provider depending on the status of your responses. 
 
-In this case, we want to log requests to Helicone when a request succeeds. 
+liteLLM provides `success_callbacks` and `failure_callbacks`, making it easy for you to send data to a particular provider depending on the status of your responses.
 
-### Approach 1: Use Callbacks 
-Use just 1 line of code, to instantly log your responses **across all providers** with helicone: 
+In this case, we want to log requests to Helicone when a request succeeds.
+
+### Approach 1: Use Callbacks
+
+Use just 1 line of code, to instantly log your responses **across all providers** with helicone:
+
 ```python
 litellm.success_callback=["helicone"]
 ```
 
 Complete code
+
 ```python
 from litellm import completion
 
 ## set env variables
-os.environ["HELICONE_API_KEY"] = "your-helicone-key" 
+os.environ["HELICONE_API_KEY"] = "your-helicone-key"
 os.environ["OPENAI_API_KEY"], os.environ["COHERE_API_KEY"] = "", ""
 
 # set callbacks
 litellm.success_callback=["helicone"]
 
 #openai call
-response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}]) 
+response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}])
 
 #cohere call
-response = completion(model="command-nightly", messages=[{"role": "user", "content": "Hi 👋 - i'm cohere"}]) 
+response = completion(model="command-nightly", messages=[{"role": "user", "content": "Hi 👋 - i'm cohere"}])
 ```
 
 ### Approach 2: [OpenAI + Azure only] Use Helicone as a proxy
+
 Helicone provides advanced functionality like caching, etc. Helicone currently supports this for Azure and OpenAI.
 
-If you want to use Helicone to proxy your OpenAI/Azure requests, then you can - 
+If you want to use Helicone to proxy your OpenAI/Azure requests, then you can -
 
-- Set helicone as your base url via: `litellm.api_url` 
-- Pass in helicone request headers via: `litellm.headers` 
+- Set helicone as your base url via: `litellm.api_url`
+- Pass in helicone request headers via: `litellm.headers`
 
 Complete Code
+
 ```python
 import litellm
 from litellm import completion
@@ -62,3 +67,10 @@ response = litellm.completion(
 
 print(response)
 ```
+
+### Group and visualize multi-step LLM interactions.
+
+Track request flows across multiple traces and gain insights into complex AI workflows by adding only 2 simple headers.
+
+- `Helicone-Session-Id` - The session id you want to track
+- `Helicone-Session-Path` - The path of the session
