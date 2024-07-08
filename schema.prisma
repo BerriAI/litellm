@@ -191,6 +191,7 @@ model LiteLLM_SpendLogs {
   request_tags        Json     @default("[]")
   team_id             String? 
   end_user            String?
+  requester_ip_address String?
 }
 
 // View spend, model, api_key per request
