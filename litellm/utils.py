@@ -2144,6 +2144,71 @@ def get_litellm_params(
     return litellm_params
 
 
+def get_optional_params_transcription(
+    model: str,
+    language: Optional[str] = None,
+    prompt: Optional[str] = None,
+    response_format: Optional[str] = None,
+    temperature: Optional[int] = None,
+    custom_llm_provider: Optional[str] = None,
+    drop_params: Optional[bool] = None,
+    **kwargs,
+):
+    # retrieve all parameters passed to the function
+    passed_params = locals()
+    custom_llm_provider = passed_params.pop("custom_llm_provider")
+    drop_params = passed_params.pop("drop_params")
+    special_params = passed_params.pop("kwargs")
+    for k, v in special_params.items():
+        passed_params[k] = v
+
+    default_params = {
+        "language": None,
+        "prompt": None,
+        "response_format": None,
+        "temperature": None,  # openai defaults this to 0
+    }
+
+    non_default_params = {
+        k: v
+        for k, v in passed_params.items()
+        if (k in default_params and v != default_params[k])
+    }
+    optional_params = {}
+
+    ## raise exception if non-default value passed for non-openai/azure embedding calls
+    def _check_valid_arg(supported_params):
+        if len(non_default_params.keys()) > 0:
+            keys = list(non_default_params.keys())
+            for k in keys:
+                if (
+                    drop_params is True or litellm.drop_params is True
+                ) and k not in supported_params:  # drop the unsupported non-default values
+                    non_default_params.pop(k, None)
+                elif k not in supported_params:
+                    raise UnsupportedParamsError(
+                        status_code=500,
+                        message=f"Setting user/encoding format is not supported by {custom_llm_provider}. To drop it from the call, set `litellm.drop_params = True`.",
+                    )
+            return non_default_params
+
+    if custom_llm_provider == "openai" or custom_llm_provider == "azure":
+        optional_params = non_default_params
+    elif custom_llm_provider == "groq":
+        supported_params = litellm.GroqConfig().get_supported_openai_params_stt()
+        _check_valid_arg(supported_params=supported_params)
+        optional_params = litellm.GroqConfig().map_openai_params_stt(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=drop_params if drop_params is not None else False,
+        )
+    for k in passed_params.keys():  # pass additional kwargs without modification
+        if k not in default_params.keys():
+            optional_params[k] = passed_params[k]
+    return optional_params
+
+
 def get_optional_params_image_gen(
     n: Optional[int] = None,
     quality: Optional[str] = None,
@@ -7559,7 +7624,7 @@ def exception_type(
                 else:
                     # if no status code then it is an APIConnectionError: https://github.com/openai/openai-python#handling-errors
                     raise APIConnectionError(
-                        message=f"{exception_provider} APIConnectionError - {message}",
+                        message=f"{exception_provider} APIConnectionError - {message}\n{traceback.format_exc()}",
                         llm_provider="azure",
                         model=model,
                         litellm_debug_info=extra_information,

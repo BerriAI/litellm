@@ -61,6 +61,7 @@ from litellm.utils import (
     get_llm_provider,
     get_optional_params_embeddings,
     get_optional_params_image_gen,
+    get_optional_params_transcription,
     get_secret,
     mock_completion_streaming_obj,
     read_config_args,
@@ -4279,7 +4280,7 @@ def image_generation(
 
 
 @client
-async def atranscription(*args, **kwargs):
+async def atranscription(*args, **kwargs) -> TranscriptionResponse:
     """
     Calls openai + azure whisper endpoints.
 
@@ -4304,9 +4305,9 @@ async def atranscription(*args, **kwargs):
 
         # Await normally
         init_response = await loop.run_in_executor(None, func_with_context)
-        if isinstance(init_response, dict) or isinstance(
-            init_response, TranscriptionResponse
-        ):  ## CACHING SCENARIO
+        if isinstance(init_response, dict):
+            response = TranscriptionResponse(**init_response)
+        elif isinstance(init_response, TranscriptionResponse):  ## CACHING SCENARIO
             response = init_response
         elif asyncio.iscoroutine(init_response):
             response = await init_response
@@ -4346,7 +4347,7 @@ def transcription(
     litellm_logging_obj: Optional[LiteLLMLoggingObj] = None,
     custom_llm_provider=None,
     **kwargs,
-):
+) -> TranscriptionResponse:
     """
     Calls openai + azure whisper endpoints.
 
@@ -4358,6 +4359,7 @@ def transcription(
     proxy_server_request = kwargs.get("proxy_server_request", None)
     model_info = kwargs.get("model_info", None)
     metadata = kwargs.get("metadata", {})
+    drop_params = kwargs.get("drop_params", None)
     client: Optional[
         Union[
             openai.AsyncOpenAI,
@@ -4379,12 +4381,22 @@ def transcription(
 
     if dynamic_api_key is not None:
         api_key = dynamic_api_key
-    optional_params = {
-        "language": language,
-        "prompt": prompt,
-        "response_format": response_format,
-        "temperature": None,  # openai defaults this to 0
-    }
+
+    optional_params = get_optional_params_transcription(
+        model=model,
+        language=language,
+        prompt=prompt,
+        response_format=response_format,
+        temperature=temperature,
+        custom_llm_provider=custom_llm_provider,
+        drop_params=drop_params,
+    )
+    # optional_params = {
+    #     "language": language,
+    #     "prompt": prompt,
+    #     "response_format": response_format,
+    #     "temperature": None,  # openai defaults this to 0
+    # }
 
     if custom_llm_provider == "azure":
         # azure configs
