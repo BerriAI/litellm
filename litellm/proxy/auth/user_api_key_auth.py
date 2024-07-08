@@ -1129,12 +1129,15 @@ async def user_api_key_auth(
 
         if isinstance(e, litellm.BudgetExceededError):
             raise ProxyException(
-                message=e.message, type="auth_error", param=None, code=400
+                message=e.message,
+                type=ProxyErrorTypes.budget_exceeded,
+                param=None,
+                code=400,
             )
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"Authentication Error({str(e)})"),
-                type="auth_error",
+                type=ProxyErrorTypes.auth_error,
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_401_UNAUTHORIZED),
             )
@@ -1142,7 +1145,7 @@ async def user_api_key_auth(
             raise e
         raise ProxyException(
             message="Authentication Error, " + str(e),
-            type="auth_error",
+            type=ProxyErrorTypes.auth_error,
             param=getattr(e, "param", "None"),
             code=status.HTTP_401_UNAUTHORIZED,
         )
