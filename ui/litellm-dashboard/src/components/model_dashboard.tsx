@@ -1699,7 +1699,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                     className="mb-0"
                   >
                     <TextInput
-                      placeholder={getPlaceholder(selectedProvider.toString())}
+                      
                     />
                   </Form.Item>
                   <Row>
@@ -1718,7 +1718,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                     className="mb-0"
                   >
                     {selectedProvider === Providers.Azure ? (
-                      <TextInput placeholder="Enter model name" />
+                      <TextInput placeholder={getPlaceholder(selectedProvider.toString())} />
                     ) : providerModels.length > 0 ? (
                       <MultiSelect value={providerModels}>
                         {providerModels.map((model, index) => (
@@ -1728,7 +1728,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                         ))}
                       </MultiSelect>
                     ) : (
-                      <TextInput placeholder="gpt-3.5-turbo-0125" />
+                      <TextInput placeholder={getPlaceholder(selectedProvider.toString())} />
                     )}
                   </Form.Item>
                   <Row>
