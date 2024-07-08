@@ -10,7 +10,13 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._types import CallInfo, ProxyException, UserAPIKeyAuth, WebhookEvent
+from litellm.proxy._types import (
+    CallInfo,
+    ProxyErrorTypes,
+    ProxyException,
+    UserAPIKeyAuth,
+    WebhookEvent,
+)
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.health_check import perform_health_check
 
@@ -239,7 +245,7 @@ async def health_services_endpoint(
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"Authentication Error({str(e)})"),
-                type="auth_error",
+                type=ProxyErrorTypes.auth_error,
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
             )
@@ -247,7 +253,7 @@ async def health_services_endpoint(
             raise e
         raise ProxyException(
             message="Authentication Error, " + str(e),
-            type="auth_error",
+            type=ProxyErrorTypes.auth_error,
             param=getattr(e, "param", "None"),
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
