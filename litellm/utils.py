@@ -2393,6 +2393,7 @@ def get_optional_params(
     top_logprobs=None,
     extra_headers=None,
     api_version=None,
+    parallel_tool_calls=None,
     drop_params=None,
     additional_drop_params=None,
     **kwargs,
@@ -2470,6 +2471,7 @@ def get_optional_params(
         "top_logprobs": None,
         "extra_headers": None,
         "api_version": None,
+        "parallel_tool_calls": None,
         "drop_params": None,
         "additional_drop_params": None,
     }

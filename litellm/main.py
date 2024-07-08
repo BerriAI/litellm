@@ -108,7 +108,6 @@ from .llms.databricks import DatabricksChatCompletion
 from .llms.huggingface_restapi import Huggingface
 from .llms.openai import OpenAIChatCompletion, OpenAITextCompletion
 from .llms.predibase import PredibaseChatCompletion
-from .llms.watsonx import IBMWatsonXAI
 from .llms.prompt_templates.factory import (
     custom_prompt,
     function_call_prompt,
@@ -119,6 +118,7 @@ from .llms.prompt_templates.factory import (
 from .llms.text_completion_codestral import CodestralTextCompletion
 from .llms.triton import TritonChatCompletion
 from .llms.vertex_httpx import VertexLLM
+from .llms.watsonx import IBMWatsonXAI
 from .types.llms.openai import HttpxBinaryResponseContent
 from .types.utils import ChatCompletionMessageToolCall
 
@@ -593,6 +593,7 @@ def completion(
     tool_choice: Optional[Union[str, dict]] = None,
     logprobs: Optional[bool] = None,
     top_logprobs: Optional[int] = None,
+    parallel_tool_calls: Optional[bool] = None,
     deployment_id=None,
     extra_headers: Optional[dict] = None,
     # soon to be deprecated params by OpenAI
@@ -722,6 +723,7 @@ def completion(
         "tools",
         "tool_choice",
         "max_retries",
+        "parallel_tool_calls",
         "logprobs",
         "top_logprobs",
         "extra_headers",
@@ -932,6 +934,7 @@ def completion(
             top_logprobs=top_logprobs,
             extra_headers=extra_headers,
             api_version=api_version,
+            parallel_tool_calls=parallel_tool_calls,
             **non_default_params,
         )
 
