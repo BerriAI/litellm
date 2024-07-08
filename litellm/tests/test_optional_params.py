@@ -269,7 +269,7 @@ def test_dynamic_drop_params(drop_params):
     """
     Make a call to cohere w/ drop params = True vs. false.
     """
-    if drop_params == True:
+    if drop_params is True:
         optional_params = litellm.utils.get_optional_params(
             model="command-r",
             custom_llm_provider="cohere",
@@ -304,6 +304,52 @@ def test_dynamic_drop_params_e2e():
         mock_response.assert_called_once()
         print(mock_response.call_args.kwargs["data"])
         assert "response_format" not in mock_response.call_args.kwargs["data"]
+
+
+@pytest.mark.parametrize(
+    "model, provider, should_drop",
+    [("command-r", "cohere", True), ("gpt-3.5-turbo", "openai", False)],
+)
+def test_drop_params_parallel_tool_calls(model, provider, should_drop):
+    """
+    https://github.com/BerriAI/litellm/issues/4584
+    """
+    response = litellm.utils.get_optional_params(
+        model=model,
+        custom_llm_provider=provider,
+        response_format="json",
+        parallel_tool_calls=True,
+        drop_params=True,
+    )
+
+    print(response)
+
+    if should_drop:
+        assert "response_format" not in response
+        assert "parallel_tool_calls" not in response
+    else:
+        assert "response_format" in response
+        assert "parallel_tool_calls" in response
+
+
+def test_dynamic_drop_params_parallel_tool_calls():
+    """
+    https://github.com/BerriAI/litellm/issues/4584
+    """
+    with patch("requests.post", new=MagicMock()) as mock_response:
+        try:
+            response = litellm.completion(
+                model="command-r",
+                messages=[{"role": "user", "content": "Hey, how's it going?"}],
+                parallel_tool_calls=True,
+                drop_params=True,
+            )
+        except Exception as e:
+            pass
+
+        mock_response.assert_called_once()
+        print(mock_response.call_args.kwargs["data"])
+        assert "parallel_tool_calls" not in mock_response.call_args.kwargs["data"]
 
 
 @pytest.mark.parametrize("drop_params", [True, False, None])
