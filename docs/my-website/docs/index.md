@@ -318,7 +318,7 @@ os.environ["LUNARY_PUBLIC_KEY"] = "your-lunary-public-key"
 os.environ["OPENAI_API_KEY"]
 
 # set callbacks
-litellm.success_callback = ["lunary", "langfuse"] # log input/output to lunary, langfuse, supabase
+litellm.success_callback = ["lunary", "langfuse", "helicone"] # log input/output to lunary, langfuse, supabase, helicone
 
 #openai call
 response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}])
