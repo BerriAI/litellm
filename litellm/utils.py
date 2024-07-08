@@ -3477,8 +3477,16 @@ def get_optional_params(
             model=model, custom_llm_provider="azure"
         )
         _check_valid_arg(supported_params=supported_params)
+        verbose_logger.debug(
+            "Azure optional params - api_version: api_version={}, litellm.api_version={}, os.environ['AZURE_API_VERSION']={}".format(
+                api_version, litellm.api_version, get_secret("AZURE_API_VERSION")
+            )
+        )
         api_version = (
-            api_version or litellm.api_version or get_secret("AZURE_API_VERSION")
+            api_version
+            or litellm.api_version
+            or get_secret("AZURE_API_VERSION")
+            or litellm.AZURE_DEFAULT_API_VERSION
         )
         optional_params = litellm.AzureOpenAIConfig().map_openai_params(
             non_default_params=non_default_params,
