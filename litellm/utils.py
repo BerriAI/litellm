@@ -2144,6 +2144,33 @@ def get_litellm_params(
     return litellm_params
 
 
+def _should_drop_param(k, additional_drop_params) -> bool:
+    if (
+        additional_drop_params is not None
+        and isinstance(additional_drop_params, list)
+        and k in additional_drop_params
+    ):
+        return True  # allow user to drop specific params for a model - e.g. vllm - logit bias
+
+    return False
+
+
+def _get_non_default_params(
+    passed_params: dict, default_params: dict, additional_drop_params: Optional[bool]
+) -> dict:
+    non_default_params = {}
+    for k, v in passed_params.items():
+        if (
+            k in default_params
+            and v != default_params[k]
+            and _should_drop_param(k=k, additional_drop_params=additional_drop_params)
+            is False
+        ):
+            non_default_params[k] = v
+
+    return non_default_params
+
+
 def get_optional_params_transcription(
     model: str,
     language: Optional[str] = None,
@@ -2217,11 +2244,13 @@ def get_optional_params_image_gen(
     style: Optional[str] = None,
     user: Optional[str] = None,
     custom_llm_provider: Optional[str] = None,
+    additional_drop_params: Optional[bool] = None,
     **kwargs,
 ):
     # retrieve all parameters passed to the function
     passed_params = locals()
     custom_llm_provider = passed_params.pop("custom_llm_provider")
+    additional_drop_params = passed_params.pop("additional_drop_params", None)
     special_params = passed_params.pop("kwargs")
     for k, v in special_params.items():
         passed_params[k] = v
@@ -2235,11 +2264,11 @@ def get_optional_params_image_gen(
         "user": None,
     }
 
-    non_default_params = {
-        k: v
-        for k, v in passed_params.items()
-        if (k in default_params and v != default_params[k])
-    }
+    non_default_params = _get_non_default_params(
+        passed_params=passed_params,
+        default_params=default_params,
+        additional_drop_params=additional_drop_params,
+    )
     optional_params = {}
 
     ## raise exception if non-default value passed for non-openai/azure embedding calls
@@ -2293,6 +2322,7 @@ def get_optional_params_embeddings(
     encoding_format=None,
     dimensions=None,
     custom_llm_provider="",
+    additional_drop_params: Optional[bool] = None,
     **kwargs,
 ):
     # retrieve all parameters passed to the function
@@ -2301,6 +2331,8 @@ def get_optional_params_embeddings(
     special_params = passed_params.pop("kwargs")
     for k, v in special_params.items():
         passed_params[k] = v
+
+    additional_drop_params = passed_params.pop("additional_drop_params", None)
 
     default_params = {"user": None, "encoding_format": None, "dimensions": None}
 
@@ -2317,11 +2349,11 @@ def get_optional_params_embeddings(
                 message=f"{custom_llm_provider} does not support parameters: {unsupported_params}, for model={model}. To drop these, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n",
             )
 
-    non_default_params = {
-        k: v
-        for k, v in passed_params.items()
-        if (k in default_params and v != default_params[k])
-    }
+    non_default_params = _get_non_default_params(
+        passed_params=passed_params,
+        default_params=default_params,
+        additional_drop_params=additional_drop_params,
+    )
 
     ## raise exception if non-default value passed for non-openai/azure embedding calls
     if custom_llm_provider == "openai":
@@ -2540,16 +2572,6 @@ def get_optional_params(
         "drop_params": None,
         "additional_drop_params": None,
     }
-
-    def _should_drop_param(k, additional_drop_params) -> bool:
-        if (
-            additional_drop_params is not None
-            and isinstance(additional_drop_params, list)
-            and k in additional_drop_params
-        ):
-            return True  # allow user to drop specific params for a model - e.g. vllm - logit bias
-
-        return False
 
     # filter out those parameters that were passed with non-default values
     non_default_params = {
