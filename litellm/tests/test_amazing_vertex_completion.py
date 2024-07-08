@@ -593,6 +593,43 @@ async def test_gemini_pro_vision(provider, sync_mode):
 # test_gemini_pro_vision()
 
 
+def test_completion_function_plus_pdf():
+    litellm.set_verbose = True
+    load_vertex_ai_credentials()
+    try:
+        import base64
+
+        import requests
+
+        # URL of the file
+        url = "https://storage.googleapis.com/cloud-samples-data/generative-ai/pdf/2403.05530.pdf"
+
+        # Download the file
+        response = requests.get(url)
+        file_data = response.content
+
+        encoded_file = base64.b64encode(file_data).decode("utf-8")
+
+        image_content = [
+            {"type": "text", "text": "What's this file about?"},
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:application/pdf;base64,{encoded_file}"},
+            },
+        ]
+        image_message = {"role": "user", "content": image_content}
+
+        response = completion(
+            model="vertex_ai_beta/gemini-1.5-flash-preview-0514",
+            messages=[image_message],
+            stream=False,
+        )
+
+        print(response)
+    except litellm.InternalServerError as e:
+        pytest.fail("Got={}".format(str(e)))
+
+
 def encode_image(image_path):
     import base64
 
@@ -1428,123 +1465,6 @@ def test_tool_name_conversion():
         translated_messages[-1]["parts"][0]["function_response"]["name"]
         == "get_weather"
     )
-
-
-# Extra gemini Vision tests for completion + stream, async, async + stream
-# if we run into issues with gemini, we will also add these to our ci/cd pipeline
-# def test_gemini_pro_vision_stream():
-#     try:
-#         litellm.set_verbose = False
-#         litellm.num_retries=0
-#         print("streaming response from gemini-pro-vision")
-#         resp = litellm.completion(
-#             model = "vertex_ai/gemini-pro-vision",
-#             messages=[
-#                 {
-#                     "role": "user",
-#                     "content": [
-#                                     {
-#                                         "type": "text",
-#                                         "text": "Whats in this image?"
-#                                     },
-#                                     {
-#                                         "type": "image_url",
-#                                         "image_url": {
-#                                         "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg"
-#                                         }
-#                                     }
-#                                 ]
-#                 }
-#             ],
-#             stream=True
-#         )
-#         print(resp)
-#         for chunk in resp:
-#             print(chunk)
-#     except Exception as e:
-#         import traceback
-#         traceback.print_exc()
-#         raise e
-# test_gemini_pro_vision_stream()
-
-
-def test_gemini_pro_vision_async():
-    try:
-        litellm.set_verbose = True
-        litellm.num_retries = 0
-
-        async def test():
-            load_vertex_ai_credentials()
-            resp = await litellm.acompletion(
-                model="vertex_ai/gemini-pro-vision",
-                messages=[
-                    {"role": "system", "content": ""},
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": "Whats in this image?"},
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg"
-                                },
-                            },
-                        ],
-                    },
-                ],
-            )
-            print("async response gemini pro vision")
-            print(resp)
-
-        asyncio.run(test())
-    except litellm.RateLimitError:
-        pass
-    except Exception as e:
-        import traceback
-
-        traceback.print_exc()
-        raise e
-
-
-# test_gemini_pro_vision_async()
-
-
-# def test_gemini_pro_vision_async_stream():
-#     try:
-#         litellm.set_verbose = True
-#         litellm.num_retries=0
-#         async def test():
-#             resp = await litellm.acompletion(
-#                 model = "vertex_ai/gemini-pro-vision",
-#                 messages=[
-#                     {
-#                         "role": "user",
-#                         "content": [
-#                                         {
-#                                             "type": "text",
-#                                             "text": "Whats in this image?"
-#                                         },
-#                                         {
-#                                             "type": "image_url",
-#                                             "image_url": {
-#                                             "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg"
-#                                             }
-#                                         }
-#                                     ]
-#                     }
-#                 ],
-#                 stream=True
-#             )
-#             print("async response gemini pro vision")
-#             print(resp)
-#             for chunk in resp:
-#                 print(chunk)
-#         asyncio.run(test())
-#     except Exception as e:
-#         import traceback
-#         traceback.print_exc()
-#         raise e
-# test_gemini_pro_vision_async()
 
 
 def test_prompt_factory():

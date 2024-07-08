@@ -849,45 +849,6 @@ def test_completion_function_plus_image(model):
 
 
 @pytest.mark.parametrize(
-    "model", ["gemini/gemini-1.5-pro"]  # "claude-3-sonnet-20240229",
-)
-def test_completion_function_plus_pdf(model):
-    litellm.set_verbose = True
-    try:
-        import base64
-
-        import requests
-
-        # URL of the file
-        url = "https://storage.googleapis.com/cloud-samples-data/generative-ai/pdf/2403.05530.pdf"
-
-        # Download the file
-        response = requests.get(url)
-        file_data = response.content
-
-        encoded_file = base64.b64encode(file_data).decode("utf-8")
-
-        image_content = [
-            {"type": "text", "text": "What's this file about?"},
-            {
-                "type": "image_url",
-                "image_url": {"url": f"data:application/pdf;base64,{encoded_file}"},
-            },
-        ]
-        image_message = {"role": "user", "content": image_content}
-
-        response = completion(
-            model=model,
-            messages=[image_message],
-            stream=False,
-        )
-
-        print(response)
-    except litellm.InternalServerError:
-        pass
-
-
-@pytest.mark.parametrize(
     "provider",
     ["azure", "azure_ai"],
 )
