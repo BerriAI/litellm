@@ -136,6 +136,19 @@ async def user_api_key_auth(
             enable_jwt_auth: true
         ```
         """
+
+        ### FILTER IP ADDRESS ###
+
+        is_valid_ip = _check_valid_ip(
+            allowed_ips=general_settings.get("allowed_ips", None), request=request
+        )
+
+        if not is_valid_ip:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access forbidden: IP address not allowed.",
+            )
+
         route: str = request.url.path
 
         if (
@@ -1208,3 +1221,22 @@ def _get_user_role(user_id_information: Optional[list]):
 
     _user = user_id_information[0]
     return _user.get("user_role")
+
+
+def _check_valid_ip(allowed_ips: Optional[List[str]], request: Request) -> bool:
+    """
+    Returns if ip is allowed or not
+    """
+    if allowed_ips is None:  # if not set, assume true
+        return True
+
+    if request.client is not None:
+        client_ip = request.client.host
+    else:
+        client_ip = None
+
+    # Check if IP address is allowed
+    if client_ip not in allowed_ips:
+        return False
+
+    return True
