@@ -9,7 +9,7 @@ from litellm._logging import verbose_logger
 
 class HeliconeLogger:
     # Class variables or attributes
-    helicone_model_list = ["gpt", "claude", "command-r", "command-r-plus", "command-light", "command-medium", "command-medium-beta", "command-xlarge-nightly", "command-nightly	"]
+    helicone_model_list = ["gpt", "claude", "command-r", "command-r-plus", "command-light", "command-medium", "command-medium-beta", "command-xlarge-nightly", "command-nightly"]
 
     def __init__(self):
         # Instance variables
@@ -61,18 +61,9 @@ class HeliconeLogger:
             litellm_params.get("proxy_server_request", {}).get("headers", {}) or {}
         )
 
-        for metadata_param_key in proxy_headers:
-            if metadata_param_key.startswith("helicone_"):
-                trace_param_key = metadata_param_key.replace("helicone_", "", 1)
-                if trace_param_key in metadata:
-                    verbose_logger.warning(
-                        f"Overwriting Helicone `{trace_param_key}` from request header"
-                    )
-                else:
-                    verbose_logger.debug(
-                        f"Found Helicone `{trace_param_key}` in request header"
-                    )
-                metadata[trace_param_key] = proxy_headers.get(metadata_param_key)
+        for header_key in proxy_headers:
+            if header_key.startswith("helicone_"):
+                metadata[header_key] = proxy_headers.get(header_key)
 
         return metadata
 
@@ -131,11 +122,13 @@ class HeliconeLogger:
             end_time_milliseconds = int(
                 (end_time.timestamp() - end_time_seconds) * 1000
             )
+            meta = {"Helicone-Auth": f"Bearer {self.key}"}
+            meta.update(metadata)
             data = {
                 "providerRequest": {
                     "url": self.provider_url,
                     "json": provider_request,
-                    "meta": {"Helicone-Auth": f"Bearer {self.key}"},
+                    "meta": meta,
                 },
                 "providerResponse": providerResponse,
                 "timing": {
