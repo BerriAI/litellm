@@ -1319,6 +1319,7 @@ class LiteLLM_SpendLogs(LiteLLMBase):
     cache_hit: Optional[str] = "False"
     cache_key: Optional[str] = None
     request_tags: Optional[Json] = None
+    requester_ip_address: Optional[str] = None
 
 
 class LiteLLM_ErrorLogs(LiteLLMBase):
@@ -1510,6 +1511,7 @@ class SpendLogsMetadata(TypedDict):
     spend_logs_metadata: Optional[
         dict
     ]  # special param to log k,v pairs to spendlogs for a call
+    requester_ip_address: Optional[str]
 
 
 class SpendLogsPayload(TypedDict):
@@ -1534,6 +1536,7 @@ class SpendLogsPayload(TypedDict):
     request_tags: str  # json str
     team_id: Optional[str]
     end_user: Optional[str]
+    requester_ip_address: Optional[str]
 
 
 class SpanAttributes(str, enum.Enum):

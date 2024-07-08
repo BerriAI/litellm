@@ -7,13 +7,11 @@ Interested in Enterprise? Schedule a meeting with us here 👉
 
 :::
 
-## [AWS Marketplace Listing](https://aws.amazon.com/marketplace/pp/prodview-gdm3gswgjhgjo?sr=0-1&ref_=beagle&applicationId=AWSMPContessa)
-
 Deploy managed LiteLLM Proxy within your VPC.
 
 Includes all enterprise features.
 
-[**View Listing**](https://aws.amazon.com/marketplace/pp/prodview-gdm3gswgjhgjo?sr=0-1&ref_=beagle&applicationId=AWSMPContessa)
+[**View AWS Marketplace Listing**](https://aws.amazon.com/marketplace/pp/prodview-gdm3gswgjhgjo?sr=0-1&ref_=beagle&applicationId=AWSMPContessa)
 
 [**Get early access**](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
 
@@ -26,6 +24,7 @@ This covers:
         - ✅ [JWT-Auth](../docs/proxy/token_auth.md)
         - ✅ [Control available public, private routes](./proxy/enterprise#control-available-public-private-routes)
         - ✅ [[BETA] AWS Key Manager v2 - Key Decryption](./proxy/enterprise#beta-aws-key-manager---key-decryption)
+        - ✅ Track Request IP Address
         - ✅ [Use LiteLLM keys/authentication on Pass Through Endpoints](./proxy/pass_through#✨-enterprise---use-litellm-keysauthentication-on-pass-through-endpoints)
         - ✅ [Enforce Required Params for LLM Requests (ex. Reject requests missing ["metadata"]["generation_name"])](./proxy/enterprise#enforce-required-params-for-llm-requests)
     - **Spend Tracking**

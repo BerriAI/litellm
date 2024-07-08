@@ -70,6 +70,7 @@ def test_spend_logs_payload():
                     "user_api_key_team_id": None,
                     "user_api_key_team_alias": None,
                     "user_api_key_metadata": {},
+                    "requester_ip_address": "127.0.0.1",
                     "spend_logs_metadata": {"hello": "world"},
                     "headers": {
                         "content-type": "application/json",
