@@ -1108,7 +1108,10 @@ class AzureChatCompletion(BaseLLM):
                     "api-key": api_key,
                 },
             )
-            operation_location_url = response.headers["operation-location"]
+            if "operation-location" in response.headers:
+                operation_location_url = response.headers["operation-location"]
+            else:
+                raise AzureOpenAIError(status_code=500, message=response.text)
             response = await async_handler.get(
                 url=operation_location_url,
                 headers={
@@ -1220,7 +1223,10 @@ class AzureChatCompletion(BaseLLM):
                     "api-key": api_key,
                 },
             )
-            operation_location_url = response.headers["operation-location"]
+            if "operation-location" in response.headers:
+                operation_location_url = response.headers["operation-location"]
+            else:
+                raise AzureOpenAIError(status_code=500, message=response.text)
             response = sync_handler.get(
                 url=operation_location_url,
                 headers={
