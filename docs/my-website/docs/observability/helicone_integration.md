@@ -20,9 +20,10 @@ Helicone can log requests across [various LLM providers](https://docs.helicone.a
 - OpenAI
 - Azure
 - Anthropic
+- Gemini
+- Groq
 - Cohere
 - Replicate
-- PaLM
 - And more
 
 ### Integration Methods
