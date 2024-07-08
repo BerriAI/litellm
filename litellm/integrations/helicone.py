@@ -108,8 +108,6 @@ class HeliconeLogger:
 
             # Code to be executed
             url = "https://api.hconeai.com/oai/v1/log"
-            if model.startswith("command"):
-                url = "https://api.hconeai.com/custom/v1/log"
             headers = {
                 "Authorization": f"Bearer {self.key}",
                 "Content-Type": "application/json",
