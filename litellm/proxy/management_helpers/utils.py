@@ -29,9 +29,17 @@ async def add_new_member(
     """
     ## ADD TEAM ID, to USER TABLE IF NEW ##
     if new_member.user_id is not None:
-        await prisma_client.db.litellm_usertable.update(
+        await prisma_client.db.litellm_usertable.upsert(
             where={"user_id": new_member.user_id},
-            data={"teams": {"push": [team_id]}},
+            data={
+                "update": {
+                    "teams": {"push": [team_id]}
+                },
+                "create": {
+                    "user_id": new_member.user_id, 
+                    "teams": [team_id]
+                }
+            },
         )
     elif new_member.user_email is not None:
         user_data = {"user_id": str(uuid.uuid4()), "user_email": new_member.user_email}
