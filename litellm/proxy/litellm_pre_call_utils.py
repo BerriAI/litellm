@@ -65,6 +65,8 @@ async def add_litellm_data_to_request(
         dict: The modified data dictionary.
 
     """
+    from litellm.proxy.proxy_server import premium_user
+
     query_params = dict(request.query_params)
     if "api-version" in query_params:
         data["api_version"] = query_params["api-version"]
@@ -155,6 +157,19 @@ async def add_litellm_data_to_request(
     ### END-USER SPECIFIC PARAMS ###
     if user_api_key_dict.allowed_model_region is not None:
         data["allowed_model_region"] = user_api_key_dict.allowed_model_region
+
+    ## [Enterprise Only] Add User-IP Address
+    requester_ip_address = ""
+    if premium_user is True:
+        # Only set the IP Address for Enterprise Users
+        if (
+            request is not None
+            and hasattr(request, "client")
+            and hasattr(request.client, "host")
+            and request.client is not None
+        ):
+            requester_ip_address = request.client.host
+    data[_metadata_variable_name]["requester_ip_address"] = requester_ip_address
 
     ### TEAM-SPECIFIC PARAMS ###
     if user_api_key_dict.team_id is not None:
