@@ -829,6 +829,7 @@ from .llms.openai import (
     MistralConfig,
     MistralEmbeddingConfig,
     DeepInfraConfig,
+    GroqConfig,
     AzureAIStudioConfig,
 )
 from .llms.nvidia_nim import NvidiaNimConfig

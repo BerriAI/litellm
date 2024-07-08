@@ -35,75 +35,44 @@ import litellm
 from litellm import Router
 
 
-def test_transcription():
-    transcript = litellm.transcription(
-        model="whisper-1",
-        file=audio_file,
-    )
+@pytest.mark.parametrize(
+    "model, api_key, api_base",
+    [
+        ("whisper-1", None, None),
+        # ("groq/whisper-large-v3", None, None),
+        (
+            "azure/azure-whisper",
+            os.getenv("AZURE_EUROPE_API_KEY"),
+            "https://my-endpoint-europe-berri-992.openai.azure.com/",
+        ),
+    ],
+)
+@pytest.mark.parametrize("response_format", ["json", "vtt"])
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_transcription(model, api_key, api_base, response_format, sync_mode):
+    if sync_mode:
+        transcript = litellm.transcription(
+            model=model,
+            file=audio_file,
+            api_key=api_key,
+            api_base=api_base,
+            response_format=response_format,
+            drop_params=True,
+        )
+    else:
+        transcript = await litellm.atranscription(
+            model=model,
+            file=audio_file,
+            api_key=api_key,
+            api_base=api_base,
+            response_format=response_format,
+            drop_params=True,
+        )
     print(f"transcript: {transcript.model_dump()}")
     print(f"transcript: {transcript._hidden_params}")
 
-
-# test_transcription()
-
-
-def test_transcription_groq():
-    litellm.set_verbose = True
-    transcript = litellm.transcription(
-        model="groq/whisper-large-v3",
-        file=audio_file,
-    )
-    print(f"response=: {transcript.model_dump()}")
-    print(f"hidden_params: {transcript._hidden_params}")
-
-
-# test_transcription()
-
-
-def test_transcription_azure():
-    litellm.set_verbose = True
-    transcript = litellm.transcription(
-        model="azure/azure-whisper",
-        file=audio_file,
-        api_base="https://my-endpoint-europe-berri-992.openai.azure.com/",
-        api_key=os.getenv("AZURE_EUROPE_API_KEY"),
-        api_version="2024-02-15-preview",
-    )
-
-    print(f"transcript: {transcript}")
     assert transcript.text is not None
-    assert isinstance(transcript.text, str)
-
-
-# test_transcription_azure()
-
-
-@pytest.mark.asyncio
-async def test_transcription_async_azure():
-    transcript = await litellm.atranscription(
-        model="azure/azure-whisper",
-        file=audio_file,
-        api_base="https://my-endpoint-europe-berri-992.openai.azure.com/",
-        api_key=os.getenv("AZURE_EUROPE_API_KEY"),
-        api_version="2024-02-15-preview",
-    )
-
-    assert transcript.text is not None
-    assert isinstance(transcript.text, str)
-
-
-# asyncio.run(test_transcription_async_azure())
-
-
-@pytest.mark.asyncio
-async def test_transcription_async_openai():
-    transcript = await litellm.atranscription(
-        model="whisper-1",
-        file=audio_file,
-    )
-
-    assert transcript.text is not None
-    assert isinstance(transcript.text, str)
 
 
 # This file includes the custom callbacks for LiteLLM Proxy
