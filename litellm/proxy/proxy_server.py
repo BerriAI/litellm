@@ -5989,7 +5989,7 @@ async def add_new_model(
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"Authentication Error({str(e)})"),
-                type="auth_error",
+                type=ProxyErrorTypes.auth_error,
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
@@ -5997,7 +5997,7 @@ async def add_new_model(
             raise e
         raise ProxyException(
             message="Authentication Error, " + str(e),
-            type="auth_error",
+            type=ProxyErrorTypes.auth_error,
             param=getattr(e, "param", "None"),
             code=status.HTTP_400_BAD_REQUEST,
         )
@@ -6105,7 +6105,7 @@ async def update_model(
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"Authentication Error({str(e)})"),
-                type="auth_error",
+                type=ProxyErrorTypes.auth_error,
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
@@ -6113,7 +6113,7 @@ async def update_model(
             raise e
         raise ProxyException(
             message="Authentication Error, " + str(e),
-            type="auth_error",
+            type=ProxyErrorTypes.auth_error,
             param=getattr(e, "param", "None"),
             code=status.HTTP_400_BAD_REQUEST,
         )
@@ -6903,7 +6903,7 @@ async def delete_model(model_info: ModelInfoDelete):
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"Authentication Error({str(e)})"),
-                type="auth_error",
+                type=ProxyErrorTypes.auth_error,
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
@@ -6911,7 +6911,7 @@ async def delete_model(model_info: ModelInfoDelete):
             raise e
         raise ProxyException(
             message="Authentication Error, " + str(e),
-            type="auth_error",
+            type=ProxyErrorTypes.auth_error,
             param=getattr(e, "param", "None"),
             code=status.HTTP_400_BAD_REQUEST,
         )
@@ -7141,7 +7141,7 @@ async def async_queue_request(
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"Authentication Error({str(e)})"),
-                type="auth_error",
+                type=ProxyErrorTypes.auth_error,
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
@@ -7149,7 +7149,7 @@ async def async_queue_request(
             raise e
         raise ProxyException(
             message="Authentication Error, " + str(e),
-            type="auth_error",
+            type=ProxyErrorTypes.auth_error,
             param=getattr(e, "param", "None"),
             code=status.HTTP_400_BAD_REQUEST,
         )
@@ -7180,7 +7180,7 @@ async def google_login(request: Request):
         if premium_user != True:
             raise ProxyException(
                 message="You must be a LiteLLM Enterprise user to use SSO. If you have a license please set `LITELLM_LICENSE` in your env. If you want to obtain a license meet with us here: https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat You are seeing this error message because You set one of `MICROSOFT_CLIENT_ID`, `GOOGLE_CLIENT_ID`, or `GENERIC_CLIENT_ID` in your env. Please unset this",
-                type="auth_error",
+                type=ProxyErrorTypes.auth_error,
                 param="premium_user",
                 code=status.HTTP_403_FORBIDDEN,
             )
@@ -7205,7 +7205,7 @@ async def google_login(request: Request):
         if google_client_secret is None:
             raise ProxyException(
                 message="GOOGLE_CLIENT_SECRET not set. Set it in .env file",
-                type="auth_error",
+                type=ProxyErrorTypes.auth_error,
                 param="GOOGLE_CLIENT_SECRET",
                 code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
@@ -7228,7 +7228,7 @@ async def google_login(request: Request):
         if microsoft_client_secret is None:
             raise ProxyException(
                 message="MICROSOFT_CLIENT_SECRET not set. Set it in .env file",
-                type="auth_error",
+                type=ProxyErrorTypes.auth_error,
                 param="MICROSOFT_CLIENT_SECRET",
                 code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
@@ -7254,28 +7254,28 @@ async def google_login(request: Request):
         if generic_client_secret is None:
             raise ProxyException(
                 message="GENERIC_CLIENT_SECRET not set. Set it in .env file",
-                type="auth_error",
+                type=ProxyErrorTypes.auth_error,
                 param="GENERIC_CLIENT_SECRET",
                 code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
         if generic_authorization_endpoint is None:
             raise ProxyException(
                 message="GENERIC_AUTHORIZATION_ENDPOINT not set. Set it in .env file",
-                type="auth_error",
+                type=ProxyErrorTypes.auth_error,
                 param="GENERIC_AUTHORIZATION_ENDPOINT",
                 code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
         if generic_token_endpoint is None:
             raise ProxyException(
                 message="GENERIC_TOKEN_ENDPOINT not set. Set it in .env file",
-                type="auth_error",
+                type=ProxyErrorTypes.auth_error,
                 param="GENERIC_TOKEN_ENDPOINT",
                 code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
         if generic_userinfo_endpoint is None:
             raise ProxyException(
                 message="GENERIC_USERINFO_ENDPOINT not set. Set it in .env file",
-                type="auth_error",
+                type=ProxyErrorTypes.auth_error,
                 param="GENERIC_USERINFO_ENDPOINT",
                 code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
@@ -7360,7 +7360,7 @@ async def login(request: Request):
     if master_key is None:
         raise ProxyException(
             message="Master Key not set for Proxy. Please set Master Key to use Admin UI. Set `LITELLM_MASTER_KEY` in .env or set general_settings:master_key in config.yaml.  https://docs.litellm.ai/docs/proxy/virtual_keys. If set, use `--detailed_debug` to debug issue.",
-            type="auth_error",
+            type=ProxyErrorTypes.auth_error,
             param="master_key",
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
@@ -7374,7 +7374,7 @@ async def login(request: Request):
     if ui_password is None:
         raise ProxyException(
             message="set Proxy master key to use UI. https://docs.litellm.ai/docs/proxy/virtual_keys. If set, use `--detailed_debug` to debug issue.",
-            type="auth_error",
+            type=ProxyErrorTypes.auth_error,
             param="UI_PASSWORD",
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
@@ -7433,7 +7433,7 @@ async def login(request: Request):
         else:
             raise ProxyException(
                 message="No Database connected. Set DATABASE_URL in .env. If set, use `--detailed_debug` to debug issue.",
-                type="auth_error",
+                type=ProxyErrorTypes.auth_error,
                 param="DATABASE_URL",
                 code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
@@ -7497,7 +7497,7 @@ async def login(request: Request):
             else:
                 raise ProxyException(
                     message="No Database connected. Set DATABASE_URL in .env. If set, use `--detailed_debug` to debug issue.",
-                    type="auth_error",
+                    type=ProxyErrorTypes.auth_error,
                     param="DATABASE_URL",
                     code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 )
@@ -7530,14 +7530,14 @@ async def login(request: Request):
         else:
             raise ProxyException(
                 message=f"Invalid credentials used to access UI. Passed in username: {username}, passed in password: {password}.\nNot valid credentials for {username}",
-                type="auth_error",
+                type=ProxyErrorTypes.auth_error,
                 param="invalid_credentials",
                 code=status.HTTP_401_UNAUTHORIZED,
             )
     else:
         raise ProxyException(
             message=f"Invalid credentials used to access UI. Passed in username: {username}, passed in password: {password}.\nCheck 'UI_USERNAME', 'UI_PASSWORD' in .env file",
-            type="auth_error",
+            type=ProxyErrorTypes.auth_error,
             param="invalid_credentials",
             code=status.HTTP_401_UNAUTHORIZED,
         )
@@ -7569,7 +7569,7 @@ async def onboarding(invite_link: str):
     if master_key is None:
         raise ProxyException(
             message="Master Key not set for Proxy. Please set Master Key to use Admin UI. Set `LITELLM_MASTER_KEY` in .env or set general_settings:master_key in config.yaml.  https://docs.litellm.ai/docs/proxy/virtual_keys. If set, use `--detailed_debug` to debug issue.",
-            type="auth_error",
+            type=ProxyErrorTypes.auth_error,
             param="master_key",
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
@@ -7784,7 +7784,7 @@ async def auth_callback(request: Request):
     if master_key is None:
         raise ProxyException(
             message="Master Key not set for Proxy. Please set Master Key to use Admin UI. Set `LITELLM_MASTER_KEY` in .env or set general_settings:master_key in config.yaml.  https://docs.litellm.ai/docs/proxy/virtual_keys. If set, use `--detailed_debug` to debug issue.",
-            type="auth_error",
+            type=ProxyErrorTypes.auth_error,
             param="master_key",
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
@@ -7800,7 +7800,7 @@ async def auth_callback(request: Request):
         if google_client_secret is None:
             raise ProxyException(
                 message="GOOGLE_CLIENT_SECRET not set. Set it in .env file",
-                type="auth_error",
+                type=ProxyErrorTypes.auth_error,
                 param="GOOGLE_CLIENT_SECRET",
                 code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
@@ -7818,14 +7818,14 @@ async def auth_callback(request: Request):
         if microsoft_client_secret is None:
             raise ProxyException(
                 message="MICROSOFT_CLIENT_SECRET not set. Set it in .env file",
-                type="auth_error",
+                type=ProxyErrorTypes.auth_error,
                 param="MICROSOFT_CLIENT_SECRET",
                 code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
         if microsoft_tenant is None:
             raise ProxyException(
                 message="MICROSOFT_TENANT not set. Set it in .env file",
-                type="auth_error",
+                type=ProxyErrorTypes.auth_error,
                 param="MICROSOFT_TENANT",
                 code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
@@ -7854,28 +7854,28 @@ async def auth_callback(request: Request):
         if generic_client_secret is None:
             raise ProxyException(
                 message="GENERIC_CLIENT_SECRET not set. Set it in .env file",
-                type="auth_error",
+                type=ProxyErrorTypes.auth_error,
                 param="GENERIC_CLIENT_SECRET",
                 code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
         if generic_authorization_endpoint is None:
             raise ProxyException(
                 message="GENERIC_AUTHORIZATION_ENDPOINT not set. Set it in .env file",
-                type="auth_error",
+                type=ProxyErrorTypes.auth_error,
                 param="GENERIC_AUTHORIZATION_ENDPOINT",
                 code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
         if generic_token_endpoint is None:
             raise ProxyException(
                 message="GENERIC_TOKEN_ENDPOINT not set. Set it in .env file",
-                type="auth_error",
+                type=ProxyErrorTypes.auth_error,
                 param="GENERIC_TOKEN_ENDPOINT",
                 code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
         if generic_userinfo_endpoint is None:
             raise ProxyException(
                 message="GENERIC_USERINFO_ENDPOINT not set. Set it in .env file",
-                type="auth_error",
+                type=ProxyErrorTypes.auth_error,
                 param="GENERIC_USERINFO_ENDPOINT",
                 code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
@@ -8446,7 +8446,7 @@ async def update_config(config_info: ConfigYAML):
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"Authentication Error({str(e)})"),
-                type="auth_error",
+                type=ProxyErrorTypes.auth_error,
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
@@ -8454,7 +8454,7 @@ async def update_config(config_info: ConfigYAML):
             raise e
         raise ProxyException(
             message="Authentication Error, " + str(e),
-            type="auth_error",
+            type=ProxyErrorTypes.auth_error,
             param=getattr(e, "param", "None"),
             code=status.HTTP_400_BAD_REQUEST,
         )
@@ -8916,7 +8916,7 @@ async def get_config():
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"Authentication Error({str(e)})"),
-                type="auth_error",
+                type=ProxyErrorTypes.auth_error,
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
@@ -8924,7 +8924,7 @@ async def get_config():
             raise e
         raise ProxyException(
             message="Authentication Error, " + str(e),
-            type="auth_error",
+            type=ProxyErrorTypes.auth_error,
             param=getattr(e, "param", "None"),
             code=status.HTTP_400_BAD_REQUEST,
         )
