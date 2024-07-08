@@ -1641,3 +1641,8 @@ class SpendCalculateRequest(LiteLLMBase):
     model: Optional[str] = None
     messages: Optional[List] = None
     completion_response: Optional[dict] = None
+
+
+class ProxyErrorTypes(str, enum.Enum):
+    budget_exceeded = "budget_exceeded"
+    auth_error = "auth_error"
