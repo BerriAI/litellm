@@ -202,6 +202,17 @@ class LiteLLMRoutes(enum.Enum):
         # files
         "/v1/files",
         "/files",
+        # assistants-related routes
+        "/assistants",
+        "/v1/assistants",
+        "/threads",
+        "/v1/threads",
+        "/threads/{thread_id}",
+        "/v1/threads/{thread_id}",
+        "/threads/{thread_id}/messages",
+        "/v1/threads/{thread_id}/messages",
+        "/threads/{thread_id}/runs",
+        "/v1/threads/{thread_id}/runs",
         # models
         "/models",
         "/v1/models",
