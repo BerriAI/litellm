@@ -704,22 +704,19 @@ def convert_to_anthropic_image_obj(openai_image_url: str) -> GenericImageParsing
     try:
         if openai_image_url.startswith("http"):
             openai_image_url = convert_url_to_base64(url=openai_image_url)
-        # Extract the base64 image data
-        base64_data = openai_image_url.split("data:image/")[1].split(";base64,")[1]
-
-        # Infer image format from the URL
-        image_format = openai_image_url.split("data:image/")[1].split(";base64,")[0]
+        # Extract the media type and base64 data
+        media_type, base64_data = openai_image_url.split("data:")[1].split(";base64,")
 
         return GenericImageParsingChunk(
             type="base64",
-            media_type=f"image/{image_format}",
+            media_type=media_type,
             data=base64_data,
         )
     except Exception as e:
         if "Error: Unable to fetch image from URL" in str(e):
             raise e
         raise Exception(
-            """Image url not in expected format. Example Expected input - "image_url": "data:image/jpeg;base64,{base64_image}". Supported formats - ['image/jpeg', 'image/png', 'image/gif', 'image/webp'] """
+            """Image url not in expected format. Example Expected input - "image_url": "data:image/jpeg;base64,{base64_image}". Supported formats - ['image/jpeg', 'image/png', 'image/gif', 'image/webp']."""
         )
 
 

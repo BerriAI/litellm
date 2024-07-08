@@ -15,6 +15,7 @@ from litellm.llms.prompt_templates.factory import (
     anthropic_messages_pt,
     anthropic_pt,
     claude_2_1_pt,
+    convert_to_anthropic_image_obj,
     convert_url_to_base64,
     llama_2_chat_pt,
     prompt_factory,
@@ -163,3 +164,16 @@ def test_convert_url_to_img():
     )
 
     assert "image/jpeg" in response_url
+
+
+@pytest.mark.parametrize(
+    "url, expected_media_type",
+    [
+        ("data:image/jpeg;base64,1234", "image/jpeg"),
+        ("data:application/pdf;base64,1234", "application/pdf"),
+    ],
+)
+def test_base64_image_input(url, expected_media_type):
+    response = convert_to_anthropic_image_obj(openai_image_url=url)
+
+    assert response["media_type"] == expected_media_type
