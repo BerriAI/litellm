@@ -429,7 +429,11 @@ model_list:
 curl -X POST 'http://0.0.0.0:4000/v1/embeddings' \
 -H 'Authorization: Bearer sk-54d77cd67b9febbb' \
 -H 'Content-Type: application/json' \
--D '{"input": ["Are you authorized to work in United States of America?"], "model": "cohere-embed", "input_type": "search_document}'
+-d '{
+  "model": "cohere-embed",
+  "input": ["Are you authorized to work in United States of America?"],
+  "input_type": "search_document" # 👈 PROVIDER-SPECIFIC PARAM
+}'
 ```
 </TabItem>
 </Tabs>
