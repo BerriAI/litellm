@@ -4263,6 +4263,7 @@ def image_generation(
                 model_response=model_response,
                 vertex_project=vertex_ai_project,
                 vertex_location=vertex_ai_location,
+                vertex_credentials=vertex_credentials,
                 aimg_generation=aimg_generation,
             )
 
