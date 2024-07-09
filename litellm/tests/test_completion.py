@@ -281,6 +281,7 @@ def test_completion_claude():
 # test_completion_claude()
 
 
+@pytest.mark.skip(reason="No empower api key")
 def test_completion_empower():
     litellm.set_verbose = True
     messages = [
