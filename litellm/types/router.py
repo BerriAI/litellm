@@ -2,14 +2,17 @@
 litellm.Router Types - includes RouterConfig, UpdateRouterConfig, ModelInfo etc
 """
 
-from typing import List, Optional, Union, Dict, Tuple, Literal, TypedDict
-import uuid
+import datetime
 import enum
+import uuid
+from typing import Dict, List, Literal, Optional, Tuple, TypedDict, Union
+
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
-import datetime
+
 from .completion import CompletionRequest
 from .embedding import EmbeddingRequest
+from .utils import ModelResponse
 
 
 class ModelConfig(BaseModel):
@@ -76,7 +79,9 @@ class ModelInfo(BaseModel):
     id: Optional[
         str
     ]  # Allow id to be optional on input, but it will always be present as a str in the model instance
-    db_model: bool = False  # used for proxy - to separate models which are stored in the db vs. config.
+    db_model: bool = (
+        False  # used for proxy - to separate models which are stored in the db vs. config.
+    )
     updated_at: Optional[datetime.datetime] = None
     updated_by: Optional[str] = None
 
@@ -281,12 +286,6 @@ class updateDeployment(BaseModel):
 
 
 class LiteLLMParamsTypedDict(TypedDict, total=False):
-    """
-    [TODO]
-    - allow additional params (not in list)
-    - set value to none if not set -> don't raise error if value not set
-    """
-
     model: str
     custom_llm_provider: Optional[str]
     tpm: Optional[int]
@@ -297,7 +296,9 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     timeout: Optional[Union[float, str, httpx.Timeout]]
     stream_timeout: Optional[Union[float, str]]
     max_retries: Optional[int]
-    organization: Optional[str]  # for openai orgs
+    organization: Optional[Union[List, str]]  # for openai orgs
+    ## DROP PARAMS ##
+    drop_params: Optional[bool]
     ## UNIFIED PROJECT/REGION ##
     region_name: Optional[str]
     ## VERTEX AI ##
@@ -314,11 +315,21 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     output_cost_per_token: Optional[float]
     input_cost_per_second: Optional[float]
     output_cost_per_second: Optional[float]
+    ## MOCK RESPONSES ##
+    mock_response: Optional[Union[str, ModelResponse, Exception]]
 
 
 class DeploymentTypedDict(TypedDict):
     model_name: str
     litellm_params: LiteLLMParamsTypedDict
+
+
+SPECIAL_MODEL_INFO_PARAMS = [
+    "input_cost_per_token",
+    "output_cost_per_token",
+    "input_cost_per_character",
+    "output_cost_per_character",
+]
 
 
 class Deployment(BaseModel):
@@ -339,6 +350,16 @@ class Deployment(BaseModel):
             model_info = ModelInfo()
         elif isinstance(model_info, dict):
             model_info = ModelInfo(**model_info)
+
+        for (
+            key
+        ) in (
+            SPECIAL_MODEL_INFO_PARAMS
+        ):  # ensures custom pricing info is consistently in 'model_info'
+            field = getattr(litellm_params, key, None)
+            if field is not None:
+                setattr(model_info, key, field)
+
         super().__init__(
             model_info=model_info,
             model_name=model_name,
@@ -377,6 +398,23 @@ class RouterErrors(enum.Enum):
 
     user_defined_ratelimit_error = "Deployment over user-defined ratelimit."
     no_deployments_available = "No deployments available for selected model"
+
+
+class AllowedFailsPolicy(BaseModel):
+    """
+    Use this to set a custom number of allowed fails/minute before cooling down a deployment
+    If `AuthenticationErrorAllowedFails = 1000`, then 1000 AuthenticationError will be allowed before cooling down a deployment
+
+    Mapping of Exception type to allowed_fails for each exception
+    https://docs.litellm.ai/docs/exception_mapping
+    """
+
+    BadRequestErrorAllowedFails: Optional[int] = None
+    AuthenticationErrorAllowedFails: Optional[int] = None
+    TimeoutErrorAllowedFails: Optional[int] = None
+    RateLimitErrorAllowedFails: Optional[int] = None
+    ContentPolicyViolationErrorAllowedFails: Optional[int] = None
+    InternalServerErrorAllowedFails: Optional[int] = None
 
 
 class RetryPolicy(BaseModel):
@@ -418,10 +456,75 @@ class ModelGroupInfo(BaseModel):
     max_output_tokens: Optional[float] = None
     input_cost_per_token: Optional[float] = None
     output_cost_per_token: Optional[float] = None
-    mode: Literal[
-        "chat", "embedding", "completion", "image_generation", "audio_transcription"
-    ]
+    mode: Optional[
+        Literal[
+            "chat", "embedding", "completion", "image_generation", "audio_transcription"
+        ]
+    ] = Field(default="chat")
+    tpm: Optional[int] = None
+    rpm: Optional[int] = None
     supports_parallel_function_calling: bool = Field(default=False)
     supports_vision: bool = Field(default=False)
     supports_function_calling: bool = Field(default=False)
-    supported_openai_params: List[str] = Field(default=[])
+    supported_openai_params: Optional[List[str]] = Field(default=[])
+
+
+class AssistantsTypedDict(TypedDict):
+    custom_llm_provider: Literal["azure", "openai"]
+    litellm_params: LiteLLMParamsTypedDict
+
+
+class CustomRoutingStrategyBase:
+    async def async_get_available_deployment(
+        self,
+        model: str,
+        messages: Optional[List[Dict[str, str]]] = None,
+        input: Optional[Union[str, List]] = None,
+        specific_deployment: Optional[bool] = False,
+        request_kwargs: Optional[Dict] = None,
+    ):
+        """
+        Asynchronously retrieves the available deployment based on the given parameters.
+
+        Args:
+            model (str): The name of the model.
+            messages (Optional[List[Dict[str, str]]], optional): The list of messages for a given request. Defaults to None.
+            input (Optional[Union[str, List]], optional): The input for a given embedding request. Defaults to None.
+            specific_deployment (Optional[bool], optional): Whether to retrieve a specific deployment. Defaults to False.
+            request_kwargs (Optional[Dict], optional): Additional request keyword arguments. Defaults to None.
+
+        Returns:
+            Returns an element from litellm.router.model_list
+
+        """
+        pass
+
+    def get_available_deployment(
+        self,
+        model: str,
+        messages: Optional[List[Dict[str, str]]] = None,
+        input: Optional[Union[str, List]] = None,
+        specific_deployment: Optional[bool] = False,
+        request_kwargs: Optional[Dict] = None,
+    ):
+        """
+        Synchronously retrieves the available deployment based on the given parameters.
+
+        Args:
+            model (str): The name of the model.
+            messages (Optional[List[Dict[str, str]]], optional): The list of messages for a given request. Defaults to None.
+            input (Optional[Union[str, List]], optional): The input for a given embedding request. Defaults to None.
+            specific_deployment (Optional[bool], optional): Whether to retrieve a specific deployment. Defaults to False.
+            request_kwargs (Optional[Dict], optional): Additional request keyword arguments. Defaults to None.
+
+        Returns:
+            Returns an element from litellm.router.model_list
+
+        """
+        pass
+
+
+class RouterGeneralSettings(BaseModel):
+    async_only_mode: bool = Field(
+        default=False
+    )  # this will only initialize async clients. Good for memory utils

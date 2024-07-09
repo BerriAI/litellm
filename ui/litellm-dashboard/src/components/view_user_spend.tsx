@@ -131,7 +131,7 @@ const ViewUserSpend: React.FC<ViewUserSpendProps> = ({ userID, userRole, accessT
             ${roundedSpend}
           </p>
         </div>
-        <div className="ml-auto">
+        {/* <div className="ml-auto">
           <Accordion>
             <AccordionHeader><Text>Team Models</Text></AccordionHeader>
             <AccordionBody className="absolute right-0 z-10 bg-white p-2 shadow-lg max-w-xs">
@@ -144,7 +144,7 @@ const ViewUserSpend: React.FC<ViewUserSpendProps> = ({ userID, userRole, accessT
               </List>
             </AccordionBody>
           </Accordion>
-        </div>
+        </div> */}
       </div>
     );
 }

@@ -29,8 +29,22 @@ import { Statistic } from "antd"
 import { modelAvailableCall }  from "./networking";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 
+interface ApiRefProps {
+  proxySettings: any;
+}
 
-const APIRef = ({}) => {
+
+const APIRef: React.FC<ApiRefProps> = ({
+  proxySettings,
+}) => {
+
+  let base_url = "http://localhost:4000";
+
+  if (proxySettings) {
+    if (proxySettings.PROXY_BASE_URL && proxySettings.PROXY_BASE_URL !== undefined) {
+      base_url = proxySettings.PROXY_BASE_URL;
+    }
+  }
     return (
         <>
          <Grid className="gap-2 p-8 h-[80vh] w-full mt-2">
@@ -51,7 +65,7 @@ const APIRef = ({}) => {
 import openai
 client = openai.OpenAI(
     api_key="your_api_key",
-    base_url="http://0.0.0.0:4000" # LiteLLM Proxy is OpenAI compatible, Read More: https://docs.litellm.ai/docs/proxy/user_keys
+    base_url="${base_url}" # LiteLLM Proxy is OpenAI compatible, Read More: https://docs.litellm.ai/docs/proxy/user_keys
 )
 
 response = client.chat.completions.create(
@@ -80,14 +94,14 @@ from llama_index import VectorStoreIndex, SimpleDirectoryReader, ServiceContext
 llm = AzureOpenAI(
     engine="azure-gpt-3.5",               # model_name on litellm proxy
     temperature=0.0,
-    azure_endpoint="http://0.0.0.0:4000", # litellm proxy endpoint
+    azure_endpoint="${base_url}", # litellm proxy endpoint
     api_key="sk-1234",                    # litellm proxy API Key
     api_version="2023-07-01-preview",
 )
 
 embed_model = AzureOpenAIEmbedding(
     deployment_name="azure-embedding-model",
-    azure_endpoint="http://0.0.0.0:4000",
+    azure_endpoint="${base_url}",
     api_key="sk-1234",
     api_version="2023-07-01-preview",
 )
@@ -116,7 +130,7 @@ from langchain.prompts.chat import (
 from langchain.schema import HumanMessage, SystemMessage
 
 chat = ChatOpenAI(
-    openai_api_base="http://0.0.0.0:4000",
+    openai_api_base="${base_url}",
     model = "gpt-3.5-turbo",
     temperature=0.1
 )

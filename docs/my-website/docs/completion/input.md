@@ -39,38 +39,38 @@ This is a list of openai params we translate across providers.
 
 Use `litellm.get_supported_openai_params()` for an updated list of params for each model + provider 
 
-| Provider | temperature | max_tokens | top_p | stream | stop | n | presence_penalty | frequency_penalty | functions | function_call | logit_bias | user | response_format | seed | tools | tool_choice | logprobs | top_logprobs | extra_headers | 
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|--|
-|Anthropic| ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |  |  |  |✅ | ✅ | ✅ | ✅ | ✅ |  |  | ✅ 
-|OpenAI| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |✅ | ✅ | ✅ | ✅ |✅ | ✅ | ✅ | ✅ | ✅ |
-|Azure OpenAI| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |✅ | ✅ | ✅ | ✅ |✅ | ✅ |  |  | ✅ |
+| Provider | temperature | max_tokens | top_p | stream | stream_options | stop | n | presence_penalty | frequency_penalty | functions | function_call | logit_bias | user | response_format | seed | tools | tool_choice | logprobs | top_logprobs | extra_headers |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+|Anthropic| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |  |  |  |✅ | ✅ | ✅ | ✅ | ✅ |  |  | ✅ |
+|OpenAI| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |✅ | ✅ | ✅ | ✅ |✅ | ✅ | ✅ | ✅ | ✅ |
+|Azure OpenAI| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |✅ | ✅ | ✅ | ✅ |✅ | ✅ |  |  | ✅ |
 |Replicate | ✅ | ✅ | ✅ | ✅ | ✅ | |  |   |  |   |
-|Anyscale | ✅ | ✅ | ✅ | ✅ |
+|Anyscale | ✅ | ✅ | ✅ | ✅ | ✅ |
 |Cohere| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |   |   |
-|Huggingface| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |    |
+|Huggingface| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |   |    |
 |Openrouter| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | | | | | ✅ | | | | |
 |AI21| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |
-|VertexAI| ✅ | ✅ |  | ✅ |  |  |  |  |  |   | | | | | ✅ | | |
+|VertexAI| ✅ | ✅ |  | ✅ | ✅ |  |  |  |  |   | | | | ✅ | ✅ | | |
 |Bedrock| ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |  |   | | | | | ✅ (for anthropic) | |
-|Sagemaker| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |  |   |
+|Sagemaker| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |
 |TogetherAI| ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |  |   | ✅ |
-|AlephAlpha| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |   |  |   |
-|Palm| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |  |   |
-|NLP Cloud| ✅ | ✅ | ✅ | ✅ | ✅ | |  |  |  |   |
-|Petals| ✅ | ✅ |  | ✅ | |  |   |  |  |   |
+|AlephAlpha| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |   |  |   |
+|Palm| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |
+|NLP Cloud| ✅ | ✅ | ✅ | ✅ | ✅ | | |  |  |   |
+|Petals| ✅ | ✅ |  | ✅ | ✅ | |  |   |  |   |
 |Ollama| ✅ | ✅ | ✅ | ✅ | ✅ |  |   | ✅ |  |   | | | ✅ | | |
 |Databricks| ✅ | ✅ | ✅ | ✅ | ✅ |  |   | |  |   | | | | | |
-|ClarifAI| ✅ | ✅ | | | |  |   | |  |   | | | | | |
-
+|ClarifAI| ✅ | ✅ | |✅ | ✅ |  |   | |  |   | | | | | |
 :::note
 
 By default, LiteLLM raises an exception if the openai param being passed in isn't supported. 
 
-To drop the param instead, set `litellm.drop_params = True`.
+To drop the param instead, set `litellm.drop_params = True` or `completion(..drop_params=True)`.
 
-**For function calling:**
+This **ONLY DROPS UNSUPPORTED OPENAI PARAMS**. 
 
-Add to prompt for non-openai models, set: `litellm.add_function_to_prompt = True`. 
+LiteLLM assumes any non-openai param is provider specific and passes it in as a kwarg in the request body
+
 ::: 
 
 ## Input Params
@@ -97,6 +97,7 @@ def completion(
     seed: Optional[int] = None,
     tools: Optional[List] = None,
     tool_choice: Optional[str] = None,
+    parallel_tool_calls: Optional[bool] = None,
     logprobs: Optional[bool] = None,
     top_logprobs: Optional[int] = None,
     deployment_id=None,
@@ -166,9 +167,11 @@ def completion(
 
     - `function`: *object* - Required.
 
-- `tool_choice`: *string or object (optional)* - Controls which (if any) function is called by the model. none means the model will not call a function and instead generates a message. auto means the model can pick between generating a message or calling a function. Specifying a particular function via {"type: "function", "function": {"name": "my_function"}} forces the model to call that function.
+- `tool_choice`: *string or object (optional)* - Controls which (if any) function is called by the model. none means the model will not call a function and instead generates a message. auto means the model can pick between generating a message or calling a function. Specifying a particular function via `{"type: "function", "function": {"name": "my_function"}}` forces the model to call that function.
 
     - `none` is the default when no functions are present. `auto` is the default if functions are present.
+
+- `parallel_tool_calls`: *boolean (optional)* - Whether to enable parallel function calling during tool use.. OpenAI default is true.
 
 - `frequency_penalty`: *number or null (optional)* - It is used to penalize new tokens based on their frequency in the text so far.
 

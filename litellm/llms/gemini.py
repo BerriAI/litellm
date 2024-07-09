@@ -1,13 +1,22 @@
-import os, types, traceback, copy, asyncio
-import json
-from enum import Enum
+####################################
+######### DEPRECATED FILE ##########
+####################################
+# logic moved to `vertex_httpx.py` #
+
+import copy
 import time
+import traceback
+import types
 from typing import Callable, Optional
-from litellm.utils import ModelResponse, get_secret, Choices, Message, Usage
-import litellm
-import sys, httpx
-from .prompt_templates.factory import prompt_factory, custom_prompt, get_system_prompt
+
+import httpx
 from packaging.version import Version
+
+import litellm
+from litellm import verbose_logger
+from litellm.utils import Choices, Message, ModelResponse, Usage
+
+from .prompt_templates.factory import custom_prompt, get_system_prompt, prompt_factory
 
 
 class GeminiError(Exception):
@@ -185,8 +194,8 @@ def completion(
         if _system_instruction and len(system_prompt) > 0:
             _params["system_instruction"] = system_prompt
         _model = genai.GenerativeModel(**_params)
-        if stream == True:
-            if acompletion == True:
+        if stream is True:
+            if acompletion is True:
 
                 async def async_streaming():
                     try:
@@ -264,7 +273,8 @@ def completion(
             choices_list.append(choice_obj)
         model_response["choices"] = choices_list
     except Exception as e:
-        traceback.print_exc()
+        verbose_logger.error("LiteLLM.gemini.py: Exception occured - {}".format(str(e)))
+        verbose_logger.debug(traceback.format_exc())
         raise GeminiError(
             message=traceback.format_exc(), status_code=response.status_code
         )
@@ -356,7 +366,8 @@ async def async_completion(
             choices_list.append(choice_obj)
         model_response["choices"] = choices_list
     except Exception as e:
-        traceback.print_exc()
+        verbose_logger.error("LiteLLM.gemini.py: Exception occured - {}".format(str(e)))
+        verbose_logger.debug(traceback.format_exc())
         raise GeminiError(
             message=traceback.format_exc(), status_code=response.status_code
         )

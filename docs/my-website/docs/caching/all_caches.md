@@ -214,6 +214,94 @@ If you run the code two times, response1 will use the cache from the first run t
 
 </Tabs>
 
+## Switch Cache On / Off Per LiteLLM Call 
+
+LiteLLM supports 4 cache-controls:
+
+- `no-cache`: *Optional(bool)* When `True`, Will not return a cached response, but instead call the actual endpoint. 
+- `no-store`: *Optional(bool)* When `True`, Will not cache the response. 
+- `ttl`: *Optional(int)* - Will cache the response for the user-defined amount of time (in seconds).
+- `s-maxage`: *Optional(int)* Will only accept cached responses that are within user-defined range (in seconds).
+
+[Let us know if you need more](https://github.com/BerriAI/litellm/issues/1218)
+<Tabs>
+<TabItem value="no-cache" label="No-Cache">
+
+Example usage `no-cache` - When `True`, Will not return a cached response
+
+```python
+response = litellm.completion(
+        model="gpt-3.5-turbo",
+        messages=[
+            {
+                "role": "user",
+                "content": "hello who are you"
+            }
+        ],
+        cache={"no-cache": True},
+    )
+```
+
+</TabItem>
+
+<TabItem value="no-store" label="No-Store">
+
+Example usage `no-store` - When `True`, Will not cache the response. 
+
+```python
+response = litellm.completion(
+        model="gpt-3.5-turbo",
+        messages=[
+            {
+                "role": "user",
+                "content": "hello who are you"
+            }
+        ],
+        cache={"no-store": True},
+    )
+```
+
+</TabItem>
+
+<TabItem value="ttl" label="ttl">
+Example usage `ttl` - cache the response for 10 seconds
+
+```python
+response = litellm.completion(
+        model="gpt-3.5-turbo",
+        messages=[
+            {
+                "role": "user",
+                "content": "hello who are you"
+            }
+        ],
+        cache={"ttl": 10},
+    )
+```
+
+</TabItem>
+
+<TabItem value="s-maxage" label="s-maxage">
+Example usage `s-maxage` - Will only accept cached responses for 60 seconds
+
+```python
+response = litellm.completion(
+        model="gpt-3.5-turbo",
+        messages=[
+            {
+                "role": "user",
+                "content": "hello who are you"
+            }
+        ],
+        cache={"s-maxage": 60},
+    )
+```
+
+</TabItem>
+
+
+</Tabs>
+
 ## Cache Context Manager - Enable, Disable, Update Cache
 Use the context manager for easily enabling, disabling & updating the litellm cache 
 

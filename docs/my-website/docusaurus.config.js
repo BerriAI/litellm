@@ -38,9 +38,6 @@ const config = {
         disableInDev: false,
       },
     ],
-    [ require.resolve('docusaurus-lunr-search'), {
-      languages: ['en'] // language codes
-    }],
     () => ({
       name: 'cripchat',
       injectHtmlTags() {
@@ -90,6 +87,15 @@ const config = {
     ({
       // Replace with your project's social card
       image: 'img/docusaurus-social-card.png',
+      algolia: {
+        // The application ID provided by Algolia
+        appId: 'NU85Y4NU0B',
+  
+        // Public API key: it is safe to commit it
+        apiKey: '4e0cf8c3020d0c876ad9174cea5c01fb',
+  
+        indexName: 'litellm',
+      },
       navbar: {
         title: '🚅 LiteLLM',
         items: [
@@ -138,8 +144,8 @@ const config = {
             title: 'Docs',
             items: [
               {
-                label: 'Tutorial',
-                to: '/docs/index',
+                label: 'Getting Started',
+                to: 'https://docs.litellm.ai/docs/',
               },
             ],
           },

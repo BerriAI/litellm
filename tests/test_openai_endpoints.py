@@ -22,6 +22,7 @@ async def generate_key(
         "text-embedding-ada-002",
         "dall-e-2",
         "fake-openai-endpoint-2",
+        "mistral-embed",
     ],
 ):
     url = "http://0.0.0.0:4000/key/generate"
@@ -72,6 +73,27 @@ async def new_user(session):
         return await response.json()
 
 
+async def moderation(session, key):
+    url = "http://0.0.0.0:4000/moderations"
+    headers = {
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+    }
+    data = {"input": "I want to kill the cat."}
+
+    async with session.post(url, headers=headers, json=data) as response:
+        status = response.status
+        response_text = await response.text()
+
+        print(response_text)
+        print()
+
+        if status != 200:
+            raise Exception(f"Request did not return a 200 status code: {status}")
+
+        return await response.json()
+
+
 async def chat_completion(session, key, model: Union[str, List] = "gpt-4"):
     url = "http://0.0.0.0:4000/chat/completions"
     headers = {
@@ -101,6 +123,36 @@ async def chat_completion(session, key, model: Union[str, List] = "gpt-4"):
         )  # calling the function to check response headers
 
         return await response.json()
+
+
+async def queue_chat_completion(
+    session, key, priority: int, model: Union[str, List] = "gpt-4"
+):
+    url = "http://0.0.0.0:4000/queue/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+    }
+    data = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": "Hello!"},
+        ],
+        "priority": priority,
+    }
+
+    async with session.post(url, headers=headers, json=data) as response:
+        status = response.status
+        response_text = await response.text()
+
+        print(response_text)
+        print()
+
+        if status != 200:
+            raise Exception(f"Request did not return a 200 status code: {status}")
+
+        return response.raw_headers
 
 
 async def chat_completion_with_headers(session, key, model="gpt-4"):
@@ -167,14 +219,14 @@ async def completion(session, key):
         return response
 
 
-async def embeddings(session, key):
+async def embeddings(session, key, model="text-embedding-ada-002"):
     url = "http://0.0.0.0:4000/embeddings"
     headers = {
         "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
     }
     data = {
-        "model": "text-embedding-ada-002",
+        "model": model,
         "input": ["hello world"],
     }
 
@@ -278,7 +330,7 @@ async def test_chat_completion_different_deployments():
         # key_gen = await generate_key(session=session)
         key = "sk-1234"
         results = []
-        for _ in range(5):
+        for _ in range(20):
             results.append(
                 await chat_completion_with_headers(
                     session=session, key=key, model="fake-openai-endpoint-3"
@@ -378,6 +430,9 @@ async def test_embeddings():
         key_2 = key_gen["key"]
         await embeddings(session=session, key=key_2)
 
+        # embedding request with non OpenAI model
+        await embeddings(session=session, key=key, model="mistral-embed")
+
 
 @pytest.mark.asyncio
 async def test_image_generation():
@@ -431,3 +486,22 @@ async def test_batch_chat_completions():
 
         assert len(response) == 2
         assert isinstance(response, list)
+
+
+@pytest.mark.asyncio
+async def test_moderations_endpoint():
+    """
+    - Make chat completion call using
+
+    """
+    async with aiohttp.ClientSession() as session:
+
+        # call chat/completions with a model that the key was not created for + the model is not on the config.yaml
+        response = await moderation(
+            session=session,
+            key="sk-1234",
+        )
+
+        print(f"response: {response}")
+
+        assert "results" in response

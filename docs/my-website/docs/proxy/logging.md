@@ -3,21 +3,678 @@ import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
 
-# 🔎 Logging - Custom Callbacks, DataDog, Langfuse, s3 Bucket, Sentry, OpenTelemetry, Athina, Azure Content-Safety
+# 🪢 Logging - Langfuse, OpenTelemetry, Custom Callbacks, DataDog, s3 Bucket, Sentry, Athina, Azure Content-Safety
 
-Log Proxy Input, Output, Exceptions using Custom Callbacks, Langfuse, OpenTelemetry, LangFuse, DynamoDB, s3 Bucket
+Log Proxy Input, Output, Exceptions using Langfuse, OpenTelemetry, Custom Callbacks, DataDog, DynamoDB, s3 Bucket
 
+## Table of Contents
+
+- [Logging to Langfuse](#logging-proxy-inputoutput---langfuse)
+- [Logging with OpenTelemetry (OpenTelemetry)](#logging-proxy-inputoutput-in-opentelemetry-format)
 - [Async Custom Callbacks](#custom-callback-class-async)
 - [Async Custom Callback APIs](#custom-callback-apis-async)
-- [Logging to Langfuse](#logging-proxy-inputoutput---langfuse)
+- [Logging to Galileo](#logging-llm-io-to-galileo)
 - [Logging to OpenMeter](#logging-proxy-inputoutput---langfuse)
 - [Logging to s3 Buckets](#logging-proxy-inputoutput---s3-buckets)
 - [Logging to DataDog](#logging-proxy-inputoutput---datadog)
 - [Logging to DynamoDB](#logging-proxy-inputoutput---dynamodb)
 - [Logging to Sentry](#logging-proxy-inputoutput---sentry)
-- [Logging to Traceloop (OpenTelemetry)](#logging-proxy-inputoutput-traceloop-opentelemetry)
 - [Logging to Athina](#logging-proxy-inputoutput-athina)
 - [(BETA) Moderation with Azure Content-Safety](#moderation-with-azure-content-safety)
+
+## Logging Proxy Input/Output - Langfuse
+We will use the `--config` to set `litellm.success_callback = ["langfuse"]` this will log all successfull LLM calls to langfuse. Make sure to set `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` in your environment
+
+**Step 1** Install langfuse
+
+```shell
+pip install langfuse>=2.0.0
+```
+
+**Step 2**: Create a `config.yaml` file and set `litellm_settings`: `success_callback`
+```yaml
+model_list:
+ - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+litellm_settings:
+  success_callback: ["langfuse"]
+```
+
+**Step 3**: Set required env variables for logging to langfuse
+```shell
+export LANGFUSE_PUBLIC_KEY="pk_kk"
+export LANGFUSE_SECRET_KEY="sk_ss"
+# Optional, defaults to https://cloud.langfuse.com
+export LANGFUSE_HOST="https://xxx.langfuse.com"
+```
+
+**Step 4**: Start the proxy, make a test request
+
+Start proxy
+```shell
+litellm --config config.yaml --debug
+```
+
+Test Request
+```
+litellm --test
+```
+
+Expected output on Langfuse
+
+<Image img={require('../../img/langfuse_small.png')} />
+
+### Logging Metadata to Langfuse
+
+
+<Tabs>
+
+<TabItem value="Curl" label="Curl Request">
+
+Pass `metadata` as part of the request body
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --data '{
+    "model": "gpt-3.5-turbo",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what llm are you"
+        }
+    ],
+    "metadata": {
+        "generation_name": "ishaan-test-generation",
+        "generation_id": "gen-id22",
+        "trace_id": "trace-id22",
+        "trace_user_id": "user-id2"
+    }
+}'
+```
+</TabItem>
+<TabItem value="openai" label="OpenAI v1.0.0+">
+
+Set `extra_body={"metadata": { }}` to `metadata` you want to pass
+
+```python
+import openai
+client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://0.0.0.0:4000"
+)
+
+# request sent to model set on litellm proxy, `litellm --model`
+response = client.chat.completions.create(
+    model="gpt-3.5-turbo",
+    messages = [
+        {
+            "role": "user",
+            "content": "this is a test request, write a short poem"
+        }
+    ],
+    extra_body={
+        "metadata": {
+            "generation_name": "ishaan-generation-openai-client",
+            "generation_id": "openai-client-gen-id22",
+            "trace_id": "openai-client-trace-id22",
+            "trace_user_id": "openai-client-user-id2"
+        }
+    }
+)
+
+print(response)
+```
+</TabItem>
+<TabItem value="langchain" label="Langchain">
+
+```python
+from langchain.chat_models import ChatOpenAI
+from langchain.prompts.chat import (
+    ChatPromptTemplate,
+    HumanMessagePromptTemplate,
+    SystemMessagePromptTemplate,
+)
+from langchain.schema import HumanMessage, SystemMessage
+
+chat = ChatOpenAI(
+    openai_api_base="http://0.0.0.0:4000",
+    model = "gpt-3.5-turbo",
+    temperature=0.1,
+    extra_body={
+        "metadata": {
+            "generation_name": "ishaan-generation-langchain-client",
+            "generation_id": "langchain-client-gen-id22",
+            "trace_id": "langchain-client-trace-id22",
+            "trace_user_id": "langchain-client-user-id2"
+        }
+    }
+)
+
+messages = [
+    SystemMessage(
+        content="You are a helpful assistant that im using to make a test request to."
+    ),
+    HumanMessage(
+        content="test from litellm. tell me why it's amazing in 1 sentence"
+    ),
+]
+response = chat(messages)
+
+print(response)
+```
+
+</TabItem>
+</Tabs>
+
+
+### Team based Logging to Langfuse
+
+**Example:**
+
+This config would send langfuse logs to 2 different langfuse projects, based on the team id 
+
+```yaml
+litellm_settings:
+  default_team_settings: 
+    - team_id: my-secret-project
+      success_callback: ["langfuse"]
+      langfuse_public_key: os.environ/LANGFUSE_PUB_KEY_1 # Project 1
+      langfuse_secret: os.environ/LANGFUSE_PRIVATE_KEY_1 # Project 1
+    - team_id: ishaans-secret-project
+      success_callback: ["langfuse"]
+      langfuse_public_key: os.environ/LANGFUSE_PUB_KEY_2 # Project 2
+      langfuse_secret: os.environ/LANGFUSE_SECRET_2 # Project 2
+```
+
+Now, when you [generate keys](./virtual_keys.md) for this team-id 
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/key/generate' \
+-H 'Authorization: Bearer sk-1234' \
+-H 'Content-Type: application/json' \
+-d '{"team_id": "ishaans-secret-project"}'
+```
+
+All requests made with these keys will log data to their team-specific logging.
+
+### Redacting Messages, Response Content from Langfuse Logging 
+
+Set `litellm.turn_off_message_logging=True` This will prevent the messages and responses from being logged to langfuse, but request metadata will still be logged.
+
+```yaml
+model_list:
+ - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+litellm_settings:
+  success_callback: ["langfuse"]
+  turn_off_message_logging: True
+```
+
+If you have this feature turned on, you can override it for specific requests by
+setting a request header `LiteLLM-Disable-Message-Redaction: true`.
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --header 'LiteLLM-Disable-Message-Redaction: true' \
+    --data '{
+    "model": "gpt-3.5-turbo",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what llm are you"
+        }
+    ]
+}'
+```
+
+### 🔧 Debugging - Viewing RAW CURL sent from LiteLLM to provider
+
+Use this when you want to view the RAW curl request sent from LiteLLM to the LLM API 
+
+<Tabs>
+
+<TabItem value="Curl" label="Curl Request">
+
+Pass `metadata` as part of the request body
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --data '{
+    "model": "gpt-3.5-turbo",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what llm are you"
+        }
+    ],
+    "metadata": {
+        "log_raw_request": true
+    }
+}'
+```
+</TabItem>
+<TabItem value="openai" label="OpenAI v1.0.0+">
+
+Set `extra_body={"metadata": {"log_raw_request": True }}` to `metadata` you want to pass
+
+```python
+import openai
+client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://0.0.0.0:4000"
+)
+
+# request sent to model set on litellm proxy, `litellm --model`
+response = client.chat.completions.create(
+    model="gpt-3.5-turbo",
+    messages = [
+        {
+            "role": "user",
+            "content": "this is a test request, write a short poem"
+        }
+    ],
+    extra_body={
+        "metadata": {
+            "log_raw_request": True
+        }
+    }
+)
+
+print(response)
+```
+</TabItem>
+<TabItem value="langchain" label="Langchain">
+
+```python
+from langchain.chat_models import ChatOpenAI
+from langchain.prompts.chat import (
+    ChatPromptTemplate,
+    HumanMessagePromptTemplate,
+    SystemMessagePromptTemplate,
+)
+from langchain.schema import HumanMessage, SystemMessage
+
+chat = ChatOpenAI(
+    openai_api_base="http://0.0.0.0:4000",
+    model = "gpt-3.5-turbo",
+    temperature=0.1,
+    extra_body={
+        "metadata": {
+            "log_raw_request": True
+        }
+    }
+)
+
+messages = [
+    SystemMessage(
+        content="You are a helpful assistant that im using to make a test request to."
+    ),
+    HumanMessage(
+        content="test from litellm. tell me why it's amazing in 1 sentence"
+    ),
+]
+response = chat(messages)
+
+print(response)
+```
+
+</TabItem>
+</Tabs>
+
+**Expected Output on Langfuse**
+
+You will see `raw_request` in your Langfuse Metadata. This is the RAW CURL command sent from LiteLLM to your LLM API provider
+
+<Image img={require('../../img/debug_langfuse.png')} />
+
+
+## Logging Proxy Input/Output in OpenTelemetry format
+
+:::info 
+
+[Optional] Customize OTEL Service Name and OTEL TRACER NAME by setting the following variables in your environment
+
+```shell
+OTEL_TRACER_NAME=<your-trace-name>     # default="litellm"
+OTEL_SERVICE_NAME=<your-service-name>` # default="litellm"
+```
+
+:::
+
+<Tabs>
+
+
+<TabItem value="Console Exporter" label="Log to console">
+
+
+**Step 1:** Set callbacks and env vars
+
+Add the following to your env
+
+```shell
+OTEL_EXPORTER="console"
+```
+
+Add `otel` as a callback on your `litellm_config.yaml`
+
+```shell
+litellm_settings:
+  callbacks: ["otel"]
+```
+
+
+**Step 2**: Start the proxy, make a test request
+
+Start proxy
+
+```shell
+litellm --config config.yaml --detailed_debug
+```
+
+Test Request
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --data ' {
+    "model": "gpt-3.5-turbo",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what llm are you"
+        }
+    ]
+    }'
+```
+
+**Step 3**: **Expect to see the following logged on your server logs / console**
+
+This is the Span from OTEL Logging
+
+```json
+{
+    "name": "litellm-acompletion",
+    "context": {
+        "trace_id": "0x8d354e2346060032703637a0843b20a3",
+        "span_id": "0xd8d3476a2eb12724",
+        "trace_state": "[]"
+    },
+    "kind": "SpanKind.INTERNAL",
+    "parent_id": null,
+    "start_time": "2024-06-04T19:46:56.415888Z",
+    "end_time": "2024-06-04T19:46:56.790278Z",
+    "status": {
+        "status_code": "OK"
+    },
+    "attributes": {
+        "model": "llama3-8b-8192"
+    },
+    "events": [],
+    "links": [],
+    "resource": {
+        "attributes": {
+            "service.name": "litellm"
+        },
+        "schema_url": ""
+    }
+}
+```
+
+</TabItem>
+
+
+<TabItem value="Honeycomb" label="Log to Honeycomb">
+
+#### Quick Start - Log to Honeycomb
+
+**Step 1:** Set callbacks and env vars
+
+Add the following to your env
+
+```shell
+OTEL_EXPORTER="otlp_http"
+OTEL_ENDPOINT="https://api.honeycomb.io/v1/traces"
+OTEL_HEADERS="x-honeycomb-team=<your-api-key>"
+```
+
+Add `otel` as a callback on your `litellm_config.yaml`
+
+```shell
+litellm_settings:
+  callbacks: ["otel"]
+```
+
+
+**Step 2**: Start the proxy, make a test request
+
+Start proxy
+
+```shell
+litellm --config config.yaml --detailed_debug
+```
+
+Test Request
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --data ' {
+    "model": "gpt-3.5-turbo",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what llm are you"
+        }
+    ]
+    }'
+```
+
+
+</TabItem>
+
+
+<TabItem value="otel-col" label="Log to OTEL HTTP Collector">
+
+#### Quick Start - Log to OTEL Collector
+
+**Step 1:** Set callbacks and env vars
+
+Add the following to your env
+
+```shell
+OTEL_EXPORTER="otlp_http"
+OTEL_ENDPOINT="http:/0.0.0.0:4317"
+OTEL_HEADERS="x-honeycomb-team=<your-api-key>" # Optional
+```
+
+Add `otel` as a callback on your `litellm_config.yaml`
+
+```shell
+litellm_settings:
+  callbacks: ["otel"]
+```
+
+
+**Step 2**: Start the proxy, make a test request
+
+Start proxy
+
+```shell
+litellm --config config.yaml --detailed_debug
+```
+
+Test Request
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --data ' {
+    "model": "gpt-3.5-turbo",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what llm are you"
+        }
+    ]
+    }'
+```
+
+</TabItem>
+
+
+<TabItem value="otel-col-grpc" label="Log to OTEL GRPC Collector">
+
+#### Quick Start - Log to OTEL GRPC Collector
+
+**Step 1:** Set callbacks and env vars
+
+Add the following to your env
+
+```shell
+OTEL_EXPORTER="otlp_grpc"
+OTEL_ENDPOINT="http:/0.0.0.0:4317"
+OTEL_HEADERS="x-honeycomb-team=<your-api-key>" # Optional
+```
+
+Add `otel` as a callback on your `litellm_config.yaml`
+
+```shell
+litellm_settings:
+  callbacks: ["otel"]
+```
+
+
+**Step 2**: Start the proxy, make a test request
+
+Start proxy
+
+```shell
+litellm --config config.yaml --detailed_debug
+```
+
+Test Request
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --data ' {
+    "model": "gpt-3.5-turbo",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what llm are you"
+        }
+    ]
+    }'
+```
+
+
+</TabItem>
+
+<TabItem value="traceloop" label="Log to Traceloop Cloud">
+
+#### Quick Start - Log to Traceloop
+
+**Step 1:** Install the `traceloop-sdk` SDK
+
+```shell
+pip install traceloop-sdk==0.21.2
+```
+
+**Step 2:** Add `traceloop` as a success_callback
+
+```shell
+litellm_settings:
+  success_callback: ["traceloop"]
+
+environment_variables:
+  TRACELOOP_API_KEY: "XXXXX"
+```
+
+
+**Step 3**: Start the proxy, make a test request
+
+Start proxy
+
+```shell
+litellm --config config.yaml --detailed_debug
+```
+
+Test Request
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --data ' {
+    "model": "gpt-3.5-turbo",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what llm are you"
+        }
+    ]
+    }'
+```
+
+</TabItem>
+
+</Tabs>
+
+** 🎉 Expect to see this trace logged in your OTEL collector**
+
+### Context propagation across Services `Traceparent HTTP Header`
+
+❓ Use this when you want to **pass information about the incoming request in a distributed tracing system**
+
+✅ Key change: Pass the **`traceparent` header** in your requests. [Read more about traceparent headers here](https://uptrace.dev/opentelemetry/opentelemetry-traceparent.html#what-is-traceparent-header)
+```curl
+traceparent: 00-80e1afed08e019fc1110464cfa66635c-7a085853722dc6d2-01
+```
+Example Usage
+1. Make Request to LiteLLM Proxy with `traceparent` header
+```python
+import openai
+import uuid
+
+client = openai.OpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+example_traceparent = f"00-80e1afed08e019fc1110464cfa66635c-02e80198930058d4-01"
+extra_headers = {
+    "traceparent": example_traceparent
+}
+_trace_id = example_traceparent.split("-")[1]
+
+print("EXTRA HEADERS: ", extra_headers)
+print("Trace ID: ", _trace_id)
+
+response = client.chat.completions.create(
+    model="llama3",
+    messages=[
+        {"role": "user", "content": "this is a test request, write a short poem"}
+    ],
+    extra_headers=extra_headers,
+)
+
+print(response)
+
+```
+
+```shell
+# EXTRA HEADERS:  {'traceparent': '00-80e1afed08e019fc1110464cfa66635c-02e80198930058d4-01'}
+# Trace ID:  80e1afed08e019fc1110464cfa66635c
+```
+
+2. Lookup Trace ID on OTEL Logger
+
+Search for Trace=`80e1afed08e019fc1110464cfa66635c` on your OTEL Collector
+
+<Image img={require('../../img/otel_parent.png')} />
+
+
 
 ## Custom Callback Class [Async]
 Use this when you want to run custom callbacks in `python`
@@ -402,196 +1059,67 @@ litellm_settings:
 
 Start the LiteLLM Proxy and make a test request to verify the logs reached your callback API 
 
-## Logging Proxy Input/Output - Langfuse
-We will use the `--config` to set `litellm.success_callback = ["langfuse"]` this will log all successfull LLM calls to langfuse. Make sure to set `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` in your environment
 
-**Step 1** Install langfuse
+## Logging LLM IO to Galileo
+[BETA]
 
-```shell
-pip install langfuse>=2.0.0
-```
+Log LLM I/O on [www.rungalileo.io](https://www.rungalileo.io/)
 
-**Step 2**: Create a `config.yaml` file and set `litellm_settings`: `success_callback`
-```yaml
-model_list:
- - model_name: gpt-3.5-turbo
-    litellm_params:
-      model: gpt-3.5-turbo
-litellm_settings:
-  success_callback: ["langfuse"]
-```
+:::info
 
-**Step 3**: Set required env variables for logging to langfuse
-```shell
-export LANGFUSE_PUBLIC_KEY="pk_kk"
-export LANGFUSE_SECRET_KEY="sk_ss
-```
+Beta Integration
 
-**Step 4**: Start the proxy, make a test request
+:::
 
-Start proxy
-```shell
-litellm --config config.yaml --debug
-```
-
-Test Request
-```
-litellm --test
-```
-
-Expected output on Langfuse
-
-<Image img={require('../../img/langfuse_small.png')} />
-
-### Logging Metadata to Langfuse
-
-
-<Tabs>
-
-<TabItem value="Curl" label="Curl Request">
-
-Pass `metadata` as part of the request body
-
-```shell
-curl --location 'http://0.0.0.0:4000/chat/completions' \
-    --header 'Content-Type: application/json' \
-    --data '{
-    "model": "gpt-3.5-turbo",
-    "messages": [
-        {
-        "role": "user",
-        "content": "what llm are you"
-        }
-    ],
-    "metadata": {
-        "generation_name": "ishaan-test-generation",
-        "generation_id": "gen-id22",
-        "trace_id": "trace-id22",
-        "trace_user_id": "user-id2"
-    }
-}'
-```
-</TabItem>
-<TabItem value="openai" label="OpenAI v1.0.0+">
-
-Set `extra_body={"metadata": { }}` to `metadata` you want to pass
-
-```python
-import openai
-client = openai.OpenAI(
-    api_key="anything",
-    base_url="http://0.0.0.0:4000"
-)
-
-# request sent to model set on litellm proxy, `litellm --model`
-response = client.chat.completions.create(
-    model="gpt-3.5-turbo",
-    messages = [
-        {
-            "role": "user",
-            "content": "this is a test request, write a short poem"
-        }
-    ],
-    extra_body={
-        "metadata": {
-            "generation_name": "ishaan-generation-openai-client",
-            "generation_id": "openai-client-gen-id22",
-            "trace_id": "openai-client-trace-id22",
-            "trace_user_id": "openai-client-user-id2"
-        }
-    }
-)
-
-print(response)
-```
-</TabItem>
-<TabItem value="langchain" label="Langchain">
-
-```python
-from langchain.chat_models import ChatOpenAI
-from langchain.prompts.chat import (
-    ChatPromptTemplate,
-    HumanMessagePromptTemplate,
-    SystemMessagePromptTemplate,
-)
-from langchain.schema import HumanMessage, SystemMessage
-
-chat = ChatOpenAI(
-    openai_api_base="http://0.0.0.0:4000",
-    model = "gpt-3.5-turbo",
-    temperature=0.1,
-    extra_body={
-        "metadata": {
-            "generation_name": "ishaan-generation-langchain-client",
-            "generation_id": "langchain-client-gen-id22",
-            "trace_id": "langchain-client-trace-id22",
-            "trace_user_id": "langchain-client-user-id2"
-        }
-    }
-)
-
-messages = [
-    SystemMessage(
-        content="You are a helpful assistant that im using to make a test request to."
-    ),
-    HumanMessage(
-        content="test from litellm. tell me why it's amazing in 1 sentence"
-    ),
-]
-response = chat(messages)
-
-print(response)
-```
-
-</TabItem>
-</Tabs>
-
-
-### Team based Logging to Langfuse
-
-**Example:**
-
-This config would send langfuse logs to 2 different langfuse projects, based on the team id 
-
-```yaml
-litellm_settings:
-  default_team_settings: 
-    - team_id: my-secret-project
-      success_callback: ["langfuse"]
-      langfuse_public_key: os.environ/LANGFUSE_PUB_KEY_1 # Project 1
-      langfuse_secret: os.environ/LANGFUSE_PRIVATE_KEY_1 # Project 1
-    - team_id: ishaans-secret-project
-      success_callback: ["langfuse"]
-      langfuse_public_key: os.environ/LANGFUSE_PUB_KEY_2 # Project 2
-      langfuse_secret: os.environ/LANGFUSE_SECRET_2 # Project 2
-```
-
-Now, when you [generate keys](./virtual_keys.md) for this team-id 
+**Required Env Variables**
 
 ```bash
-curl -X POST 'http://0.0.0.0:4000/key/generate' \
--H 'Authorization: Bearer sk-1234' \
--H 'Content-Type: application/json' \
--d '{"team_id": "ishaans-secret-project"}'
+export GALILEO_BASE_URL=""  # For most users, this is the same as their console URL except with the word 'console' replaced by 'api' (e.g. http://www.console.galileo.myenterprise.com -> http://www.api.galileo.myenterprise.com)
+export GALILEO_PROJECT_ID=""
+export GALILEO_USERNAME=""
+export GALILEO_PASSWORD=""
 ```
 
-All requests made with these keys will log data to their team-specific logging.
+### Quick Start 
 
-### Redacting Messages, Response Content from Langfuse Logging 
-
-Set `litellm.turn_off_message_logging=True` This will prevent the messages and responses from being logged to langfuse, but request metadata will still be logged.
-
+1. Add to Config.yaml
 ```yaml
 model_list:
- - model_name: gpt-3.5-turbo
-    litellm_params:
-      model: gpt-3.5-turbo
+- litellm_params:
+    api_base: https://exampleopenaiendpoint-production.up.railway.app/
+    api_key: my-fake-key
+    model: openai/my-fake-model
+  model_name: fake-openai-endpoint
+
 litellm_settings:
-  success_callback: ["langfuse"]
-  turn_off_message_logging: True
+  success_callback: ["galileo"] # 👈 KEY CHANGE
+```
+
+2. Start Proxy
+
+```
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+--header 'Content-Type: application/json' \
+--data ' {
+      "model": "fake-openai-endpoint",
+      "messages": [
+        {
+          "role": "user",
+          "content": "what llm are you"
+        }
+      ],
+    }
+'
 ```
 
 
+🎉 That's it - Expect to see your Logs on your Galileo Dashboard
 
 ## Logging Proxy Cost + Usage - OpenMeter
 
@@ -725,6 +1253,7 @@ litellm_settings:
     s3_region_name: us-west-2              # AWS Region Name for S3
     s3_aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID  # us os.environ/<variable name> to pass environment variables. This is AWS Access Key ID for S3
     s3_aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY  # AWS Secret Access Key for S3
+    s3_path: my-test-path # [OPTIONAL] set path in bucket you want to write logs to
     s3_endpoint_url: https://s3.amazonaws.com  # [OPTIONAL] S3 endpoint URL, if you want to use Backblaze/cloudflare s3 buckets
 ```
 
@@ -913,86 +1442,6 @@ litellm --config config.yaml --debug
 Test Request
 ```
 litellm --test
-```
-
-## Logging Proxy Input/Output in OpenTelemetry format using Traceloop's OpenLLMetry
-
-[OpenLLMetry](https://github.com/traceloop/openllmetry) _(built and maintained by Traceloop)_ is a set of extensions
-built on top of [OpenTelemetry](https://opentelemetry.io/) that gives you complete observability over your LLM
-application. Because it uses OpenTelemetry under the
-hood, [it can be connected to various observability solutions](https://www.traceloop.com/docs/openllmetry/integrations/introduction)
-like:
-
-* [Traceloop](https://www.traceloop.com/docs/openllmetry/integrations/traceloop)
-* [Axiom](https://www.traceloop.com/docs/openllmetry/integrations/axiom)
-* [Azure Application Insights](https://www.traceloop.com/docs/openllmetry/integrations/azure)
-* [Datadog](https://www.traceloop.com/docs/openllmetry/integrations/datadog)
-* [Dynatrace](https://www.traceloop.com/docs/openllmetry/integrations/dynatrace)
-* [Grafana Tempo](https://www.traceloop.com/docs/openllmetry/integrations/grafana)
-* [Honeycomb](https://www.traceloop.com/docs/openllmetry/integrations/honeycomb)
-* [HyperDX](https://www.traceloop.com/docs/openllmetry/integrations/hyperdx)
-* [Instana](https://www.traceloop.com/docs/openllmetry/integrations/instana)
-* [New Relic](https://www.traceloop.com/docs/openllmetry/integrations/newrelic)
-* [OpenTelemetry Collector](https://www.traceloop.com/docs/openllmetry/integrations/otel-collector)
-* [Service Now Cloud Observability](https://www.traceloop.com/docs/openllmetry/integrations/service-now)
-* [Sentry](https://www.traceloop.com/docs/openllmetry/integrations/sentry)
-* [SigNoz](https://www.traceloop.com/docs/openllmetry/integrations/signoz)
-* [Splunk](https://www.traceloop.com/docs/openllmetry/integrations/splunk)
-
-We will use the `--config` to set `litellm.success_callback = ["traceloop"]` to achieve this, steps are listed below.
-
-**Step 1:** Install the SDK
-
-```shell
-pip install traceloop-sdk
-```
-
-**Step 2:** Configure Environment Variable for trace exporting
-
-You will need to configure where to export your traces. Environment variables will control this, example: For Traceloop
-you should use `TRACELOOP_API_KEY`, whereas for Datadog you use `TRACELOOP_BASE_URL`. For more
-visit [the Integrations Catalog](https://www.traceloop.com/docs/openllmetry/integrations/introduction).
-
-If you are using Datadog as the observability solutions then you can set `TRACELOOP_BASE_URL` as:
-
-```shell
-TRACELOOP_BASE_URL=http://<datadog-agent-hostname>:4318
-```
-
-**Step 3**: Create a `config.yaml` file and set `litellm_settings`: `success_callback`
-
-```yaml
-model_list:
-  - model_name: gpt-3.5-turbo
-    litellm_params:
-      model: gpt-3.5-turbo
-      api_key: my-fake-key # replace api_key with actual key
-litellm_settings:
-  success_callback: [ "traceloop" ]
-```
-
-**Step 4**: Start the proxy, make a test request
-
-Start proxy
-
-```shell
-litellm --config config.yaml --debug
-```
-
-Test Request
-
-```
-curl --location 'http://0.0.0.0:4000/chat/completions' \
-    --header 'Content-Type: application/json' \
-    --data ' {
-    "model": "gpt-3.5-turbo",
-    "messages": [
-        {
-        "role": "user",
-        "content": "what llm are you"
-        }
-    ]
-    }'
 ```
 
 ## Logging Proxy Input/Output Athina

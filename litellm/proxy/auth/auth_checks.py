@@ -8,19 +8,31 @@ Run checks for:
 2. If user is in budget 
 3. If end_user ('user' passed to /chat/completions, /embeddings endpoint) is in budget 
 """
+from datetime import datetime
+from typing import TYPE_CHECKING, Any, Literal, Optional
+
+import litellm
+from litellm._logging import verbose_proxy_logger
+from litellm.caching import DualCache
 from litellm.proxy._types import (
-    LiteLLM_UserTable,
     LiteLLM_EndUserTable,
     LiteLLM_JWTAuth,
-    LiteLLM_TeamTable,
-    LiteLLMRoutes,
     LiteLLM_OrganizationTable,
+    LiteLLM_TeamTable,
+    LiteLLM_UserTable,
+    LiteLLMRoutes,
     LitellmUserRoles,
+    UserAPIKeyAuth,
 )
-from typing import Optional, Literal, Union
-from litellm.proxy.utils import PrismaClient
-from litellm.caching import DualCache
-import litellm
+from litellm.proxy.utils import PrismaClient, ProxyLogging, log_to_opentelemetry
+from litellm.types.services import ServiceLoggerPayload, ServiceTypes
+
+if TYPE_CHECKING:
+    from opentelemetry.trace import Span as _Span
+
+    Span = _Span
+else:
+    Span = Any
 
 all_routes = LiteLLMRoutes.openai_routes.value + LiteLLMRoutes.management_routes.value
 
@@ -97,6 +109,40 @@ def common_checks(
             raise Exception(
                 f"'user' param not passed in. 'enforce_user_param'={general_settings['enforce_user_param']}"
             )
+    if general_settings.get("enforced_params", None) is not None:
+        # Enterprise ONLY Feature
+        # we already validate if user is premium_user when reading the config
+        # Add an extra premium_usercheck here too, just incase
+        from litellm.proxy.proxy_server import CommonProxyErrors, premium_user
+
+        if premium_user is not True:
+            raise ValueError(
+                "Trying to use `enforced_params`"
+                + CommonProxyErrors.not_premium_user.value
+            )
+
+        if route in LiteLLMRoutes.openai_routes.value:
+            # loop through each enforced param
+            # example enforced_params ['user', 'metadata', 'metadata.generation_name']
+            for enforced_param in general_settings["enforced_params"]:
+                _enforced_params = enforced_param.split(".")
+                if len(_enforced_params) == 1:
+                    if _enforced_params[0] not in request_body:
+                        raise ValueError(
+                            f"BadRequest please pass param={_enforced_params[0]} in request body. This is a required param"
+                        )
+                elif len(_enforced_params) == 2:
+                    # this is a scenario where user requires request['metadata']['generation_name'] to exist
+                    if _enforced_params[0] not in request_body:
+                        raise ValueError(
+                            f"BadRequest please pass param={_enforced_params[0]} in request body. This is a required param"
+                        )
+                    if _enforced_params[1] not in request_body[_enforced_params[0]]:
+                        raise ValueError(
+                            f"BadRequest please pass param=[{_enforced_params[0]}][{_enforced_params[1]}] in request body. This is a required param"
+                        )
+
+        pass
     # 7. [OPTIONAL] If 'litellm.max_budget' is set (>0), is proxy under budget
     if (
         litellm.max_budget > 0
@@ -108,8 +154,8 @@ def common_checks(
         and route != "/models"
     ):
         if global_proxy_spend > litellm.max_budget:
-            raise Exception(
-                f"ExceededBudget: LiteLLM Proxy has exceeded its budget. Current spend: {global_proxy_spend}; Max Budget: {litellm.max_budget}"
+            raise litellm.BudgetExceededError(
+                current_cost=global_proxy_spend, max_budget=litellm.max_budget
             )
     return True
 
@@ -182,10 +228,13 @@ def get_actual_routes(allowed_routes: list) -> list:
     return actual_routes
 
 
+@log_to_opentelemetry
 async def get_end_user_object(
     end_user_id: Optional[str],
     prisma_client: Optional[PrismaClient],
     user_api_key_cache: DualCache,
+    parent_otel_span: Optional[Span] = None,
+    proxy_logging_obj: Optional[ProxyLogging] = None,
 ) -> Optional[LiteLLM_EndUserTable]:
     """
     Returns end user object, if in db.
@@ -245,11 +294,14 @@ async def get_end_user_object(
         return None
 
 
+@log_to_opentelemetry
 async def get_user_object(
     user_id: str,
     prisma_client: Optional[PrismaClient],
     user_api_key_cache: DualCache,
     user_id_upsert: bool,
+    parent_otel_span: Optional[Span] = None,
+    proxy_logging_obj: Optional[ProxyLogging] = None,
 ) -> Optional[LiteLLM_UserTable]:
     """
     - Check if user id in proxy User Table
@@ -296,10 +348,13 @@ async def get_user_object(
         )
 
 
+@log_to_opentelemetry
 async def get_team_object(
     team_id: str,
     prisma_client: Optional[PrismaClient],
     user_api_key_cache: DualCache,
+    parent_otel_span: Optional[Span] = None,
+    proxy_logging_obj: Optional[ProxyLogging] = None,
 ) -> LiteLLM_TeamTable:
     """
     - Check if team id in proxy Team Table
@@ -312,7 +367,8 @@ async def get_team_object(
         )
 
     # check if in cache
-    cached_team_obj = await user_api_key_cache.async_get_cache(key=team_id)
+    key = "team_id:{}".format(team_id)
+    cached_team_obj = await user_api_key_cache.async_get_cache(key=key)
     if cached_team_obj is not None:
         if isinstance(cached_team_obj, dict):
             return LiteLLM_TeamTable(**cached_team_obj)
@@ -329,7 +385,7 @@ async def get_team_object(
 
         _response = LiteLLM_TeamTable(**response.dict())
         # save the team object to cache
-        await user_api_key_cache.async_set_cache(key=response.team_id, value=_response)
+        await user_api_key_cache.async_set_cache(key=key, value=_response)
 
         return _response
     except Exception as e:
@@ -338,10 +394,13 @@ async def get_team_object(
         )
 
 
+@log_to_opentelemetry
 async def get_org_object(
     org_id: str,
     prisma_client: Optional[PrismaClient],
     user_api_key_cache: DualCache,
+    parent_otel_span: Optional[Span] = None,
+    proxy_logging_obj: Optional[ProxyLogging] = None,
 ):
     """
     - Check if org id in proxy Org Table
@@ -374,3 +433,61 @@ async def get_org_object(
         raise Exception(
             f"Organization doesn't exist in db. Organization={org_id}. Create organization via `/organization/new` call."
         )
+
+
+async def can_key_call_model(
+    model: str, llm_model_list: Optional[list], valid_token: UserAPIKeyAuth
+) -> Literal[True]:
+    """
+    Checks if token can call a given model
+
+    Returns:
+        - True: if token allowed to call model
+
+    Raises:
+        - Exception: If token not allowed to call model
+    """
+    if model in litellm.model_alias_map:
+        model = litellm.model_alias_map[model]
+
+    ## check if model in allowed model names
+    verbose_proxy_logger.debug(
+        f"LLM Model List pre access group check: {llm_model_list}"
+    )
+    from collections import defaultdict
+
+    access_groups = defaultdict(list)
+    if llm_model_list is not None:
+        for m in llm_model_list:
+            for group in m.get("model_info", {}).get("access_groups", []):
+                model_name = m["model_name"]
+                access_groups[group].append(model_name)
+
+    models_in_current_access_groups = []
+    if len(access_groups) > 0:  # check if token contains any model access groups
+        for idx, m in enumerate(
+            valid_token.models
+        ):  # loop token models, if any of them are an access group add the access group
+            if m in access_groups:
+                # if it is an access group we need to remove it from valid_token.models
+                models_in_group = access_groups[m]
+                models_in_current_access_groups.extend(models_in_group)
+
+    # Filter out models that are access_groups
+    filtered_models = [m for m in valid_token.models if m not in access_groups]
+
+    filtered_models += models_in_current_access_groups
+    verbose_proxy_logger.debug(f"model: {model}; allowed_models: {filtered_models}")
+    if (
+        model is not None
+        and model not in filtered_models
+        and "*" not in filtered_models
+    ):
+        raise ValueError(
+            f"API Key not allowed to access model. This token can only access models={valid_token.models}. Tried to access {model}"
+        )
+    valid_token.models = filtered_models
+    verbose_proxy_logger.debug(
+        f"filtered allowed_models: {filtered_models}; valid_token.models: {valid_token.models}"
+    )
+    return True
