@@ -1,16 +1,19 @@
 #### What this tests ####
 #    This tests the the acompletion function #
 
-import sys, os
-import pytest
+import asyncio
+import logging
+import os
+import sys
 import traceback
-import asyncio, logging
+
+import pytest
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import litellm
-from litellm import completion, acompletion, acreate
+from litellm import acompletion, acreate, completion
 
 litellm.num_retries = 3
 
@@ -42,9 +45,36 @@ def test_async_response_openai():
     async def test_get_response():
         user_message = "Hello, how are you?"
         messages = [{"content": user_message, "role": "user"}]
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_current_weather",
+                    "description": "Get the current weather in a given location",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "location": {
+                                "type": "string",
+                                "description": "The city and state, e.g. San Francisco, CA",
+                            },
+                            "unit": {
+                                "type": "string",
+                                "enum": ["celsius", "fahrenheit"],
+                            },
+                        },
+                        "required": ["location"],
+                    },
+                },
+            }
+        ]
         try:
             response = await acompletion(
-                model="gpt-3.5-turbo", messages=messages, timeout=5
+                model="gpt-3.5-turbo",
+                messages=messages,
+                tools=tools,
+                parallel_tool_calls=True,
+                timeout=5,
             )
             print(f"response: {response}")
             print(f"response ms: {response._response_ms}")
