@@ -221,6 +221,7 @@ const CreateKeyPage = () => {
               searchParams={searchParams}
               accessToken={accessToken}
               showSSOBanner={showSSOBanner}
+              premiumUser={premiumUser}
             />
           ) : page == "api_ref" ? (
             <APIRef 
