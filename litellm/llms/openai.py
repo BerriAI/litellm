@@ -2383,6 +2383,39 @@ class OpenAIAssistantsAPI(BaseLLM):
 
         return response
 
+    # Create Assistant
+    def create_assistants(
+        self,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        organization: Optional[str],
+        create_assistant_data: dict,
+        client=None,
+        acreate_assistants=None,
+    ):
+        if acreate_assistants is not None and acreate_assistants == True:
+            return self.async_get_assistants(
+                api_key=api_key,
+                api_base=api_base,
+                timeout=timeout,
+                max_retries=max_retries,
+                organization=organization,
+                client=client,
+            )
+        openai_client = self.get_openai_client(
+            api_key=api_key,
+            api_base=api_base,
+            timeout=timeout,
+            max_retries=max_retries,
+            organization=organization,
+            client=client,
+        )
+
+        response = openai_client.beta.assistants.create(**create_assistant_data)
+        return response
+
     ### MESSAGES ###
 
     async def a_add_message(
