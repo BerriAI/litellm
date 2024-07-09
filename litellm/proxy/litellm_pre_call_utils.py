@@ -33,11 +33,11 @@ def _get_metadata_variable_name(request: Request) -> str:
     """
     Helper to return what the "metadata" field should be called in the request data
 
-    For all /thread endpoints we need to call this "litellm_metadata"
+    For all /thread or /assistant endpoints we need to call this "litellm_metadata"
 
     For ALL other endpoints we call this "metadata
     """
-    if "thread" in request.url.path:
+    if "thread" in request.url.path or "assistant" in request.url.path:
         return "litellm_metadata"
     else:
         return "metadata"

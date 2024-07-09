@@ -1,4 +1,7 @@
+import re
+
 from litellm._logging import verbose_proxy_logger
+from litellm.proxy._types import *
 
 
 def route_in_additonal_public_routes(current_route: str):
@@ -41,3 +44,31 @@ def route_in_additonal_public_routes(current_route: str):
     except Exception as e:
         verbose_proxy_logger.error(f"route_in_additonal_public_routes: {str(e)}")
         return False
+
+
+def is_openai_route(route: str) -> bool:
+    """
+    Helper to checks if provided route is an OpenAI route
+
+
+    Returns:
+        - True: if route is an OpenAI route
+        - False: if route is not an OpenAI route
+    """
+
+    if route in LiteLLMRoutes.openai_routes.value:
+        return True
+
+    # fuzzy match routes like "/v1/threads/thread_49EIN5QF32s4mH20M7GFKdlZ"
+    # Check for routes with placeholders
+    for openai_route in LiteLLMRoutes.openai_routes.value:
+        # Replace placeholders with regex pattern
+        # placeholders are written as "/threads/{thread_id}"
+        if "{" in openai_route:
+            pattern = re.sub(r"\{[^}]+\}", r"[^/]+", openai_route)
+            # Anchor the pattern to match the entire string
+            pattern = f"^{pattern}$"
+            if re.match(pattern, route):
+                return True
+
+    return False

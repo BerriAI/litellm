@@ -1970,6 +1970,25 @@ class Router:
 
     #### ASSISTANTS API ####
 
+    async def acreate_assistants(
+        self,
+        custom_llm_provider: Optional[Literal["openai", "azure"]] = None,
+        client: Optional[AsyncOpenAI] = None,
+        **kwargs,
+    ) -> Assistant:
+        if custom_llm_provider is None:
+            if self.assistants_config is not None:
+                custom_llm_provider = self.assistants_config["custom_llm_provider"]
+                kwargs.update(self.assistants_config["litellm_params"])
+            else:
+                raise Exception(
+                    "'custom_llm_provider' must be set. Either via:\n `Router(assistants_config={'custom_llm_provider': ..})` \nor\n `router.arun_thread(custom_llm_provider=..)`"
+                )
+
+        return await litellm.acreate_assistants(
+            custom_llm_provider=custom_llm_provider, client=client, **kwargs
+        )
+
     async def aget_assistants(
         self,
         custom_llm_provider: Optional[Literal["openai", "azure"]] = None,
