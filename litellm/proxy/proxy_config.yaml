@@ -35,7 +35,6 @@ general_settings:
         LANGFUSE_SECRET_KEY: "os.environ/LANGFUSE_DEV_SK_KEY"
 
 litellm_settings:
-  callbacks: ["otel"]
   guardrails:
     - prompt_injection:
         callbacks: [lakera_prompt_injection, hide_secrets]
@@ -43,6 +42,9 @@ litellm_settings:
     - hide_secrets:
         callbacks: [hide_secrets]
         default_on: true
-    
 
+assistant_settings:
+  custom_llm_provider: openai
+  litellm_params: 
+    api_key: os.environ/OPENAI_API_KEY
 
