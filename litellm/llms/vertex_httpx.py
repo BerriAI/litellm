@@ -391,16 +391,23 @@ class VertexGeminiConfig:
                 optional_params["presence_penalty"] = value
             if param == "tools" and isinstance(value, list):
                 gtool_func_declarations = []
+                google_search_tool: Optional[dict] = None
                 for tool in value:
-                    gtool_func_declaration = FunctionDeclaration(
-                        name=tool["function"]["name"],
-                        description=tool["function"].get("description", ""),
-                        parameters=tool["function"].get("parameters", {}),
-                    )
-                    gtool_func_declarations.append(gtool_func_declaration)
-                optional_params["tools"] = [
-                    Tools(function_declarations=gtool_func_declarations)
-                ]
+                    # check if grounding
+                    _search_tool = tool.get("googleSearchRetrieval", None)
+                    if google_search_tool is not None:
+                        google_search_tool = _search_tool
+                    else:
+                        gtool_func_declaration = FunctionDeclaration(
+                            name=tool["function"]["name"],
+                            description=tool["function"].get("description", ""),
+                            parameters=tool["function"].get("parameters", {}),
+                        )
+                        gtool_func_declarations.append(gtool_func_declaration)
+                _tools = Tools(function_declarations=gtool_func_declarations)
+                if google_search_tool is not None:
+                    _tools["googleSearchRetrieval"] = google_search_tool
+                optional_params["tools"] = [_tools]
             if param == "tool_choice" and (
                 isinstance(value, str) or isinstance(value, dict)
             ):

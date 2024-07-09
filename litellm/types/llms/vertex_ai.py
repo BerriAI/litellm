@@ -94,6 +94,14 @@ class FunctionDeclaration(TypedDict, total=False):
     response: Schema
 
 
+class VertexAISearch(TypedDict, total=False):
+    datastore: Required[str]
+
+
+class Retrieval(TypedDict):
+    source: VertexAISearch
+
+
 class FunctionCallingConfig(TypedDict, total=False):
     mode: Literal["ANY", "AUTO", "NONE"]
     allowed_function_names: List[str]
@@ -147,8 +155,10 @@ class GenerationConfig(TypedDict, total=False):
     response_mime_type: Literal["text/plain", "application/json"]
 
 
-class Tools(TypedDict):
+class Tools(TypedDict, total=False):
     function_declarations: List[FunctionDeclaration]
+    googleSearchRetrieval: dict
+    retrieval: Retrieval
 
 
 class ToolConfig(TypedDict):
