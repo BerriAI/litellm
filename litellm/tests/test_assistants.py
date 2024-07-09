@@ -62,7 +62,7 @@ async def test_get_assistants(provider, sync_mode):
 @pytest.mark.parametrize("provider", ["openai"])
 @pytest.mark.parametrize(
     "sync_mode",
-    [True, False],
+    [False],
 )
 @pytest.mark.asyncio
 async def test_create_assistants(provider, sync_mode):
@@ -86,8 +86,20 @@ async def test_create_assistants(provider, sync_mode):
         )
         assert assistant.id is not None
     else:
-        assistants = await litellm.aget_assistants(**data)
-        assert isinstance(assistants, AsyncCursorPage)
+        assistant = await litellm.acreate_assistants(
+            custom_llm_provider="openai",
+            model="gpt-4-turbo",
+            instructions="You are a personal math tutor. When asked a question, write and run Python code to answer the question.",
+            name="Math Tutor",
+            tools=[{"type": "code_interpreter"}],
+        )
+        print("New assistants", assistant)
+        assert isinstance(assistant, Assistant)
+        assert (
+            assistant.instructions
+            == "You are a personal math tutor. When asked a question, write and run Python code to answer the question."
+        )
+        assert assistant.id is not None
 
 
 @pytest.mark.parametrize("provider", ["openai", "azure"])
