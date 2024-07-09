@@ -2184,7 +2184,9 @@ def _bedrock_converse_messages_pt(messages: List) -> List[BedrockMessageBlock]:
         assistant_content: List[BedrockContentBlock] = []
         ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
         while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
-            if isinstance(messages[msg_i]["content"], list):
+            if messages[msg_i].get("content", None) is not None and isinstance(
+                messages[msg_i]["content"], list
+            ):
                 assistants_parts: List[BedrockContentBlock] = []
                 for element in messages[msg_i]["content"]:
                     if isinstance(element, dict):

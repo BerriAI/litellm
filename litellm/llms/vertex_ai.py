@@ -366,7 +366,9 @@ def _gemini_convert_messages_with_history(messages: list) -> List[ContentType]:
             assistant_content = []
             ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
             while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
-                if isinstance(messages[msg_i]["content"], list):
+                if messages[msg_i].get("content", None) is not None and isinstance(
+                    messages[msg_i]["content"], list
+                ):
                     _parts = []
                     for element in messages[msg_i]["content"]:
                         if isinstance(element, dict):
