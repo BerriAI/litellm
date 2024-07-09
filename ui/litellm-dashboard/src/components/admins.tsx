@@ -723,25 +723,25 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
           ]}
         >
           <Table>
-            <TableHead>
-              <TableRow>
-                <TableHeaderCell>IP Address</TableHeaderCell>
-                <TableHeaderCell>Action</TableHeaderCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {allowedIPs.map((ip, index) => (
-                <TableRow key={index}>
-                  <TableCell>{ip}</TableCell>
-                  <TableCell>
-                    <Button onClick={() => handleDeleteIP(ip)} color="red">
-                      Delete
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+  <TableHead>
+    <TableRow>
+      <TableHeaderCell>IP Address</TableHeaderCell>
+      <TableHeaderCell className="text-right">Action</TableHeaderCell>
+    </TableRow>
+  </TableHead>
+  <TableBody>
+    {allowedIPs.map((ip, index) => (
+      <TableRow key={index}>
+        <TableCell>{ip}</TableCell>
+        <TableCell className="text-right">
+          <Button onClick={() => handleDeleteIP(ip)} color="red" size="xs">
+            Delete
+          </Button>
+        </TableCell>
+      </TableRow>
+    ))}
+  </TableBody>
+</Table>
         </Modal>
 
         <Modal
@@ -768,8 +768,16 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
         <Modal
           title="Confirm Delete"
           visible={isDeleteIPModalVisible}
-          onOk={confirmDeleteIP}
           onCancel={() => setIsDeleteIPModalVisible(false)}
+          onOk={confirmDeleteIP}
+          footer={[
+            <Button className="mx-1"key="delete" onClick={() => confirmDeleteIP()}>
+              Yes
+            </Button>,
+            <Button key="close" onClick={() => setIsDeleteIPModalVisible(false)}>
+              Close
+            </Button>
+          ]}
         >
           <p>Are you sure you want to delete the IP address: {ipToDelete}?</p>
         </Modal>
