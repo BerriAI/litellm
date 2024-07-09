@@ -98,7 +98,7 @@ const Sidebar: React.FC<SidebarProps> = ({
           ) : null}
           {userRole == "Admin" ? (
             <Menu.Item key="12" onClick={() => setPage("admin-panel")}>
-              <Text>Admin</Text>
+              <Text>Admin Settings</Text>
             </Menu.Item>
           ) : null}
           <Menu.Item key="13" onClick={() => setPage("api_ref")}>
