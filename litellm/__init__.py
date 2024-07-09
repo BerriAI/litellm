@@ -334,6 +334,7 @@ cohere_models: List = []
 cohere_chat_models: List = []
 mistral_chat_models: List = []
 anthropic_models: List = []
+empower_models: List = []
 openrouter_models: List = []
 vertex_language_models: List = []
 vertex_vision_models: List = []
@@ -363,7 +364,9 @@ for key, value in model_cost.items():
     elif value.get("litellm_provider") == "mistral":
         mistral_chat_models.append(key)
     elif value.get("litellm_provider") == "anthropic":
-        anthropic_models.append(key)
+        anthropic_models.append(key)    
+    elif value.get("litellm_provider") == "empower":
+        empower_models.append(key)
     elif value.get("litellm_provider") == "openrouter":
         openrouter_models.append(key)
     elif value.get("litellm_provider") == "vertex_ai-text-models":
@@ -411,6 +414,7 @@ openai_compatible_endpoints: List = [
     "https://integrate.api.nvidia.com/v1",
     "api.deepseek.com/v1",
     "api.together.xyz/v1",
+    "app.empower.dev/api/v1",
     "inference.friendli.ai/v1",
 ]
 
@@ -428,6 +432,7 @@ openai_compatible_providers: List = [
     "xinference",
     "together_ai",
     "fireworks_ai",
+    "empower",
     "friendliai",
     "azure_ai",
 ]
@@ -530,6 +535,10 @@ huggingface_models: List = [
     "meta-llama/Llama-2-70b",
     "meta-llama/Llama-2-70b-chat",
 ]  # these have been tested on extensively. But by default all text2text-generation and text-generation models are supported by liteLLM. - https://docs.litellm.ai/docs/providers
+empower_models = [
+    "empower/empower-functions",
+    "empower/empower-functions-small",
+]
 
 together_ai_models: List = [
     # llama llms - chat
@@ -665,6 +674,7 @@ provider_list: List = [
     "triton",
     "predibase",
     "databricks",
+    "empower",
     "custom",  # custom apis
 ]
 
