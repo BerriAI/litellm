@@ -1,27 +1,34 @@
 # What is this?
 ## Unit Tests for OpenAI Assistants API
-import sys, os, json
+import json
+import os
+import sys
 import traceback
+
 from dotenv import load_dotenv
 
 load_dotenv()
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-import pytest, logging, asyncio
+import asyncio
+import logging
+
+import pytest
+from openai.types.beta.assistant import Assistant
+from typing_extensions import override
+
 import litellm
 from litellm import create_thread, get_thread
 from litellm.llms.openai import (
-    OpenAIAssistantsAPI,
-    MessageData,
-    Thread,
-    OpenAIMessage as Message,
-    AsyncCursorPage,
-    SyncCursorPage,
     AssistantEventHandler,
     AsyncAssistantEventHandler,
+    AsyncCursorPage,
+    MessageData,
+    OpenAIAssistantsAPI,
 )
-from typing_extensions import override
+from litellm.llms.openai import OpenAIMessage as Message
+from litellm.llms.openai import SyncCursorPage, Thread
 
 """
 V0 Scope:
@@ -50,6 +57,49 @@ async def test_get_assistants(provider, sync_mode):
     else:
         assistants = await litellm.aget_assistants(**data)
         assert isinstance(assistants, AsyncCursorPage)
+
+
+@pytest.mark.parametrize("provider", ["openai"])
+@pytest.mark.parametrize(
+    "sync_mode",
+    [False],
+)
+@pytest.mark.asyncio
+async def test_create_assistants(provider, sync_mode):
+    data = {
+        "custom_llm_provider": provider,
+    }
+
+    if sync_mode == True:
+        assistant = litellm.create_assistants(
+            custom_llm_provider="openai",
+            model="gpt-4-turbo",
+            instructions="You are a personal math tutor. When asked a question, write and run Python code to answer the question.",
+            name="Math Tutor",
+            tools=[{"type": "code_interpreter"}],
+        )
+        print("New assistants", assistant)
+        assert isinstance(assistant, Assistant)
+        assert (
+            assistant.instructions
+            == "You are a personal math tutor. When asked a question, write and run Python code to answer the question."
+        )
+        assert assistant.id is not None
+    else:
+        assistant = await litellm.acreate_assistants(
+            custom_llm_provider="openai",
+            model="gpt-4-turbo",
+            instructions="You are a personal math tutor. When asked a question, write and run Python code to answer the question.",
+            name="Math Tutor",
+            tools=[{"type": "code_interpreter"}],
+        )
+        print("New assistants", assistant)
+        assert isinstance(assistant, Assistant)
+        assert (
+            assistant.instructions
+            == "You are a personal math tutor. When asked a question, write and run Python code to answer the question."
+        )
+        assert assistant.id is not None
 
 
 @pytest.mark.parametrize("provider", ["openai", "azure"])

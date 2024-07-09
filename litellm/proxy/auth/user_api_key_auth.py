@@ -56,7 +56,10 @@ from litellm.proxy.auth.auth_checks import (
     get_user_object,
     log_to_opentelemetry,
 )
-from litellm.proxy.auth.auth_utils import route_in_additonal_public_routes
+from litellm.proxy.auth.auth_utils import (
+    is_openai_route,
+    route_in_additonal_public_routes,
+)
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.proxy.utils import _to_ns
 
@@ -933,9 +936,9 @@ async def user_api_key_auth(
             _user_role = _get_user_role(user_id_information=user_id_information)
 
             if not _is_user_proxy_admin(user_id_information):  # if non-admin
-                if route in LiteLLMRoutes.openai_routes.value:
+                if is_openai_route(route=route):
                     pass
-                elif request["route"].name in LiteLLMRoutes.openai_route_names.value:
+                elif is_openai_route(route=request["route"].name):
                     pass
                 elif (
                     route in LiteLLMRoutes.info_routes.value
@@ -988,7 +991,7 @@ async def user_api_key_auth(
 
                     pass
                 elif _user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value:
-                    if route in LiteLLMRoutes.openai_routes.value:
+                    if is_openai_route(route=route):
                         raise HTTPException(
                             status_code=status.HTTP_403_FORBIDDEN,
                             detail=f"user not allowed to access this OpenAI routes, role= {_user_role}",
