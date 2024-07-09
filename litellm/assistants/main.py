@@ -186,6 +186,45 @@ def get_assistants(
     return response
 
 
+async def acreate_assistants(
+    custom_llm_provider: Literal["openai", "azure"],
+    client: Optional[AsyncOpenAI] = None,
+    **kwargs,
+) -> Assistant:
+    loop = asyncio.get_event_loop()
+    ### PASS ARGS TO GET ASSISTANTS ###
+    kwargs["async_create_assistants"] = True
+    try:
+        model = kwargs.pop("model", None)
+        kwargs["client"] = client
+        # Use a partial function to pass your keyword arguments
+        func = partial(create_assistants, custom_llm_provider, model, **kwargs)
+
+        # Add the context to the function
+        ctx = contextvars.copy_context()
+        func_with_context = partial(ctx.run, func)
+
+        _, custom_llm_provider, _, _ = get_llm_provider(  # type: ignore
+            model=model, custom_llm_provider=custom_llm_provider
+        )  # type: ignore
+
+        # Await normally
+        init_response = await loop.run_in_executor(None, func_with_context)
+        if asyncio.iscoroutine(init_response):
+            response = await init_response
+        else:
+            response = init_response
+        return response  # type: ignore
+    except Exception as e:
+        raise exception_type(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            original_exception=e,
+            completion_kwargs={},
+            extra_kwargs=kwargs,
+        )
+
+
 def create_assistants(
     custom_llm_provider: Literal["openai", "azure"],
     model: str,
@@ -204,10 +243,14 @@ def create_assistants(
     api_version: Optional[str] = None,
     **kwargs,
 ) -> Assistant:
-    acreate_assistants: Optional[bool] = kwargs.pop("acreate_assistants", None)
-    if acreate_assistants is not None and not isinstance(acreate_assistants, bool):
+    async_create_assistants: Optional[bool] = kwargs.pop(
+        "async_create_assistants", None
+    )
+    if async_create_assistants is not None and not isinstance(
+        async_create_assistants, bool
+    ):
         raise ValueError(
-            "Invalid value passed in for acreate_assistants. Only bool or None allowed"
+            "Invalid value passed in for async_create_assistants. Only bool or None allowed"
         )
     optional_params = GenericLiteLLMParams(
         api_key=api_key, api_base=api_base, api_version=api_version, **kwargs
@@ -272,7 +315,7 @@ def create_assistants(
             organization=organization,
             create_assistant_data=create_assistant_data,
             client=client,
-            acreate_assistants=acreate_assistants,  # type: ignore
+            async_create_assistants=async_create_assistants,  # type: ignore
         )  # type: ignore
     else:
         raise litellm.exceptions.BadRequestError(
