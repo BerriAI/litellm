@@ -26,5 +26,6 @@
 
 # # cohere call
 # response = completion(
-#     model="command-nightly", messages=[{"role": "user", "content": "Hi 👋 - i'm cohere"}]
+#     model="command-nightly",
+#     messages=[{"role": "user", "content": "Hi 👋 - i'm cohere"}],
 # )

@@ -17,12 +17,9 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.integrations.custom_logger import CustomLogger
 from fastapi import HTTPException
 from litellm._logging import verbose_proxy_logger
-from litellm.utils import (
-    ModelResponse,
-    EmbeddingResponse,
-    ImageResponse,
-    StreamingChoices,
-)
+from litellm.proxy.guardrails.init_guardrails import all_guardrails
+from litellm.proxy.guardrails.guardrail_helpers import should_proceed_based_on_metadata
+
 from datetime import datetime
 import aiohttp, asyncio
 from litellm._logging import verbose_proxy_logger
@@ -31,6 +28,8 @@ import httpx
 import json
 
 litellm.set_verbose = True
+
+GUARDRAIL_NAME = "lakera_prompt_injection"
 
 
 class _ENTERPRISE_lakeraAI_Moderation(CustomLogger):
@@ -49,6 +48,16 @@ class _ENTERPRISE_lakeraAI_Moderation(CustomLogger):
         user_api_key_dict: UserAPIKeyAuth,
         call_type: Literal["completion", "embeddings", "image_generation"],
     ):
+
+        if (
+            await should_proceed_based_on_metadata(
+                data=data,
+                guardrail_name=GUARDRAIL_NAME,
+            )
+            is False
+        ):
+            return
+
         if "messages" in data and isinstance(data["messages"], list):
             text = ""
             for m in data["messages"]:  # assume messages is a list
@@ -114,7 +123,11 @@ class _ENTERPRISE_lakeraAI_Moderation(CustomLogger):
 
             if flagged == True:
                 raise HTTPException(
-                    status_code=400, detail={"error": "Violated content safety policy"}
+                    status_code=400,
+                    detail={
+                        "error": "Violated content safety policy",
+                        "lakera_ai_response": _json_response,
+                    },
                 )
 
         pass

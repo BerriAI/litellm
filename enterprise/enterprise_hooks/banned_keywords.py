@@ -82,7 +82,7 @@ class _ENTERPRISE_BannedKeywords(CustomLogger):
         except HTTPException as e:
             raise e
         except Exception as e:
-            traceback.print_exc()
+            verbose_proxy_logger.error(traceback.format_exc())
 
     async def async_post_call_success_hook(
         self,
@@ -93,7 +93,7 @@ class _ENTERPRISE_BannedKeywords(CustomLogger):
             response.choices[0], litellm.utils.Choices
         ):
             for word in self.banned_keywords_list:
-                self.test_violation(test_str=response.choices[0].message.content)
+                self.test_violation(test_str=response.choices[0].message.content or "")
 
     async def async_post_call_streaming_hook(
         self,

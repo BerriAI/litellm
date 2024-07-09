@@ -1,4 +1,13 @@
 # Helicone Tutorial 
+
+:::tip
+
+This is community maintained, Please make an issue if you run into a bug
+https://github.com/BerriAI/litellm
+
+:::
+
+
 [Helicone](https://helicone.ai/) is an open source observability platform that proxies your OpenAI traffic and provides you key insights into your spend, latency and usage.
 
 ## Use Helicone to log requests across all LLM Providers (OpenAI, Azure, Anthropic, Cohere, Replicate, PaLM)

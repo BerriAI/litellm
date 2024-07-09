@@ -1,25 +1,31 @@
 # test that the proxy actually does exception mapping to the OpenAI format
 
-import sys, os
-from unittest import mock
 import json
+import os
+import sys
+from unittest import mock
+
 from dotenv import load_dotenv
 
 load_dotenv()
-import os, io, asyncio
+import asyncio
+import io
+import os
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
+import openai
 import pytest
-import litellm, openai
-from fastapi.testclient import TestClient
 from fastapi import Response
-from litellm.proxy.proxy_server import (
+from fastapi.testclient import TestClient
+
+import litellm
+from litellm.proxy.proxy_server import (  # Replace with the actual module where your FastAPI router is defined
+    initialize,
     router,
     save_worker_config,
-    initialize,
-)  # Replace with the actual module where your FastAPI router is defined
+)
 
 invalid_authentication_error_response = Response(
     status_code=401,
@@ -66,6 +72,12 @@ def test_chat_completion_exception(client):
         json_response = response.json()
         print("keys in json response", json_response.keys())
         assert json_response.keys() == {"error"}
+        print("ERROR=", json_response["error"])
+        assert isinstance(json_response["error"]["message"], str)
+        assert (
+            json_response["error"]["message"]
+            == "litellm.AuthenticationError: AuthenticationError: OpenAIException - Incorrect API key provided: bad-key. You can find your API key at https://platform.openai.com/account/api-keys."
+        )
 
         # make an openai client to call _make_status_error_from_response
         openai_client = openai.OpenAI(api_key="anything")
@@ -210,7 +222,9 @@ def test_chat_completion_exception_any_model(client):
         )
         assert isinstance(openai_exception, openai.BadRequestError)
         _error_message = openai_exception.message
-        assert "chat_completion: Invalid model name passed in model=Lite-GPT-12" in str(_error_message)
+        assert "chat_completion: Invalid model name passed in model=Lite-GPT-12" in str(
+            _error_message
+        )
 
     except Exception as e:
         pytest.fail(f"LiteLLM Proxy test failed. Exception {str(e)}")
@@ -238,7 +252,9 @@ def test_embedding_exception_any_model(client):
         print("Exception raised=", openai_exception)
         assert isinstance(openai_exception, openai.BadRequestError)
         _error_message = openai_exception.message
-        assert "embeddings: Invalid model name passed in model=Lite-GPT-12" in str(_error_message)
+        assert "embeddings: Invalid model name passed in model=Lite-GPT-12" in str(
+            _error_message
+        )
 
     except Exception as e:
         pytest.fail(f"LiteLLM Proxy test failed. Exception {str(e)}")

@@ -68,6 +68,7 @@ response = litellm.completion(
 
 | Model Name       | Function Call                          |
 |------------------|----------------------------------------|
+| gpt-4o            | `completion('azure/<your deployment name>', messages)`         |
 | gpt-4            | `completion('azure/<your deployment name>', messages)`         |
 | gpt-4-0314            | `completion('azure/<your deployment name>', messages)`         | 
 | gpt-4-0613            | `completion('azure/<your deployment name>', messages)`         |
@@ -85,7 +86,8 @@ response = litellm.completion(
 ## Azure OpenAI Vision Models 
 | Model Name            | Function Call                                                   |
 |-----------------------|-----------------------------------------------------------------|
-| gpt-4-vision   | `response = completion(model="azure/<your deployment name>", messages=messages)` |
+| gpt-4-vision   | `completion(model="azure/<your deployment name>", messages=messages)` |
+| gpt-4o            | `completion('azure/<your deployment name>', messages)`         |
 
 #### Usage
 ```python

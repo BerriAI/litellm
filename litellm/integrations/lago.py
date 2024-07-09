@@ -1,13 +1,19 @@
 # What is this?
 ## On Success events log cost to Lago - https://github.com/BerriAI/litellm/issues/3639
 
-import dotenv, os, json
+import json
+import os
+import traceback
+import uuid
+from typing import Literal, Optional
+
+import dotenv
+import httpx
+
 import litellm
-import traceback, httpx
+from litellm import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-import uuid
-from typing import Optional, Literal
 
 
 def get_utc_datetime():
@@ -143,6 +149,7 @@ class LagoLogger(CustomLogger):
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
+            verbose_logger.debug("ENTERS LAGO CALLBACK")
             _url = os.getenv("LAGO_API_BASE")
             assert _url is not None and isinstance(
                 _url, str

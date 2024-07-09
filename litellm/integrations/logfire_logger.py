@@ -171,7 +171,6 @@ class LogfireLogger:
                 f"Logfire Layer Logging - final response object: {response_obj}"
             )
         except Exception as e:
-            traceback.print_exc()
             verbose_logger.debug(
                 f"Logfire Layer Error - {str(e)}\n{traceback.format_exc()}"
             )

@@ -15,8 +15,18 @@ import APIRef from "@/components/api_ref";
 import ChatUI from "@/components/chat_ui";
 import Sidebar from "../components/leftnav";
 import Usage from "../components/usage";
+import CacheDashboard from "@/components/cache_dashboard";
 import { jwtDecode } from "jwt-decode";
 import { Typography } from "antd";
+
+function getCookie(name: string) {
+  console.log("COOKIES", document.cookie)
+  const cookieValue = document.cookie
+      .split('; ')
+      .find(row => row.startsWith(name + '='));
+  return cookieValue ? cookieValue.split('=')[1] : null;
+}
+
 
 function formatUserRole(userRole: string) {
   if (!userRole) {
@@ -35,11 +45,20 @@ function formatUserRole(userRole: string) {
       return "Admin";
     case "proxy_admin_viewer":
       return "Admin Viewer";
+    case "internal_user":
+      return "Internal User";
+    case "internal_viewer":
+      return "Internal Viewer";
     case "app_user":
       return "App User";
     default:
       return "Unknown Role";
   }
+}
+
+interface ProxySettings {
+  PROXY_BASE_URL: string;
+  PROXY_LOGOUT_URL: string;
 }
 
 const CreateKeyPage = () => {
@@ -49,11 +68,17 @@ const CreateKeyPage = () => {
   const [userEmail, setUserEmail] = useState<null | string>(null);
   const [teams, setTeams] = useState<null | any[]>(null);
   const [keys, setKeys] = useState<null | any[]>(null);
+  const [proxySettings, setProxySettings] = useState<ProxySettings>({
+    PROXY_BASE_URL: "",
+    PROXY_LOGOUT_URL: "",
+  });
+
   const [showSSOBanner, setShowSSOBanner] = useState<boolean>(true);
   const searchParams = useSearchParams();
   const [modelData, setModelData] = useState<any>({ data: [] });
   const userID = searchParams.get("userID");
-  const token = searchParams.get("token");
+  const invitation_id = searchParams.get("invitation_id");
+  const token = getCookie('token');
 
   const [page, setPage] = useState("api-keys");
   const [accessToken, setAccessToken] = useState<string | null>(null);
@@ -104,21 +129,39 @@ const CreateKeyPage = () => {
 
   return (
     <Suspense fallback={<div>Loading...</div>}>
-      <div className="flex flex-col min-h-screen">
+      {
+        invitation_id ? (
+          <UserDashboard
+              userID={userID}
+              userRole={userRole}
+              teams={teams}
+              keys={keys}
+              setUserRole={setUserRole}
+              userEmail={userEmail}
+              setUserEmail={setUserEmail}
+              setTeams={setTeams}
+              setKeys={setKeys}
+              setProxySettings={setProxySettings}
+              proxySettings={proxySettings}
+            />
+        ) : (
+        <div className="flex flex-col min-h-screen">
         <Navbar
           userID={userID}
           userRole={userRole}
           userEmail={userEmail}
           showSSOBanner={showSSOBanner}
           premiumUser={premiumUser}
+          setProxySettings={setProxySettings}
+          proxySettings={proxySettings}
         />
         <div className="flex flex-1 overflow-auto">
           <div className="mt-8">
-            <Sidebar
-              setPage={setPage}
-              userRole={userRole}
-              defaultSelectedKey={null}
-            />
+                <Sidebar
+                setPage={setPage}
+                userRole={userRole}
+                defaultSelectedKey={null}
+              />            
           </div>
 
           {page == "api-keys" ? (
@@ -132,12 +175,15 @@ const CreateKeyPage = () => {
               setUserEmail={setUserEmail}
               setTeams={setTeams}
               setKeys={setKeys}
+              setProxySettings={setProxySettings}
+              proxySettings={proxySettings}
             />
           ) : page == "models" ? (
             <ModelDashboard
               userID={userID}
               userRole={userRole}
               token={token}
+              keys={keys}
               accessToken={accessToken}
               modelData={modelData}
               setModelData={setModelData}
@@ -177,7 +223,9 @@ const CreateKeyPage = () => {
               showSSOBanner={showSSOBanner}
             />
           ) : page == "api_ref" ? (
-            <APIRef />
+            <APIRef 
+            proxySettings={proxySettings}
+            />
           ) : page == "settings" ? (
             <Settings
               userID={userID}
@@ -200,6 +248,14 @@ const CreateKeyPage = () => {
               publicPage={false}
               premiumUser={premiumUser}
             />
+          ) : page == "caching" ? (
+            <CacheDashboard
+              userID={userID}
+              userRole={userRole}
+              token={token}
+              accessToken={accessToken}
+              premiumUser={premiumUser}
+            />
           ) : (
             <Usage
               userID={userID}
@@ -211,7 +267,10 @@ const CreateKeyPage = () => {
             />
           )}
         </div>
-      </div>
+      </div>         
+        )
+      }
+      
     </Suspense>
   );
 };
