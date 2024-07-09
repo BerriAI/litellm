@@ -213,6 +213,10 @@ async def test_new_user_response(prisma_client):
         # model_list
         APIRoute(path="/v1/models", endpoint=model_list),
         APIRoute(path="/models", endpoint=model_list),
+        # threads
+        APIRoute(
+            path="/v1/threads/thread_49EIN5QF32s4mH20M7GFKdlZ", endpoint=model_list
+        ),
     ],
     ids=lambda route: str(dict(route=route.endpoint.__name__, path=route.path)),
 )
