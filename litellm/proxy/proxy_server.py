@@ -3975,10 +3975,10 @@ async def create_assistant(
     API Reference docs - https://platform.openai.com/docs/api-reference/assistants/createAssistant
     """
     global proxy_logging_obj
-    data: Dict = {}
     try:
         # Use orjson to parse JSON data, orjson speeds up requests significantly
         body = await request.body()
+        data = orjson.loads(body)
 
         # Include original request and headers in the data
         data = await add_litellm_data_to_request(
