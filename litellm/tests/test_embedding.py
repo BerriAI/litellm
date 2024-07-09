@@ -1,17 +1,20 @@
-import sys, os
+import os
+import sys
 import traceback
+
+import openai
 import pytest
 from dotenv import load_dotenv
-import openai
 
 load_dotenv()
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-import litellm
-from litellm import embedding, completion, completion_cost
 from unittest.mock import MagicMock, patch
+
+import litellm
+from litellm import completion, completion_cost, embedding
 
 litellm.set_verbose = False
 
@@ -232,6 +235,7 @@ def test_cohere_embedding():
         response = embedding(
             model="embed-english-v2.0",
             input=["good morning from litellm", "this is another item"],
+            input_type="search_query",
         )
         print(f"response:", response)
 
@@ -486,16 +490,16 @@ def test_mistral_embeddings():
 
 
 def test_watsonx_embeddings():
-    
-    def mock_wx_embed_request(method:str, url:str, **kwargs):
+
+    def mock_wx_embed_request(method: str, url: str, **kwargs):
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.headers = {"Content-Type": "application/json"}
         mock_response.json.return_value = {
-                "model_id": "ibm/slate-30m-english-rtrvr",
-                "created_at": "2024-01-01T00:00:00.00Z",
-                "results": [ {"embedding": [0.0]*254} ],
-                "input_token_count": 8
+            "model_id": "ibm/slate-30m-english-rtrvr",
+            "created_at": "2024-01-01T00:00:00.00Z",
+            "results": [{"embedding": [0.0] * 254}],
+            "input_token_count": 8,
         }
         return mock_response
 
@@ -505,7 +509,7 @@ def test_watsonx_embeddings():
             response = litellm.embedding(
                 model="watsonx/ibm/slate-30m-english-rtrvr",
                 input=["good morning from litellm"],
-                token="secret-token"
+                token="secret-token",
             )
         print(f"response: {response}")
         assert isinstance(response.usage, litellm.Usage)
@@ -514,26 +518,27 @@ def test_watsonx_embeddings():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+
 @pytest.mark.asyncio
 async def test_watsonx_aembeddings():
 
     def mock_async_client(*args, **kwargs):
 
         mocked_client = MagicMock()
-        
+
         async def mock_send(request, *args, stream: bool = False, **kwags):
             mock_response = MagicMock()
             mock_response.status_code = 200
             mock_response.headers = {"Content-Type": "application/json"}
             mock_response.json.return_value = {
-                    "model_id": "ibm/slate-30m-english-rtrvr",
-                    "created_at": "2024-01-01T00:00:00.00Z",
-                    "results": [ {"embedding": [0.0]*254} ],
-                    "input_token_count": 8
+                "model_id": "ibm/slate-30m-english-rtrvr",
+                "created_at": "2024-01-01T00:00:00.00Z",
+                "results": [{"embedding": [0.0] * 254}],
+                "input_token_count": 8,
             }
             mock_response.is_error = False
             return mock_response
-            
+
         mocked_client.send = mock_send
 
         return mocked_client
@@ -544,7 +549,7 @@ async def test_watsonx_aembeddings():
             response = await litellm.aembedding(
                 model="watsonx/ibm/slate-30m-english-rtrvr",
                 input=["good morning from litellm"],
-                token="secret-token"
+                token="secret-token",
             )
         print(f"response: {response}")
         assert isinstance(response.usage, litellm.Usage)
