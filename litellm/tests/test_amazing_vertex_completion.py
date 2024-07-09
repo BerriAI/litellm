@@ -677,6 +677,57 @@ def test_gemini_pro_vision_base64():
             pytest.fail(f"An exception occurred - {str(e)}")
 
 
+def test_gemini_pro_grounding():
+    try:
+        load_vertex_ai_credentials()
+        litellm.set_verbose = True
+
+        messages = [
+            {
+                "role": "system",
+                "content": "Your name is Litellm Bot, you are a helpful assistant",
+            },
+            # User asks for their name and weather in San Francisco
+            {
+                "role": "user",
+                "content": "Hello, what is your name and can you tell me the weather?",
+            },
+        ]
+
+        tools = [{"googleSearchRetrieval": {}}]
+
+        litellm.set_verbose = True
+
+        from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+        client = HTTPHandler()
+
+        with patch.object(client, "post", new=MagicMock()) as mock_call:
+            try:
+                resp = litellm.completion(
+                    model="vertex_ai_beta/gemini-1.0-pro-001",
+                    messages=[{"role": "user", "content": "Who won the world cup?"}],
+                    tools=tools,
+                    client=client,
+                )
+            except Exception:
+                pass
+
+            mock_call.assert_called_once()
+
+            print(mock_call.call_args.kwargs["json"]["tools"][0])
+
+            assert (
+                "googleSearchRetrieval"
+                in mock_call.call_args.kwargs["json"]["tools"][0]
+            )
+
+    except litellm.InternalServerError:
+        pass
+    except litellm.RateLimitError:
+        pass
+
+
 # @pytest.mark.skip(reason="exhausted vertex quota. need to refactor to mock the call")
 @pytest.mark.parametrize(
     "model", ["vertex_ai_beta/gemini-1.5-pro", "vertex_ai/claude-3-sonnet@20240229"]
