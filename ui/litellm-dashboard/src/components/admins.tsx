@@ -40,6 +40,7 @@ interface AdminPanelProps {
   accessToken: string | null;
   setTeams: React.Dispatch<React.SetStateAction<Object[] | null>>;
   showSSOBanner: boolean;
+  premiumUser: boolean;
 }
 
 import {
@@ -59,6 +60,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
   searchParams,
   accessToken,
   showSSOBanner,
+  premiumUser,
 }) => {
   const [form] = Form.useForm();
   const [memberForm] = Form.useForm();
@@ -105,6 +107,12 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
 
   const handleShowAllowedIPs = async () => {
     try {
+      if (premiumUser !== true) {
+        message.error(
+          "This feature is only available for premium users. Please upgrade your account."
+        )
+        return
+      }
       if (accessToken) {
         const data = await getAllowedIPs(accessToken);
         setAllowedIPs(data && data.length > 0 ? data : [all_ip_address_allowed]);
@@ -116,7 +124,9 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
       message.error(`Failed to fetch allowed IPs ${error}`);
       setAllowedIPs([all_ip_address_allowed]);
     } finally {
-      setIsAllowedIPModalVisible(true);
+      if (premiumUser === true) {
+        setIsAllowedIPModalVisible(true);
+      }
     }
   };
   
@@ -605,7 +615,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
         <Title level={4}> ✨ Security Settings</Title>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '1rem' }}>
     <div>
-      <Button onClick={() => setIsAddSSOModalVisible(true)}>Add SSO</Button>
+      <Button onClick={() => premiumUser === true ? setIsAddSSOModalVisible(true) : message.error("Only premium users can add SSO")}>Add SSO</Button>
     </div>
     <div>
       <Button onClick={handleShowAllowedIPs}>Allowed IPs</Button>
