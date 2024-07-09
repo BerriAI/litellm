@@ -788,6 +788,95 @@ export const modelHubCall = async (accessToken: String) => {
   }
 };
 
+// Function to get allowed IPs
+export const getAllowedIPs = async (accessToken: String) => {
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/get/allowed_ips`
+      : `/get/allowed_ips`;
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      throw new Error(`Network response was not ok: ${errorData}`);
+    }
+
+    const data = await response.json();
+    console.log("getAllowedIPs:", data);
+    return data.data; // Assuming the API returns { data: [...] }
+  } catch (error) {
+    console.error("Failed to get allowed IPs:", error);
+    throw error;
+  }
+};
+
+// Function to add an allowed IP
+export const addAllowedIP = async (accessToken: String, ip: String) => {
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/add/allowed_ip`
+      : `/add/allowed_ip`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ ip: ip }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      throw new Error(`Network response was not ok: ${errorData}`);
+    }
+
+    const data = await response.json();
+    console.log("addAllowedIP:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to add allowed IP:", error);
+    throw error;
+  }
+};
+
+// Function to delete an allowed IP
+export const deleteAllowedIP = async (accessToken: String, ip: String) => {
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/delete/allowed_ip`
+      : `/delete/allowed_ip`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ ip: ip }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      throw new Error(`Network response was not ok: ${errorData}`);
+    }
+
+    const data = await response.json();
+    console.log("deleteAllowedIP:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to delete allowed IP:", error);
+    throw error;
+  }
+};
+
 export const modelMetricsCall = async (
   accessToken: String,
   userID: String,

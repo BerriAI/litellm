@@ -186,6 +186,9 @@ from litellm.proxy.spend_tracking.spend_management_endpoints import (
     router as spend_management_router,
 )
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
+    router as ui_crud_endpoints_router,
+)
 from litellm.proxy.utils import (
     DBClient,
     PrismaClient,
@@ -1281,7 +1284,7 @@ class ProxyConfig:
         return config
 
     async def save_config(self, new_config: dict):
-        global prisma_client, general_settings, user_config_file_path
+        global prisma_client, general_settings, user_config_file_path, store_model_in_db
         # Load existing config
         ## DB - writes valid config to db
         """
@@ -1290,6 +1293,7 @@ class ProxyConfig:
         """
         if prisma_client is not None and (
             general_settings.get("store_model_in_db", False) == True
+            or store_model_in_db
         ):
             # if using - db for config - models are in ModelTable
             new_config.pop("model_list", None)
@@ -9181,3 +9185,4 @@ app.include_router(spend_management_router)
 app.include_router(caching_router)
 app.include_router(analytics_router)
 app.include_router(debugging_endpoints_router)
+app.include_router(ui_crud_endpoints_router)
