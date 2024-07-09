@@ -682,18 +682,6 @@ def test_gemini_pro_grounding():
         load_vertex_ai_credentials()
         litellm.set_verbose = True
 
-        messages = [
-            {
-                "role": "system",
-                "content": "Your name is Litellm Bot, you are a helpful assistant",
-            },
-            # User asks for their name and weather in San Francisco
-            {
-                "role": "user",
-                "content": "Hello, what is your name and can you tell me the weather?",
-            },
-        ]
-
         tools = [{"googleSearchRetrieval": {}}]
 
         litellm.set_verbose = True
@@ -710,8 +698,8 @@ def test_gemini_pro_grounding():
                     tools=tools,
                     client=client,
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                print("Received Exception - {}".format(str(e)))
 
             mock_call.assert_called_once()
 

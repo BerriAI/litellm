@@ -394,16 +394,19 @@ class VertexGeminiConfig:
                 google_search_tool: Optional[dict] = None
                 for tool in value:
                     # check if grounding
-                    _search_tool = tool.get("googleSearchRetrieval", None)
-                    if google_search_tool is not None:
-                        google_search_tool = _search_tool
-                    else:
+                    try:
                         gtool_func_declaration = FunctionDeclaration(
                             name=tool["function"]["name"],
                             description=tool["function"].get("description", ""),
                             parameters=tool["function"].get("parameters", {}),
                         )
                         gtool_func_declarations.append(gtool_func_declaration)
+                    except KeyError:
+                        # assume it's a provider-specific param
+                        verbose_logger.warning(
+                            "Got KeyError parsing tool={}. Assuming it's a provider-specific param. Use `litellm.set_verbose` or `litellm --detailed_debug` to see raw request."
+                        )
+                        google_search_tool = tool
                 _tools = Tools(function_declarations=gtool_func_declarations)
                 if google_search_tool is not None:
                     _tools["googleSearchRetrieval"] = google_search_tool
