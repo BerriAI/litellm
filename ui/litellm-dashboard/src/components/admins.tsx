@@ -73,6 +73,11 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
   const [isAddSSOModalVisible, setIsAddSSOModalVisible] = useState(false);
   const [isInstructionsModalVisible, setIsInstructionsModalVisible] =
     useState(false);
+  const [isAllowedIPModalVisible, setIsAllowedIPModalVisible] = useState(false);
+  const [isAddIPModalVisible, setIsAddIPModalVisible] = useState(false);
+  const [isDeleteIPModalVisible, setIsDeleteIPModalVisible] = useState(false);
+  const [allowedIPs, setAllowedIPs] = useState<string[]>([]);
+  const [ipToDelete, setIPToDelete] = useState<string | null>(null);
   const router = useRouter();
 
   const [possibleUIRoles, setPossibleUIRoles] = useState<null | Record<
@@ -92,6 +97,33 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
     nonSssoUrl = "<your-proxy-url>";
   }
   nonSssoUrl += "/fallback/login";
+
+  const handleShowAllowedIPs = () => {
+    // In a real application, you would fetch the allowed IPs from your backend here
+    setAllowedIPs(['192.168.1.1', '10.0.0.1', '172.16.0.1']);
+    setIsAllowedIPModalVisible(true);
+  };
+
+  const handleAddIP = (values: { ip: string }) => {
+    setAllowedIPs([...allowedIPs, values.ip]);
+    setIsAddIPModalVisible(false);
+    message.success('IP address added successfully');
+  };
+
+  const handleDeleteIP = (ip: string) => {
+    setIPToDelete(ip);
+    setIsDeleteIPModalVisible(true);
+  };
+
+  const confirmDeleteIP = () => {
+    if (ipToDelete) {
+      setAllowedIPs(allowedIPs.filter(ip => ip !== ipToDelete));
+      setIsDeleteIPModalVisible(false);
+      setIPToDelete(null);
+      message.success('IP address deleted successfully');
+    }
+  };
+
 
   const handleAddSSOOk = () => {
     setIsAddSSOModalVisible(false);
@@ -533,9 +565,19 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
         </Col>
       </Grid>
       <Grid>
+        <Card>
+        <Title level={4}> ✨ Security Settings</Title>
         <Title level={4}>Add SSO</Title>
+        <Button onClick={() => setIsAddSSOModalVisible(true)}>Add SSO</Button>
+
+
+        <Title level={4}>Allowed IP Addresses</Title>
+        <Button onClick={handleShowAllowedIPs}>Manage Allowed IPs</Button>
+
+        </Card>
+       
         <div className="flex justify-start mb-4">
-          <Button onClick={() => setIsAddSSOModalVisible(true)}>Add SSO</Button>
+         
           <Modal
             title="Add SSO"
             visible={isAddSSOModalVisible}
@@ -632,6 +674,71 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
               <Button2 onClick={handleInstructionsOk}>Done</Button2>
             </div>
           </Modal>
+          <Modal
+          title="Manage Allowed IP Addresses"
+          width={800}
+          visible={isAllowedIPModalVisible}
+          onCancel={() => setIsAllowedIPModalVisible(false)}
+          footer={[
+            <Button className="mx-1"key="add" onClick={() => setIsAddIPModalVisible(true)}>
+              Add IP Address
+            </Button>,
+            <Button key="close" onClick={() => setIsAllowedIPModalVisible(false)}>
+              Close
+            </Button>
+          ]}
+        >
+          <Table>
+            <TableHead>
+              <TableRow>
+                <TableHeaderCell>IP Address</TableHeaderCell>
+                <TableHeaderCell>Action</TableHeaderCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {allowedIPs.map((ip, index) => (
+                <TableRow key={index}>
+                  <TableCell>{ip}</TableCell>
+                  <TableCell>
+                    <Button onClick={() => handleDeleteIP(ip)} color="red">
+                      Delete
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </Modal>
+
+        <Modal
+          title="Add Allowed IP Address"
+          visible={isAddIPModalVisible}
+          onCancel={() => setIsAddIPModalVisible(false)}
+          footer={null}
+        >
+          <Form onFinish={handleAddIP}>
+            <Form.Item
+              name="ip"
+              rules={[{ required: true, message: 'Please enter an IP address' }]}
+            >
+              <Input placeholder="Enter IP address" />
+            </Form.Item>
+            <Form.Item>
+              <Button2 htmlType="submit">
+                Add IP Address
+              </Button2>
+            </Form.Item>
+          </Form>
+        </Modal>
+
+        <Modal
+          title="Confirm Delete"
+          visible={isDeleteIPModalVisible}
+          onOk={confirmDeleteIP}
+          onCancel={() => setIsDeleteIPModalVisible(false)}
+        >
+          <p>Are you sure you want to delete the IP address: {ipToDelete}?</p>
+        </Modal>
         </div>
         <Callout title="Login without SSO" color="teal">
           If you need to login without sso, you can access{" "}
