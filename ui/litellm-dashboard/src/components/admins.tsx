@@ -15,7 +15,7 @@ import {
   message,
 } from "antd";
 import { CopyToClipboard } from "react-copy-to-clipboard";
-import { Select, SelectItem } from "@tremor/react";
+import { Select, SelectItem, Subtitle } from "@tremor/react";
 import {
   Table,
   TableBody,
@@ -598,16 +598,17 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
           </div>
         </Col>
       </Grid>
-      <Grid>
+      <Grid >
         <Card>
         <Title level={4}> ✨ Security Settings</Title>
-        <Title level={4}>Add SSO</Title>
-        <Button onClick={() => setIsAddSSOModalVisible(true)}>Add SSO</Button>
-
-
-        <Title level={4}>Allowed IP Addresses</Title>
-        <Button onClick={handleShowAllowedIPs}>Manage Allowed IPs</Button>
-
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '1rem' }}>
+    <div>
+      <Button onClick={() => setIsAddSSOModalVisible(true)}>Add SSO</Button>
+    </div>
+    <div>
+      <Button onClick={handleShowAllowedIPs}>Allowed IPs</Button>
+    </div>
+  </div>
         </Card>
        
         <div className="flex justify-start mb-4">
