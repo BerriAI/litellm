@@ -45,6 +45,52 @@ response = completion(
 )
 ```
 
+## Tool Calling 
+
+```python
+from litellm import completion
+import os
+# set env
+os.environ["GEMINI_API_KEY"] = ".."
+
+tools = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_current_weather",
+            "description": "Get the current weather in a given location",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location": {
+                        "type": "string",
+                        "description": "The city and state, e.g. San Francisco, CA",
+                    },
+                    "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                },
+                "required": ["location"],
+            },
+        },
+    }
+]
+messages = [{"role": "user", "content": "What's the weather like in Boston today?"}]
+
+response = completion(
+    model="gemini/gemini-1.5-flash",
+    messages=messages,
+    tools=tools,
+)
+# Add any assertions, here to check response args
+print(response)
+assert isinstance(response.choices[0].message.tool_calls[0].function.name, str)
+assert isinstance(
+    response.choices[0].message.tool_calls[0].function.arguments, str
+)
+
+
+```
+
+
 # Gemini-Pro-Vision
 LiteLLM Supports the following image types passed in `url`
 - Images with direct links - https://storage.googleapis.com/github-repo/img/gemini/intro/landmark3.jpg

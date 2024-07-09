@@ -1,13 +1,18 @@
-import os, types
+import asyncio
 import json
-import requests  # type: ignore
+import os
 import time
-from typing import Callable, Optional, Union, Tuple, Any
-from litellm.utils import ModelResponse, Usage, CustomStreamWrapper
-import litellm, asyncio
+import types
+from typing import Any, Callable, Optional, Tuple, Union
+
 import httpx  # type: ignore
-from .prompt_templates.factory import prompt_factory, custom_prompt
+import requests  # type: ignore
+
+import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
+
+from .prompt_templates.factory import custom_prompt, prompt_factory
 
 
 class ReplicateError(Exception):
@@ -251,7 +256,7 @@ async def async_handle_prediction_response(
     logs = ""
     while True and (status not in ["succeeded", "failed", "canceled"]):
         print_verbose(f"replicate: polling endpoint: {prediction_url}")
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(0.5)  # prevent replicate rate limit errors
         response = await http_handler.get(prediction_url, headers=headers)
         if response.status_code == 200:
             response_data = response.json()
@@ -290,7 +295,15 @@ def handle_prediction_response_streaming(prediction_url, api_token, print_verbos
             response_data = response.json()
             status = response_data["status"]
             if "output" in response_data:
-                output_string = "".join(response_data["output"])
+                try:
+                    output_string = "".join(response_data["output"])
+                except Exception as e:
+                    raise ReplicateError(
+                        status_code=422,
+                        message="Unable to parse response. Got={}".format(
+                            response_data["output"]
+                        ),
+                    )
                 new_output = output_string[len(previous_output) :]
                 print_verbose(f"New chunk: {new_output}")
                 yield {"output": new_output, "status": status}
@@ -329,7 +342,15 @@ async def async_handle_prediction_response_streaming(
             response_data = response.json()
             status = response_data["status"]
             if "output" in response_data:
-                output_string = "".join(response_data["output"])
+                try:
+                    output_string = "".join(response_data["output"])
+                except Exception as e:
+                    raise ReplicateError(
+                        status_code=422,
+                        message="Unable to parse response. Got={}".format(
+                            response_data["output"]
+                        ),
+                    )
                 new_output = output_string[len(previous_output) :]
                 print_verbose(f"New chunk: {new_output}")
                 yield {"output": new_output, "status": status}

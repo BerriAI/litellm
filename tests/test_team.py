@@ -15,6 +15,7 @@ async def new_user(
     budget_duration=None,
     models=["azure-models"],
     team_id=None,
+    user_email=None,
 ):
     url = "http://0.0.0.0:4000/user/new"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
@@ -24,6 +25,7 @@ async def new_user(
         "duration": None,
         "max_budget": budget,
         "budget_duration": budget_duration,
+        "user_email": user_email,
     }
 
     if user_id is not None:
@@ -47,7 +49,7 @@ async def new_user(
 
 
 async def add_member(
-    session, i, team_id, user_id=None, user_email=None, max_budget=None
+    session, i, team_id, user_id=None, user_email=None, max_budget=None, members=None
 ):
     url = "http://0.0.0.0:4000/team/member_add"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
@@ -56,10 +58,13 @@ async def add_member(
         data["member"]["user_email"] = user_email
     elif user_id is not None:
         data["member"]["user_id"] = user_id
+    elif members is not None:
+        data["member"] = members
 
     if max_budget is not None:
         data["max_budget_in_team"] = max_budget
 
+    print("sent data: {}".format(data))
     async with session.post(url, headers=headers, json=data) as response:
         status = response.status
         response_text = await response.text()
@@ -74,10 +79,14 @@ async def add_member(
         return await response.json()
 
 
-async def delete_member(session, i, team_id, user_id):
+async def delete_member(session, i, team_id, user_id=None, user_email=None):
     url = "http://0.0.0.0:4000/team/member_delete"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
-    data = {"team_id": team_id, "user_id": user_id}
+    data = {"team_id": team_id}
+    if user_id is not None:
+        data["user_id"] = user_id
+    elif user_email is not None:
+        data["user_email"] = user_email
 
     async with session.post(url, headers=headers, json=data) as response:
         status = response.status
@@ -333,7 +342,7 @@ async def test_team_info():
 async def test_team_update_sc_2():
     """
     - Create team
-    - Add 1 user (doesn't exist in db)
+    - Add 3 users (doesn't exist in db)
     - Change team alias
     - Check if it works
     - Assert team object unchanged besides team alias
@@ -347,15 +356,20 @@ async def test_team_update_sc_2():
             {"role": "admin", "user_id": admin_user},
         ]
         team_data = await new_team(session=session, i=0, member_list=member_list)
-        ## Create new normal user
-        new_normal_user = f"krrish_{uuid.uuid4()}@berri.ai"
+        ## Create 10 normal users
+        members = [
+            {"role": "user", "user_id": f"krrish_{uuid.uuid4()}@berri.ai"}
+            for _ in range(10)
+        ]
         await add_member(
-            session=session,
-            i=0,
-            team_id=team_data["team_id"],
-            user_id=None,
-            user_email=new_normal_user,
+            session=session, i=0, team_id=team_data["team_id"], members=members
         )
+        ## ASSERT TEAM SIZE
+        team_info = await get_team_info(
+            session=session, get_team=team_data["team_id"], call_key="sk-1234"
+        )
+
+        assert len(team_info["team_info"]["members_with_roles"]) == 12
 
         ## CHANGE TEAM ALIAS
 
@@ -415,8 +429,9 @@ async def test_team_delete():
         await delete_team(session=session, i=0, team_id=team_data["team_id"])
 
 
+@pytest.mark.parametrize("dimension", ["user_id", "user_email"])
 @pytest.mark.asyncio
-async def test_member_delete():
+async def test_member_delete(dimension):
     """
     - Create team
     - Add member
@@ -431,30 +446,58 @@ async def test_member_delete():
         await new_user(session=session, i=0, user_id=admin_user)
         ## Create normal user
         normal_user = f"{uuid.uuid4()}"
+        normal_user_email = "{}@berri.ai".format(normal_user)
         print(f"normal_user: {normal_user}")
-        await new_user(session=session, i=0, user_id=normal_user)
+        await new_user(
+            session=session, i=0, user_id=normal_user, user_email=normal_user_email
+        )
         ## Create team with 1 admin and 1 user
         member_list = [
             {"role": "admin", "user_id": admin_user},
-            {"role": "user", "user_id": normal_user},
         ]
+        if dimension == "user_id":
+            member_list.append({"role": "user", "user_id": normal_user})
+        elif dimension == "user_email":
+            member_list.append({"role": "user", "user_email": normal_user_email})
         team_data = await new_team(session=session, i=0, member_list=member_list)
-        print(f"team_data: {team_data}")
-        member_id_list = []
+
+        user_in_team = False
         for member in team_data["members_with_roles"]:
-            member_id_list.append(member["user_id"])
+            if dimension == "user_id" and member["user_id"] == normal_user:
+                user_in_team = True
+            elif (
+                dimension == "user_email" and member["user_email"] == normal_user_email
+            ):
+                user_in_team = True
 
-        assert normal_user in member_id_list
-        # Delete member
-        updated_team_data = await delete_member(
-            session=session, i=0, team_id=team_data["team_id"], user_id=normal_user
+        assert (
+            user_in_team is True
+        ), "User not in team. Team list={}, User details - id={}, email={}. Dimension={}".format(
+            team_data["members_with_roles"], normal_user, normal_user_email, dimension
         )
+        # Delete member
+        if dimension == "user_id":
+            updated_team_data = await delete_member(
+                session=session, i=0, team_id=team_data["team_id"], user_id=normal_user
+            )
+        elif dimension == "user_email":
+            updated_team_data = await delete_member(
+                session=session,
+                i=0,
+                team_id=team_data["team_id"],
+                user_email=normal_user_email,
+            )
         print(f"updated_team_data: {updated_team_data}")
-        member_id_list = []
-        for member in updated_team_data["members_with_roles"]:
-            member_id_list.append(member["user_id"])
+        user_in_team = False
+        for member in team_data["members_with_roles"]:
+            if dimension == "user_id" and member["user_id"] == normal_user:
+                user_in_team = True
+            elif (
+                dimension == "user_email" and member["user_email"] == normal_user_email
+            ):
+                user_in_team = True
 
-        assert normal_user not in member_id_list
+        assert user_in_team is True
 
 
 @pytest.mark.asyncio
@@ -535,4 +578,4 @@ async def test_users_in_team_budget():
         except Exception as e:
             print("got exception, this is expected")
             print(e)
-            assert "Crossed spend within team" in str(e)
+            assert "Budget has been exceeded" in str(e)

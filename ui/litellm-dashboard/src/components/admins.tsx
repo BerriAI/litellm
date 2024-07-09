@@ -33,6 +33,8 @@ import {
   Divider,
 } from "@tremor/react";
 import { PencilAltIcon } from "@heroicons/react/outline";
+import OnboardingModal from "./onboarding_link";
+import { InvitationLink } from "./onboarding_link";
 interface AdminPanelProps {
   searchParams: any;
   accessToken: string | null;
@@ -40,17 +42,6 @@ interface AdminPanelProps {
   showSSOBanner: boolean;
 }
 
-interface InvitationLink {
-  id: string;
-  user_id: string;
-  is_accepted: boolean;
-  accepted_at: Date | null;
-  expires_at: Date;
-  created_at: Date;
-  created_by: string;
-  updated_at: Date;
-  updated_by: string;
-}
 import {
   userUpdateUserCall,
   Member,
@@ -73,7 +64,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
   const [admins, setAdmins] = useState<null | any[]>(null);
   const [invitationLinkData, setInvitationLinkData] =
     useState<InvitationLink | null>(null);
-  const [isInvitationLinkModalVisible, setInvitationLinkModalVisible] =
+  const [isInvitationLinkModalVisible, setIsInvitationLinkModalVisible] =
     useState(false);
   const [isAddMemberModalVisible, setIsAddMemberModalVisible] = useState(false);
   const [isAddAdminModalVisible, setIsAddAdminModalVisible] = useState(false);
@@ -83,9 +74,16 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
   const [isInstructionsModalVisible, setIsInstructionsModalVisible] =
     useState(false);
   const router = useRouter();
-  const [baseUrl, setBaseUrl] = useState("");
-  const [possibleUIRoles, setPossibleUIRoles] = useState<null | Record<string, Record<string, string>>>(null);
 
+  const [possibleUIRoles, setPossibleUIRoles] = useState<null | Record<
+    string,
+    Record<string, string>
+  >>(null);
+
+  const isLocal = process.env.NODE_ENV === "development";
+  const [baseUrl, setBaseUrl] = useState(
+    isLocal ? "http://localhost:4000" : ""
+  );
 
   let nonSssoUrl;
   try {
@@ -178,31 +176,38 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
   const handleMemberUpdateOk = () => {
     setIsUpdateModalModalVisible(false);
     memberForm.resetFields();
+    form.resetFields();
   };
 
   const handleMemberOk = () => {
     setIsAddMemberModalVisible(false);
     memberForm.resetFields();
+    form.resetFields();
   };
 
   const handleAdminOk = () => {
     setIsAddAdminModalVisible(false);
     memberForm.resetFields();
+    form.resetFields();
   };
 
   const handleMemberCancel = () => {
     setIsAddMemberModalVisible(false);
     memberForm.resetFields();
+    form.resetFields();
   };
 
   const handleAdminCancel = () => {
     setIsAddAdminModalVisible(false);
+    setIsInvitationLinkModalVisible(false);
     memberForm.resetFields();
+    form.resetFields();
   };
 
   const handleMemberUpdateCancel = () => {
     setIsUpdateModalModalVisible(false);
     memberForm.resetFields();
+    form.resetFields();
   };
   // Define the type for the handleMemberCreate function
   type HandleMemberCreate = (formValues: Record<string, any>) => Promise<void>;
@@ -217,21 +222,21 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
         labelAlign="left"
       >
         <>
-          <Form.Item label="Email" name="user_email" className="mb-4">
+          <Form.Item label="Email" name="user_email" className="mb-8 mt-4">
             <Input
               name="user_email"
               className="px-3 py-2 border rounded-md w-full"
             />
           </Form.Item>
-          <div className="text-center mb-4">OR</div>
+          {/* <div className="text-center mb-4">OR</div>
           <Form.Item label="User ID" name="user_id" className="mb-4">
             <Input
               name="user_id"
               className="px-3 py-2 border rounded-md w-full"
             />
-          </Form.Item>
+          </Form.Item> */}
         </>
-        <div style={{ textAlign: "right", marginTop: "10px" }}>
+        <div style={{ textAlign: "right", marginTop: "10px" }} className="mt-4">
           <Button2 htmlType="submit">Add member</Button2>
         </div>
       </Form>
@@ -328,6 +333,14 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
         );
         console.log(`response for team create call: ${response}`);
         // Checking if the team exists in the list and updating or adding accordingly
+
+        // Give admin an invite link for inviting user to proxy
+        const user_id = response.data?.user_id || response.user_id;
+        invitationCreateCall(accessToken, user_id).then((data) => {
+          setInvitationLinkData(data);
+          setIsInvitationLinkModalVisible(true);
+        });
+
         const foundIndex = admins.findIndex((user) => {
           console.log(
             `user.user_id=${user.user_id}; response.user_id=${response.user_id}`
@@ -341,6 +354,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
           // If new user is found, update it
           setAdmins(admins); // Set the new state
         }
+        form.resetFields();
         setIsAddMemberModalVisible(false);
       }
     } catch (error) {
@@ -366,7 +380,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
         const user_id = response.data?.user_id || response.user_id;
         invitationCreateCall(accessToken, user_id).then((data) => {
           setInvitationLinkData(data);
-          setInvitationLinkModalVisible(true);
+          setIsInvitationLinkModalVisible(true);
         });
         console.log(`response for team create call: ${response}`);
         // Checking if the team exists in the list and updating or adding accordingly
@@ -383,6 +397,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
           // If new user is found, update it
           setAdmins(admins); // Set the new state
         }
+        form.resetFields();
         setIsAddAdminModalVisible(false);
       }
     } catch (error) {
@@ -441,7 +456,11 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                               ? member["user_id"]
                               : null}
                         </TableCell>
-                        <TableCell> {possibleUIRoles?.[member?.user_role]?.ui_label || "-"}</TableCell>
+                        <TableCell>
+                          {" "}
+                          {possibleUIRoles?.[member?.user_role]?.ui_label ||
+                            "-"}
+                        </TableCell>
                         <TableCell>
                           <Icon
                             icon={PencilAltIcon}
@@ -488,39 +507,12 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
             >
               {addMemberForm(handleAdminCreate)}
             </Modal>
-            <Modal
-              title="Invitation Link"
-              visible={isInvitationLinkModalVisible}
-              width={600}
-              footer={null}
-              onOk={handleAdminOk}
-              onCancel={handleAdminCancel}
-            >
-              {/* {JSON.stringify(invitationLinkData)} */}
-              <Paragraph>
-                Copy and send the generated link to onboard this user to the
-                proxy.
-              </Paragraph>
-              <div className="flex justify-between pt-5 pb-2">
-                <Text className="text-base">User ID</Text>
-                <Text>{invitationLinkData?.user_id}</Text>
-              </div>
-              <div className="flex justify-between pt-5 pb-2">
-                <Text>Invitation Link</Text>
-                <Text>
-                  {baseUrl}/onboarding/{invitationLinkData?.id}
-                </Text>
-              </div>
-              <div className="flex justify-end mt-5">
-                <div></div>
-                <CopyToClipboard
-                  text={`${baseUrl}/onboarding/${invitationLinkData?.id}`}
-                  onCopy={() => message.success("Copied!")}
-                >
-                  <Button variant="primary">Copy invitation link</Button>
-                </CopyToClipboard>
-              </div>
-            </Modal>
+            <OnboardingModal
+              isInvitationLinkModalVisible={isInvitationLinkModalVisible}
+              setIsInvitationLinkModalVisible={setIsInvitationLinkModalVisible}
+              baseUrl={baseUrl}
+              invitationLinkData={invitationLinkData}
+            />
             <Button
               className="mb-5"
               onClick={() => setIsAddMemberModalVisible(true)}

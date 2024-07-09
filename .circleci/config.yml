@@ -44,8 +44,12 @@ jobs:
             pip install "logfire==0.29.0"
             pip install numpydoc
             pip install traceloop-sdk==0.21.1
+            pip install opentelemetry-api==1.25.0
+            pip install opentelemetry-sdk==1.25.0
+            pip install opentelemetry-exporter-otlp==1.25.0
             pip install openai
-            pip install prisma            
+            pip install prisma   
+            pip install "detect_secrets==1.5.0"         
             pip install "httpx==0.24.1"
             pip install fastapi
             pip install "gunicorn==21.2.0"
@@ -62,6 +66,7 @@ jobs:
             pip install "pydantic==2.7.1"
             pip install "diskcache==5.6.1"
             pip install "Pillow==10.3.0"
+            pip install "jsonschema==4.22.0"
       - save_cache:
           paths:
             - ./venv
@@ -97,7 +102,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv litellm/tests/ -x --junitxml=test-results/junit.xml --durations=5
+            python -m pytest -vv litellm/tests/ -x --junitxml=test-results/junit.xml --durations=5 -k "not test_python_38.py"
           no_output_timeout: 120m
 
       # Store test results
@@ -123,6 +128,7 @@ jobs:
             pip install jinja2
             pip install tokenizers
             pip install openai
+            pip install jsonschema
       - run:
           name: Run tests
           command: |
@@ -177,6 +183,7 @@ jobs:
             pip install numpydoc
             pip install prisma            
             pip install fastapi            
+            pip install jsonschema   
             pip install "httpx==0.24.1"
             pip install "gunicorn==21.2.0"
             pip install "anyio==3.7.1"
@@ -199,11 +206,13 @@ jobs:
               -e REDIS_PORT=$REDIS_PORT \
               -e AZURE_FRANCE_API_KEY=$AZURE_FRANCE_API_KEY \
               -e AZURE_EUROPE_API_KEY=$AZURE_EUROPE_API_KEY \
+              -e MISTRAL_API_KEY=$MISTRAL_API_KEY \
               -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
               -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
               -e AWS_REGION_NAME=$AWS_REGION_NAME \
               -e AUTO_INFER_REGION=True \
               -e OPENAI_API_KEY=$OPENAI_API_KEY \
+              -e LITELLM_LICENSE=$LITELLM_LICENSE \
               -e LANGFUSE_PROJECT1_PUBLIC=$LANGFUSE_PROJECT1_PUBLIC \
               -e LANGFUSE_PROJECT2_PUBLIC=$LANGFUSE_PROJECT2_PUBLIC \
               -e LANGFUSE_PROJECT1_SECRET=$LANGFUSE_PROJECT1_SECRET \

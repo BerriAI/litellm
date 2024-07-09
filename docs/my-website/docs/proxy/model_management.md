@@ -1,3 +1,6 @@
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
 # Model Management
 Add new models + Get model info without restarting proxy.
 

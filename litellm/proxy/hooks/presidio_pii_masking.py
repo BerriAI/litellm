@@ -8,21 +8,26 @@
 #  Tell us how we can improve! - Krrish & Ishaan
 
 
-from typing import Optional, Literal, Union
-import litellm, traceback, sys, uuid, json
-from litellm.caching import DualCache
-from litellm.proxy._types import UserAPIKeyAuth
-from litellm.integrations.custom_logger import CustomLogger
+import asyncio
+import json
+import traceback
+import uuid
+from typing import Optional, Union
+
+import aiohttp
 from fastapi import HTTPException
+
+import litellm  # noqa: E401
 from litellm._logging import verbose_proxy_logger
+from litellm.caching import DualCache
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.utils import (
-    ModelResponse,
     EmbeddingResponse,
     ImageResponse,
+    ModelResponse,
     StreamingChoices,
 )
-from datetime import datetime
-import aiohttp, asyncio
 
 
 class _OPTIONAL_PresidioPIIMasking(CustomLogger):
@@ -57,22 +62,41 @@ class _OPTIONAL_PresidioPIIMasking(CustomLogger):
                     f"An error occurred: {str(e)}, file_path={ad_hoc_recognizers}"
                 )
 
-        self.presidio_analyzer_api_base = litellm.get_secret(
+        self.validate_environment()
+
+    def validate_environment(self):
+        self.presidio_analyzer_api_base: Optional[str] = litellm.get_secret(
             "PRESIDIO_ANALYZER_API_BASE", None
-        )
-        self.presidio_anonymizer_api_base = litellm.get_secret(
+        )  # type: ignore
+        self.presidio_anonymizer_api_base: Optional[str] = litellm.get_secret(
             "PRESIDIO_ANONYMIZER_API_BASE", None
-        )
+        )  # type: ignore
 
         if self.presidio_analyzer_api_base is None:
             raise Exception("Missing `PRESIDIO_ANALYZER_API_BASE` from environment")
-        elif not self.presidio_analyzer_api_base.endswith("/"):
+        if not self.presidio_analyzer_api_base.endswith("/"):
             self.presidio_analyzer_api_base += "/"
+        if not (
+            self.presidio_analyzer_api_base.startswith("http://")
+            or self.presidio_analyzer_api_base.startswith("https://")
+        ):
+            # add http:// if unset, assume communicating over private network - e.g. render
+            self.presidio_analyzer_api_base = (
+                "http://" + self.presidio_analyzer_api_base
+            )
 
         if self.presidio_anonymizer_api_base is None:
             raise Exception("Missing `PRESIDIO_ANONYMIZER_API_BASE` from environment")
-        elif not self.presidio_anonymizer_api_base.endswith("/"):
+        if not self.presidio_anonymizer_api_base.endswith("/"):
             self.presidio_anonymizer_api_base += "/"
+        if not (
+            self.presidio_anonymizer_api_base.startswith("http://")
+            or self.presidio_anonymizer_api_base.startswith("https://")
+        ):
+            # add http:// if unset, assume communicating over private network - e.g. render
+            self.presidio_anonymizer_api_base = (
+                "http://" + self.presidio_anonymizer_api_base
+            )
 
     def print_verbose(self, print_statement):
         try:
@@ -138,7 +162,12 @@ class _OPTIONAL_PresidioPIIMasking(CustomLogger):
                 else:
                     raise Exception(f"Invalid anonymizer response: {redacted_text}")
         except Exception as e:
-            traceback.print_exc()
+            verbose_proxy_logger.error(
+                "litellm.proxy.hooks.presidio_pii_masking.py::async_pre_call_hook(): Exception occured - {}".format(
+                    str(e)
+                )
+            )
+            verbose_proxy_logger.debug(traceback.format_exc())
             raise e
 
     async def async_pre_call_hook(

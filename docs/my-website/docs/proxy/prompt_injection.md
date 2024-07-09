@@ -1,12 +1,15 @@
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
 # 🕵️ Prompt Injection Detection
 
 LiteLLM Supports the following methods for detecting prompt injection attacks
 
-- [Using Lakera AI API](#lakeraai)
+- [Using Lakera AI API](#✨-enterprise-lakeraai)
 - [Similarity Checks](#similarity-checking)
 - [LLM API Call to check](#llm-api-checks)
 
-## LakeraAI
+## ✨ [Enterprise] LakeraAI
 
 Use this if you want to reject /chat, /completions, /embeddings calls that have prompt injection attacks
 

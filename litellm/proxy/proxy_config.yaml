@@ -14,14 +14,35 @@ model_list:
     litellm_params:
       model: openai/*
       api_key: os.environ/OPENAI_API_KEY
-  - model_name: my-triton-model
+  - model_name: mistral-embed
     litellm_params:
-      model: triton/any"
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/triton/embeddings
+      model: mistral/mistral-embed
 
 general_settings:
-  master_key: sk-1234
-  alerting: ["slack"]
+  pass_through_endpoints:
+    - path: "/v1/rerank"
+      target: "https://api.cohere.com/v1/rerank"
+      auth: true # 👈 Key change to use LiteLLM Auth / Keys
+      headers:
+        Authorization: "bearer os.environ/COHERE_API_KEY"
+        content-type: application/json
+        accept: application/json
+    - path: "/api/public/ingestion"
+      target: "https://us.cloud.langfuse.com/api/public/ingestion"
+      auth: true
+      headers:
+        LANGFUSE_PUBLIC_KEY: "os.environ/LANGFUSE_DEV_PUBLIC_KEY"
+        LANGFUSE_SECRET_KEY: "os.environ/LANGFUSE_DEV_SK_KEY"
 
 litellm_settings:
-  callbacks: custom_callbacks1.proxy_handler_instance
+  callbacks: ["otel"]
+  guardrails:
+    - prompt_injection:
+        callbacks: [lakera_prompt_injection, hide_secrets]
+        default_on: true
+    - hide_secrets:
+        callbacks: [hide_secrets]
+        default_on: true
+    
+
+

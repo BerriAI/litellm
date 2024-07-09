@@ -85,6 +85,5 @@ class DyanmoDBLogger:
             )
             return response
         except:
-            traceback.print_exc()
             print_verbose(f"DynamoDB Layer Error - {traceback.format_exc()}")
             pass
