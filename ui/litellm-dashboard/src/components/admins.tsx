@@ -93,6 +93,8 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
     isLocal ? "http://localhost:4000" : ""
   );
 
+  const all_ip_address_allowed = "All IP Addresses Allowed";
+
   let nonSssoUrl;
   try {
     nonSssoUrl = window.location.origin;
@@ -105,14 +107,14 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
     try {
       if (accessToken) {
         const data = await getAllowedIPs(accessToken);
-        setAllowedIPs(data.length > 0 ? data : ["All IP Addresses"]);
+        setAllowedIPs(data && data.length > 0 ? data : [all_ip_address_allowed]);
       } else {
-        setAllowedIPs(["All IP Addresses"]);
+        setAllowedIPs([all_ip_address_allowed]);
       }
     } catch (error) {
       console.error("Error fetching allowed IPs:", error);
-      message.error("Failed to fetch allowed IPs");
-      setAllowedIPs(["All IP Addresses"]);
+      message.error(`Failed to fetch allowed IPs ${error}`);
+      setAllowedIPs([all_ip_address_allowed]);
     } finally {
       setIsAllowedIPModalVisible(true);
     }
@@ -129,7 +131,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
       }
     } catch (error) {
       console.error("Error adding IP:", error);
-      message.error('Failed to add IP address');
+      message.error(`Failed to add IP address ${error}`);
     } finally {
       setIsAddIPModalVisible(false);
     }
@@ -146,11 +148,11 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
         await deleteAllowedIP(accessToken, ipToDelete);
         // Fetch the updated list of IPs
         const updatedIPs = await getAllowedIPs(accessToken);
-        setAllowedIPs(updatedIPs.length > 0 ? updatedIPs : ["All IP Addresses"]);
+        setAllowedIPs(updatedIPs.length > 0 ? updatedIPs : [all_ip_address_allowed]);
         message.success('IP address deleted successfully');
       } catch (error) {
         console.error("Error deleting IP:", error);
-        message.error('Failed to delete IP address');
+        message.error(`Failed to delete IP address ${error}`);
       } finally {
         setIsDeleteIPModalVisible(false);
         setIPToDelete(null);
@@ -731,16 +733,18 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
     </TableRow>
   </TableHead>
   <TableBody>
-    {allowedIPs.map((ip, index) => (
-      <TableRow key={index}>
-        <TableCell>{ip}</TableCell>
-        <TableCell className="text-right">
-          <Button onClick={() => handleDeleteIP(ip)} color="red" size="xs">
-            Delete
-          </Button>
-        </TableCell>
-      </TableRow>
-    ))}
+  {allowedIPs.map((ip, index) => (
+  <TableRow key={index}>
+    <TableCell>{ip}</TableCell>
+    <TableCell className="text-right">
+      {ip !== all_ip_address_allowed && (
+        <Button onClick={() => handleDeleteIP(ip)} color="red" size="xs">
+          Delete
+        </Button>
+      )}
+    </TableCell>
+  </TableRow>
+))}
   </TableBody>
 </Table>
         </Modal>
