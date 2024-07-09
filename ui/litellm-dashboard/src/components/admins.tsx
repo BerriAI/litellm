@@ -50,6 +50,9 @@ import {
   setCallbacksCall,
   invitationCreateCall,
   getPossibleUserRoles,
+  addAllowedIP,
+  getAllowedIPs,
+  deleteAllowedIP,
 } from "./networking";
 
 const AdminPanel: React.FC<AdminPanelProps> = ({
@@ -98,29 +101,60 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
   }
   nonSssoUrl += "/fallback/login";
 
-  const handleShowAllowedIPs = () => {
-    // In a real application, you would fetch the allowed IPs from your backend here
-    setAllowedIPs(['192.168.1.1', '10.0.0.1', '172.16.0.1']);
-    setIsAllowedIPModalVisible(true);
+  const handleShowAllowedIPs = async () => {
+    try {
+      if (accessToken) {
+        const data = await getAllowedIPs(accessToken);
+        setAllowedIPs(data.length > 0 ? data : ["All IP Addresses"]);
+      } else {
+        setAllowedIPs(["All IP Addresses"]);
+      }
+    } catch (error) {
+      console.error("Error fetching allowed IPs:", error);
+      message.error("Failed to fetch allowed IPs");
+      setAllowedIPs(["All IP Addresses"]);
+    } finally {
+      setIsAllowedIPModalVisible(true);
+    }
   };
-
-  const handleAddIP = (values: { ip: string }) => {
-    setAllowedIPs([...allowedIPs, values.ip]);
-    setIsAddIPModalVisible(false);
-    message.success('IP address added successfully');
+  
+  const handleAddIP = async (values: { ip: string }) => {
+    try {
+      if (accessToken) {
+        await addAllowedIP(accessToken, values.ip);
+        // Fetch the updated list of IPs
+        const updatedIPs = await getAllowedIPs(accessToken);
+        setAllowedIPs(updatedIPs);
+        message.success('IP address added successfully');
+      }
+    } catch (error) {
+      console.error("Error adding IP:", error);
+      message.error('Failed to add IP address');
+    } finally {
+      setIsAddIPModalVisible(false);
+    }
   };
-
-  const handleDeleteIP = (ip: string) => {
+  
+  const handleDeleteIP = async (ip: string) => {
     setIPToDelete(ip);
     setIsDeleteIPModalVisible(true);
   };
-
-  const confirmDeleteIP = () => {
-    if (ipToDelete) {
-      setAllowedIPs(allowedIPs.filter(ip => ip !== ipToDelete));
-      setIsDeleteIPModalVisible(false);
-      setIPToDelete(null);
-      message.success('IP address deleted successfully');
+  
+  const confirmDeleteIP = async () => {
+    if (ipToDelete && accessToken) {
+      try {
+        await deleteAllowedIP(accessToken, ipToDelete);
+        // Fetch the updated list of IPs
+        const updatedIPs = await getAllowedIPs(accessToken);
+        setAllowedIPs(updatedIPs.length > 0 ? updatedIPs : ["All IP Addresses"]);
+        message.success('IP address deleted successfully');
+      } catch (error) {
+        console.error("Error deleting IP:", error);
+        message.error('Failed to delete IP address');
+      } finally {
+        setIsDeleteIPModalVisible(false);
+        setIPToDelete(null);
+      }
     }
   };
 
