@@ -2165,7 +2165,7 @@ async def initialize(
     generate_feedback_box()
     user_model = model
     user_debug = debug
-    if debug == True:  # this needs to be first, so users can see Router init debugg
+    if debug is True:  # this needs to be first, so users can see Router init debugg
         import logging
 
         from litellm._logging import (
@@ -2424,7 +2424,7 @@ def giveup(e):
 
 @router.on_event("startup")
 async def startup_event():
-    global prisma_client, master_key, use_background_health_checks, llm_router, llm_model_list, general_settings, proxy_budget_rescheduler_min_time, proxy_budget_rescheduler_max_time, litellm_proxy_admin_name, db_writer_client, store_model_in_db
+    global prisma_client, master_key, use_background_health_checks, llm_router, llm_model_list, general_settings, proxy_budget_rescheduler_min_time, proxy_budget_rescheduler_max_time, litellm_proxy_admin_name, db_writer_client, store_model_in_db, premium_user, _license_check
     import json
 
     ### LOAD MASTER KEY ###
@@ -2453,6 +2453,21 @@ async def startup_event():
         # if not, assume it's a json string
         worker_config = json.loads(os.getenv("WORKER_CONFIG"))
         await initialize(**worker_config)
+
+    ## CHECK PREMIUM USER
+    verbose_proxy_logger.debug(
+        "litellm.proxy.proxy_server.py::startup() - CHECKING PREMIUM USER - {}".format(
+            premium_user
+        )
+    )
+    if premium_user is False:
+        premium_user = _license_check.is_premium()
+
+    verbose_proxy_logger.debug(
+        "litellm.proxy.proxy_server.py::startup() - PREMIUM USER value - {}".format(
+            premium_user
+        )
+    )
 
     ## COST TRACKING ##
     cost_tracking()
@@ -7645,7 +7660,7 @@ async def login(request: Request):
             litellm_dashboard_ui += "/ui/"
         import jwt
 
-        jwt_token = jwt.encode(
+        jwt_token = jwt.encode(  # type: ignore
             {
                 "user_id": user_id,
                 "key": key,
@@ -7709,7 +7724,7 @@ async def login(request: Request):
                 litellm_dashboard_ui += "/ui/"
             import jwt
 
-            jwt_token = jwt.encode(
+            jwt_token = jwt.encode(  # type: ignore
                 {
                     "user_id": user_id,
                     "key": key,
@@ -7844,7 +7859,7 @@ async def onboarding(invite_link: str):
         litellm_dashboard_ui += "/ui/onboarding"
     import jwt
 
-    jwt_token = jwt.encode(
+    jwt_token = jwt.encode(  # type: ignore
         {
             "user_id": user_obj.user_id,
             "key": key,
@@ -8261,7 +8276,7 @@ async def auth_callback(request: Request):
 
     import jwt
 
-    jwt_token = jwt.encode(
+    jwt_token = jwt.encode(  # type: ignore
         {
             "user_id": user_id,
             "key": key,
