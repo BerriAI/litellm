@@ -3240,6 +3240,12 @@ async def completion(
     tags=["embeddings"],
 )
 @router.post(
+    "/engines/{model:path}/embeddings",
+    dependencies=[Depends(user_api_key_auth)],
+    response_class=ORJSONResponse,
+    tags=["embeddings"],
+)  # azure compatible endpoint
+@router.post(
     "/openai/deployments/{model:path}/embeddings",
     dependencies=[Depends(user_api_key_auth)],
     response_class=ORJSONResponse,
