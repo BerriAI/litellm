@@ -48,6 +48,7 @@ from litellm import (  # type: ignore
     get_litellm_params,
     get_optional_params,
 )
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.utils import (
     CustomStreamWrapper,
@@ -3941,6 +3942,33 @@ def text_completion(
     text_completion_response["usage"] = response.get("usage", None)
 
     return text_completion_response
+
+
+###### Adapter Completion ################
+
+
+def adapter_completion(*, adapter_id: str, **kwargs) -> Any:
+    translation_obj: Optional[CustomLogger] = None
+    for item in litellm.adapters:
+        if item["id"] == adapter_id:
+            translation_obj = item["adapter"]
+
+    if translation_obj is None:
+        raise ValueError(
+            "No matching adapter given. Received 'adapter_id'={}, litellm.adapters={}".format(
+                adapter_id, litellm.adapters
+            )
+        )
+
+    new_kwargs = translation_obj.translate_completion_input_params(kwargs=kwargs)
+
+    response: ModelResponse = completion(**new_kwargs)  # type: ignore
+
+    translated_response = translation_obj.translate_completion_output_params(
+        response=response
+    )
+
+    return translated_response
 
 
 ##### Moderation #######################
