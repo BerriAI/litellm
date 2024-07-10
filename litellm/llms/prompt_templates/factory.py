@@ -1339,7 +1339,16 @@ def parse_xml_params(xml_content, json_schema: Optional[dict] = None):
         for prop in json_schema["properties"]:
             # If property is an array, get the nested items
             _element = root.find(f"parameters/{prop}")
-            if json_schema["properties"][prop]["type"] == "array":
+            
+            is_array = json_schema["properties"][prop].get("type", None) == "array"
+            for wrapping_property in ["anyOf", "oneOf", "allOf"]:
+                if not is_array and wrapping_property in json_schema["properties"][prop]:
+                    for prop_schema in json_schema["properties"][prop][wrapping_property]:
+                        if prop_schema.get("type", None) == "array":
+                            is_array = True
+                            break
+
+            if is_array:
                 items = []
                 if _element is not None:
                     for value in _element:
