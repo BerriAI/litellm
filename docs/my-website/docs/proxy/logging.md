@@ -22,6 +22,39 @@ Log Proxy Input, Output, Exceptions using Langfuse, OpenTelemetry, Custom Callba
 - [Logging to Athina](#logging-proxy-inputoutput-athina)
 - [(BETA) Moderation with Azure Content-Safety](#moderation-with-azure-content-safety)
 
+## Getting the LiteLLM Call ID
+
+LiteLLM generates a unique `call_id` for each request. This `call_id` can be
+used to track the request across the system. This can be very useful for finding
+the info for a particular request in a logging system like one of the systems
+mentioned in this page.
+
+```shell
+curl -i -sSL --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'Content-Type: application/json' \
+    --data '{
+      "model": "gpt-3.5-turbo",
+      "messages": [{"role": "user", "content": "what llm are you"}]
+    }' | grep 'x-litellm'
+```
+
+The output of this is:
+
+```output
+x-litellm-call-id: b980db26-9512-45cc-b1da-c511a363b83f
+x-litellm-model-id: cb41bc03f4c33d310019bae8c5afdb1af0a8f97b36a234405a9807614988457c
+x-litellm-model-api-base: https://x-example-1234.openai.azure.com
+x-litellm-version: 1.40.21
+x-litellm-response-cost: 2.85e-05
+x-litellm-key-tpm-limit: None
+x-litellm-key-rpm-limit: None
+```
+
+A number of these headers could be useful for troubleshooting, but the
+`x-litellm-call-id` is the one that is most useful for tracking a request across
+components in your system, including in logging tools.
+
 ## Logging Proxy Input/Output - Langfuse
 We will use the `--config` to set `litellm.success_callback = ["langfuse"]` this will log all successfull LLM calls to langfuse. Make sure to set `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` in your environment
 
