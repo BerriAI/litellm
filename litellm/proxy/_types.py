@@ -207,6 +207,8 @@ class LiteLLMRoutes(enum.Enum):
         # assistants-related routes
         "/assistants",
         "/v1/assistants",
+        "/v1/assistants/{assistant_id}",
+        "/assistants/{assistant_id}",
         "/threads",
         "/v1/threads",
         "/threads/{thread_id}",
