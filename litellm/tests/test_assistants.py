@@ -62,10 +62,10 @@ async def test_get_assistants(provider, sync_mode):
 @pytest.mark.parametrize("provider", ["openai"])
 @pytest.mark.parametrize(
     "sync_mode",
-    [False],
+    [True, False],
 )
 @pytest.mark.asyncio
-async def test_create_assistants(provider, sync_mode):
+async def test_create_delete_assistants(provider, sync_mode):
     data = {
         "custom_llm_provider": provider,
     }
@@ -85,6 +85,13 @@ async def test_create_assistants(provider, sync_mode):
             == "You are a personal math tutor. When asked a question, write and run Python code to answer the question."
         )
         assert assistant.id is not None
+
+        # delete the created assistant
+        response = litellm.delete_assistant(
+            custom_llm_provider="openai", assistant_id=assistant.id
+        )
+        print("Response deleting assistant", response)
+        assert response.id == assistant.id
     else:
         assistant = await litellm.acreate_assistants(
             custom_llm_provider="openai",
@@ -100,6 +107,12 @@ async def test_create_assistants(provider, sync_mode):
             == "You are a personal math tutor. When asked a question, write and run Python code to answer the question."
         )
         assert assistant.id is not None
+
+        response = await litellm.adelete_assistant(
+            custom_llm_provider="openai", assistant_id=assistant.id
+        )
+        print("Response deleting assistant", response)
+        assert response.id == assistant.id
 
 
 @pytest.mark.parametrize("provider", ["openai", "azure"])

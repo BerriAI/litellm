@@ -17,6 +17,7 @@ from typing import (
 import httpx
 import openai
 from openai import AsyncOpenAI, OpenAI
+from openai.types.beta.assistant_deleted import AssistantDeleted
 from pydantic import BaseModel
 from typing_extensions import overload, override
 
@@ -2438,6 +2439,63 @@ class OpenAIAssistantsAPI(BaseLLM):
         )
 
         response = openai_client.beta.assistants.create(**create_assistant_data)
+        return response
+
+    # Delete Assistant
+    async def async_delete_assistant(
+        self,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        organization: Optional[str],
+        client: Optional[AsyncOpenAI],
+        assistant_id: str,
+    ) -> AssistantDeleted:
+        openai_client = self.async_get_openai_client(
+            api_key=api_key,
+            api_base=api_base,
+            timeout=timeout,
+            max_retries=max_retries,
+            organization=organization,
+            client=client,
+        )
+
+        response = await openai_client.beta.assistants.delete(assistant_id=assistant_id)
+
+        return response
+
+    def delete_assistant(
+        self,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        organization: Optional[str],
+        assistant_id: str,
+        client=None,
+        async_delete_assistants=None,
+    ):
+        if async_delete_assistants is not None and async_delete_assistants == True:
+            return self.async_delete_assistant(
+                api_key=api_key,
+                api_base=api_base,
+                timeout=timeout,
+                max_retries=max_retries,
+                organization=organization,
+                client=client,
+                assistant_id=assistant_id,
+            )
+        openai_client = self.get_openai_client(
+            api_key=api_key,
+            api_base=api_base,
+            timeout=timeout,
+            max_retries=max_retries,
+            organization=organization,
+            client=client,
+        )
+
+        response = openai_client.beta.assistants.delete(assistant_id=assistant_id)
         return response
 
     ### MESSAGES ###
