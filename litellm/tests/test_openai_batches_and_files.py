@@ -164,6 +164,12 @@ async def test_async_create_batch():
 
     assert delete_file_response.id == batch_input_file_id
 
+    all_files_list = await litellm.afile_list(
+        custom_llm_provider="openai",
+    )
+
+    print("all_files_list = ", all_files_list)
+
     # # write this file content to a file
     # with open("file_content.json", "w") as f:
     #     json.dump(file_content, f)
