@@ -4,11 +4,12 @@ import asyncio
 import contextvars
 import os
 from functools import partial
-from typing import Any, Dict, Iterable, List, Literal, Optional, Union
+from typing import Any, Coroutine, Dict, Iterable, List, Literal, Optional, Union
 
 import httpx
 from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
 from openai.types.beta.assistant import Assistant
+from openai.types.beta.assistant_deleted import AssistantDeleted
 
 import litellm
 from litellm import client
@@ -339,6 +340,44 @@ def create_assistants(
     return response
 
 
+async def adelete_assistant(
+    custom_llm_provider: Literal["openai", "azure"],
+    client: Optional[AsyncOpenAI] = None,
+    **kwargs,
+) -> AssistantDeleted:
+    loop = asyncio.get_event_loop()
+    ### PASS ARGS TO GET ASSISTANTS ###
+    kwargs["async_delete_assistants"] = True
+    try:
+        kwargs["client"] = client
+        # Use a partial function to pass your keyword arguments
+        func = partial(delete_assistant, custom_llm_provider, **kwargs)
+
+        # Add the context to the function
+        ctx = contextvars.copy_context()
+        func_with_context = partial(ctx.run, func)
+
+        _, custom_llm_provider, _, _ = get_llm_provider(  # type: ignore
+            model="", custom_llm_provider=custom_llm_provider
+        )  # type: ignore
+
+        # Await normally
+        init_response = await loop.run_in_executor(None, func_with_context)
+        if asyncio.iscoroutine(init_response):
+            response = await init_response
+        else:
+            response = init_response
+        return response  # type: ignore
+    except Exception as e:
+        raise exception_type(
+            model="",
+            custom_llm_provider=custom_llm_provider,
+            original_exception=e,
+            completion_kwargs={},
+            extra_kwargs=kwargs,
+        )
+
+
 def delete_assistant(
     custom_llm_provider: Literal["openai", "azure"],
     assistant_id: str,
@@ -347,10 +386,20 @@ def delete_assistant(
     api_base: Optional[str] = None,
     api_version: Optional[str] = None,
     **kwargs,
-) -> Dict[str, Any]:
+) -> AssistantDeleted:
     optional_params = GenericLiteLLMParams(
         api_key=api_key, api_base=api_base, api_version=api_version, **kwargs
     )
+
+    async_delete_assistants: Optional[bool] = kwargs.pop(
+        "async_delete_assistants", None
+    )
+    if async_delete_assistants is not None and not isinstance(
+        async_delete_assistants, bool
+    ):
+        raise ValueError(
+            "Invalid value passed in for async_delete_assistants. Only bool or None allowed"
+        )
 
     ### TIMEOUT LOGIC ###
     timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
@@ -368,7 +417,7 @@ def delete_assistant(
     elif timeout is None:
         timeout = 600.0
 
-    response: Optional[Dict[str, Any]] = None
+    response: Optional[AssistantDeleted] = None
     if custom_llm_provider == "openai":
         api_base = (
             optional_params.api_base
@@ -398,6 +447,7 @@ def delete_assistant(
             organization=organization,
             assistant_id=assistant_id,
             client=client,
+            async_delete_assistants=async_delete_assistants,
         )
     else:
         raise litellm.exceptions.BadRequestError(
