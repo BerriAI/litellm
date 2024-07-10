@@ -1538,7 +1538,11 @@ Model Info:
                 final_value = response_s
                 total_tokens = 0
 
-                if isinstance(response_obj, litellm.ModelResponse):
+                if isinstance(response_obj, litellm.ModelResponse) and (
+                    hasattr(response_obj, "usage")
+                    and response_obj.usage is not None
+                    and hasattr(response_obj.usage, "completion_tokens")
+                ):
                     completion_tokens = response_obj.usage.completion_tokens
                     if completion_tokens is not None and completion_tokens > 0:
                         final_value = float(
@@ -1557,8 +1561,7 @@ Model Info:
                 )
         except Exception as e:
             verbose_proxy_logger.error(
-                "[Non-Blocking Error] Slack Alerting: Got error in logging LLM deployment latency: ",
-                e,
+                f"[Non-Blocking Error] Slack Alerting: Got error in logging LLM deployment latency: {str(e)}"
             )
             pass
 
