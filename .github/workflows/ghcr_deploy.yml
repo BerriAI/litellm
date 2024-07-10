@@ -18,6 +18,7 @@ env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
   CHART_NAME: litellm-helm
+  APP_NAME: litellm
 
 # There is a single job in this workflow. It's configured to run on the latest available version of Ubuntu.
 jobs:
@@ -186,6 +187,7 @@ jobs:
           platforms: local,linux/amd64,linux/arm64,linux/arm64/v8
 
   build-and-push-helm-chart:
+    needs: [docker-hub-deploy, build-and-push-image, build-and-push-image-database]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -203,9 +205,12 @@ jobs:
       - name: lowercase github.repository_owner
         run: |
           echo "REPO_OWNER=`echo ${{github.repository_owner}} | tr '[:upper:]' '[:lower:]'`" >>${GITHUB_ENV}
+
       - name: Get LiteLLM Latest Tag
         id: current_app_tag
         uses: WyriHaximus/github-action-get-previous-tag@v1.3.0
+        env:
+          CHART_NAME: ${{ env.APP_NAME }}
 
       - name: Get last published chart version
         id: current_version
