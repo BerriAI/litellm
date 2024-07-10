@@ -43,6 +43,7 @@ from typing_extensions import overload
 
 import litellm
 from litellm._logging import verbose_router_logger
+from litellm.assistants.main import AssistantDeleted
 from litellm.caching import DualCache, InMemoryCache, RedisCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.azure import get_azure_ad_token_from_oidc
@@ -1986,6 +1987,25 @@ class Router:
                 )
 
         return await litellm.acreate_assistants(
+            custom_llm_provider=custom_llm_provider, client=client, **kwargs
+        )
+
+    async def adelete_assistant(
+        self,
+        custom_llm_provider: Optional[Literal["openai", "azure"]] = None,
+        client: Optional[AsyncOpenAI] = None,
+        **kwargs,
+    ) -> AssistantDeleted:
+        if custom_llm_provider is None:
+            if self.assistants_config is not None:
+                custom_llm_provider = self.assistants_config["custom_llm_provider"]
+                kwargs.update(self.assistants_config["litellm_params"])
+            else:
+                raise Exception(
+                    "'custom_llm_provider' must be set. Either via:\n `Router(assistants_config={'custom_llm_provider': ..})` \nor\n `router.arun_thread(custom_llm_provider=..)`"
+                )
+
+        return await litellm.adelete_assistant(
             custom_llm_provider=custom_llm_provider, client=client, **kwargs
         )
 
