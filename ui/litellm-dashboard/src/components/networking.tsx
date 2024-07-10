@@ -12,11 +12,19 @@ export interface Model {
   model_info: Object | null;
 }
 
-export const modelCostMap = async () => {
+export const modelCostMap = async (
+  accessToken: string,
+) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/get/litellm_model_cost_map` : `/get/litellm_model_cost_map`;
     const response = await fetch(
-      url
+      url, {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+      }
     );
     const jsonData = await response.json();
     console.log(`received litellm model cost data: ${jsonData}`);
@@ -693,6 +701,9 @@ export const claimOnboardingToken = async (
     throw error;
   }
 };
+let ModelListerrorShown = false;
+let errorTimer: NodeJS.Timeout | null = null;
+
 export const modelInfoCall = async (
   accessToken: String,
   userID: String,
@@ -714,8 +725,21 @@ export const modelInfoCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      message.error(errorData, 10);
+      let errorData = await response.text();
+      errorData += `error shown=${ModelListerrorShown}`
+      if (!ModelListerrorShown) {
+        if (errorData.includes("No model list passed")) {
+          errorData = "No Models Exist. Click Add Model to get started.";
+        }
+        message.info(errorData, 10);
+        ModelListerrorShown = true;
+        
+        if (errorTimer) clearTimeout(errorTimer);
+        errorTimer = setTimeout(() => {
+          ModelListerrorShown = false;
+        }, 10000);
+      }
+
       throw new Error("Network response was not ok");
     }
 
@@ -750,7 +774,6 @@ export const modelHubCall = async (accessToken: String) => {
 
     if (!response.ok) {
       const errorData = await response.text();
-      message.error(errorData, 10);
       throw new Error("Network response was not ok");
     }
 
@@ -761,6 +784,95 @@ export const modelHubCall = async (accessToken: String) => {
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
     console.error("Failed to create key:", error);
+    throw error;
+  }
+};
+
+// Function to get allowed IPs
+export const getAllowedIPs = async (accessToken: String) => {
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/get/allowed_ips`
+      : `/get/allowed_ips`;
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      throw new Error(`Network response was not ok: ${errorData}`);
+    }
+
+    const data = await response.json();
+    console.log("getAllowedIPs:", data);
+    return data.data; // Assuming the API returns { data: [...] }
+  } catch (error) {
+    console.error("Failed to get allowed IPs:", error);
+    throw error;
+  }
+};
+
+// Function to add an allowed IP
+export const addAllowedIP = async (accessToken: String, ip: String) => {
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/add/allowed_ip`
+      : `/add/allowed_ip`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ ip: ip }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      throw new Error(`Network response was not ok: ${errorData}`);
+    }
+
+    const data = await response.json();
+    console.log("addAllowedIP:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to add allowed IP:", error);
+    throw error;
+  }
+};
+
+// Function to delete an allowed IP
+export const deleteAllowedIP = async (accessToken: String, ip: String) => {
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/delete/allowed_ip`
+      : `/delete/allowed_ip`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ ip: ip }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      throw new Error(`Network response was not ok: ${errorData}`);
+    }
+
+    const data = await response.json();
+    console.log("deleteAllowedIP:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to delete allowed IP:", error);
     throw error;
   }
 };
@@ -1341,6 +1453,47 @@ export const adminGlobalActivity = async (
     let url = proxyBaseUrl
       ? `${proxyBaseUrl}/global/activity`
       : `/global/activity`;
+
+    if (startTime && endTime) {
+      url += `?start_date=${startTime}&end_date=${endTime}`;
+    }
+
+    const requestOptions: {
+      method: string;
+      headers: {
+        Authorization: string;
+      };
+    } = {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+    };
+
+    const response = await fetch(url, requestOptions);
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      throw new Error("Network response was not ok");
+    }
+    const data = await response.json();
+    console.log(data);
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch spend data:", error);
+    throw error;
+  }
+};
+
+export const adminGlobalCacheActivity = async (
+  accessToken: String,
+  startTime: String | undefined,
+  endTime: String | undefined
+) => {
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/global/activity/cache_hits`
+      : `/global/activity/cache_hits`;
 
     if (startTime && endTime) {
       url += `?start_date=${startTime}&end_date=${endTime}`;

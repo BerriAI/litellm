@@ -1,13 +1,17 @@
-from pydantic import BaseModel, Extra, Field, model_validator, Json, ConfigDict
-from dataclasses import fields
 import enum
-from typing import Optional, List, Union, Dict, Literal, Any, TypedDict, TYPE_CHECKING
+import json
+import os
+import sys
+import uuid
+from dataclasses import fields
 from datetime import datetime
-import uuid, json, sys, os
-from litellm.types.router import UpdateRouterConfig
-from litellm.types.utils import ProviderField
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, TypedDict, Union
+
+from pydantic import BaseModel, ConfigDict, Extra, Field, Json, model_validator
 from typing_extensions import Annotated
 
+from litellm.types.router import UpdateRouterConfig
+from litellm.types.utils import ProviderField
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -171,10 +175,12 @@ class LiteLLMRoutes(enum.Enum):
         "/chat/completions",
         "/v1/chat/completions",
         # completions
+        "/engines/{model}/completions",
         "/openai/deployments/{model}/completions",
         "/completions",
         "/v1/completions",
         # embeddings
+        "/engines/{model}/embeddings",
         "/openai/deployments/{model}/embeddings",
         "/embeddings",
         "/v1/embeddings",
@@ -184,6 +190,9 @@ class LiteLLMRoutes(enum.Enum):
         # audio transcription
         "/audio/transcriptions",
         "/v1/audio/transcriptions",
+        # audio Speech
+        "/audio/speech",
+        "/v1/audio/speech",
         # moderations
         "/moderations",
         "/v1/moderations",
@@ -195,6 +204,17 @@ class LiteLLMRoutes(enum.Enum):
         # files
         "/v1/files",
         "/files",
+        # assistants-related routes
+        "/assistants",
+        "/v1/assistants",
+        "/threads",
+        "/v1/threads",
+        "/threads/{thread_id}",
+        "/v1/threads/{thread_id}",
+        "/threads/{thread_id}/messages",
+        "/v1/threads/{thread_id}/messages",
+        "/threads/{thread_id}/runs",
+        "/v1/threads/{thread_id}/runs",
         # models
         "/models",
         "/v1/models",
@@ -211,6 +231,7 @@ class LiteLLMRoutes(enum.Enum):
         "/v2/model/info",
         "/v2/key/info",
         "/model_group/info",
+        "/health",
     ]
 
     # NOTE: ROUTES ONLY FOR MASTER KEY - only the Master Key should be able to Reset Spend
@@ -283,12 +304,16 @@ class LiteLLMRoutes(enum.Enum):
         "/metrics",
     ]
 
-    internal_user_routes: List = [
-        "/key/generate",
-        "/key/update",
-        "/key/delete",
-        "/key/info",
-    ] + spend_tracking_routes
+    internal_user_routes: List = (
+        [
+            "/key/generate",
+            "/key/update",
+            "/key/delete",
+            "/key/info",
+        ]
+        + spend_tracking_routes
+        + sso_only_routes
+    )
 
 
 # class LiteLLMAllowedRoutes(LiteLLMBase):
@@ -657,6 +682,10 @@ class UpdateUserRequest(GenerateRequestBase):
         if values.get("user_id") is None and values.get("user_email") is None:
             raise ValueError("Either user id or user email must be provided")
         return values
+
+
+class DeleteUserRequest(LiteLLMBase):
+    user_ids: List[str]  # required
 
 
 class NewCustomerRequest(LiteLLMBase):
@@ -1303,6 +1332,7 @@ class LiteLLM_SpendLogs(LiteLLMBase):
     cache_hit: Optional[str] = "False"
     cache_key: Optional[str] = None
     request_tags: Optional[Json] = None
+    requester_ip_address: Optional[str] = None
 
 
 class LiteLLM_ErrorLogs(LiteLLMBase):
@@ -1358,10 +1388,11 @@ class CallInfo(LiteLLMBase):
 
     spend: float
     max_budget: Optional[float] = None
-    token: str = Field(description="Hashed value of that key")
+    token: Optional[str] = Field(default=None, description="Hashed value of that key")
     customer_id: Optional[str] = None
     user_id: Optional[str] = None
     team_id: Optional[str] = None
+    team_alias: Optional[str] = None
     user_email: Optional[str] = None
     key_alias: Optional[str] = None
     projected_exceeded_date: Optional[str] = None
@@ -1493,6 +1524,7 @@ class SpendLogsMetadata(TypedDict):
     spend_logs_metadata: Optional[
         dict
     ]  # special param to log k,v pairs to spendlogs for a call
+    requester_ip_address: Optional[str]
 
 
 class SpendLogsPayload(TypedDict):
@@ -1517,6 +1549,7 @@ class SpendLogsPayload(TypedDict):
     request_tags: str  # json str
     team_id: Optional[str]
     end_user: Optional[str]
+    requester_ip_address: Optional[str]
 
 
 class SpanAttributes(str, enum.Enum):
@@ -1574,3 +1607,55 @@ class ManagementEndpointLoggingPayload(LiteLLMBase):
     exception: Optional[Any] = None
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
+
+
+class ProxyException(Exception):
+    # NOTE: DO NOT MODIFY THIS
+    # This is used to map exactly to OPENAI Exceptions
+    def __init__(
+        self,
+        message: str,
+        type: str,
+        param: Optional[str],
+        code: Optional[int],
+    ):
+        self.message = message
+        self.type = type
+        self.param = param
+        self.code = code
+
+        # rules for proxyExceptions
+        # Litellm router.py returns "No healthy deployment available" when there are no deployments available
+        # Should map to 429 errors https://github.com/BerriAI/litellm/issues/2487
+        if (
+            "No healthy deployment available" in self.message
+            or "No deployments available" in self.message
+        ):
+            self.code = 429
+
+    def to_dict(self) -> dict:
+        """Converts the ProxyException instance to a dictionary."""
+        return {
+            "message": self.message,
+            "type": self.type,
+            "param": self.param,
+            "code": self.code,
+        }
+
+
+class CommonProxyErrors(str, enum.Enum):
+    db_not_connected_error = "DB not connected"
+    no_llm_router = "No models configured on proxy"
+    not_allowed_access = "Admin-only endpoint. Not allowed to access this."
+    not_premium_user = "You must be a LiteLLM Enterprise user to use this feature. If you have a license please set `LITELLM_LICENSE` in your env. If you want to obtain a license meet with us here: https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat"
+
+
+class SpendCalculateRequest(LiteLLMBase):
+    model: Optional[str] = None
+    messages: Optional[List] = None
+    completion_response: Optional[dict] = None
+
+
+class ProxyErrorTypes(str, enum.Enum):
+    budget_exceeded = "budget_exceeded"
+    auth_error = "auth_error"

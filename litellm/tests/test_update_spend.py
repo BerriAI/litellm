@@ -2,9 +2,14 @@
 ## This tests the batch update spend logic on the proxy server
 
 
-import sys, os, asyncio, time, random
-from datetime import datetime
+import asyncio
+import os
+import random
+import sys
+import time
 import traceback
+from datetime import datetime
+
 from dotenv import load_dotenv
 from fastapi import Request
 
@@ -14,49 +19,50 @@ import os
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
+import asyncio
+import logging
+
 import pytest
+
 import litellm
 from litellm import Router, mock_completion
-from litellm.proxy.utils import ProxyLogging
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
-from litellm.proxy.utils import PrismaClient, ProxyLogging, hash_token
-
-import pytest, logging, asyncio
-import litellm, asyncio
-from litellm.proxy.proxy_server import (
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.management_endpoints.internal_user_endpoints import (
     new_user,
-    generate_key_fn,
-    user_api_key_auth,
+    user_info,
     user_update,
+)
+from litellm.proxy.management_endpoints.key_management_endpoints import (
     delete_key_fn,
-    info_key_fn,
-    update_key_fn,
     generate_key_fn,
     generate_key_helper_fn,
-    spend_user_fn,
+    info_key_fn,
+    update_key_fn,
+)
+from litellm.proxy.proxy_server import block_user, user_api_key_auth
+from litellm.proxy.spend_tracking.spend_management_endpoints import (
     spend_key_fn,
+    spend_user_fn,
     view_spend_logs,
-    user_info,
-    block_user,
 )
 from litellm.proxy.utils import PrismaClient, ProxyLogging, hash_token, update_spend
-from litellm._logging import verbose_proxy_logger
 
 verbose_proxy_logger.setLevel(level=logging.DEBUG)
 
+from starlette.datastructures import URL
+
+from litellm.caching import DualCache
 from litellm.proxy._types import (
-    NewUserRequest,
-    GenerateKeyRequest,
-    DynamoDBArgs,
-    KeyRequest,
-    UpdateKeyRequest,
-    GenerateKeyRequest,
     BlockUsers,
+    DynamoDBArgs,
+    GenerateKeyRequest,
+    KeyRequest,
+    NewUserRequest,
+    UpdateKeyRequest,
 )
 from litellm.proxy.utils import DBClient
-from starlette.datastructures import URL
-from litellm.caching import DualCache
 
 proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
 

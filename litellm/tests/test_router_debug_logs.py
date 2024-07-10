@@ -1,16 +1,23 @@
-import sys, os, time
-import traceback, asyncio
+import asyncio
+import os
+import sys
+import time
+import traceback
+
 import pytest
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 
-import litellm, asyncio, logging
+import asyncio
+import logging
+
+import litellm
 from litellm import Router
 
 # this tests debug logs from litellm router and litellm proxy server
-from litellm._logging import verbose_router_logger, verbose_logger, verbose_proxy_logger
+from litellm._logging import verbose_logger, verbose_proxy_logger, verbose_router_logger
 
 
 # this tests debug logs from litellm router and litellm proxy server
@@ -81,7 +88,7 @@ def test_async_fallbacks(caplog):
     # Define the expected log messages
     # - error request, falling back notice, success notice
     expected_logs = [
-        "litellm.acompletion(model=gpt-3.5-turbo)\x1b[31m Exception AuthenticationError: OpenAIException - Error code: 401 - {'error': {'message': 'Incorrect API key provided: bad-key. You can find your API key at https://platform.openai.com/account/api-keys.', 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_api_key'}}\x1b[0m",
+        "litellm.acompletion(model=gpt-3.5-turbo)\x1b[31m Exception litellm.AuthenticationError: AuthenticationError: OpenAIException - Incorrect API key provided: bad-key. You can find your API key at https://platform.openai.com/account/api-keys.\x1b[0m",
         "Falling back to model_group = azure/gpt-3.5-turbo",
         "litellm.acompletion(model=azure/chatgpt-v-2)\x1b[32m 200 OK\x1b[0m",
         "Successful fallback b/w models.",

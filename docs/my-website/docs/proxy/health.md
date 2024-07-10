@@ -162,3 +162,45 @@ Example Response:
 ```json
 "I'm alive!"
 ```
+
+## Advanced - Call specific models 
+
+To check health of specific models, here's how to call them: 
+
+### 1. Get model id via `/model/info` 
+
+```bash
+curl -X GET 'http://0.0.0.0:4000/v1/model/info' \
+--header 'Authorization: Bearer sk-1234' \
+```
+
+**Expected Response**
+
+```bash
+{
+    "model_name": "bedrock-anthropic-claude-3",
+    "litellm_params": {
+        "model": "anthropic.claude-3-sonnet-20240229-v1:0"
+    },
+    "model_info": {
+        "id": "634b87c444..", # 👈 UNIQUE MODEL ID
+}
+```
+
+### 2. Call specific model via `/chat/completions` 
+
+```bash
+curl -X POST 'http://localhost:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-D '{
+  "model": "634b87c444.." # 👈 UNIQUE MODEL ID
+  "messages": [
+    {
+      "role": "user",
+      "content": "ping"
+    }
+  ],
+}
+'
+```

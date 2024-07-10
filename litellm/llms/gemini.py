@@ -1,14 +1,22 @@
-import types
-import traceback
+####################################
+######### DEPRECATED FILE ##########
+####################################
+# logic moved to `vertex_httpx.py` #
+
 import copy
 import time
+import traceback
+import types
 from typing import Callable, Optional
-from litellm.utils import ModelResponse, Choices, Message, Usage
-import litellm
+
 import httpx
-from .prompt_templates.factory import prompt_factory, custom_prompt, get_system_prompt
 from packaging.version import Version
+
+import litellm
 from litellm import verbose_logger
+from litellm.utils import Choices, Message, ModelResponse, Usage
+
+from .prompt_templates.factory import custom_prompt, get_system_prompt, prompt_factory
 
 
 class GeminiError(Exception):
@@ -186,8 +194,8 @@ def completion(
         if _system_instruction and len(system_prompt) > 0:
             _params["system_instruction"] = system_prompt
         _model = genai.GenerativeModel(**_params)
-        if stream == True:
-            if acompletion == True:
+        if stream is True:
+            if acompletion is True:
 
                 async def async_streaming():
                     try:

@@ -1,15 +1,16 @@
-from typing import TypedDict, Any, Union, Optional, List, Literal, Dict
 import json
-from typing_extensions import (
-    Self,
-    Protocol,
-    TypeGuard,
-    override,
-    get_origin,
-    runtime_checkable,
-    Required,
-)
 from enum import Enum
+from typing import Any, Dict, List, Literal, Optional, TypedDict, Union
+
+from typing_extensions import (
+    Protocol,
+    Required,
+    Self,
+    TypeGuard,
+    get_origin,
+    override,
+    runtime_checkable,
+)
 
 
 class Field(TypedDict):
@@ -38,7 +39,7 @@ class FileDataType(TypedDict):
 
 class BlobType(TypedDict):
     mime_type: Required[str]
-    data: Required[bytes]
+    data: Required[str]
 
 
 class PartType(TypedDict, total=False):
@@ -91,6 +92,14 @@ class FunctionDeclaration(TypedDict, total=False):
     description: str
     parameters: Schema
     response: Schema
+
+
+class VertexAISearch(TypedDict, total=False):
+    datastore: Required[str]
+
+
+class Retrieval(TypedDict):
+    source: VertexAISearch
 
 
 class FunctionCallingConfig(TypedDict, total=False):
@@ -146,12 +155,24 @@ class GenerationConfig(TypedDict, total=False):
     response_mime_type: Literal["text/plain", "application/json"]
 
 
-class Tools(TypedDict):
+class Tools(TypedDict, total=False):
     function_declarations: List[FunctionDeclaration]
+    googleSearchRetrieval: dict
+    retrieval: Retrieval
 
 
 class ToolConfig(TypedDict):
     functionCallingConfig: FunctionCallingConfig
+
+
+class TTL(TypedDict, total=False):
+    seconds: Required[float]
+    nano: float
+
+
+class CachedContent(TypedDict, total=False):
+    ttl: TTL
+    expire_time: str
 
 
 class RequestBody(TypedDict, total=False):
@@ -159,8 +180,9 @@ class RequestBody(TypedDict, total=False):
     system_instruction: SystemInstructions
     tools: Tools
     toolConfig: ToolConfig
-    safetySettings: SafetSettingsConfig
+    safetySettings: List[SafetSettingsConfig]
     generationConfig: GenerationConfig
+    cachedContent: str
 
 
 class SafetyRatings(TypedDict):
@@ -214,7 +236,7 @@ class Candidates(TypedDict, total=False):
         "PROHIBITED_CONTENT",
         "SPII",
     ]
-    safetyRatings: SafetyRatings
+    safetyRatings: List[SafetyRatings]
     citationMetadata: CitationMetadata
     groundingMetadata: GroundingMetadata
     finishMessage: str
@@ -226,7 +248,7 @@ class PromptFeedback(TypedDict):
     blockReasonMessage: str
 
 
-class UsageMetadata(TypedDict):
+class UsageMetadata(TypedDict, total=False):
     promptTokenCount: int
     totalTokenCount: int
     candidatesTokenCount: int

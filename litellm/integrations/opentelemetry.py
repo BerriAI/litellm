@@ -1,20 +1,21 @@
 import os
 from dataclasses import dataclass
 from datetime import datetime
-import litellm
-
-from litellm.integrations.custom_logger import CustomLogger
-from litellm._logging import verbose_logger
-from litellm.types.services import ServiceLoggerPayload
 from functools import wraps
-from typing import Union, Optional, TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Optional, Union
+
+import litellm
+from litellm._logging import verbose_logger
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.types.services import ServiceLoggerPayload
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
-    from litellm.proxy.proxy_server import UserAPIKeyAuth as _UserAPIKeyAuth
+
     from litellm.proxy._types import (
         ManagementEndpointLoggingPayload as _ManagementEndpointLoggingPayload,
     )
+    from litellm.proxy.proxy_server import UserAPIKeyAuth as _UserAPIKeyAuth
 
     Span = _Span
     UserAPIKeyAuth = _UserAPIKeyAuth
@@ -28,6 +29,7 @@ else:
 LITELLM_TRACER_NAME = os.getenv("OTEL_TRACER_NAME", "litellm")
 LITELLM_RESOURCE = {
     "service.name": os.getenv("OTEL_SERVICE_NAME", "litellm"),
+    "deployment.environment": os.getenv("OTEL_ENVIRONMENT_NAME", "production"),
 }
 RAW_REQUEST_SPAN_NAME = "raw_gen_ai_request"
 LITELLM_REQUEST_SPAN_NAME = "litellm_request"
@@ -104,11 +106,12 @@ class OpenTelemetry(CustomLogger):
         self,
         payload: ServiceLoggerPayload,
         parent_otel_span: Optional[Span] = None,
-        start_time: Optional[datetime] = None,
-        end_time: Optional[datetime] = None,
+        start_time: Optional[Union[datetime, float]] = None,
+        end_time: Optional[Union[datetime, float]] = None,
     ):
-        from opentelemetry import trace
         from datetime import datetime
+
+        from opentelemetry import trace
         from opentelemetry.trace import Status, StatusCode
 
         _start_time_ns = start_time
@@ -142,11 +145,12 @@ class OpenTelemetry(CustomLogger):
         self,
         payload: ServiceLoggerPayload,
         parent_otel_span: Optional[Span] = None,
-        start_time: Optional[datetime] = None,
-        end_time: Optional[datetime] = None,
+        start_time: Optional[Union[datetime, float]] = None,
+        end_time: Optional[Union[float, datetime]] = None,
     ):
-        from opentelemetry import trace
         from datetime import datetime
+
+        from opentelemetry import trace
         from opentelemetry.trace import Status, StatusCode
 
         _start_time_ns = start_time
@@ -179,8 +183,8 @@ class OpenTelemetry(CustomLogger):
     async def async_post_call_failure_hook(
         self, original_exception: Exception, user_api_key_dict: UserAPIKeyAuth
     ):
-        from opentelemetry.trace import Status, StatusCode
         from opentelemetry import trace
+        from opentelemetry.trace import Status, StatusCode
 
         parent_otel_span = user_api_key_dict.parent_otel_span
         if parent_otel_span is not None:
@@ -202,8 +206,8 @@ class OpenTelemetry(CustomLogger):
             parent_otel_span.end(end_time=self._to_ns(datetime.now()))
 
     def _handle_sucess(self, kwargs, response_obj, start_time, end_time):
-        from opentelemetry.trace import Status, StatusCode
         from opentelemetry import trace
+        from opentelemetry.trace import Status, StatusCode
 
         verbose_logger.debug(
             "OpenTelemetry Logger: Logging kwargs: %s, OTEL config settings=%s",
@@ -253,8 +257,9 @@ class OpenTelemetry(CustomLogger):
         span.end(end_time=self._to_ns(end_time))
 
     def set_tools_attributes(self, span: Span, tools):
-        from litellm.proxy._types import SpanAttributes
         import json
+
+        from litellm.proxy._types import SpanAttributes
 
         if not tools:
             return
@@ -320,7 +325,7 @@ class OpenTelemetry(CustomLogger):
             )
 
         span.set_attribute(
-            SpanAttributes.LLM_IS_STREAMING, optional_params.get("stream", False)
+            SpanAttributes.LLM_IS_STREAMING, str(optional_params.get("stream", False))
         )
 
         if optional_params.get("tools"):
@@ -439,17 +444,28 @@ class OpenTelemetry(CustomLogger):
         #############################################
         ########## LLM Response Attributes ##########
         #############################################
-        if _raw_response:
+        if _raw_response and isinstance(_raw_response, str):
             # cast sr -> dict
             import json
 
-            _raw_response = json.loads(_raw_response)
-            for param, val in _raw_response.items():
-                if not isinstance(val, str):
-                    val = str(val)
+            try:
+                _raw_response = json.loads(_raw_response)
+                for param, val in _raw_response.items():
+                    if not isinstance(val, str):
+                        val = str(val)
+                    span.set_attribute(
+                        f"llm.{custom_llm_provider}.{param}",
+                        val,
+                    )
+            except json.JSONDecodeError:
+                verbose_logger.debug(
+                    "litellm.integrations.opentelemetry.py::set_raw_request_attributes() - raw_response not json string - {}".format(
+                        _raw_response
+                    )
+                )
                 span.set_attribute(
-                    f"llm.{custom_llm_provider}.{param}",
-                    val,
+                    f"llm.{custom_llm_provider}.stringified_raw_response",
+                    _raw_response,
                 )
 
         pass
@@ -478,10 +494,10 @@ class OpenTelemetry(CustomLogger):
         return _parent_context
 
     def _get_span_context(self, kwargs):
+        from opentelemetry import trace
         from opentelemetry.trace.propagation.tracecontext import (
             TraceContextTextMapPropagator,
         )
-        from opentelemetry import trace
 
         litellm_params = kwargs.get("litellm_params", {}) or {}
         proxy_server_request = litellm_params.get("proxy_server_request", {}) or {}
@@ -505,17 +521,17 @@ class OpenTelemetry(CustomLogger):
             return TraceContextTextMapPropagator().extract(carrier=carrier), None
 
     def _get_span_processor(self):
-        from opentelemetry.sdk.trace.export import (
-            SpanExporter,
-            SimpleSpanProcessor,
-            BatchSpanProcessor,
-            ConsoleSpanExporter,
+        from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
+            OTLPSpanExporter as OTLPSpanExporterGRPC,
         )
         from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
             OTLPSpanExporter as OTLPSpanExporterHTTP,
         )
-        from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
-            OTLPSpanExporter as OTLPSpanExporterGRPC,
+        from opentelemetry.sdk.trace.export import (
+            BatchSpanProcessor,
+            ConsoleSpanExporter,
+            SimpleSpanProcessor,
+            SpanExporter,
         )
 
         verbose_logger.debug(
@@ -574,8 +590,9 @@ class OpenTelemetry(CustomLogger):
         logging_payload: ManagementEndpointLoggingPayload,
         parent_otel_span: Optional[Span] = None,
     ):
-        from opentelemetry import trace
         from datetime import datetime
+
+        from opentelemetry import trace
         from opentelemetry.trace import Status, StatusCode
 
         _start_time_ns = logging_payload.start_time
@@ -619,8 +636,9 @@ class OpenTelemetry(CustomLogger):
         logging_payload: ManagementEndpointLoggingPayload,
         parent_otel_span: Optional[Span] = None,
     ):
-        from opentelemetry import trace
         from datetime import datetime
+
+        from opentelemetry import trace
         from opentelemetry.trace import Status, StatusCode
 
         _start_time_ns = logging_payload.start_time

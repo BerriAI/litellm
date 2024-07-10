@@ -2,6 +2,15 @@ import Image from '@theme/IdealImage';
 
 # Athina
 
+
+:::tip
+
+This is community maintained, Please make an issue if you run into a bug
+https://github.com/BerriAI/litellm
+
+:::
+
+
 [Athina](https://athina.ai/) is an evaluation framework and production monitoring platform for your LLM-powered app. Athina is designed to enhance the performance and reliability of AI applications through real-time monitoring, granular analytics, and plug-and-play evaluations.
 
 <Image img={require('../../img/athina_dashboard.png')} />

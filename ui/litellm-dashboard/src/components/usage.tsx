@@ -32,7 +32,6 @@ import {
   allTagNamesCall,
   modelMetricsCall,
   modelAvailableCall,
-  modelInfoCall,
   adminspendByProvider,
   adminGlobalActivity,
   adminGlobalActivityPerModel,
@@ -667,9 +666,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
                   showLegend={true}
                   index="date"
                   categories={uniqueTeamIds}
-                  yAxisWidth={80}
-                  colors={["blue", "green", "yellow", "red", "purple"]}
-                  
+                  yAxisWidth={80}                  
                   stack={true}
                 />
               </Card>

@@ -4,7 +4,7 @@ import TabItem from '@theme/TabItem';
 
 # 🤗 UI - Self-Serve
 
-Allow users to creat their own keys on [Proxy UI](./ui.md).
+Allow users to create their own keys on [Proxy UI](./ui.md).
 
 1. Add user with permissions to a team on proxy 
 
@@ -124,3 +124,17 @@ LiteLLM Enterprise: Enable [SSO login](./ui.md#setup-ssoauth-for-ui)
 
 
 <Image img={require('../../img/ui_self_serve_create_key.png')}  style={{ width: '800px', height: 'auto' }} />
+
+
+## Advanced
+### Setting custom logout URLs
+
+Set `PROXY_LOGOUT_URL` in your .env if you want users to get redirected to a specific URL when they click logout
+
+```
+export PROXY_LOGOUT_URL="https://www.google.com"
+```
+
+<Image img={require('../../img/ui_logout.png')}  style={{ width: '400px', height: 'auto' }} />
+
+

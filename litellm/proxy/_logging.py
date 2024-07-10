@@ -1,7 +1,10 @@
+### DEPRECATED ###
+## unused file. initially written for json logging on proxy.
 import json
 import logging
-from logging import Formatter
 import os
+from logging import Formatter
+
 from litellm import json_logs
 
 # Set default log level to INFO
@@ -14,8 +17,11 @@ class JsonFormatter(Formatter):
         super(JsonFormatter, self).__init__()
 
     def format(self, record):
-        json_record = {}
-        json_record["message"] = record.getMessage()
+        json_record = {
+            "message": record.getMessage(),
+            "level": record.levelname,
+            "timestamp": self.formatTime(record, self.datefmt),
+        }
         return json.dumps(json_record)
 
 

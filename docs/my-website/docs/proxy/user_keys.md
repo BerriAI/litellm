@@ -1,7 +1,7 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Use with Langchain, OpenAI SDK, LlamaIndex, Curl
+# Use with Langchain, OpenAI SDK, LlamaIndex, Instructor, Curl
 
 :::info
 
@@ -25,6 +25,39 @@ Set `extra_body={"metadata": { }}` to `metadata` you want to pass
 ```python
 import openai
 client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://0.0.0.0:4000"
+)
+
+# request sent to model set on litellm proxy, `litellm --model`
+response = client.chat.completions.create(
+    model="gpt-3.5-turbo",
+    messages = [
+        {
+            "role": "user",
+            "content": "this is a test request, write a short poem"
+        }
+    ],
+    extra_body={ # pass in any provider-specific param, if not supported by openai, https://docs.litellm.ai/docs/completion/input#provider-specific-params
+        "metadata": { # 👈 use for logging additional params (e.g. to langfuse)
+            "generation_name": "ishaan-generation-openai-client",
+            "generation_id": "openai-client-gen-id22",
+            "trace_id": "openai-client-trace-id22",
+            "trace_user_id": "openai-client-user-id2"
+        }
+    }
+)
+
+print(response)
+```
+</TabItem>
+<TabItem value="azureopenai" label="AzureOpenAI Python">
+
+Set `extra_body={"metadata": { }}` to `metadata` you want to pass
+
+```python
+import openai
+client = openai.AzureOpenAI(
     api_key="anything",
     base_url="http://0.0.0.0:4000"
 )
@@ -153,6 +186,58 @@ print(response)
 ```
 
 </TabItem>
+<TabItem value="langchain js" label="Langchain JS">
+
+```js
+import { ChatOpenAI } from "@langchain/openai";
+
+
+const model = new ChatOpenAI({
+  modelName: "gpt-4",
+  openAIApiKey: "sk-1234",
+  modelKwargs: {"metadata": "hello world"} // 👈 PASS Additional params here
+}, {
+  basePath: "http://0.0.0.0:4000",
+});
+
+const message = await model.invoke("Hi there!");
+
+console.log(message);
+
+```
+
+</TabItem>
+<TabItem value="instructor" label="Instructor">
+
+```python
+from openai import OpenAI
+import instructor
+from pydantic import BaseModel
+
+my_proxy_api_key = "" # e.g. sk-1234
+my_proxy_base_url = "" # e.g. http://0.0.0.0:4000
+
+# This enables response_model keyword
+# from client.chat.completions.create
+client = instructor.from_openai(OpenAI(api_key=my_proxy_api_key, base_url=my_proxy_base_url))
+
+class UserDetail(BaseModel):
+    name: str
+    age: int
+
+user = client.chat.completions.create(
+    model="gemini-pro-flash",
+    response_model=UserDetail,
+    messages=[
+        {"role": "user", "content": "Extract Jason is 25 years old"},
+    ]
+)
+
+assert isinstance(user, UserDetail)
+assert user.name == "Jason"
+assert user.age == 25
+```
+</TabItem>
 </Tabs>
 
 ### Response Format
@@ -183,6 +268,97 @@ print(response)
 }
 
 ```
+
+### Function Calling 
+
+Here's some examples of doing function calling with the proxy. 
+
+You can use the proxy for function calling with **any** openai-compatible project. 
+
+<Tabs>
+<TabItem value="curl" label="curl">
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+-H "Content-Type: application/json" \
+-H "Authorization: Bearer $OPTIONAL_YOUR_PROXY_KEY" \
+-d '{
+  "model": "gpt-4-turbo",
+  "messages": [
+    {
+      "role": "user",
+      "content": "What'\''s the weather like in Boston today?"
+    }
+  ],
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_current_weather",
+        "description": "Get the current weather in a given location",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "location": {
+              "type": "string",
+              "description": "The city and state, e.g. San Francisco, CA"
+            },
+            "unit": {
+              "type": "string",
+              "enum": ["celsius", "fahrenheit"]
+            }
+          },
+          "required": ["location"]
+        }
+      }
+    }
+  ],
+  "tool_choice": "auto"
+}'
+```
+</TabItem>
+<TabItem value="sdk" label="SDK">
+
+```python 
+from openai import OpenAI
+client = OpenAI(
+    api_key="sk-1234", # [OPTIONAL] set if you set one on proxy, else set ""
+    base_url="http://0.0.0.0:4000",
+)
+
+tools = [
+  {
+    "type": "function",
+    "function": {
+      "name": "get_current_weather",
+      "description": "Get the current weather in a given location",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "location": {
+            "type": "string",
+            "description": "The city and state, e.g. San Francisco, CA",
+          },
+          "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+        },
+        "required": ["location"],
+      },
+    }
+  }
+]
+messages = [{"role": "user", "content": "What's the weather like in Boston today?"}]
+completion = client.chat.completions.create(
+  model="gpt-4o", # use 'model_name' from config.yaml
+  messages=messages,
+  tools=tools,
+  tool_choice="auto"
+)
+
+print(completion)
+
+```
+</TabItem>
+</Tabs>
 
 ## `/embeddings`
 
