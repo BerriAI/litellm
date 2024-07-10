@@ -106,7 +106,6 @@ import litellm
 from litellm import (
     CancelBatchRequest,
     CreateBatchRequest,
-    CreateFileRequest,
     ListBatchRequest,
     RetrieveBatchRequest,
 )
@@ -174,6 +173,9 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     router as key_management_router,
 )
 from litellm.proxy.management_endpoints.team_endpoints import router as team_router
+from litellm.proxy.openai_files_endpoints.files_endpoints import (
+    router as openai_files_router,
+)
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     initialize_pass_through_endpoints,
 )
@@ -4885,117 +4887,6 @@ async def retrieve_batch(
 
 ######################################################################
 
-######################################################################
-
-#                          /v1/files Endpoints
-
-
-######################################################################
-@router.post(
-    "/v1/files",
-    dependencies=[Depends(user_api_key_auth)],
-    tags=["files"],
-)
-@router.post(
-    "/files",
-    dependencies=[Depends(user_api_key_auth)],
-    tags=["files"],
-)
-async def create_file(
-    request: Request,
-    fastapi_response: Response,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-):
-    """
-    Upload a file that can be used across - Assistants API, Batch API 
-    This is the equivalent of POST https://api.openai.com/v1/files
-
-    Supports Identical Params as: https://platform.openai.com/docs/api-reference/files/create
-
-    Example Curl
-    ```
-    curl https://api.openai.com/v1/files \
-        -H "Authorization: Bearer sk-1234" \
-        -F purpose="batch" \
-        -F file="@mydata.jsonl"
-
-    ```
-    """
-    global proxy_logging_obj
-    data: Dict = {}
-    try:
-        # Use orjson to parse JSON data, orjson speeds up requests significantly
-        form_data = await request.form()
-        data = {key: value for key, value in form_data.items() if key != "file"}
-
-        # Include original request and headers in the data
-        data = await add_litellm_data_to_request(
-            data=data,
-            request=request,
-            general_settings=general_settings,
-            user_api_key_dict=user_api_key_dict,
-            version=version,
-            proxy_config=proxy_config,
-        )
-
-        _create_file_request = CreateFileRequest()
-
-        # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
-        response = await litellm.acreate_file(
-            custom_llm_provider="openai", **_create_file_request
-        )
-
-        ### ALERTING ###
-        asyncio.create_task(
-            proxy_logging_obj.update_request_status(
-                litellm_call_id=data.get("litellm_call_id", ""), status="success"
-            )
-        )
-
-        ### RESPONSE HEADERS ###
-        hidden_params = getattr(response, "_hidden_params", {}) or {}
-        model_id = hidden_params.get("model_id", None) or ""
-        cache_key = hidden_params.get("cache_key", None) or ""
-        api_base = hidden_params.get("api_base", None) or ""
-
-        fastapi_response.headers.update(
-            get_custom_headers(
-                user_api_key_dict=user_api_key_dict,
-                model_id=model_id,
-                cache_key=cache_key,
-                api_base=api_base,
-                version=version,
-                model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
-            )
-        )
-
-        return response
-    except Exception as e:
-        await proxy_logging_obj.post_call_failure_hook(
-            user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
-        )
-        verbose_proxy_logger.error(
-            "litellm.proxy.proxy_server.create_file(): Exception occured - {}".format(
-                str(e)
-            )
-        )
-        verbose_proxy_logger.debug(traceback.format_exc())
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "message", str(e.detail)),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
-            )
-        else:
-            error_msg = f"{str(e)}"
-            raise ProxyException(
-                message=getattr(e, "message", error_msg),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", 500),
-            )
-
 
 @router.post(
     "/v1/moderations",
@@ -9296,3 +9187,4 @@ app.include_router(caching_router)
 app.include_router(analytics_router)
 app.include_router(debugging_endpoints_router)
 app.include_router(ui_crud_endpoints_router)
+app.include_router(openai_files_router)
