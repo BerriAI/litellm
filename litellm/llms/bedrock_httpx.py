@@ -44,7 +44,13 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallFunctionChunk,
 )
 from litellm.types.utils import Choices, Message
-from litellm.utils import CustomStreamWrapper, ModelResponse, Usage, get_secret
+from litellm.utils import (
+    CustomStreamWrapper,
+    ModelResponse,
+    Usage,
+    get_secret,
+    print_verbose,
+)
 
 from .base import BaseLLM
 from .bedrock import BedrockError, ModelResponseIterator, convert_messages_to_prompt
@@ -328,6 +334,10 @@ class BedrockLLM(BaseLLM):
         """
         import boto3
 
+        print_verbose(
+            f"Boto3 get_credentials called variables passed to function {locals()}"
+        )
+
         ## CHECK IS  'os.environ/' passed in
         params_to_check: List[Optional[str]] = [
             aws_access_key_id,
@@ -364,6 +374,9 @@ class BedrockLLM(BaseLLM):
             and aws_role_name is not None
             and aws_session_name is not None
         ):
+            print_verbose(
+                f"IN Web Identity Token: {aws_web_identity_token} | Role Name: {aws_role_name} | Session Name: {aws_session_name}"
+            )
             iam_creds_cache_key = json.dumps(
                 {
                     "aws_web_identity_token": aws_web_identity_token,
@@ -419,6 +432,9 @@ class BedrockLLM(BaseLLM):
 
             return iam_creds
         elif aws_role_name is not None and aws_session_name is not None:
+            print_verbose(
+                f"Using STS Client AWS aws_role_name: {aws_role_name} aws_session_name: {aws_session_name}"
+            )
             sts_client = boto3.client(
                 "sts",
                 aws_access_key_id=aws_access_key_id,  # [OPTIONAL]
@@ -441,6 +457,7 @@ class BedrockLLM(BaseLLM):
             return credentials
         elif aws_profile_name is not None:  ### CHECK SESSION ###
             # uses auth values from AWS profile usually stored in ~/.aws/credentials
+            print_verbose(f"Using AWS profile: {aws_profile_name}")
             client = boto3.Session(profile_name=aws_profile_name)
 
             return client.get_credentials()
@@ -449,6 +466,7 @@ class BedrockLLM(BaseLLM):
             and aws_secret_access_key is not None
             and aws_session_token is not None
         ):  ### CHECK FOR AWS SESSION TOKEN ###
+            print_verbose(f"Using AWS Session Token: {aws_session_token}")
             from botocore.credentials import Credentials
 
             credentials = Credentials(
@@ -458,6 +476,7 @@ class BedrockLLM(BaseLLM):
             )
             return credentials
         else:
+            print_verbose("Using Default AWS Session")
             session = boto3.Session(
                 aws_access_key_id=aws_access_key_id,
                 aws_secret_access_key=aws_secret_access_key,

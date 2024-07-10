@@ -391,16 +391,26 @@ class VertexGeminiConfig:
                 optional_params["presence_penalty"] = value
             if param == "tools" and isinstance(value, list):
                 gtool_func_declarations = []
+                google_search_tool: Optional[dict] = None
                 for tool in value:
-                    gtool_func_declaration = FunctionDeclaration(
-                        name=tool["function"]["name"],
-                        description=tool["function"].get("description", ""),
-                        parameters=tool["function"].get("parameters", {}),
-                    )
-                    gtool_func_declarations.append(gtool_func_declaration)
-                optional_params["tools"] = [
-                    Tools(function_declarations=gtool_func_declarations)
-                ]
+                    # check if grounding
+                    try:
+                        gtool_func_declaration = FunctionDeclaration(
+                            name=tool["function"]["name"],
+                            description=tool["function"].get("description", ""),
+                            parameters=tool["function"].get("parameters", {}),
+                        )
+                        gtool_func_declarations.append(gtool_func_declaration)
+                    except KeyError:
+                        # assume it's a provider-specific param
+                        verbose_logger.warning(
+                            "Got KeyError parsing tool={}. Assuming it's a provider-specific param. Use `litellm.set_verbose` or `litellm --detailed_debug` to see raw request."
+                        )
+                        google_search_tool = tool
+                _tools = Tools(function_declarations=gtool_func_declarations)
+                if google_search_tool is not None:
+                    _tools["googleSearchRetrieval"] = google_search_tool
+                optional_params["tools"] = [_tools]
             if param == "tool_choice" and (
                 isinstance(value, str) or isinstance(value, dict)
             ):
@@ -1178,23 +1188,25 @@ class VertexLLM(BaseLLM):
     def image_generation(
         self,
         prompt: str,
-        vertex_project: str,
-        vertex_location: str,
+        vertex_project: Optional[str],
+        vertex_location: Optional[str],
+        vertex_credentials: Optional[str],
+        model_response: litellm.ImageResponse,
         model: Optional[
             str
         ] = "imagegeneration",  # vertex ai uses imagegeneration as the default model
-        client: Optional[AsyncHTTPHandler] = None,
+        client: Optional[Any] = None,
         optional_params: Optional[dict] = None,
         timeout: Optional[int] = None,
         logging_obj=None,
-        model_response=None,
         aimg_generation=False,
     ):
-        if aimg_generation == True:
-            response = self.aimage_generation(
+        if aimg_generation is True:
+            return self.aimage_generation(
                 prompt=prompt,
                 vertex_project=vertex_project,
                 vertex_location=vertex_location,
+                vertex_credentials=vertex_credentials,
                 model=model,
                 client=client,
                 optional_params=optional_params,
@@ -1202,13 +1214,99 @@ class VertexLLM(BaseLLM):
                 logging_obj=logging_obj,
                 model_response=model_response,
             )
-            return response
+
+        if client is None:
+            _params = {}
+            if timeout is not None:
+                if isinstance(timeout, float) or isinstance(timeout, int):
+                    _httpx_timeout = httpx.Timeout(timeout)
+                    _params["timeout"] = _httpx_timeout
+            else:
+                _params["timeout"] = httpx.Timeout(timeout=600.0, connect=5.0)
+
+            sync_handler: HTTPHandler = HTTPHandler(**_params)  # type: ignore
+        else:
+            sync_handler = client  # type: ignore
+
+        url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:predict"
+
+        auth_header, _ = self._ensure_access_token(
+            credentials=vertex_credentials, project_id=vertex_project
+        )
+        optional_params = optional_params or {
+            "sampleCount": 1
+        }  # default optional params
+
+        request_data = {
+            "instances": [{"prompt": prompt}],
+            "parameters": optional_params,
+        }
+
+        request_str = f"\n curl -X POST \\\n -H \"Authorization: Bearer {auth_header[:10] + 'XXXXXXXXXX'}\" \\\n -H \"Content-Type: application/json; charset=utf-8\" \\\n -d {request_data} \\\n \"{url}\""
+        logging_obj.pre_call(
+            input=prompt,
+            api_key=None,
+            additional_args={
+                "complete_input_dict": optional_params,
+                "request_str": request_str,
+            },
+        )
+
+        logging_obj.pre_call(
+            input=prompt,
+            api_key=None,
+            additional_args={
+                "complete_input_dict": optional_params,
+                "request_str": request_str,
+            },
+        )
+
+        response = sync_handler.post(
+            url=url,
+            headers={
+                "Content-Type": "application/json; charset=utf-8",
+                "Authorization": f"Bearer {auth_header}",
+            },
+            data=json.dumps(request_data),
+        )
+
+        if response.status_code != 200:
+            raise Exception(f"Error: {response.status_code} {response.text}")
+        """
+        Vertex AI Image generation response example:
+        {
+            "predictions": [
+                {
+                "bytesBase64Encoded": "BASE64_IMG_BYTES",
+                "mimeType": "image/png"
+                },
+                {
+                "mimeType": "image/png",
+                "bytesBase64Encoded": "BASE64_IMG_BYTES"
+                }
+            ]
+        }
+        """
+
+        _json_response = response.json()
+        _predictions = _json_response["predictions"]
+
+        _response_data: List[litellm.ImageObject] = []
+        for _prediction in _predictions:
+            _bytes_base64_encoded = _prediction["bytesBase64Encoded"]
+            image_object = litellm.ImageObject(b64_json=_bytes_base64_encoded)
+            _response_data.append(image_object)
+
+        model_response.data = _response_data
+
+        return model_response
 
     async def aimage_generation(
         self,
         prompt: str,
-        vertex_project: str,
-        vertex_location: str,
+        vertex_project: Optional[str],
+        vertex_location: Optional[str],
+        vertex_credentials: Optional[str],
         model_response: litellm.ImageResponse,
         model: Optional[
             str
@@ -1253,7 +1351,9 @@ class VertexLLM(BaseLLM):
         } \
         "https://us-central1-aiplatform.googleapis.com/v1/projects/PROJECT_ID/locations/us-central1/publishers/google/models/imagegeneration:predict"
         """
-        auth_header, _ = self._ensure_access_token(credentials=None, project_id=None)
+        auth_header, _ = self._ensure_access_token(
+            credentials=vertex_credentials, project_id=vertex_project
+        )
         optional_params = optional_params or {
             "sampleCount": 1
         }  # default optional params

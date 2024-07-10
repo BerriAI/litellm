@@ -330,6 +330,51 @@ Return a `list[Recipe]`
 completion(model="vertex_ai_beta/gemini-1.5-flash-preview-0514", messages=messages, response_format={ "type": "json_object" })
 ```
 
+### **Grounding**
+
+Add Google Search Result grounding to vertex ai calls. 
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python 
+from litellm import completion 
+
+## SETUP ENVIRONMENT
+# !gcloud auth application-default login - run this to add vertex credentials to your env
+
+tools = [{"googleSearchRetrieval": {}}] # 👈 ADD GOOGLE SEARCH
+
+resp = litellm.completion(
+                    model="vertex_ai_beta/gemini-1.0-pro-001",
+                    messages=[{"role": "user", "content": "Who won the world cup?"}],
+                    tools=tools,
+                )
+
+print(resp)
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -d '{
+    "model": "gpt-4o",
+    "messages": [{"role": "user", "content": "Who won the world cup?"}],
+    "tools": [
+        {
+            "googleSearchResults": {} 
+        }
+    ]
+  }'
+
+```
+
+</TabItem>
+</Tabs>
+
 ## Pre-requisites
 * `pip install google-cloud-aiplatform` (pre-installed on proxy docker image)
 * Authentication: 
@@ -825,9 +870,11 @@ assert isinstance(
 
 Pass any file supported by Vertex AI, through LiteLLM. 
 
+
 <Tabs>
 <TabItem value="sdk" label="SDK">
 
+### **Using `gs://`**
 ```python
 from litellm import completion
 
@@ -840,7 +887,7 @@ response = completion(
                 {"type": "text", "text": "You are a very professional document summarization specialist. Please summarize the given document."},
                 {
                     "type": "image_url",
-                    "image_url": "gs://cloud-samples-data/generative-ai/pdf/2403.05530.pdf",
+                    "image_url": "gs://cloud-samples-data/generative-ai/pdf/2403.05530.pdf", # 👈 PDF
                 },
             ],
         }
@@ -849,7 +896,41 @@ response = completion(
 )
 
 print(response.choices[0])
+```
 
+### **using base64**
+```python
+from litellm import completion
+import base64
+import requests
+
+# URL of the file
+url = "https://storage.googleapis.com/cloud-samples-data/generative-ai/pdf/2403.05530.pdf"
+
+# Download the file
+response = requests.get(url)
+file_data = response.content
+
+encoded_file = base64.b64encode(file_data).decode("utf-8")
+
+response = completion(
+    model="vertex_ai/gemini-1.5-flash",
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "You are a very professional document summarization specialist. Please summarize the given document."},
+                {
+                    "type": "image_url",
+                    "image_url": f"data:application/pdf;base64,{encoded_file}", # 👈 PDF
+                },
+            ],
+        }
+    ],
+    max_tokens=300,
+)
+
+print(response.choices[0])
 ```
 </TabItem>
 <TabItem value="proxy" lable="PROXY">
@@ -871,6 +952,7 @@ litellm --config /path/to/config.yaml
 
 3. Test it! 
 
+**Using `gs://`**
 ```bash
 curl http://0.0.0.0:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
@@ -887,8 +969,8 @@ curl http://0.0.0.0:4000/v1/chat/completions \
           },
           {
                 "type": "image_url",
-                "image_url": "gs://cloud-samples-data/generative-ai/pdf/2403.05530.pdf",
-            },
+                "image_url": "gs://cloud-samples-data/generative-ai/pdf/2403.05530.pdf" # 👈 PDF
+            }
           }
         ]
       }
@@ -898,6 +980,33 @@ curl http://0.0.0.0:4000/v1/chat/completions \
 
 ```
 
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <YOUR-LITELLM-KEY>" \
+  -d '{
+    "model": "gemini-1.5-flash",
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "You are a very professional document summarization specialist. Please summarize the given document"
+          },
+          {
+                "type": "image_url",
+                "image_url": "data:application/pdf;base64,{encoded_file}" # 👈 PDF
+            }
+          }
+        ]
+      }
+    ],
+    "max_tokens": 300
+  }'
+
+```
 </TabItem>
 </Tabs>
 

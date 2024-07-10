@@ -95,6 +95,8 @@ from litellm.proxy._types import (
     NewCustomerRequest,
     NewTeamRequest,
     NewUserRequest,
+    ProxyErrorTypes,
+    ProxyException,
     UpdateKeyRequest,
     UpdateTeamRequest,
     UserAPIKeyAuth,
@@ -211,6 +213,10 @@ async def test_new_user_response(prisma_client):
         # model_list
         APIRoute(path="/v1/models", endpoint=model_list),
         APIRoute(path="/models", endpoint=model_list),
+        # threads
+        APIRoute(
+            path="/v1/threads/thread_49EIN5QF32s4mH20M7GFKdlZ", endpoint=model_list
+        ),
     ],
     ids=lambda route: str(dict(route=route.endpoint.__name__, path=route.path)),
 )
@@ -491,6 +497,8 @@ def test_call_with_user_over_budget(prisma_client):
     except Exception as e:
         error_detail = e.message
         assert "Budget has been exceeded" in error_detail
+        assert isinstance(e, ProxyException)
+        assert e.type == ProxyErrorTypes.budget_exceeded
         print(vars(e))
 
 
@@ -597,6 +605,8 @@ def test_call_with_end_user_over_budget(prisma_client):
     except Exception as e:
         error_detail = e.message
         assert "Budget has been exceeded! Current" in error_detail
+        assert isinstance(e, ProxyException)
+        assert e.type == ProxyErrorTypes.budget_exceeded
         print(vars(e))
 
 
@@ -686,6 +696,8 @@ def test_call_with_proxy_over_budget(prisma_client):
         else:
             error_detail = traceback.format_exc()
         assert "Budget has been exceeded" in error_detail
+        assert isinstance(e, ProxyException)
+        assert e.type == ProxyErrorTypes.budget_exceeded
         print(vars(e))
 
 
@@ -765,6 +777,8 @@ def test_call_with_user_over_budget_stream(prisma_client):
     except Exception as e:
         error_detail = e.message
         assert "Budget has been exceeded" in error_detail
+        assert isinstance(e, ProxyException)
+        assert e.type == ProxyErrorTypes.budget_exceeded
         print(vars(e))
 
 
@@ -1401,6 +1415,8 @@ def test_call_with_key_over_budget(prisma_client):
         else:
             error_detail = str(e)
         assert "Budget has been exceeded" in error_detail
+        assert isinstance(e, ProxyException)
+        assert e.type == ProxyErrorTypes.budget_exceeded
         print(vars(e))
 
 
@@ -1514,6 +1530,8 @@ def test_call_with_key_over_budget_no_cache(prisma_client):
         else:
             error_detail = str(e)
         assert "Budget has been exceeded" in error_detail
+        assert isinstance(e, ProxyException)
+        assert e.type == ProxyErrorTypes.budget_exceeded
         print(vars(e))
 
 
@@ -1629,6 +1647,8 @@ def test_call_with_key_over_model_budget(prisma_client):
         traceback.print_exc()
         error_detail = e.message
         assert "Budget has been exceeded!" in error_detail
+        assert isinstance(e, ProxyException)
+        assert e.type == ProxyErrorTypes.budget_exceeded
         print(vars(e))
 
 
@@ -1795,6 +1815,7 @@ async def test_call_with_key_over_budget_stream(prisma_client):
         print("Got Exception", e)
         error_detail = e.message
         assert "Budget has been exceeded" in error_detail
+
         print(vars(e))
 
 

@@ -2144,6 +2144,98 @@ def get_litellm_params(
     return litellm_params
 
 
+def _should_drop_param(k, additional_drop_params) -> bool:
+    if (
+        additional_drop_params is not None
+        and isinstance(additional_drop_params, list)
+        and k in additional_drop_params
+    ):
+        return True  # allow user to drop specific params for a model - e.g. vllm - logit bias
+
+    return False
+
+
+def _get_non_default_params(
+    passed_params: dict, default_params: dict, additional_drop_params: Optional[bool]
+) -> dict:
+    non_default_params = {}
+    for k, v in passed_params.items():
+        if (
+            k in default_params
+            and v != default_params[k]
+            and _should_drop_param(k=k, additional_drop_params=additional_drop_params)
+            is False
+        ):
+            non_default_params[k] = v
+
+    return non_default_params
+
+
+def get_optional_params_transcription(
+    model: str,
+    language: Optional[str] = None,
+    prompt: Optional[str] = None,
+    response_format: Optional[str] = None,
+    temperature: Optional[int] = None,
+    custom_llm_provider: Optional[str] = None,
+    drop_params: Optional[bool] = None,
+    **kwargs,
+):
+    # retrieve all parameters passed to the function
+    passed_params = locals()
+    custom_llm_provider = passed_params.pop("custom_llm_provider")
+    drop_params = passed_params.pop("drop_params")
+    special_params = passed_params.pop("kwargs")
+    for k, v in special_params.items():
+        passed_params[k] = v
+
+    default_params = {
+        "language": None,
+        "prompt": None,
+        "response_format": None,
+        "temperature": None,  # openai defaults this to 0
+    }
+
+    non_default_params = {
+        k: v
+        for k, v in passed_params.items()
+        if (k in default_params and v != default_params[k])
+    }
+    optional_params = {}
+
+    ## raise exception if non-default value passed for non-openai/azure embedding calls
+    def _check_valid_arg(supported_params):
+        if len(non_default_params.keys()) > 0:
+            keys = list(non_default_params.keys())
+            for k in keys:
+                if (
+                    drop_params is True or litellm.drop_params is True
+                ) and k not in supported_params:  # drop the unsupported non-default values
+                    non_default_params.pop(k, None)
+                elif k not in supported_params:
+                    raise UnsupportedParamsError(
+                        status_code=500,
+                        message=f"Setting user/encoding format is not supported by {custom_llm_provider}. To drop it from the call, set `litellm.drop_params = True`.",
+                    )
+            return non_default_params
+
+    if custom_llm_provider == "openai" or custom_llm_provider == "azure":
+        optional_params = non_default_params
+    elif custom_llm_provider == "groq":
+        supported_params = litellm.GroqConfig().get_supported_openai_params_stt()
+        _check_valid_arg(supported_params=supported_params)
+        optional_params = litellm.GroqConfig().map_openai_params_stt(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=drop_params if drop_params is not None else False,
+        )
+    for k in passed_params.keys():  # pass additional kwargs without modification
+        if k not in default_params.keys():
+            optional_params[k] = passed_params[k]
+    return optional_params
+
+
 def get_optional_params_image_gen(
     n: Optional[int] = None,
     quality: Optional[str] = None,
@@ -2152,11 +2244,13 @@ def get_optional_params_image_gen(
     style: Optional[str] = None,
     user: Optional[str] = None,
     custom_llm_provider: Optional[str] = None,
+    additional_drop_params: Optional[bool] = None,
     **kwargs,
 ):
     # retrieve all parameters passed to the function
     passed_params = locals()
     custom_llm_provider = passed_params.pop("custom_llm_provider")
+    additional_drop_params = passed_params.pop("additional_drop_params", None)
     special_params = passed_params.pop("kwargs")
     for k, v in special_params.items():
         passed_params[k] = v
@@ -2170,11 +2264,11 @@ def get_optional_params_image_gen(
         "user": None,
     }
 
-    non_default_params = {
-        k: v
-        for k, v in passed_params.items()
-        if (k in default_params and v != default_params[k])
-    }
+    non_default_params = _get_non_default_params(
+        passed_params=passed_params,
+        default_params=default_params,
+        additional_drop_params=additional_drop_params,
+    )
     optional_params = {}
 
     ## raise exception if non-default value passed for non-openai/azure embedding calls
@@ -2228,6 +2322,7 @@ def get_optional_params_embeddings(
     encoding_format=None,
     dimensions=None,
     custom_llm_provider="",
+    additional_drop_params: Optional[bool] = None,
     **kwargs,
 ):
     # retrieve all parameters passed to the function
@@ -2236,6 +2331,8 @@ def get_optional_params_embeddings(
     special_params = passed_params.pop("kwargs")
     for k, v in special_params.items():
         passed_params[k] = v
+
+    additional_drop_params = passed_params.pop("additional_drop_params", None)
 
     default_params = {"user": None, "encoding_format": None, "dimensions": None}
 
@@ -2252,11 +2349,11 @@ def get_optional_params_embeddings(
                 message=f"{custom_llm_provider} does not support parameters: {unsupported_params}, for model={model}. To drop these, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n",
             )
 
-    non_default_params = {
-        k: v
-        for k, v in passed_params.items()
-        if (k in default_params and v != default_params[k])
-    }
+    non_default_params = _get_non_default_params(
+        passed_params=passed_params,
+        default_params=default_params,
+        additional_drop_params=additional_drop_params,
+    )
 
     ## raise exception if non-default value passed for non-openai/azure embedding calls
     if custom_llm_provider == "openai":
@@ -2393,6 +2490,7 @@ def get_optional_params(
     top_logprobs=None,
     extra_headers=None,
     api_version=None,
+    parallel_tool_calls=None,
     drop_params=None,
     additional_drop_params=None,
     **kwargs,
@@ -2470,19 +2568,10 @@ def get_optional_params(
         "top_logprobs": None,
         "extra_headers": None,
         "api_version": None,
+        "parallel_tool_calls": None,
         "drop_params": None,
         "additional_drop_params": None,
     }
-
-    def _should_drop_param(k, additional_drop_params) -> bool:
-        if (
-            additional_drop_params is not None
-            and isinstance(additional_drop_params, list)
-            and k in additional_drop_params
-        ):
-            return True  # allow user to drop specific params for a model - e.g. vllm - logit bias
-
-        return False
 
     # filter out those parameters that were passed with non-default values
     non_default_params = {
@@ -3388,8 +3477,16 @@ def get_optional_params(
             model=model, custom_llm_provider="azure"
         )
         _check_valid_arg(supported_params=supported_params)
+        verbose_logger.debug(
+            "Azure optional params - api_version: api_version={}, litellm.api_version={}, os.environ['AZURE_API_VERSION']={}".format(
+                api_version, litellm.api_version, get_secret("AZURE_API_VERSION")
+            )
+        )
         api_version = (
-            api_version or litellm.api_version or get_secret("AZURE_API_VERSION")
+            api_version
+            or litellm.api_version
+            or get_secret("AZURE_API_VERSION")
+            or litellm.AZURE_DEFAULT_API_VERSION
         )
         optional_params = litellm.AzureOpenAIConfig().map_openai_params(
             non_default_params=non_default_params,
@@ -4165,6 +4262,9 @@ def get_llm_provider(
                 # deepinfra is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.endpoints.anyscale.com/v1
                 api_base = "https://api.deepinfra.com/v1/openai"
                 dynamic_api_key = get_secret("DEEPINFRA_API_KEY")
+            elif custom_llm_provider == "empower":
+                api_base = "https://app.empower.dev/api/v1"
+                dynamic_api_key = get_secret("EMPOWER_API_KEY")
             elif custom_llm_provider == "groq":
                 # groq is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.groq.com/openai/v1
                 api_base = "https://api.groq.com/openai/v1"
@@ -4287,6 +4387,9 @@ def get_llm_provider(
                     elif endpoint == "https://codestral.mistral.ai/v1":
                         custom_llm_provider = "text-completion-codestral"
                         dynamic_api_key = get_secret("CODESTRAL_API_KEY")
+                    elif endpoint == "app.empower.dev/api/v1":
+                        custom_llm_provider = "empower"
+                        dynamic_api_key = get_secret("EMPOWER_API_KEY")
                     elif endpoint == "api.deepseek.com/v1":
                         custom_llm_provider = "deepseek"
                         dynamic_api_key = get_secret("DEEPSEEK_API_KEY")
@@ -4383,6 +4486,8 @@ def get_llm_provider(
         # openai embeddings
         elif model in litellm.open_ai_embedding_models:
             custom_llm_provider = "openai"
+        elif model in litellm.empower_models:
+            custom_llm_provider = "empower"
         if custom_llm_provider is None or custom_llm_provider == "":
             if litellm.suppress_debug_info == False:
                 print()  # noqa
@@ -7557,7 +7662,7 @@ def exception_type(
                 else:
                     # if no status code then it is an APIConnectionError: https://github.com/openai/openai-python#handling-errors
                     raise APIConnectionError(
-                        message=f"{exception_provider} APIConnectionError - {message}",
+                        message=f"{exception_provider} APIConnectionError - {message}\n{traceback.format_exc()}",
                         llm_provider="azure",
                         model=model,
                         litellm_debug_info=extra_information,
@@ -8021,7 +8126,7 @@ class CustomStreamWrapper:
 
             if chunk.startswith(self.complete_response):
                 # Remove last_sent_chunk only if it appears at the start of the new chunk
-                chunk = chunk[len(self.complete_response) :]
+                chunk = chunk[len(self.complete_response):]
 
             self.complete_response += chunk
             return chunk
@@ -10019,7 +10124,7 @@ def mock_completion_streaming_obj(
     model_response, mock_response, model, n: Optional[int] = None
 ):
     for i in range(0, len(mock_response), 3):
-        completion_obj = Delta(role="assistant", content=mock_response[i : i + 3])
+        completion_obj = Delta(role="assistant", content=mock_response[i: i + 3])
         if n is None:
             model_response.choices[0].delta = completion_obj
         else:
@@ -10028,7 +10133,7 @@ def mock_completion_streaming_obj(
                 _streaming_choice = litellm.utils.StreamingChoices(
                     index=j,
                     delta=litellm.utils.Delta(
-                        role="assistant", content=mock_response[i : i + 3]
+                        role="assistant", content=mock_response[i: i + 3]
                     ),
                 )
                 _all_choices.append(_streaming_choice)
@@ -10040,7 +10145,7 @@ async def async_mock_completion_streaming_obj(
     model_response, mock_response, model, n: Optional[int] = None
 ):
     for i in range(0, len(mock_response), 3):
-        completion_obj = Delta(role="assistant", content=mock_response[i : i + 3])
+        completion_obj = Delta(role="assistant", content=mock_response[i: i + 3])
         if n is None:
             model_response.choices[0].delta = completion_obj
         else:
@@ -10049,7 +10154,7 @@ async def async_mock_completion_streaming_obj(
                 _streaming_choice = litellm.utils.StreamingChoices(
                     index=j,
                     delta=litellm.utils.Delta(
-                        role="assistant", content=mock_response[i : i + 3]
+                        role="assistant", content=mock_response[i: i + 3]
                     ),
                 )
                 _all_choices.append(_streaming_choice)

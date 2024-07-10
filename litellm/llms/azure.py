@@ -19,6 +19,7 @@ from typing import (
 import httpx  # type: ignore
 import requests
 from openai import AsyncAzureOpenAI, AzureOpenAI
+from pydantic import BaseModel
 from typing_extensions import overload
 
 import litellm
@@ -1107,7 +1108,10 @@ class AzureChatCompletion(BaseLLM):
                     "api-key": api_key,
                 },
             )
-            operation_location_url = response.headers["operation-location"]
+            if "operation-location" in response.headers:
+                operation_location_url = response.headers["operation-location"]
+            else:
+                raise AzureOpenAIError(status_code=500, message=response.text)
             response = await async_handler.get(
                 url=operation_location_url,
                 headers={
@@ -1219,7 +1223,10 @@ class AzureChatCompletion(BaseLLM):
                     "api-key": api_key,
                 },
             )
-            operation_location_url = response.headers["operation-location"]
+            if "operation-location" in response.headers:
+                operation_location_url = response.headers["operation-location"]
+            else:
+                raise AzureOpenAIError(status_code=500, message=response.text)
             response = sync_handler.get(
                 url=operation_location_url,
                 headers={
@@ -1534,7 +1541,12 @@ class AzureChatCompletion(BaseLLM):
         response = azure_client.audio.transcriptions.create(
             **data, timeout=timeout  # type: ignore
         )
-        stringified_response = response.model_dump()
+
+        if isinstance(response, BaseModel):
+            stringified_response = response.model_dump()
+        else:
+            stringified_response = TranscriptionResponse(text=response).model_dump()
+
         ## LOGGING
         logging_obj.post_call(
             input=audio_file.name,
@@ -1587,7 +1599,10 @@ class AzureChatCompletion(BaseLLM):
                 **data, timeout=timeout
             )  # type: ignore
 
-            stringified_response = response.model_dump()
+            if isinstance(response, BaseModel):
+                stringified_response = response.model_dump()
+            else:
+                stringified_response = TranscriptionResponse(text=response).model_dump()
 
             ## LOGGING
             logging_obj.post_call(

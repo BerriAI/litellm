@@ -37,6 +37,7 @@ const sidebars = {
           href: "https://litellm-api.up.railway.app/",
         },
         "proxy/enterprise",
+        "proxy/user_keys",
         "proxy/demo",
         "proxy/configs",
         "proxy/reliability",
@@ -46,7 +47,6 @@ const sidebars = {
         "proxy/team_budgets",
         "proxy/customers",
         "proxy/billing",
-        "proxy/user_keys",
         "proxy/virtual_keys",
         "proxy/guardrails",
         "proxy/token_auth",
@@ -90,6 +90,7 @@ const sidebars = {
       },
       items: [
         "completion/input",
+        "completion/provider_specific_params",
         "completion/drop_params",
         "completion/prompt_formatting",
         "completion/output",

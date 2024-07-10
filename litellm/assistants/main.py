@@ -1,19 +1,28 @@
 # What is this?
 ## Main file for assistants API logic
-from typing import Iterable
+import asyncio
+import contextvars
+import os
 from functools import partial
-import os, asyncio, contextvars
+from typing import Any, Coroutine, Dict, Iterable, List, Literal, Optional, Union
+
+import httpx
+from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
+from openai.types.beta.assistant import Assistant
+from openai.types.beta.assistant_deleted import AssistantDeleted
+
 import litellm
-from openai import OpenAI, AsyncOpenAI, AzureOpenAI, AsyncAzureOpenAI
 from litellm import client
+from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import (
-    supports_httpx_timeout,
     exception_type,
     get_llm_provider,
     get_secret,
+    supports_httpx_timeout,
 )
-from ..llms.openai import OpenAIAssistantsAPI
+
 from ..llms.azure import AzureAssistantsAPI
+from ..llms.openai import OpenAIAssistantsAPI
 from ..types.llms.openai import *
 from ..types.router import *
 from .utils import get_optional_params_add_message
@@ -174,6 +183,292 @@ def get_assistants(
                 content="Unsupported provider",
                 request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),  # type: ignore
             ),
+        )
+    return response
+
+
+async def acreate_assistants(
+    custom_llm_provider: Literal["openai", "azure"],
+    client: Optional[AsyncOpenAI] = None,
+    **kwargs,
+) -> Assistant:
+    loop = asyncio.get_event_loop()
+    ### PASS ARGS TO GET ASSISTANTS ###
+    kwargs["async_create_assistants"] = True
+    try:
+        model = kwargs.pop("model", None)
+        kwargs["client"] = client
+        # Use a partial function to pass your keyword arguments
+        func = partial(create_assistants, custom_llm_provider, model, **kwargs)
+
+        # Add the context to the function
+        ctx = contextvars.copy_context()
+        func_with_context = partial(ctx.run, func)
+
+        _, custom_llm_provider, _, _ = get_llm_provider(  # type: ignore
+            model=model, custom_llm_provider=custom_llm_provider
+        )  # type: ignore
+
+        # Await normally
+        init_response = await loop.run_in_executor(None, func_with_context)
+        if asyncio.iscoroutine(init_response):
+            response = await init_response
+        else:
+            response = init_response
+        return response  # type: ignore
+    except Exception as e:
+        raise exception_type(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            original_exception=e,
+            completion_kwargs={},
+            extra_kwargs=kwargs,
+        )
+
+
+def create_assistants(
+    custom_llm_provider: Literal["openai", "azure"],
+    model: str,
+    name: Optional[str] = None,
+    description: Optional[str] = None,
+    instructions: Optional[str] = None,
+    tools: Optional[List[Dict[str, Any]]] = None,
+    tool_resources: Optional[Dict[str, Any]] = None,
+    metadata: Optional[Dict[str, str]] = None,
+    temperature: Optional[float] = None,
+    top_p: Optional[float] = None,
+    response_format: Optional[Union[str, Dict[str, str]]] = None,
+    client: Optional[Any] = None,
+    api_key: Optional[str] = None,
+    api_base: Optional[str] = None,
+    api_version: Optional[str] = None,
+    **kwargs,
+) -> Assistant:
+    async_create_assistants: Optional[bool] = kwargs.pop(
+        "async_create_assistants", None
+    )
+    if async_create_assistants is not None and not isinstance(
+        async_create_assistants, bool
+    ):
+        raise ValueError(
+            "Invalid value passed in for async_create_assistants. Only bool or None allowed"
+        )
+    optional_params = GenericLiteLLMParams(
+        api_key=api_key, api_base=api_base, api_version=api_version, **kwargs
+    )
+
+    ### TIMEOUT LOGIC ###
+    timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
+    # set timeout for 10 minutes by default
+
+    if (
+        timeout is not None
+        and isinstance(timeout, httpx.Timeout)
+        and supports_httpx_timeout(custom_llm_provider) == False
+    ):
+        read_timeout = timeout.read or 600
+        timeout = read_timeout  # default 10 min timeout
+    elif timeout is not None and not isinstance(timeout, httpx.Timeout):
+        timeout = float(timeout)  # type: ignore
+    elif timeout is None:
+        timeout = 600.0
+
+    response: Optional[Assistant] = None
+    if custom_llm_provider == "openai":
+        api_base = (
+            optional_params.api_base  # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
+            or litellm.api_base
+            or os.getenv("OPENAI_API_BASE")
+            or "https://api.openai.com/v1"
+        )
+        organization = (
+            optional_params.organization
+            or litellm.organization
+            or os.getenv("OPENAI_ORGANIZATION", None)
+            or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
+        )
+        # set API KEY
+        api_key = (
+            optional_params.api_key
+            or litellm.api_key  # for deepinfra/perplexity/anyscale we check in get_llm_provider and pass in the api key from there
+            or litellm.openai_key
+            or os.getenv("OPENAI_API_KEY")
+        )
+
+        create_assistant_data = {
+            "model": model,
+            "name": name,
+            "description": description,
+            "instructions": instructions,
+            "tools": tools,
+            "tool_resources": tool_resources,
+            "metadata": metadata,
+            "temperature": temperature,
+            "top_p": top_p,
+            "response_format": response_format,
+        }
+
+        response = openai_assistants_api.create_assistants(
+            api_base=api_base,
+            api_key=api_key,
+            timeout=timeout,
+            max_retries=optional_params.max_retries,
+            organization=organization,
+            create_assistant_data=create_assistant_data,
+            client=client,
+            async_create_assistants=async_create_assistants,  # type: ignore
+        )  # type: ignore
+    else:
+        raise litellm.exceptions.BadRequestError(
+            message="LiteLLM doesn't support {} for 'create_assistants'. Only 'openai' is supported.".format(
+                custom_llm_provider
+            ),
+            model="n/a",
+            llm_provider=custom_llm_provider,
+            response=httpx.Response(
+                status_code=400,
+                content="Unsupported provider",
+                request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),  # type: ignore
+            ),
+        )
+    if response is None:
+        raise litellm.exceptions.InternalServerError(
+            message="No response returned from 'create_assistants'",
+            model=model,
+            llm_provider=custom_llm_provider,
+        )
+    return response
+
+
+async def adelete_assistant(
+    custom_llm_provider: Literal["openai", "azure"],
+    client: Optional[AsyncOpenAI] = None,
+    **kwargs,
+) -> AssistantDeleted:
+    loop = asyncio.get_event_loop()
+    ### PASS ARGS TO GET ASSISTANTS ###
+    kwargs["async_delete_assistants"] = True
+    try:
+        kwargs["client"] = client
+        # Use a partial function to pass your keyword arguments
+        func = partial(delete_assistant, custom_llm_provider, **kwargs)
+
+        # Add the context to the function
+        ctx = contextvars.copy_context()
+        func_with_context = partial(ctx.run, func)
+
+        _, custom_llm_provider, _, _ = get_llm_provider(  # type: ignore
+            model="", custom_llm_provider=custom_llm_provider
+        )  # type: ignore
+
+        # Await normally
+        init_response = await loop.run_in_executor(None, func_with_context)
+        if asyncio.iscoroutine(init_response):
+            response = await init_response
+        else:
+            response = init_response
+        return response  # type: ignore
+    except Exception as e:
+        raise exception_type(
+            model="",
+            custom_llm_provider=custom_llm_provider,
+            original_exception=e,
+            completion_kwargs={},
+            extra_kwargs=kwargs,
+        )
+
+
+def delete_assistant(
+    custom_llm_provider: Literal["openai", "azure"],
+    assistant_id: str,
+    client: Optional[Any] = None,
+    api_key: Optional[str] = None,
+    api_base: Optional[str] = None,
+    api_version: Optional[str] = None,
+    **kwargs,
+) -> AssistantDeleted:
+    optional_params = GenericLiteLLMParams(
+        api_key=api_key, api_base=api_base, api_version=api_version, **kwargs
+    )
+
+    async_delete_assistants: Optional[bool] = kwargs.pop(
+        "async_delete_assistants", None
+    )
+    if async_delete_assistants is not None and not isinstance(
+        async_delete_assistants, bool
+    ):
+        raise ValueError(
+            "Invalid value passed in for async_delete_assistants. Only bool or None allowed"
+        )
+
+    ### TIMEOUT LOGIC ###
+    timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
+    # set timeout for 10 minutes by default
+
+    if (
+        timeout is not None
+        and isinstance(timeout, httpx.Timeout)
+        and supports_httpx_timeout(custom_llm_provider) == False
+    ):
+        read_timeout = timeout.read or 600
+        timeout = read_timeout  # default 10 min timeout
+    elif timeout is not None and not isinstance(timeout, httpx.Timeout):
+        timeout = float(timeout)  # type: ignore
+    elif timeout is None:
+        timeout = 600.0
+
+    response: Optional[AssistantDeleted] = None
+    if custom_llm_provider == "openai":
+        api_base = (
+            optional_params.api_base
+            or litellm.api_base
+            or os.getenv("OPENAI_API_BASE")
+            or "https://api.openai.com/v1"
+        )
+        organization = (
+            optional_params.organization
+            or litellm.organization
+            or os.getenv("OPENAI_ORGANIZATION", None)
+            or None
+        )
+        # set API KEY
+        api_key = (
+            optional_params.api_key
+            or litellm.api_key
+            or litellm.openai_key
+            or os.getenv("OPENAI_API_KEY")
+        )
+
+        response = openai_assistants_api.delete_assistant(
+            api_base=api_base,
+            api_key=api_key,
+            timeout=timeout,
+            max_retries=optional_params.max_retries,
+            organization=organization,
+            assistant_id=assistant_id,
+            client=client,
+            async_delete_assistants=async_delete_assistants,
+        )
+    else:
+        raise litellm.exceptions.BadRequestError(
+            message="LiteLLM doesn't support {} for 'delete_assistant'. Only 'openai' is supported.".format(
+                custom_llm_provider
+            ),
+            model="n/a",
+            llm_provider=custom_llm_provider,
+            response=httpx.Response(
+                status_code=400,
+                content="Unsupported provider",
+                request=httpx.Request(
+                    method="delete_assistant", url="https://github.com/BerriAI/litellm"
+                ),
+            ),
+        )
+    if response is None:
+        raise litellm.exceptions.InternalServerError(
+            message="No response returned from 'delete_assistant'",
+            model="n/a",
+            llm_provider=custom_llm_provider,
         )
     return response
 

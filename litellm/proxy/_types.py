@@ -175,10 +175,12 @@ class LiteLLMRoutes(enum.Enum):
         "/chat/completions",
         "/v1/chat/completions",
         # completions
+        "/engines/{model}/completions",
         "/openai/deployments/{model}/completions",
         "/completions",
         "/v1/completions",
         # embeddings
+        "/engines/{model}/embeddings",
         "/openai/deployments/{model}/embeddings",
         "/embeddings",
         "/v1/embeddings",
@@ -202,6 +204,19 @@ class LiteLLMRoutes(enum.Enum):
         # files
         "/v1/files",
         "/files",
+        # assistants-related routes
+        "/assistants",
+        "/v1/assistants",
+        "/v1/assistants/{assistant_id}",
+        "/assistants/{assistant_id}",
+        "/threads",
+        "/v1/threads",
+        "/threads/{thread_id}",
+        "/v1/threads/{thread_id}",
+        "/threads/{thread_id}/messages",
+        "/v1/threads/{thread_id}/messages",
+        "/threads/{thread_id}/runs",
+        "/v1/threads/{thread_id}/runs",
         # models
         "/models",
         "/v1/models",
@@ -1319,6 +1334,7 @@ class LiteLLM_SpendLogs(LiteLLMBase):
     cache_hit: Optional[str] = "False"
     cache_key: Optional[str] = None
     request_tags: Optional[Json] = None
+    requester_ip_address: Optional[str] = None
 
 
 class LiteLLM_ErrorLogs(LiteLLMBase):
@@ -1510,6 +1526,7 @@ class SpendLogsMetadata(TypedDict):
     spend_logs_metadata: Optional[
         dict
     ]  # special param to log k,v pairs to spendlogs for a call
+    requester_ip_address: Optional[str]
 
 
 class SpendLogsPayload(TypedDict):
@@ -1534,6 +1551,7 @@ class SpendLogsPayload(TypedDict):
     request_tags: str  # json str
     team_id: Optional[str]
     end_user: Optional[str]
+    requester_ip_address: Optional[str]
 
 
 class SpanAttributes(str, enum.Enum):
@@ -1638,3 +1656,8 @@ class SpendCalculateRequest(LiteLLMBase):
     model: Optional[str] = None
     messages: Optional[List] = None
     completion_response: Optional[dict] = None
+
+
+class ProxyErrorTypes(str, enum.Enum):
+    budget_exceeded = "budget_exceeded"
+    auth_error = "auth_error"
