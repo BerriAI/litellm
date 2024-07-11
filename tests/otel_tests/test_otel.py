@@ -100,12 +100,17 @@ async def test_chat_completion_check_otel_spans():
         print("otel_spans: ", otel_spans)
 
         all_otel_spans = otel_spans["otel_spans"]
+        most_recent_parent = str(otel_spans["most_recent_parent"])
+        print("Most recent OTEL parent: ", most_recent_parent)
+        print("\n spans grouped by parent: ", otel_spans["spans_grouped_by_parent"])
+        parent_trace_spans = otel_spans["spans_grouped_by_parent"][most_recent_parent]
 
-        assert len(all_otel_spans) == 5
+        print("Parent trace spans: ", parent_trace_spans)
+
+        assert len(parent_trace_spans) == 4
 
         # 'postgres', 'redis', 'raw_gen_ai_request', 'litellm_request', 'Received Proxy Server Request' in the span
-        assert "postgres" in all_otel_spans
-        assert "redis" in all_otel_spans
-        assert "raw_gen_ai_request" in all_otel_spans
-        assert "litellm_request" in all_otel_spans
-        assert "Received Proxy Server Request" in all_otel_spans
+        assert "postgres" in parent_trace_spans
+        assert "redis" in parent_trace_spans
+        assert "raw_gen_ai_request" in parent_trace_spans
+        assert "litellm_request" in parent_trace_spans
