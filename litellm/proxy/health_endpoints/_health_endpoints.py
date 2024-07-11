@@ -406,6 +406,19 @@ async def active_callbacks():
     }
 
 
+def callback_name(callback):
+    if isinstance(callback, str):
+        return callback
+
+    try:
+        return callback.__name__
+    except AttributeError:
+        try:
+            return callback.__class__.__name__
+        except AttributeError:
+            return str(callback)
+
+
 @router.get(
     "/health/readiness",
     tags=["health"],
@@ -424,8 +437,8 @@ async def health_readiness():
         try:
             # this was returning a JSON of the values in some of the callbacks
             # all we need is the callback name, hence we do str(callback)
-            success_callback_names = [str(x) for x in litellm.success_callback]
-        except:
+            success_callback_names = [callback_name(x) for x in litellm.success_callback]
+        except AttributeError:
             # don't let this block the /health/readiness response, if we can't convert to str -> return litellm.success_callback
             success_callback_names = litellm.success_callback
 
