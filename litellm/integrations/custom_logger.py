@@ -5,9 +5,12 @@ import traceback
 from typing import Literal, Optional, Union
 
 import dotenv
+from pydantic import BaseModel
 
 from litellm.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.types.llms.openai import ChatCompletionRequest
+from litellm.types.utils import ModelResponse
 
 
 class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callback#callback-class
@@ -53,6 +56,30 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         pass
 
     def pre_call_check(self, deployment: dict) -> Optional[dict]:
+        pass
+
+    #### ADAPTERS #### Allow calling 100+ LLMs in custom format - https://github.com/BerriAI/litellm/pulls
+
+    def translate_completion_input_params(
+        self, kwargs
+    ) -> Optional[ChatCompletionRequest]:
+        """
+        Translates the input params, from the provider's native format to the litellm.completion() format.
+        """
+        pass
+
+    def translate_completion_output_params(
+        self, response: ModelResponse
+    ) -> Optional[BaseModel]:
+        """
+        Translates the output params, from the OpenAI format to the custom format.
+        """
+        pass
+
+    def translate_completion_output_params_streaming(self) -> Optional[BaseModel]:
+        """
+        Translates the streaming chunk, from the OpenAI format to the custom format.
+        """
         pass
 
     #### CALL HOOKS - proxy only ####
