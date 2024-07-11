@@ -21,6 +21,8 @@ sys.path.insert(
 from dotenv import load_dotenv
 
 load_dotenv()
+import random
+
 import litellm
 from litellm import (
     AuthenticationError,
@@ -1373,7 +1375,8 @@ async def test_bedrock_httpx_streaming(sync_mode, model):
             if complete_response.strip() == "":
                 raise Exception("Empty response received")
         print(f"completion_response: {complete_response}\n\nFinalChunk: {final_chunk}")
-    except RateLimitError:
+    except RateLimitError as e:
+        print("got rate limit error=", e)
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
