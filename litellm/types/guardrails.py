@@ -19,4 +19,5 @@ litellm_settings:
 class GuardrailItem(BaseModel):
     callbacks: List[str]
     default_on: bool
+    logging_only: bool
     guardrail_name: str
