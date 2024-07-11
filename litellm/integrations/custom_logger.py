@@ -5,6 +5,7 @@ import traceback
 from typing import Literal, Optional, Union
 
 import dotenv
+from pydantic import BaseModel
 
 from litellm.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
@@ -67,13 +68,15 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         """
         pass
 
-    def translate_completion_output_params(self, response: ModelResponse):
+    def translate_completion_output_params(
+        self, response: ModelResponse
+    ) -> Optional[BaseModel]:
         """
         Translates the output params, from the OpenAI format to the custom format.
         """
         pass
 
-    def translate_completion_output_params_streaming(self):
+    def translate_completion_output_params_streaming(self) -> Optional[BaseModel]:
         """
         Translates the streaming chunk, from the OpenAI format to the custom format.
         """
