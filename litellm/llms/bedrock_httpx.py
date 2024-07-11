@@ -1066,7 +1066,7 @@ class BedrockLLM(BaseLLM):
 
             if response.status_code != 200:
                 raise BedrockError(
-                    status_code=response.status_code, message=response.text
+                    status_code=response.status_code, message=response.read()
                 )
 
             decoder = AWSEventStreamDecoder(model=model)
