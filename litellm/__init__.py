@@ -789,6 +789,7 @@ from .utils import (
     get_api_base,
     get_first_chars_messages,
     ModelResponse,
+    EmbeddingResponse,
     ImageResponse,
     get_provider_fields,
 )
