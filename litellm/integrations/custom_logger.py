@@ -2,7 +2,7 @@
 #    On success, logs events to Promptlayer
 import os
 import traceback
-from typing import Literal, Optional, Union
+from typing import Any, Literal, Optional, Tuple, Union
 
 import dotenv
 
@@ -89,6 +89,16 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         response,
     ):
         pass
+
+    async def async_logging_hook(self):
+        """For masking logged request/response"""
+        pass
+
+    def logging_hook(
+        self, kwargs: dict, result: Any, call_type: str
+    ) -> Tuple[dict, Any]:
+        """For masking logged request/response. Return a modified version of the request/result."""
+        return kwargs, result
 
     async def async_moderation_hook(
         self,

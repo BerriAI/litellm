@@ -1467,12 +1467,14 @@ class ProxyConfig:
                             + CommonProxyErrors.not_premium_user.value
                         )
 
-                    initialize_guardrails(
+                    guardrail_name_config_map = initialize_guardrails(
                         guardrails_config=value,
                         premium_user=premium_user,
                         config_file_path=config_file_path,
                         litellm_settings=litellm_settings,
                     )
+
+                    litellm.guardrail_name_config_map = guardrail_name_config_map
                 elif key == "callbacks":
 
                     initialize_callbacks_on_proxy(

@@ -655,6 +655,16 @@ class Logging:
                 result=result, litellm_logging_obj=self
             )
 
+            ## LOGGING HOOK ##
+
+            for callback in callbacks:
+                if isinstance(callback, CustomLogger):
+                    self.model_call_details["input"], result = callback.logging_hook(
+                        kwargs=self.model_call_details,
+                        result=result,
+                        call_type=self.call_type,
+                    )
+
             for callback in callbacks:
                 try:
                     litellm_params = self.model_call_details.get("litellm_params", {})
