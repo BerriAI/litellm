@@ -243,7 +243,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv tests/ -x --junitxml=test-results/junit.xml --durations=5 "not (otel_tests)"
+            python -m pytest -vv tests/ -x --junitxml=test-results/junit.xml --durations=5 --ignore=tests/otel_tests
           no_output_timeout: 120m
 
       # Store test results
