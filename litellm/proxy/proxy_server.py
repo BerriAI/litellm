@@ -2673,6 +2673,11 @@ async def startup_event():
 def model_list(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
+    """
+    Use `/model/info` - to get detailed model information, example - pricing, mode, etc.
+
+    This is just for compatibility with openai projects like aider.
+    """
     global llm_model_list, general_settings
     all_models = []
     ## CHECK IF MODEL RESTRICTIONS ARE SET AT KEY/TEAM LEVEL ##
