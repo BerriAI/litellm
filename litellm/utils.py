@@ -4829,6 +4829,7 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
                 supports_response_schema=_model_info.get(
                     "supports_response_schema", None
                 ),
+                supports_vision=_model_info.get("supports_vision", None),
             )
     except Exception:
         raise Exception(
@@ -8126,7 +8127,7 @@ class CustomStreamWrapper:
 
             if chunk.startswith(self.complete_response):
                 # Remove last_sent_chunk only if it appears at the start of the new chunk
-                chunk = chunk[len(self.complete_response):]
+                chunk = chunk[len(self.complete_response) :]
 
             self.complete_response += chunk
             return chunk
@@ -10124,7 +10125,7 @@ def mock_completion_streaming_obj(
     model_response, mock_response, model, n: Optional[int] = None
 ):
     for i in range(0, len(mock_response), 3):
-        completion_obj = Delta(role="assistant", content=mock_response[i: i + 3])
+        completion_obj = Delta(role="assistant", content=mock_response[i : i + 3])
         if n is None:
             model_response.choices[0].delta = completion_obj
         else:
@@ -10133,7 +10134,7 @@ def mock_completion_streaming_obj(
                 _streaming_choice = litellm.utils.StreamingChoices(
                     index=j,
                     delta=litellm.utils.Delta(
-                        role="assistant", content=mock_response[i: i + 3]
+                        role="assistant", content=mock_response[i : i + 3]
                     ),
                 )
                 _all_choices.append(_streaming_choice)
@@ -10145,7 +10146,7 @@ async def async_mock_completion_streaming_obj(
     model_response, mock_response, model, n: Optional[int] = None
 ):
     for i in range(0, len(mock_response), 3):
-        completion_obj = Delta(role="assistant", content=mock_response[i: i + 3])
+        completion_obj = Delta(role="assistant", content=mock_response[i : i + 3])
         if n is None:
             model_response.choices[0].delta = completion_obj
         else:
@@ -10154,7 +10155,7 @@ async def async_mock_completion_streaming_obj(
                 _streaming_choice = litellm.utils.StreamingChoices(
                     index=j,
                     delta=litellm.utils.Delta(
-                        role="assistant", content=mock_response[i: i + 3]
+                        role="assistant", content=mock_response[i : i + 3]
                     ),
                 )
                 _all_choices.append(_streaming_choice)
