@@ -234,7 +234,7 @@ class AnthropicResponseContentBlockToolUse(BaseModel):
     type: Literal["tool_use"]
     id: str
     name: str
-    input: str
+    input: dict
 
 
 class AnthropicResponseUsageBlock(BaseModel):
