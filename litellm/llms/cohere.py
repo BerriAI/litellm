@@ -1,12 +1,16 @@
-import os, types
 import json
+import os
+import time
+import traceback
+import types
 from enum import Enum
-import requests  # type: ignore
-import time, traceback
 from typing import Callable, Optional
-from litellm.utils import ModelResponse, Choices, Message, Usage
-import litellm
+
 import httpx  # type: ignore
+import requests  # type: ignore
+
+import litellm
+from litellm.utils import Choices, Message, ModelResponse, Usage
 
 
 class CohereError(Exception):
@@ -117,7 +121,7 @@ class CohereConfig:
 
 def validate_environment(api_key):
     headers = {
-        "Request-Source":"unspecified:litellm",
+        "Request-Source": "unspecified:litellm",
         "accept": "application/json",
         "content-type": "application/json",
     }
@@ -219,7 +223,7 @@ def completion(
                         message=message_obj,
                     )
                     choices_list.append(choice_obj)
-                model_response["choices"] = choices_list
+                model_response.choices = choices_list  # type: ignore
             except Exception as e:
                 raise CohereError(
                     message=response.text, status_code=response.status_code
@@ -231,8 +235,8 @@ def completion(
             encoding.encode(model_response["choices"][0]["message"].get("content", ""))
         )
 
-        model_response["created"] = int(time.time())
-        model_response["model"] = model
+        model_response.created = int(time.time())
+        model_response.model = model
         usage = Usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
@@ -245,9 +249,9 @@ def completion(
 def embedding(
     model: str,
     input: list,
+    model_response: litellm.EmbeddingResponse,
     api_key: Optional[str] = None,
     logging_obj=None,
-    model_response=None,
     encoding=None,
     optional_params=None,
 ):
@@ -294,14 +298,18 @@ def embedding(
         output_data.append(
             {"object": "embedding", "index": idx, "embedding": embedding}
         )
-    model_response["object"] = "list"
-    model_response["data"] = output_data
-    model_response["model"] = model
+    model_response.object = "list"
+    model_response.data = output_data
+    model_response.model = model
     input_tokens = 0
     for text in input:
         input_tokens += len(encoding.encode(text))
 
-    model_response["usage"] = Usage(
-        prompt_tokens=input_tokens, completion_tokens=0, total_tokens=input_tokens
+    setattr(
+        model_response,
+        "usage",
+        Usage(
+            prompt_tokens=input_tokens, completion_tokens=0, total_tokens=input_tokens
+        ),
     )
     return model_response

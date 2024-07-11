@@ -607,8 +607,8 @@ class AnthropicChatCompletion(BaseLLM):
         completion_tokens = completion_response["usage"]["output_tokens"]
         total_tokens = prompt_tokens + completion_tokens
 
-        model_response["created"] = int(time.time())
-        model_response["model"] = model
+        model_response.created = int(time.time())
+        model_response.model = model
         usage = Usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
