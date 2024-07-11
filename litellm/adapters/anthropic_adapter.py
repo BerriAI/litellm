@@ -8,11 +8,12 @@ from typing import Literal, Optional
 
 import dotenv
 import httpx
+from pydantic import BaseModel
 
 import litellm
 from litellm import ChatCompletionRequest, verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.types.llms.anthropic import AnthropicMessagesRequest
+from litellm.types.llms.anthropic import AnthropicMessagesRequest, AnthropicResponse
 
 
 class AnthropicAdapter(CustomLogger):
@@ -31,12 +32,18 @@ class AnthropicAdapter(CustomLogger):
         translated_body = litellm.AnthropicConfig().translate_anthropic_to_openai(
             anthropic_message_request=request_body
         )
+
         return translated_body
 
-    def translate_completion_output_params(self, response: litellm.ModelResponse):
-        return super().translate_completion_output_params(response)
+    def translate_completion_output_params(
+        self, response: litellm.ModelResponse
+    ) -> Optional[AnthropicResponse]:
 
-    def translate_completion_output_params_streaming(self):
+        return litellm.AnthropicConfig().translate_openai_response_to_anthropic(
+            response=response
+        )
+
+    def translate_completion_output_params_streaming(self) -> Optional[BaseModel]:
         return super().translate_completion_output_params_streaming()
 
 
