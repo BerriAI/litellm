@@ -305,8 +305,8 @@ def completion(
         prompt_tokens = billed_units.get("input_tokens", 0)
         completion_tokens = billed_units.get("output_tokens", 0)
 
-        model_response["created"] = int(time.time())
-        model_response["model"] = model
+        model_response.created = int(time.time())
+        model_response.model = model
         usage = Usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
