@@ -38,6 +38,25 @@ async def get_otel_spans():
 
     print("Spans: ", recorded_spans)  # noqa
 
+    most_recent_parent = None
+    most_recent_start_time = 1000000
+    spans_grouped_by_parent = {}
+    for span in recorded_spans:
+        if span.parent is not None:
+            parent_trace_id = span.parent.trace_id
+            if parent_trace_id not in spans_grouped_by_parent:
+                spans_grouped_by_parent[parent_trace_id] = []
+            spans_grouped_by_parent[parent_trace_id].append(span.name)
+
+            # check time of span
+            if span.start_time > most_recent_start_time:
+                most_recent_parent = parent_trace_id
+                most_recent_start_time = span.start_time
+
     # these are otel spans - get the span name
     span_names = [span.name for span in recorded_spans]
-    return {"otel_spans": span_names}
+    return {
+        "otel_spans": span_names,
+        "spans_grouped_by_parent": spans_grouped_by_parent,
+        "most_recent_parent": most_recent_parent,
+    }
