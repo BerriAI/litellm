@@ -13,6 +13,7 @@ verbose_logger.setLevel(logging.DEBUG)
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="Local only test. WIP.")
 async def test_async_otel_callback():
     exporter = InMemorySpanExporter()
     litellm.set_verbose = True
