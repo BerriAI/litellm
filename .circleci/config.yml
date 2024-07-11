@@ -435,6 +435,12 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - proxy_log_to_otel_tests:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
       - installing_litellm_on_python:
           filters:
             branches:
@@ -445,6 +451,7 @@ workflows:
           requires:
             - local_testing
             - build_and_test
+            - proxy_log_to_otel_tests
           filters:
             branches:
               only:
