@@ -117,6 +117,7 @@ const sidebars = {
         "text_to_speech",
         "assistants",
         "batches",
+        "anthropic_completion"
       ],
     },
     {
