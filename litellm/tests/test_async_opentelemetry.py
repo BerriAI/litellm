@@ -1,21 +1,20 @@
 import asyncio
-import litellm
-
-from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
-from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-from litellm._logging import verbose_logger
 import logging
 import time
+
 import pytest
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+import litellm
+from litellm._logging import verbose_logger
+from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
 
 verbose_logger.setLevel(logging.DEBUG)
 
 
-@pytest.mark.skip(
-    reason="new test. WIP. works locally but not on CI. Still figuring this out"
-)
 @pytest.mark.asyncio
-async def test_otel_callback():
+@pytest.mark.skip(reason="Local only test. WIP.")
+async def test_async_otel_callback():
     exporter = InMemorySpanExporter()
     litellm.set_verbose = True
     litellm.callbacks = [OpenTelemetry(OpenTelemetryConfig(exporter=exporter))]
