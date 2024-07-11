@@ -118,13 +118,11 @@ Unprotected endpoint for checking if proxy is ready to accept requests
 
 Example Request: 
 
-```bash 
-curl --location 'http://0.0.0.0:4000/health/readiness'
+```bash
+curl http://0.0.0.0:4000/health/readiness
 ```
 
 Example Response:  
-
-*If proxy connected to a database*  
 
 ```json
 {
@@ -145,26 +143,8 @@ Example Response:
 }
 ```
 
-*If proxy not connected to a database*  
-
-```json
-{
-  "status": "connected",
-  "db": "Not connected",
-  "cache": null,
-  "litellm_version": "1.40.21",
-  "success_callbacks": [
-    "langfuse",
-    "_PROXY_track_cost_callback",
-    "response_taking_too_long_callback",
-    "_PROXY_MaxParallelRequestsHandler",
-    "_PROXY_MaxBudgetLimiter",
-    "_PROXY_CacheControlCheck",
-    "ServiceLogging"
-  ],
-  "last_updated": "2024-07-10T18:59:10.616968"
-}
-```
+If the proxy is not connected to a database, then the `"db"` field will be `"Not
+connected"` instead of `"connected"` and the `"last_updated"` field will not be present.
 
 ## `/health/liveliness`
 
