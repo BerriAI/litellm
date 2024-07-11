@@ -7,14 +7,21 @@
 #
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
-import litellm
-import time, logging, asyncio
-import json, traceback, ast, hashlib
-from typing import Optional, Literal, List, Union, Any, BinaryIO
+import ast
+import asyncio
+import hashlib
+import json
+import logging
+import time
+import traceback
+from datetime import timedelta
+from typing import Any, BinaryIO, List, Literal, Optional, Union
+
 from openai._models import BaseModel as OpenAIObject
+
+import litellm
 from litellm._logging import verbose_logger
 from litellm.types.services import ServiceLoggerPayload, ServiceTypes
-import traceback
 
 
 def print_verbose(print_statement):
@@ -57,16 +64,55 @@ class BaseCache:
 
 
 class InMemoryCache(BaseCache):
-    def __init__(self):
-        # if users don't provider one, use the default litellm cache
-        self.cache_dict = {}
-        self.ttl_dict = {}
+    def __init__(
+        self,
+        max_size_in_memory: Optional[int] = 200,
+        default_ttl: Optional[
+            int
+        ] = 600,  # default ttl is 10 minutes. At maximum litellm rate limiting logic requires objects to be in memory for 1 minute
+    ):
+        """
+        max_size_in_memory [int]: Maximum number of items in cache. done to prevent memory leaks. Use 200 items as a default
+        """
+        self.max_size_in_memory = (
+            max_size_in_memory or 200
+        )  # set an upper bound of 200 items in-memory
+        self.default_ttl = default_ttl or 600
+
+        # in-memory cache
+        self.cache_dict: dict = {}
+        self.ttl_dict: dict = {}
+
+    def evict_cache(self):
+        """
+        Eviction policy:
+        - check if any items in ttl_dict are expired -> remove them from ttl_dict and cache_dict
+
+
+        This guarantees the following:
+        - 1. When item ttl not set: At minimumm each item will remain in memory for 5 minutes
+        - 2. When ttl is set: the item will remain in memory for at least that amount of time
+        - 3. the size of in-memory cache is bounded
+
+        """
+        for key in list(self.ttl_dict.keys()):
+            if time.time() > self.ttl_dict[key]:
+                self.cache_dict.pop(key, None)
+                self.ttl_dict.pop(key, None)
 
     def set_cache(self, key, value, **kwargs):
-        print_verbose("InMemoryCache: set_cache")
+        print_verbose(
+            "InMemoryCache: set_cache. current size= {}".format(len(self.cache_dict))
+        )
+        if len(self.cache_dict) >= self.max_size_in_memory:
+            # only evict when cache is full
+            self.evict_cache()
+
         self.cache_dict[key] = value
         if "ttl" in kwargs:
             self.ttl_dict[key] = time.time() + kwargs["ttl"]
+        else:
+            self.ttl_dict[key] = time.time() + self.default_ttl
 
     async def async_set_cache(self, key, value, **kwargs):
         self.set_cache(key=key, value=value, **kwargs)
@@ -77,6 +123,17 @@ class InMemoryCache(BaseCache):
                 self.set_cache(key=cache_key, value=cache_value, ttl=ttl)
             else:
                 self.set_cache(key=cache_key, value=cache_value)
+
+    async def async_set_cache_sadd(self, key, value: List, ttl: Optional[float]):
+        """
+        Add value to set
+        """
+        # get the value
+        init_value = self.get_cache(key=key) or set()
+        for val in value:
+            init_value.add(val)
+        self.set_cache(key, init_value, ttl=ttl)
+        return value
 
     def get_cache(self, key, **kwargs):
         if key in self.cache_dict:
@@ -121,6 +178,7 @@ class InMemoryCache(BaseCache):
         init_value = await self.async_get_cache(key=key) or 0
         value = init_value + value
         await self.async_set_cache(key, value, **kwargs)
+
         return value
 
     def flush_cache(self):
@@ -147,9 +205,11 @@ class RedisCache(BaseCache):
         namespace: Optional[str] = None,
         **kwargs,
     ):
-        from ._redis import get_redis_client, get_redis_connection_pool
-        from litellm._service_logger import ServiceLogging
         import redis
+
+        from litellm._service_logger import ServiceLogging
+
+        from ._redis import get_redis_client, get_redis_connection_pool
 
         redis_kwargs = {}
         if host is not None:
@@ -188,9 +248,15 @@ class RedisCache(BaseCache):
             # asyncio.get_running_loop().create_task(self.ping())
             result = asyncio.get_running_loop().create_task(self.ping())
         except Exception as e:
-            verbose_logger.error(
-                "Error connecting to Async Redis client", extra={"error": str(e)}
-            )
+            if "no running event loop" in str(e):
+                verbose_logger.debug(
+                    "Ignoring async redis ping. No running event loop."
+                )
+            else:
+                verbose_logger.error(
+                    "Error connecting to Async Redis client - {}".format(str(e)),
+                    extra={"error": str(e)},
+                )
 
         ### SYNC HEALTH PING ###
         try:
@@ -329,6 +395,7 @@ class RedisCache(BaseCache):
                     start_time=start_time,
                     end_time=end_time,
                     parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
+                    call_type="async_set_cache",
                 )
             )
             # NON blocking - notify users Redis is throwing an exception
@@ -447,6 +514,80 @@ class RedisCache(BaseCache):
                 str(e),
                 cache_value,
             )
+
+    async def async_set_cache_sadd(
+        self, key, value: List, ttl: Optional[float], **kwargs
+    ):
+        start_time = time.time()
+        try:
+            _redis_client = self.init_async_client()
+        except Exception as e:
+            end_time = time.time()
+            _duration = end_time - start_time
+            asyncio.create_task(
+                self.service_logger_obj.async_service_failure_hook(
+                    service=ServiceTypes.REDIS,
+                    duration=_duration,
+                    error=e,
+                    start_time=start_time,
+                    end_time=end_time,
+                    parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
+                    call_type="async_set_cache_sadd",
+                )
+            )
+            # NON blocking - notify users Redis is throwing an exception
+            verbose_logger.error(
+                "LiteLLM Redis Caching: async set() - Got exception from REDIS %s, Writing value=%s",
+                str(e),
+                value,
+            )
+            raise e
+
+        key = self.check_and_fix_namespace(key=key)
+        async with _redis_client as redis_client:
+            print_verbose(
+                f"Set ASYNC Redis Cache: key: {key}\nValue {value}\nttl={ttl}"
+            )
+            try:
+                await redis_client.sadd(key, *value)
+                if ttl is not None:
+                    _td = timedelta(seconds=ttl)
+                    await redis_client.expire(key, _td)
+                print_verbose(
+                    f"Successfully Set ASYNC Redis Cache SADD: key: {key}\nValue {value}\nttl={ttl}"
+                )
+                end_time = time.time()
+                _duration = end_time - start_time
+                asyncio.create_task(
+                    self.service_logger_obj.async_service_success_hook(
+                        service=ServiceTypes.REDIS,
+                        duration=_duration,
+                        call_type="async_set_cache_sadd",
+                        start_time=start_time,
+                        end_time=end_time,
+                        parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
+                    )
+                )
+            except Exception as e:
+                end_time = time.time()
+                _duration = end_time - start_time
+                asyncio.create_task(
+                    self.service_logger_obj.async_service_failure_hook(
+                        service=ServiceTypes.REDIS,
+                        duration=_duration,
+                        error=e,
+                        call_type="async_set_cache_sadd",
+                        start_time=start_time,
+                        end_time=end_time,
+                        parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
+                    )
+                )
+                # NON blocking - notify users Redis is throwing an exception
+                verbose_logger.error(
+                    "LiteLLM Redis Caching: async set_cache_sadd() - Got exception from REDIS %s, Writing value=%s",
+                    str(e),
+                    value,
+                )
 
     async def batch_cache_write(self, key, value, **kwargs):
         print_verbose(
@@ -886,11 +1027,10 @@ class RedisSemanticCache(BaseCache):
 
     def get_cache(self, key, **kwargs):
         print_verbose(f"sync redis semantic-cache get_cache, kwargs: {kwargs}")
-        from redisvl.query import VectorQuery
         import numpy as np
+        from redisvl.query import VectorQuery
 
         # query
-
         # get the messages
         messages = kwargs["messages"]
         prompt = "".join(message["content"] for message in messages)
@@ -943,7 +1083,8 @@ class RedisSemanticCache(BaseCache):
 
     async def async_set_cache(self, key, value, **kwargs):
         import numpy as np
-        from litellm.proxy.proxy_server import llm_router, llm_model_list
+
+        from litellm.proxy.proxy_server import llm_model_list, llm_router
 
         try:
             await self.index.acreate(overwrite=False)  # don't overwrite existing index
@@ -998,12 +1139,12 @@ class RedisSemanticCache(BaseCache):
 
     async def async_get_cache(self, key, **kwargs):
         print_verbose(f"async redis semantic-cache get_cache, kwargs: {kwargs}")
-        from redisvl.query import VectorQuery
         import numpy as np
-        from litellm.proxy.proxy_server import llm_router, llm_model_list
+        from redisvl.query import VectorQuery
+
+        from litellm.proxy.proxy_server import llm_model_list, llm_router
 
         # query
-
         # get the messages
         messages = kwargs["messages"]
         prompt = "".join(message["content"] for message in messages)
@@ -1161,7 +1302,8 @@ class S3Cache(BaseCache):
         self.set_cache(key=key, value=value, **kwargs)
 
     def get_cache(self, key, **kwargs):
-        import boto3, botocore
+        import boto3
+        import botocore
 
         try:
             key = self.key_prefix + key
@@ -1192,7 +1334,7 @@ class S3Cache(BaseCache):
             return cached_response
         except botocore.exceptions.ClientError as e:
             if e.response["Error"]["Code"] == "NoSuchKey":
-                verbose_logger.error(
+                verbose_logger.debug(
                     f"S3 Cache: The specified key '{key}' does not exist in the S3 bucket."
                 )
                 return None
@@ -1471,13 +1613,45 @@ class DualCache(BaseCache):
                     key, value, **kwargs
                 )
 
-            if self.redis_cache is not None and local_only == False:
+            if self.redis_cache is not None and local_only is False:
                 result = await self.redis_cache.async_increment(key, value, **kwargs)
 
             return result
         except Exception as e:
             verbose_logger.error(f"LiteLLM Cache: Excepton async add_cache: {str(e)}")
             verbose_logger.debug(traceback.format_exc())
+            raise e
+
+    async def async_set_cache_sadd(
+        self, key, value: List, local_only: bool = False, **kwargs
+    ) -> None:
+        """
+        Add value to a set
+
+        Key - the key in cache
+
+        Value - str - the value you want to add to the set
+
+        Returns - None
+        """
+        try:
+            if self.in_memory_cache is not None:
+                _ = await self.in_memory_cache.async_set_cache_sadd(
+                    key, value, ttl=kwargs.get("ttl", None)
+                )
+
+            if self.redis_cache is not None and local_only is False:
+                _ = await self.redis_cache.async_set_cache_sadd(
+                    key, value, ttl=kwargs.get("ttl", None) ** kwargs
+                )
+
+            return None
+        except Exception as e:
+            verbose_logger.error(
+                "LiteLLM Cache: Excepton async set_cache_sadd: {}\n{}".format(
+                    str(e), traceback.format_exc()
+                )
+            )
             raise e
 
     def flush_cache(self):

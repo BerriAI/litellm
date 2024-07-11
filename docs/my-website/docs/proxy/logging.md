@@ -7,10 +7,13 @@ import TabItem from '@theme/TabItem';
 
 Log Proxy Input, Output, Exceptions using Langfuse, OpenTelemetry, Custom Callbacks, DataDog, DynamoDB, s3 Bucket
 
+## Table of Contents
+
 - [Logging to Langfuse](#logging-proxy-inputoutput---langfuse)
 - [Logging with OpenTelemetry (OpenTelemetry)](#logging-proxy-inputoutput-in-opentelemetry-format)
 - [Async Custom Callbacks](#custom-callback-class-async)
 - [Async Custom Callback APIs](#custom-callback-apis-async)
+- [Logging to Galileo](#logging-llm-io-to-galileo)
 - [Logging to OpenMeter](#logging-proxy-inputoutput---langfuse)
 - [Logging to s3 Buckets](#logging-proxy-inputoutput---s3-buckets)
 - [Logging to DataDog](#logging-proxy-inputoutput---datadog)
@@ -208,6 +211,24 @@ model_list:
 litellm_settings:
   success_callback: ["langfuse"]
   turn_off_message_logging: True
+```
+
+If you have this feature turned on, you can override it for specific requests by
+setting a request header `LiteLLM-Disable-Message-Redaction: true`.
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --header 'LiteLLM-Disable-Message-Redaction: true' \
+    --data '{
+    "model": "gpt-3.5-turbo",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what llm are you"
+        }
+    ]
+}'
 ```
 
 ### 🔧 Debugging - Viewing RAW CURL sent from LiteLLM to provider
@@ -606,6 +627,52 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 
 ** 🎉 Expect to see this trace logged in your OTEL collector**
 
+### Context propagation across Services `Traceparent HTTP Header`
+
+❓ Use this when you want to **pass information about the incoming request in a distributed tracing system**
+
+✅ Key change: Pass the **`traceparent` header** in your requests. [Read more about traceparent headers here](https://uptrace.dev/opentelemetry/opentelemetry-traceparent.html#what-is-traceparent-header)
+```curl
+traceparent: 00-80e1afed08e019fc1110464cfa66635c-7a085853722dc6d2-01
+```
+Example Usage
+1. Make Request to LiteLLM Proxy with `traceparent` header
+```python
+import openai
+import uuid
+
+client = openai.OpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+example_traceparent = f"00-80e1afed08e019fc1110464cfa66635c-02e80198930058d4-01"
+extra_headers = {
+    "traceparent": example_traceparent
+}
+_trace_id = example_traceparent.split("-")[1]
+
+print("EXTRA HEADERS: ", extra_headers)
+print("Trace ID: ", _trace_id)
+
+response = client.chat.completions.create(
+    model="llama3",
+    messages=[
+        {"role": "user", "content": "this is a test request, write a short poem"}
+    ],
+    extra_headers=extra_headers,
+)
+
+print(response)
+
+```
+
+```shell
+# EXTRA HEADERS:  {'traceparent': '00-80e1afed08e019fc1110464cfa66635c-02e80198930058d4-01'}
+# Trace ID:  80e1afed08e019fc1110464cfa66635c
+```
+
+2. Lookup Trace ID on OTEL Logger
+
+Search for Trace=`80e1afed08e019fc1110464cfa66635c` on your OTEL Collector
+
+<Image img={require('../../img/otel_parent.png')} />
 
 
 
@@ -992,6 +1059,68 @@ litellm_settings:
 
 Start the LiteLLM Proxy and make a test request to verify the logs reached your callback API 
 
+
+## Logging LLM IO to Galileo
+[BETA]
+
+Log LLM I/O on [www.rungalileo.io](https://www.rungalileo.io/)
+
+:::info
+
+Beta Integration
+
+:::
+
+**Required Env Variables**
+
+```bash
+export GALILEO_BASE_URL=""  # For most users, this is the same as their console URL except with the word 'console' replaced by 'api' (e.g. http://www.console.galileo.myenterprise.com -> http://www.api.galileo.myenterprise.com)
+export GALILEO_PROJECT_ID=""
+export GALILEO_USERNAME=""
+export GALILEO_PASSWORD=""
+```
+
+### Quick Start 
+
+1. Add to Config.yaml
+```yaml
+model_list:
+- litellm_params:
+    api_base: https://exampleopenaiendpoint-production.up.railway.app/
+    api_key: my-fake-key
+    model: openai/my-fake-model
+  model_name: fake-openai-endpoint
+
+litellm_settings:
+  success_callback: ["galileo"] # 👈 KEY CHANGE
+```
+
+2. Start Proxy
+
+```
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+--header 'Content-Type: application/json' \
+--data ' {
+      "model": "fake-openai-endpoint",
+      "messages": [
+        {
+          "role": "user",
+          "content": "what llm are you"
+        }
+      ],
+    }
+'
+```
+
+
+🎉 That's it - Expect to see your Logs on your Galileo Dashboard
+
 ## Logging Proxy Cost + Usage - OpenMeter
 
 Bill customers according to their LLM API usage with [OpenMeter](../observability/openmeter.md)
@@ -1124,6 +1253,7 @@ litellm_settings:
     s3_region_name: us-west-2              # AWS Region Name for S3
     s3_aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID  # us os.environ/<variable name> to pass environment variables. This is AWS Access Key ID for S3
     s3_aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY  # AWS Secret Access Key for S3
+    s3_path: my-test-path # [OPTIONAL] set path in bucket you want to write logs to
     s3_endpoint_url: https://s3.amazonaws.com  # [OPTIONAL] S3 endpoint URL, if you want to use Backblaze/cloudflare s3 buckets
 ```
 

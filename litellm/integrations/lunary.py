@@ -105,19 +105,18 @@ class LunaryLogger:
         end_time=datetime.now(timezone.utc),
         error=None,
     ):
-        # Method definition
         try:
             print_verbose(f"Lunary Logging - Logging request for model {model}")
 
+            template_id = None
             litellm_params = kwargs.get("litellm_params", {})
             optional_params = kwargs.get("optional_params", {})
             metadata = litellm_params.get("metadata", {}) or {}
 
             if optional_params:
-                # merge into extra
                 extra = {**extra, **optional_params}
 
-            tags = litellm_params.pop("tags", None) or []
+            tags = metadata.get("tags", None) 
 
             if extra:
                 extra.pop("extra_body", None)

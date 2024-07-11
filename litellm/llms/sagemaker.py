@@ -9,6 +9,7 @@ from litellm.utils import ModelResponse, EmbeddingResponse, get_secret, Usage
 import sys
 from copy import deepcopy
 import httpx  # type: ignore
+import io
 from .prompt_templates.factory import prompt_factory, custom_prompt
 
 
@@ -23,10 +24,6 @@ class SagemakerError(Exception):
         super().__init__(
             self.message
         )  # Call the base class constructor with the parameters it needs
-
-
-import io
-import json
 
 
 class TokenIterator:
@@ -185,7 +182,8 @@ def completion(
         # I assume majority of users use .env for auth
         region_name = (
             get_secret("AWS_REGION_NAME")
-            or "us-west-2"  # default to us-west-2 if user not specified
+            or aws_region_name  # get region from config file if specified
+            or "us-west-2"  # default to us-west-2 if region not specified
         )
         client = boto3.client(
             service_name="sagemaker-runtime",
@@ -439,7 +437,8 @@ async def async_streaming(
         # I assume majority of users use .env for auth
         region_name = (
             get_secret("AWS_REGION_NAME")
-            or "us-west-2"  # default to us-west-2 if user not specified
+            or aws_region_name  # get region from config file if specified
+            or "us-west-2"  # default to us-west-2 if region not specified
         )
         _client = session.client(
             service_name="sagemaker-runtime",
@@ -506,7 +505,8 @@ async def async_completion(
         # I assume majority of users use .env for auth
         region_name = (
             get_secret("AWS_REGION_NAME")
-            or "us-west-2"  # default to us-west-2 if user not specified
+            or aws_region_name  # get region from config file if specified
+            or "us-west-2"  # default to us-west-2 if region not specified
         )
         _client = session.client(
             service_name="sagemaker-runtime",
@@ -661,7 +661,8 @@ def embedding(
         # I assume majority of users use .env for auth
         region_name = (
             get_secret("AWS_REGION_NAME")
-            or "us-west-2"  # default to us-west-2 if user not specified
+            or aws_region_name  # get region from config file if specified
+            or "us-west-2"  # default to us-west-2 if region not specified
         )
         client = boto3.client(
             service_name="sagemaker-runtime",

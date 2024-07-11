@@ -1,20 +1,32 @@
 # @pytest.mark.skip(reason="AWS Suspended Account")
-import sys, os
+import os
+import sys
 import traceback
+
 from dotenv import load_dotenv
 
 load_dotenv()
-import os, io
+import io
+import os
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
+from unittest.mock import AsyncMock, Mock, patch
+
 import pytest
+
 import litellm
-from litellm import embedding, completion, completion_cost, Timeout, ModelResponse
-from litellm import RateLimitError
-from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
-from unittest.mock import patch, AsyncMock, Mock
+from litellm import (
+    ModelResponse,
+    RateLimitError,
+    Timeout,
+    completion,
+    completion_cost,
+    embedding,
+)
+from litellm.llms.bedrock_httpx import BedrockLLM
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
 # litellm.num_retries = 3
 litellm.cache = None
@@ -206,6 +218,234 @@ def test_completion_bedrock_claude_sts_client_auth():
         pytest.fail(f"Error occurred: {e}")
 
 
+@pytest.fixture()
+def bedrock_session_token_creds():
+    print("\ncalling oidc auto to get aws_session_token credentials")
+    import os
+
+    aws_region_name = os.environ["AWS_REGION_NAME"]
+    aws_session_token = os.environ.get("AWS_SESSION_TOKEN")
+
+    bllm = BedrockLLM()
+    if aws_session_token is not None:
+        # For local testing
+        creds = bllm.get_credentials(
+            aws_region_name=aws_region_name,
+            aws_access_key_id=os.environ["AWS_ACCESS_KEY_ID"],
+            aws_secret_access_key=os.environ["AWS_SECRET_ACCESS_KEY"],
+            aws_session_token=aws_session_token,
+        )
+    else:
+        # For circle-ci testing
+        # aws_role_name = os.environ["AWS_TEMP_ROLE_NAME"]
+        # TODO: This is using ai.moda's IAM role, we should use LiteLLM's IAM role eventually
+        aws_role_name = (
+            "arn:aws:iam::335785316107:role/litellm-github-unit-tests-circleci"
+        )
+        aws_web_identity_token = "oidc/circleci_v2/"
+
+        creds = bllm.get_credentials(
+            aws_region_name=aws_region_name,
+            aws_web_identity_token=aws_web_identity_token,
+            aws_role_name=aws_role_name,
+            aws_session_name="my-test-session",
+        )
+    return creds
+
+
+def process_stream_response(res, messages):
+    import types
+
+    if isinstance(res, litellm.utils.CustomStreamWrapper):
+        chunks = []
+        for part in res:
+            chunks.append(part)
+            text = part.choices[0].delta.content or ""
+            print(text, end="")
+        res = litellm.stream_chunk_builder(chunks, messages=messages)
+    else:
+        raise ValueError("Response object is not a streaming response")
+
+    return res
+
+
+@pytest.mark.skipif(
+    os.environ.get("CIRCLE_OIDC_TOKEN_V2") is None,
+    reason="Cannot run without being in CircleCI Runner",
+)
+def test_completion_bedrock_claude_aws_session_token(bedrock_session_token_creds):
+    print("\ncalling bedrock claude with aws_session_token auth")
+
+    import os
+
+    aws_region_name = os.environ["AWS_REGION_NAME"]
+    aws_access_key_id = bedrock_session_token_creds.access_key
+    aws_secret_access_key = bedrock_session_token_creds.secret_key
+    aws_session_token = bedrock_session_token_creds.token
+
+    try:
+        litellm.set_verbose = True
+
+        response_1 = completion(
+            model="bedrock/anthropic.claude-3-haiku-20240307-v1:0",
+            messages=messages,
+            max_tokens=10,
+            temperature=0.1,
+            aws_region_name=aws_region_name,
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
+            aws_session_token=aws_session_token,
+        )
+        print(response_1)
+        assert len(response_1.choices) > 0
+        assert len(response_1.choices[0].message.content) > 0
+
+        # This second call is to verify that the cache isn't breaking anything
+        response_2 = completion(
+            model="bedrock/anthropic.claude-3-haiku-20240307-v1:0",
+            messages=messages,
+            max_tokens=5,
+            temperature=0.2,
+            aws_region_name=aws_region_name,
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
+            aws_session_token=aws_session_token,
+        )
+        print(response_2)
+        assert len(response_2.choices) > 0
+        assert len(response_2.choices[0].message.content) > 0
+
+        # This third call is to verify that the cache isn't used for a different region
+        response_3 = completion(
+            model="bedrock/anthropic.claude-3-haiku-20240307-v1:0",
+            messages=messages,
+            max_tokens=6,
+            temperature=0.3,
+            aws_region_name="us-east-1",
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
+            aws_session_token=aws_session_token,
+        )
+        print(response_3)
+        assert len(response_3.choices) > 0
+        assert len(response_3.choices[0].message.content) > 0
+
+        # This fourth call is to verify streaming api works
+        response_4 = completion(
+            model="bedrock/anthropic.claude-3-haiku-20240307-v1:0",
+            messages=messages,
+            max_tokens=6,
+            temperature=0.3,
+            aws_region_name="us-east-1",
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
+            aws_session_token=aws_session_token,
+            stream=True,
+        )
+        response_4 = process_stream_response(response_4, messages)
+        print(response_4)
+        assert len(response_4.choices) > 0
+        assert len(response_4.choices[0].message.content) > 0
+
+    except RateLimitError:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.skipif(
+    os.environ.get("CIRCLE_OIDC_TOKEN_V2") is None,
+    reason="Cannot run without being in CircleCI Runner",
+)
+def test_completion_bedrock_claude_aws_bedrock_client(bedrock_session_token_creds):
+    print("\ncalling bedrock claude with aws_session_token auth")
+
+    import os
+
+    import boto3
+    from botocore.client import Config
+
+    aws_region_name = os.environ["AWS_REGION_NAME"]
+    aws_access_key_id = bedrock_session_token_creds.access_key
+    aws_secret_access_key = bedrock_session_token_creds.secret_key
+    aws_session_token = bedrock_session_token_creds.token
+
+    aws_bedrock_client_west = boto3.client(
+        service_name="bedrock-runtime",
+        region_name=aws_region_name,
+        aws_access_key_id=aws_access_key_id,
+        aws_secret_access_key=aws_secret_access_key,
+        aws_session_token=aws_session_token,
+        config=Config(read_timeout=600),
+    )
+
+    try:
+        litellm.set_verbose = True
+
+        response_1 = completion(
+            model="bedrock/anthropic.claude-3-haiku-20240307-v1:0",
+            messages=messages,
+            max_tokens=10,
+            temperature=0.1,
+            aws_bedrock_client=aws_bedrock_client_west,
+        )
+        print(response_1)
+        assert len(response_1.choices) > 0
+        assert len(response_1.choices[0].message.content) > 0
+
+        # This second call is to verify that the cache isn't breaking anything
+        response_2 = completion(
+            model="bedrock/anthropic.claude-3-haiku-20240307-v1:0",
+            messages=messages,
+            max_tokens=5,
+            temperature=0.2,
+            aws_bedrock_client=aws_bedrock_client_west,
+        )
+        print(response_2)
+        assert len(response_2.choices) > 0
+        assert len(response_2.choices[0].message.content) > 0
+
+        # This third call is to verify that the cache isn't used for a different region
+        aws_bedrock_client_east = boto3.client(
+            service_name="bedrock-runtime",
+            region_name="us-east-1",
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
+            aws_session_token=aws_session_token,
+            config=Config(read_timeout=600),
+        )
+
+        response_3 = completion(
+            model="bedrock/anthropic.claude-3-haiku-20240307-v1:0",
+            messages=messages,
+            max_tokens=6,
+            temperature=0.3,
+            aws_bedrock_client=aws_bedrock_client_east,
+        )
+        print(response_3)
+        assert len(response_3.choices) > 0
+        assert len(response_3.choices[0].message.content) > 0
+
+        # This fourth call is to verify streaming api works
+        response_4 = completion(
+            model="bedrock/anthropic.claude-3-haiku-20240307-v1:0",
+            messages=messages,
+            max_tokens=6,
+            temperature=0.3,
+            aws_bedrock_client=aws_bedrock_client_east,
+            stream=True,
+        )
+        response_4 = process_stream_response(response_4, messages)
+        print(response_4)
+        assert len(response_4.choices) > 0
+        assert len(response_4.choices[0].message.content) > 0
+
+    except RateLimitError:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
 # test_completion_bedrock_claude_sts_client_auth()
 
 
@@ -220,13 +460,13 @@ def test_completion_bedrock_claude_sts_oidc_auth():
     aws_web_identity_token = "oidc/circleci_v2/"
     aws_region_name = os.environ["AWS_REGION_NAME"]
     # aws_role_name = os.environ["AWS_TEMP_ROLE_NAME"]
-    # TODO: This is using David's IAM role, we should use Litellm's IAM role eventually
+    # TODO: This is using ai.moda's IAM role, we should use LiteLLM's IAM role eventually
     aws_role_name = "arn:aws:iam::335785316107:role/litellm-github-unit-tests-circleci"
 
     try:
         litellm.set_verbose = True
 
-        response = completion(
+        response_1 = completion(
             model="bedrock/anthropic.claude-3-haiku-20240307-v1:0",
             messages=messages,
             max_tokens=10,
@@ -236,8 +476,40 @@ def test_completion_bedrock_claude_sts_oidc_auth():
             aws_role_name=aws_role_name,
             aws_session_name="my-test-session",
         )
-        # Add any assertions here to check the response
-        print(response)
+        print(response_1)
+        assert len(response_1.choices) > 0
+        assert len(response_1.choices[0].message.content) > 0
+
+        # This second call is to verify that the cache isn't breaking anything
+        response_2 = completion(
+            model="bedrock/anthropic.claude-3-haiku-20240307-v1:0",
+            messages=messages,
+            max_tokens=5,
+            temperature=0.2,
+            aws_region_name=aws_region_name,
+            aws_web_identity_token=aws_web_identity_token,
+            aws_role_name=aws_role_name,
+            aws_session_name="my-test-session",
+        )
+        print(response_2)
+        assert len(response_2.choices) > 0
+        assert len(response_2.choices[0].message.content) > 0
+
+        # This third call is to verify that the cache isn't used for a different region
+        response_3 = completion(
+            model="bedrock/anthropic.claude-3-haiku-20240307-v1:0",
+            messages=messages,
+            max_tokens=6,
+            temperature=0.3,
+            aws_region_name="us-east-1",
+            aws_web_identity_token=aws_web_identity_token,
+            aws_role_name=aws_role_name,
+            aws_session_name="my-test-session",
+        )
+        print(response_3)
+        assert len(response_3.choices) > 0
+        assert len(response_3.choices[0].message.content) > 0
+
     except RateLimitError:
         pass
     except Exception as e:
@@ -255,7 +527,7 @@ def test_completion_bedrock_httpx_command_r_sts_oidc_auth():
     aws_web_identity_token = "oidc/circleci_v2/"
     aws_region_name = os.environ["AWS_REGION_NAME"]
     # aws_role_name = os.environ["AWS_TEMP_ROLE_NAME"]
-    # TODO: This is using David's IAM role, we should use Litellm's IAM role eventually
+    # TODO: This is using ai.moda's IAM role, we should use LiteLLM's IAM role eventually
     aws_role_name = "arn:aws:iam::335785316107:role/litellm-github-unit-tests-circleci"
 
     try:
@@ -446,58 +718,6 @@ def test_completion_claude_3_base64():
             pytest.fail(f"An exception occurred - {str(e)}")
 
 
-def test_provisioned_throughput():
-    try:
-        litellm.set_verbose = True
-        import botocore, json, io
-        import botocore.session
-        from botocore.stub import Stubber
-
-        bedrock_client = botocore.session.get_session().create_client(
-            "bedrock-runtime", region_name="us-east-1"
-        )
-
-        expected_params = {
-            "accept": "application/json",
-            "body": '{"prompt": "\\n\\nHuman: Hello, how are you?\\n\\nAssistant: ", '
-            '"max_tokens_to_sample": 256}',
-            "contentType": "application/json",
-            "modelId": "provisioned-model-arn",
-        }
-        response_from_bedrock = {
-            "body": io.StringIO(
-                json.dumps(
-                    {
-                        "completion": " Here is a short poem about the sky:",
-                        "stop_reason": "max_tokens",
-                        "stop": None,
-                    }
-                )
-            ),
-            "contentType": "contentType",
-            "ResponseMetadata": {"HTTPStatusCode": 200},
-        }
-
-        with Stubber(bedrock_client) as stubber:
-            stubber.add_response(
-                "invoke_model",
-                service_response=response_from_bedrock,
-                expected_params=expected_params,
-            )
-            response = litellm.completion(
-                model="bedrock/anthropic.claude-instant-v1",
-                model_id="provisioned-model-arn",
-                messages=[{"content": "Hello, how are you?", "role": "user"}],
-                aws_bedrock_client=bedrock_client,
-            )
-            print("response stubbed", response)
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-# test_provisioned_throughput()
-
-
 def test_completion_bedrock_mistral_completion_auth():
     print("calling bedrock mistral completion params auth")
     import os
@@ -505,7 +725,6 @@ def test_completion_bedrock_mistral_completion_auth():
     # aws_access_key_id = os.environ["AWS_ACCESS_KEY_ID"]
     # aws_secret_access_key = os.environ["AWS_SECRET_ACCESS_KEY"]
     # aws_region_name = os.environ["AWS_REGION_NAME"]
-
     # os.environ.pop("AWS_ACCESS_KEY_ID", None)
     # os.environ.pop("AWS_SECRET_ACCESS_KEY", None)
     # os.environ.pop("AWS_REGION_NAME", None)
@@ -592,3 +811,101 @@ async def test_bedrock_extra_headers():
         assert "test" in mock_client_post.call_args.kwargs["headers"]
         assert mock_client_post.call_args.kwargs["headers"]["test"] == "hello world"
         mock_client_post.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_bedrock_custom_prompt_template():
+    """
+    Check if custom prompt template used for bedrock models
+
+    Reference: https://github.com/BerriAI/litellm/issues/4415
+    """
+    client = AsyncHTTPHandler()
+
+    with patch.object(client, "post", new=AsyncMock()) as mock_client_post:
+        import json
+
+        try:
+            response = await litellm.acompletion(
+                model="bedrock/mistral.OpenOrca",
+                messages=[{"role": "user", "content": "What's AWS?"}],
+                client=client,
+                roles={
+                    "system": {
+                        "pre_message": "<|im_start|>system\n",
+                        "post_message": "<|im_end|>",
+                    },
+                    "assistant": {
+                        "pre_message": "<|im_start|>assistant\n",
+                        "post_message": "<|im_end|>",
+                    },
+                    "user": {
+                        "pre_message": "<|im_start|>user\n",
+                        "post_message": "<|im_end|>",
+                    },
+                },
+                bos_token="<s>",
+                eos_token="<|im_end|>",
+            )
+        except Exception as e:
+            pass
+
+        print(f"mock_client_post.call_args: {mock_client_post.call_args}")
+        assert "prompt" in mock_client_post.call_args.kwargs["data"]
+
+        prompt = json.loads(mock_client_post.call_args.kwargs["data"])["prompt"]
+        assert prompt == "<|im_start|>user\nWhat's AWS?<|im_end|>"
+        mock_client_post.assert_called_once()
+
+
+def test_completion_bedrock_external_client_region():
+    print("\ncalling bedrock claude external client auth")
+    import os
+
+    aws_access_key_id = os.environ["AWS_ACCESS_KEY_ID"]
+    aws_secret_access_key = os.environ["AWS_SECRET_ACCESS_KEY"]
+    aws_region_name = "us-east-1"
+
+    os.environ.pop("AWS_ACCESS_KEY_ID", None)
+    os.environ.pop("AWS_SECRET_ACCESS_KEY", None)
+
+    client = HTTPHandler()
+
+    try:
+        import boto3
+
+        litellm.set_verbose = True
+
+        bedrock = boto3.client(
+            service_name="bedrock-runtime",
+            region_name=aws_region_name,
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
+            endpoint_url=f"https://bedrock-runtime.{aws_region_name}.amazonaws.com",
+        )
+        with patch.object(client, "post", new=Mock()) as mock_client_post:
+            try:
+                response = completion(
+                    model="bedrock/anthropic.claude-instant-v1",
+                    messages=messages,
+                    max_tokens=10,
+                    temperature=0.1,
+                    aws_bedrock_client=bedrock,
+                    client=client,
+                )
+                # Add any assertions here to check the response
+                print(response)
+            except Exception as e:
+                pass
+
+            print(f"mock_client_post.call_args: {mock_client_post.call_args}")
+            assert "us-east-1" in mock_client_post.call_args.kwargs["url"]
+
+            mock_client_post.assert_called_once()
+
+        os.environ["AWS_ACCESS_KEY_ID"] = aws_access_key_id
+        os.environ["AWS_SECRET_ACCESS_KEY"] = aws_secret_access_key
+    except RateLimitError:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")

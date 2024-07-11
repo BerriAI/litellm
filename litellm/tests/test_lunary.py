@@ -24,8 +24,7 @@ def test_lunary_logging():
     except Exception as e:
         print(e)
 
-
-# test_lunary_logging()
+test_lunary_logging()
 
 
 def test_lunary_template():
@@ -38,8 +37,7 @@ def test_lunary_template():
     except Exception as e:
         print(e)
 
-
-# test_lunary_template()
+test_lunary_template()
 
 
 def test_lunary_logging_with_metadata():
@@ -52,16 +50,16 @@ def test_lunary_logging_with_metadata():
             metadata={
                 "run_name": "litellmRUN",
                 "project_name": "litellm-completion",
+                "tags": ["tag1", "tag2"]
             },
         )
         print(response)
     except Exception as e:
         print(e)
 
-#test_lunary_logging_with_metadata()
+test_lunary_logging_with_metadata()
 
 def test_lunary_with_tools():
-
     import litellm
 
     messages = [{"role": "user", "content": "What's the weather like in San Francisco, Tokyo, and Paris?"}]
@@ -97,7 +95,7 @@ def test_lunary_with_tools():
     print("\nLLM Response:\n", response.choices[0].message)
 
 
-#test_lunary_with_tools()
+test_lunary_with_tools()
 
 def test_lunary_logging_with_streaming_and_metadata():
     try:
@@ -117,5 +115,4 @@ def test_lunary_logging_with_streaming_and_metadata():
     except Exception as e:
         print(e)
 
-
-# test_lunary_logging_with_streaming_and_metadata()
+test_lunary_logging_with_streaming_and_metadata()

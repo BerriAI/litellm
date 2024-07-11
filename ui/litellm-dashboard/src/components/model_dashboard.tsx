@@ -139,6 +139,7 @@ interface ProviderSettings {
 enum Providers {
   OpenAI = "OpenAI",
   Azure = "Azure",
+  Azure_AI_Studio = "Azure AI Studio",
   Anthropic = "Anthropic",
   Google_AI_Studio = "Google AI Studio",
   Bedrock = "Amazon Bedrock",
@@ -151,6 +152,7 @@ enum Providers {
 const provider_map: Record<string, string> = {
   OpenAI: "openai",
   Azure: "azure",
+  Azure_AI_Studio: "azure_ai",
   Anthropic: "anthropic",
   Google_AI_Studio: "gemini",
   Bedrock: "bedrock",
@@ -158,6 +160,7 @@ const provider_map: Record<string, string> = {
   Vertex_AI: "vertex_ai",
   Databricks: "databricks",
   Ollama: "ollama",
+
 };
 
 const retry_policy_map: Record<string, string> = {
@@ -205,10 +208,10 @@ const handleSubmit = async (
         if (key == "model_name") {
           modelName = modelName + value;
         } else if (key == "custom_llm_provider") {
-          // const providerEnumValue = Providers[value as keyof typeof Providers];
-          // const mappingResult = provider_map[providerEnumValue]; // Get the corresponding value from the mapping
-          // modelName = mappingResult + "/" + modelName
-          continue;
+          console.log("custom_llm_provider:", value);
+          const mappingResult = provider_map[value]; // Get the corresponding value from the mapping
+          litellmParamsObj["custom_llm_provider"] = mappingResult;
+          console.log("custom_llm_provider mappingResult:", mappingResult);
         } else if (key == "model") {
           continue;
         }
@@ -622,7 +625,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
           _initial_model_group =
             _array_model_groups[_array_model_groups.length - 1];
           console.log("_initial_model_group:", _initial_model_group);
-          setSelectedModelGroup(_initial_model_group);
+          //setSelectedModelGroup(_initial_model_group);
         }
 
         console.log("selectedModelGroup:", selectedModelGroup);
@@ -740,7 +743,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     }
 
     const fetchModelMap = async () => {
-      const data = await modelCostMap();
+      const data = await modelCostMap(accessToken);
       console.log(`received model cost map data: ${Object.keys(data)}`);
       setModelMap(data);
     };
@@ -764,6 +767,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   for (let i = 0; i < modelData.data.length; i++) {
     let curr_model = modelData.data[i];
     let litellm_model_name = curr_model?.litellm_params?.model;
+    let custom_llm_provider = curr_model?.litellm_params?.custom_llm_provider;
     let model_info = curr_model?.model_info;
 
     let defaultProvider = "openai";
@@ -798,13 +802,18 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
       let firstElement = splitModel[0];
 
       // If there is only one element, default provider to openai
-      provider =
+      provider = custom_llm_provider;
+      if (!provider) {
+        provider =
         splitModel.length === 1
           ? getProviderFromModel(litellm_model_name)
           : firstElement;
+        
+      }
+      
     } else {
       // litellm_model_name is null or undefined, default provider to openai
-      provider = "openai";
+      provider = "-";
     }
 
     if (model_info) {
@@ -1130,7 +1139,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                               setSelectedAPIKey(key);
                             }}
                           >
-                            ✨ {key["key_alias"]} (Enterpise only Feature) 
+                            ✨ {key["key_alias"]} (Enterprise only Feature)
                           </SelectItem>
                         );
                       }
@@ -1165,7 +1174,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                       setSelectedCustomer(user);
                     }}
                   >
-                    ✨ {user} (Enterpise only Feature) 
+                    ✨ {user} (Enterprise only Feature)
                   </SelectItem>
                 );
               })
@@ -1245,6 +1254,10 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
       return "claude-3-opus";
     } else if (selectedProvider == Providers.Google_AI_Studio) {
       return "gemini-pro";
+    } else if (selectedProvider == Providers.Azure_AI_Studio) {
+      return "azure_ai/command-r-plus";
+    } else if (selectedProvider == Providers.Azure) {
+      return "azure/my-deployment";
     } else {
       return "gpt-3.5-turbo";
     }
@@ -1311,7 +1324,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                   defaultValue={
                     selectedModelGroup
                       ? selectedModelGroup
-                      : availableModelGroups[0]
+                      : undefined
                   }
                   onValueChange={(value) =>
                     setSelectedModelGroup(value === "all" ? "all" : value)
@@ -1319,7 +1332,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                   value={
                     selectedModelGroup
                       ? selectedModelGroup
-                      : availableModelGroups[0]
+                      : undefined
                   }
                 >
                   <SelectItem value={"all"}>All Models</SelectItem>
@@ -1524,7 +1537,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                             <pre className="text-xs">
                               {model.input_cost
                                 ? model.input_cost
-                                : model.litellm_params.input_cost_per_token
+                                : model.litellm_params.input_cost_per_token != null && model.litellm_params.input_cost_per_token != undefined
                                   ? (
                                       Number(
                                         model.litellm_params
@@ -1686,7 +1699,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                     className="mb-0"
                   >
                     <TextInput
-                      placeholder={getPlaceholder(selectedProvider.toString())}
+                      
                     />
                   </Form.Item>
                   <Row>
@@ -1705,7 +1718,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                     className="mb-0"
                   >
                     {selectedProvider === Providers.Azure ? (
-                      <TextInput placeholder="Enter model name" />
+                      <TextInput placeholder={getPlaceholder(selectedProvider.toString())} />
                     ) : providerModels.length > 0 ? (
                       <MultiSelect value={providerModels}>
                         {providerModels.map((model, index) => (
@@ -1715,7 +1728,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                         ))}
                       </MultiSelect>
                     ) : (
-                      <TextInput placeholder="gpt-3.5-turbo-0125" />
+                      <TextInput placeholder={getPlaceholder(selectedProvider.toString())} />
                     )}
                   </Form.Item>
                   <Row>
@@ -2073,6 +2086,24 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                 </Card>
               </Col>
             </Grid>
+            <Grid numItems={1} className="gap-2 w-full mt-2">
+            <Card>
+
+            <Title>All Exceptions for {selectedModelGroup}</Title>
+             
+            <BarChart
+                    className="h-60"
+                    data={modelExceptions}
+                    index="model"
+                    categories={allExceptions}
+                    stack={true}
+                    
+                    yAxisWidth={30}
+              /> 
+                          </Card>
+      
+            </Grid>
+
 
             <Grid numItems={1} className="gap-2 w-full mt-2">
                 <Card>
@@ -2091,15 +2122,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                   </Col>
                   <Col>
 
-                {/* <BarChart
-                    className="h-40"
-                    data={modelExceptions}
-                    index="model"
-                    categories={allExceptions}
-                    stack={true}
-                    yAxisWidth={30}
-              /> */}
-      
+               
 
                 </Col>
 

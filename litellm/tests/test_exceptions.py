@@ -1,26 +1,26 @@
-from openai import AuthenticationError, BadRequestError, RateLimitError, OpenAIError
+import asyncio
 import os
+import subprocess
 import sys
 import traceback
-import subprocess, asyncio
 from typing import Any
+
+from openai import AuthenticationError, BadRequestError, OpenAIError, RateLimitError
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-import litellm
-from litellm import (
-    embedding,
-    completion,
-    #     AuthenticationError,
-    ContextWindowExceededError,
-    #     RateLimitError,
-    #     ServiceUnavailableError,
-    #     OpenAIError,
-)
 from concurrent.futures import ThreadPoolExecutor
+from unittest.mock import MagicMock, patch
+
 import pytest
-from unittest.mock import patch, MagicMock
+
+import litellm
+from litellm import (  # AuthenticationError,; RateLimitError,; ServiceUnavailableError,; OpenAIError,
+    ContextWindowExceededError,
+    completion,
+    embedding,
+)
 
 litellm.vertex_project = "pathrise-convert-1606954137718"
 litellm.vertex_location = "us-central1"
@@ -55,8 +55,12 @@ async def test_content_policy_exception_azure():
     except litellm.ContentPolicyViolationError as e:
         print("caught a content policy violation error! Passed")
         print("exception", e)
+        assert e.litellm_debug_info is not None
+        assert isinstance(e.litellm_debug_info, str)
+        assert len(e.litellm_debug_info) > 0
         pass
     except Exception as e:
+        print()
         pytest.fail(f"An exception occurred - {str(e)}")
 
 
@@ -245,9 +249,29 @@ def test_completion_azure_exception():
 # test_completion_azure_exception()
 
 
+def test_azure_embedding_exceptions():
+    try:
+
+        response = litellm.embedding(
+            model="azure/azure-embedding-model",
+            input="hello",
+            messages="hello",
+        )
+        pytest.fail(f"Bad request this should have failed but got {response}")
+
+    except Exception as e:
+        print(vars(e))
+        # CRUCIAL Test - Ensures our exceptions are readable and not overly complicated. some users have complained exceptions will randomly have another exception raised in our exception mapping
+        assert (
+            e.message
+            == "litellm.APIError: AzureException APIError - Embeddings.create() got an unexpected keyword argument 'messages'"
+        )
+
+
 async def asynctest_completion_azure_exception():
     try:
         import openai
+
         import litellm
 
         print("azure gpt-3.5 test\n\n")
@@ -279,8 +303,11 @@ async def asynctest_completion_azure_exception():
 
 def asynctest_completion_openai_exception_bad_model():
     try:
+        import asyncio
+
         import openai
-        import litellm, asyncio
+
+        import litellm
 
         print("azure exception bad model\n\n")
         litellm.set_verbose = True
@@ -307,8 +334,11 @@ def asynctest_completion_openai_exception_bad_model():
 
 def asynctest_completion_azure_exception_bad_model():
     try:
+        import asyncio
+
         import openai
-        import litellm, asyncio
+
+        import litellm
 
         print("azure exception bad model\n\n")
         litellm.set_verbose = True
@@ -659,7 +689,7 @@ def test_litellm_predibase_exception():
 # print(f"accuracy_score: {accuracy_score}")
 
 
-@pytest.mark.parametrize("provider", ["predibase"])
+@pytest.mark.parametrize("provider", ["predibase", "vertex_ai_beta", "anthropic"])
 def test_exception_mapping(provider):
     """
     For predibase, run through a set of mock exceptions
@@ -701,3 +731,27 @@ def test_exception_mapping(provider):
         )
 
     pass
+
+
+def test_anthropic_tool_calling_exception():
+    """
+    Related - https://github.com/BerriAI/litellm/issues/4348
+    """
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {},
+            },
+        }
+    ]
+    try:
+        litellm.completion(
+            model="claude-3-5-sonnet-20240620",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+            tools=tools,
+        )
+    except litellm.BadRequestError:
+        pass

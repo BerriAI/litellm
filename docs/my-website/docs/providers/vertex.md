@@ -8,6 +8,373 @@ import TabItem from '@theme/TabItem';
   <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
 </a>
 
+## 🆕 `vertex_ai_beta/` route 
+
+New `vertex_ai_beta/` route. Adds support for system messages, tool_choice params, etc. by moving to httpx client (instead of vertex sdk).
+
+```python
+from litellm import completion
+import json 
+
+## GET CREDENTIALS 
+file_path = 'path/to/vertex_ai_service_account.json'
+
+# Load the JSON file
+with open(file_path, 'r') as file:
+    vertex_credentials = json.load(file)
+
+# Convert to JSON string
+vertex_credentials_json = json.dumps(vertex_credentials)
+
+## COMPLETION CALL 
+response = completion(
+  model="vertex_ai_beta/gemini-pro",
+  messages=[{ "content": "Hello, how are you?","role": "user"}],
+  vertex_credentials=vertex_credentials_json
+)
+```
+
+### **System Message**
+
+```python
+from litellm import completion
+import json 
+
+## GET CREDENTIALS 
+file_path = 'path/to/vertex_ai_service_account.json'
+
+# Load the JSON file
+with open(file_path, 'r') as file:
+    vertex_credentials = json.load(file)
+
+# Convert to JSON string
+vertex_credentials_json = json.dumps(vertex_credentials)
+
+
+response = completion(
+  model="vertex_ai_beta/gemini-pro",
+  messages=[{"content": "You are a good bot.","role": "system"}, {"content": "Hello, how are you?","role": "user"}], 
+  vertex_credentials=vertex_credentials_json
+)
+```
+
+### **Function Calling**
+
+Force Gemini to make tool calls with `tool_choice="required"`.
+
+```python
+from litellm import completion
+import json 
+
+## GET CREDENTIALS 
+file_path = 'path/to/vertex_ai_service_account.json'
+
+# Load the JSON file
+with open(file_path, 'r') as file:
+    vertex_credentials = json.load(file)
+
+# Convert to JSON string
+vertex_credentials_json = json.dumps(vertex_credentials)
+
+
+messages = [
+    {
+        "role": "system",
+        "content": "Your name is Litellm Bot, you are a helpful assistant",
+    },
+    # User asks for their name and weather in San Francisco
+    {
+        "role": "user",
+        "content": "Hello, what is your name and can you tell me the weather?",
+    },
+]
+
+tools = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "Get the current weather in a given location",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location": {
+                        "type": "string",
+                        "description": "The city and state, e.g. San Francisco, CA",
+                    }
+                },
+                "required": ["location"],
+            },
+        },
+    }
+]
+
+data = {
+    "model": "vertex_ai_beta/gemini-1.5-pro-preview-0514"),
+    "messages": messages,
+    "tools": tools,
+    "tool_choice": "required",
+    "vertex_credentials": vertex_credentials_json
+}
+
+## COMPLETION CALL 
+print(completion(**data))
+```
+
+### **JSON Schema**
+
+From v`1.40.1+` LiteLLM supports sending `response_schema` as a param for Gemini-1.5-Pro on Vertex AI. For other models (e.g. `gemini-1.5-flash` or `claude-3-5-sonnet`), LiteLLM adds the schema to the message list with a user-controlled prompt.
+
+**Response Schema**
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion 
+import json 
+
+## SETUP ENVIRONMENT
+# !gcloud auth application-default login - run this to add vertex credentials to your env
+
+messages = [
+    {
+        "role": "user",
+        "content": "List 5 popular cookie recipes."
+    }
+]
+
+response_schema = {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "recipe_name": {
+                    "type": "string",
+                },
+            },
+            "required": ["recipe_name"],
+        },
+    }
+
+
+completion(
+    model="vertex_ai_beta/gemini-1.5-pro", 
+    messages=messages, 
+    response_format={"type": "json_object", "response_schema": response_schema} # 👈 KEY CHANGE
+    )
+
+print(json.loads(completion.choices[0].message.content))
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Add model to config.yaml
+```yaml
+model_list:
+  - model_name: gemini-pro
+    litellm_params:
+      model: vertex_ai_beta/gemini-1.5-pro
+      vertex_project: "project-id"
+      vertex_location: "us-central1"
+      vertex_credentials: "/path/to/service_account.json" # [OPTIONAL] Do this OR `!gcloud auth application-default login` - run this to add vertex credentials to your env
+```
+
+2. Start Proxy 
+
+```
+$ litellm --config /path/to/config.yaml
+```
+
+3. Make Request!
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-D '{
+  "model": "gemini-pro",
+  "messages": [
+        {"role": "user", "content": "List 5 popular cookie recipes."}
+    ],
+  "response_format": {"type": "json_object", "response_schema": { 
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "recipe_name": {
+                    "type": "string",
+                },
+            },
+            "required": ["recipe_name"],
+        },
+    }}
+}
+'
+```
+
+</TabItem>
+</Tabs>
+
+**Validate Schema**
+
+To validate the response_schema, set `enforce_validation: true`.
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion, JSONSchemaValidationError
+try: 
+	completion(
+    model="vertex_ai_beta/gemini-1.5-pro", 
+    messages=messages, 
+    response_format={
+        "type": "json_object", 
+        "response_schema": response_schema,
+        "enforce_validation": true # 👈 KEY CHANGE
+    }
+	)
+except JSONSchemaValidationError as e: 
+	print("Raw Response: {}".format(e.raw_response))
+	raise e
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Add model to config.yaml
+```yaml
+model_list:
+  - model_name: gemini-pro
+    litellm_params:
+      model: vertex_ai_beta/gemini-1.5-pro
+      vertex_project: "project-id"
+      vertex_location: "us-central1"
+      vertex_credentials: "/path/to/service_account.json" # [OPTIONAL] Do this OR `!gcloud auth application-default login` - run this to add vertex credentials to your env
+```
+
+2. Start Proxy 
+
+```
+$ litellm --config /path/to/config.yaml
+```
+
+3. Make Request!
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-D '{
+  "model": "gemini-pro",
+  "messages": [
+        {"role": "user", "content": "List 5 popular cookie recipes."}
+    ],
+  "response_format": {"type": "json_object", "response_schema": { 
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "recipe_name": {
+                    "type": "string",
+                },
+            },
+            "required": ["recipe_name"],
+        },
+    }, 
+    "enforce_validation": true
+    }
+}
+'
+```
+
+</TabItem>
+</Tabs>
+
+LiteLLM will validate the response against the schema, and raise a `JSONSchemaValidationError` if the response does not match the schema. 
+
+JSONSchemaValidationError inherits from `openai.APIError` 
+
+Access the raw response with `e.raw_response`
+
+**Add to prompt yourself**
+
+```python 
+from litellm import completion 
+
+## GET CREDENTIALS 
+file_path = 'path/to/vertex_ai_service_account.json'
+
+# Load the JSON file
+with open(file_path, 'r') as file:
+    vertex_credentials = json.load(file)
+
+# Convert to JSON string
+vertex_credentials_json = json.dumps(vertex_credentials)
+
+messages = [
+    {
+        "role": "user",
+        "content": """
+List 5 popular cookie recipes.
+
+Using this JSON schema:
+
+    Recipe = {"recipe_name": str}
+
+Return a `list[Recipe]`
+        """
+    }
+]
+
+completion(model="vertex_ai_beta/gemini-1.5-flash-preview-0514", messages=messages, response_format={ "type": "json_object" })
+```
+
+### **Grounding**
+
+Add Google Search Result grounding to vertex ai calls. 
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python 
+from litellm import completion 
+
+## SETUP ENVIRONMENT
+# !gcloud auth application-default login - run this to add vertex credentials to your env
+
+tools = [{"googleSearchRetrieval": {}}] # 👈 ADD GOOGLE SEARCH
+
+resp = litellm.completion(
+                    model="vertex_ai_beta/gemini-1.0-pro-001",
+                    messages=[{"role": "user", "content": "Who won the world cup?"}],
+                    tools=tools,
+                )
+
+print(resp)
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -d '{
+    "model": "gpt-4o",
+    "messages": [{"role": "user", "content": "Who won the world cup?"}],
+    "tools": [
+        {
+            "googleSearchResults": {} 
+        }
+    ]
+  }'
+
+```
+
+</TabItem>
+</Tabs>
+
 ## Pre-requisites
 * `pip install google-cloud-aiplatform` (pre-installed on proxy docker image)
 * Authentication: 
@@ -140,7 +507,7 @@ In certain use-cases you may need to make calls to the models and pass [safety s
 
 ```python
 response = completion(
-    model="gemini/gemini-pro", 
+    model="vertex_ai/gemini-pro", 
     messages=[{"role": "user", "content": "write code for saying hi from LiteLLM"}]
     safety_settings=[
         {
@@ -254,6 +621,7 @@ litellm.vertex_location = "us-central1 # Your Location
 | Model Name       | Function Call                        |
 |------------------|--------------------------------------|
 | claude-3-opus@20240229   | `completion('vertex_ai/claude-3-opus@20240229', messages)` |
+| claude-3-5-sonnet@20240620  | `completion('vertex_ai/claude-3-5-sonnet@20240620', messages)` |
 | claude-3-sonnet@20240229   | `completion('vertex_ai/claude-3-sonnet@20240229', messages)` |
 | claude-3-haiku@20240307   | `completion('vertex_ai/claude-3-haiku@20240307', messages)` |
 
@@ -363,8 +731,8 @@ response = completion(
 ## Gemini 1.5 Pro (and Vision)
 | Model Name       | Function Call                        |
 |------------------|--------------------------------------|
-| gemini-1.5-pro   | `completion('gemini-1.5-pro', messages)`, `completion('vertex_ai/gemini-pro', messages)` |
-| gemini-1.5-flash-preview-0514   | `completion('gemini-1.5-flash-preview-0514', messages)`, `completion('vertex_ai/gemini-pro', messages)` |
+| gemini-1.5-pro   | `completion('gemini-1.5-pro', messages)`, `completion('vertex_ai/gemini-1.5-pro', messages)` |
+| gemini-1.5-flash-preview-0514   | `completion('gemini-1.5-flash-preview-0514', messages)`, `completion('vertex_ai/gemini-1.5-flash-preview-0514', messages)` |
 | gemini-1.5-pro-preview-0514   | `completion('gemini-1.5-pro-preview-0514', messages)`, `completion('vertex_ai/gemini-1.5-pro-preview-0514', messages)` |
 
 
@@ -449,6 +817,198 @@ print(response)
 </TabItem>
 </Tabs>
 
+## Usage - Function Calling 
+
+LiteLLM supports Function Calling for Vertex AI gemini models. 
+
+```python
+from litellm import completion
+import os
+# set env
+os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = ".."
+os.environ["VERTEX_AI_PROJECT"] = ".."
+os.environ["VERTEX_AI_LOCATION"] = ".."
+
+tools = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_current_weather",
+            "description": "Get the current weather in a given location",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location": {
+                        "type": "string",
+                        "description": "The city and state, e.g. San Francisco, CA",
+                    },
+                    "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                },
+                "required": ["location"],
+            },
+        },
+    }
+]
+messages = [{"role": "user", "content": "What's the weather like in Boston today?"}]
+
+response = completion(
+    model="vertex_ai/gemini-pro-vision",
+    messages=messages,
+    tools=tools,
+)
+# Add any assertions, here to check response args
+print(response)
+assert isinstance(response.choices[0].message.tool_calls[0].function.name, str)
+assert isinstance(
+    response.choices[0].message.tool_calls[0].function.arguments, str
+)
+
+```
+
+
+## Usage - PDF / Videos / etc. Files 
+
+Pass any file supported by Vertex AI, through LiteLLM. 
+
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+### **Using `gs://`**
+```python
+from litellm import completion
+
+response = completion(
+    model="vertex_ai/gemini-1.5-flash",
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "You are a very professional document summarization specialist. Please summarize the given document."},
+                {
+                    "type": "image_url",
+                    "image_url": "gs://cloud-samples-data/generative-ai/pdf/2403.05530.pdf", # 👈 PDF
+                },
+            ],
+        }
+    ],
+    max_tokens=300,
+)
+
+print(response.choices[0])
+```
+
+### **using base64**
+```python
+from litellm import completion
+import base64
+import requests
+
+# URL of the file
+url = "https://storage.googleapis.com/cloud-samples-data/generative-ai/pdf/2403.05530.pdf"
+
+# Download the file
+response = requests.get(url)
+file_data = response.content
+
+encoded_file = base64.b64encode(file_data).decode("utf-8")
+
+response = completion(
+    model="vertex_ai/gemini-1.5-flash",
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "You are a very professional document summarization specialist. Please summarize the given document."},
+                {
+                    "type": "image_url",
+                    "image_url": f"data:application/pdf;base64,{encoded_file}", # 👈 PDF
+                },
+            ],
+        }
+    ],
+    max_tokens=300,
+)
+
+print(response.choices[0])
+```
+</TabItem>
+<TabItem value="proxy" lable="PROXY">
+
+1. Add model to config 
+
+```yaml
+- model_name: gemini-1.5-flash
+  litellm_params:
+    model: vertex_ai/gemini-1.5-flash
+    vertex_credentials: "/path/to/service_account.json"
+```
+
+2. Start Proxy
+
+```
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+**Using `gs://`**
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <YOUR-LITELLM-KEY>" \
+  -d '{
+    "model": "gemini-1.5-flash",
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "You are a very professional document summarization specialist. Please summarize the given document"
+          },
+          {
+                "type": "image_url",
+                "image_url": "gs://cloud-samples-data/generative-ai/pdf/2403.05530.pdf" # 👈 PDF
+            }
+          }
+        ]
+      }
+    ],
+    "max_tokens": 300
+  }'
+
+```
+
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <YOUR-LITELLM-KEY>" \
+  -d '{
+    "model": "gemini-1.5-flash",
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "You are a very professional document summarization specialist. Please summarize the given document"
+          },
+          {
+                "type": "image_url",
+                "image_url": "data:application/pdf;base64,{encoded_file}" # 👈 PDF
+            }
+          }
+        ]
+      }
+    ],
+    "max_tokens": 300
+  }'
+
+```
+</TabItem>
+</Tabs>
 
 ## Chat Models
 | Model Name       | Function Call                        |
@@ -500,6 +1060,8 @@ All models listed [here](https://github.com/BerriAI/litellm/blob/57f37f743886a02
 
 | Model Name               | Function Call                                                                                                                                                      |
 |--------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| text-embedding-004 | `embedding(model="vertex_ai/text-embedding-004", input)` | 
+| text-multilingual-embedding-002 | `embedding(model="vertex_ai/text-multilingual-embedding-002", input)` | 
 | textembedding-gecko | `embedding(model="vertex_ai/textembedding-gecko", input)` | 
 | textembedding-gecko-multilingual | `embedding(model="vertex_ai/textembedding-gecko-multilingual", input)` | 
 | textembedding-gecko-multilingual@001 | `embedding(model="vertex_ai/textembedding-gecko-multilingual@001", input)` | 
@@ -507,6 +1069,29 @@ All models listed [here](https://github.com/BerriAI/litellm/blob/57f37f743886a02
 | textembedding-gecko@003 | `embedding(model="vertex_ai/textembedding-gecko@003", input)` | 
 | text-embedding-preview-0409 | `embedding(model="vertex_ai/text-embedding-preview-0409", input)` |
 | text-multilingual-embedding-preview-0409 | `embedding(model="vertex_ai/text-multilingual-embedding-preview-0409", input)` | 
+
+### Advanced Use `task_type` and `title` (Vertex Specific Params)
+
+👉 `task_type` and `title` are vertex specific params
+
+LiteLLM Supported Vertex Specific Params
+
+```python
+auto_truncate: Optional[bool] = None
+task_type: Optional[Literal["RETRIEVAL_QUERY","RETRIEVAL_DOCUMENT", "SEMANTIC_SIMILARITY", "CLASSIFICATION", "CLUSTERING", "QUESTION_ANSWERING", "FACT_VERIFICATION"]] = None
+title: Optional[str] = None # The title of the document to be embedded. (only valid with task_type=RETRIEVAL_DOCUMENT).
+```
+
+**Example Usage with LiteLLM**
+```python
+response = litellm.embedding(
+    model="vertex_ai/text-embedding-004",
+    input=["good morning from litellm", "gm"]
+    task_type = "RETRIEVAL_DOCUMENT",
+    dimensions=1,
+    auto_truncate=True,
+)
+```
 
 ## Image Generation Models
 
@@ -603,9 +1188,6 @@ Once that's done, when you deploy the new container in the Google Cloud Run serv
 
 
 s/o @[Darien Kindlund](https://www.linkedin.com/in/kindlund/) for this tutorial
-
-
-
 
 
 

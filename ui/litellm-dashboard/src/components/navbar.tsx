@@ -114,7 +114,7 @@ const Navbar: React.FC<NavbarProps> = ({
                 textDecoration: "underline",
               }}
             >
-              Get enterpise license
+              Get enterprise license
             </a>
           </div>
         ) : null}

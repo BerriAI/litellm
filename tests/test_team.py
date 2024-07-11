@@ -49,7 +49,7 @@ async def new_user(
 
 
 async def add_member(
-    session, i, team_id, user_id=None, user_email=None, max_budget=None
+    session, i, team_id, user_id=None, user_email=None, max_budget=None, members=None
 ):
     url = "http://0.0.0.0:4000/team/member_add"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
@@ -58,10 +58,13 @@ async def add_member(
         data["member"]["user_email"] = user_email
     elif user_id is not None:
         data["member"]["user_id"] = user_id
+    elif members is not None:
+        data["member"] = members
 
     if max_budget is not None:
         data["max_budget_in_team"] = max_budget
 
+    print("sent data: {}".format(data))
     async with session.post(url, headers=headers, json=data) as response:
         status = response.status
         response_text = await response.text()
@@ -339,7 +342,7 @@ async def test_team_info():
 async def test_team_update_sc_2():
     """
     - Create team
-    - Add 1 user (doesn't exist in db)
+    - Add 3 users (doesn't exist in db)
     - Change team alias
     - Check if it works
     - Assert team object unchanged besides team alias
@@ -353,15 +356,20 @@ async def test_team_update_sc_2():
             {"role": "admin", "user_id": admin_user},
         ]
         team_data = await new_team(session=session, i=0, member_list=member_list)
-        ## Create new normal user
-        new_normal_user = f"krrish_{uuid.uuid4()}@berri.ai"
+        ## Create 10 normal users
+        members = [
+            {"role": "user", "user_id": f"krrish_{uuid.uuid4()}@berri.ai"}
+            for _ in range(10)
+        ]
         await add_member(
-            session=session,
-            i=0,
-            team_id=team_data["team_id"],
-            user_id=None,
-            user_email=new_normal_user,
+            session=session, i=0, team_id=team_data["team_id"], members=members
         )
+        ## ASSERT TEAM SIZE
+        team_info = await get_team_info(
+            session=session, get_team=team_data["team_id"], call_key="sk-1234"
+        )
+
+        assert len(team_info["team_info"]["members_with_roles"]) == 12
 
         ## CHANGE TEAM ALIAS
 
@@ -570,4 +578,4 @@ async def test_users_in_team_budget():
         except Exception as e:
             print("got exception, this is expected")
             print(e)
-            assert "Crossed spend within team" in str(e)
+            assert "Budget has been exceeded" in str(e)

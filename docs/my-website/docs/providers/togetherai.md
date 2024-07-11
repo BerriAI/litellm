@@ -208,7 +208,7 @@ print(response)
 
 Instead of using the `custom_llm_provider` arg to specify which provider you're using (e.g. together ai), you can just pass the provider name as part of the model name, and LiteLLM will parse it out. 
 
-Expected format: <custom_llm_provider>/<model_name>
+Expected format: `<custom_llm_provider>/<model_name>`
 
 e.g. completion(model="together_ai/togethercomputer/Llama-2-7B-32K-Instruct", ...)
 

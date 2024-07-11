@@ -77,6 +77,28 @@ litellm_settings:
 
 #### Step 2: Setup Oauth Client
 <Tabs>
+<TabItem value="okta" label="Okta SSO">
+
+1. Add Okta credentials to your .env
+
+```bash
+GENERIC_CLIENT_ID = "<your-okta-client-id>"
+GENERIC_CLIENT_SECRET = "<your-okta-client-secret>" 
+GENERIC_AUTHORIZATION_ENDPOINT = "<your-okta-domain>/authorize" # https://dev-2kqkcd6lx6kdkuzt.us.auth0.com/authorize
+GENERIC_TOKEN_ENDPOINT = "<your-okta-domain>/token" # https://dev-2kqkcd6lx6kdkuzt.us.auth0.com/oauth/token
+GENERIC_USERINFO_ENDPOINT = "<your-okta-domain>/userinfo" # https://dev-2kqkcd6lx6kdkuzt.us.auth0.com/userinfo
+```
+
+You can get your domain specific auth/token/userinfo endpoints at `<YOUR-OKTA-DOMAIN>/.well-known/openid-configuration`
+
+2. Add proxy url as callback_url on Okta
+
+On Okta, add the 'callback_url' as `<proxy_base_url>/sso/callback`
+
+
+<Image img={require('../../img/okta_callback_url.png')} />
+
+</TabItem>
 <TabItem value="google" label="Google SSO">
 
 - Create a new Oauth 2.0 Client on https://console.cloud.google.com/ 
@@ -114,7 +136,6 @@ MICROSOFT_TENANT="5a39737
     ```
 
 </TabItem>
-
 
 <TabItem value="Generic" label="Generic SSO Provider">
 

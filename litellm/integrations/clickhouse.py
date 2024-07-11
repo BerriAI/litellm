@@ -226,14 +226,6 @@ def _start_clickhouse():
             response = client.query("DESCRIBE default.spend_logs")
             verbose_logger.debug(f"spend logs schema ={response.result_rows}")
 
-        # RUN Enterprise Clickhouse Setup
-        # TLDR: For Enterprise - we create views / aggregate tables for low latency reporting APIs
-        from litellm.proxy.enterprise.utils import _create_clickhouse_aggregate_tables
-        from litellm.proxy.enterprise.utils import _create_clickhouse_material_views
-
-        _create_clickhouse_aggregate_tables(client=client, table_names=table_names)
-        _create_clickhouse_material_views(client=client, table_names=table_names)
-
 
 class ClickhouseLogger:
     # Class variables or attributes

@@ -140,7 +140,7 @@ class _PROXY_AzureContentSafety(
             response.choices[0], litellm.utils.Choices
         ):
             await self.test_violation(
-                content=response.choices[0].message.content, source="output"
+                content=response.choices[0].message.content or "", source="output"
             )
 
     # async def async_post_call_streaming_hook(

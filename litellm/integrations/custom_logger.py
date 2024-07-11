@@ -1,16 +1,18 @@
 #### What this does ####
 #    On success, logs events to Promptlayer
-import dotenv, os
-
-from litellm.proxy._types import UserAPIKeyAuth
-from litellm.caching import DualCache
-from typing import Literal, Union, Optional
+import os
 import traceback
+from typing import Literal, Optional, Union
+
+import dotenv
+
+from litellm.caching import DualCache
+from litellm.proxy._types import UserAPIKeyAuth
 
 
 class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callback#callback-class
     # Class variables or attributes
-    def __init__(self):
+    def __init__(self) -> None:
         pass
 
     def log_pre_api_call(self, model, messages, kwargs):

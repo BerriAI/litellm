@@ -1,6 +1,9 @@
-import sys, os, uuid
+import os
+import sys
 import time
 import traceback
+import uuid
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -9,12 +12,15 @@ import os
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-import pytest
-import litellm
-from litellm import embedding, completion, aembedding
-from litellm.caching import Cache
+import asyncio
+import hashlib
 import random
-import hashlib, asyncio
+
+import pytest
+
+import litellm
+from litellm import aembedding, completion, embedding
+from litellm.caching import Cache
 
 # litellm.set_verbose=True
 
@@ -656,6 +662,7 @@ def test_redis_cache_completion():
     assert response1.created == response2.created
     assert response1.choices[0].message.content == response2.choices[0].message.content
 
+
 # test_redis_cache_completion()
 
 
@@ -877,6 +884,7 @@ async def test_redis_cache_acompletion_stream_bedrock():
         print(e)
         raise e
 
+
 def test_disk_cache_completion():
     litellm.set_verbose = False
 
@@ -925,7 +933,7 @@ def test_disk_cache_completion():
     litellm.success_callback = []
     litellm._async_success_callback = []
 
-    # 1 & 2 should be exactly the same 
+    # 1 & 2 should be exactly the same
     # 1 & 3 should be different, since input params are diff
     if (
         response1["choices"][0]["message"]["content"]
@@ -1569,3 +1577,47 @@ async def test_redis_semantic_cache_acompletion():
     )
     print(f"response2: {response2}")
     assert response1.id == response2.id
+
+
+def test_caching_redis_simple(caplog):
+    """
+    Relevant issue - https://github.com/BerriAI/litellm/issues/4511
+    """
+    litellm.cache = Cache(
+        type="redis", url=os.getenv("REDIS_SSL_URL")
+    )  # passing `supported_call_types = ["completion"]` has no effect
+
+    s = time.time()
+    x = completion(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "Hello, how are you? Wink"}],
+        stream=True,
+    )
+    for m in x:
+        print(m)
+    print(time.time() - s)
+
+    s2 = time.time()
+    x = completion(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "Hello, how are you? Wink"}],
+        stream=True,
+    )
+    for m in x:
+        print(m)
+    print(time.time() - s2)
+
+    redis_async_caching_error = False
+    redis_service_logging_error = False
+    captured_logs = [rec.message for rec in caplog.records]
+
+    print(f"captured_logs: {captured_logs}")
+    for item in captured_logs:
+        if "Error connecting to Async Redis client" in item:
+            redis_async_caching_error = True
+
+        if "ServiceLogging.async_service_success_hook" in item:
+            redis_service_logging_error = True
+
+    assert redis_async_caching_error is False
+    assert redis_service_logging_error is False
