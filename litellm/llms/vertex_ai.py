@@ -331,6 +331,14 @@ def _gemini_convert_messages_with_history(messages: list) -> List[ContentType]:
 
     last_message_with_tool_calls = None
 
+    # delete all assistant/user messages with no content or tool calls
+    # if we don't do this, then we will end up with non-alternating user and assistant messages
+    messages = [
+        message
+        for message in messages
+        if message.get("content") or message.get("tool_calls")
+    ]
+
     msg_i = 0
     try:
         while msg_i < len(messages):
