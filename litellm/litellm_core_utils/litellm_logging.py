@@ -1275,7 +1275,7 @@ class Logging:
                     f"Model={self.model}; cost={self.model_call_details['response_cost']}"
                 )
             except litellm.NotFoundError as e:
-                verbose_logger.error(
+                verbose_logger.warning(
                     f"Model={self.model} not found in completion cost map. Setting 'response_cost' to None"
                 )
                 self.model_call_details["response_cost"] = None
