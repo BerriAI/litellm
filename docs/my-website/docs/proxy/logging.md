@@ -6,21 +6,6 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-## Table of Contents
-
-- [Logging to Langfuse](#logging-proxy-inputoutput---langfuse)
-- [Logging with OpenTelemetry (OpenTelemetry)](#logging-proxy-inputoutput-in-opentelemetry-format)
-- [Async Custom Callbacks](#custom-callback-class-async)
-- [Async Custom Callback APIs](#custom-callback-apis-async)
-- [Logging to Galileo](#logging-llm-io-to-galileo)
-- [Logging to OpenMeter](#logging-proxy-inputoutput---langfuse)
-- [Logging to s3 Buckets](#logging-proxy-inputoutput---s3-buckets)
-- [Logging to DataDog](#logging-proxy-inputoutput---datadog)
-- [Logging to DynamoDB](#logging-proxy-inputoutput---dynamodb)
-- [Logging to Sentry](#logging-proxy-inputoutput---sentry)
-- [Logging to Athina](#logging-proxy-inputoutput-athina)
-- [(BETA) Moderation with Azure Content-Safety](#moderation-with-azure-content-safety)
-
 ## Logging Proxy Input/Output - Langfuse
 We will use the `--config` to set `litellm.success_callback = ["langfuse"]` this will log all successfull LLM calls to langfuse. Make sure to set `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` in your environment
 
