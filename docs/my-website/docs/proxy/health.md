@@ -128,9 +128,20 @@ Example Response:
 
 ```json
 {
-    "status": "healthy",
-    "db": "connected",
-    "litellm_version":"1.19.2",
+  "status": "connected",
+  "db": "connected",
+  "cache": null,
+  "litellm_version": "1.40.21",
+  "success_callbacks": [
+    "langfuse",
+    "_PROXY_track_cost_callback",
+    "response_taking_too_long_callback",
+    "_PROXY_MaxParallelRequestsHandler",
+    "_PROXY_MaxBudgetLimiter",
+    "_PROXY_CacheControlCheck",
+    "ServiceLogging"
+  ],
+  "last_updated": "2024-07-10T18:59:10.616968"
 }
 ```
 
@@ -138,9 +149,20 @@ Example Response:
 
 ```json
 {
-    "status": "healthy",
-    "db": "Not connected",
-    "litellm_version":"1.19.2",
+  "status": "connected",
+  "db": "Not connected",
+  "cache": null,
+  "litellm_version": "1.40.21",
+  "success_callbacks": [
+    "langfuse",
+    "_PROXY_track_cost_callback",
+    "response_taking_too_long_callback",
+    "_PROXY_MaxParallelRequestsHandler",
+    "_PROXY_MaxBudgetLimiter",
+    "_PROXY_CacheControlCheck",
+    "ServiceLogging"
+  ],
+  "last_updated": "2024-07-10T18:59:10.616968"
 }
 ```
 
