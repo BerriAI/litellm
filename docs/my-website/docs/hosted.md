@@ -21,6 +21,14 @@ See our status page for [**live reliability**](https://status.litellm.ai/)
 - **Reliable**: Our hosted proxy is tested on 1k requests per second, making it reliable for high load.
 - **Secure**: LiteLLM is currently undergoing SOC-2 compliance, to make sure your data is as secure as possible.
 
+## Data Privacy & Security
+
+You can find our [data privacy & security policy for cloud litellm here](../docs/data_security#litellm-cloud)
+
+## Supported data regions for LiteLLM Cloud
+
+You can find [supported data regions litellm here](../docs/data_security#supported-data-regions-for-litellm-cloud)
+
 ### Pricing
 
 Pricing is based on usage. We can figure out a price that works for your team, on the call. 
