@@ -305,7 +305,7 @@ class Message(OpenAIObject):
     ):
         init_values = {
             "content": content,
-            "role": role,
+            "role": "assistant",
             "function_call": (
                 FunctionCall(**function_call) if function_call is not None else None
             ),
