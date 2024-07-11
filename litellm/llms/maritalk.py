@@ -1,11 +1,15 @@
-import os, types
 import json
+import os
+import time
+import traceback
+import types
 from enum import Enum
+from typing import Callable, List, Optional
+
 import requests  # type: ignore
-import time, traceback
-from typing import Callable, Optional, List
-from litellm.utils import ModelResponse, Choices, Message, Usage
+
 import litellm
+from litellm.utils import Choices, Message, ModelResponse, Usage
 
 
 class MaritalkError(Exception):
@@ -152,9 +156,9 @@ def completion(
         else:
             try:
                 if len(completion_response["answer"]) > 0:
-                    model_response["choices"][0]["message"]["content"] = (
-                        completion_response["answer"]
-                    )
+                    model_response.choices[0].message.content = completion_response[  # type: ignore
+                        "answer"
+                    ]
             except Exception as e:
                 raise MaritalkError(
                     message=response.text, status_code=response.status_code
@@ -167,8 +171,8 @@ def completion(
             encoding.encode(model_response["choices"][0]["message"].get("content", ""))
         )
 
-        model_response["created"] = int(time.time())
-        model_response["model"] = model
+        model_response.created = int(time.time())
+        model_response.model = model
         usage = Usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,

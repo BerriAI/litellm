@@ -279,7 +279,7 @@ class PredibaseChatCompletion(BaseLLM):
                     message=f"'generated_text' is not a key response dictionary - {completion_response}",
                 )
             if len(completion_response["generated_text"]) > 0:
-                model_response["choices"][0]["message"]["content"] = self.output_parser(
+                model_response.choices[0].message.content = self.output_parser(  # type: ignore
                     completion_response["generated_text"]
                 )
             ## GETTING LOGPROBS + FINISH REASON
@@ -294,10 +294,10 @@ class PredibaseChatCompletion(BaseLLM):
                 for token in completion_response["details"]["tokens"]:
                     if token["logprob"] is not None:
                         sum_logprob += token["logprob"]
-                model_response["choices"][0][
-                    "message"
-                ]._logprob = (
-                    sum_logprob  # [TODO] move this to using the actual logprobs
+                setattr(
+                    model_response.choices[0].message,  # type: ignore
+                    "_logprob",
+                    sum_logprob,  # [TODO] move this to using the actual logprobs
                 )
             if "best_of" in optional_params and optional_params["best_of"] > 1:
                 if (
@@ -325,7 +325,7 @@ class PredibaseChatCompletion(BaseLLM):
                             message=message_obj,
                         )
                         choices_list.append(choice_obj)
-                    model_response["choices"].extend(choices_list)
+                    model_response.choices.extend(choices_list)
 
         ## CALCULATING USAGE
         prompt_tokens = 0
@@ -351,8 +351,8 @@ class PredibaseChatCompletion(BaseLLM):
 
         total_tokens = prompt_tokens + completion_tokens
 
-        model_response["created"] = int(time.time())
-        model_response["model"] = model
+        model_response.created = int(time.time())
+        model_response.model = model
         usage = Usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,

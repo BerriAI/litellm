@@ -521,7 +521,7 @@ class BedrockLLM(BaseLLM):
                     outputText = completion_response["text"]  # type: ignore
                 elif "generations" in completion_response:
                     outputText = completion_response["generations"][0]["text"]
-                    model_response["finish_reason"] = map_finish_reason(
+                    model_response.choices[0].finish_reason = map_finish_reason(
                         completion_response["generations"][0]["finish_reason"]
                     )
             elif provider == "anthropic":
@@ -625,7 +625,7 @@ class BedrockLLM(BaseLLM):
                                 logging_obj=logging_obj,
                             )
 
-                    model_response["finish_reason"] = map_finish_reason(
+                    model_response.choices[0].finish_reason = map_finish_reason(
                         completion_response.get("stop_reason", "")
                     )
                     _usage = litellm.Usage(
@@ -638,7 +638,9 @@ class BedrockLLM(BaseLLM):
                 else:
                     outputText = completion_response["completion"]
 
-                    model_response["finish_reason"] = completion_response["stop_reason"]
+                    model_response.choices[0].finish_reason = completion_response[
+                        "stop_reason"
+                    ]
             elif provider == "ai21":
                 outputText = (
                     completion_response.get("completions")[0].get("data").get("text")
@@ -647,9 +649,9 @@ class BedrockLLM(BaseLLM):
                 outputText = completion_response["generation"]
             elif provider == "mistral":
                 outputText = completion_response["outputs"][0]["text"]
-                model_response["finish_reason"] = completion_response["outputs"][0][
-                    "stop_reason"
-                ]
+                model_response.choices[0].finish_reason = completion_response[
+                    "outputs"
+                ][0]["stop_reason"]
             else:  # amazon titan
                 outputText = completion_response.get("results")[0].get("outputText")
         except Exception as e:
@@ -667,7 +669,7 @@ class BedrockLLM(BaseLLM):
                 and getattr(model_response.choices[0].message, "tool_calls", None)
                 is None
             ):
-                model_response["choices"][0]["message"]["content"] = outputText
+                model_response.choices[0].message.content = outputText
             elif (
                 hasattr(model_response.choices[0], "message")
                 and getattr(model_response.choices[0].message, "tool_calls", None)
@@ -723,8 +725,8 @@ class BedrockLLM(BaseLLM):
             )
         )
 
-        model_response["created"] = int(time.time())
-        model_response["model"] = model
+        model_response.created = int(time.time())
+        model_response.model = model
         usage = Usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
@@ -1446,8 +1448,8 @@ class BedrockConverseLLM(BaseLLM):
                 message=litellm.Message(**chat_completion_message),
             )
         ]
-        model_response["created"] = int(time.time())
-        model_response["model"] = model
+        model_response.created = int(time.time())
+        model_response.model = model
         usage = Usage(
             prompt_tokens=input_tokens,
             completion_tokens=output_tokens,
