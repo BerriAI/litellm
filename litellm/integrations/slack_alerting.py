@@ -1530,9 +1530,9 @@ Model Info:
         """Log deployment latency"""
         try:
             if "daily_reports" in self.alert_types:
-                model_id = (
-                    kwargs.get("litellm_params", {}).get("model_info", {}).get("id", "")
-                )
+                litellm_params = kwargs.get("litellm_params", {}) or {}
+                model_info = litellm_params.get("model_info", {}) or {}
+                model_id = model_info.get("id", "") or ""
                 response_s: timedelta = end_time - start_time
 
                 final_value = response_s
