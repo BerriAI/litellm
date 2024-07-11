@@ -422,7 +422,7 @@ class AnthropicConfig:
                         AnthropicResponseContentBlockToolUse(
                             type="tool_use",
                             id=tool_call.id,
-                            name=tool_call.function.name,
+                            name=tool_call.function.name or "",
                             input=json.loads(tool_call.function.arguments),
                         )
                     )
