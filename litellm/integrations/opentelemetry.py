@@ -52,6 +52,12 @@ class OpenTelemetryConfig:
 
         OTEL_HEADERS gets sent as headers = {"x-honeycomb-team": "B85YgLm96******"}
         """
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+            InMemorySpanExporter,
+        )
+
+        if os.getenv("OTEL_EXPORTER") == "in_memory":
+            return cls(exporter=InMemorySpanExporter())
         return cls(
             exporter=os.getenv("OTEL_EXPORTER", "console"),
             endpoint=os.getenv("OTEL_ENDPOINT"),

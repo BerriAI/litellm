@@ -25,3 +25,19 @@ if os.environ.get("LITELLM_PROFILE", "false").lower() == "true":
             result.append(f"{stat.traceback.format()}: {stat.size / 1024} KiB")
 
         return {"top_50_memory_usage": result}
+
+
+@router.get("/otel-spans", include_in_schema=False)
+async def get_otel_spans():
+    from litellm.integrations.opentelemetry import OpenTelemetry
+    from litellm.proxy.proxy_server import open_telemetry_logger
+
+    open_telemetry_logger: OpenTelemetry = open_telemetry_logger
+    otel_exporter = open_telemetry_logger.OTEL_EXPORTER
+    recorded_spans = otel_exporter.get_finished_spans()
+
+    print("Spans: ", recorded_spans)  # noqa
+
+    # these are otel spans - get the span name
+    span_names = [span.name for span in recorded_spans]
+    return {"otel_spans": span_names}
