@@ -591,9 +591,9 @@ class IBMWatsonXAI(BaseLLM):
         self,
         model: str,
         input: Union[list, str],
+        model_response: litellm.EmbeddingResponse,
         api_key: Optional[str] = None,
         logging_obj=None,
-        model_response=None,
         optional_params=None,
         encoding=None,
         print_verbose=None,
@@ -610,7 +610,7 @@ class IBMWatsonXAI(BaseLLM):
             if k not in optional_params:
                 optional_params[k] = v
 
-        model_response["model"] = model
+        model_response.model = model
 
         # Load auth variables from environment variables
         if isinstance(input, str):
