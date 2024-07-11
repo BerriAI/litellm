@@ -5048,12 +5048,15 @@ def create_proxy_transport_and_mounts():
     return sync_proxy_mounts, async_proxy_mounts
 
 
-def validate_environment(model: Optional[str] = None) -> dict:
+def validate_environment(
+    model: Optional[str] = None, api_key: Optional[str] = None
+) -> dict:
     """
     Checks if the environment variables are valid for the given model.
 
     Args:
         model (Optional[str]): The name of the model. Defaults to None.
+        api_key (Optional[str]): If the user passed in an api key, of their own.
 
     Returns:
         dict: A dictionary containing the following keys:
@@ -5329,6 +5332,13 @@ def validate_environment(model: Optional[str] = None) -> dict:
                 keys_in_environment = True
             else:
                 missing_keys.append("NLP_CLOUD_API_KEY")
+
+    if api_key is not None:
+        new_missing_keys = []
+        for key in missing_keys:
+            if "api_key" not in key.lower():
+                new_missing_keys.append(key)
+        missing_keys = new_missing_keys
     return {"keys_in_environment": keys_in_environment, "missing_keys": missing_keys}
 
 
