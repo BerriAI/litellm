@@ -624,10 +624,6 @@ class ModelResponse(OpenAIObject):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def __setitem__(self, key, value):
-        # Allow dictionary-style assignment of attributes
-        setattr(self, key, value)
-
     def json(self, **kwargs):
         try:
             return self.model_dump()  # noqa
