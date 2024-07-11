@@ -1765,6 +1765,125 @@ class Router:
                 self.fail_calls[model] += 1
             raise e
 
+    async def aadapter_completion(
+        self,
+        adapter_id: str,
+        model: str,
+        is_retry: Optional[bool] = False,
+        is_fallback: Optional[bool] = False,
+        is_async: Optional[bool] = False,
+        **kwargs,
+    ):
+        try:
+            kwargs["model"] = model
+            kwargs["adapter_id"] = adapter_id
+            kwargs["original_function"] = self._aadapter_completion
+            kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
+            timeout = kwargs.get("request_timeout", self.timeout)
+            kwargs.setdefault("metadata", {}).update({"model_group": model})
+            response = await self.async_function_with_fallbacks(**kwargs)
+
+            return response
+        except Exception as e:
+            asyncio.create_task(
+                send_llm_exception_alert(
+                    litellm_router_instance=self,
+                    request_kwargs=kwargs,
+                    error_traceback_str=traceback.format_exc(),
+                    original_exception=e,
+                )
+            )
+            raise e
+
+    async def _aadapter_completion(self, adapter_id: str, model: str, **kwargs):
+        try:
+            verbose_router_logger.debug(
+                f"Inside _aadapter_completion()- model: {model}; kwargs: {kwargs}"
+            )
+            deployment = await self.async_get_available_deployment(
+                model=model,
+                messages=[{"role": "user", "content": "default text"}],
+                specific_deployment=kwargs.pop("specific_deployment", None),
+            )
+            kwargs.setdefault("metadata", {}).update(
+                {
+                    "deployment": deployment["litellm_params"]["model"],
+                    "model_info": deployment.get("model_info", {}),
+                    "api_base": deployment.get("litellm_params", {}).get("api_base"),
+                }
+            )
+            kwargs["model_info"] = deployment.get("model_info", {})
+            data = deployment["litellm_params"].copy()
+            model_name = data["model"]
+            for k, v in self.default_litellm_params.items():
+                if (
+                    k not in kwargs
+                ):  # prioritize model-specific params > default router params
+                    kwargs[k] = v
+                elif k == "metadata":
+                    kwargs[k].update(v)
+
+            potential_model_client = self._get_client(
+                deployment=deployment, kwargs=kwargs, client_type="async"
+            )
+            # check if provided keys == client keys #
+            dynamic_api_key = kwargs.get("api_key", None)
+            if (
+                dynamic_api_key is not None
+                and potential_model_client is not None
+                and dynamic_api_key != potential_model_client.api_key
+            ):
+                model_client = None
+            else:
+                model_client = potential_model_client
+            self.total_calls[model_name] += 1
+
+            response = litellm.aadapter_completion(
+                **{
+                    **data,
+                    "adapter_id": adapter_id,
+                    "caching": self.cache_responses,
+                    "client": model_client,
+                    "timeout": self.timeout,
+                    **kwargs,
+                }
+            )
+
+            rpm_semaphore = self._get_client(
+                deployment=deployment,
+                kwargs=kwargs,
+                client_type="max_parallel_requests",
+            )
+
+            if rpm_semaphore is not None and isinstance(
+                rpm_semaphore, asyncio.Semaphore
+            ):
+                async with rpm_semaphore:
+                    """
+                    - Check rpm limits before making the call
+                    - If allowed, increment the rpm limit (allows global value to be updated, concurrency-safe)
+                    """
+                    await self.async_routing_strategy_pre_call_checks(
+                        deployment=deployment
+                    )
+                    response = await response  # type: ignore
+            else:
+                await self.async_routing_strategy_pre_call_checks(deployment=deployment)
+                response = await response  # type: ignore
+
+            self.success_calls[model_name] += 1
+            verbose_router_logger.info(
+                f"litellm.aadapter_completion(model={model_name})\033[32m 200 OK\033[0m"
+            )
+            return response
+        except Exception as e:
+            verbose_router_logger.info(
+                f"litellm.aadapter_completion(model={model})\033[31m Exception {str(e)}\033[0m"
+            )
+            if model is not None:
+                self.fail_calls[model] += 1
+            raise e
+
     def embedding(
         self,
         model: str,
