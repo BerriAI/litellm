@@ -1,6 +1,14 @@
-# 🪢 Logging - Langfuse, OpenTelemetry, Custom Callbacks, DataDog, s3 Bucket, Sentry, Athina, Azure Content-Safety
+# 🪢 Logging
 
-Log Proxy Input, Output, Exceptions using Langfuse, OpenTelemetry, Custom Callbacks, DataDog, DynamoDB, s3 Bucket
+Log Proxy input, output, and exceptions using:
+
+- Langfuse
+- OpenTelemetry
+- Custom Callbacks
+- DataDog
+- DynamoDB
+- s3 Bucket
+- etc.
 
 import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
