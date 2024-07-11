@@ -305,7 +305,13 @@ class ChatCompletionToolCallFunctionChunk(TypedDict, total=False):
     arguments: str
 
 
-class ChatCompletionToolCallChunk(TypedDict):
+class ChatCompletionAssistantToolCall(TypedDict):
+    id: Optional[str]
+    type: Literal["function"]
+    function: ChatCompletionToolCallFunctionChunk
+
+
+class ChatCompletionToolCallChunk(TypedDict):  # result of /chat/completions call
     id: Optional[str]
     type: Literal["function"]
     function: ChatCompletionToolCallFunctionChunk
@@ -317,6 +323,107 @@ class ChatCompletionDeltaToolCallChunk(TypedDict, total=False):
     type: Literal["function"]
     function: ChatCompletionToolCallFunctionChunk
     index: int
+
+
+class ChatCompletionTextObject(TypedDict):
+    type: Literal["text"]
+    text: str
+
+
+class ChatCompletionImageUrlObject(TypedDict, total=False):
+    url: Required[str]
+    detail: str
+
+
+class ChatCompletionImageObject(TypedDict):
+    type: Literal["image_url"]
+    image_url: ChatCompletionImageUrlObject
+
+
+class ChatCompletionUserMessage(TypedDict):
+    role: Literal["user"]
+    content: Union[
+        str, Iterable[Union[ChatCompletionTextObject, ChatCompletionImageObject]]
+    ]
+
+
+class ChatCompletionAssistantMessage(TypedDict, total=False):
+    role: Required[Literal["assistant"]]
+    content: Optional[str]
+    name: str
+    tool_calls: List[ChatCompletionAssistantToolCall]
+
+
+class ChatCompletionToolMessage(TypedDict):
+    role: Literal["tool"]
+    content: str
+    tool_call_id: str
+
+
+class ChatCompletionSystemMessage(TypedDict, total=False):
+    role: Required[Literal["system"]]
+    content: Required[str]
+    name: str
+
+
+AllMessageValues = Union[
+    ChatCompletionUserMessage,
+    ChatCompletionAssistantMessage,
+    ChatCompletionToolMessage,
+    ChatCompletionSystemMessage,
+]
+
+
+class ChatCompletionToolChoiceFunctionParam(TypedDict):
+    name: str
+
+
+class ChatCompletionToolChoiceObjectParam(TypedDict):
+    type: Literal["function"]
+    function: ChatCompletionToolChoiceFunctionParam
+
+
+ChatCompletionToolChoiceStringValues = Literal["none", "auto", "required"]
+
+ChatCompletionToolChoiceValues = Union[
+    ChatCompletionToolChoiceStringValues, ChatCompletionToolChoiceObjectParam
+]
+
+
+class ChatCompletionToolParamFunctionChunk(TypedDict, total=False):
+    name: Required[str]
+    description: str
+    parameters: dict
+
+
+class ChatCompletionToolParam(TypedDict):
+    type: Literal["function"]
+    function: ChatCompletionToolParamFunctionChunk
+
+
+class ChatCompletionRequest(TypedDict, total=False):
+    model: Required[str]
+    messages: Required[List[AllMessageValues]]
+    frequency_penalty: float
+    logit_bias: dict
+    logprobs: bool
+    top_logprobs: int
+    max_tokens: int
+    n: int
+    presence_penalty: float
+    response_format: dict
+    seed: int
+    service_tier: str
+    stop: Union[str, List[str]]
+    stream_options: dict
+    temperature: float
+    top_p: float
+    tools: List[ChatCompletionToolParam]
+    tool_choice: ChatCompletionToolChoiceValues
+    parallel_tool_calls: bool
+    function_call: Union[str, dict]
+    functions: List
+    user: str
 
 
 class ChatCompletionDeltaChunk(TypedDict, total=False):
