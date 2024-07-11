@@ -237,6 +237,7 @@ const sidebars = {
       label: "Extras",
       items: [
         "extras/contributing",
+        "data_security",
         "contributing",
         "rules",
         "proxy_server",
