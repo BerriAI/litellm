@@ -166,7 +166,9 @@ class FunctionCall(OpenAIObject):
 
 class Function(OpenAIObject):
     arguments: str
-    name: str
+    name: Optional[
+        str
+    ]  # can be None - openai e.g.: ChoiceDeltaToolCallFunction(arguments='{"', name=None), type=None)
 
     def __init__(
         self,
