@@ -128,7 +128,7 @@ def process_response(
                 message=message_obj,
             )
             choices_list.append(choice_obj)
-        model_response.choices = choices_list
+        model_response.choices = choices_list  # type: ignore
 
     except Exception as e:
         raise ClarifaiError(
