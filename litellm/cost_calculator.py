@@ -15,10 +15,12 @@ from litellm.litellm_core_utils.llm_cost_calc.google import (
 from litellm.litellm_core_utils.llm_cost_calc.google import (
     cost_per_token as google_cost_per_token,
 )
+from litellm.litellm_core_utils.llm_cost_calc.google import (
+    cost_router as google_cost_router,
+)
 from litellm.litellm_core_utils.llm_cost_calc.utils import _generic_cost_per_character
 from litellm.types.llms.openai import HttpxBinaryResponseContent
 from litellm.types.router import SPECIAL_MODEL_INFO_PARAMS
-
 from litellm.utils import (
     CallTypes,
     CostPerToken,
@@ -160,22 +162,32 @@ def cost_per_token(
 
     # see this https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models
     print_verbose(f"Looking up model={model} in model_cost_map")
-    if custom_llm_provider == "vertex_ai" and "claude" in model:
-        return google_cost_per_token(
-            model=model_without_prefix,
-            custom_llm_provider=custom_llm_provider,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-        )
     if custom_llm_provider == "vertex_ai":
-        return google_cost_per_character(
+        cost_router = google_cost_router(
             model=model_without_prefix,
             custom_llm_provider=custom_llm_provider,
             prompt_characters=prompt_characters,
             completion_characters=completion_characters,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
+            call_type=call_type,
         )
+        if cost_router == "cost_per_character":
+            return google_cost_per_character(
+                model=model_without_prefix,
+                custom_llm_provider=custom_llm_provider,
+                prompt_characters=prompt_characters,
+                completion_characters=completion_characters,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+            )
+        elif cost_router == "cost_per_token":
+            return google_cost_per_token(
+                model=model_without_prefix,
+                custom_llm_provider=custom_llm_provider,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+            )
     elif custom_llm_provider == "gemini":
         return google_cost_per_token(
             model=model_without_prefix,
