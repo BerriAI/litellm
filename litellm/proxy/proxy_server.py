@@ -210,6 +210,12 @@ from litellm.router import (
 from litellm.router import ModelInfo as RouterModelInfo
 from litellm.router import updateDeployment
 from litellm.scheduler import DefaultPriorities, FlowItem, Scheduler
+from litellm.types.llms.anthropic import (
+    AnthropicMessagesRequest,
+    AnthropicResponse,
+    AnthropicResponseContentBlockText,
+    AnthropicResponseUsageBlock,
+)
 from litellm.types.llms.openai import HttpxBinaryResponseContent
 from litellm.types.router import RouterGeneralSettings
 
@@ -5030,6 +5036,34 @@ async def moderations(
             )
 
 
+#### ANTHROPIC ENDPOINTS ####
+
+
+@router.post(
+    "/v1/messages",
+    tags=["[beta] Anthropic `/v1/messages`"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=AnthropicResponse,
+)
+async def anthropic_response(data: AnthropicMessagesRequest):
+    from litellm import adapter_completion
+    from litellm.adapters.anthropic_adapter import anthropic_adapter
+
+    litellm.adapters = [{"id": "anthropic", "adapter": anthropic_adapter}]
+
+    response: Optional[BaseModel] = adapter_completion(adapter_id="anthropic", **data)
+
+    if response is None:
+        raise Exception("Response is None.")
+    elif not isinstance(response, AnthropicResponse):
+        raise Exception(
+            "Invalid model response={}. Not in 'AnthropicResponse' format".format(
+                response
+            )
+        )
+    return response
+
+
 #### DEV UTILS ####
 
 # @router.get(
@@ -7546,7 +7580,7 @@ async def login(request: Request):
             litellm_dashboard_ui += "/ui/"
         import jwt
 
-        jwt_token = jwt.encode(
+        jwt_token = jwt.encode(  # type: ignore
             {
                 "user_id": user_id,
                 "key": key,
@@ -7610,7 +7644,7 @@ async def login(request: Request):
                 litellm_dashboard_ui += "/ui/"
             import jwt
 
-            jwt_token = jwt.encode(
+            jwt_token = jwt.encode(  # type: ignore
                 {
                     "user_id": user_id,
                     "key": key,
@@ -7745,7 +7779,7 @@ async def onboarding(invite_link: str):
         litellm_dashboard_ui += "/ui/onboarding"
     import jwt
 
-    jwt_token = jwt.encode(
+    jwt_token = jwt.encode(  # type: ignore
         {
             "user_id": user_obj.user_id,
             "key": key,
@@ -8162,7 +8196,7 @@ async def auth_callback(request: Request):
 
     import jwt
 
-    jwt_token = jwt.encode(
+    jwt_token = jwt.encode(  # type: ignore
         {
             "user_id": user_id,
             "key": key,

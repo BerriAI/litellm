@@ -38,6 +38,7 @@ import dotenv
 import httpx
 import openai
 import tiktoken
+from pydantic import BaseModel
 from typing_extensions import overload
 
 import litellm
@@ -3947,7 +3948,7 @@ def text_completion(
 ###### Adapter Completion ################
 
 
-def adapter_completion(*, adapter_id: str, **kwargs) -> Any:
+def adapter_completion(*, adapter_id: str, **kwargs) -> Optional[BaseModel]:
     translation_obj: Optional[CustomLogger] = None
     for item in litellm.adapters:
         if item["id"] == adapter_id:
