@@ -307,7 +307,7 @@ jobs:
               -e DATABASE_URL=$PROXY_DATABASE_URL \
               -e REDIS_HOST=bad-credentials \
               -e REDIS_PASSWORD=bad-credentials \
-              -e REDIS_PORT=bad-credentials \
+              -e REDIS_PORT=16337 \
               -e OPENAI_API_KEY=$OPENAI_API_KEY \
               -e LITELLM_LICENSE=$LITELLM_LICENSE \
               -e OTEL_EXPORTER="in_memory" \
