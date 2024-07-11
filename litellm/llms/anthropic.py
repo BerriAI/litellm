@@ -423,7 +423,7 @@ class AnthropicConfig:
                             type="tool_use",
                             id=tool_call.id,
                             name=tool_call.function.name,
-                            input=tool_call.function.arguments,
+                            input=json.loads(tool_call.function.arguments),
                         )
                     )
             elif choice.message.content is not None:

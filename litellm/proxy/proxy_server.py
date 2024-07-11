@@ -5045,23 +5045,187 @@ async def moderations(
     dependencies=[Depends(user_api_key_auth)],
     response_model=AnthropicResponse,
 )
-async def anthropic_response(data: AnthropicMessagesRequest):
+async def anthropic_response(
+    anthropic_data: AnthropicMessagesRequest,
+    fastapi_response: Response,
+    request: Request,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     from litellm import adapter_completion
     from litellm.adapters.anthropic_adapter import anthropic_adapter
 
     litellm.adapters = [{"id": "anthropic", "adapter": anthropic_adapter}]
 
-    response: Optional[BaseModel] = adapter_completion(adapter_id="anthropic", **data)
+    global user_temperature, user_request_timeout, user_max_tokens, user_api_base
+    data: dict = {**anthropic_data, "adapter_id": "anthropic"}
+    try:
+        data["model"] = (
+            general_settings.get("completion_model", None)  # server default
+            or user_model  # model name passed via cli args
+            or data["model"]  # default passed in http request
+        )
+        if user_model:
+            data["model"] = user_model
 
-    if response is None:
-        raise Exception("Response is None.")
-    elif not isinstance(response, AnthropicResponse):
-        raise Exception(
-            "Invalid model response={}. Not in 'AnthropicResponse' format".format(
-                response
+        data = await add_litellm_data_to_request(
+            data=data,  # type: ignore
+            request=request,
+            general_settings=general_settings,
+            user_api_key_dict=user_api_key_dict,
+            version=version,
+            proxy_config=proxy_config,
+        )
+
+        # override with user settings, these are params passed via cli
+        if user_temperature:
+            data["temperature"] = user_temperature
+        if user_request_timeout:
+            data["request_timeout"] = user_request_timeout
+        if user_max_tokens:
+            data["max_tokens"] = user_max_tokens
+        if user_api_base:
+            data["api_base"] = user_api_base
+
+        ### MODEL ALIAS MAPPING ###
+        # check if model name in model alias map
+        # get the actual model name
+        if data["model"] in litellm.model_alias_map:
+            data["model"] = litellm.model_alias_map[data["model"]]
+
+        ### CALL HOOKS ### - modify incoming data before calling the model
+        data = await proxy_logging_obj.pre_call_hook(  # type: ignore
+            user_api_key_dict=user_api_key_dict, data=data, call_type="text_completion"
+        )
+
+        ### ROUTE THE REQUESTs ###
+        router_model_names = llm_router.model_names if llm_router is not None else []
+        # skip router if user passed their key
+        if "api_key" in data:
+            llm_response = asyncio.create_task(litellm.aadapter_completion(**data))
+        elif (
+            llm_router is not None and data["model"] in router_model_names
+        ):  # model in router model list
+            llm_response = asyncio.create_task(llm_router.aadapter_completion(**data))
+        elif (
+            llm_router is not None
+            and llm_router.model_group_alias is not None
+            and data["model"] in llm_router.model_group_alias
+        ):  # model set in model_group_alias
+            llm_response = asyncio.create_task(llm_router.aadapter_completion(**data))
+        elif (
+            llm_router is not None and data["model"] in llm_router.deployment_names
+        ):  # model in router deployments, calling a specific deployment on the router
+            llm_response = asyncio.create_task(
+                llm_router.aadapter_completion(**data, specific_deployment=True)
+            )
+        elif (
+            llm_router is not None and data["model"] in llm_router.get_model_ids()
+        ):  # model in router model list
+            llm_response = asyncio.create_task(llm_router.aadapter_completion(**data))
+        elif (
+            llm_router is not None
+            and data["model"] not in router_model_names
+            and llm_router.default_deployment is not None
+        ):  # model in router deployments, calling a specific deployment on the router
+            llm_response = asyncio.create_task(llm_router.aadapter_completion(**data))
+        elif user_model is not None:  # `litellm --model <your-model-name>`
+            llm_response = asyncio.create_task(litellm.aadapter_completion(**data))
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": "completion: Invalid model name passed in model="
+                    + data.get("model", "")
+                },
+            )
+
+        # Await the llm_response task
+        response = await llm_response
+
+        hidden_params = getattr(response, "_hidden_params", {}) or {}
+        model_id = hidden_params.get("model_id", None) or ""
+        cache_key = hidden_params.get("cache_key", None) or ""
+        api_base = hidden_params.get("api_base", None) or ""
+        response_cost = hidden_params.get("response_cost", None) or ""
+
+        ### ALERTING ###
+        asyncio.create_task(
+            proxy_logging_obj.update_request_status(
+                litellm_call_id=data.get("litellm_call_id", ""), status="success"
             )
         )
-    return response
+
+        verbose_proxy_logger.debug("final response: %s", response)
+
+        fastapi_response.headers.update(
+            get_custom_headers(
+                user_api_key_dict=user_api_key_dict,
+                model_id=model_id,
+                cache_key=cache_key,
+                api_base=api_base,
+                version=version,
+                response_cost=response_cost,
+            )
+        )
+
+        verbose_proxy_logger.info("\nResponse from Litellm:\n{}".format(response))
+        return response
+    except RejectedRequestError as e:
+        _data = e.request_data
+        await proxy_logging_obj.post_call_failure_hook(
+            user_api_key_dict=user_api_key_dict,
+            original_exception=e,
+            request_data=_data,
+        )
+        if _data.get("stream", None) is not None and _data["stream"] == True:
+            _chat_response = litellm.ModelResponse()
+            _usage = litellm.Usage(
+                prompt_tokens=0,
+                completion_tokens=0,
+                total_tokens=0,
+            )
+            _chat_response.usage = _usage  # type: ignore
+            _chat_response.choices[0].message.content = e.message  # type: ignore
+            _iterator = litellm.utils.ModelResponseIterator(
+                model_response=_chat_response, convert_to_delta=True
+            )
+            _streaming_response = litellm.TextCompletionStreamWrapper(
+                completion_stream=_iterator,
+                model=_data.get("model", ""),
+            )
+
+            selected_data_generator = select_data_generator(
+                response=_streaming_response,
+                user_api_key_dict=user_api_key_dict,
+                request_data=data,
+            )
+
+            return StreamingResponse(
+                selected_data_generator,
+                media_type="text/event-stream",
+                headers={},
+            )
+        else:
+            _response = litellm.TextCompletionResponse()
+            _response.choices[0].text = e.message
+            return _response
+    except Exception as e:
+        await proxy_logging_obj.post_call_failure_hook(
+            user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
+        )
+        verbose_proxy_logger.error(
+            "litellm.proxy.proxy_server.completion(): Exception occured - {}".format(
+                str(e)
+            )
+        )
+        verbose_proxy_logger.debug(traceback.format_exc())
+        error_msg = f"{str(e)}"
+        raise ProxyException(
+            message=getattr(e, "message", error_msg),
+            type=getattr(e, "type", "None"),
+            param=getattr(e, "param", "None"),
+            code=getattr(e, "status_code", 500),
+        )
 
 
 #### DEV UTILS ####

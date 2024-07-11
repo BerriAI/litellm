@@ -3948,6 +3948,36 @@ def text_completion(
 ###### Adapter Completion ################
 
 
+async def aadapter_completion(*, adapter_id: str, **kwargs) -> Optional[BaseModel]:
+    """
+    Implemented to handle async calls for adapter_completion()
+    """
+    try:
+        translation_obj: Optional[CustomLogger] = None
+        for item in litellm.adapters:
+            if item["id"] == adapter_id:
+                translation_obj = item["adapter"]
+
+        if translation_obj is None:
+            raise ValueError(
+                "No matching adapter given. Received 'adapter_id'={}, litellm.adapters={}".format(
+                    adapter_id, litellm.adapters
+                )
+            )
+
+        new_kwargs = translation_obj.translate_completion_input_params(kwargs=kwargs)
+
+        response: ModelResponse = await acompletion(**new_kwargs)  # type: ignore
+
+        translated_response = translation_obj.translate_completion_output_params(
+            response=response
+        )
+
+        return translated_response
+    except Exception as e:
+        raise e
+
+
 def adapter_completion(*, adapter_id: str, **kwargs) -> Optional[BaseModel]:
     translation_obj: Optional[CustomLogger] = None
     for item in litellm.adapters:
