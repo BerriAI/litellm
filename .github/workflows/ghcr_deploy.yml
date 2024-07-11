@@ -187,6 +187,7 @@ jobs:
           platforms: local,linux/amd64,linux/arm64,linux/arm64/v8
 
   build-and-push-helm-chart:
+    if: github.event.inputs.release_type  != 'dev'
     needs: [docker-hub-deploy, build-and-push-image, build-and-push-image-database]
     runs-on: ubuntu-latest
     steps:
