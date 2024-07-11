@@ -522,7 +522,7 @@ def mock_completion(
             )
             return response
         if n is None:
-            model_response["choices"][0]["message"]["content"] = mock_response
+            model_response.choices[0].message.content = mock_response  # type: ignore
         else:
             _all_choices = []
             for i in range(n):
@@ -533,12 +533,12 @@ def mock_completion(
                     ),
                 )
                 _all_choices.append(_choice)
-            model_response["choices"] = _all_choices
-        model_response["created"] = int(time.time())
-        model_response["model"] = model
+            model_response.choices = _all_choices  # type: ignore
+        model_response.created = int(time.time())
+        model_response.model = model
 
         if mock_tool_calls:
-            model_response["choices"][0]["message"]["tool_calls"] = [
+            model_response.choices[0].message.tool_calls = [  # type: ignore
                 ChatCompletionMessageToolCall(**tool_call)
                 for tool_call in mock_tool_calls
             ]
@@ -2672,9 +2672,9 @@ def completion(
             """
             string_response = response_json["data"][0]["output"][0]
             ## RESPONSE OBJECT
-            model_response["choices"][0]["message"]["content"] = string_response
-            model_response["created"] = int(time.time())
-            model_response["model"] = model
+            model_response.choices[0].message.content = string_response  # type: ignore
+            model_response.created = int(time.time())
+            model_response.model = model
             response = model_response
         else:
             raise ValueError(
