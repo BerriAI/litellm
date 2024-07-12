@@ -98,3 +98,9 @@ version_files = [
 
 [tool.mypy]
 plugins = "pydantic.mypy"
+
+[tool.prisma]
+# cache engine binaries in a directory relative to your project
+# binary_cache_dir = '.binaries'
+home_dir = '.prisma'
+nodeenv_cache_dir = '.nodeenv'
