@@ -1,7 +1,7 @@
 # What is this?
 ## Cost calculation for Google AI Studio / Vertex AI models
 import traceback
-from typing import List, Literal, Optional, Tuple
+from typing import List, Literal, Optional, Tuple, Union
 
 import litellm
 from litellm import verbose_logger
@@ -27,6 +27,32 @@ def _is_above_128k(tokens: float) -> bool:
     if tokens > 128000:
         return True
     return False
+
+
+def cost_router(
+    model: str,
+    custom_llm_provider: str,
+    prompt_tokens: float,
+    completion_tokens: float,
+    prompt_characters: float,
+    completion_characters: float,
+    call_type: Union[Literal["embedding", "aembedding"], str],
+) -> Literal["cost_per_character", "cost_per_token"]:
+    """
+    Route the cost calc to the right place, based on model/call_type/etc.
+
+    Returns
+        - str, the specific google cost calc function it should route to.
+    """
+    if custom_llm_provider == "vertex_ai" and "claude" in model:
+        return "cost_per_token"
+    elif custom_llm_provider == "gemini":
+        return "cost_per_token"
+    elif custom_llm_provider == "vertex_ai" and (
+        call_type == "embedding" or call_type == "aembedding"
+    ):
+        return "cost_per_token"
+    return "cost_per_character"
 
 
 def cost_per_character(

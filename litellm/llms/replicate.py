@@ -388,7 +388,7 @@ def process_response(
 
     ## Building RESPONSE OBJECT
     if len(result) > 1:
-        model_response["choices"][0]["message"]["content"] = result
+        model_response.choices[0].message.content = result  # type: ignore
 
     # Calculate usage
     prompt_tokens = len(encoding.encode(prompt, disallowed_special=()))
@@ -398,7 +398,7 @@ def process_response(
             disallowed_special=(),
         )
     )
-    model_response["model"] = "replicate/" + model
+    model_response.model = "replicate/" + model
     usage = Usage(
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
@@ -498,7 +498,7 @@ def completion(
     ## Step1: Start Prediction: gets a prediction url
     ## Step2: Poll prediction url for response
     ## Step2: is handled with and without streaming
-    model_response["created"] = int(
+    model_response.created = int(
         time.time()
     )  # for pricing this must remain right before calling api
 

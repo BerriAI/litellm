@@ -712,6 +712,79 @@ def test_vertex_ai_claude_completion_cost():
     assert cost == predicted_cost
 
 
+def test_vertex_ai_embedding_completion_cost(caplog):
+    """
+    Relevant issue - https://github.com/BerriAI/litellm/issues/4630
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    text = "The quick brown fox jumps over the lazy dog."
+    input_tokens = litellm.token_counter(
+        model="vertex_ai/textembedding-gecko", text=text
+    )
+
+    model_info = litellm.get_model_info(model="vertex_ai/textembedding-gecko")
+
+    print("\nExpected model info:\n{}\n\n".format(model_info))
+
+    expected_input_cost = input_tokens * model_info["input_cost_per_token"]
+
+    ## CALCULATED COST
+    calculated_input_cost, calculated_output_cost = cost_per_token(
+        model="textembedding-gecko",
+        custom_llm_provider="vertex_ai",
+        prompt_tokens=input_tokens,
+        call_type="aembedding",
+    )
+
+    assert round(expected_input_cost, 6) == round(calculated_input_cost, 6)
+    print("expected_input_cost: {}".format(expected_input_cost))
+    print("calculated_input_cost: {}".format(calculated_input_cost))
+
+    captured_logs = [rec.message for rec in caplog.records]
+    for item in captured_logs:
+        print("\nitem:{}\n".format(item))
+        if (
+            "litellm.litellm_core_utils.llm_cost_calc.google.cost_per_character(): Exception occured "
+            in item
+        ):
+            raise Exception("Error log raised for calculating embedding cost")
+
+
+# def test_vertex_ai_embedding_completion_cost_e2e():
+#     """
+#     Relevant issue - https://github.com/BerriAI/litellm/issues/4630
+#     """
+#     from litellm.tests.test_amazing_vertex_completion import load_vertex_ai_credentials
+
+#     load_vertex_ai_credentials()
+#     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+#     litellm.model_cost = litellm.get_model_cost_map(url="")
+
+#     text = "The quick brown fox jumps over the lazy dog."
+#     input_tokens = litellm.token_counter(
+#         model="vertex_ai/textembedding-gecko", text=text
+#     )
+
+#     model_info = litellm.get_model_info(model="vertex_ai/textembedding-gecko")
+
+#     print("\nExpected model info:\n{}\n\n".format(model_info))
+
+#     expected_input_cost = input_tokens * model_info["input_cost_per_token"]
+
+#     ## CALCULATED COST
+#     resp = litellm.embedding(model="textembedding-gecko", input=[text])
+
+#     calculated_input_cost = resp._hidden_params["response_cost"]
+
+#     assert round(expected_input_cost, 6) == round(calculated_input_cost, 6)
+#     print("expected_input_cost: {}".format(expected_input_cost))
+#     print("calculated_input_cost: {}".format(calculated_input_cost))
+
+#     assert False
+
+
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_completion_cost_hidden_params(sync_mode):

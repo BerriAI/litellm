@@ -23,7 +23,7 @@ from litellm import RateLimitError, Timeout, completion, completion_cost, embedd
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.prompt_templates.factory import anthropic_messages_pt
 
-# litellm.num_retries = 3
+# litellm.num_retries=3
 litellm.cache = None
 litellm.success_callback = []
 user_message = "Write a short poem about the sky"
@@ -3065,32 +3065,38 @@ def response_format_tests(response: litellm.ModelResponse):
 @pytest.mark.asyncio
 async def test_completion_bedrock_httpx_models(sync_mode, model):
     litellm.set_verbose = True
+    try:
 
-    if sync_mode:
-        response = completion(
-            model=model,
-            messages=[{"role": "user", "content": "Hey! how's it going?"}],
-            temperature=0.2,
-            max_tokens=200,
-        )
+        if sync_mode:
+            response = completion(
+                model=model,
+                messages=[{"role": "user", "content": "Hey! how's it going?"}],
+                temperature=0.2,
+                max_tokens=200,
+            )
 
-        assert isinstance(response, litellm.ModelResponse)
+            assert isinstance(response, litellm.ModelResponse)
 
-        response_format_tests(response=response)
-    else:
-        response = await litellm.acompletion(
-            model=model,
-            messages=[{"role": "user", "content": "Hey! how's it going?"}],
-            temperature=0.2,
-            max_tokens=100,
-        )
+            response_format_tests(response=response)
+        else:
+            response = await litellm.acompletion(
+                model=model,
+                messages=[{"role": "user", "content": "Hey! how's it going?"}],
+                temperature=0.2,
+                max_tokens=100,
+            )
 
-        assert isinstance(response, litellm.ModelResponse)
+            assert isinstance(response, litellm.ModelResponse)
+
+            print(f"response: {response}")
+            response_format_tests(response=response)
 
         print(f"response: {response}")
-        response_format_tests(response=response)
-
-    print(f"response: {response}")
+    except litellm.RateLimitError as e:
+        print("got rate limit error=", e)
+        pass
+    except Exception as e:
+        pytest.fail(f"An error occurred - {str(e)}")
 
 
 def test_completion_bedrock_titan_null_response():
