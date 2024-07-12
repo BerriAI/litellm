@@ -79,6 +79,8 @@ from litellm.types.utils import (
     TranscriptionResponse,
     Usage,
 )
+# ollama_chat does not support parameters to drop these set (litellm.drop_params = True)
+litellm.drop_params = True
 
 oidc_cache = DualCache()
 
