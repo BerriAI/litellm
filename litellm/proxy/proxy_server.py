@@ -2796,7 +2796,7 @@ async def chat_completion(
 
         ## LOGGING OBJECT ## - initialize logging object for logging success/failure events for call
         ## IMPORTANT Note: - initialize this before running pre-call checks. Ensures we log rejected requests to langfuse.
-        data["litellm_call_id"] = str(uuid.uuid4())
+        data["litellm_call_id"] = request.headers.get('x-litellm-call-id', str(uuid.uuid4()))
         logging_obj, data = litellm.utils.function_setup(
             original_function="acompletion",
             rules_obj=litellm.utils.Rules(),
