@@ -573,6 +573,8 @@ class ModelResponse(OpenAIObject):
                         _new_choice = choice  # type: ignore
                     elif isinstance(choice, dict):
                         _new_choice = Choices(**choice)  # type: ignore
+                    else:
+                        _new_choice = choice
                     new_choices.append(_new_choice)
                 choices = new_choices
             else:
