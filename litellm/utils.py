@@ -4829,7 +4829,7 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
                 supports_response_schema=_model_info.get(
                     "supports_response_schema", None
                 ),
-                supports_vision=_model_info.get("supports_vision", None),
+                supports_vision=_model_info.get("supports_vision", False),
             )
     except Exception:
         raise Exception(
