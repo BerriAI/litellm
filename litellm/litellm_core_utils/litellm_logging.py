@@ -811,6 +811,7 @@ class Logging:
                         print_verbose("reaches helicone for logging!")
                         model = self.model
                         messages = self.model_call_details["input"]
+                        kwargs = self.model_call_details
                         heliconeLogger.log_success(
                             model=model,
                             messages=messages,
@@ -818,6 +819,7 @@ class Logging:
                             start_time=start_time,
                             end_time=end_time,
                             print_verbose=print_verbose,
+                            kwargs=kwargs,
                         )
                     if callback == "langfuse":
                         global langFuseLogger
