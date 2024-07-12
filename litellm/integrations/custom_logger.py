@@ -90,9 +90,11 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     ):
         pass
 
-    async def async_logging_hook(self):
-        """For masking logged request/response"""
-        pass
+    async def async_logging_hook(
+        self, kwargs: dict, result: Any, call_type: str
+    ) -> Tuple[dict, Any]:
+        """For masking logged request/response. Return a modified version of the request/result."""
+        return kwargs, result
 
     def logging_hook(
         self, kwargs: dict, result: Any, call_type: str
