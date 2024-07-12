@@ -18,7 +18,7 @@ def initialize_guardrails(
     premium_user: bool,
     config_file_path: str,
     litellm_settings: dict,
-):
+) -> Dict[str, GuardrailItem]:
     try:
         verbose_proxy_logger.debug(f"validating  guardrails passed {guardrails_config}")
         global all_guardrails
@@ -55,7 +55,11 @@ def initialize_guardrails(
                 litellm_settings=litellm_settings,
             )
 
+        return guardrail_name_config_map
     except Exception as e:
-        verbose_proxy_logger.error(f"error initializing guardrails {str(e)}")
-        traceback.print_exc()
+        verbose_proxy_logger.error(
+            "error initializing guardrails {}\n{}".format(
+                str(e), traceback.format_exc()
+            )
+        )
         raise e

@@ -46,7 +46,17 @@ def initialize_callbacks_on_proxy(
                     _OPTIONAL_PresidioPIIMasking,
                 )
 
-                pii_masking_object = _OPTIONAL_PresidioPIIMasking()
+                presidio_logging_only: Optional[bool] = litellm_settings.get(
+                    "presidio_logging_only", None
+                )
+                if presidio_logging_only is not None:
+                    presidio_logging_only = bool(
+                        presidio_logging_only
+                    )  # validate boolean given
+
+                pii_masking_object = _OPTIONAL_PresidioPIIMasking(
+                    logging_only=presidio_logging_only
+                )
                 imported_list.append(pii_masking_object)
             elif isinstance(callback, str) and callback == "llamaguard_moderations":
                 from enterprise.enterprise_hooks.llama_guard import (
