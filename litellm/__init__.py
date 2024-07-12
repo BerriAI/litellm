@@ -364,7 +364,7 @@ for key, value in model_cost.items():
     elif value.get("litellm_provider") == "mistral":
         mistral_chat_models.append(key)
     elif value.get("litellm_provider") == "anthropic":
-        anthropic_models.append(key)    
+        anthropic_models.append(key)
     elif value.get("litellm_provider") == "empower":
         empower_models.append(key)
     elif value.get("litellm_provider") == "openrouter":
@@ -789,6 +789,7 @@ from .utils import (
     get_api_base,
     get_first_chars_messages,
     ModelResponse,
+    EmbeddingResponse,
     ImageResponse,
     get_provider_fields,
 )
@@ -879,5 +880,11 @@ from .proxy.proxy_cli import run_server
 from .router import Router
 from .assistants.main import *
 from .batches.main import *
+from .files.main import *
 from .scheduler import *
 from .cost_calculator import response_cost_calculator, cost_per_token
+
+### ADAPTERS ###
+from .types.adapter import AdapterItem
+
+adapters: List[AdapterItem] = []

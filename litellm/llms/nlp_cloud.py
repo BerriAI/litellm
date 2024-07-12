@@ -1,9 +1,12 @@
-import os, types
 import json
-from enum import Enum
-import requests  # type: ignore
+import os
 import time
+import types
+from enum import Enum
 from typing import Callable, Optional
+
+import requests  # type: ignore
+
 import litellm
 from litellm.utils import ModelResponse, Usage
 
@@ -185,7 +188,7 @@ def completion(
         else:
             try:
                 if len(completion_response["generated_text"]) > 0:
-                    model_response["choices"][0]["message"]["content"] = (
+                    model_response.choices[0].message.content = (  # type: ignore
                         completion_response["generated_text"]
                     )
             except:
@@ -198,8 +201,8 @@ def completion(
         prompt_tokens = completion_response["nb_input_tokens"]
         completion_tokens = completion_response["nb_generated_tokens"]
 
-        model_response["created"] = int(time.time())
-        model_response["model"] = model
+        model_response.created = int(time.time())
+        model_response.model = model
         usage = Usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,

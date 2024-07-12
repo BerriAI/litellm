@@ -204,9 +204,15 @@ class LiteLLMRoutes(enum.Enum):
         # files
         "/v1/files",
         "/files",
+        "/v1/files/{file_id}",
+        "/files/{file_id}",
+        "/v1/files/{file_id}/content",
+        "/files/{file_id}/content",
         # assistants-related routes
         "/assistants",
         "/v1/assistants",
+        "/v1/assistants/{assistant_id}",
+        "/assistants/{assistant_id}",
         "/threads",
         "/v1/threads",
         "/threads/{thread_id}",

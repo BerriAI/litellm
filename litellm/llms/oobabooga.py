@@ -1,11 +1,14 @@
-import os
 import json
-from enum import Enum
-import requests  # type: ignore
+import os
 import time
+from enum import Enum
 from typing import Callable, Optional
-from litellm.utils import ModelResponse, Usage
-from .prompt_templates.factory import prompt_factory, custom_prompt
+
+import requests  # type: ignore
+
+from litellm.utils import EmbeddingResponse, ModelResponse, Usage
+
+from .prompt_templates.factory import custom_prompt, prompt_factory
 
 
 class OobaboogaError(Exception):
@@ -99,17 +102,15 @@ def completion(
             )
         else:
             try:
-                model_response["choices"][0]["message"]["content"] = (
-                    completion_response["choices"][0]["message"]["content"]
-                )
+                model_response.choices[0].message.content = completion_response["choices"][0]["message"]["content"]  # type: ignore
             except:
                 raise OobaboogaError(
                     message=json.dumps(completion_response),
                     status_code=response.status_code,
                 )
 
-        model_response["created"] = int(time.time())
-        model_response["model"] = model
+        model_response.created = int(time.time())
+        model_response.model = model
         usage = Usage(
             prompt_tokens=completion_response["usage"]["prompt_tokens"],
             completion_tokens=completion_response["usage"]["completion_tokens"],
@@ -122,10 +123,10 @@ def completion(
 def embedding(
     model: str,
     input: list,
+    model_response: EmbeddingResponse,
     api_key: Optional[str] = None,
     api_base: Optional[str] = None,
     logging_obj=None,
-    model_response=None,
     optional_params=None,
     encoding=None,
 ):
@@ -166,7 +167,7 @@ def embedding(
         )
 
     # Process response data
-    model_response["data"] = [
+    model_response.data = [
         {
             "embedding": completion_response["data"][0]["embedding"],
             "index": 0,
@@ -176,8 +177,12 @@ def embedding(
 
     num_tokens = len(completion_response["data"][0]["embedding"])
     # Adding metadata to response
-    model_response.usage = Usage(prompt_tokens=num_tokens, total_tokens=num_tokens)
-    model_response["object"] = "list"
-    model_response["model"] = model
+    setattr(
+        model_response,
+        "usage",
+        Usage(prompt_tokens=num_tokens, total_tokens=num_tokens),
+    )
+    model_response.object = "list"
+    model_response.model = model
 
     return model_response

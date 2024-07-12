@@ -4,47 +4,14 @@ model_list:
       model: openai/fake
       api_key: fake-key
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
-  - model_name: llama3
+  - model_name: gemini-flash
     litellm_params:
-      model: groq/llama3-8b-8192
-  - model_name: gpt-3.5-turbo
-    litellm_params:
-      model: gpt-3.5-turbo
-  - model_name: "*"
-    litellm_params:
-      model: openai/*
-      api_key: os.environ/OPENAI_API_KEY
-  - model_name: mistral-embed
-    litellm_params:
-      model: mistral/mistral-embed
+      model: gemini/gemini-1.5-flash
 
-general_settings:
-  pass_through_endpoints:
-    - path: "/v1/rerank"
-      target: "https://api.cohere.com/v1/rerank"
-      auth: true # 👈 Key change to use LiteLLM Auth / Keys
-      headers:
-        Authorization: "bearer os.environ/COHERE_API_KEY"
-        content-type: application/json
-        accept: application/json
-    - path: "/api/public/ingestion"
-      target: "https://us.cloud.langfuse.com/api/public/ingestion"
-      auth: true
-      headers:
-        LANGFUSE_PUBLIC_KEY: "os.environ/LANGFUSE_DEV_PUBLIC_KEY"
-        LANGFUSE_SECRET_KEY: "os.environ/LANGFUSE_DEV_SK_KEY"
+general_settings: 
+  master_key: sk-1234 
 
 litellm_settings:
-  guardrails:
-    - prompt_injection:
-        callbacks: [lakera_prompt_injection, hide_secrets]
-        default_on: true
-    - hide_secrets:
-        callbacks: [hide_secrets]
-        default_on: true
-
-assistant_settings:
-  custom_llm_provider: openai
-  litellm_params: 
-    api_key: os.environ/OPENAI_API_KEY
+  cache: true
+  callbacks: ["otel"]
 

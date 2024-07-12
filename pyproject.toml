@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "litellm"
-version = "1.41.15"
+version = "1.41.17"
 description = "Library to easily interface with LLM API providers"
 authors = ["BerriAI"]
 license = "MIT"
@@ -91,10 +91,16 @@ requires = ["poetry-core", "wheel"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.commitizen]
-version = "1.41.15"
+version = "1.41.17"
 version_files = [
     "pyproject.toml:^version"
 ]
 
 [tool.mypy]
 plugins = "pydantic.mypy"
+
+[tool.prisma]
+# cache engine binaries in a directory relative to your project
+# binary_cache_dir = '.binaries'
+home_dir = '.prisma'
+nodeenv_cache_dir = '.nodeenv'

@@ -1717,7 +1717,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                     tooltip="Actual model name used for making litellm.completion() call."
                     className="mb-0"
                   >
-                    {selectedProvider === Providers.Azure ? (
+                    { (selectedProvider === Providers.Azure) || (selectedProvider === Providers.OpenAI_Compatible) || (selectedProvider === Providers.Ollama) ? (
                       <TextInput placeholder={getPlaceholder(selectedProvider.toString())} />
                     ) : providerModels.length > 0 ? (
                       <MultiSelect value={providerModels}>

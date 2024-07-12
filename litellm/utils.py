@@ -4829,6 +4829,7 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
                 supports_response_schema=_model_info.get(
                     "supports_response_schema", None
                 ),
+                supports_vision=_model_info.get("supports_vision", None),
             )
     except Exception:
         raise Exception(
@@ -5048,12 +5049,15 @@ def create_proxy_transport_and_mounts():
     return sync_proxy_mounts, async_proxy_mounts
 
 
-def validate_environment(model: Optional[str] = None) -> dict:
+def validate_environment(
+    model: Optional[str] = None, api_key: Optional[str] = None
+) -> dict:
     """
     Checks if the environment variables are valid for the given model.
 
     Args:
         model (Optional[str]): The name of the model. Defaults to None.
+        api_key (Optional[str]): If the user passed in an api key, of their own.
 
     Returns:
         dict: A dictionary containing the following keys:
@@ -5329,6 +5333,13 @@ def validate_environment(model: Optional[str] = None) -> dict:
                 keys_in_environment = True
             else:
                 missing_keys.append("NLP_CLOUD_API_KEY")
+
+    if api_key is not None:
+        new_missing_keys = []
+        for key in missing_keys:
+            if "api_key" not in key.lower():
+                new_missing_keys.append(key)
+        missing_keys = new_missing_keys
     return {"keys_in_environment": keys_in_environment, "missing_keys": missing_keys}
 
 
@@ -8126,7 +8137,7 @@ class CustomStreamWrapper:
 
             if chunk.startswith(self.complete_response):
                 # Remove last_sent_chunk only if it appears at the start of the new chunk
-                chunk = chunk[len(self.complete_response):]
+                chunk = chunk[len(self.complete_response) :]
 
             self.complete_response += chunk
             return chunk
@@ -9483,8 +9494,8 @@ class CustomStreamWrapper:
                             model_response.choices[0].delta = Delta(**_json_delta)
                         except Exception as e:
                             verbose_logger.error(
-                                "litellm.CustomStreamWrapper.chunk_creator(): Exception occured - {}".format(
-                                    str(e)
+                                "litellm.CustomStreamWrapper.chunk_creator(): Exception occured - {}\n{}".format(
+                                    str(e), traceback.format_exc()
                                 )
                             )
                             verbose_logger.debug(traceback.format_exc())
@@ -10124,7 +10135,7 @@ def mock_completion_streaming_obj(
     model_response, mock_response, model, n: Optional[int] = None
 ):
     for i in range(0, len(mock_response), 3):
-        completion_obj = Delta(role="assistant", content=mock_response[i: i + 3])
+        completion_obj = Delta(role="assistant", content=mock_response[i : i + 3])
         if n is None:
             model_response.choices[0].delta = completion_obj
         else:
@@ -10133,7 +10144,7 @@ def mock_completion_streaming_obj(
                 _streaming_choice = litellm.utils.StreamingChoices(
                     index=j,
                     delta=litellm.utils.Delta(
-                        role="assistant", content=mock_response[i: i + 3]
+                        role="assistant", content=mock_response[i : i + 3]
                     ),
                 )
                 _all_choices.append(_streaming_choice)
@@ -10145,7 +10156,7 @@ async def async_mock_completion_streaming_obj(
     model_response, mock_response, model, n: Optional[int] = None
 ):
     for i in range(0, len(mock_response), 3):
-        completion_obj = Delta(role="assistant", content=mock_response[i: i + 3])
+        completion_obj = Delta(role="assistant", content=mock_response[i : i + 3])
         if n is None:
             model_response.choices[0].delta = completion_obj
         else:
@@ -10154,7 +10165,7 @@ async def async_mock_completion_streaming_obj(
                 _streaming_choice = litellm.utils.StreamingChoices(
                     index=j,
                     delta=litellm.utils.Delta(
-                        role="assistant", content=mock_response[i: i + 3]
+                        role="assistant", content=mock_response[i : i + 3]
                     ),
                 )
                 _all_choices.append(_streaming_choice)

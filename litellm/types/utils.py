@@ -73,6 +73,7 @@ class ModelInfo(TypedDict, total=False):
     supported_openai_params: Required[Optional[List[str]]]
     supports_system_messages: Optional[bool]
     supports_response_schema: Optional[bool]
+    supports_vision: Optional[bool]
 
 
 class GenericStreamingChunk(TypedDict):
@@ -166,7 +167,9 @@ class FunctionCall(OpenAIObject):
 
 class Function(OpenAIObject):
     arguments: str
-    name: Optional[str] = None
+    name: Optional[
+        str
+    ]  # can be None - openai e.g.: ChoiceDeltaToolCallFunction(arguments='{"', name=None), type=None)
 
     def __init__(
         self,
@@ -280,29 +283,43 @@ class ChatCompletionMessageToolCall(OpenAIObject):
         setattr(self, key, value)
 
 
+"""
+Reference:
+ChatCompletionMessage(content='This is a test', role='assistant', function_call=None, tool_calls=None))
+"""
+
+
 class Message(OpenAIObject):
+
+    content: Optional[str]
+    role: Literal["assistant"]
+    tool_calls: Optional[List[ChatCompletionMessageToolCall]]
+    function_call: Optional[FunctionCall]
+
     def __init__(
         self,
-        content: Optional[str] = "default",
-        role="assistant",
-        logprobs=None,
+        content: Optional[str] = None,
+        role: Literal["assistant"] = "assistant",
         function_call=None,
         tool_calls=None,
         **params,
     ):
-        super(Message, self).__init__(**params)
-        self.content = content
-        self.role = role
-        if function_call is not None:
-            self.function_call = FunctionCall(**function_call)
-
-        if tool_calls is not None:
-            self.tool_calls = []
-            for tool_call in tool_calls:
-                self.tool_calls.append(ChatCompletionMessageToolCall(**tool_call))
-
-        if logprobs is not None:
-            self._logprobs = ChoiceLogprobs(**logprobs)
+        init_values = {
+            "content": content,
+            "role": "assistant",
+            "function_call": (
+                FunctionCall(**function_call) if function_call is not None else None
+            ),
+            "tool_calls": (
+                [ChatCompletionMessageToolCall(**tool_call) for tool_call in tool_calls]
+                if tool_calls is not None
+                else None
+            ),
+        }
+        super(Message, self).__init__(
+            **init_values,
+            **params,
+        )
 
     def get(self, key, default=None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
@@ -607,10 +624,6 @@ class ModelResponse(OpenAIObject):
     def __getitem__(self, key):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
-
-    def __setitem__(self, key, value):
-        # Allow dictionary-style assignment of attributes
-        setattr(self, key, value)
 
     def json(self, **kwargs):
         try:
