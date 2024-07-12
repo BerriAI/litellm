@@ -15,9 +15,9 @@ model_list:
       metadata: "here's additional metadata on the model" # returned via GET /model/info
 ```
 
-## Get Model Information
+## Get Model Information - `/model/info`
 
-Retrieve detailed information about each model listed in the `/models` endpoint, including descriptions from the `config.yaml` file, and additional model info (e.g. max tokens, cost per input token, etc.) pulled the model_info you set and the litellm model cost map. Sensitive details like API keys are excluded for security purposes.
+Retrieve detailed information about each model listed in the `/model/info` endpoint, including descriptions from the `config.yaml` file, and additional model info (e.g. max tokens, cost per input token, etc.) pulled the model_info you set and the litellm model cost map. Sensitive details like API keys are excluded for security purposes.
 
 <Tabs
   defaultValue="curl"

@@ -326,7 +326,12 @@ class LangFuseLogger:
                     or isinstance(value, int)
                     or isinstance(value, float)
                 ):
-                    new_metadata[key] = copy.deepcopy(value)
+                    try:
+                        new_metadata[key] = copy.deepcopy(value)
+                    except Exception as e:
+                        verbose_logger.error(
+                            f"Langfuse [Non-blocking error] - error copying metadata: {str(e)}"
+                        )
             metadata = new_metadata
 
             supports_tags = Version(langfuse.version.__version__) >= Version("2.6.3")

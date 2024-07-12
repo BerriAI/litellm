@@ -367,8 +367,8 @@ async def async_completion(
     prompt_tokens = message.usage.input_tokens
     completion_tokens = message.usage.output_tokens
 
-    model_response["created"] = int(time.time())
-    model_response["model"] = model
+    model_response.created = int(time.time())
+    model_response.model = model
     usage = Usage(
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,

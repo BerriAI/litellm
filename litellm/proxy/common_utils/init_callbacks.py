@@ -35,6 +35,10 @@ def initialize_callbacks_on_proxy(
 
                 open_telemetry_logger = OpenTelemetry()
 
+                # Add Otel as a service callback
+                if "otel" not in litellm.service_callback:
+                    litellm.service_callback.append("otel")
+
                 imported_list.append(open_telemetry_logger)
                 setattr(proxy_server, "open_telemetry_logger", open_telemetry_logger)
             elif isinstance(callback, str) and callback == "presidio":
