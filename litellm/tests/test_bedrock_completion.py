@@ -586,14 +586,41 @@ def test_bedrock_claude_3(image_url):
         response: ModelResponse = completion(
             model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
             num_retries=3,
-            # messages=messages,
-            # max_tokens=10,
-            # temperature=0.78,
             **data,
-        )
+        )  # type: ignore
         # Add any assertions here to check the response
         assert len(response.choices) > 0
         assert len(response.choices[0].message.content) > 0
+
+    except RateLimitError:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.parametrize(
+    "system", ["You are an AI", [{"type": "text", "text": "You are an AI"}]]
+)
+def test_bedrock_claude_3_system_prompt(system):
+    try:
+        litellm.set_verbose = True
+        data = {
+            "max_tokens": 100,
+            "stream": False,
+            "temperature": 0.3,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": "hey, how's it going?"},
+            ],
+        }
+        response: ModelResponse = completion(
+            model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+            **data,
+        )  # type: ignore
+        # Add any assertions here to check the response
+        assert len(response.choices) > 0
+        assert len(response.choices[0].message.content) > 0
+
     except RateLimitError:
         pass
     except Exception as e:
@@ -637,7 +664,7 @@ def test_bedrock_claude_3_tool_calling():
             messages=messages,
             tools=tools,
             tool_choice="auto",
-        )
+        )  # type: ignore
         print(f"response: {response}")
         # Add any assertions here to check the response
         assert isinstance(response.choices[0].message.tool_calls[0].function.name, str)
