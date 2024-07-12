@@ -1815,7 +1815,12 @@ class BedrockConverseLLM(BaseLLM):
         system_content_blocks: List[SystemContentBlock] = []
         for idx, message in enumerate(messages):
             if message["role"] == "system":
-                _system_content_block = SystemContentBlock(text=message["content"])
+                if isinstance(message["content"], str):
+                    _system_content_block = SystemContentBlock(text=message["content"])
+                elif isinstance(message["content"], list):
+                    for m in message["content"]:
+                        if m.get("type", "") == "text":
+                            _system_content_block = SystemContentBlock(text=m["text"])
                 system_content_blocks.append(_system_content_block)
                 system_prompt_indices.append(idx)
         if len(system_prompt_indices) > 0:
