@@ -282,7 +282,7 @@ class ProxyLogging:
             key="request_status:{}".format(litellm_call_id),
             value=status,
             local_only=True,
-            ttl=3600,
+            ttl=120,
         )
 
     # The actual implementation of the function
