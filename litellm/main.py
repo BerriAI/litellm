@@ -115,6 +115,7 @@ from .llms.prompt_templates.factory import (
     custom_prompt,
     function_call_prompt,
     map_system_message_pt,
+    pre_process_messages,
     prompt_factory,
     stringify_json_tool_call_content,
 )
@@ -906,6 +907,8 @@ def completion(
             and supports_system_message is False
         ):
             messages = map_system_message_pt(messages=messages)
+
+        messages = pre_process_messages(messages=messages)
         model_api_key = get_api_key(
             llm_provider=custom_llm_provider, dynamic_api_key=api_key
         )  # get the api key from the environment if required for the model

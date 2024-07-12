@@ -782,6 +782,37 @@ def encode_image(image_path):
         return base64.b64encode(image_file.read()).decode("utf-8")
 
 
+@pytest.mark.parametrize(
+    "model",
+    [
+        "gpt-3.5-turbo",
+        "anthropic.claude-3-sonnet-20240229-v1:0",
+        "claude-3-opus-20240229",
+        "azure/chatgpt-v-2",
+        "gemini/gemini-1.5-flash",
+        "vertex_ai/gemini-1.5-flash",
+    ],
+)
+def test_alt_message_empty_content(model):
+    """
+    Relevent issue - https://github.com/BerriAI/litellm/pull/4659
+    """
+    from litellm.tests.test_amazing_vertex_completion import load_vertex_ai_credentials
+
+    if "vertex_ai" in model:
+        load_vertex_ai_credentials()
+
+    messages = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": ""},
+        {"role": "user", "content": "what"},
+    ]
+
+    response = litellm.completion(model=model, messages=messages)
+
+    response_format_tests(response=response)
+
+
 @pytest.mark.skip(
     reason="we already test claude-3, this is just another way to pass images"
 )

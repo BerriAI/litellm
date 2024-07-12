@@ -2153,6 +2153,15 @@ def _bedrock_converse_messages_pt(messages: List) -> List[BedrockMessageBlock]:
     """
 
     contents: List[BedrockMessageBlock] = []
+
+    # delete all assistant/user messages with no content or tool calls
+    # if we don't do this, then we will end up with non-alternating user and assistant messages
+    messages = [
+        message
+        for message in messages
+        if message.get("content") or message.get("tool_calls")
+    ]
+
     msg_i = 0
     while msg_i < len(messages):
         user_content: List[BedrockContentBlock] = []
@@ -2401,6 +2410,22 @@ def custom_prompt(
 
     prompt += final_prompt_value
     return prompt
+
+
+### GENERAL PRE-PROCESSING ###
+def pre_process_messages(messages: list):
+    # delete all assistant/user messages with no content or tool calls
+    # if we don't do this, then we will end up with non-alternating user and assistant messages
+    # this causes calls to fail on vertex_ai/bedrock/anthropic
+    messages = [
+        message
+        for message in messages
+        if isinstance(message, dict)
+        and message.get("content")
+        or message.get("tool_calls")
+    ]
+
+    return messages
 
 
 def prompt_factory(
