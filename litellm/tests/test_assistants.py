@@ -279,7 +279,7 @@ async def test_aarun_thread_litellm(sync_mode, provider, is_streaming):
                     AsyncAssistantEventHandler,
                 )
                 print(run)
-                run.until_done()
+                await run.until_done()
         else:
             run = await litellm.arun_thread(
                 custom_llm_provider=provider,
