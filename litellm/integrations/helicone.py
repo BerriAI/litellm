@@ -4,11 +4,12 @@ import dotenv, os
 import requests  # type: ignore
 import litellm
 import traceback
+from litellm._logging import verbose_logger
 
 
 class HeliconeLogger:
     # Class variables or attributes
-    helicone_model_list = ["gpt", "claude"]
+    helicone_model_list = ["gpt", "claude", "command-r", "command-r-plus", "command-light", "command-medium", "command-medium-beta", "command-xlarge-nightly", "command-nightly"]
 
     def __init__(self):
         # Instance variables
@@ -37,15 +38,49 @@ class HeliconeLogger:
         }
 
         return claude_provider_request, claude_response_obj
+    
+    @staticmethod
+    def add_metadata_from_header(litellm_params: dict, metadata: dict) -> dict:
+        """
+        Adds metadata from proxy request headers to Helicone logging if keys start with "helicone_"
+        and overwrites litellm_params.metadata if already included.
+
+        For example if you want to add custom property to your request, send
+        `headers: { ..., helicone-property-something: 1234 }` via proxy request.
+        """
+        if litellm_params is None:
+            return metadata
+
+        if litellm_params.get("proxy_server_request") is None:
+            return metadata
+
+        if metadata is None:
+            metadata = {}
+
+        proxy_headers = (
+            litellm_params.get("proxy_server_request", {}).get("headers", {}) or {}
+        )
+
+        for header_key in proxy_headers:
+            if header_key.startswith("helicone_"):
+                metadata[header_key] = proxy_headers.get(header_key)
+
+        return metadata
 
     def log_success(
-        self, model, messages, response_obj, start_time, end_time, print_verbose
+        self, model, messages, response_obj, start_time, end_time, print_verbose, kwargs
     ):
         # Method definition
         try:
             print_verbose(
                 f"Helicone Logging - Enters logging function for model {model}"
             )
+            litellm_params = kwargs.get("litellm_params", {})
+            litellm_call_id = kwargs.get("litellm_call_id", None)
+            metadata = (
+                litellm_params.get("metadata", {}) or {}
+            )
+            metadata = self.add_metadata_from_header(litellm_params, metadata)
             model = (
                 model
                 if any(
@@ -85,11 +120,13 @@ class HeliconeLogger:
             end_time_milliseconds = int(
                 (end_time.timestamp() - end_time_seconds) * 1000
             )
+            meta = {"Helicone-Auth": f"Bearer {self.key}"}
+            meta.update(metadata)
             data = {
                 "providerRequest": {
                     "url": self.provider_url,
                     "json": provider_request,
-                    "meta": {"Helicone-Auth": f"Bearer {self.key}"},
+                    "meta": meta,
                 },
                 "providerResponse": providerResponse,
                 "timing": {
