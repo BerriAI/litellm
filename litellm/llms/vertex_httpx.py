@@ -265,6 +265,8 @@ class VertexGeminiConfig:
 
     - `presence_penalty` (float): This parameter is used to penalize the model from generating the same output as the input. The default value is 0.0.
 
+    - `seed` (int): The seed value is used to help generate the same output for the same input. The default value is None.
+
     Note: Please make sure to modify the default parameters as required for your use case.
     """
 
@@ -277,6 +279,7 @@ class VertexGeminiConfig:
     stop_sequences: Optional[list] = None
     frequency_penalty: Optional[float] = None
     presence_penalty: Optional[float] = None
+    seed: Optional[int] = None
 
     def __init__(
         self,
@@ -289,6 +292,7 @@ class VertexGeminiConfig:
         stop_sequences: Optional[list] = None,
         frequency_penalty: Optional[float] = None,
         presence_penalty: Optional[float] = None,
+        seed: Optional[int] = None,
     ) -> None:
         locals_ = locals()
         for key, value in locals_.items():
@@ -326,6 +330,7 @@ class VertexGeminiConfig:
             "stop",
             "frequency_penalty",
             "presence_penalty",
+            "seed",
         ]
 
     def map_tool_choice_values(
@@ -419,6 +424,8 @@ class VertexGeminiConfig:
                 )
                 if _tool_choice_value is not None:
                     optional_params["tool_choice"] = _tool_choice_value
+            if param == "seed":
+                optional_params["seed"] = value
         return optional_params
 
     def get_mapped_special_auth_params(self) -> dict:
