@@ -112,6 +112,19 @@ model_list:
       mode: completion # 👈 ADD THIS
 ```
 
+### Speech to Text Models 
+
+```yaml
+model_list:
+  - model_name: whisper
+    litellm_params:
+      model: whisper-1
+      api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      mode: audio_transcription
+```
+
+
 ## `/health/readiness`
 
 Unprotected endpoint for checking if proxy is ready to accept requests
