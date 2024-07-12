@@ -446,6 +446,7 @@ def _get_pydantic_json_dict(pydantic_obj: BaseModel) -> dict:
 def get_custom_headers(
     *,
     user_api_key_dict: UserAPIKeyAuth,
+    call_id: Optional[str] = None,
     model_id: Optional[str] = None,
     cache_key: Optional[str] = None,
     api_base: Optional[str] = None,
@@ -457,6 +458,7 @@ def get_custom_headers(
 ) -> dict:
     exclude_values = {"", None}
     headers = {
+        "x-litellm-call-id": call_id,
         "x-litellm-model-id": model_id,
         "x-litellm-cache-key": cache_key,
         "x-litellm-model-api-base": api_base,
@@ -2902,6 +2904,7 @@ async def chat_completion(
         ):  # use generate_responses to stream responses
             custom_headers = get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
+                call_id=logging_obj.litellm_call_id,
                 model_id=model_id,
                 cache_key=cache_key,
                 api_base=api_base,
@@ -2932,6 +2935,7 @@ async def chat_completion(
         fastapi_response.headers.update(
             get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
+                call_id=logging_obj.litellm_call_id,
                 model_id=model_id,
                 cache_key=cache_key,
                 api_base=api_base,
@@ -3145,6 +3149,7 @@ async def completion(
         ):  # use generate_responses to stream responses
             custom_headers = get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
+                call_id=logging_obj.litellm_call_id,
                 model_id=model_id,
                 cache_key=cache_key,
                 api_base=api_base,
@@ -3165,6 +3170,7 @@ async def completion(
         fastapi_response.headers.update(
             get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
+                call_id=logging_obj.litellm_call_id,
                 model_id=model_id,
                 cache_key=cache_key,
                 api_base=api_base,
