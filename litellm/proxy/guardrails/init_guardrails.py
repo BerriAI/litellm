@@ -26,7 +26,7 @@ def initialize_guardrails(
             """
             one item looks like this:
 
-            {'prompt_injection': {'callbacks': ['lakera_prompt_injection', 'prompt_injection_api_2'], 'default_on': True}}
+            {'prompt_injection': {'callbacks': ['lakera_prompt_injection', 'prompt_injection_api_2'], 'default_on': True, 'enabled_roles': ['user']}}
             """
 
             for k, v in item.items():
