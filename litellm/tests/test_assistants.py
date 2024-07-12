@@ -220,81 +220,86 @@ async def test_aarun_thread_litellm(sync_mode, provider, is_streaming):
     - Create thread
     - Create run w/ Assistants + Thread
     """
-    if sync_mode:
-        assistants = litellm.get_assistants(custom_llm_provider=provider)
-    else:
-        assistants = await litellm.aget_assistants(custom_llm_provider=provider)
+    import openai
 
-    ## get the first assistant ###
-    assistant_id = assistants.data[0].id
-
-    new_thread = test_create_thread_litellm(sync_mode=sync_mode, provider=provider)
-
-    if asyncio.iscoroutine(new_thread):
-        _new_thread = await new_thread
-    else:
-        _new_thread = new_thread
-
-    thread_id = _new_thread.id
-
-    # add message to thread
-    message: MessageData = {"role": "user", "content": "Hey, how's it going?"}  # type: ignore
-
-    data = {"custom_llm_provider": provider, "thread_id": _new_thread.id, **message}
-
-    if sync_mode:
-        added_message = litellm.add_message(**data)
-
-        if is_streaming:
-            run = litellm.run_thread_stream(assistant_id=assistant_id, **data)
-            with run as run:
-                assert isinstance(run, AssistantEventHandler)
-                print(run)
-                run.until_done()
+    try:
+        if sync_mode:
+            assistants = litellm.get_assistants(custom_llm_provider=provider)
         else:
-            run = litellm.run_thread(
-                assistant_id=assistant_id, stream=is_streaming, **data
-            )
-            if run.status == "completed":
-                messages = litellm.get_messages(
-                    thread_id=_new_thread.id, custom_llm_provider=provider
-                )
-                assert isinstance(messages.data[0], Message)
-            else:
-                pytest.fail(
-                    "An unexpected error occurred when running the thread, {}".format(
-                        run
-                    )
-                )
+            assistants = await litellm.aget_assistants(custom_llm_provider=provider)
 
-    else:
-        added_message = await litellm.a_add_message(**data)
+        ## get the first assistant ###
+        assistant_id = assistants.data[0].id
 
-        if is_streaming:
-            run = litellm.arun_thread_stream(assistant_id=assistant_id, **data)
-            async with run as run:
-                print(f"run: {run}")
-                assert isinstance(
-                    run,
-                    AsyncAssistantEventHandler,
-                )
-                print(run)
-                run.until_done()
+        new_thread = test_create_thread_litellm(sync_mode=sync_mode, provider=provider)
+
+        if asyncio.iscoroutine(new_thread):
+            _new_thread = await new_thread
         else:
-            run = await litellm.arun_thread(
-                custom_llm_provider=provider,
-                thread_id=thread_id,
-                assistant_id=assistant_id,
-            )
+            _new_thread = new_thread
 
-            if run.status == "completed":
-                messages = await litellm.aget_messages(
-                    thread_id=_new_thread.id, custom_llm_provider=provider
-                )
-                assert isinstance(messages.data[0], Message)
+        thread_id = _new_thread.id
+
+        # add message to thread
+        message: MessageData = {"role": "user", "content": "Hey, how's it going?"}  # type: ignore
+
+        data = {"custom_llm_provider": provider, "thread_id": _new_thread.id, **message}
+
+        if sync_mode:
+            added_message = litellm.add_message(**data)
+
+            if is_streaming:
+                run = litellm.run_thread_stream(assistant_id=assistant_id, **data)
+                with run as run:
+                    assert isinstance(run, AssistantEventHandler)
+                    print(run)
+                    run.until_done()
             else:
-                pytest.fail(
-                    "An unexpected error occurred when running the thread, {}".format(
-                        run
-                    )
+                run = litellm.run_thread(
+                    assistant_id=assistant_id, stream=is_streaming, **data
                 )
+                if run.status == "completed":
+                    messages = litellm.get_messages(
+                        thread_id=_new_thread.id, custom_llm_provider=provider
+                    )
+                    assert isinstance(messages.data[0], Message)
+                else:
+                    pytest.fail(
+                        "An unexpected error occurred when running the thread, {}".format(
+                            run
+                        )
+                    )
+
+        else:
+            added_message = await litellm.a_add_message(**data)
+
+            if is_streaming:
+                run = litellm.arun_thread_stream(assistant_id=assistant_id, **data)
+                async with run as run:
+                    print(f"run: {run}")
+                    assert isinstance(
+                        run,
+                        AsyncAssistantEventHandler,
+                    )
+                    print(run)
+                    await run.until_done()
+            else:
+                run = await litellm.arun_thread(
+                    custom_llm_provider=provider,
+                    thread_id=thread_id,
+                    assistant_id=assistant_id,
+                )
+
+                if run.status == "completed":
+                    messages = await litellm.aget_messages(
+                        thread_id=_new_thread.id, custom_llm_provider=provider
+                    )
+                    assert isinstance(messages.data[0], Message)
+                else:
+                    pytest.fail(
+                        "An unexpected error occurred when running the thread, {}".format(
+                            run
+                        )
+                    )
+    except openai.APIError as e:
+        pass

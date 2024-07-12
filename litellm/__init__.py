@@ -16,7 +16,7 @@ from litellm._logging import (
     log_level,
 )
 
-
+from litellm.types.guardrails import GuardrailItem
 from litellm.proxy._types import (
     KeyManagementSystem,
     KeyManagementSettings,
@@ -124,6 +124,7 @@ llamaguard_unsafe_content_categories: Optional[str] = None
 blocked_user_list: Optional[Union[str, List]] = None
 banned_keywords_list: Optional[Union[str, List]] = None
 llm_guard_mode: Literal["all", "key-specific", "request-specific"] = "all"
+guardrail_name_config_map: Optional[Dict[str, GuardrailItem]] = None
 ##################
 ### PREVIEW FEATURES ###
 enable_preview_features: bool = False
