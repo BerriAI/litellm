@@ -1,14 +1,22 @@
 ### What this tests ####
 ## This test asserts the type of data passed into each method of the custom callback handler
-import sys, os, time, inspect, asyncio, traceback
+import asyncio
+import inspect
+import os
+import sys
+import time
+import traceback
+import uuid
 from datetime import datetime
-import pytest, uuid
+
+import pytest
 from pydantic import BaseModel
 
 sys.path.insert(0, os.path.abspath("../.."))
-from typing import Optional, Literal, List, Union
-from litellm import completion, embedding, Cache
+from typing import List, Literal, Optional, Union
+
 import litellm
+from litellm import Cache, completion, embedding
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.utils import LiteLLMCommonStrings
 
@@ -819,6 +827,37 @@ async def test_async_embedding_openai():
 
 
 # asyncio.run(test_async_embedding_openai())
+
+
+## Test Azure + Async
+def test_sync_embedding():
+    try:
+        customHandler_success = CompletionCustomHandler()
+        customHandler_failure = CompletionCustomHandler()
+        litellm.callbacks = [customHandler_success]
+        response = litellm.embedding(
+            model="azure/azure-embedding-model", input=["good morning from litellm"]
+        )
+        print(f"customHandler_success.errors: {customHandler_success.errors}")
+        print(f"customHandler_success.states: {customHandler_success.states}")
+        assert len(customHandler_success.errors) == 0
+        assert len(customHandler_success.states) == 3  # pre, post, success
+        # test failure callback
+        litellm.callbacks = [customHandler_failure]
+        try:
+            response = litellm.embedding(
+                model="azure/azure-embedding-model",
+                input=["good morning from litellm"],
+                api_key="my-bad-key",
+            )
+        except:
+            pass
+        print(f"customHandler_failure.errors: {customHandler_failure.errors}")
+        print(f"customHandler_failure.states: {customHandler_failure.states}")
+        assert len(customHandler_failure.errors) == 1
+        assert len(customHandler_failure.states) == 3  # pre, post, failure
+    except Exception as e:
+        pytest.fail(f"An exception occurred: {str(e)}")
 
 
 ## Test Azure + Async
