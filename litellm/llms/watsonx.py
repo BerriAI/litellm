@@ -25,7 +25,13 @@ import requests  # type: ignore
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from litellm.utils import ModelResponse, Usage, get_secret
+from litellm.utils import (
+    EmbeddingResponse,
+    ModelResponse,
+    Usage,
+    get_secret,
+    map_finish_reason,
+)
 
 from .base import BaseLLM
 from .prompt_templates import factory as ptf
@@ -414,14 +420,16 @@ class IBMWatsonXAI(BaseLLM):
         generated_text = json_resp["results"][0]["generated_text"]
         prompt_tokens = json_resp["results"][0]["input_token_count"]
         completion_tokens = json_resp["results"][0]["generated_token_count"]
-        model_response["choices"][0]["message"]["content"] = generated_text
-        model_response["finish_reason"] = json_resp["results"][0]["stop_reason"]
+        model_response.choices[0].message.content = generated_text  # type: ignore
+        model_response.choices[0].finish_reason = map_finish_reason(
+            json_resp["results"][0]["stop_reason"]
+        )
         if json_resp.get("created_at"):
-            model_response["created"] = datetime.fromisoformat(
-                json_resp["created_at"]
-            ).timestamp()
+            model_response.created = int(
+                datetime.fromisoformat(json_resp["created_at"]).timestamp()
+            )
         else:
-            model_response["created"] = int(time.time())
+            model_response.created = int(time.time())
         usage = Usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
@@ -463,7 +471,7 @@ class IBMWatsonXAI(BaseLLM):
         prompt = convert_messages_to_prompt(
             model, messages, provider, custom_prompt_dict
         )
-        model_response["model"] = model
+        model_response.model = model
 
         def process_stream_response(
             stream_resp: Union[Iterator[str], AsyncIterator],
@@ -551,10 +559,10 @@ class IBMWatsonXAI(BaseLLM):
             raise WatsonXAIError(status_code=500, message=str(e))
 
     def _process_embedding_response(
-        self, json_resp: dict, model_response: Union[ModelResponse, None] = None
-    ) -> ModelResponse:
+        self, json_resp: dict, model_response: Optional[EmbeddingResponse] = None
+    ) -> EmbeddingResponse:
         if model_response is None:
-            model_response = ModelResponse(model=json_resp.get("model_id", None))
+            model_response = EmbeddingResponse(model=json_resp.get("model_id", None))
         results = json_resp.get("results", [])
         embedding_response = []
         for idx, result in enumerate(results):
@@ -565,8 +573,8 @@ class IBMWatsonXAI(BaseLLM):
                     "embedding": result["embedding"],
                 }
             )
-        model_response["object"] = "list"
-        model_response["data"] = embedding_response
+        model_response.object = "list"
+        model_response.data = embedding_response
         input_tokens = json_resp.get("input_token_count", 0)
         setattr(
             model_response,
@@ -583,9 +591,9 @@ class IBMWatsonXAI(BaseLLM):
         self,
         model: str,
         input: Union[list, str],
+        model_response: litellm.EmbeddingResponse,
         api_key: Optional[str] = None,
         logging_obj=None,
-        model_response=None,
         optional_params=None,
         encoding=None,
         print_verbose=None,
@@ -602,7 +610,7 @@ class IBMWatsonXAI(BaseLLM):
             if k not in optional_params:
                 optional_params[k] = v
 
-        model_response["model"] = model
+        model_response.model = model
 
         # Load auth variables from environment variables
         if isinstance(input, str):
@@ -635,12 +643,12 @@ class IBMWatsonXAI(BaseLLM):
         }
         request_manager = RequestManager(logging_obj)
 
-        def handle_embedding(request_params: dict) -> ModelResponse:
+        def handle_embedding(request_params: dict) -> EmbeddingResponse:
             with request_manager.request(request_params, input=input) as resp:
                 json_resp = resp.json()
             return self._process_embedding_response(json_resp, model_response)
 
-        async def handle_aembedding(request_params: dict) -> ModelResponse:
+        async def handle_aembedding(request_params: dict) -> EmbeddingResponse:
             async with request_manager.async_request(
                 request_params, input=input
             ) as resp:

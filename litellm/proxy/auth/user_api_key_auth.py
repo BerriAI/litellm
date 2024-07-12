@@ -71,6 +71,11 @@ azure_api_key_header = APIKeyHeader(
     auto_error=False,
     description="Some older versions of the openai Python package will send an API-Key header with just the API key ",
 )
+anthropic_api_key_header = APIKeyHeader(
+    name="x-api-key",
+    auto_error=False,
+    description="If anthropic client used.",
+)
 
 
 def _get_bearer_token(
@@ -87,6 +92,9 @@ async def user_api_key_auth(
     request: Request,
     api_key: str = fastapi.Security(api_key_header),
     azure_api_key_header: str = fastapi.Security(azure_api_key_header),
+    anthropic_api_key_header: Optional[str] = fastapi.Security(
+        anthropic_api_key_header
+    ),
 ) -> UserAPIKeyAuth:
 
     from litellm.proxy.proxy_server import (
@@ -113,6 +121,9 @@ async def user_api_key_auth(
 
         elif isinstance(azure_api_key_header, str):
             api_key = azure_api_key_header
+
+        elif isinstance(anthropic_api_key_header, str):
+            api_key = anthropic_api_key_header
 
         parent_otel_span: Optional[Span] = None
         if open_telemetry_logger is not None:

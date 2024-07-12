@@ -20,7 +20,7 @@ import pytest
 import litellm
 from litellm.proxy._types import LiteLLMRoutes
 from litellm.proxy.auth.auth_utils import is_openai_route
-from litellm.proxy.proxy_server import router
+from litellm.proxy.proxy_server import app
 
 # Configure logging
 logging.basicConfig(
@@ -37,7 +37,7 @@ def test_routes_on_litellm_proxy():
     this prevents accidentelly deleting /threads, or /batches etc
     """
     _all_routes = []
-    for route in router.routes:
+    for route in app.routes:
 
         _path_as_str = str(route.path)
         if ":path" in _path_as_str:
