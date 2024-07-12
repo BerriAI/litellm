@@ -188,6 +188,7 @@ const sidebars = {
       type: "category",
       label: "Logging & Observability",
       items: [
+        "observability/helicone_integration",
         "observability/langfuse_integration",
         "observability/logfire_integration",
         "debugging/local_debugging",
@@ -204,7 +205,6 @@ const sidebars = {
         "observability/athina_integration",
         "observability/lunary_integration",
         "observability/greenscale_integration",
-        "observability/helicone_integration",
         "observability/supabase_integration",
         `observability/telemetry`,
       ],
