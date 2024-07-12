@@ -250,6 +250,10 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({
     getCallbacksCall(accessToken, userID, userRole).then((data) => {
       console.log("callbacks", data);
       let router_settings = data.router_settings;
+      // remove "model_group_retry_policy" from general_settings if exists
+      if ("model_group_retry_policy" in router_settings) {
+        delete router_settings["model_group_retry_policy"];
+      }
       setRouterSettings(router_settings);
     });
     getGeneralSettingsCall(accessToken).then((data) => {
