@@ -16,6 +16,8 @@ import os
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
 
 import litellm
@@ -196,3 +198,68 @@ async def test_presidio_pii_masking_input_b():
 
     assert "<PERSON>" in new_data["messages"][0]["content"]
     assert "<PHONE_NUMBER>" not in new_data["messages"][0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_presidio_pii_masking_logging_output_only_no_pre_api_hook():
+    pii_masking = _OPTIONAL_PresidioPIIMasking(
+        logging_only=True,
+        mock_testing=True,
+        mock_redacted_text=input_b_anonymizer_results,
+    )
+
+    _api_key = "sk-12345"
+    user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
+    local_cache = DualCache()
+
+    test_messages = [
+        {
+            "role": "user",
+            "content": "My name is Jane Doe, who are you? Say my name in your response",
+        }
+    ]
+
+    new_data = await pii_masking.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data={"messages": test_messages},
+        call_type="completion",
+    )
+
+    assert "Jane Doe" in new_data["messages"][0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_presidio_pii_masking_logging_output_only_logged_response():
+    pii_masking = _OPTIONAL_PresidioPIIMasking(
+        logging_only=True,
+        mock_testing=True,
+        mock_redacted_text=input_b_anonymizer_results,
+    )
+
+    test_messages = [
+        {
+            "role": "user",
+            "content": "My name is Jane Doe, who are you? Say my name in your response",
+        }
+    ]
+    with patch.object(
+        pii_masking, "async_log_success_event", new=AsyncMock()
+    ) as mock_call:
+        litellm.callbacks = [pii_masking]
+        response = await litellm.acompletion(
+            model="gpt-3.5-turbo", messages=test_messages, mock_response="Hi Peter!"
+        )
+
+        await asyncio.sleep(3)
+
+        assert response.choices[0].message.content == "Hi Peter!"  # type: ignore
+
+        mock_call.assert_called_once()
+
+        print(mock_call.call_args.kwargs["kwargs"]["messages"][0]["content"])
+
+        assert (
+            mock_call.call_args.kwargs["kwargs"]["messages"][0]["content"]
+            == "My name is <PERSON>, who are you? Say my name in your response"
+        )
