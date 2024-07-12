@@ -18,7 +18,8 @@ from fastapi import HTTPException
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.guardrails.init_guardrails import guardrail_name_config_map
 from litellm.proxy.guardrails.guardrail_helpers import should_proceed_based_on_metadata
-from litellm.types.guardrails import default_roles 
+from litellm.types.guardrails import default_roles
+from litellm.utils import get_formatted_prompt
 
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -57,7 +58,9 @@ class _ENTERPRISE_lakeraAI_Moderation(CustomLogger):
             return
 
         if "messages" in data and isinstance(data["messages"], list):
-            text = self.format_messages(data["messages"])
+            enabled_roles = guardrail_name_config_map[GUARDRAIL_NAME].get("enabled_roles", default_roles)
+            data["messages"] = [m for m in data["messages"] if m.get("role", "") in enabled_roles]
+            text = get_formatted_prompt(data, call_type)
 
         # https://platform.lakera.ai/account/api-keys
         data = {"input": text}
@@ -126,11 +129,3 @@ class _ENTERPRISE_lakeraAI_Moderation(CustomLogger):
                 )
 
         pass
-
-    def format_messages(messages: list) -> str:
-        enabled_roles = guardrail_name_config_map[GUARDRAIL_NAME].get("enabled_roles", default_roles)
-        text = ""
-        for m in messages:  # assume messages is a list
-            if m.get("role", "") in enabled_roles and "content" in m and isinstance(m["content"], str):
-                text += m["content"]
-        return text
