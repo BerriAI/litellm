@@ -1332,6 +1332,9 @@ def client(original_function):
 
             # ADD HIDDEN PARAMS - additional call metadata
             if hasattr(result, "_hidden_params"):
+                result._hidden_params["litellm_call_id"] = getattr(
+                    logging_obj, "litellm_call_id", None
+                )
                 result._hidden_params["model_id"] = kwargs.get("model_info", {}).get(
                     "id", None
                 )
