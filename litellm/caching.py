@@ -97,8 +97,15 @@ class InMemoryCache(BaseCache):
         """
         for key in list(self.ttl_dict.keys()):
             if time.time() > self.ttl_dict[key]:
-                self.cache_dict.pop(key, None)
-                self.ttl_dict.pop(key, None)
+                removed_item = self.cache_dict.pop(key, None)
+                removed_ttl_item = self.ttl_dict.pop(key, None)
+
+                # de-reference the removed item
+                # https://www.geeksforgeeks.org/diagnosing-and-fixing-memory-leaks-in-python/
+                # One of the most common causes of memory leaks in Python is the retention of objects that are no longer being used.
+                # This can occur when an object is referenced by another object, but the reference is never removed.
+                removed_item = None
+                removed_ttl_item = None
 
     def set_cache(self, key, value, **kwargs):
         print_verbose(
