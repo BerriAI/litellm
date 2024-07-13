@@ -19,4 +19,19 @@ litellm_settings:
 class GuardrailItem(BaseModel):
     callbacks: List[str]
     default_on: bool
+    logging_only: Optional[bool]
     guardrail_name: str
+
+    def __init__(
+        self,
+        callbacks: List[str],
+        default_on: bool,
+        guardrail_name: str,
+        logging_only: Optional[bool] = None,
+    ):
+        super().__init__(
+            callbacks=callbacks,
+            default_on=default_on,
+            logging_only=logging_only,
+            guardrail_name=guardrail_name,
+        )
