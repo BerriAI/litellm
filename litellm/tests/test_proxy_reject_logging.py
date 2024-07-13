@@ -66,6 +66,7 @@ class testLogger(CustomLogger):
             "image_generation",
             "moderation",
             "audio_transcription",
+            "pass_through_endpoint",
         ],
     ):
         raise HTTPException(
