@@ -1,6 +1,7 @@
-from typing import Dict, List, Optional, TypedDict, Union
+from typing import Dict, List, Optional, Union
 
 from pydantic import BaseModel, RootModel
+from typing_extensions import Required, TypedDict, override
 
 """
 Pydantic object defining how to set guardrails on litellm proxy
@@ -16,6 +17,12 @@ litellm_settings:
 """
 
 
+class GuardrailItemSpec(TypedDict, total=False):
+    callbacks: Required[List[str]]
+    default_on: bool
+    logging_only: Optional[bool]
+
+
 class GuardrailItem(BaseModel):
     callbacks: List[str]
     default_on: bool
@@ -25,8 +32,8 @@ class GuardrailItem(BaseModel):
     def __init__(
         self,
         callbacks: List[str],
-        default_on: bool,
         guardrail_name: str,
+        default_on: bool = False,
         logging_only: Optional[bool] = None,
     ):
         super().__init__(
