@@ -941,6 +941,8 @@ def test_generate_and_call_with_expired_key(prisma_client):
         print("Got Exception", e)
         print(e.message)
         assert "Authentication Error" in e.message
+        assert e.type == ProxyErrorTypes.expired_key
+
         pass
 
 
