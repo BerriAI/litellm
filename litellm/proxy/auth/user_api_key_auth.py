@@ -115,6 +115,12 @@ async def user_api_key_auth(
     )
 
     try:
+        route: str = request.url.path
+
+        pass_through_endpoints: Optional[List[dict]] = general_settings.get(
+            "pass_through_endpoints", None
+        )
+
         if isinstance(api_key, str):
             passed_in_key = api_key
             api_key = _get_bearer_token(api_key=api_key)
@@ -125,6 +131,14 @@ async def user_api_key_auth(
         elif isinstance(anthropic_api_key_header, str):
             api_key = anthropic_api_key_header
 
+        elif pass_through_endpoints is not None:
+            for endpoint in pass_through_endpoints:
+                if endpoint.get("path", "") == route:
+                    headers: Optional[dict] = endpoint.get("headers", None)
+                    if headers is not None:
+                        header_key: str = headers.get("litellm_user_api_key", "")
+                        if request.headers.get(key=header_key) is not None:
+                            api_key = request.headers.get(key=header_key)
         parent_otel_span: Optional[Span] = None
         if open_telemetry_logger is not None:
             parent_otel_span = open_telemetry_logger.tracer.start_span(
@@ -162,8 +176,6 @@ async def user_api_key_auth(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access forbidden: IP address not allowed.",
             )
-
-        route: str = request.url.path
 
         if (
             route in LiteLLMRoutes.public_routes.value
