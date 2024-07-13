@@ -194,8 +194,9 @@ const CacheDashboard: React.FC<CachePageProps> = ({
     // set header cache statistics 
     setCachedResponses(valueFormatterNumbers(cache_hits));
     setCachedTokens(valueFormatterNumbers(cached_tokens));
-    if (llm_api_requests > 0) {
-      let cache_hit_ratio = ((cache_hits / llm_api_requests) * 100).toFixed(2);
+    let allRequests = cache_hits + llm_api_requests
+    if (allRequests > 0) {
+      let cache_hit_ratio = ((cache_hits / allRequests) * 100).toFixed(2);
       setCacheHitRatio(cache_hit_ratio);
     } else {
       setCacheHitRatio("0");
