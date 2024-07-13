@@ -81,7 +81,7 @@ from litellm.types.utils import (
 )
 
 oidc_cache = DualCache()
-
+tool_cache = DualCache()
 try:
     # New and recommended way to access resources
     from importlib import resources
@@ -503,6 +503,8 @@ def function_setup(
                     ),
                     model=model,
                 )
+
+            kwargs["litellm_tool_cache"] = tool_cache
         elif (
             call_type == CallTypes.embedding.value
             or call_type == CallTypes.aembedding.value
@@ -647,12 +649,12 @@ def client(original_function):
         # DO NOT MOVE THIS. It always needs to run first
         # Check if this is an async function. If so only execute the async function
         if (
-            kwargs.get("acompletion", False) == True
-            or kwargs.get("aembedding", False) == True
-            or kwargs.get("aimg_generation", False) == True
-            or kwargs.get("amoderation", False) == True
-            or kwargs.get("atext_completion", False) == True
-            or kwargs.get("atranscription", False) == True
+            kwargs.get("acompletion", False) is True
+            or kwargs.get("aembedding", False) is True
+            or kwargs.get("aimg_generation", False) is True
+            or kwargs.get("amoderation", False) is True
+            or kwargs.get("atext_completion", False) is True
+            or kwargs.get("atranscription", False) is True
         ):
             # [OPTIONAL] CHECK MAX RETRIES / REQUEST
             if litellm.num_retries_per_request is not None:
@@ -875,6 +877,8 @@ def client(original_function):
                         base_model=base_model,
                         messages=messages,
                         user_max_tokens=user_max_tokens,
+                        buffer_num=None,
+                        buffer_perc=None,
                     )
                     kwargs["max_tokens"] = modified_max_tokens
                 except Exception as e:
@@ -921,6 +925,19 @@ def client(original_function):
             ) and (kwargs.get("cache", {}).get("no-store", False) != True):
                 litellm.cache.add_cache(result, *args, **kwargs)
 
+            ### [OPTIONAL] SAVE TOOLS ###
+            if (
+                kwargs.get("save_tools", None) is not None
+                and kwargs["save_tools"] is True
+            ):
+                ## save the tool name -> tool mapping to in-memory cache
+                if kwargs.get("tools", None) is not None:
+                    for tool in kwargs["tools"]:
+                        tool_cache.set_cache(
+                            key=tool.get("function", {}).get("name", ""),
+                            value=tool,
+                            local_only=True,
+                        )
             # LOG SUCCESS - handle streaming success logging in the _next_ object, remove `handle_success` once it's deprecated
             verbose_logger.info(f"Wrapper: Completed Call, calling success_handler")
             threading.Thread(
@@ -2119,6 +2136,7 @@ def get_litellm_params(
     output_cost_per_token=None,
     output_cost_per_second=None,
     cooldown_time=None,
+    tool_cache=None,
 ):
     litellm_params = {
         "acompletion": acompletion,
@@ -2142,6 +2160,7 @@ def get_litellm_params(
         "output_cost_per_token": output_cost_per_token,
         "output_cost_per_second": output_cost_per_second,
         "cooldown_time": cooldown_time,
+        "tool_cache": tool_cache,
     }
 
     return litellm_params

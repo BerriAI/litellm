@@ -72,7 +72,7 @@ from litellm.utils import (
 )
 
 from ._logging import verbose_logger
-from .caching import disable_cache, enable_cache, update_cache
+from .caching import DualCache, disable_cache, enable_cache, update_cache
 from .llms import (
     ai21,
     aleph_alpha,
@@ -698,6 +698,8 @@ def completion(
     no_log = kwargs.get("no-log", False)
     ### COPY MESSAGES ### - related issue https://github.com/BerriAI/litellm/discussions/4489
     messages = deepcopy(messages)
+    ### TOOL CACHE ### - related https://github.com/BerriAI/litellm/issues/4687
+    tool_cache: Optional[DualCache] = kwargs.get("litellm_tool_cache", None)
     ######## end of unpacking kwargs ###########
     openai_params = [
         "functions",
@@ -789,6 +791,8 @@ def completion(
         "model_config",
         "fastest_response",
         "cooldown_time",
+        "save_tools",
+        "litellm_tool_cache",
     ]
 
     default_params = openai_params + litellm_params
@@ -975,6 +979,7 @@ def completion(
             output_cost_per_second=output_cost_per_second,
             output_cost_per_token=output_cost_per_token,
             cooldown_time=cooldown_time,
+            tool_cache=tool_cache,
         )
         logging.update_environment_variables(
             model=model,

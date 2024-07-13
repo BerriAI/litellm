@@ -13,6 +13,7 @@ import requests  # type: ignore
 import litellm
 import litellm.litellm_core_utils
 from litellm import verbose_logger
+from litellm.caching import DualCache
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -738,6 +739,10 @@ class AnthropicChatCompletion(BaseLLM):
         _is_function_call = False
         messages = copy.deepcopy(messages)
         optional_params = copy.deepcopy(optional_params)
+        tool_cache: Optional[DualCache] = None
+        if litellm_params is not None:
+            tool_cache = litellm_params.get("tool_cache")
+
         if model in custom_prompt_dict:
             # check if the model has a registered custom prompt
             model_prompt_details = custom_prompt_dict[model]
@@ -785,12 +790,30 @@ class AnthropicChatCompletion(BaseLLM):
 
             anthropic_tools = []
             for tool in optional_params["tools"]:
-                new_tool = tool["function"]
+                new_tool = copy.deepcopy(tool["function"])
                 new_tool["input_schema"] = new_tool.pop("parameters")  # rename key
                 anthropic_tools.append(new_tool)
 
             optional_params["tools"] = anthropic_tools
+        elif tool_cache is not None and isinstance(tool_cache, DualCache):
+            # check if messages contains 'tool_use' blocks
+            anthropic_tools = []
+            for m in messages:
+                if isinstance(m["content"], list):
+                    for content in m["content"]:
+                        if content.get("type", "") == "tool_use":
+                            openai_tool = tool_cache.get_cache(
+                                key=content.get("name", ""), local_only=True
+                            )
+                            if openai_tool is not None:
+                                anthropic_tool = copy.deepcopy(openai_tool["function"])
+                                anthropic_tool["input_schema"] = anthropic_tool.pop(
+                                    "parameters"
+                                )
+                                anthropic_tools.append(anthropic_tool)
 
+            if len(anthropic_tools) > 0:
+                optional_params["tools"] = anthropic_tools
         stream = optional_params.pop("stream", None)
         is_vertex_request: bool = optional_params.pop("is_vertex_request", False)
 
