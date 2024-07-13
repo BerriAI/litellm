@@ -222,15 +222,13 @@ general_settings:
 
 ## Custom Chat Endpoints (Anthropic/Bedrock/Vertex)
 
-Allow developers to call the proxy with Anthropic sdk/boto3/etc.
+Allow developers to call the proxy with Anthropic/boto3/etc. client sdk's.
 
 Use our [Anthropic Adapter](https://github.com/BerriAI/litellm/blob/fd743aaefd23ae509d8ca64b0c232d25fe3e39ee/litellm/adapters/anthropic_adapter.py#L50) for reference
 
 ### 1. Write an Adapter 
 
-Translate the request/response from your custom API schema to the OpenAI schema and back. 
-
-This is used internally to do Logging, Guardrails, etc. in a consistent format. 
+Translate the request/response from your custom API schema to the OpenAI schema (used by litellm.completion()) and back. 
 
 For provider-specific params 👉 [**Provider-Specific Params**](../completion/provider_specific_params.md)
 
