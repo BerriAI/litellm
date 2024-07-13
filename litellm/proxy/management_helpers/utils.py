@@ -191,6 +191,8 @@ def management_endpoint_wrapper(func):
                                 logging_payload=logging_payload,
                                 parent_otel_span=parent_otel_span,
                             )
+
+                # Delete updated/deleted info from cache
                 _delete_api_key_from_cache(kwargs=kwargs)
                 _delete_user_id_from_cache(kwargs=kwargs)
                 _delete_team_id_from_cache(kwargs=kwargs)
