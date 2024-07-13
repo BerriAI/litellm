@@ -1664,4 +1664,5 @@ class SpendCalculateRequest(LiteLLMBase):
 
 class ProxyErrorTypes(str, enum.Enum):
     budget_exceeded = "budget_exceeded"
+    expired_key = "expired_key"
     auth_error = "auth_error"
