@@ -9,7 +9,7 @@ from litellm._logging import verbose_proxy_logger
 router = APIRouter()
 
 if os.environ.get("LITELLM_PROFILE", "false").lower() == "true":
-    tracemalloc.start()
+    tracemalloc.start(10)
 
     @router.get("/memory-usage", include_in_schema=False)
     async def memory_usage():
@@ -22,7 +22,7 @@ if os.environ.get("LITELLM_PROFILE", "false").lower() == "true":
         top_50 = top_stats[:50]
         result = []
         for stat in top_50:
-            result.append(f"{stat.traceback.format()}: {stat.size / 1024} KiB")
+            result.append(f"{stat.traceback.format(limit=10)}: {stat.size / 1024} KiB")
 
         return {"top_50_memory_usage": result}
 
