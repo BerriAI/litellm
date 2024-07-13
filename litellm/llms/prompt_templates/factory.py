@@ -2393,7 +2393,16 @@ def custom_prompt(
             if role in role_dict and "post_message" in role_dict[role]
             else ""
         )
-        prompt += pre_message_str + message["content"] + post_message_str
+        if isinstance(message["content"], str):
+            prompt += pre_message_str + message["content"] + post_message_str
+        elif isinstance(message["content"], list):
+            text_str = ""
+            for content in message["content"]:
+                if content.get("text", None) is not None and isinstance(
+                    content["text"], str
+                ):
+                    text_str += content["text"]
+            prompt += pre_message_str + text_str + post_message_str
 
         if role == "assistant":
             prompt += eos_token
