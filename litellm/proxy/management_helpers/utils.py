@@ -1,16 +1,21 @@
 # What is this?
 ## Helper utils for the management endpoints (keys/users/teams)
+import uuid
 from datetime import datetime
 from functools import wraps
-from litellm.proxy._types import UserAPIKeyAuth, ManagementEndpointLoggingPayload
-from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
-from litellm._logging import verbose_logger
+from typing import Optional
+
 from fastapi import Request
 
-from litellm.proxy._types import LiteLLM_TeamTable, Member, UserAPIKeyAuth
+from litellm._logging import verbose_logger
+from litellm.proxy._types import (
+    LiteLLM_TeamTable,
+    ManagementEndpointLoggingPayload,
+    Member,
+    UserAPIKeyAuth,
+)
+from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.proxy.utils import PrismaClient
-import uuid
-from typing import Optional
 
 
 async def add_new_member(
@@ -32,13 +37,8 @@ async def add_new_member(
         await prisma_client.db.litellm_usertable.upsert(
             where={"user_id": new_member.user_id},
             data={
-                "update": {
-                    "teams": {"push": [team_id]}
-                },
-                "create": {
-                    "user_id": new_member.user_id, 
-                    "teams": [team_id]
-                }
+                "update": {"teams": {"push": [team_id]}},
+                "create": {"user_id": new_member.user_id, "teams": [team_id]},
             },
         )
     elif new_member.user_email is not None:
@@ -123,23 +123,22 @@ def management_endpoint_wrapper(func):
                                 logging_payload=logging_payload,
                                 parent_otel_span=parent_otel_span,
                             )
+                if _http_request:
+                    _route = _http_request.url.path
+                    # Flush user_api_key cache if this was an update/delete call to /key, /team, or /user
+                    if _route in [
+                        "/key/update",
+                        "/key/delete",
+                        "/team/update",
+                        "/team/delete",
+                        "/user/update",
+                        "/user/delete",
+                        "/customer/update",
+                        "/customer/delete",
+                    ]:
+                        from litellm.proxy.proxy_server import user_api_key_cache
 
-                    if _http_request:
-                        _route = _http_request.url.path
-                        # Flush user_api_key cache if this was an update/delete call to /key, /team, or /user
-                        if _route in [
-                            "/key/update",
-                            "/key/delete",
-                            "/team/update",
-                            "/team/delete",
-                            "/user/update",
-                            "/user/delete",
-                            "/customer/update",
-                            "/customer/delete",
-                        ]:
-                            from litellm.proxy.proxy_server import user_api_key_cache
-
-                            user_api_key_cache.flush_cache()
+                        user_api_key_cache.flush_cache()
             except Exception as e:
                 # Non-Blocking Exception
                 verbose_logger.debug("Error in management endpoint wrapper: %s", str(e))
