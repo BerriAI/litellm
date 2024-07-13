@@ -1845,7 +1845,9 @@ class BedrockConverseLLM(BaseLLM):
             inference_params.pop(key, None)
 
         bedrock_messages: List[MessageBlock] = _bedrock_converse_messages_pt(
-            messages=messages
+            messages=messages,
+            model=model,
+            llm_provider="bedrock_converse",
         )
         bedrock_tools: List[ToolBlock] = _bedrock_tools_pt(
             inference_params.pop("tools", [])
