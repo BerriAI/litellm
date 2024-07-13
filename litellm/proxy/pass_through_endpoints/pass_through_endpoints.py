@@ -23,8 +23,6 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
-async_client = httpx.AsyncClient()
-
 
 async def set_env_variables_in_header(custom_headers: dict):
     """
@@ -276,6 +274,8 @@ async def pass_through_request(
             data=_parsed_body,
             call_type="pass_through_endpoint",
         )
+
+        async_client = httpx.AsyncClient()
 
         response = await async_client.request(
             method=request.method,
