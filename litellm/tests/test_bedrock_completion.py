@@ -599,9 +599,19 @@ def test_bedrock_claude_3(image_url):
 
 
 @pytest.mark.parametrize(
-    "system", ["You are an AI", [{"type": "text", "text": "You are an AI"}]]
+    "system",
+    ["You are an AI", [{"type": "text", "text": "You are an AI"}]],
 )
-def test_bedrock_claude_3_system_prompt(system):
+@pytest.mark.parametrize(
+    "model",
+    [
+        "anthropic.claude-3-sonnet-20240229-v1:0",
+        "meta.llama3-70b-instruct-v1:0",
+        "anthropic.claude-v2",
+        "mistral.mixtral-8x7b-instruct-v0:1",
+    ],
+)
+def test_bedrock_system_prompt(system, model):
     try:
         litellm.set_verbose = True
         data = {
@@ -614,7 +624,7 @@ def test_bedrock_claude_3_system_prompt(system):
             ],
         }
         response: ModelResponse = completion(
-            model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+            model="bedrock/{}".format(model),
             **data,
         )  # type: ignore
         # Add any assertions here to check the response
