@@ -3265,7 +3265,9 @@ def test_completion_anthropic_hanging():
         {"role": "function", "name": "get_capital", "content": "Kokoko"},
     ]
 
-    converted_messages = anthropic_messages_pt(messages)
+    converted_messages = anthropic_messages_pt(
+        messages, model="claude-3-sonnet-20240229", llm_provider="anthropic"
+    )
 
     print(f"converted_messages: {converted_messages}")
 

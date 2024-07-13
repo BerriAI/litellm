@@ -5961,6 +5961,12 @@ def exception_type(
     extra_kwargs={},
 ):
     global user_logger_fn, liteDebuggerClient
+
+    if any(
+        isinstance(original_exception, exc_type)
+        for exc_type in litellm.LITELLM_EXCEPTION_TYPES
+    ):
+        return original_exception
     exception_mapping_worked = False
     if litellm.suppress_debug_info is False:
         print()  # noqa
@@ -6131,7 +6137,7 @@ def exception_type(
                 ):
                     exception_mapping_worked = True
                     raise BadRequestError(
-                        message=f"BadRequestError: {exception_provider} - {message}",
+                        message=f"{exception_provider} - {message}",
                         llm_provider=custom_llm_provider,
                         model=model,
                         response=original_exception.response,
@@ -6218,7 +6224,7 @@ def exception_type(
                     elif original_exception.status_code == 422:
                         exception_mapping_worked = True
                         raise BadRequestError(
-                            message=f"BadRequestError: {exception_provider} - {message}",
+                            message=f"{exception_provider} - {message}",
                             model=model,
                             llm_provider=custom_llm_provider,
                             response=original_exception.response,
