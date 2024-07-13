@@ -299,6 +299,7 @@ class ProxyLogging:
             "image_generation",
             "moderation",
             "audio_transcription",
+            "pass_through_endpoint",
         ],
     ) -> dict:
         """
