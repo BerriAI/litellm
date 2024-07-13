@@ -29,6 +29,10 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     generate_key_helper_fn,
 )
+from litellm.proxy.management_helpers.utils import (
+    add_new_member,
+    management_endpoint_wrapper,
+)
 
 router = APIRouter()
 
@@ -39,7 +43,10 @@ router = APIRouter()
     dependencies=[Depends(user_api_key_auth)],
     response_model=NewUserResponse,
 )
-async def new_user(data: NewUserRequest):
+@management_endpoint_wrapper
+async def new_user(
+    data: NewUserRequest,
+):
     """
     Use this to create a new INTERNAL user with a budget.
     Internal Users can access LiteLLM Admin UI to make keys, request access to models.
@@ -254,6 +261,7 @@ async def ui_get_available_role(
     tags=["Internal User management"],
     dependencies=[Depends(user_api_key_auth)],
 )
+@management_endpoint_wrapper
 async def user_info(
     user_id: Optional[str] = fastapi.Query(
         default=None, description="User ID in the request parameters"
@@ -441,7 +449,10 @@ async def user_info(
     tags=["Internal User management"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def user_update(data: UpdateUserRequest):
+@management_endpoint_wrapper
+async def user_update(
+    data: UpdateUserRequest,
+):
     """
     Example curl 
 
@@ -683,6 +694,7 @@ async def get_users(
     tags=["Internal User management"],
     dependencies=[Depends(user_api_key_auth)],
 )
+@management_endpoint_wrapper
 async def delete_user(
     data: DeleteUserRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
