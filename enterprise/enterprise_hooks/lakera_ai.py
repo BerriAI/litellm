@@ -17,7 +17,6 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.integrations.custom_logger import CustomLogger
 from fastapi import HTTPException
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy.guardrails.init_guardrails import all_guardrails
 from litellm.proxy.guardrails.guardrail_helpers import should_proceed_based_on_metadata
 
 from datetime import datetime
