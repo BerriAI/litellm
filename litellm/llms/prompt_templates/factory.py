@@ -2412,20 +2412,44 @@ def custom_prompt(
     return prompt
 
 
-### GENERAL PRE-PROCESSING ###
+### EMPTY MESSAGE FILTERING ### - used for vertex_ai/anthropic/bedrock
+
+
+def _empty_content(content: Optional[Union[str, List[dict]]]) -> bool:
+    if content is None:
+        return False
+
+    if isinstance(content, str) and len(content) == 0:
+        return True
+    return False
+
+
+def _empty_message_content(message: dict) -> bool:
+    """
+    If a message contains content, check if it's empty
+    """
+    special_k = ["content"]
+    for k, v in message.items():
+        if k in special_k:
+            if k == "content":
+                # check if empty content
+                is_empty = _empty_content(content=v)
+                if is_empty:
+                    return True
+
+    return False
+
+
 def pre_process_messages(messages: list):
-    # delete all assistant/user messages with no content or tool calls
+    # skip all assistant/user messages with empty content
     # if we don't do this, then we will end up with non-alternating user and assistant messages
     # this causes calls to fail on vertex_ai/bedrock/anthropic
-    messages = [
-        message
-        for message in messages
-        if isinstance(message, dict)
-        and message.get("content")
-        or message.get("tool_calls")
-    ]
+    new_messages = []
+    for message in messages:
+        if not _empty_message_content(message=message):
+            new_messages.append(message)
 
-    return messages
+    return new_messages
 
 
 def prompt_factory(

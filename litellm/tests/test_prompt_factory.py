@@ -18,6 +18,7 @@ from litellm.llms.prompt_templates.factory import (
     convert_to_anthropic_image_obj,
     convert_url_to_base64,
     llama_2_chat_pt,
+    pre_process_messages,
     prompt_factory,
 )
 
@@ -177,3 +178,14 @@ def test_base64_image_input(url, expected_media_type):
     response = convert_to_anthropic_image_obj(openai_image_url=url)
 
     assert response["media_type"] == expected_media_type
+
+
+def test_empty_message():
+    messages = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": ""},
+        {"role": "user", "content": "what"},
+    ]
+    new_messages = pre_process_messages(messages=messages)
+
+    assert new_messages[1] == {"role": "user", "content": "what"}

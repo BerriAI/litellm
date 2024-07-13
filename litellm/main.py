@@ -908,7 +908,6 @@ def completion(
         ):
             messages = map_system_message_pt(messages=messages)
 
-        messages = pre_process_messages(messages=messages)
         model_api_key = get_api_key(
             llm_provider=custom_llm_provider, dynamic_api_key=api_key
         )  # get the api key from the environment if required for the model
@@ -1483,6 +1482,9 @@ def completion(
             )
             custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
 
+            ## FILTER OUT EMPTY MESSAGE BLOCKS ## - causes calls to fail
+            messages = pre_process_messages(messages=messages)
+
             if (model == "claude-2") or (model == "claude-instant-1"):
                 # call anthropic /completion, only use this route for claude-2, claude-instant-1
                 api_base = (
@@ -1964,6 +1966,10 @@ def completion(
                 return response
             response = model_response
         elif custom_llm_provider == "vertex_ai_beta" or custom_llm_provider == "gemini":
+
+            ## FILTER OUT EMPTY MESSAGE BLOCKS ## - causes gemini calls to fail
+            messages = pre_process_messages(messages=messages)
+
             vertex_ai_project = (
                 optional_params.pop("vertex_project", None)
                 or optional_params.pop("vertex_ai_project", None)
@@ -2013,6 +2019,10 @@ def completion(
             )
 
         elif custom_llm_provider == "vertex_ai":
+
+            ## FILTER OUT EMPTY MESSAGE BLOCKS ## - causes vertex ai calls to fail
+            messages = pre_process_messages(messages=messages)
+
             vertex_ai_project = (
                 optional_params.pop("vertex_project", None)
                 or optional_params.pop("vertex_ai_project", None)
@@ -2252,6 +2262,9 @@ def completion(
         elif custom_llm_provider == "bedrock":
             # boto3 reads keys from .env
             custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
+
+            ### FILTER OUT EMPTY MESSAGE BLOCKS ### - causes bedrock calls to fail
+            messages = pre_process_messages(messages=messages)
 
             if "aws_bedrock_client" in optional_params:
                 verbose_logger.warning(
@@ -3374,6 +3387,7 @@ def embedding(
                 aembedding=aembedding,
             )
         elif custom_llm_provider == "vertex_ai":
+
             vertex_ai_project = (
                 optional_params.pop("vertex_project", None)
                 or optional_params.pop("vertex_ai_project", None)

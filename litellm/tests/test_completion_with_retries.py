@@ -1,5 +1,7 @@
-import sys, os
+import os
+import sys
 import traceback
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -8,16 +10,18 @@ import os
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-import pytest
 import openai
+import pytest
+
 import litellm
-from litellm import completion_with_retries, completion
 from litellm import (
     AuthenticationError,
     BadRequestError,
+    OpenAIError,
     RateLimitError,
     ServiceUnavailableError,
-    OpenAIError,
+    completion,
+    completion_with_retries,
 )
 
 user_message = "Hello, whats the weather in San Francisco??"
@@ -32,13 +36,18 @@ def logger_fn(user_model_dict):
 # completion with num retries + impact on exception mapping
 def test_completion_with_num_retries():
     try:
+        bad_messages = [{"messages": "vibe", "bad": "message"}]
         response = completion(
             model="j2-ultra",
-            messages=[{"messages": "vibe", "bad": "message"}],
+            messages=bad_messages,
             num_retries=2,
         )
-        pytest.fail(f"Unmapped exception occurred")
-    except Exception as e:
+        pytest.fail(
+            "This should not have passed. Invalid message={}, was sent.".format(
+                bad_messages
+            )
+        )
+    except Exception:
         pass
 
 
