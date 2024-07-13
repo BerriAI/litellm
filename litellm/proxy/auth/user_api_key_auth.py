@@ -753,9 +753,11 @@ async def user_api_key_auth(
                 )
                 if expiry_time < current_time:
                     # Token exists but is expired.
-                    raise HTTPException(
-                        status_code=status.HTTP_403_FORBIDDEN,
-                        detail=f"Authentication Error - Expired Key. Key Expiry time {expiry_time} and current time {current_time}",
+                    raise ProxyException(
+                        message=f"Authentication Error - Expired Key. Key Expiry time {expiry_time} and current time {current_time}",
+                        type=ProxyErrorTypes.expired_key,
+                        code=400,
+                        param=api_key,
                     )
 
             # Check 4. Token Spend is under budget
