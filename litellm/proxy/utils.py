@@ -83,6 +83,8 @@ def safe_deep_copy(data):
 
     Use this function to safely deep copy the LiteLLM Request
     """
+    if litellm.safe_memory_mode is True:
+        return data
 
     # Step 1: Remove the litellm_parent_otel_span
     if isinstance(data, dict):
@@ -282,7 +284,7 @@ class ProxyLogging:
             key="request_status:{}".format(litellm_call_id),
             value=status,
             local_only=True,
-            ttl=3600,
+            ttl=120,
         )
 
     # The actual implementation of the function

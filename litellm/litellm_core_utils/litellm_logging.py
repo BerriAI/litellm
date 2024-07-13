@@ -1105,19 +1105,19 @@ class Logging:
                         and self.model_call_details.get("litellm_params", {}).get(
                             "acompletion", False
                         )
-                        == False
+                        is not True
                         and self.model_call_details.get("litellm_params", {}).get(
                             "aembedding", False
                         )
-                        == False
+                        is not True
                         and self.model_call_details.get("litellm_params", {}).get(
                             "aimage_generation", False
                         )
-                        == False
+                        is not True
                         and self.model_call_details.get("litellm_params", {}).get(
                             "atranscription", False
                         )
-                        == False
+                        is not True
                     ):
                         global openMeterLogger
                         if openMeterLogger is None:
@@ -1150,19 +1150,19 @@ class Logging:
                         and self.model_call_details.get("litellm_params", {}).get(
                             "acompletion", False
                         )
-                        == False
+                        is not True
                         and self.model_call_details.get("litellm_params", {}).get(
                             "aembedding", False
                         )
-                        == False
+                        is not True
                         and self.model_call_details.get("litellm_params", {}).get(
                             "aimage_generation", False
                         )
-                        == False
+                        is not True
                         and self.model_call_details.get("litellm_params", {}).get(
                             "atranscription", False
                         )
-                        == False
+                        is not True
                     ):  # custom logger class
                         if self.stream and complete_streaming_response is None:
                             callback.log_stream_event(
@@ -1190,19 +1190,19 @@ class Logging:
                         and self.model_call_details.get("litellm_params", {}).get(
                             "acompletion", False
                         )
-                        == False
+                        is not True
                         and self.model_call_details.get("litellm_params", {}).get(
                             "aembedding", False
                         )
-                        == False
+                        is not True
                         and self.model_call_details.get("litellm_params", {}).get(
                             "aimage_generation", False
                         )
-                        == False
+                        is not True
                         and self.model_call_details.get("litellm_params", {}).get(
                             "atranscription", False
                         )
-                        == False
+                        is not True
                     ):  # custom logger functions
                         print_verbose(
                             f"success callbacks: Running Custom Callback Function"
@@ -1634,11 +1634,11 @@ class Logging:
                         and self.model_call_details.get("litellm_params", {}).get(
                             "acompletion", False
                         )
-                        == False
+                        is not True
                         and self.model_call_details.get("litellm_params", {}).get(
                             "aembedding", False
                         )
-                        == False
+                        is not True
                     ):  # custom logger class
 
                         callback.log_failure_event(
