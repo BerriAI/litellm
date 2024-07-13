@@ -1,5 +1,5 @@
+import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy.guardrails.init_guardrails import guardrail_name_config_map
 from litellm.proxy.proxy_server import UserAPIKeyAuth
 from litellm.types.guardrails import *
 
@@ -31,7 +31,7 @@ async def should_proceed_based_on_metadata(data: dict, guardrail_name: str) -> b
                     continue
 
                 # lookup the guardrail in guardrail_name_config_map
-                guardrail_item: GuardrailItem = guardrail_name_config_map[
+                guardrail_item: GuardrailItem = litellm.guardrail_name_config_map[
                     _guardrail_name
                 ]
 
@@ -80,7 +80,9 @@ async def should_proceed_based_on_api_key(
                 continue
 
             # lookup the guardrail in guardrail_name_config_map
-            guardrail_item: GuardrailItem = guardrail_name_config_map[_guardrail_name]
+            guardrail_item: GuardrailItem = litellm.guardrail_name_config_map[
+                _guardrail_name
+            ]
 
             guardrail_callbacks = guardrail_item.callbacks
             if guardrail_name in guardrail_callbacks:
