@@ -5573,8 +5573,16 @@ def convert_to_model_response_object(
                     "system_fingerprint"
                 ]
 
-            if "model" in response_object and model_response_object.model is None:
-                model_response_object.model = response_object["model"]
+            if "model" in response_object:
+                if model_response_object.model is None:
+                    model_response_object.model = response_object["model"]
+                elif "/" in model_response_object.model:
+                    openai_compatible_provider = model_response_object.model.split("/")[
+                        0
+                    ]
+                    model_response_object.model = (
+                        openai_compatible_provider + "/" + response_object["model"]
+                    )
 
             if start_time is not None and end_time is not None:
                 if isinstance(start_time, type(end_time)):
