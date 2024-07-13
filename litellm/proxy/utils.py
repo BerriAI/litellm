@@ -83,6 +83,8 @@ def safe_deep_copy(data):
 
     Use this function to safely deep copy the LiteLLM Request
     """
+    if litellm.safe_memory_mode is True:
+        return data
 
     # Step 1: Remove the litellm_parent_otel_span
     if isinstance(data, dict):
