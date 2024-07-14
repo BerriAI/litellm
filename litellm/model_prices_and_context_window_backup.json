@@ -698,6 +698,44 @@
         "litellm_provider": "azure", 
         "mode": "image_generation"
     },
+    "azure_ai/jamba-instruct": {
+        "max_tokens": 4096,
+        "max_input_tokens": 70000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.0000005,
+        "output_cost_per_token": 0.0000007,
+        "litellm_provider": "azure_ai",
+        "mode": "chat"
+    },
+    "azure_ai/mistral-large": {
+        "max_tokens": 8191,
+        "max_input_tokens": 32000,
+        "max_output_tokens": 8191,
+        "input_cost_per_token": 0.000004,
+        "output_cost_per_token": 0.000012,
+        "litellm_provider": "azure_ai",
+        "mode": "chat",
+        "supports_function_calling": true
+    },
+    "azure_ai/mistral-small": {
+        "max_tokens": 8191,
+        "max_input_tokens": 32000,
+        "max_output_tokens": 8191,
+        "input_cost_per_token": 0.000001,
+        "output_cost_per_token": 0.000003,
+        "litellm_provider": "azure_ai",
+        "supports_function_calling": true,
+        "mode": "chat"
+    },
+    "azure_ai/Meta-Llama-3-70B-Instruct": {
+        "max_tokens": 8192,
+        "max_input_tokens": 8192,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 0.0000011,
+        "output_cost_per_token": 0.00000037,
+        "litellm_provider": "azure_ai",
+        "mode": "chat"
+    },
     "babbage-002": {
         "max_tokens": 16384,
         "max_input_tokens": 16384,
