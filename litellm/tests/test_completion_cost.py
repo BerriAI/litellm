@@ -8,6 +8,7 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import asyncio
+import os
 import time
 from typing import Optional
 
@@ -783,6 +784,28 @@ def test_vertex_ai_embedding_completion_cost(caplog):
 #     print("calculated_input_cost: {}".format(calculated_input_cost))
 
 #     assert False
+
+
+def test_completion_azure_ai():
+    try:
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+
+        litellm.set_verbose = True
+        response = litellm.completion(
+            model="azure_ai/Mistral-large-nmefg",
+            messages=[{"content": "what llm are you", "role": "user"}],
+            max_tokens=15,
+            num_retries=3,
+            api_base=os.getenv("AZURE_AI_MISTRAL_API_BASE"),
+            api_key=os.getenv("AZURE_AI_MISTRAL_API_KEY"),
+        )
+        print(response)
+
+        assert "response_cost" in response._hidden_params
+        assert isinstance(response._hidden_params["response_cost"], float)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
