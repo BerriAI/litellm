@@ -226,7 +226,7 @@ general_settings:
 
 Allow developers to call the proxy with Anthropic/boto3/etc. client sdk's.
 
-Use our [Anthropic Adapter](https://github.com/BerriAI/litellm/blob/fd743aaefd23ae509d8ca64b0c232d25fe3e39ee/litellm/adapters/anthropic_adapter.py#L50) for reference
+Test our [Anthropic Adapter](../anthropic_completion.md) for reference [**Code**](https://github.com/BerriAI/litellm/blob/fd743aaefd23ae509d8ca64b0c232d25fe3e39ee/litellm/adapters/anthropic_adapter.py#L50)
 
 ### 1. Write an Adapter 
 
