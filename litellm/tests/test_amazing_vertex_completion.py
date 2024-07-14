@@ -677,12 +677,13 @@ def test_gemini_pro_vision_base64():
             pytest.fail(f"An exception occurred - {str(e)}")
 
 
-def test_gemini_pro_grounding():
+@pytest.mark.parametrize("value_in_dict", [{}, {"disable_attribution": False}])  #
+def test_gemini_pro_grounding(value_in_dict):
     try:
         load_vertex_ai_credentials()
         litellm.set_verbose = True
 
-        tools = [{"googleSearchRetrieval": {}}]
+        tools = [{"googleSearchRetrieval": value_in_dict}]
 
         litellm.set_verbose = True
 
@@ -708,6 +709,10 @@ def test_gemini_pro_grounding():
             assert (
                 "googleSearchRetrieval"
                 in mock_call.call_args.kwargs["json"]["tools"][0]
+            )
+            assert (
+                mock_call.call_args.kwargs["json"]["tools"][0]["googleSearchRetrieval"]
+                == value_in_dict
             )
 
     except litellm.InternalServerError:

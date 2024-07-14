@@ -10,7 +10,7 @@ import TabItem from '@theme/TabItem';
 
 ## 🆕 `vertex_ai_beta/` route 
 
-New `vertex_ai_beta/` route. Adds support for system messages, tool_choice params, etc. by moving to httpx client (instead of vertex sdk).
+New `vertex_ai_beta/` route. Adds support for system messages, tool_choice params, etc. by moving to httpx client (instead of vertex sdk). This implementation uses [VertexAI's REST API](https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/inference#syntax).
 
 ```python
 from litellm import completion
@@ -376,6 +376,54 @@ curl http://0.0.0.0:4000/v1/chat/completions \
 
 </TabItem>
 </Tabs>
+
+#### **Moving from Vertex AI SDK to LiteLLM (GROUNDING)**
+
+
+If this was your initial VertexAI Grounding code,
+
+```python
+import vertexai 
+
+vertexai.init(project=project_id, location="us-central1")
+
+model = GenerativeModel("gemini-1.5-flash-001")
+
+# Use Google Search for grounding
+tool = Tool.from_google_search_retrieval(grounding.GoogleSearchRetrieval(disable_attributon=False))
+
+prompt = "When is the next total solar eclipse in US?"
+response = model.generate_content(
+    prompt,
+    tools=[tool],
+    generation_config=GenerationConfig(
+        temperature=0.0,
+    ),
+)
+
+print(response)
+```
+
+then, this is what it looks like now
+
+```python
+from litellm import completion 
+
+
+# !gcloud auth application-default login - run this to add vertex credentials to your env
+
+tools = [{"googleSearchRetrieval": {"disable_attributon": False}}] # 👈 ADD GOOGLE SEARCH
+
+resp = litellm.completion(
+                    model="vertex_ai_beta/gemini-1.0-pro-001",
+                    messages=[{"role": "user", "content": "Who won the world cup?"}],
+                    tools=tools,
+                    vertex_project="project-id"
+                )
+
+print(resp)
+```
+
 
 ## Pre-requisites
 * `pip install google-cloud-aiplatform` (pre-installed on proxy docker image)
