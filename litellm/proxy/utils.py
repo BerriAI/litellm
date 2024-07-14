@@ -280,6 +280,10 @@ class ProxyLogging:
     async def update_request_status(
         self, litellm_call_id: str, status: Literal["success", "fail"]
     ):
+        # only use this if slack alerting is being used
+        if self.alerting is None:
+            return
+
         await self.internal_usage_cache.async_set_cache(
             key="request_status:{}".format(litellm_call_id),
             value=status,
