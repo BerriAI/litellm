@@ -876,6 +876,7 @@ from .exceptions import (
     InternalServerError,
     JSONSchemaValidationError,
     LITELLM_EXCEPTION_TYPES,
+    MockException,
 )
 from .budget_manager import BudgetManager
 from .proxy.proxy_cli import run_server

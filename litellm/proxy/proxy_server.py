@@ -329,6 +329,7 @@ class UserAPIKeyCacheTTLEnum(enum.Enum):
 @app.exception_handler(ProxyException)
 async def openai_exception_handler(request: Request, exc: ProxyException):
     # NOTE: DO NOT MODIFY THIS, its crucial to map to Openai exceptions
+    headers = exc.headers
     return JSONResponse(
         status_code=(
             int(exc.code) if exc.code else status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -341,6 +342,7 @@ async def openai_exception_handler(request: Request, exc: ProxyException):
                 "code": exc.code,
             }
         },
+        headers=headers,
     )
 
 
@@ -3003,11 +3005,13 @@ async def chat_completion(
         router_model_names = llm_router.model_names if llm_router is not None else []
 
         if isinstance(e, HTTPException):
+            # print("e.headers={}".format(e.headers))
             raise ProxyException(
                 message=getattr(e, "detail", str(e)),
                 type=getattr(e, "type", "None"),
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+                headers=getattr(e, "headers", {}),
             )
         error_msg = f"{str(e)}"
         raise ProxyException(

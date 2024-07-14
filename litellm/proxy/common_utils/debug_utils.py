@@ -9,6 +9,19 @@ from litellm._logging import verbose_proxy_logger
 router = APIRouter()
 
 if os.environ.get("LITELLM_PROFILE", "false").lower() == "true":
+    try:
+        import objgraph
+
+        print("growth of objects")  # noqa
+        objgraph.show_growth()
+        print("\n\nMost common types")  # noqa
+        objgraph.show_most_common_types()
+        roots = objgraph.get_leaking_objects()
+        print("\n\nLeaking objects")  # noqa
+        objgraph.show_most_common_types(objects=roots)
+    except:
+        pass
+
     tracemalloc.start(10)
 
     @router.get("/memory-usage", include_in_schema=False)
@@ -25,6 +38,37 @@ if os.environ.get("LITELLM_PROFILE", "false").lower() == "true":
             result.append(f"{stat.traceback.format(limit=10)}: {stat.size / 1024} KiB")
 
         return {"top_50_memory_usage": result}
+
+    @router.get("/memory-usage-in-mem-cache", include_in_schema=False)
+    async def memory_usage_in_mem_cache():
+        # returns the size of all in-memory caches on the proxy server
+        """
+        1. user_api_key_cache
+        2. router_cache
+        3. proxy_logging_cache
+        4. internal_usage_cache
+        """
+        from litellm.proxy.proxy_server import (
+            llm_router,
+            proxy_logging_obj,
+            user_api_key_cache,
+        )
+
+        num_items_in_user_api_key_cache = len(
+            user_api_key_cache.in_memory_cache.cache_dict
+        ) + len(user_api_key_cache.in_memory_cache.ttl_dict)
+        num_items_in_llm_router_cache = len(
+            llm_router.cache.in_memory_cache.cache_dict
+        ) + len(llm_router.cache.in_memory_cache.ttl_dict)
+        num_items_in_proxy_logging_obj_cache = len(
+            proxy_logging_obj.internal_usage_cache.in_memory_cache.cache_dict
+        ) + len(proxy_logging_obj.internal_usage_cache.in_memory_cache.ttl_dict)
+
+        return {
+            "num_items_in_user_api_key_cache": num_items_in_user_api_key_cache,
+            "num_items_in_llm_router_cache": num_items_in_llm_router_cache,
+            "num_items_in_proxy_logging_obj_cache": num_items_in_proxy_logging_obj_cache,
+        }
 
 
 @router.get("/otel-spans", include_in_schema=False)

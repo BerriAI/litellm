@@ -723,3 +723,28 @@ class InvalidRequestError(openai.BadRequestError):  # type: ignore
         super().__init__(
             self.message, f"{self.model}"
         )  # Call the base class constructor with the parameters it needs
+
+
+class MockException(openai.APIError):
+    # used for testing
+    def __init__(
+        self,
+        status_code,
+        message,
+        llm_provider,
+        model,
+        request: Optional[httpx.Request] = None,
+        litellm_debug_info: Optional[str] = None,
+        max_retries: Optional[int] = None,
+        num_retries: Optional[int] = None,
+    ):
+        self.status_code = status_code
+        self.message = "litellm.MockException: {}".format(message)
+        self.llm_provider = llm_provider
+        self.model = model
+        self.litellm_debug_info = litellm_debug_info
+        self.max_retries = max_retries
+        self.num_retries = num_retries
+        if request is None:
+            request = httpx.Request(method="POST", url="https://api.openai.com/v1")
+        super().__init__(self.message, request=request, body=None)  # type: ignore

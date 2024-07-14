@@ -1668,6 +1668,9 @@ class DualCache(BaseCache):
             self.redis_cache.flush_cache()
 
     def delete_cache(self, key):
+        """
+        Delete a key from the cache
+        """
         if self.in_memory_cache is not None:
             self.in_memory_cache.delete_cache(key)
         if self.redis_cache is not None:
