@@ -329,6 +329,7 @@ class UserAPIKeyCacheTTLEnum(enum.Enum):
 @app.exception_handler(ProxyException)
 async def openai_exception_handler(request: Request, exc: ProxyException):
     # NOTE: DO NOT MODIFY THIS, its crucial to map to Openai exceptions
+    headers = exc.headers
     return JSONResponse(
         status_code=(
             int(exc.code) if exc.code else status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -341,6 +342,7 @@ async def openai_exception_handler(request: Request, exc: ProxyException):
                 "code": exc.code,
             }
         },
+        headers=headers,
     )
 
 
@@ -2707,16 +2709,6 @@ def model_list(
             for model in all_models
         ],
         object="list",
-    )
-
-
-@app.exception_handler(ProxyException)
-async def proxy_exception_handler(request: Request, exc: ProxyException):
-    headers = exc.headers
-    return JSONResponse(
-        status_code=exc.code or 400,
-        content=exc.to_dict(),
-        headers=headers,
     )
 
 
