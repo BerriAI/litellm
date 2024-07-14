@@ -273,6 +273,9 @@ async def test_presidio_pii_masking_logging_output_only_logged_response_guardrai
     from litellm.proxy.guardrails.init_guardrails import initialize_guardrails
     from litellm.types.guardrails import GuardrailItem, GuardrailItemSpec
 
+    os.environ["PRESIDIO_ANALYZER_API_BASE"] = "http://localhost:5002"
+    os.environ["PRESIDIO_ANONYMIZER_API_BASE"] = "http://localhost:5001"
+
     guardrails_config: List[Dict[str, GuardrailItemSpec]] = [
         {
             "pii_masking": {
