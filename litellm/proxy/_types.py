@@ -1624,11 +1624,17 @@ class ProxyException(Exception):
         type: str,
         param: Optional[str],
         code: Optional[int],
+        headers: Optional[Dict[str, str]] = None,
     ):
         self.message = message
         self.type = type
         self.param = param
         self.code = code
+        if headers is not None:
+            for k, v in headers.items():
+                if not isinstance(v, str):
+                    headers[k] = str(v)
+        self.headers = headers or {}
 
         # rules for proxyExceptions
         # Litellm router.py returns "No healthy deployment available" when there are no deployments available

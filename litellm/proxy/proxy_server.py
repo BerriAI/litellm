@@ -2710,6 +2710,16 @@ def model_list(
     )
 
 
+@app.exception_handler(ProxyException)
+async def proxy_exception_handler(request: Request, exc: ProxyException):
+    headers = exc.headers
+    return JSONResponse(
+        status_code=exc.code or 400,
+        content=exc.to_dict(),
+        headers=headers,
+    )
+
+
 @router.post(
     "/v1/chat/completions",
     dependencies=[Depends(user_api_key_auth)],
@@ -3003,11 +3013,13 @@ async def chat_completion(
         router_model_names = llm_router.model_names if llm_router is not None else []
 
         if isinstance(e, HTTPException):
+            # print("e.headers={}".format(e.headers))
             raise ProxyException(
                 message=getattr(e, "detail", str(e)),
                 type=getattr(e, "type", "None"),
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+                headers=getattr(e, "headers", {}),
             )
         error_msg = f"{str(e)}"
         raise ProxyException(
