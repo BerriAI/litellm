@@ -9,6 +9,19 @@ from litellm._logging import verbose_proxy_logger
 router = APIRouter()
 
 if os.environ.get("LITELLM_PROFILE", "false").lower() == "true":
+    try:
+        import objgraph
+
+        print("growth of objects")  # noqa
+        objgraph.show_growth()
+        print("\n\nMost common types")  # noqa
+        objgraph.show_most_common_types()
+        roots = objgraph.get_leaking_objects()
+        print("\n\nLeaking objects")  # noqa
+        objgraph.show_most_common_types(objects=roots)
+    except:
+        pass
+
     tracemalloc.start(10)
 
     @router.get("/memory-usage", include_in_schema=False)
