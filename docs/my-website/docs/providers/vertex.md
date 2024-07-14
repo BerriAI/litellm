@@ -334,6 +334,8 @@ completion(model="vertex_ai_beta/gemini-1.5-flash-preview-0514", messages=messag
 
 Add Google Search Result grounding to vertex ai calls. 
 
+[**Relevant VertexAI Docs**](https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/grounding#examples)
+
 <Tabs>
 <TabItem value="sdk" label="SDK">
 
