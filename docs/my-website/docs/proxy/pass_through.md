@@ -156,6 +156,8 @@ POST /api/public/ingestion HTTP/1.1" 207 Multi-Status
 
 Use this if you want the pass through endpoint to honour LiteLLM keys/authentication
 
+This also enforces the key's rpm limits on pass-through endpoints.
+
 Usage - set `auth: true` on the config
 ```yaml
 general_settings:
@@ -362,3 +364,4 @@ curl --location 'http://0.0.0.0:4000/v1/messages' \
     ]
 }'
 ```
+

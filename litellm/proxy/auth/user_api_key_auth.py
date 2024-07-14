@@ -96,7 +96,6 @@ async def user_api_key_auth(
         anthropic_api_key_header
     ),
 ) -> UserAPIKeyAuth:
-
     from litellm.proxy.proxy_server import (
         allowed_routes_check,
         common_checks,
