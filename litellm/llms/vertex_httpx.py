@@ -396,7 +396,8 @@ class VertexGeminiConfig:
                 optional_params["presence_penalty"] = value
             if param == "tools" and isinstance(value, list):
                 gtool_func_declarations = []
-                google_search_tool: Optional[dict] = None
+                googleSearchRetrieval: Optional[dict] = None
+                provider_specific_tools: List[dict] = []
                 for tool in value:
                     # check if grounding
                     try:
@@ -411,11 +412,14 @@ class VertexGeminiConfig:
                         verbose_logger.warning(
                             "Got KeyError parsing tool={}. Assuming it's a provider-specific param. Use `litellm.set_verbose` or `litellm --detailed_debug` to see raw request."
                         )
-                        google_search_tool = tool
-                _tools = Tools(function_declarations=gtool_func_declarations)
-                if google_search_tool is not None:
-                    _tools["googleSearchRetrieval"] = google_search_tool
-                optional_params["tools"] = [_tools]
+                        if tool.get("googleSearchRetrieval", None) is not None:
+                            googleSearchRetrieval = tool["googleSearchRetrieval"]
+                _tools = Tools(
+                    function_declarations=gtool_func_declarations,
+                )
+                if googleSearchRetrieval is not None:
+                    _tools["googleSearchRetrieval"] = googleSearchRetrieval
+                optional_params["tools"] = [_tools] + provider_specific_tools
             if param == "tool_choice" and (
                 isinstance(value, str) or isinstance(value, dict)
             ):
