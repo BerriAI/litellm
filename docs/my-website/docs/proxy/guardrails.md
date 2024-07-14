@@ -280,25 +280,34 @@ The `pii_masking` guardrail ran on this request because api key=sk-jNm1Zar7XfNdZ
 ```yaml
 litellm_settings:
   guardrails:
+    - string: GuardrailItemSpec
+```
+
+- `string` - Your custom guardrail name
+
+- `GuardrailItemSpec`:
+    - `callbacks`: List[str], list of supported guardrail callbacks.
+        - Full List: presidio, lakera_prompt_injection, hide_secrets, llmguard_moderations, llamaguard_moderations, google_text_moderation
+    - `default_on`: bool,  will run on all llm requests when true
+    - `logging_only`: Optional[bool], if true, run guardrail only on logged output, not on the actual LLM API call. Currently only supported for presidio pii masking. Requires `default_on` to be True as well.
+
+Example: 
+
+```yaml
+litellm_settings:
+  guardrails:
     - prompt_injection:  # your custom name for guardrail
         callbacks: [lakera_prompt_injection, hide_secrets, llmguard_moderations, llamaguard_moderations, google_text_moderation] # litellm callbacks to use
         default_on: true # will run on all llm requests when true
     - hide_secrets:
         callbacks: [hide_secrets]
         default_on: true
+    - pii_masking:
+        callback: ["presidio"]
+        default_on: true
+        logging_only: true
     - your-custom-guardrail
         callbacks: [hide_secrets]
         default_on: false
 ```
 
-
-### `guardrails`: List of guardrail configurations to be applied to LLM requests.
-
-#### Guardrail: `prompt_injection`: Configuration for detecting and preventing prompt injection attacks.
-
-- `callbacks`: List of LiteLLM callbacks used for this guardrail. [Can be one of `[lakera_prompt_injection, hide_secrets, presidio, llmguard_moderations, llamaguard_moderations, google_text_moderation]`](enterprise#content-moderation)
-- `default_on`: Boolean flag determining if this guardrail runs on all LLM requests by default.
-#### Guardrail: `your-custom-guardrail`: Configuration for a user-defined custom guardrail.
-
-- `callbacks`: List of callbacks for this custom guardrail. Can be one of `[lakera_prompt_injection, hide_secrets, presidio, llmguard_moderations, llamaguard_moderations, google_text_moderation]`
-- `default_on`: Boolean flag determining if this custom guardrail runs by default, set to false.
