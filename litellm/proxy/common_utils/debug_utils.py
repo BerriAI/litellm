@@ -39,36 +39,62 @@ if os.environ.get("LITELLM_PROFILE", "false").lower() == "true":
 
         return {"top_50_memory_usage": result}
 
-    @router.get("/memory-usage-in-mem-cache", include_in_schema=False)
-    async def memory_usage_in_mem_cache():
-        # returns the size of all in-memory caches on the proxy server
-        """
-        1. user_api_key_cache
-        2. router_cache
-        3. proxy_logging_cache
-        4. internal_usage_cache
-        """
-        from litellm.proxy.proxy_server import (
-            llm_router,
-            proxy_logging_obj,
-            user_api_key_cache,
-        )
 
-        num_items_in_user_api_key_cache = len(
-            user_api_key_cache.in_memory_cache.cache_dict
-        ) + len(user_api_key_cache.in_memory_cache.ttl_dict)
-        num_items_in_llm_router_cache = len(
-            llm_router.cache.in_memory_cache.cache_dict
-        ) + len(llm_router.cache.in_memory_cache.ttl_dict)
-        num_items_in_proxy_logging_obj_cache = len(
-            proxy_logging_obj.internal_usage_cache.in_memory_cache.cache_dict
-        ) + len(proxy_logging_obj.internal_usage_cache.in_memory_cache.ttl_dict)
+@router.get("/memory-usage-in-mem-cache", include_in_schema=False)
+async def memory_usage_in_mem_cache():
+    # returns the size of all in-memory caches on the proxy server
+    """
+    1. user_api_key_cache
+    2. router_cache
+    3. proxy_logging_cache
+    4. internal_usage_cache
+    """
+    from litellm.proxy.proxy_server import (
+        llm_router,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
 
-        return {
-            "num_items_in_user_api_key_cache": num_items_in_user_api_key_cache,
-            "num_items_in_llm_router_cache": num_items_in_llm_router_cache,
-            "num_items_in_proxy_logging_obj_cache": num_items_in_proxy_logging_obj_cache,
-        }
+    num_items_in_user_api_key_cache = len(
+        user_api_key_cache.in_memory_cache.cache_dict
+    ) + len(user_api_key_cache.in_memory_cache.ttl_dict)
+    num_items_in_llm_router_cache = len(
+        llm_router.cache.in_memory_cache.cache_dict
+    ) + len(llm_router.cache.in_memory_cache.ttl_dict)
+    num_items_in_proxy_logging_obj_cache = len(
+        proxy_logging_obj.internal_usage_cache.in_memory_cache.cache_dict
+    ) + len(proxy_logging_obj.internal_usage_cache.in_memory_cache.ttl_dict)
+
+    return {
+        "num_items_in_user_api_key_cache": num_items_in_user_api_key_cache,
+        "num_items_in_llm_router_cache": num_items_in_llm_router_cache,
+        "num_items_in_proxy_logging_obj_cache": num_items_in_proxy_logging_obj_cache,
+    }
+
+
+@router.get("/memory-usage-in-mem-cache-items", include_in_schema=False)
+async def memory_usage_in_mem_cache_items():
+    # returns the size of all in-memory caches on the proxy server
+    """
+    1. user_api_key_cache
+    2. router_cache
+    3. proxy_logging_cache
+    4. internal_usage_cache
+    """
+    from litellm.proxy.proxy_server import (
+        llm_router,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
+
+    return {
+        "user_api_key_cache": user_api_key_cache.in_memory_cache.cache_dict,
+        "user_api_key_ttl": user_api_key_cache.in_memory_cache.ttl_dict,
+        "llm_router_cache": llm_router.cache.in_memory_cache.cache_dict,
+        "llm_router_ttl": llm_router.cache.in_memory_cache.ttl_dict,
+        "proxy_logging_obj_cache": proxy_logging_obj.internal_usage_cache.in_memory_cache.cache_dict,
+        "proxy_logging_obj_ttl": proxy_logging_obj.internal_usage_cache.in_memory_cache.ttl_dict,
+    }
 
 
 @router.get("/otel-spans", include_in_schema=False)
