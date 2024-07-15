@@ -1059,10 +1059,10 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 ### Using via API
 
 
-**Block all calls for a user id**
+**Block all calls for a customer id**
 
 ```
-curl -X POST "http://0.0.0.0:4000/user/block" \
+curl -X POST "http://0.0.0.0:4000/customer/block" \
 -H "Authorization: Bearer sk-1234" \ 
 -D '{
 "user_ids": [<user_id>, ...] 
@@ -1078,6 +1078,8 @@ curl -X POST "http://0.0.0.0:4000/user/unblock" \
 "user_ids": [<user_id>, ...] 
 }'
 ```
+
+
 
 ## Enable Banned Keywords List
 
