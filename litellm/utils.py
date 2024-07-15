@@ -1635,12 +1635,12 @@ def openai_token_counter(
                                 image_url_dict = c["image_url"]
                                 detail = image_url_dict.get("detail", "auto")
                                 url = image_url_dict.get("url")
-                                num_tokens += _calculate_img_tokens(
+                                num_tokens += calculate_img_tokens(
                                     data=url, mode=detail
                                 )
                             elif isinstance(c["image_url"], str):
                                 image_url_str = c["image_url"]
-                                num_tokens += _calculate_img_tokens(
+                                num_tokens += calculate_img_tokens(
                                     data=image_url_str, mode="auto"
                                 )
     elif text is not None and count_response_tokens == True:
@@ -1749,7 +1749,7 @@ def get_image_dimensions(data):
         return None, None
 
 
-def _calculate_img_tokens(
+def calculate_img_tokens(
     data,
     mode: Literal["low", "high", "auto"] = "auto",
     base_tokens: int = 85,  # openai default - https://openai.com/pricing
@@ -1909,12 +1909,12 @@ def token_counter(
                                     image_url_dict = c["image_url"]
                                     detail = image_url_dict.get("detail", "auto")
                                     url = image_url_dict.get("url")
-                                    num_tokens += _calculate_img_tokens(
+                                    num_tokens += calculate_img_tokens(
                                         data=url, mode=detail
                                     )
                                 elif isinstance(c["image_url"], str):
                                     image_url_str = c["image_url"]
-                                    num_tokens += _calculate_img_tokens(
+                                    num_tokens += calculate_img_tokens(
                                         data=image_url_str, mode="auto"
                                     )
                 if "tool_calls" in message:
