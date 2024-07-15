@@ -4487,7 +4487,8 @@ def get_llm_provider(
                 )
             elif custom_llm_provider == "friendliai":
                 api_base = (
-                    get_secret("FRIENDLI_API_BASE")
+                    api_base
+                    or get_secret("FRIENDLI_API_BASE")
                     or "https://inference.friendli.ai/v1"
                 )
                 dynamic_api_key = (
