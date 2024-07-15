@@ -26,7 +26,7 @@ class MyCustomHandler(CustomLogger):
                     datefmt='%Y-%m-%d %H:%M:%S'
             )
 
-            response_cost = litellm.completion_cost(completion_response=response_obj)
+            response_cost: Optional[float] = kwargs.get("response_cost", None)
             print("regular response_cost", response_cost)
             logging.info(f"Model {response_obj.model} Cost: ${response_cost:.8f}")
         except:
