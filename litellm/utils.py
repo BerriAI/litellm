@@ -1802,10 +1802,11 @@ def create_tokenizer(json: str):
     tokenizer = Tokenizer.from_str(json)
     return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
 
-# Based on https://github.com/forestwanglin/openai-java/blob/main/jtokkit/src/main/java/xyz/felh/openai/jtokkit/utils/TikTokenUtils.java
-
 
 def _format_function_definitions(tools):
+    """Formats tool definitions in the format that OpenAI appears to use.
+    Based on https://github.com/forestwanglin/openai-java/blob/main/jtokkit/src/main/java/xyz/felh/openai/jtokkit/utils/TikTokenUtils.java
+    """
     lines = []
     lines.append("namespace functions {")
     lines.append("")
