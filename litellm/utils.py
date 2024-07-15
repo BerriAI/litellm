@@ -4657,7 +4657,7 @@ def get_max_tokens(model: str) -> Optional[int]:
 
 def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> ModelInfo:
     """
-    Get a dict for the maximum tokens (context window), input_cost_per_token, output_cost_per_token  for a given model.
+    Get a dict for the maximum input and output tokens (context window), input_cost_per_token, output_cost_per_token  for a given model.
 
     Parameters:
     - model (str): The name of the model.
@@ -4671,6 +4671,11 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
             - litellm_provider (str): The provider of the model (e.g., "openai").
             - mode (str): The mode of the model (e.g., "chat" or "completion").
             - supported_openai_params (List[str]): A list of supported OpenAI parameters for the model.
+            - max_input_tokens (int, optional): The maximum number of input tokens allowed for the given model.
+            - max_output_tokens (int, optional): The maximum number of output tokens allowed for the given model.
+            - supports_function_calling (bool, optional): Whether the model supports function calling.
+            - supports_parallel_function_calling (bool, optional): Whether the model supports parallel function calling.
+            - supports_vision (bool, optional): Whether the model supports vision tasks.
 
     Raises:
         Exception: If the model is not mapped yet.
@@ -4678,12 +4683,15 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
     Example:
         >>> get_model_info("gpt-4")
         {
-            "max_tokens": 8192,
+            "max_tokens": 4096,
+            "max_input_tokens": 8192,
+            "max_output_tokens": 4096, 
             "input_cost_per_token": 0.00003,
             "output_cost_per_token": 0.00006,
             "litellm_provider": "openai",
             "mode": "chat",
-            "supported_openai_params": ["temperature", "max_tokens", "top_p", "frequency_penalty", "presence_penalty"]
+            "supported_openai_params": ['frequency_penalty', 'logit_bias', 'logprobs', 'top_logprobs', 'max_tokens', 'n', 'presence_penalty', 'seed', 'stop', 'stream', 'stream_options', 'temperature', 'top_p', 'tools', 'tool_choice', 'function_call', 'functions', 'max_retries', 'extra_headers', 'user'],
+            'supports_function_calling': True
         }
     """
     supported_openai_params: Union[List[str], None] = []
