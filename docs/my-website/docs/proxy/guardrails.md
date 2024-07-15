@@ -217,12 +217,12 @@ If you need to switch `pii_masking` off for an API Key set `"permissions": {"pii
 <TabItem value="/key/generate" label="/key/generate">
 
 ```shell
-curl --location 'http://0.0.0.0:4000/key/generate' \
-    --header 'Authorization: Bearer sk-1234' \
-    --header 'Content-Type: application/json' \
-    --data '{
+curl -X POST 'http://0.0.0.0:4000/key/generate' \
+    -H 'Authorization: Bearer sk-1234' \
+    -H 'Content-Type: application/json' \
+    -D '{
         "permissions": {"pii_masking": true}
-}'
+    }'
 ```
 
 ```shell
