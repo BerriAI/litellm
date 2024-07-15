@@ -292,6 +292,7 @@ const CacheDashboard: React.FC<CachePageProps> = ({
       <BarChart
         title="Cache Hits vs API Requests"
         data={filteredData}
+        stack={true}
         index="name"
         valueFormatter={valueFormatterNumbers}
         categories={["LLM API requests", "Cache hit"]}
@@ -303,6 +304,7 @@ const CacheDashboard: React.FC<CachePageProps> = ({
     <BarChart
         className="mt-6"
         data={filteredData}
+        stack={true}
         index="name"
         valueFormatter={valueFormatterNumbers}
         categories={["Generated Completion Tokens", "Cached Completion Tokens"]}
