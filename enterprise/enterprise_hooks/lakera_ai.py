@@ -17,10 +17,8 @@ from litellm.integrations.custom_logger import CustomLogger
 from fastapi import HTTPException
 from litellm._logging import verbose_proxy_logger
 
-from litellm.proxy.guardrails.init_guardrails import all_guardrails 
 from litellm.proxy.guardrails.guardrail_helpers import should_proceed_based_on_metadata
-from litellm.types.guardrails import default_roles, Role
-from litellm.utils import get_formatted_prompt
+from litellm.types.guardrails import Role
 
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
