@@ -336,6 +336,8 @@ Add Google Search Result grounding to vertex ai calls.
 
 [**Relevant VertexAI Docs**](https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/grounding#examples)
 
+See the grounding metadata with `response_obj._hidden_params["vertex_ai_grounding_metadata"]`
+
 <Tabs>
 <TabItem value="sdk" label="SDK">
 
