@@ -7,6 +7,13 @@ model_list:
   - model_name: gemini-flash
     litellm_params:
       model: gemini/gemini-1.5-flash
+  - model_name: whisper
+    litellm_params:
+      model: whisper-1
+      api_key: sk-*******
+      max_file_size_mb: 1000
+    model_info:
+      mode: audio_transcription
 
 general_settings: 
   master_key: sk-1234 
