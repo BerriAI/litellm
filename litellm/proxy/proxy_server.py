@@ -5474,8 +5474,19 @@ async def new_end_user(
 ):
     """
     Allow creating a new Customer 
-    NOTE: This used to be called `/end_user/new`, we will still be maintaining compatibility for /end_user/XXX for these endpoints
 
+
+    Parameters:
+    - user_id: str - The unique identifier for the user.
+    - alias: Optional[str] - A human-friendly alias for the user.
+    - blocked: bool - Flag to allow or disallow requests for this end-user. Default is False.
+    - max_budget: Optional[float] - The maximum budget allocated to the user. Either 'max_budget' or 'budget_id' should be provided, not both.
+    - budget_id: Optional[str] - The identifier for an existing budget allocated to the user. Either 'max_budget' or 'budget_id' should be provided, not both.
+    - allowed_model_region: Optional[Literal["eu"]] - Require all user requests to use models in this specific region.
+    - default_model: Optional[str] - If no equivalent model in the allowed region, default all requests to this model.
+    - metadata: Optional[dict] = Metadata for customer, store information for customer. Example metadata = {"data_training_opt_out": True}
+    
+    
     - Allow specifying allowed regions 
     - Allow specifying default model
 
@@ -5493,6 +5504,8 @@ async def new_end_user(
 
         # return end-user object
     ```
+
+    NOTE: This used to be called `/end_user/new`, we will still be maintaining compatibility for /end_user/XXX for these endpoints
     """
     global prisma_client, llm_router
     """
