@@ -4375,9 +4375,8 @@ def get_llm_provider(
         if (
             model.split("/", 1)[0] in litellm.provider_list
             and model.split("/", 1)[0] not in litellm.model_list
-            and len(model.split("/"))
+            and len(model.split("/")) > 1  # handle edge case where user passes in `litellm --model mistral` https://github.com/BerriAI/litellm/issues/1351
             and not api_key
-            > 1  # handle edge case where user passes in `litellm --model mistral` https://github.com/BerriAI/litellm/issues/1351
         ):
             custom_llm_provider = model.split("/", 1)[0]
             model = model.split("/", 1)[1]
