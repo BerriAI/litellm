@@ -21,6 +21,7 @@ Features:
     - ✅ IP address‑based access control lists
     - ✅ Track Request IP Address
     - ✅ [Use LiteLLM keys/authentication on Pass Through Endpoints](pass_through#✨-enterprise---use-litellm-keysauthentication-on-pass-through-endpoints)
+    - ✅ Set Max Request / File Size on Requests
     - ✅ [Enforce Required Params for LLM Requests (ex. Reject requests missing ["metadata"]["generation_name"])](#enforce-required-params-for-llm-requests)
 - **Spend Tracking**
     - ✅ [Tracking Spend for Custom Tags](#tracking-spend-for-custom-tags)
