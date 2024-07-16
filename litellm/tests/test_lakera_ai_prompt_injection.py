@@ -1,21 +1,12 @@
 # What is this?
 ## This tests the Lakera AI integration
 
-import asyncio
 import os
-import random
 import sys
-import time
-import traceback
 import json
-from datetime import datetime
 
 from dotenv import load_dotenv
 from fastapi import HTTPException
-import litellm.llms
-import litellm.llms.custom_httpx
-import litellm.llms.custom_httpx.http_handler
-import litellm.llms.custom_httpx.httpx_handler
 from litellm.types.guardrails import GuardrailItem
 
 load_dotenv()
@@ -29,15 +20,14 @@ import logging
 import pytest
 
 import litellm
-from litellm import Router, mock_completion
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.enterprise.enterprise_hooks.lakera_ai import (
     _ENTERPRISE_lakeraAI_Moderation,
 )
-from litellm.proxy.utils import ProxyLogging, hash_token
-from unittest.mock import patch, MagicMock
+from litellm.proxy.utils import hash_token
+from unittest.mock import patch
 
 verbose_proxy_logger.setLevel(logging.DEBUG)
 
@@ -59,7 +49,6 @@ async def test_lakera_prompt_injection_detection():
     _api_key = "sk-12345"
     _api_key = hash_token("sk-12345")
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
-    local_cache = DualCache()
 
     try:
         await lakera_ai.async_moderation_hook(
@@ -94,7 +83,7 @@ async def test_lakera_safe_prompt():
     _api_key = "sk-12345"
     _api_key = hash_token("sk-12345")
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
-    local_cache = DualCache()
+
     await lakera_ai.async_moderation_hook(
         data={
             "messages": [
