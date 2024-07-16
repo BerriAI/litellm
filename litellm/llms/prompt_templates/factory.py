@@ -670,7 +670,7 @@ def convert_url_to_base64(url):
         base64_image = base64.b64encode(image_bytes).decode("utf-8")
 
         image_type = response.headers.get("Content-Type", None)
-        if image_type is not None and image_type.startswith("image/"):
+        if image_type is not None:
             img_type = image_type
         else:
             img_type = url.split(".")[-1].lower()

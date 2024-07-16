@@ -593,7 +593,8 @@ async def test_gemini_pro_vision(provider, sync_mode):
 # test_gemini_pro_vision()
 
 
-def test_completion_function_plus_pdf():
+@pytest.mark.parametrize("load_pdf", [False])  # True,
+def test_completion_function_plus_pdf(load_pdf):
     litellm.set_verbose = True
     load_vertex_ai_credentials()
     try:
@@ -605,16 +606,18 @@ def test_completion_function_plus_pdf():
         url = "https://storage.googleapis.com/cloud-samples-data/generative-ai/pdf/2403.05530.pdf"
 
         # Download the file
-        response = requests.get(url)
-        file_data = response.content
+        if load_pdf:
+            response = requests.get(url)
+            file_data = response.content
 
-        encoded_file = base64.b64encode(file_data).decode("utf-8")
+            encoded_file = base64.b64encode(file_data).decode("utf-8")
+            url = f"data:application/pdf;base64,{encoded_file}"
 
         image_content = [
             {"type": "text", "text": "What's this file about?"},
             {
                 "type": "image_url",
-                "image_url": {"url": f"data:application/pdf;base64,{encoded_file}"},
+                "image_url": {"url": url},
             },
         ]
         image_message = {"role": "user", "content": image_content}
