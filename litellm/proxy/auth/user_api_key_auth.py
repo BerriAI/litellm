@@ -123,13 +123,10 @@ async def user_api_key_auth(
         if isinstance(api_key, str):
             passed_in_key = api_key
             api_key = _get_bearer_token(api_key=api_key)
-
         elif isinstance(azure_api_key_header, str):
             api_key = azure_api_key_header
-
         elif isinstance(anthropic_api_key_header, str):
             api_key = anthropic_api_key_header
-
         elif pass_through_endpoints is not None:
             for endpoint in pass_through_endpoints:
                 if endpoint.get("path", "") == route:
@@ -138,6 +135,14 @@ async def user_api_key_auth(
                         header_key: str = headers.get("litellm_user_api_key", "")
                         if request.headers.get(key=header_key) is not None:
                             api_key = request.headers.get(key=header_key)
+        custom_litellm_key_header_name = general_settings.get("litellm_key_header_name")
+        if custom_litellm_key_header_name is not None:
+            # use this as the virtual key passed to litellm proxy
+            passed_api_key = (
+                request.headers.get(key=custom_litellm_key_header_name) or ""  # type: ignore
+            )
+            api_key = _get_bearer_token(api_key=passed_api_key)
+
         parent_otel_span: Optional[Span] = None
         if open_telemetry_logger is not None:
             parent_otel_span = open_telemetry_logger.tracer.start_span(
