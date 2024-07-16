@@ -737,8 +737,8 @@ def response_cost_calculator(
         )
         return None
     except Exception as e:
-        verbose_logger.error(
-            "litellm.cost_calculator.py::response_cost_calculator - Exception occurred - {}/n{}".format(
+        verbose_logger.warning(
+            "litellm.cost_calculator.py::response_cost_calculator - Returning None. Exception occurred - {}/n{}".format(
                 str(e), traceback.format_exc()
             )
         )
