@@ -42,6 +42,14 @@ class CustomLoggingHandler(CustomLogger):
 
         print(f"response_cost: {self.response_cost} ")
 
+    def log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        print("Reaches log failure event!")
+        self.response_cost = kwargs["response_cost"]
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        print("Reaches async log failure event!")
+        self.response_cost = kwargs["response_cost"]
+
 
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
@@ -66,6 +74,41 @@ async def test_custom_pricing(sync_mode):
             output_cost_per_token=0.0,
         )
 
+        await asyncio.sleep(5)
+
+    print(f"new_handler.response_cost: {new_handler.response_cost}")
+    assert new_handler.response_cost is not None
+
+    assert new_handler.response_cost == 0
+
+
+@pytest.mark.parametrize(
+    "sync_mode",
+    [True, False],
+)
+@pytest.mark.asyncio
+async def test_failure_completion_cost(sync_mode):
+    new_handler = CustomLoggingHandler()
+    litellm.callbacks = [new_handler]
+    if sync_mode:
+        try:
+            response = litellm.completion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "Hey!"}],
+                mock_response=Exception("this should trigger an error"),
+            )
+        except Exception:
+            pass
+        time.sleep(5)
+    else:
+        try:
+            response = await litellm.acompletion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "Hey!"}],
+                mock_response=Exception("this should trigger an error"),
+            )
+        except Exception:
+            pass
         await asyncio.sleep(5)
 
     print(f"new_handler.response_cost: {new_handler.response_cost}")

@@ -1499,6 +1499,7 @@ class Logging:
         self.model_call_details["traceback_exception"] = traceback_exception
         self.model_call_details["end_time"] = end_time
         self.model_call_details.setdefault("original_response", None)
+        self.model_call_details["response_cost"] = 0
         return start_time, end_time
 
     def failure_handler(
