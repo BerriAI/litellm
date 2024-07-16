@@ -198,7 +198,10 @@ class CompletionCustomHandler(
             assert isinstance(kwargs["user"], (str, type(None)))
             assert (
                 isinstance(kwargs["input"], list)
-                and isinstance(kwargs["input"][0], dict)
+                and (
+                    isinstance(kwargs["input"][0], dict)
+                    or isinstance(kwargs["input"][0], str)
+                )
             ) or isinstance(kwargs["input"], (dict, str))
             assert isinstance(kwargs["api_key"], (str, type(None)))
             assert isinstance(
