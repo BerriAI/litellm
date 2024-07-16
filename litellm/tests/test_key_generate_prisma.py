@@ -2545,3 +2545,53 @@ async def test_update_user_role(prisma_client):
     # use generated key to auth in
     result = await user_api_key_auth(request=request, api_key=api_key)
     print("result from user auth with new key", result)
+
+
+@pytest.mark.asyncio()
+async def test_custom_api_key_header_name(prisma_client):
+    """ """
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(
+        litellm.proxy.proxy_server,
+        "general_settings",
+        {"litellm_key_header_name": "x-litellm-key"},
+    )
+    await litellm.proxy.proxy_server.prisma_client.connect()
+
+    api_route = APIRoute(path="/chat/completions", endpoint=chat_completion)
+    request = Request(
+        {
+            "type": "http",
+            "route": api_route,
+            "path": api_route.path,
+            "headers": [
+                (b"x-litellm-key", b"Bearer sk-1234"),
+            ],
+        }
+    )
+
+    # this should pass because we pass the master key as X-Litellm-Key and litellm_key_header_name="X-Litellm-Key" in general settings
+    result = await user_api_key_auth(request=request, api_key="Bearer invalid-key")
+
+    # this should fail because X-Litellm-Key is invalid
+    request = Request(
+        {
+            "type": "http",
+            "route": api_route,
+            "path": api_route.path,
+            "headers": [],
+        }
+    )
+    try:
+        result = await user_api_key_auth(request=request, api_key="Bearer sk-1234")
+        pytest.fail(f"This should have failed!. invalid Auth on this request")
+    except Exception as e:
+        print("failed with error", e)
+        assert (
+            "No LiteLLM Virtual Key pass. Please set header=x-litellm-key: Bearer <api_key>"
+            in e.message
+        )
+        pass
+
+    # this should pass because X-Litellm-Key is valid
