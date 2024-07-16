@@ -51,14 +51,7 @@ class _ENTERPRISE_OpenAI_Moderation(CustomLogger):
                 if "content" in m and isinstance(m["content"], str):
                     text += m["content"]
 
-        from litellm.proxy.proxy_server import llm_router
-
-        if llm_router is None:
-            return
-
-        moderation_response = await llm_router.amoderation(
-            model=self.model_name, input=text
-        )
+        moderation_response = await litellm.amoderation(input=text)
 
         verbose_proxy_logger.debug("Moderation response: %s", moderation_response)
         if moderation_response.results[0].flagged == True:
