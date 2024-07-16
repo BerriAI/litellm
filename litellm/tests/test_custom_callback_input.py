@@ -840,6 +840,7 @@ def test_sync_embedding():
         )
         print(f"customHandler_success.errors: {customHandler_success.errors}")
         print(f"customHandler_success.states: {customHandler_success.states}")
+        time.sleep(2)
         assert len(customHandler_success.errors) == 0
         assert len(customHandler_success.states) == 3  # pre, post, success
         # test failure callback
@@ -854,6 +855,7 @@ def test_sync_embedding():
             pass
         print(f"customHandler_failure.errors: {customHandler_failure.errors}")
         print(f"customHandler_failure.states: {customHandler_failure.states}")
+        time.sleep(2)
         assert len(customHandler_failure.errors) == 1
         assert len(customHandler_failure.states) == 3  # pre, post, failure
     except Exception as e:
