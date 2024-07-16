@@ -40,36 +40,36 @@ response = completion(
 
 Here's how to call Anthropic with the LiteLLM Proxy Server
 
-### 1. Save key in your environment
-
-```bash
-export AWS_ACCESS_KEY_ID=""
-export AWS_SECRET_ACCESS_KEY=""
-export AWS_REGION_NAME=""
-```
-
-### 2. Start the proxy 
-
-<Tabs>
-<TabItem value="cli" label="CLI">
-
-```bash
-$ litellm --model anthropic.claude-3-sonnet-20240229-v1:0
-
-# Server running on http://0.0.0.0:4000
-```
-</TabItem>
-<TabItem value="config" label="config.yaml">
+### 1. Setup config.yaml
 
 ```yaml
 model_list:
   - model_name: bedrock-claude-v1
     litellm_params:
       model: bedrock/anthropic.claude-instant-v1
+      aws_access_key_id: os.environ/CUSTOM_AWS_ACCESS_KEY_ID
+      aws_secret_access_key: os.environ/CUSTOM_AWS_SECRET_ACCESS_KEY
+      aws_region_name: os.environ/CUSTOM_AWS_REGION_NAME
 ```
-</TabItem>
-</Tabs>
 
+All possible auth params: 
+
+```
+aws_access_key_id: Optional[str],
+aws_secret_access_key: Optional[str],
+aws_session_token: Optional[str],
+aws_region_name: Optional[str],
+aws_session_name: Optional[str],
+aws_profile_name: Optional[str],
+aws_role_name: Optional[str],
+aws_web_identity_token: Optional[str],
+```
+
+### 2. Start the proxy 
+
+```bash
+litellm --config /path/to/config.yaml
+```
 ### 3. Test it
 
 

@@ -401,6 +401,18 @@ class ChatCompletionToolParam(TypedDict):
     function: ChatCompletionToolParamFunctionChunk
 
 
+class Function(TypedDict, total=False):
+    name: Required[str]
+    """The name of the function to call."""
+
+
+class ChatCompletionNamedToolChoiceParam(TypedDict, total=False):
+    function: Required[Function]
+
+    type: Required[Literal["function"]]
+    """The type of the tool. Currently, only `function` is supported."""
+
+
 class ChatCompletionRequest(TypedDict, total=False):
     model: Required[str]
     messages: Required[List[AllMessageValues]]
