@@ -183,6 +183,19 @@ print(response)
 | claude-instant-1.2  | `completion('claude-instant-1.2', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
 | claude-instant-1  | `completion('claude-instant-1', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
 
+## Passing Extra Headers to Anthropic API 
+
+Pass `extra_headers: dict` to `litellm.completion`
+
+```python
+from litellm import completion
+messages = [{"role": "user", "content": "What is Anthropic?"}]
+response = completion(
+    model="claude-3-5-sonnet-20240620", 
+    messages=messages, 
+    extra_headers={"anthropic-beta": "max-tokens-3-5-sonnet-2024-07-15"}
+)
+```
 ## Advanced
 
 ## Usage - Function Calling 
