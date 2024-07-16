@@ -154,7 +154,7 @@ class GenericLiteLLMParams(BaseModel):
     input_cost_per_second: Optional[float] = None
     output_cost_per_second: Optional[float] = None
 
-    max_file_size_mb: Optional[int] = None
+    max_file_size_mb: Optional[float] = None
 
     model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
 
@@ -187,7 +187,7 @@ class GenericLiteLLMParams(BaseModel):
         output_cost_per_token: Optional[float] = None,
         input_cost_per_second: Optional[float] = None,
         output_cost_per_second: Optional[float] = None,
-        max_file_size_mb: Optional[int] = None,
+        max_file_size_mb: Optional[float] = None,
         **params,
     ):
         args = locals()
@@ -248,7 +248,7 @@ class LiteLLM_Params(GenericLiteLLMParams):
         aws_region_name: Optional[str] = None,
         # OpenAI / Azure Whisper
         # set a max-size of file that can be passed to litellm proxy
-        max_file_size_mb: Optional[int] = None,
+        max_file_size_mb: Optional[float] = None,
         **params,
     ):
         args = locals()
