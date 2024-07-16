@@ -910,7 +910,7 @@ def completion(
             llm_provider=custom_llm_provider, dynamic_api_key=api_key
         )  # get the api key from the environment if required for the model
 
-        if dynamic_api_key is not None:
+        if dynamic_api_key is not None and api_key is not None:
             api_key = dynamic_api_key
         # check if user passed in any of the OpenAI optional params
         optional_params = get_optional_params(
