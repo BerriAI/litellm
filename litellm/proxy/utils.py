@@ -284,11 +284,14 @@ class ProxyLogging:
         if self.alerting is None:
             return
 
+        # current alerting threshold
+        alerting_threshold = self.alerting_threshold or 120
+
         await self.internal_usage_cache.async_set_cache(
             key="request_status:{}".format(litellm_call_id),
             value=status,
             local_only=True,
-            ttl=120,
+            ttl=alerting_threshold,
         )
 
     # The actual implementation of the function
