@@ -1575,8 +1575,8 @@ def openai_token_counter(
     model="gpt-3.5-turbo-0613",
     text: Optional[str] = None,
     is_tool_call: Optional[bool] = False,
-    tools: Optional[List[ChatCompletionToolParam]] = None,
-    tool_choice: Optional[ChatCompletionNamedToolChoiceParam] = None,
+    tools: List[ChatCompletionToolParam] | None = None,
+    tool_choice: ChatCompletionNamedToolChoiceParam | None = None,
     count_response_tokens: Optional[
         bool
     ] = False,  # Flag passed from litellm.stream_chunk_builder, to indicate counting tokens for LLM Response. We need this because for LLM input we add +3 tokens per message - based on OpenAI's token counter
@@ -1620,6 +1620,7 @@ def openai_token_counter(
         for message in messages:
             num_tokens += tokens_per_message
             if message.get("role", None) == "system":
+                includes_system_message = True
                 includes_system_message = True
             for key, value in message.items():
                 if isinstance(value, str):
@@ -1872,6 +1873,7 @@ def _format_type(props, indent):
         return "any"
 
 
+
 def token_counter(
     model="",
     custom_tokenizer: Optional[dict] = None,
@@ -1960,6 +1962,7 @@ def token_counter(
                     count_response_tokens=count_response_tokens,
                     tools=tools,
                     tool_choice=tool_choice,
+                    tool_choice=tool_choice,
                 )
             else:
                 print_verbose(
@@ -1972,6 +1975,7 @@ def token_counter(
                     is_tool_call=is_tool_call,
                     count_response_tokens=count_response_tokens,
                     tools=tools,
+                    tool_choice=tool_choice,
                     tool_choice=tool_choice,
                 )
     else:
