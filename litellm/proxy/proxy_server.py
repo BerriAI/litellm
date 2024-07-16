@@ -143,7 +143,10 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
 )
-from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+from litellm.proxy.common_utils.http_parsing_utils import (
+    _read_request_body,
+    check_file_size_under_limit,
+)
 from litellm.proxy.common_utils.init_callbacks import initialize_callbacks_on_proxy
 from litellm.proxy.common_utils.openai_endpoint_utils import (
     remove_sensitive_info_from_deployment,
@@ -3796,7 +3799,13 @@ async def audio_transcriptions(
                 param="file",
             )
 
-        # Instead of writing to a file
+        # Check if File can be read in memory before reading
+        check_file_size_under_limit(
+            request_data=data,
+            file=file,
+            router_model_names=router_model_names,
+        )
+
         file_content = await file.read()
         file_object = io.BytesIO(file_content)
         file_object.name = file.filename
