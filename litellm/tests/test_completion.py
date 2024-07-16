@@ -2870,7 +2870,7 @@ def test_completion_together_ai_mixtral():
 
 def test_completion_together_ai_yi_chat():
     litellm.set_verbose = True
-    model_name = "together_ai/zero-one-ai/Yi-34B-Chat"
+    model_name = "together_ai/mistralai/Mistral-7B-Instruct-v0.1"
     try:
         messages = [
             {"role": "user", "content": "What llm are you?"},
