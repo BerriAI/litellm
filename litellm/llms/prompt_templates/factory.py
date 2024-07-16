@@ -2514,6 +2514,12 @@ def prompt_factory(
                 initial_prompt_value="<|begin_of_text|>",
                 final_prompt_value="<|start_header_id|>assistant<|end_header_id|>\n",
             )
+    elif custom_llm_provider == "vllm":
+        from tokenizers import AutoTokenizer
+        tokenizer = AutoTokenizer.from_pretrained(model)
+        return tokenizer.apply_chat_template(
+            messages, add_generation_prompt=True, tokenize=False
+        )
     try:
         if "meta-llama/llama-2" in model and "chat" in model:
             return llama_2_chat_pt(messages=messages)
