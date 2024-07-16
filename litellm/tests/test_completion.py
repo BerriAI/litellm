@@ -1348,6 +1348,26 @@ def test_completion_fireworks_ai():
         pytest.fail(f"Error occurred: {e}")
 
 
+def test_completion_fireworks_ai_bad_api_base():
+    try:
+        litellm.set_verbose = True
+        messages = [
+            {"role": "system", "content": "You're a good bot"},
+            {
+                "role": "user",
+                "content": "Hey",
+            },
+        ]
+        response = completion(
+            model="fireworks_ai/accounts/fireworks/models/mixtral-8x7b-instruct",
+            messages=messages,
+            api_base="my-bad-api-base",
+        )
+        pytest.fail(f"This call should have failed!")
+    except Exception as e:
+        pass
+
+
 @pytest.mark.skip(reason="this test is flaky")
 def test_completion_perplexity_api():
     try:
