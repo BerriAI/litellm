@@ -4086,7 +4086,7 @@
         "litellm_provider": "perplexity",
         "mode": "chat"
     },
-    "fireworks_ai/firefunction-v2": {
+    "fireworks_ai/accounts/fireworks/models/firefunction-v2": {
         "max_tokens": 8192,
         "max_input_tokens": 8192,
         "max_output_tokens": 8192,
@@ -4097,7 +4097,7 @@
         "supports_function_calling": true,
         "source": "https://fireworks.ai/pricing"
     },
-    "fireworks_ai/mixtral-8x22b-instruct-hf": {
+    "fireworks_ai/accounts/fireworks/models/mixtral-8x22b-instruct-hf": {
         "max_tokens": 65536,
         "max_input_tokens": 65536,
         "max_output_tokens": 65536,
@@ -4108,7 +4108,7 @@
         "supports_function_calling": true,
         "source": "https://fireworks.ai/pricing"
     },
-    "fireworks_ai/qwen2-72b-instruct": {
+    "fireworks_ai/accounts/fireworks/models/qwen2-72b-instruct": {
         "max_tokens": 32768,
         "max_input_tokens": 32768,
         "max_output_tokens": 32768,
@@ -4119,7 +4119,7 @@
         "supports_function_calling": true,
         "source": "https://fireworks.ai/pricing"
     },
-    "fireworks_ai/yi-large": {
+    "fireworks_ai/accounts/fireworks/models/yi-large": {
         "max_tokens": 32768,
         "max_input_tokens": 32768,
         "max_output_tokens": 32768,
@@ -4130,7 +4130,7 @@
         "supports_function_calling": true,
         "source": "https://fireworks.ai/pricing"
     },
-    "fireworks_ai/deepseek-coder-v2-instruct": {
+    "fireworks_ai/accounts/fireworks/models/deepseek-coder-v2-instruct": {
         "max_tokens": 65536,
         "max_input_tokens": 65536,
         "max_output_tokens": 8192,
