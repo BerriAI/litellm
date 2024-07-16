@@ -27,6 +27,7 @@ This covers:
         - ✅ IP address‑based access control lists
         - ✅ Track Request IP Address
         - ✅ [Use LiteLLM keys/authentication on Pass Through Endpoints](./proxy/pass_through#✨-enterprise---use-litellm-keysauthentication-on-pass-through-endpoints)
+        - ✅ Set Max Request / File Size on Requests
         - ✅ [Enforce Required Params for LLM Requests (ex. Reject requests missing ["metadata"]["generation_name"])](./proxy/enterprise#enforce-required-params-for-llm-requests)
     - **Spend Tracking**
         - ✅ [Tracking Spend for Custom Tags](./proxy/enterprise#tracking-spend-for-custom-tags)
