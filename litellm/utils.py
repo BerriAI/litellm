@@ -4157,11 +4157,7 @@ def get_formatted_prompt(
                     for c in content:
                         if c["type"] == "text":
                             prompt += c["text"]
-            if "tool_calls" in message:
-                for tool_call in message["tool_calls"]:
-                    if "function" in tool_call:
-                        function_arguments = tool_call["function"]["arguments"]
-                        prompt += function_arguments
+            prompt += get_tool_call_function_args(message)
     elif call_type == "text_completion":
         prompt = data["prompt"]
     elif call_type == "embedding" or call_type == "moderation":
@@ -4177,6 +4173,15 @@ def get_formatted_prompt(
             prompt = data["prompt"]
     return prompt
 
+def get_tool_call_function_args(message: dict) -> str:
+    all_args = ""
+    if "tool_calls" in message:
+        for tool_call in message["tool_calls"]:
+            if "function" in tool_call:
+                all_args += tool_call["function"]["arguments"]
+
+    return all_args 
+    
 
 def get_response_string(response_obj: ModelResponse) -> str:
     _choices: List[Union[Choices, StreamingChoices]] = response_obj.choices
