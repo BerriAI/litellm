@@ -686,6 +686,8 @@ class VertexLLM(BaseLLM):
         model_response.choices = []  # type: ignore
 
         try:
+            ## CHECK IF GROUNDING METADATA IN REQUEST
+            grounding_metadata: List[dict] = []
             ## GET TEXT ##
             chat_completion_message = {"role": "assistant"}
             content_str = ""
@@ -693,6 +695,9 @@ class VertexLLM(BaseLLM):
             for idx, candidate in enumerate(completion_response["candidates"]):
                 if "content" not in candidate:
                     continue
+
+                if "groundingMetadata" in candidate:
+                    grounding_metadata.append(candidate["groundingMetadata"])
 
                 if "text" in candidate["content"]["parts"][0]:
                     content_str = candidate["content"]["parts"][0]["text"]
@@ -739,6 +744,11 @@ class VertexLLM(BaseLLM):
             )
 
             setattr(model_response, "usage", usage)
+
+            ## ADD GROUNDING METADATA ##
+            model_response._hidden_params["vertex_ai_grounding_metadata"] = (
+                grounding_metadata
+            )
         except Exception as e:
             raise VertexAIError(
                 message="Received={}, Error converting to valid response block={}. File an issue if litellm error - https://github.com/BerriAI/litellm/issues".format(

@@ -221,6 +221,7 @@ class SearchEntryPoint(TypedDict, total=False):
 class GroundingMetadata(TypedDict, total=False):
     webSearchQueries: List[str]
     searchEntryPoint: SearchEntryPoint
+    groundingAttributions: List[dict]
 
 
 class Candidates(TypedDict, total=False):
