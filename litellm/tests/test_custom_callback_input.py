@@ -830,7 +830,7 @@ async def test_async_embedding_openai():
 
 
 ## Test Azure + Async
-def test_sync_embedding():
+def test_amazing_sync_embedding():
     try:
         customHandler_success = CompletionCustomHandler()
         customHandler_failure = CompletionCustomHandler()
