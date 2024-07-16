@@ -659,7 +659,7 @@ class Logging:
 
             for callback in callbacks:
                 if isinstance(callback, CustomLogger):
-                    self.model_call_details["input"], result = callback.logging_hook(
+                    self.model_call_details, result = callback.logging_hook(
                         kwargs=self.model_call_details,
                         result=result,
                         call_type=self.call_type,
@@ -1316,12 +1316,10 @@ class Logging:
 
         for callback in callbacks:
             if isinstance(callback, CustomLogger):
-                self.model_call_details["input"], result = (
-                    await callback.async_logging_hook(
-                        kwargs=self.model_call_details,
-                        result=result,
-                        call_type=self.call_type,
-                    )
+                self.model_call_details, result = await callback.async_logging_hook(
+                    kwargs=self.model_call_details,
+                    result=result,
+                    call_type=self.call_type,
                 )
 
         for callback in callbacks:

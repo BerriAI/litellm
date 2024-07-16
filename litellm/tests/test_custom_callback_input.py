@@ -165,6 +165,11 @@ class CompletionCustomHandler(
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
+            print(f"\n\nkwargs={kwargs}\n\n")
+            print(
+                json.dumps(kwargs, default=str)
+            )  # this is a test to confirm no circular references are in the logging object
+
             self.states.append("sync_success")
             ## START TIME
             assert isinstance(start_time, datetime)
