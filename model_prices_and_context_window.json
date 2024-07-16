@@ -827,9 +827,9 @@
         "tool_use_system_prompt_tokens": 395
     },
     "claude-3-sonnet-20240229": {
-        "max_tokens": 4096,
+        "max_tokens": 8192,
         "max_input_tokens": 200000,
-        "max_output_tokens": 4096,
+        "max_output_tokens": 8192,
         "input_cost_per_token": 0.000003,
         "output_cost_per_token": 0.000015,
         "litellm_provider": "anthropic",
