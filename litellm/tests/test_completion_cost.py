@@ -706,6 +706,18 @@ def test_vertex_ai_completion_cost():
     print("calculated_input_cost: {}".format(calculated_input_cost))
 
 
+def test_vertex_ai_medlm_completion_cost():
+    model="medlm-medium"
+    messages = [{"role": "user", "content": "Test MedLM completion cost."}]
+    predictive_cost = completion_cost(model=model, messages=messages)
+    assert predictive_cost > 0
+
+    model="medlm-large"
+    messages = [{"role": "user", "content": "Test MedLM completion cost."}]
+    predictive_cost = completion_cost(model=model, messages=messages)
+    assert predictive_cost > 0
+
+
 def test_vertex_ai_claude_completion_cost():
     from litellm import Choices, Message, ModelResponse
     from litellm.utils import Usage
