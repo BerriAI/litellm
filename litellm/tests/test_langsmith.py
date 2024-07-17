@@ -4,6 +4,10 @@ import sys
 
 sys.path.insert(0, os.path.abspath("../.."))
 
+import asyncio
+
+import pytest
+
 import litellm
 from litellm import completion
 from litellm.integrations.langsmith import LangsmithLogger
@@ -14,14 +18,15 @@ import time
 test_langsmith_logger = LangsmithLogger()
 
 
-def test_langsmith_logging():
+@pytest.mark.asyncio()
+async def test_langsmith_logging():
     try:
         import uuid
 
         run_id = str(uuid.uuid4())
         litellm.set_verbose = True
-        litellm.success_callback = ["langsmith"]
-        response = completion(
+        litellm.callbacks = ["langsmith"]
+        response = await litellm.acompletion(
             model="claude-instant-1.2",
             messages=[{"role": "user", "content": "what llm are u"}],
             max_tokens=10,
@@ -40,7 +45,7 @@ def test_langsmith_logging():
             },
         )
         print(response)
-        time.sleep(3)
+        await asyncio.sleep(3)
 
         print("run_id", run_id)
         logged_run_on_langsmith = test_langsmith_logger.get_run_by_id(run_id=run_id)
@@ -50,13 +55,15 @@ def test_langsmith_logging():
         print("fields in logged_run_on_langsmith", logged_run_on_langsmith.keys())
 
         input_fields_on_langsmith = logged_run_on_langsmith.get("inputs")
-        extra_fields_on_langsmith = logged_run_on_langsmith.get("extra")
+        extra_fields_on_langsmith = logged_run_on_langsmith.get("extra").get(
+            "invocation_params"
+        )
 
         print("\nLogged INPUT ON LANGSMITH", input_fields_on_langsmith)
 
         print("\nextra fields on langsmith", extra_fields_on_langsmith)
 
-        assert input_fields_on_langsmith is not None
+        assert isinstance(input_fields_on_langsmith, dict)
         assert "api_key" not in input_fields_on_langsmith
         assert "api_key" not in extra_fields_on_langsmith
 
@@ -67,6 +74,7 @@ def test_langsmith_logging():
 
     except Exception as e:
         print(e)
+        pytest.fail(f"Error occurred: {e}")
 
 
 # test_langsmith_logging()
@@ -87,9 +95,6 @@ def test_langsmith_logging_with_metadata():
         print(e)
 
 
-# test_langsmith_logging_with_metadata()
-
-
 def test_langsmith_logging_with_streaming_and_metadata():
     try:
         litellm.success_callback = ["langsmith"]
@@ -105,6 +110,3 @@ def test_langsmith_logging_with_streaming_and_metadata():
         time.sleep(3)
     except Exception as e:
         print(e)
-
-
-# test_langsmith_logging_with_streaming_and_metadata()
