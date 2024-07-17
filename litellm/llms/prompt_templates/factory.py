@@ -1081,7 +1081,7 @@ def convert_to_gemini_tool_call_result(
     return _part
 
 
-def convert_to_anthropic_tool_result(message: dict) -> dict:
+def convert_to_anthropic_tool_result(message: dict) -> AnthropicMessagesToolResultParam:
     """
     OpenAI message with a tool result looks like:
     {
@@ -1114,44 +1114,50 @@ def convert_to_anthropic_tool_result(message: dict) -> dict:
     }
     """
     if message["role"] == "tool":
-        tool_call_id = message.get("tool_call_id")
-        content = message.get("content")
+        tool_call_id: str = message.get("tool_call_id")  # type: ignore
+        content: str = message.get("content")  # type: ignore
 
         # We can't determine from openai message format whether it's a successful or
         # error call result so default to the successful result template
-        anthropic_tool_result = {
-            "type": "tool_result",
-            "tool_use_id": tool_call_id,
-            "content": content,
-        }
+        anthropic_tool_result = AnthropicMessagesToolResultParam(
+            type="tool_result", tool_use_id=tool_call_id, content=content
+        )
         return anthropic_tool_result
-    elif message["role"] == "function":
-        content = message.get("content")
-        anthropic_tool_result = {
-            "type": "tool_result",
-            "tool_use_id": str(uuid.uuid4()),
-            "content": content,
-        }
+    if message["role"] == "function":
+        content = message.get("content")  # type: ignore
+        anthropic_tool_result = AnthropicMessagesToolResultParam(
+            type="tool_result", tool_use_id=str(uuid.uuid4()), content=content
+        )
+
         return anthropic_tool_result
-    return {}
+    else:
+        raise Exception(
+            "Invalid role={}. Only 'tool' or 'function' are accepted for tool result blocks.".format(
+                message.get("content")
+            )
+        )
 
 
-def convert_function_to_anthropic_tool_invoke(function_call):
+def convert_function_to_anthropic_tool_invoke(
+    function_call,
+) -> List[AnthropicMessagesToolUseParam]:
     try:
         anthropic_tool_invoke = [
-            {
-                "type": "tool_use",
-                "id": str(uuid.uuid4()),
-                "name": get_attribute_or_key(function_call, "name"),
-                "input": json.loads(get_attribute_or_key(function_call, "arguments")),
-            }
+            AnthropicMessagesToolUseParam(
+                type="tool_use",
+                id=str(uuid.uuid4()),
+                name=get_attribute_or_key(function_call, "name"),
+                input=json.loads(get_attribute_or_key(function_call, "arguments")),
+            )
         ]
         return anthropic_tool_invoke
     except Exception as e:
         raise e
 
 
-def convert_to_anthropic_tool_invoke(tool_calls: list) -> list:
+def convert_to_anthropic_tool_invoke(
+    tool_calls: list,
+) -> List[AnthropicMessagesToolUseParam]:
     """
     OpenAI tool invokes:
     {
@@ -1189,18 +1195,16 @@ def convert_to_anthropic_tool_invoke(tool_calls: list) -> list:
     }
     """
     anthropic_tool_invoke = [
-        {
-            "type": "tool_use",
-            "id": get_attribute_or_key(tool, "id"),
-            "name": get_attribute_or_key(
-                get_attribute_or_key(tool, "function"), "name"
-            ),
-            "input": json.loads(
+        AnthropicMessagesToolUseParam(
+            type="tool_use",
+            id=get_attribute_or_key(tool, "id"),
+            name=get_attribute_or_key(get_attribute_or_key(tool, "function"), "name"),
+            input=json.loads(
                 get_attribute_or_key(
                     get_attribute_or_key(tool, "function"), "arguments"
                 )
             ),
-        }
+        )
         for tool in tool_calls
         if get_attribute_or_key(tool, "type") == "function"
     ]
@@ -1212,7 +1216,12 @@ def anthropic_messages_pt(
     messages: list,
     model: str,
     llm_provider: str,
-):
+) -> List[
+    Union[
+        AnthropicMessagesUserMessageParam,
+        AnthopicMessagesAssistantMessageParam,
+    ]
+]:
     """
     format messages for anthropic
     1. Anthropic supports roles like "user" and "assistant" (system prompt sent separately)
@@ -1225,24 +1234,33 @@ def anthropic_messages_pt(
     # add role=tool support to allow function call result/error submission
     user_message_types = {"user", "tool", "function"}
     # reformat messages to ensure user/assistant are alternating, if there's either 2 consecutive 'user' messages or 2 consecutive 'assistant' message, merge them.
-    new_messages: list = []
+    new_messages: List[
+        Union[
+            AnthropicMessagesUserMessageParam,
+            AnthopicMessagesAssistantMessageParam,
+        ]
+    ] = []
     msg_i = 0
-    tool_use_param = False
     while msg_i < len(messages):
-        user_content = []
+        user_content: List[AnthropicMessagesUserMessageValues] = []
         init_msg_i = msg_i
         ## MERGE CONSECUTIVE USER CONTENT ##
         while msg_i < len(messages) and messages[msg_i]["role"] in user_message_types:
             if isinstance(messages[msg_i]["content"], list):
                 for m in messages[msg_i]["content"]:
                     if m.get("type", "") == "image_url":
+                        image_chunk = convert_to_anthropic_image_obj(
+                            m["image_url"]["url"]
+                        )
                         user_content.append(
-                            {
-                                "type": "image",
-                                "source": convert_to_anthropic_image_obj(
-                                    m["image_url"]["url"]
+                            AnthropicMessagesImageParam(
+                                type="image",
+                                source=AnthropicImageParamSource(
+                                    type="base64",
+                                    media_type=image_chunk["media_type"],
+                                    data=image_chunk["data"],
                                 ),
-                            }
+                            )
                         )
                     elif m.get("type", "") == "text":
                         user_content.append({"type": "text", "text": m["text"]})
@@ -1262,14 +1280,25 @@ def anthropic_messages_pt(
         if user_content:
             new_messages.append({"role": "user", "content": user_content})
 
-        assistant_content = []
+        assistant_content: List[AnthropicMessagesAssistantMessageValues] = []
         ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
         while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
-            assistant_text = (
-                messages[msg_i].get("content") or ""
-            )  # either string or none
-            if assistant_text:
-                assistant_content.append({"type": "text", "text": assistant_text})
+            if "content" in messages[msg_i] and isinstance(
+                messages[msg_i]["content"], list
+            ):
+                for m in messages[msg_i]["content"]:
+                    # handle text
+                    if m.get("type", "") == "text":
+                        anthropic_message = AnthropicMessagesTextParam(
+                            type="text", text=m.get("text")
+                        )
+                        assistant_content.append(anthropic_message)
+            elif "content" in messages[msg_i] and isinstance(
+                messages[msg_i]["content"], str
+            ):
+                assistant_content.append(
+                    {"type": "text", "text": messages[msg_i]["content"]}
+                )
 
             if messages[msg_i].get(
                 "tool_calls", []

@@ -123,13 +123,10 @@ async def user_api_key_auth(
         if isinstance(api_key, str):
             passed_in_key = api_key
             api_key = _get_bearer_token(api_key=api_key)
-
         elif isinstance(azure_api_key_header, str):
             api_key = azure_api_key_header
-
         elif isinstance(anthropic_api_key_header, str):
             api_key = anthropic_api_key_header
-
         elif pass_through_endpoints is not None:
             for endpoint in pass_through_endpoints:
                 if endpoint.get("path", "") == route:
@@ -138,6 +135,15 @@ async def user_api_key_auth(
                         header_key: str = headers.get("litellm_user_api_key", "")
                         if request.headers.get(key=header_key) is not None:
                             api_key = request.headers.get(key=header_key)
+
+        # if user wants to pass LiteLLM_Master_Key as a custom header, example pass litellm keys as X-LiteLLM-Key: Bearer sk-1234
+        custom_litellm_key_header_name = general_settings.get("litellm_key_header_name")
+        if custom_litellm_key_header_name is not None:
+            api_key = get_api_key_from_custom_header(
+                request=request,
+                custom_litellm_key_header_name=custom_litellm_key_header_name,
+            )
+
         parent_otel_span: Optional[Span] = None
         if open_telemetry_logger is not None:
             parent_otel_span = open_telemetry_logger.tracer.start_span(
@@ -1267,3 +1273,27 @@ def _check_valid_ip(allowed_ips: Optional[List[str]], request: Request) -> bool:
         return False
 
     return True
+
+
+def get_api_key_from_custom_header(
+    request: Request, custom_litellm_key_header_name: str
+):
+    # use this as the virtual key passed to litellm proxy
+    custom_litellm_key_header_name = custom_litellm_key_header_name.lower()
+    verbose_proxy_logger.debug(
+        "searching for custom_litellm_key_header_name= %s",
+        custom_litellm_key_header_name,
+    )
+    custom_api_key = request.headers.get(custom_litellm_key_header_name)
+    if custom_api_key:
+        api_key = _get_bearer_token(api_key=custom_api_key)
+        verbose_proxy_logger.debug(
+            "Found custom API key using header: {}, setting api_key={}".format(
+                custom_litellm_key_header_name, api_key
+            )
+        )
+    else:
+        raise ValueError(
+            f"No LiteLLM Virtual Key pass. Please set header={custom_litellm_key_header_name}: Bearer <api_key>"
+        )
+    return api_key

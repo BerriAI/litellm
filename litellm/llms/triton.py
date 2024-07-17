@@ -1,14 +1,19 @@
-import os, types
+import copy
 import json
-from enum import Enum
-import requests, copy  # type: ignore
+import os
 import time
-from typing import Callable, Optional, List
-import litellm
-from .prompt_templates.factory import prompt_factory, custom_prompt
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from .base import BaseLLM
+import types
+from enum import Enum
+from typing import Callable, List, Optional
+
 import httpx  # type: ignore
+import requests  # type: ignore
+
+import litellm
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+from .base import BaseLLM
+from .prompt_templates.factory import custom_prompt, prompt_factory
 
 
 class TritonError(Exception):
@@ -52,17 +57,25 @@ class TritonChatCompletion(BaseLLM):
         logging_obj.post_call(original_response=_text_response)
 
         _json_response = response.json()
+        _embedding_output = []
 
         _outputs = _json_response["outputs"]
-        _output_data = _outputs[0]["data"]
-        _embedding_output = {
-            "object": "embedding",
-            "index": 0,
-            "embedding": _output_data,
-        }
+        for output in _outputs:
+            _shape = output["shape"]
+            _data = output["data"]
+            _split_output_data = self.split_embedding_by_shape(_data, _shape)
+
+            for idx, embedding in enumerate(_split_output_data):
+                _embedding_output.append(
+                    {
+                        "object": "embedding",
+                        "index": idx,
+                        "embedding": embedding,
+                    }
+                )
 
         model_response.model = _json_response.get("model_name", "None")
-        model_response.data = [_embedding_output]
+        model_response.data = _embedding_output
 
         return model_response
 
@@ -83,7 +96,7 @@ class TritonChatCompletion(BaseLLM):
             "inputs": [
                 {
                     "name": "input_text",
-                    "shape": [1],
+                    "shape": [len(input)],
                     "datatype": "BYTES",
                     "data": input,
                 }
@@ -116,3 +129,14 @@ class TritonChatCompletion(BaseLLM):
             raise Exception(
                 "Only async embedding supported for triton, please use litellm.aembedding() for now"
             )
+
+    @staticmethod
+    def split_embedding_by_shape(
+        data: List[float], shape: List[int]
+    ) -> List[List[float]]:
+        if len(shape) != 2:
+            raise ValueError("Shape must be of length 2.")
+        embedding_size = shape[1]
+        return [
+            data[i * embedding_size : (i + 1) * embedding_size] for i in range(shape[0])
+        ]

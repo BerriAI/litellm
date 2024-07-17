@@ -713,6 +713,7 @@ async def team_info(
     team_id: str = fastapi.Query(
         default=None, description="Team ID in the request parameters"
     ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
     get info on team + related keys
@@ -745,6 +746,18 @@ async def team_info(
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail={"message": "Malformed request. No team id passed in."},
+            )
+
+        if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+            pass
+        elif user_api_key_dict.team_id is None or (
+            team_id != user_api_key_dict.team_id
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="key not allowed to access this team's info. Key team_id={}, Requested team_id={}".format(
+                    user_api_key_dict.team_id, team_id
+                ),
             )
 
         team_info = await prisma_client.get_data(
