@@ -475,10 +475,12 @@ class AnthropicConfig:
 
 
 # makes headers for API call
-def validate_environment(api_key, user_headers):
+def validate_environment(api_key, user_headers, model):
     if api_key is None:
-        raise ValueError(
-            "Missing Anthropic API Key - A call is being made to anthropic but no key is set either in the environment variables or via params"
+        raise litellm.AuthenticationError(
+            message="Missing Anthropic API Key - A call is being made to anthropic but no key is set either in the environment variables or via params. Please set `ANTHROPIC_API_KEY` in your environment vars",
+            llm_provider="anthropic",
+            model=model,
         )
     headers = {
         "accept": "application/json",
@@ -734,7 +736,7 @@ class AnthropicChatCompletion(BaseLLM):
         logger_fn=None,
         headers={},
     ):
-        headers = validate_environment(api_key, headers)
+        headers = validate_environment(api_key, headers, model)
         _is_function_call = False
         messages = copy.deepcopy(messages)
         optional_params = copy.deepcopy(optional_params)
