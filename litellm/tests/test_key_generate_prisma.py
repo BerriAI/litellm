@@ -2419,12 +2419,19 @@ async def test_create_update_team(prisma_client):
     )
 
     # now hit team_info
-    response = await team_info(
-        team_id=_team_id,
-        http_request=Request(scope={"type": "http"}),
-    )
-
-    print("RESPONSE from team_info", response)
+    try:
+        response = await team_info(
+            team_id=_team_id,
+            http_request=Request(scope={"type": "http"}),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key="sk-1234",
+                user_id="1234",
+            ),
+        )
+    except Exception as e:
+        print(e)
+        pytest.fail("Receives error - {}".format(e))
 
     _team_info = response["team_info"]
     _team_info = dict(_team_info)
