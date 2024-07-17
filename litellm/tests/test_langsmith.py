@@ -102,24 +102,40 @@ def test_langsmith_logging_with_metadata():
         print(e)
 
 
-def test_langsmith_logging_with_streaming_and_metadata():
+@pytest.mark.parametrize("sync_mode", [False, True])
+@pytest.mark.asyncio
+async def test_langsmith_logging_with_streaming_and_metadata(sync_mode):
     try:
         litellm.success_callback = ["langsmith"]
         litellm.set_verbose = True
         run_id = str(uuid.uuid4())
 
         messages = [{"role": "user", "content": "what llm are u"}]
-        response = completion(
-            model="gpt-3.5-turbo",
-            messages=messages,
-            max_tokens=10,
-            temperature=0.2,
-            stream=True,
-            metadata={"id": run_id},
-        )
-        for chunk in response:
-            continue
-        time.sleep(3)
+        if sync_mode is True:
+            response = completion(
+                model="gpt-3.5-turbo",
+                messages=messages,
+                max_tokens=10,
+                temperature=0.2,
+                stream=True,
+                metadata={"id": run_id},
+            )
+            for chunk in response:
+                continue
+            time.sleep(3)
+        else:
+            response = await litellm.acompletion(
+                model="gpt-3.5-turbo",
+                messages=messages,
+                max_tokens=10,
+                temperature=0.2,
+                mock_response="This is a mock request",
+                stream=True,
+                metadata={"id": run_id},
+            )
+            async for chunk in response:
+                continue
+            await asyncio.sleep(3)
 
         print("run_id", run_id)
         logged_run_on_langsmith = test_langsmith_logger.get_run_by_id(run_id=run_id)
