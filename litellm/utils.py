@@ -1878,7 +1878,7 @@ def token_counter(
     text: Optional[Union[str, List[str]]] = None,
     messages: Optional[List] = None,
     count_response_tokens: Optional[bool] = False,
-    tools: Optional[list[ChatCompletionToolParam]] = None,
+    tools: Optional[List[ChatCompletionToolParam]] = None,
     tool_choice: Optional[ChatCompletionNamedToolChoiceParam] = None,
 ) -> int:
     """
