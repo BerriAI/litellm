@@ -4376,14 +4376,13 @@ def get_llm_provider(
             model.split("/", 1)[0] in litellm.provider_list
             and model.split("/", 1)[0] not in litellm.model_list
             and len(model.split("/")) > 1  # handle edge case where user passes in `litellm --model mistral` https://github.com/BerriAI/litellm/issues/1351
-            and not api_key
         ):
             custom_llm_provider = model.split("/", 1)[0]
             model = model.split("/", 1)[1]
             if custom_llm_provider == "perplexity":
                 # perplexity is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.perplexity.ai
-                api_base = api_base or "https://api.perplexity.ai"
-                dynamic_api_key = get_secret("PERPLEXITYAI_API_KEY")
+                api_base = "https://api.perplexity.ai"
+                dynamic_api_key = api_key or get_secret("PERPLEXITYAI_API_KEY")
             elif custom_llm_provider == "anyscale":
                 # anyscale is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.endpoints.anyscale.com/v1
                 api_base = api_base or "https://api.endpoints.anyscale.com/v1"
@@ -4397,8 +4396,8 @@ def get_llm_provider(
                 dynamic_api_key = get_secret("EMPOWER_API_KEY")
             elif custom_llm_provider == "groq":
                 # groq is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.groq.com/openai/v1
-                api_base = api_base or "https://api.groq.com/openai/v1"
-                dynamic_api_key = get_secret("GROQ_API_KEY")
+                api_base = "https://api.groq.com/openai/v1"
+                dynamic_api_key = api_key or get_secret("GROQ_API_KEY")
             elif custom_llm_provider == "nvidia_nim":
                 # nvidia_nim is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.endpoints.anyscale.com/v1
                 api_base = api_base or "https://integrate.api.nvidia.com/v1"
@@ -4419,8 +4418,8 @@ def get_llm_provider(
                 # fireworks is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.fireworks.ai/inference/v1
                 if not model.startswith("accounts/fireworks/models"):
                     model = f"accounts/fireworks/models/{model}"
-                api_base = api_base or "https://api.fireworks.ai/inference/v1"
-                dynamic_api_key = (
+                api_base = "https://api.fireworks.ai/inference/v1"
+                dynamic_api_key = api_key or (
                     get_secret("FIREWORKS_API_KEY")
                     or get_secret("FIREWORKS_AI_API_KEY")
                     or get_secret("FIREWORKSAI_API_KEY")
@@ -4453,7 +4452,7 @@ def get_llm_provider(
                 dynamic_api_key = get_secret("VOYAGE_API_KEY")
             elif custom_llm_provider == "together_ai":
                 api_base = "https://api.together.xyz/v1"
-                dynamic_api_key = (
+                dynamic_api_key = api_key or (
                     get_secret("TOGETHER_API_KEY")
                     or get_secret("TOGETHER_AI_API_KEY")
                     or get_secret("TOGETHERAI_API_KEY")

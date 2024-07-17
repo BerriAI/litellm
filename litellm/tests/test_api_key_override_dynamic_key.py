@@ -12,7 +12,7 @@ except Exception as e:
 
 print("==============try original===============")
 response = completion(
-    model="groq/mixtral-8x7b-32768",
+    model="gpt-3.5-turbo",
     messages=[{"role": "user", "content": "hey, how's it going?"}],
 )
 
