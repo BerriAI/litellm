@@ -4,7 +4,7 @@ import TabItem from '@theme/TabItem';
 
 # 🤗 UI - Self-Serve
 
-Allow users to create their own keys on [Proxy UI](./ui.md).
+## Allow users to create their own keys on [Proxy UI](./ui.md).
 
 1. Add user with permissions to a team on proxy 
 
@@ -125,6 +125,41 @@ LiteLLM Enterprise: Enable [SSO login](./ui.md#setup-ssoauth-for-ui)
 
 <Image img={require('../../img/ui_self_serve_create_key.png')}  style={{ width: '800px', height: 'auto' }} />
 
+## Allow users to View Usage, Caching Analytics
+
+1. Go to Internal Users -> +Invite User
+
+Set their role to `Admin Viewer` - this means they can only view usage, caching analytics
+
+<Image img={require('../../img/ui_invite_user.png')}  style={{ width: '800px', height: 'auto' }} />
+<br />
+
+2. Share invitation link with user
+
+
+<Image img={require('../../img/ui_invite_link.png')}  style={{ width: '800px', height: 'auto' }} />
+<br />
+
+3. User logs in via email + password auth
+
+<Image img={require('../../img/ui_clean_login.png')}  style={{ width: '500px', height: 'auto' }} />
+<br />
+
+4. User can now view Usage, Caching Analytics
+
+<Image img={require('../../img/ui_usage.png')}  style={{ width: '800px', height: 'auto' }} />
+
+
+## Available Roles
+Here's the available UI roles for a LiteLLM Internal User: 
+
+**Admin Roles:**
+  - `proxy_admin`: admin over the platform
+  - `proxy_admin_viewer`: can login, view all keys, view all spend. **Cannot** create/delete keys, add new users.
+
+**Internal User Roles:**
+  - `internal_user`: can login, view/create/delete their own keys, view their spend. **Cannot** add new users.
+  - `internal_user_viewer`: can login, view their own keys, view their own spend. **Cannot** create/delete keys, add new users.
 
 ## Advanced
 ### Setting custom logout URLs
