@@ -1922,7 +1922,7 @@ def token_counter(
                                     num_tokens += calculage_img_tokens(
                                         data=image_url_str, mode="auto"
                                     )
-                if "tool_calls" in message:
+                if message.get("tool_calls"):
                     is_tool_call = True
                     for tool_call in message["tool_calls"]:
                         if "function" in tool_call:
