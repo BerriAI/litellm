@@ -56,6 +56,7 @@ def check_file_size_under_limit(
 
     file_contents_size = file.size or 0
     file_content_size_in_mb = file_contents_size / (1024 * 1024)
+    max_file_size_mb = None
 
     if llm_router is not None and request_data["model"] in router_model_names:
         try:
