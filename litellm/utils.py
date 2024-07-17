@@ -3931,25 +3931,51 @@ def get_api_base(
     if dynamic_api_base is not None:
         return dynamic_api_base
 
+    stream: bool = getattr(optional_params, "stream", False)
+
     if (
         _optional_params.vertex_location is not None
         and _optional_params.vertex_project is not None
     ):
-        _api_base = "{}-aiplatform.googleapis.com/v1/projects/{}/locations/{}/publishers/google/models/{}:streamGenerateContent".format(
-            _optional_params.vertex_location,
-            _optional_params.vertex_project,
-            _optional_params.vertex_location,
-            model,
-        )
+        from litellm.llms.vertex_ai_anthropic import create_vertex_anthropic_url
+
+        if "claude" in model:
+            _api_base = create_vertex_anthropic_url(
+                vertex_location=_optional_params.vertex_location,
+                vertex_project=_optional_params.vertex_project,
+                model=model,
+                stream=stream,
+            )
+        else:
+
+            if stream:
+                _api_base = "{}-aiplatform.googleapis.com/v1/projects/{}/locations/{}/publishers/google/models/{}:streamGenerateContent".format(
+                    _optional_params.vertex_location,
+                    _optional_params.vertex_project,
+                    _optional_params.vertex_location,
+                    model,
+                )
+            else:
+                _api_base = "{}-aiplatform.googleapis.com/v1/projects/{}/locations/{}/publishers/google/models/{}:generateContent".format(
+                    _optional_params.vertex_location,
+                    _optional_params.vertex_project,
+                    _optional_params.vertex_location,
+                    model,
+                )
         return _api_base
 
     if custom_llm_provider is None:
         return None
 
     if custom_llm_provider == "gemini":
-        _api_base = "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent".format(
-            model
-        )
+        if stream:
+            _api_base = "https://generativelanguage.googleapis.com/v1beta/models/{}:streamGenerateContent".format(
+                model
+            )
+        else:
+            _api_base = "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent".format(
+                model
+            )
         return _api_base
     elif custom_llm_provider == "openai":
         _api_base = "https://api.openai.com"
