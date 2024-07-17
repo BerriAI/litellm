@@ -39,3 +39,18 @@ def map_finish_reason(
     elif finish_reason == "content_filtered":
         return "content_filter"
     return finish_reason
+
+
+def remove_index_from_tool_calls(messages, tool_calls):
+    for tool_call in tool_calls:
+        if "index" in tool_call:
+            tool_call.pop("index")
+
+    for message in messages:
+        if "tool_calls" in message:
+            tool_calls = message["tool_calls"]
+            for tool_call in tool_calls:
+                if "index" in tool_call:
+                    tool_call.pop("index")
+
+    return
