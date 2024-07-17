@@ -11,6 +11,8 @@ import dotenv  # type: ignore
 import requests  # type: ignore
 from pydantic import BaseModel  # type: ignore
 
+import litellm
+from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
@@ -59,9 +61,7 @@ class LangsmithLogger(CustomLogger):
         )
         self.async_httpx_client = AsyncHTTPHandler()
 
-    def _prepare_log_data(
-        self, kwargs, response_obj, start_time, end_time, print_verbose
-    ):
+    def _prepare_log_data(self, kwargs, response_obj, start_time, end_time):
         import datetime
         from datetime import timezone
 
@@ -76,7 +76,7 @@ class LangsmithLogger(CustomLogger):
         project_name = metadata.get("project_name", self.langsmith_project)
         run_name = metadata.get("run_name", self.langsmith_default_run_name)
         run_id = metadata.get("id", None)
-        print_verbose(
+        verbose_logger.debug(
             f"Langsmith Logging - project_name: {project_name}, run_name {run_name}"
         )
 
@@ -120,15 +120,11 @@ class LangsmithLogger(CustomLogger):
 
         return data
 
-    async def async_log_event(
-        self, kwargs, response_obj, start_time, end_time, print_verbose
-    ):
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
-            data = self._prepare_log_data(
-                kwargs, response_obj, start_time, end_time, print_verbose
-            )
+            data = self._prepare_log_data(kwargs, response_obj, start_time, end_time)
             url = f"{self.langsmith_base_url}/runs"
-            print_verbose(f"Langsmith Logging - About to send data to {url} ...")
+            verbose_logger.debug(f"Langsmith Logging - About to send data to {url} ...")
 
             headers = {"x-api-key": self.langsmith_api_key}
             response = await self.async_httpx_client.post(
@@ -136,22 +132,24 @@ class LangsmithLogger(CustomLogger):
             )
 
             if response.status_code >= 300:
-                print_verbose(f"Error: {response.status_code}")
+                verbose_logger.error(
+                    f"Langmsith Error: {response.status_code} - {response.text}"
+                )
             else:
-                print_verbose("Run successfully created")
-            print_verbose(
+                verbose_logger.debug(
+                    "Run successfully created, response=%s", response.text
+                )
+            verbose_logger.debug(
                 f"Langsmith Layer Logging - final response object: {response_obj}. Response text from langsmith={response.text}"
             )
         except:
-            print_verbose(f"Langsmith Layer Error - {traceback.format_exc()}")
+            verbose_logger.error(f"Langsmith Layer Error - {traceback.format_exc()}")
 
-    def log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
+    def log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
-            data = self._prepare_log_data(
-                kwargs, response_obj, start_time, end_time, print_verbose
-            )
+            data = self._prepare_log_data(kwargs, response_obj, start_time, end_time)
             url = f"{self.langsmith_base_url}/runs"
-            print_verbose(f"Langsmith Logging - About to send data to {url} ...")
+            verbose_logger.debug(f"Langsmith Logging - About to send data to {url} ...")
 
             response = requests.post(
                 url=url,
@@ -160,14 +158,14 @@ class LangsmithLogger(CustomLogger):
             )
 
             if response.status_code >= 300:
-                print_verbose(f"Error: {response.status_code}")
+                verbose_logger.error(f"Error: {response.status_code}")
             else:
-                print_verbose("Run successfully created")
-            print_verbose(
+                verbose_logger.debug("Run successfully created")
+            verbose_logger.debug(
                 f"Langsmith Layer Logging - final response object: {response_obj}. Response text from langsmith={response.text}"
             )
         except:
-            print_verbose(f"Langsmith Layer Error - {traceback.format_exc()}")
+            verbose_logger.error(f"Langsmith Layer Error - {traceback.format_exc()}")
 
     def get_run_by_id(self, run_id):
 
