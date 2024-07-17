@@ -114,7 +114,11 @@ async def user_api_key_auth(
     )
 
     try:
-        route: str = request.url.path
+        route: str = (
+            request.url.path[len(request.base_url.path) - 1 :]
+            if request.url.path.startswith(request.base_url.path)
+            else request.url.path
+        )  # remove base url from path if set e.g. `/genai/chat/completions` -> `/chat/completions
 
         pass_through_endpoints: Optional[List[dict]] = general_settings.get(
             "pass_through_endpoints", None
@@ -960,6 +964,10 @@ async def user_api_key_auth(
             _user_role = _get_user_role(user_id_information=user_id_information)
 
             if not _is_user_proxy_admin(user_id_information):  # if non-admin
+                print("#### ROUTE ####")
+                print(route)
+                print(request["route"].name)
+                print()
                 if is_openai_route(route=route):
                     pass
                 elif is_openai_route(route=request["route"].name):
