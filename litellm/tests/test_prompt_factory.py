@@ -7,6 +7,8 @@ import pytest
 
 sys.path.insert(0, os.path.abspath("../.."))
 
+from typing import Union
+
 # from litellm.llms.prompt_templates.factory import prompt_factory
 import litellm
 from litellm import completion
@@ -136,6 +138,38 @@ def test_anthropic_messages_pt():
             messages, model="claude-3-sonnet-20240229", llm_provider="anthropic"
         )
     assert "Invalid first message" in str(err.value)
+
+
+def test_anthropic_messages_nested_pt():
+    from litellm.types.llms.anthropic import (
+        AnthopicMessagesAssistantMessageParam,
+        AnthropicMessagesUserMessageParam,
+    )
+
+    messages = [
+        {"content": [{"text": "here is a task", "type": "text"}], "role": "user"},
+        {
+            "content": [{"text": "sure happy to help", "type": "text"}],
+            "role": "assistant",
+        },
+        {
+            "content": [
+                {
+                    "text": "Here is a screenshot of the current desktop with the "
+                    "mouse coordinates (500, 350). Please select an action "
+                    "from the provided schema.",
+                    "type": "text",
+                }
+            ],
+            "role": "user",
+        },
+    ]
+
+    new_messages = anthropic_messages_pt(
+        messages, model="claude-3-sonnet-20240229", llm_provider="anthropic"
+    )
+
+    assert isinstance(new_messages[1]["content"][0]["text"], str)
 
 
 # codellama_prompt_format()
