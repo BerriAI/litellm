@@ -1288,13 +1288,18 @@ def anthropic_messages_pt(
             ):
                 for m in messages[msg_i]["content"]:
                     # handle text
-                    if m.get("type", "") == "text":
+                    if (
+                        m.get("type", "") == "text" and len(m.get("text", "")) > 0
+                    ):  # don't pass empty text blocks. anthropic api raises errors.
                         anthropic_message = AnthropicMessagesTextParam(
                             type="text", text=m.get("text")
                         )
                         assistant_content.append(anthropic_message)
-            elif "content" in messages[msg_i] and isinstance(
-                messages[msg_i]["content"], str
+            elif (
+                "content" in messages[msg_i]
+                and isinstance(messages[msg_i]["content"], str)
+                and len(messages[msg_i]["content"])
+                > 0  # don't pass empty text blocks. anthropic api raises errors.
             ):
                 assistant_content.append(
                     {"type": "text", "text": messages[msg_i]["content"]}
