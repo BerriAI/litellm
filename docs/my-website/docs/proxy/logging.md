@@ -5,6 +5,7 @@ Log Proxy input, output, and exceptions using:
 - Langfuse
 - OpenTelemetry
 - Custom Callbacks
+- Langsmith
 - DataDog
 - DynamoDB
 - s3 Bucket
@@ -1085,6 +1086,50 @@ litellm_settings:
 ```
 
 Start the LiteLLM Proxy and make a test request to verify the logs reached your callback API 
+
+## Logging LLM IO to Langsmith
+
+1. Set `success_callback: ["langsmith"]` on litellm config.yaml
+
+If you're using a custom LangSmith instance, you can set the
+`LANGSMITH_BASE_URL` environment variable to point to your instance.
+
+```yaml
+litellm_settings:
+  success_callback: ["langsmith"]
+
+environment_variables:
+  LANGSMITH_API_KEY: "lsv2_pt_xxxxxxxx"
+  LANGSMITH_PROJECT: "litellm-proxy"
+
+  LANGSMITH_BASE_URL: "https://api.smith.langchain.com" # (Optional - only needed if you have a custom Langsmith instance)
+```
+
+
+2. Start Proxy
+
+```
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+--header 'Content-Type: application/json' \
+--data ' {
+      "model": "fake-openai-endpoint",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Hello, Claude gm!"
+        }
+      ],
+    }
+'
+```
+Expect to see your log on Langfuse
+<Image img={require('../../img/langsmith_new.png')} />
 
 ## Logging LLM IO to Galileo
 
