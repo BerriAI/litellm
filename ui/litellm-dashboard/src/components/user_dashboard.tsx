@@ -271,6 +271,11 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
     const url = proxyBaseUrl
       ? `${proxyBaseUrl}/sso/key/generate`
       : `/sso/key/generate`;
+    
+
+    // clear cookie called "token" since user will be logging in again
+    document.cookie = "token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
+
     console.log("Full URL:", url);
     window.location.href = url;
 
