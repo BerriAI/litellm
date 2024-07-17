@@ -46,6 +46,9 @@ class LangsmithLogger:
         self.langsmith_default_run_name = os.getenv(
             "LANGSMITH_DEFAULT_RUN_NAME", "LLMRun"
         )
+        self.langsmith_base_url = os.getenv(
+            "LANGSMITH_BASE_URL", "https://api.smith.langchain.com"
+        )
 
     def log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
         # Method definition
@@ -60,6 +63,7 @@ class LangsmithLogger:
         # if not set litellm will fallback to the environment variable LANGSMITH_PROJECT, then to the default project_name = litellm-completion, run_name = LLMRun
         project_name = metadata.get("project_name", self.langsmith_project)
         run_name = metadata.get("run_name", self.langsmith_default_run_name)
+        run_id = metadata.get("id", None)
         print_verbose(
             f"Langsmith Logging - project_name: {project_name}, run_name {run_name}"
         )
@@ -111,6 +115,7 @@ class LangsmithLogger:
                 "session_name": project_name,
                 "start_time": start_time,
                 "end_time": end_time,
+                "id": run_id,
             }
 
             url = f"{langsmith_base_url}/runs"
@@ -128,6 +133,17 @@ class LangsmithLogger:
             print_verbose(
                 f"Langsmith Layer Logging - final response object: {response_obj}. Response text from langsmith={response.text}"
             )
+            return
         except:
             print_verbose(f"Langsmith Layer Error - {traceback.format_exc()}")
             pass
+
+    def get_run_by_id(self, run_id):
+
+        url = f"{self.langsmith_base_url}/runs/{run_id}"
+        response = requests.get(
+            url=url,
+            headers={"x-api-key": self.langsmith_api_key},
+        )
+
+        return response.json()
