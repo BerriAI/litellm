@@ -4,9 +4,18 @@ import sys
 
 sys.path.insert(0, os.path.abspath("../.."))
 
+import asyncio
+import logging
+import uuid
+
+import pytest
+
 import litellm
 from litellm import completion
+from litellm._logging import verbose_logger
 from litellm.integrations.langsmith import LangsmithLogger
+
+verbose_logger.setLevel(logging.DEBUG)
 
 litellm.set_verbose = True
 import time
@@ -14,14 +23,14 @@ import time
 test_langsmith_logger = LangsmithLogger()
 
 
-def test_langsmith_logging():
+@pytest.mark.asyncio()
+async def test_langsmith_logging():
     try:
-        import uuid
 
         run_id = str(uuid.uuid4())
         litellm.set_verbose = True
-        litellm.success_callback = ["langsmith"]
-        response = completion(
+        litellm.callbacks = ["langsmith"]
+        response = await litellm.acompletion(
             model="claude-instant-1.2",
             messages=[{"role": "user", "content": "what llm are u"}],
             max_tokens=10,
@@ -40,7 +49,7 @@ def test_langsmith_logging():
             },
         )
         print(response)
-        time.sleep(3)
+        await asyncio.sleep(3)
 
         print("run_id", run_id)
         logged_run_on_langsmith = test_langsmith_logger.get_run_by_id(run_id=run_id)
@@ -50,13 +59,15 @@ def test_langsmith_logging():
         print("fields in logged_run_on_langsmith", logged_run_on_langsmith.keys())
 
         input_fields_on_langsmith = logged_run_on_langsmith.get("inputs")
-        extra_fields_on_langsmith = logged_run_on_langsmith.get("extra")
+        extra_fields_on_langsmith = logged_run_on_langsmith.get("extra").get(
+            "invocation_params"
+        )
 
         print("\nLogged INPUT ON LANGSMITH", input_fields_on_langsmith)
 
         print("\nextra fields on langsmith", extra_fields_on_langsmith)
 
-        assert input_fields_on_langsmith is not None
+        assert isinstance(input_fields_on_langsmith, dict)
         assert "api_key" not in input_fields_on_langsmith
         assert "api_key" not in extra_fields_on_langsmith
 
@@ -67,6 +78,7 @@ def test_langsmith_logging():
 
     except Exception as e:
         print(e)
+        pytest.fail(f"Error occurred: {e}")
 
 
 # test_langsmith_logging()
@@ -75,6 +87,7 @@ def test_langsmith_logging():
 def test_langsmith_logging_with_metadata():
     try:
         litellm.success_callback = ["langsmith"]
+        litellm.set_verbose = True
         response = completion(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "what llm are u"}],
@@ -83,28 +96,66 @@ def test_langsmith_logging_with_metadata():
         )
         print(response)
         time.sleep(3)
+
     except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
         print(e)
 
 
-# test_langsmith_logging_with_metadata()
-
-
-def test_langsmith_logging_with_streaming_and_metadata():
+@pytest.mark.parametrize("sync_mode", [False, True])
+@pytest.mark.asyncio
+async def test_langsmith_logging_with_streaming_and_metadata(sync_mode):
     try:
         litellm.success_callback = ["langsmith"]
-        response = completion(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": "what llm are u"}],
-            max_tokens=10,
-            temperature=0.2,
-            stream=True,
+        litellm.set_verbose = True
+        run_id = str(uuid.uuid4())
+
+        messages = [{"role": "user", "content": "what llm are u"}]
+        if sync_mode is True:
+            response = completion(
+                model="gpt-3.5-turbo",
+                messages=messages,
+                max_tokens=10,
+                temperature=0.2,
+                stream=True,
+                metadata={"id": run_id},
+            )
+            for chunk in response:
+                continue
+            time.sleep(3)
+        else:
+            response = await litellm.acompletion(
+                model="gpt-3.5-turbo",
+                messages=messages,
+                max_tokens=10,
+                temperature=0.2,
+                mock_response="This is a mock request",
+                stream=True,
+                metadata={"id": run_id},
+            )
+            async for chunk in response:
+                continue
+            await asyncio.sleep(3)
+
+        print("run_id", run_id)
+        logged_run_on_langsmith = test_langsmith_logger.get_run_by_id(run_id=run_id)
+
+        print("logged_run_on_langsmith", logged_run_on_langsmith)
+
+        print("fields in logged_run_on_langsmith", logged_run_on_langsmith.keys())
+
+        input_fields_on_langsmith = logged_run_on_langsmith.get("inputs")
+
+        extra_fields_on_langsmith = logged_run_on_langsmith.get("extra").get(
+            "invocation_params"
         )
-        for chunk in response:
-            continue
-        time.sleep(3)
+
+        assert logged_run_on_langsmith.get("run_type") == "llm"
+        print("\nLogged INPUT ON LANGSMITH", input_fields_on_langsmith)
+
+        print("\nextra fields on langsmith", extra_fields_on_langsmith)
+
+        assert isinstance(input_fields_on_langsmith, dict)
     except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
         print(e)
-
-
-# test_langsmith_logging_with_streaming_and_metadata()
