@@ -4284,7 +4284,7 @@ def get_formatted_prompt(
                     for c in content:
                         if c["type"] == "text":
                             prompt += c["text"]
-            if "tool_calls" in message:
+            if message.get("tool_calls"):
                 for tool_call in message["tool_calls"]:
                     if "function" in tool_call:
                         function_arguments = tool_call["function"]["arguments"]
