@@ -1337,7 +1337,14 @@ class Logging:
                 if kwargs.get("no-log", False) == True:
                     print_verbose("no-log request, skipping logging")
                     continue
-                if callback == "cache" and litellm.cache is not None:
+                if (
+                    callback == "cache"
+                    and litellm.cache is not None
+                    and self.model_call_details.get("litellm_params", {}).get(
+                        "acompletion", False
+                    )
+                    is True
+                ):
                     # set_cache once complete streaming response is built
                     print_verbose("async success_callback: reaches cache for logging!")
                     kwargs = self.model_call_details
