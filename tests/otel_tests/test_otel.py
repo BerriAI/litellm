@@ -107,7 +107,7 @@ async def test_chat_completion_check_otel_spans():
 
         print("Parent trace spans: ", parent_trace_spans)
 
-        assert len(parent_trace_spans) == 4
+        assert len(parent_trace_spans) == 5
 
         # 'postgres', 'redis', 'raw_gen_ai_request', 'litellm_request', 'Received Proxy Server Request' in the span
         assert "postgres" in parent_trace_spans
