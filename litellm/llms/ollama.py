@@ -318,9 +318,10 @@ def get_ollama_response(
 
 
 def ollama_completion_stream(url, data, logging_obj):
-    with httpx.stream(
-        url=url, json=data, method="POST", timeout=litellm.request_timeout
-    ) as response:
+    # with httpx.stream(
+    #     url=url, json=data, method="POST", timeout=litellm.request_timeout
+    # ) as response:
+    with requests.post(url=url, data=json.dumps(data), timeout=litellm.request_timeout) as response:
         try:
             if response.status_code != 200:
                 raise OllamaError(
