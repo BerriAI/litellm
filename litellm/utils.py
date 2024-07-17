@@ -5813,6 +5813,11 @@ def convert_to_model_response_object(
             if "text" in response_object:
                 model_response_object.text = response_object["text"]
 
+            optional_keys = ["language", "task", "duration", "words", "segments"]
+            for key in optional_keys:  # not guaranteed to be in response
+                if key in response_object:
+                    setattr(model_response_object, key, response_object[key])
+
             if hidden_params is not None:
                 model_response_object._hidden_params = hidden_params
             return model_response_object
