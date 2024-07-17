@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import json
+import traceback
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
@@ -795,6 +796,11 @@ async def team_info(
         return {"team_id": team_id, "team_info": team_info, "keys": keys}
 
     except Exception as e:
+        verbose_proxy_logger.error(
+            "litellm.proxy.management_endpoints.team_endpoints.py::team_info - Exception occurred - {}\n{}".format(
+                e, traceback.format_exc()
+            )
+        )
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"Authentication Error({str(e)})"),
