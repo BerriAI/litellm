@@ -417,6 +417,16 @@ def function_setup(
                     # we only support async dynamo db logging for acompletion/aembedding since that's used on proxy
                     litellm._async_success_callback.append(callback)
                     removed_async_items.append(index)
+                elif callback == "langsmith":
+                    callback_class = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(  # type: ignore
+                        callback, internal_usage_cache=None, llm_router=None
+                    )
+
+                    # don't double add a callback
+                    if not any(
+                        isinstance(cb, type(callback_class)) for cb in litellm.callbacks
+                    ):
+                        litellm.callbacks.append(callback_class)  # type: ignore
 
             # Pop the async items from success_callback in reverse order to avoid index issues
             for index in reversed(removed_async_items):
