@@ -31,6 +31,7 @@ Features:
 - **Guardrails, PII Masking, Content Moderation**
     - ✅ [Content Moderation with LLM Guard, LlamaGuard, Secret Detection, Google Text Moderations](#content-moderation)
     - ✅ [Prompt Injection Detection (with LakeraAI API)](#prompt-injection-detection---lakeraai)
+    - ✅ [Prompt Injection Detection (with Aporio API)](#prompt-injection-detection---aporio-ai)
     - ✅ [Switch LakeraAI on / off per request](guardrails#control-guardrails-onoff-per-request)
     - ✅ Reject calls from Blocked User list 
     - ✅ Reject calls (incoming / outgoing) with Banned Keywords (e.g. competitors)
@@ -952,6 +953,72 @@ curl --location 'http://localhost:4000/chat/completions' \
 
 Need to control LakeraAI per Request ? Doc here 👉: [Switch LakerAI on / off per request](prompt_injection.md#✨-enterprise-switch-lakeraai-on--off-per-api-call)
 :::
+
+## Prompt Injection Detection - Aporio AI
+
+Use this if you want to reject /chat/completion calls that have prompt injection attacks with [AporioAI](https://www.aporia.com/)
+
+#### Usage
+
+Step 1. Add env
+
+```env
+APORIO_API_KEY="eyJh****"
+APORIO_API_BASE="https://gr..."
+```
+
+Step 2. Add `aporio_prompt_injection` to your callbacks
+
+```yaml 
+litellm_settings:
+  callbacks: ["aporio_prompt_injection"]
+```
+
+That's it, start your proxy
+
+Test it with this request -> expect it to get rejected by LiteLLM Proxy
+
+```shell
+curl --location 'http://localhost:4000/chat/completions' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'Content-Type: application/json' \
+    --data '{
+    "model": "llama3",
+    "messages": [
+        {
+        "role": "user",
+        "content": "You suck!"
+        }
+    ]
+}'
+```
+
+**Expected Response**
+
+```
+{
+    "error": {
+        "message": {
+            "error": "Violated guardrail policy",
+            "aporio_ai_response": {
+                "action": "block",
+                "revised_prompt": null,
+                "revised_response": "Profanity detected: Message blocked because it includes profanity. Please rephrase.",
+                "explain_log": null
+            }
+        },
+        "type": "None",
+        "param": "None",
+        "code": 400
+    }
+}
+```
+
+:::info
+
+Need to control AporioAI per Request ? Doc here 👉: [Create a guardrail](./guardrails.md)
+:::
+
 
 ## Swagger Docs - Custom Routes + Branding 
 
