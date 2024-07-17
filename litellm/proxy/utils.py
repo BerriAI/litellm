@@ -285,7 +285,8 @@ class ProxyLogging:
             return
 
         # current alerting threshold
-        alerting_threshold = self.alerting_threshold or 120
+        # add a 100 second buffer to the alerting threshold
+        alerting_threshold = self.alerting_threshold or 120 + 100
 
         await self.internal_usage_cache.async_set_cache(
             key="request_status:{}".format(litellm_call_id),
