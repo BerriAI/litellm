@@ -427,6 +427,11 @@ def function_setup(
                         isinstance(cb, type(callback_class)) for cb in litellm.callbacks
                     ):
                         litellm.callbacks.append(callback_class)  # type: ignore
+                        litellm.input_callback.append(callback_class)  # type: ignore
+                        litellm.success_callback.append(callback_class)  # type: ignore
+                        litellm.failure_callback.append(callback_class)  # type: ignore
+                        litellm._async_success_callback.append(callback_class)  # type: ignore
+                        litellm._async_failure_callback.append(callback_class)  # type: ignore
 
             # Pop the async items from success_callback in reverse order to avoid index issues
             for index in reversed(removed_async_items):
