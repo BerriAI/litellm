@@ -759,30 +759,69 @@ class OpenAIChatCompletion(BaseLLM):
         openai_aclient: AsyncOpenAI,
         data: dict,
         timeout: Union[float, httpx.Timeout],
+        print_verbose: Optional[Callable] = None,
     ):
         """
         Helper to:
         - call chat.completions.create.with_raw_response when litellm.return_response_headers is True
         - call chat.completions.create by default
         """
-        try:
-            if litellm.return_response_headers is True:
-                raw_response = (
-                    await openai_aclient.chat.completions.with_raw_response.create(
+        for _ in range(
+            2
+        ):  # if call fails due to alternating messages, retry with reformatted message
+            try:
+                messages = data.get("messages")
+                if litellm.return_response_headers is True:
+                    raw_response = (
+                        await openai_aclient.chat.completions.with_raw_response.create(
+                            **data, timeout=timeout
+                        )
+                    )
+
+                    headers = dict(raw_response.headers)
+                    response = raw_response.parse()
+                    return headers, response
+                else:
+                    response = await openai_aclient.chat.completions.create(
                         **data, timeout=timeout
                     )
-                )
-
-                headers = dict(raw_response.headers)
-                response = raw_response.parse()
-                return headers, response
-            else:
-                response = await openai_aclient.chat.completions.create(
-                    **data, timeout=timeout
-                )
-                return None, response
-        except Exception as e:
-            raise e
+                    return None, response
+            except Exception as e:
+                if print_verbose is not None:
+                    print_verbose(f"openai.py: Received openai error - {str(e)}")
+                if (
+                    "Conversation roles must alternate user/assistant" in str(e)
+                    or "user and assistant roles should be alternating" in str(e)
+                ) and messages is not None:
+                    if print_verbose is not None:
+                        print_verbose("openai.py: REFORMATS THE MESSAGE!")
+                    # reformat messages to ensure user/assistant are alternating, if there's either 2 consecutive 'user' messages or 2 consecutive 'assistant' message, add a blank 'user' or 'assistant' message to ensure compatibility
+                    new_messages = []
+                    for i in range(len(messages) - 1):  # type: ignore
+                        new_messages.append(messages[i])
+                        if messages[i]["role"] == messages[i + 1]["role"]:
+                            if messages[i]["role"] == "user":
+                                new_messages.append(
+                                    {"role": "assistant", "content": ""}
+                                )
+                            else:
+                                new_messages.append({"role": "user", "content": ""})
+                    new_messages.append(messages[-1])
+                    messages = new_messages
+                elif (
+                    "Last message must have role `user`" in str(e)
+                ) and messages is not None:
+                    new_messages = messages
+                    new_messages.append({"role": "user", "content": ""})
+                    messages = new_messages
+                elif (
+                    "unknown field: parameter index is not a valid field" in str(e)
+                ) and "tools" in data:
+                    litellm.remove_index_from_tool_calls(
+                        tool_calls=data["tools"], messages=messages
+                    )
+                else:
+                    raise e
 
     def completion(
         self,
@@ -858,6 +897,7 @@ class OpenAIChatCompletion(BaseLLM):
                                 client=client,
                                 max_retries=max_retries,
                                 organization=organization,
+                                print_verbose=print_verbose,
                             )
                         else:
                             return self.acompletion(
@@ -871,6 +911,7 @@ class OpenAIChatCompletion(BaseLLM):
                                 client=client,
                                 max_retries=max_retries,
                                 organization=organization,
+                                print_verbose=print_verbose,
                             )
                     elif optional_params.get("stream", False):
                         return self.streaming(
@@ -979,6 +1020,7 @@ class OpenAIChatCompletion(BaseLLM):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
         organization: Optional[str] = None,
+        print_verbose: Optional[Callable] = None,
         client=None,
         max_retries=None,
         headers=None,
@@ -1008,7 +1050,10 @@ class OpenAIChatCompletion(BaseLLM):
             )
 
             headers, response = await self.make_openai_chat_completion_request(
-                openai_aclient=openai_aclient, data=data, timeout=timeout
+                openai_aclient=openai_aclient,
+                data=data,
+                timeout=timeout,
+                print_verbose=print_verbose,
             )
             stringified_response = response.model_dump()
             logging_obj.post_call(
@@ -1078,6 +1123,7 @@ class OpenAIChatCompletion(BaseLLM):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
         organization: Optional[str] = None,
+        print_verbose: Optional[Callable] = None,
         client=None,
         max_retries=None,
         headers=None,
@@ -1106,7 +1152,10 @@ class OpenAIChatCompletion(BaseLLM):
             )
 
             headers, response = await self.make_openai_chat_completion_request(
-                openai_aclient=openai_aclient, data=data, timeout=timeout
+                openai_aclient=openai_aclient,
+                data=data,
+                timeout=timeout,
+                print_verbose=print_verbose,
             )
             logging_obj.model_call_details["response_headers"] = headers
             streamwrapper = CustomStreamWrapper(
