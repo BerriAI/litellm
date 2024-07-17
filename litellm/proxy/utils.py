@@ -285,8 +285,11 @@ class ProxyLogging:
             return
 
         # current alerting threshold
+        alerting_threshold: float = self.alerting_threshold
+
         # add a 100 second buffer to the alerting threshold
-        alerting_threshold = self.alerting_threshold or 120 + 100
+        # ensures we don't send errant hanging request slack alerts
+        alerting_threshold += 100
 
         await self.internal_usage_cache.async_set_cache(
             key="request_status:{}".format(litellm_call_id),
