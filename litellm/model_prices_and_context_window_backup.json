@@ -1801,7 +1801,7 @@
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
     "medlm-medium": {
-        "max_tokens": 32768,
+        "max_input_tokens": 32768,
         "max_output_tokens": 8192,
         "input_cost_per_character": 0.0000005,
         "output_cost_per_character": 0.000001,
