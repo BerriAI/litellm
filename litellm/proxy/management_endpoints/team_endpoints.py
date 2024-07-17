@@ -748,7 +748,9 @@ async def team_info(
                 detail={"message": "Malformed request. No team id passed in."},
             )
 
-        if user_api_key_dict.team_id or (team_id != user_api_key_dict.team_id):
+        if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+            pass
+        elif user_api_key_dict.team_id or (team_id != user_api_key_dict.team_id):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="key not allowed to access this team's info",
