@@ -1283,7 +1283,9 @@ def anthropic_messages_pt(
         assistant_content: List[AnthropicMessagesAssistantMessageValues] = []
         ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
         while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
-            if isinstance(messages[msg_i]["content"], list):
+            if "content" in messages[msg_i] and isinstance(
+                messages[msg_i]["content"], list
+            ):
                 for m in messages[msg_i]["content"]:
                     # handle text
                     if m.get("type", "") == "text":
@@ -1291,7 +1293,9 @@ def anthropic_messages_pt(
                             type="text", text=m.get("text")
                         )
                         assistant_content.append(anthropic_message)
-            elif isinstance(messages[msg_i]["content"], str):
+            elif "content" in messages[msg_i] and isinstance(
+                messages[msg_i]["content"], str
+            ):
                 assistant_content.append(
                     {"type": "text", "text": messages[msg_i]["content"]}
                 )
