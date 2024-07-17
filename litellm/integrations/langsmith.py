@@ -5,7 +5,7 @@ import os
 import traceback
 import types
 from datetime import datetime
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Union
 
 import dotenv  # type: ignore
 import requests  # type: ignore
@@ -29,7 +29,7 @@ class LangsmithInputs(BaseModel):
     custom_llm_provider: Optional[str] = None
     input: Optional[List[Any]] = None
     log_event_type: Optional[str] = None
-    original_response: Optional[str] = None
+    original_response: Optional[Any] = None
     response_cost: Optional[float] = None
 
     # LiteLLM Virtual Key specific fields
@@ -96,10 +96,14 @@ class LangsmithLogger(CustomLogger):
             value = kwargs[key]
             if key == "start_time" or key == "end_time" or value is None:
                 pass
+            elif key == "original_response" and not isinstance(value, str):
+                new_kwargs[key] = str(value)
             elif type(value) == datetime.datetime:
                 new_kwargs[key] = value.isoformat()
             elif type(value) != dict and is_serializable(value=value):
                 new_kwargs[key] = value
+            elif not is_serializable(value=value):
+                continue
 
         if isinstance(response_obj, BaseModel):
             try:
@@ -122,6 +126,11 @@ class LangsmithLogger(CustomLogger):
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
+            verbose_logger.debug(
+                "Langsmith Async Layer Logging - kwargs: %s, response_obj: %s",
+                kwargs,
+                response_obj,
+            )
             data = self._prepare_log_data(kwargs, response_obj, start_time, end_time)
             url = f"{self.langsmith_base_url}/runs"
             verbose_logger.debug(f"Langsmith Logging - About to send data to {url} ...")
@@ -147,6 +156,11 @@ class LangsmithLogger(CustomLogger):
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
+            verbose_logger.debug(
+                "Langsmith Sync Layer Logging - kwargs: %s, response_obj: %s",
+                kwargs,
+                response_obj,
+            )
             data = self._prepare_log_data(kwargs, response_obj, start_time, end_time)
             url = f"{self.langsmith_base_url}/runs"
             verbose_logger.debug(f"Langsmith Logging - About to send data to {url} ...")
