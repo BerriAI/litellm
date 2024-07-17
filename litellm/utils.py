@@ -1621,7 +1621,6 @@ def openai_token_counter(
             num_tokens += tokens_per_message
             if message.get("role", None) == "system":
                 includes_system_message = True
-                includes_system_message = True
             for key, value in message.items():
                 if isinstance(value, str):
                     num_tokens += len(encoding.encode(value, disallowed_special=()))
@@ -1873,7 +1872,6 @@ def _format_type(props, indent):
         return "any"
 
 
-
 def token_counter(
     model="",
     custom_tokenizer: Optional[dict] = None,
@@ -1962,7 +1960,6 @@ def token_counter(
                     count_response_tokens=count_response_tokens,
                     tools=tools,
                     tool_choice=tool_choice,
-                    tool_choice=tool_choice,
                 )
             else:
                 print_verbose(
@@ -1975,7 +1972,6 @@ def token_counter(
                     is_tool_call=is_tool_call,
                     count_response_tokens=count_response_tokens,
                     tools=tools,
-                    tool_choice=tool_choice,
                     tool_choice=tool_choice,
                 )
     else:
