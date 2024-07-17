@@ -119,8 +119,12 @@ class LangsmithLogger(CustomLogger):
             "session_name": project_name,
             "start_time": start_time,
             "end_time": end_time,
-            "id": run_id,
         }
+
+        if run_id:
+            data["id"] = run_id
+
+        verbose_logger.debug("Langsmith Logging data on langsmith: %s", data)
 
         return data
 
@@ -172,7 +176,7 @@ class LangsmithLogger(CustomLogger):
             )
 
             if response.status_code >= 300:
-                verbose_logger.error(f"Error: {response.status_code}")
+                verbose_logger.error(f"Error: {response.status_code} - {response.text}")
             else:
                 verbose_logger.debug("Run successfully created")
             verbose_logger.debug(
