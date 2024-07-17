@@ -27,6 +27,11 @@ class LangsmithInputs(BaseModel):
     original_response: Optional[str] = None
     response_cost: Optional[float] = None
 
+    # LiteLLM Virtual Key specific fields
+    user_api_key: Optional[str] = None
+    user_api_key_user_id: Optional[str] = None
+    user_api_key_team_alias: Optional[str] = None
+
 
 def is_serializable(value):
     non_serializable_types = (
@@ -56,6 +61,13 @@ class LangsmithLogger:
         metadata = (
             kwargs.get("litellm_params", {}).get("metadata", {}) or {}
         )  # if metadata is None
+
+        # set user_api_key, user_team_id, user_api_key_user_id
+        kwargs["user_api_key"] = metadata.get("user_api_key", None)
+        kwargs["user_api_key_user_id"] = metadata.get("user_api_key_user_id", None)
+        kwargs["user_api_key_team_alias"] = metadata.get(
+            "user_api_key_team_alias", None
+        )
 
         # set project name and run_name for langsmith logging
         # users can pass project_name and run name to litellm.completion()
