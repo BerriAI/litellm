@@ -1,12 +1,31 @@
 #### What this does ####
 #    On success, logs events to Langsmith
-import dotenv, os  # type: ignore
-import requests  # type: ignore
-from datetime import datetime
-import traceback
 import asyncio
+import os
+import traceback
 import types
+from datetime import datetime
+from typing import Any, List, Optional
+
+import dotenv  # type: ignore
+import requests  # type: ignore
 from pydantic import BaseModel  # type: ignore
+
+
+class LangsmithInputs(BaseModel):
+    model: Optional[str] = None
+    messages: Optional[List[Any]] = None
+    stream: Optional[bool] = None
+    call_type: Optional[str] = None
+    litellm_call_id: Optional[str] = None
+    completion_start_time: Optional[datetime] = None
+    temperature: Optional[float] = None
+    max_tokens: Optional[int] = None
+    custom_llm_provider: Optional[str] = None
+    input: Optional[List[Any]] = None
+    log_event_type: Optional[str] = None
+    original_response: Optional[str] = None
+    response_cost: Optional[float] = None
 
 
 def is_serializable(value):
@@ -27,6 +46,9 @@ class LangsmithLogger:
         self.langsmith_default_run_name = os.getenv(
             "LANGSMITH_DEFAULT_RUN_NAME", "LLMRun"
         )
+        self.langsmith_base_url = os.getenv(
+            "LANGSMITH_BASE_URL", "https://api.smith.langchain.com"
+        )
 
     def log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
         # Method definition
@@ -41,6 +63,7 @@ class LangsmithLogger:
         # if not set litellm will fallback to the environment variable LANGSMITH_PROJECT, then to the default project_name = litellm-completion, run_name = LLMRun
         project_name = metadata.get("project_name", self.langsmith_project)
         run_name = metadata.get("run_name", self.langsmith_default_run_name)
+        run_id = metadata.get("id", None)
         print_verbose(
             f"Langsmith Logging - project_name: {project_name}, run_name {run_name}"
         )
@@ -52,9 +75,10 @@ class LangsmithLogger:
             print_verbose(
                 f"Langsmith Logging - Enters logging function for model {kwargs}"
             )
-            import requests
             import datetime
             from datetime import timezone
+
+            import requests
 
             try:
                 start_time = kwargs["start_time"].astimezone(timezone.utc).isoformat()
@@ -64,6 +88,9 @@ class LangsmithLogger:
                 end_time = datetime.datetime.utcnow().isoformat()
 
             # filter out kwargs to not include any dicts, langsmith throws an erros when trying to log kwargs
+            logged_kwargs = LangsmithInputs(**kwargs)
+            kwargs = logged_kwargs.model_dump()
+
             new_kwargs = {}
             for key in kwargs:
                 value = kwargs[key]
@@ -88,6 +115,7 @@ class LangsmithLogger:
                 "session_name": project_name,
                 "start_time": start_time,
                 "end_time": end_time,
+                "id": run_id,
             }
 
             url = f"{langsmith_base_url}/runs"
@@ -103,8 +131,19 @@ class LangsmithLogger:
             else:
                 print_verbose("Run successfully created")
             print_verbose(
-                f"Langsmith Layer Logging - final response object: {response_obj}"
+                f"Langsmith Layer Logging - final response object: {response_obj}. Response text from langsmith={response.text}"
             )
+            return
         except:
             print_verbose(f"Langsmith Layer Error - {traceback.format_exc()}")
             pass
+
+    def get_run_by_id(self, run_id):
+
+        url = f"{self.langsmith_base_url}/runs/{run_id}"
+        response = requests.get(
+            url=url,
+            headers={"x-api-key": self.langsmith_api_key},
+        )
+
+        return response.json()
