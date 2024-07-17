@@ -26,7 +26,18 @@ def test_langsmith_logging():
             messages=[{"role": "user", "content": "what llm are u"}],
             max_tokens=10,
             temperature=0.2,
-            metadata={"id": run_id},
+            metadata={
+                "id": run_id,
+                "user_api_key": "6eb81e014497d89f3cc1aa9da7c2b37bda6b7fea68e4b710d33d94201e68970c",
+                "user_api_key_alias": "ishaans-langmsith-key",
+                "user_api_end_user_max_budget": None,
+                "litellm_api_version": "1.40.19",
+                "global_max_parallel_requests": None,
+                "user_api_key_user_id": "admin",
+                "user_api_key_org_id": None,
+                "user_api_key_team_id": "dbe2f686-a686-4896-864a-4c3924458709",
+                "user_api_key_team_alias": "testing-team",
+            },
         )
         print(response)
         time.sleep(3)
@@ -48,6 +59,11 @@ def test_langsmith_logging():
         assert input_fields_on_langsmith is not None
         assert "api_key" not in input_fields_on_langsmith
         assert "api_key" not in extra_fields_on_langsmith
+
+        # assert user_api_key in extra_fields_on_langsmith
+        assert "user_api_key" in extra_fields_on_langsmith
+        assert "user_api_key_user_id" in extra_fields_on_langsmith
+        assert "user_api_key_team_alias" in extra_fields_on_langsmith
 
     except Exception as e:
         print(e)
