@@ -4,12 +4,7 @@ messages = [
     {
         "role": "user",
         "content": "hey, how's it going?",
-        "tool_calls": [
-            {
-                "tool": "token_counter",
-                "parameters": "\{count\:5\}"
-            }
-        ]
+        "tool_calls": None
     }
 ]
 
