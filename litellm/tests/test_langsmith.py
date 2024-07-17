@@ -5,12 +5,16 @@ import sys
 sys.path.insert(0, os.path.abspath("../.."))
 
 import asyncio
+import logging
 
 import pytest
 
 import litellm
 from litellm import completion
+from litellm._logging import verbose_logger
 from litellm.integrations.langsmith import LangsmithLogger
+
+verbose_logger.setLevel(logging.DEBUG)
 
 litellm.set_verbose = True
 import time
@@ -83,6 +87,7 @@ async def test_langsmith_logging():
 def test_langsmith_logging_with_metadata():
     try:
         litellm.success_callback = ["langsmith"]
+        litellm.set_verbose = True
         response = completion(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "what llm are u"}],
@@ -91,6 +96,7 @@ def test_langsmith_logging_with_metadata():
         )
         print(response)
         time.sleep(3)
+
     except Exception as e:
         print(e)
 
@@ -98,6 +104,7 @@ def test_langsmith_logging_with_metadata():
 def test_langsmith_logging_with_streaming_and_metadata():
     try:
         litellm.success_callback = ["langsmith"]
+        litellm.set_verbose = True
         response = completion(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "what llm are u"}],
