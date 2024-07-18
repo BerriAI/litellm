@@ -61,7 +61,7 @@ class _ENTERPRISE_lakeraAI_Moderation(CustomLogger):
             is False
         ):
             return
-
+        text = ""
         if "messages" in data and isinstance(data["messages"], list):
             enabled_roles = litellm.guardrail_name_config_map["prompt_injection"].enabled_roles
             lakera_input_dict = {role: None for role in INPUT_POSITIONING_MAP.keys()}
@@ -99,6 +99,11 @@ class _ENTERPRISE_lakeraAI_Moderation(CustomLogger):
         if len(lakera_input) == 0:
             verbose_proxy_logger.debug("Skipping lakera prompt injection, no roles with messages found")
             return
+
+        elif "input" in data and isinstance(data["input"], str):
+            text = data["input"]
+        elif "input" in data and isinstance(data["input"], list):
+            text = "\n".join(data["input"])
 
         # https://platform.lakera.ai/account/api-keys
         data = {"input": lakera_input}
