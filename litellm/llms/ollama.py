@@ -77,6 +77,7 @@ class OllamaConfig:
     mirostat_tau: Optional[float] = None
     num_ctx: Optional[int] = None
     num_gqa: Optional[int] = None
+    num_gpu: Optional[int] = None
     num_thread: Optional[int] = None
     repeat_last_n: Optional[int] = None
     repeat_penalty: Optional[float] = None
@@ -99,6 +100,7 @@ class OllamaConfig:
         mirostat_tau: Optional[float] = None,
         num_ctx: Optional[int] = None,
         num_gqa: Optional[int] = None,
+        num_gpu: Optional[int] = None,
         num_thread: Optional[int] = None,
         repeat_last_n: Optional[int] = None,
         repeat_penalty: Optional[float] = None,
