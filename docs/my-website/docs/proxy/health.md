@@ -124,6 +124,18 @@ model_list:
       mode: audio_transcription
 ```
 
+### Hide details
+
+The health check response contains details like endpoint URLs, error messages,
+and other LiteLLM params. While this is useful for debugging, it can be
+problematic when exposing the proxy server to a broad audience.
+
+You can hide these details by setting the `health_check_details` setting to `False`.
+
+```yaml
+general_settings: 
+  health_check_details: False
+```
 
 ## `/health/readiness`
 
