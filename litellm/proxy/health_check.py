@@ -1,13 +1,12 @@
 # This file runs a health check for the LLM, used on litellm/proxy
 
 import asyncio
+import logging
 import random
 from typing import Optional
 
 import litellm
-import logging
 from litellm._logging import print_verbose
-
 
 logger = logging.getLogger(__name__)
 
@@ -15,6 +14,7 @@ logger = logging.getLogger(__name__)
 ILLEGAL_DISPLAY_PARAMS = ["messages", "api_key", "prompt", "input"]
 
 MINIMAL_DISPLAY_PARAMS = ["model"]
+
 
 def _get_random_llm_message():
     """
@@ -25,7 +25,7 @@ def _get_random_llm_message():
     return [{"role": "user", "content": random.choice(messages)}]
 
 
-def _clean_endpoint_data(endpoint_data: dict, details: bool):
+def _clean_endpoint_data(endpoint_data: dict, details: Optional[bool] = True):
     """
     Clean the endpoint data for display to users.
     """
@@ -36,7 +36,7 @@ def _clean_endpoint_data(endpoint_data: dict, details: bool):
     )
 
 
-async def _perform_health_check(model_list: list, details: bool):
+async def _perform_health_check(model_list: list, details: Optional[bool] = True):
     """
     Perform a health check for each model in the list.
     """
@@ -64,9 +64,13 @@ async def _perform_health_check(model_list: list, details: bool):
         litellm_params = model["litellm_params"]
 
         if isinstance(is_healthy, dict) and "error" not in is_healthy:
-            healthy_endpoints.append(_clean_endpoint_data({**litellm_params, **is_healthy}, details))
+            healthy_endpoints.append(
+                _clean_endpoint_data({**litellm_params, **is_healthy}, details)
+            )
         elif isinstance(is_healthy, dict):
-            unhealthy_endpoints.append(_clean_endpoint_data({**litellm_params, **is_healthy}, details))
+            unhealthy_endpoints.append(
+                _clean_endpoint_data({**litellm_params, **is_healthy}, details)
+            )
         else:
             unhealthy_endpoints.append(_clean_endpoint_data(litellm_params, details))
 
@@ -74,7 +78,10 @@ async def _perform_health_check(model_list: list, details: bool):
 
 
 async def perform_health_check(
-    model_list: list, model: Optional[str] = None, cli_model: Optional[str] = None, details: Optional[bool] = True
+    model_list: list,
+    model: Optional[str] = None,
+    cli_model: Optional[str] = None,
+    details: Optional[bool] = True,
 ):
     """
     Perform a health check on the system.
@@ -98,6 +105,8 @@ async def perform_health_check(
             _new_model_list = [x for x in model_list if x["model_name"] == model]
         model_list = _new_model_list
 
-    healthy_endpoints, unhealthy_endpoints = await _perform_health_check(model_list, details)
+    healthy_endpoints, unhealthy_endpoints = await _perform_health_check(
+        model_list, details
+    )
 
     return healthy_endpoints, unhealthy_endpoints
