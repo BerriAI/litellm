@@ -17,9 +17,7 @@ model_list:
 
 general_settings: 
   master_key: sk-1234 
-  litellm_key_header_name: "X-Litellm-Key"
 
 litellm_settings:
-  cache: true
-  callbacks: ["otel"]
+  success_callback: ["langsmith"]
 
