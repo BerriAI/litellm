@@ -515,6 +515,7 @@ async def test_completion_predibase_streaming(sync_mode):
             response = completion(
                 model="predibase/llama-3-8b-instruct",
                 tenant_id="c4768f95",
+                max_tokens=10,
                 api_base="https://serving.app.predibase.com",
                 api_key=os.getenv("PREDIBASE_API_KEY"),
                 messages=[{"role": "user", "content": "What is the meaning of life?"}],
@@ -539,6 +540,7 @@ async def test_completion_predibase_streaming(sync_mode):
             response = await litellm.acompletion(
                 model="predibase/llama-3-8b-instruct",
                 tenant_id="c4768f95",
+                max_tokens=10,
                 api_base="https://serving.app.predibase.com",
                 api_key=os.getenv("PREDIBASE_API_KEY"),
                 messages=[{"role": "user", "content": "What is the meaning of life?"}],
