@@ -18,12 +18,15 @@ litellm_settings:
         default_on: true
 """
 
+
 class Role(Enum):
     SYSTEM = "system"
     ASSISTANT = "assistant"
     USER = "user"
 
-default_roles = [Role.SYSTEM, Role.ASSISTANT, Role.USER];
+
+default_roles = [Role.SYSTEM, Role.ASSISTANT, Role.USER]
+
 
 class GuardrailItemSpec(TypedDict, total=False):
     callbacks: Required[List[str]]
@@ -37,7 +40,7 @@ class GuardrailItem(BaseModel):
     default_on: bool
     logging_only: Optional[bool]
     guardrail_name: str
-    enabled_roles: List[Role]
+    enabled_roles: Optional[List[Role]]
     model_config = ConfigDict(use_enum_values=True)
 
     def __init__(
@@ -46,7 +49,7 @@ class GuardrailItem(BaseModel):
         guardrail_name: str,
         default_on: bool = False,
         logging_only: Optional[bool] = None,
-        enabled_roles: List[Role] = default_roles,
+        enabled_roles: Optional[List[Role]] = default_roles,
     ):
         super().__init__(
             callbacks=callbacks,
