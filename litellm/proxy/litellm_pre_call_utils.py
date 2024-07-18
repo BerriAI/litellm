@@ -43,6 +43,16 @@ def _get_metadata_variable_name(request: Request) -> str:
         return "metadata"
 
 
+def safe_add_api_version_from_query_params(data: dict, request: Request):
+    try:
+        if hasattr(request, "query_params"):
+            query_params = dict(request.query_params)
+            if "api-version" in query_params:
+                data["api_version"] = query_params["api-version"]
+    except Exception as e:
+        verbose_logger.error("error checking api version in query params: %s", str(e))
+
+
 async def add_litellm_data_to_request(
     data: dict,
     request: Request,
@@ -67,9 +77,7 @@ async def add_litellm_data_to_request(
     """
     from litellm.proxy.proxy_server import premium_user
 
-    query_params = dict(request.query_params)
-    if "api-version" in query_params:
-        data["api_version"] = query_params["api-version"]
+    safe_add_api_version_from_query_params(data, request)
 
     # Include original request and headers in the data
     data["proxy_server_request"] = {
