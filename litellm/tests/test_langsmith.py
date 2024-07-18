@@ -14,6 +14,7 @@ import litellm
 from litellm import completion
 from litellm._logging import verbose_logger
 from litellm.integrations.langsmith import LangsmithLogger
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
 verbose_logger.setLevel(logging.DEBUG)
 
@@ -74,6 +75,11 @@ async def test_async_langsmith_logging():
         assert "user_api_key_user_id" in extra_fields_on_langsmith
         assert "user_api_key_team_alias" in extra_fields_on_langsmith
 
+        for cb in litellm.callbacks:
+            if isinstance(cb, LangsmithLogger):
+                await cb.async_httpx_client.client.aclose()
+        # test_langsmith_logger.async_httpx_client.close()
+
     except Exception as e:
         print(e)
         pytest.fail(f"Error occurred: {e}")
@@ -94,6 +100,10 @@ def test_async_langsmith_logging_with_metadata():
         )
         print(response)
         time.sleep(3)
+
+        for cb in litellm.callbacks:
+            if isinstance(cb, LangsmithLogger):
+                cb.async_httpx_client.close()
 
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
@@ -119,6 +129,9 @@ async def test_async_langsmith_logging_with_streaming_and_metadata(sync_mode):
                 stream=True,
                 metadata={"id": run_id},
             )
+            for cb in litellm.callbacks:
+                if isinstance(cb, LangsmithLogger):
+                    cb.async_httpx_client = AsyncHTTPHandler()
             for chunk in response:
                 continue
             time.sleep(3)
@@ -132,6 +145,9 @@ async def test_async_langsmith_logging_with_streaming_and_metadata(sync_mode):
                 stream=True,
                 metadata={"id": run_id},
             )
+            for cb in litellm.callbacks:
+                if isinstance(cb, LangsmithLogger):
+                    cb.async_httpx_client = AsyncHTTPHandler()
             async for chunk in response:
                 continue
             await asyncio.sleep(3)
