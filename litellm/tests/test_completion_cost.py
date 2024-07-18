@@ -706,6 +706,33 @@ def test_vertex_ai_completion_cost():
     print("calculated_input_cost: {}".format(calculated_input_cost))
 
 
+# @pytest.mark.skip(reason="new test - WIP, working on fixing this")
+def test_vertex_ai_medlm_completion_cost():
+    """Test for medlm completion cost."""
+
+    with pytest.raises(Exception) as e:
+        model = "vertex_ai/medlm-medium"
+        messages = [{"role": "user", "content": "Test MedLM completion cost."}]
+        predictive_cost = completion_cost(
+            model=model, messages=messages, custom_llm_provider="vertex_ai"
+        )
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model = "vertex_ai/medlm-medium"
+    messages = [{"role": "user", "content": "Test MedLM completion cost."}]
+    predictive_cost = completion_cost(
+        model=model, messages=messages, custom_llm_provider="vertex_ai"
+    )
+    assert predictive_cost > 0
+
+    model = "vertex_ai/medlm-large"
+    messages = [{"role": "user", "content": "Test MedLM completion cost."}]
+    predictive_cost = completion_cost(model=model, messages=messages)
+    assert predictive_cost > 0
+
+
 def test_vertex_ai_claude_completion_cost():
     from litellm import Choices, Message, ModelResponse
     from litellm.utils import Usage

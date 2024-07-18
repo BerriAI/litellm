@@ -4319,7 +4319,6 @@ def get_formatted_prompt(
             prompt = data["prompt"]
     return prompt
 
-
 def get_response_string(response_obj: ModelResponse) -> str:
     _choices: List[Union[Choices, StreamingChoices]] = response_obj.choices
 

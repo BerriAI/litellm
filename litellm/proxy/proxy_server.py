@@ -416,6 +416,7 @@ user_custom_key_generate = None
 use_background_health_checks = None
 use_queue = False
 health_check_interval = None
+health_check_details = None
 health_check_results = {}
 queue: List = []
 litellm_proxy_budget_name = "litellm-proxy-budget"
@@ -1204,14 +1205,14 @@ async def _run_background_health_check():
 
     Update health_check_results, based on this.
     """
-    global health_check_results, llm_model_list, health_check_interval
+    global health_check_results, llm_model_list, health_check_interval, health_check_details
 
     # make 1 deep copy of llm_model_list -> use this for all background health checks
     _llm_model_list = copy.deepcopy(llm_model_list)
 
     while True:
         healthy_endpoints, unhealthy_endpoints = await perform_health_check(
-            model_list=_llm_model_list
+            model_list=_llm_model_list, details=health_check_details
         )
 
         # Update the global variable with the health check results
@@ -1363,7 +1364,7 @@ class ProxyConfig:
         """
         Load config values into proxy global state
         """
-        global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, use_background_health_checks, health_check_interval, use_queue, custom_db_client, proxy_budget_rescheduler_max_time, proxy_budget_rescheduler_min_time, ui_access_mode, litellm_master_key_hash, proxy_batch_write_at, disable_spend_logs, prompt_injection_detection_obj, redis_usage_cache, store_model_in_db, premium_user, open_telemetry_logger
+        global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, use_background_health_checks, health_check_interval, use_queue, custom_db_client, proxy_budget_rescheduler_max_time, proxy_budget_rescheduler_min_time, ui_access_mode, litellm_master_key_hash, proxy_batch_write_at, disable_spend_logs, prompt_injection_detection_obj, redis_usage_cache, store_model_in_db, premium_user, open_telemetry_logger, health_check_details
 
         # Load existing config
         config = await self.get_config(config_file_path=config_file_path)
@@ -1733,6 +1734,9 @@ class ProxyConfig:
                 "background_health_checks", False
             )
             health_check_interval = general_settings.get("health_check_interval", 300)
+            health_check_details = general_settings.get(
+                "health_check_details", True
+            )
 
             ## check if user has set a premium feature in general_settings
             if (
@@ -9436,6 +9440,7 @@ def cleanup_router_config_variables():
     user_custom_key_generate = None
     use_background_health_checks = None
     health_check_interval = None
+    health_check_details = None
     prisma_client = None
     custom_db_client = None
 
