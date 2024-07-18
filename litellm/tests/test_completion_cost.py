@@ -706,7 +706,7 @@ def test_vertex_ai_completion_cost():
     print("calculated_input_cost: {}".format(calculated_input_cost))
 
 
-@pytest.mark.skip(reason="new test - WIP, working on fixing this")
+# @pytest.mark.skip(reason="new test - WIP, working on fixing this")
 def test_vertex_ai_medlm_completion_cost():
     """Test for medlm completion cost."""
 
