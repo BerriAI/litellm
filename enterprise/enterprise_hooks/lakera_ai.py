@@ -56,12 +56,17 @@ class _ENTERPRISE_lakeraAI_Moderation(CustomLogger):
             is False
         ):
             return
-
+        text = ""
         if "messages" in data and isinstance(data["messages"], list):
             text = ""
             for m in data["messages"]:  # assume messages is a list
                 if "content" in m and isinstance(m["content"], str):
                     text += m["content"]
+
+        elif "input" in data and isinstance(data["input"], str):
+            text = data["input"]
+        elif "input" in data and isinstance(data["input"], list):
+            text = "\n".join(data["input"])
 
         # https://platform.lakera.ai/account/api-keys
         data = {"input": text}
