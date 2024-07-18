@@ -287,6 +287,7 @@ async def health_endpoint(
         llm_model_list,
         use_background_health_checks,
         user_model,
+        health_check_details
     )
 
     try:
@@ -294,7 +295,7 @@ async def health_endpoint(
             # if no router set, check if user set a model using litellm --model ollama/llama2
             if user_model is not None:
                 healthy_endpoints, unhealthy_endpoints = await perform_health_check(
-                    model_list=[], cli_model=user_model
+                    model_list=[], cli_model=user_model, details=health_check_details
                 )
                 return {
                     "healthy_endpoints": healthy_endpoints,
@@ -316,7 +317,7 @@ async def health_endpoint(
             return health_check_results
         else:
             healthy_endpoints, unhealthy_endpoints = await perform_health_check(
-                _llm_model_list, model
+                _llm_model_list, model, details=health_check_details
             )
 
             return {
