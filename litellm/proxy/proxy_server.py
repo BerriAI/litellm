@@ -3343,43 +3343,52 @@ async def embeddings(
             user_api_key_dict=user_api_key_dict, data=data, call_type="embeddings"
         )
 
+        tasks = []
+        tasks.append(
+            proxy_logging_obj.during_call_hook(
+                data=data,
+                user_api_key_dict=user_api_key_dict,
+                call_type="embeddings",
+            )
+        )
+
         ## ROUTE TO CORRECT ENDPOINT ##
         # skip router if user passed their key
         if "api_key" in data:
-            response = await litellm.aembedding(**data)
+            tasks.append(litellm.aembedding(**data))
         elif "user_config" in data:
             # initialize a new router instance. make request using this Router
             router_config = data.pop("user_config")
             user_router = litellm.Router(**router_config)
-            response = await user_router.aembedding(**data)
+            tasks.append(user_router.aembedding(**data))
         elif (
             llm_router is not None and data["model"] in router_model_names
         ):  # model in router model list
-            response = await llm_router.aembedding(**data)
+            tasks.append(llm_router.aembedding(**data))
         elif (
             llm_router is not None
             and llm_router.model_group_alias is not None
             and data["model"] in llm_router.model_group_alias
         ):  # model set in model_group_alias
-            response = await llm_router.aembedding(
-                **data
+            tasks.append(
+                llm_router.aembedding(**data)
             )  # ensure this goes the llm_router, router will do the correct alias mapping
         elif (
             llm_router is not None and data["model"] in llm_router.deployment_names
         ):  # model in router deployments, calling a specific deployment on the router
-            response = await llm_router.aembedding(**data, specific_deployment=True)
+            tasks.append(llm_router.aembedding(**data, specific_deployment=True))
         elif (
             llm_router is not None and data["model"] in llm_router.get_model_ids()
         ):  # model in router deployments, calling a specific deployment on the router
-            response = await llm_router.aembedding(**data)
+            tasks.append(llm_router.aembedding(**data))
         elif (
             llm_router is not None
             and data["model"] not in router_model_names
             and llm_router.default_deployment is not None
         ):  # model in router deployments, calling a specific deployment on the router
-            response = await llm_router.aembedding(**data)
+            tasks.append(llm_router.aembedding(**data))
         elif user_model is not None:  # `litellm --model <your-model-name>`
-            response = await litellm.aembedding(**data)
+            tasks.append(litellm.aembedding(**data))
         else:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -3388,6 +3397,15 @@ async def embeddings(
                     + data.get("model", "")
                 },
             )
+
+        # wait for call to end
+        llm_responses = asyncio.gather(
+            *tasks
+        )  # run the moderation check in parallel to the actual llm api call
+
+        responses = await llm_responses
+
+        response = responses[1]
 
         ### ALERTING ###
         asyncio.create_task(
