@@ -201,7 +201,7 @@ curl -X POST --location '<your_proxy_base_url>/chat/completions' \
               <SyntaxHighlighter language="python">
                 {`from openai import OpenAI
 client = OpenAI(
-  base_url="<your_proxy_base_url",
+  base_url="<your_proxy_base_url>",
   api_key="<your_proxy_key>"
 )
 

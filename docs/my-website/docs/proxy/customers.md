@@ -231,7 +231,7 @@ curl -X POST 'http://localhost:4000/customer/new' \
 ```python
 from openai import OpenAI
 client = OpenAI(
-  base_url="<your_proxy_base_url",
+  base_url="<your_proxy_base_url>",
   api_key="<your_proxy_key>"
 )
 
