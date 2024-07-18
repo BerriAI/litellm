@@ -112,6 +112,17 @@ def initialize_callbacks_on_proxy(
 
                 lakera_moderations_object = _ENTERPRISE_lakeraAI_Moderation()
                 imported_list.append(lakera_moderations_object)
+            elif isinstance(callback, str) and callback == "aporio_prompt_injection":
+                from enterprise.enterprise_hooks.aporio_ai import _ENTERPRISE_Aporio
+
+                if premium_user is not True:
+                    raise Exception(
+                        "Trying to use Aporio AI Guardrail"
+                        + CommonProxyErrors.not_premium_user.value
+                    )
+
+                aporio_guardrail_object = _ENTERPRISE_Aporio()
+                imported_list.append(aporio_guardrail_object)
             elif isinstance(callback, str) and callback == "google_text_moderation":
                 from enterprise.enterprise_hooks.google_text_moderation import (
                     _ENTERPRISE_GoogleTextModeration,
