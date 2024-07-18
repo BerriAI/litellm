@@ -20,13 +20,11 @@ verbose_logger.setLevel(logging.DEBUG)
 litellm.set_verbose = True
 import time
 
-test_langsmith_logger = LangsmithLogger()
-
 
 @pytest.mark.asyncio()
-async def test_langsmith_logging():
+async def test_async_langsmith_logging():
     try:
-
+        test_langsmith_logger = LangsmithLogger()
         run_id = str(uuid.uuid4())
         litellm.set_verbose = True
         litellm.callbacks = ["langsmith"]
@@ -84,7 +82,7 @@ async def test_langsmith_logging():
 # test_langsmith_logging()
 
 
-def test_langsmith_logging_with_metadata():
+def test_async_langsmith_logging_with_metadata():
     try:
         litellm.success_callback = ["langsmith"]
         litellm.set_verbose = True
@@ -104,8 +102,9 @@ def test_langsmith_logging_with_metadata():
 
 @pytest.mark.parametrize("sync_mode", [False, True])
 @pytest.mark.asyncio
-async def test_langsmith_logging_with_streaming_and_metadata(sync_mode):
+async def test_async_langsmith_logging_with_streaming_and_metadata(sync_mode):
     try:
+        test_langsmith_logger = LangsmithLogger()
         litellm.success_callback = ["langsmith"]
         litellm.set_verbose = True
         run_id = str(uuid.uuid4())
