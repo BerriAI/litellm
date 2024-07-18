@@ -718,6 +718,9 @@ class Router:
                 data.get(
                     "timeout", None
                 )  # timeout set on litellm_params for this deployment
+                or data.get(
+                    "request_timeout", None
+                )  # timeout set on litellm_params for this deployment
                 or self.timeout  # timeout set on router
                 or kwargs.get(
                     "timeout", None
