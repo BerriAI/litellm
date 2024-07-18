@@ -13,7 +13,12 @@ def validate_schema(schema: dict, response: str):
 
     from litellm import JSONSchemaValidationError
 
-    response_dict = json.loads(response)
+    try:
+        response_dict = json.loads(response)
+    except json.JSONDecodeError:
+        raise JSONSchemaValidationError(
+            model="", llm_provider="", raw_response=response, schema=response
+        )
 
     try:
         validate(response_dict, schema=schema)
