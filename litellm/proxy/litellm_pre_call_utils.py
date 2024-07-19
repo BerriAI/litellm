@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 from fastapi import Request
 
 from litellm._logging import verbose_logger, verbose_proxy_logger
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.types.utils import SupportedCacheControls
 
 if TYPE_CHECKING:
@@ -95,15 +95,6 @@ async def add_litellm_data_to_request(
         cache_dict = parse_cache_control(cache_control_header)
         data["ttl"] = cache_dict.get("s-maxage")
 
-    ### KEY-LEVEL CACHNG
-    key_metadata = user_api_key_dict.metadata
-    if "cache" in key_metadata:
-        data["cache"] = {}
-        if isinstance(key_metadata["cache"], dict):
-            for k, v in key_metadata["cache"].items():
-                if k in SupportedCacheControls:
-                    data["cache"][k] = v
-
     verbose_proxy_logger.debug("receiving data: %s", data)
 
     _metadata_variable_name = _get_metadata_variable_name(request)
@@ -132,6 +123,24 @@ async def add_litellm_data_to_request(
     data[_metadata_variable_name]["user_api_key_team_alias"] = getattr(
         user_api_key_dict, "team_alias", None
     )
+
+    ### KEY-LEVEL Contorls
+    key_metadata = user_api_key_dict.metadata
+    if "cache" in key_metadata:
+        data["cache"] = {}
+        if isinstance(key_metadata["cache"], dict):
+            for k, v in key_metadata["cache"].items():
+                if k in SupportedCacheControls:
+                    data["cache"][k] = v
+    if "tier" in key_metadata:
+        if premium_user is not True:
+            verbose_logger.warning(
+                "Trying to use free/paid tier feature. This will not be applied %s",
+                CommonProxyErrors.not_premium_user.value,
+            )
+
+        # add request tier to metadata
+        data[_metadata_variable_name]["tier"] = key_metadata["tier"]
 
     # Team spend, budget - used by prometheus.py
     data[_metadata_variable_name][
