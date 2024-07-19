@@ -39,38 +39,38 @@ This is a list of openai params we translate across providers.
 
 Use `litellm.get_supported_openai_params()` for an updated list of params for each model + provider 
 
-| Provider | temperature | max_tokens | top_p | stream | stop | n | presence_penalty | frequency_penalty | functions | function_call | logit_bias | user | response_format | seed | tools | tool_choice | logprobs | top_logprobs | extra_headers | 
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|--|
-|Anthropic| ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |  |  |  |✅ | ✅ | ✅ | ✅ | ✅ |  |  | ✅ 
-|OpenAI| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |✅ | ✅ | ✅ | ✅ |✅ | ✅ | ✅ | ✅ | ✅ |
-|Azure OpenAI| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |✅ | ✅ | ✅ | ✅ |✅ | ✅ |  |  | ✅ |
+| Provider | temperature | max_tokens | top_p | stream | stream_options | stop | n | presence_penalty | frequency_penalty | functions | function_call | logit_bias | user | response_format | seed | tools | tool_choice | logprobs | top_logprobs | extra_headers |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+|Anthropic| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |  |  |  |✅ | ✅ | ✅ | ✅ | ✅ |  |  | ✅ |
+|OpenAI| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |✅ | ✅ | ✅ | ✅ |✅ | ✅ | ✅ | ✅ | ✅ |
+|Azure OpenAI| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |✅ | ✅ | ✅ | ✅ |✅ | ✅ |  |  | ✅ |
 |Replicate | ✅ | ✅ | ✅ | ✅ | ✅ | |  |   |  |   |
-|Anyscale | ✅ | ✅ | ✅ | ✅ |
+|Anyscale | ✅ | ✅ | ✅ | ✅ | ✅ |
 |Cohere| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |   |   |
-|Huggingface| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |    |
+|Huggingface| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |   |    |
 |Openrouter| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | | | | | ✅ | | | | |
 |AI21| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |
-|VertexAI| ✅ | ✅ |  | ✅ |  |  |  |  |  |   | | | | | ✅ | | |
+|VertexAI| ✅ | ✅ |  | ✅ | ✅ |  |  |  |  |   | | | | ✅ | ✅ | | |
 |Bedrock| ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |  |   | | | | | ✅ (for anthropic) | |
-|Sagemaker| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |  |   |
+|Sagemaker| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |
 |TogetherAI| ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |  |   | ✅ |
-|AlephAlpha| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |   |  |   |
-|Palm| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |  |   |
-|NLP Cloud| ✅ | ✅ | ✅ | ✅ | ✅ | |  |  |  |   |
-|Petals| ✅ | ✅ |  | ✅ | |  |   |  |  |   |
+|AlephAlpha| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |   |  |   |
+|Palm| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |
+|NLP Cloud| ✅ | ✅ | ✅ | ✅ | ✅ | | |  |  |   |
+|Petals| ✅ | ✅ |  | ✅ | ✅ | |  |   |  |   |
 |Ollama| ✅ | ✅ | ✅ | ✅ | ✅ |  |   | ✅ |  |   | | | ✅ | | |
 |Databricks| ✅ | ✅ | ✅ | ✅ | ✅ |  |   | |  |   | | | | | |
-|ClarifAI| ✅ | ✅ | | | |  |   | |  |   | | | | | |
-
+|ClarifAI| ✅ | ✅ | |✅ | ✅ |  |   | |  |   | | | | | |
 :::note
 
 By default, LiteLLM raises an exception if the openai param being passed in isn't supported. 
 
-To drop the param instead, set `litellm.drop_params = True`.
+To drop the param instead, set `litellm.drop_params = True` or `completion(..drop_params=True)`.
 
-**For function calling:**
+This **ONLY DROPS UNSUPPORTED OPENAI PARAMS**. 
 
-Add to prompt for non-openai models, set: `litellm.add_function_to_prompt = True`. 
+LiteLLM assumes any non-openai param is provider specific and passes it in as a kwarg in the request body
+
 ::: 
 
 ## Input Params
@@ -97,6 +97,7 @@ def completion(
     seed: Optional[int] = None,
     tools: Optional[List] = None,
     tool_choice: Optional[str] = None,
+    parallel_tool_calls: Optional[bool] = None,
     logprobs: Optional[bool] = None,
     top_logprobs: Optional[int] = None,
     deployment_id=None,
@@ -166,9 +167,11 @@ def completion(
 
     - `function`: *object* - Required.
 
-- `tool_choice`: *string or object (optional)* - Controls which (if any) function is called by the model. none means the model will not call a function and instead generates a message. auto means the model can pick between generating a message or calling a function. Specifying a particular function via {"type: "function", "function": {"name": "my_function"}} forces the model to call that function.
+- `tool_choice`: *string or object (optional)* - Controls which (if any) function is called by the model. none means the model will not call a function and instead generates a message. auto means the model can pick between generating a message or calling a function. Specifying a particular function via `{"type: "function", "function": {"name": "my_function"}}` forces the model to call that function.
 
     - `none` is the default when no functions are present. `auto` is the default if functions are present.
+
+- `parallel_tool_calls`: *boolean (optional)* - Whether to enable parallel function calling during tool use.. OpenAI default is true.
 
 - `frequency_penalty`: *number or null (optional)* - It is used to penalize new tokens based on their frequency in the text so far.
 
@@ -226,399 +229,3 @@ def completion(
 
 - `hf_model_name`: *string (optional)* - [Sagemaker Only] The corresponding huggingface name of the model, used to pull the right chat template for the model. 
 
-
-## Provider-specific Params
-Providers might offer params not supported by OpenAI (e.g. top_k). You can pass those in 2 ways: 
-- via completion(): We'll pass the non-openai param, straight to the provider as part of the request body.
-    - e.g. `completion(model="claude-instant-1", top_k=3)`
-- via provider-specific config variable (e.g. `litellm.OpenAIConfig()`). 
-
-<Tabs>
-<TabItem value="openai" label="OpenAI">
-
-```python
-import litellm, os
-
-# set env variables
-os.environ["OPENAI_API_KEY"] = "your-openai-key"
-
-## SET MAX TOKENS - via completion() 
-response_1 = litellm.completion(
-            model="gpt-3.5-turbo",
-            messages=[{ "content": "Hello, how are you?","role": "user"}],
-            max_tokens=10
-        )
-
-response_1_text = response_1.choices[0].message.content
-
-## SET MAX TOKENS - via config
-litellm.OpenAIConfig(max_tokens=10)
-
-response_2 = litellm.completion(
-            model="gpt-3.5-turbo",
-            messages=[{ "content": "Hello, how are you?","role": "user"}],
-        )
-
-response_2_text = response_2.choices[0].message.content
-
-## TEST OUTPUT
-assert len(response_2_text) > len(response_1_text)
-```
-
-</TabItem>
-<TabItem value="openai-text" label="OpenAI Text Completion">
-
-```python
-import litellm, os
-
-# set env variables
-os.environ["OPENAI_API_KEY"] = "your-openai-key"
-
-
-## SET MAX TOKENS - via completion() 
-response_1 = litellm.completion(
-            model="text-davinci-003",
-            messages=[{ "content": "Hello, how are you?","role": "user"}],
-            max_tokens=10
-        )
-
-response_1_text = response_1.choices[0].message.content
-
-## SET MAX TOKENS - via config
-litellm.OpenAITextCompletionConfig(max_tokens=10)
-response_2 = litellm.completion(
-            model="text-davinci-003",
-            messages=[{ "content": "Hello, how are you?","role": "user"}],
-        )
-
-response_2_text = response_2.choices[0].message.content
-
-## TEST OUTPUT
-assert len(response_2_text) > len(response_1_text)
-```
-
-</TabItem>
-<TabItem value="azure-openai" label="Azure OpenAI">
-
-```python
-import litellm, os
-
-# set env variables
-os.environ["AZURE_API_BASE"] = "your-azure-api-base"
-os.environ["AZURE_API_TYPE"] = "azure" # [OPTIONAL] 
-os.environ["AZURE_API_VERSION"] = "2023-07-01-preview" # [OPTIONAL]
-
-## SET MAX TOKENS - via completion() 
-response_1 = litellm.completion(
-            model="azure/chatgpt-v-2",
-            messages=[{ "content": "Hello, how are you?","role": "user"}],
-            max_tokens=10
-        )
-
-response_1_text = response_1.choices[0].message.content
-
-## SET MAX TOKENS - via config
-litellm.AzureOpenAIConfig(max_tokens=10)
-response_2 = litellm.completion(
-            model="azure/chatgpt-v-2",
-            messages=[{ "content": "Hello, how are you?","role": "user"}],
-        )
-
-response_2_text = response_2.choices[0].message.content
-
-## TEST OUTPUT
-assert len(response_2_text) > len(response_1_text)
-```
-
-</TabItem>
-<TabItem value="anthropic" label="Anthropic">
-
-```python
-import litellm, os 
-
-# set env variables
-os.environ["ANTHROPIC_API_KEY"] = "your-anthropic-key"
-
-## SET MAX TOKENS - via completion()
-response_1 = litellm.completion(
-            model="claude-instant-1",
-            messages=[{ "content": "Hello, how are you?","role": "user"}],
-            max_tokens=10
-        )
-
-response_1_text = response_1.choices[0].message.content
-
-## SET MAX TOKENS - via config
-litellm.AnthropicConfig(max_tokens_to_sample=200)
-response_2 = litellm.completion(
-            model="claude-instant-1",
-            messages=[{ "content": "Hello, how are you?","role": "user"}],
-        )
-
-response_2_text = response_2.choices[0].message.content
-
-## TEST OUTPUT
-assert len(response_2_text) > len(response_1_text)
-```
-
-</TabItem>
-
-<TabItem value="huggingface" label="Huggingface">
-
-```python
-import litellm, os 
-
-# set env variables
-os.environ["HUGGINGFACE_API_KEY"] = "your-huggingface-key" #[OPTIONAL]
-
-## SET MAX TOKENS - via completion()
-response_1 = litellm.completion(
-            model="huggingface/mistralai/Mistral-7B-Instruct-v0.1",
-            messages=[{ "content": "Hello, how are you?","role": "user"}],
-            api_base="https://your-huggingface-api-endpoint",
-            max_tokens=10
-        )
-
-response_1_text = response_1.choices[0].message.content
-
-## SET MAX TOKENS - via config
-litellm.HuggingfaceConfig(max_new_tokens=200)
-response_2 = litellm.completion(
-            model="huggingface/mistralai/Mistral-7B-Instruct-v0.1",
-            messages=[{ "content": "Hello, how are you?","role": "user"}],
-            api_base="https://your-huggingface-api-endpoint"
-        )
-
-response_2_text = response_2.choices[0].message.content
-
-## TEST OUTPUT
-assert len(response_2_text) > len(response_1_text)
-```
-
-</TabItem>
-
-<TabItem value="together_ai" label="TogetherAI">
-
-
-```python
-import litellm, os 
-
-# set env variables
-os.environ["TOGETHERAI_API_KEY"] = "your-togetherai-key" 
-
-## SET MAX TOKENS - via completion()
-response_1 = litellm.completion(
-            model="together_ai/togethercomputer/llama-2-70b-chat",
-            messages=[{ "content": "Hello, how are you?","role": "user"}],
-            max_tokens=10
-        )
-
-response_1_text = response_1.choices[0].message.content
-
-## SET MAX TOKENS - via config
-litellm.TogetherAIConfig(max_tokens_to_sample=200)
-response_2 = litellm.completion(
-            model="together_ai/togethercomputer/llama-2-70b-chat",
-            messages=[{ "content": "Hello, how are you?","role": "user"}],
-        )
-
-response_2_text = response_2.choices[0].message.content
-
-## TEST OUTPUT
-assert len(response_2_text) > len(response_1_text)
-```
-
-</TabItem>
-
-<TabItem value="ollama" label="Ollama">
-
-```python
-import litellm, os 
-
-## SET MAX TOKENS - via completion()
-response_1 = litellm.completion(
-            model="ollama/llama2",
-            messages=[{ "content": "Hello, how are you?","role": "user"}],
-            max_tokens=10
-        )
-
-response_1_text = response_1.choices[0].message.content
-
-## SET MAX TOKENS - via config
-litellm.OllamConfig(num_predict=200)
-response_2 = litellm.completion(
-            model="ollama/llama2",
-            messages=[{ "content": "Hello, how are you?","role": "user"}],
-        )
-
-response_2_text = response_2.choices[0].message.content
-
-## TEST OUTPUT
-assert len(response_2_text) > len(response_1_text)
-```
-
-</TabItem>
-
-<TabItem value="replicate" label="Replicate">
-
-```python
-import litellm, os 
-
-# set env variables
-os.environ["REPLICATE_API_KEY"] = "your-replicate-key" 
-
-## SET MAX TOKENS - via completion()
-response_1 = litellm.completion(
-            model="replicate/meta/llama-2-70b-chat:02e509c789964a7ea8736978a43525956ef40397be9033abf9fd2badfe68c9e3",
-            messages=[{ "content": "Hello, how are you?","role": "user"}],
-            max_tokens=10
-        )
-
-response_1_text = response_1.choices[0].message.content
-
-## SET MAX TOKENS - via config
-litellm.ReplicateConfig(max_new_tokens=200)
-response_2 = litellm.completion(
-            model="replicate/meta/llama-2-70b-chat:02e509c789964a7ea8736978a43525956ef40397be9033abf9fd2badfe68c9e3",
-            messages=[{ "content": "Hello, how are you?","role": "user"}],
-        )
-
-response_2_text = response_2.choices[0].message.content
-
-## TEST OUTPUT
-assert len(response_2_text) > len(response_1_text)
-```
-
-</TabItem>
-
-<TabItem value="petals" label="Petals">
-
-
-```python
-import litellm
-
-## SET MAX TOKENS - via completion()
-response_1 = litellm.completion(
-            model="petals/petals-team/StableBeluga2",
-            messages=[{ "content": "Hello, how are you?","role": "user"}],
-            api_base="https://chat.petals.dev/api/v1/generate",
-            max_tokens=10
-        )
-
-response_1_text = response_1.choices[0].message.content
-
-## SET MAX TOKENS - via config
-litellm.PetalsConfig(max_new_tokens=10)
-response_2 = litellm.completion(
-            model="petals/petals-team/StableBeluga2",
-            messages=[{ "content": "Hello, how are you?","role": "user"}],
-            api_base="https://chat.petals.dev/api/v1/generate",
-        )
-
-response_2_text = response_2.choices[0].message.content
-
-## TEST OUTPUT
-assert len(response_2_text) > len(response_1_text)
-```
-
-</TabItem>
-
-<TabItem value="palm" label="Palm">
-
-```python
-import litellm, os 
-
-# set env variables
-os.environ["PALM_API_KEY"] = "your-palm-key"  
-
-## SET MAX TOKENS - via completion()
-response_1 = litellm.completion(
-            model="palm/chat-bison",
-            messages=[{ "content": "Hello, how are you?","role": "user"}],
-            max_tokens=10
-        )
-
-response_1_text = response_1.choices[0].message.content
-
-## SET MAX TOKENS - via config
-litellm.PalmConfig(maxOutputTokens=10)
-response_2 = litellm.completion(
-            model="palm/chat-bison",
-            messages=[{ "content": "Hello, how are you?","role": "user"}],
-        )
-
-response_2_text = response_2.choices[0].message.content
-
-## TEST OUTPUT
-assert len(response_2_text) > len(response_1_text)
-```
-</TabItem>
-
-<TabItem value="ai21" label="AI21">
-
-```python
-import litellm, os 
-
-# set env variables
-os.environ["AI21_API_KEY"] = "your-ai21-key"  
-
-## SET MAX TOKENS - via completion()
-response_1 = litellm.completion(
-            model="j2-mid",
-            messages=[{ "content": "Hello, how are you?","role": "user"}],
-            max_tokens=10
-        )
-
-response_1_text = response_1.choices[0].message.content
-
-## SET MAX TOKENS - via config
-litellm.AI21Config(maxOutputTokens=10)
-response_2 = litellm.completion(
-            model="j2-mid",
-            messages=[{ "content": "Hello, how are you?","role": "user"}],
-        )
-
-response_2_text = response_2.choices[0].message.content
-
-## TEST OUTPUT
-assert len(response_2_text) > len(response_1_text)
-```
-
-</TabItem>
-
-<TabItem value="cohere" label="Cohere">
-
-```python
-import litellm, os 
-
-# set env variables
-os.environ["COHERE_API_KEY"] = "your-cohere-key"   
-
-## SET MAX TOKENS - via completion()
-response_1 = litellm.completion(
-            model="command-nightly",
-            messages=[{ "content": "Hello, how are you?","role": "user"}],
-            max_tokens=10
-        )
-
-response_1_text = response_1.choices[0].message.content
-
-## SET MAX TOKENS - via config
-litellm.CohereConfig(max_tokens=200)
-response_2 = litellm.completion(
-            model="command-nightly",
-            messages=[{ "content": "Hello, how are you?","role": "user"}],
-        )
-
-response_2_text = response_2.choices[0].message.content
-
-## TEST OUTPUT
-assert len(response_2_text) > len(response_1_text)
-```
-
-</TabItem>
-
-</Tabs>
-
-
-[**Check out the tutorial!**](../tutorials/provider_specific_params.md)

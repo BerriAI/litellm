@@ -1,9 +1,14 @@
 # What this tests?
 ## Unit Tests for the max parallel request limiter for the proxy
 
-import sys, os, asyncio, time, random
-from datetime import datetime
+import asyncio
+import os
+import random
+import sys
+import time
 import traceback
+from datetime import datetime
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -12,16 +17,18 @@ import os
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
+from datetime import datetime
+
 import pytest
+
 import litellm
 from litellm import Router
-from litellm.proxy.utils import ProxyLogging, hash_token
-from litellm.proxy._types import UserAPIKeyAuth
 from litellm.caching import DualCache
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.parallel_request_limiter import (
     _PROXY_MaxParallelRequestsHandler as MaxParallelRequestsHandler,
 )
-from datetime import datetime
+from litellm.proxy.utils import ProxyLogging, hash_token
 
 ## On Request received
 ## On Request success
@@ -40,7 +47,9 @@ async def test_global_max_parallel_requests():
     _api_key = hash_token("sk-12345")
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=100)
     local_cache = DualCache()
-    parallel_request_handler = MaxParallelRequestsHandler()
+    parallel_request_handler = MaxParallelRequestsHandler(
+        internal_usage_cache=local_cache
+    )
 
     for _ in range(3):
         try:
@@ -68,7 +77,9 @@ async def test_pre_call_hook():
     _api_key = hash_token("sk-12345")
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=1)
     local_cache = DualCache()
-    parallel_request_handler = MaxParallelRequestsHandler()
+    parallel_request_handler = MaxParallelRequestsHandler(
+        internal_usage_cache=local_cache
+    )
 
     await parallel_request_handler.async_pre_call_hook(
         user_api_key_dict=user_api_key_dict, cache=local_cache, data={}, call_type=""
@@ -81,10 +92,12 @@ async def test_pre_call_hook():
     request_count_api_key = f"{_api_key}::{precise_minute}::request_count"
 
     print(
-        parallel_request_handler.user_api_key_cache.get_cache(key=request_count_api_key)
+        parallel_request_handler.internal_usage_cache.get_cache(
+            key=request_count_api_key
+        )
     )
     assert (
-        parallel_request_handler.user_api_key_cache.get_cache(
+        parallel_request_handler.internal_usage_cache.get_cache(
             key=request_count_api_key
         )["current_requests"]
         == 1
@@ -101,7 +114,9 @@ async def test_pre_call_hook_rpm_limits():
         api_key=_api_key, max_parallel_requests=1, tpm_limit=9, rpm_limit=1
     )
     local_cache = DualCache()
-    parallel_request_handler = MaxParallelRequestsHandler()
+    parallel_request_handler = MaxParallelRequestsHandler(
+        internal_usage_cache=local_cache
+    )
 
     await parallel_request_handler.async_pre_call_hook(
         user_api_key_dict=user_api_key_dict, cache=local_cache, data={}, call_type=""
@@ -132,6 +147,50 @@ async def test_pre_call_hook_rpm_limits():
 
 
 @pytest.mark.asyncio
+async def test_pre_call_hook_rpm_limits_retry_after():
+    """
+    Test if rate limit error, returns 'retry_after'
+    """
+    _api_key = "sk-12345"
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=_api_key, max_parallel_requests=1, tpm_limit=9, rpm_limit=1
+    )
+    local_cache = DualCache()
+    parallel_request_handler = MaxParallelRequestsHandler(
+        internal_usage_cache=local_cache
+    )
+
+    await parallel_request_handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict, cache=local_cache, data={}, call_type=""
+    )
+
+    kwargs = {"litellm_params": {"metadata": {"user_api_key": _api_key}}}
+
+    await parallel_request_handler.async_log_success_event(
+        kwargs=kwargs,
+        response_obj="",
+        start_time="",
+        end_time="",
+    )
+
+    ## Expected cache val: {"current_requests": 0, "current_tpm": 0, "current_rpm": 1}
+
+    try:
+        await parallel_request_handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data={},
+            call_type="",
+        )
+
+        pytest.fail(f"Expected call to fail")
+    except Exception as e:
+        assert e.status_code == 429
+        assert hasattr(e, "headers")
+        assert "retry-after" in e.headers
+
+
+@pytest.mark.asyncio
 async def test_pre_call_hook_team_rpm_limits():
     """
     Test if error raised on hitting team rpm limits
@@ -148,7 +207,9 @@ async def test_pre_call_hook_team_rpm_limits():
         team_id=_team_id,
     )
     local_cache = DualCache()
-    parallel_request_handler = MaxParallelRequestsHandler()
+    parallel_request_handler = MaxParallelRequestsHandler(
+        internal_usage_cache=local_cache
+    )
 
     await parallel_request_handler.async_pre_call_hook(
         user_api_key_dict=user_api_key_dict, cache=local_cache, data={}, call_type=""
@@ -194,7 +255,9 @@ async def test_pre_call_hook_tpm_limits():
         api_key=_api_key, max_parallel_requests=1, tpm_limit=9, rpm_limit=10
     )
     local_cache = DualCache()
-    parallel_request_handler = MaxParallelRequestsHandler()
+    parallel_request_handler = MaxParallelRequestsHandler(
+        internal_usage_cache=local_cache
+    )
 
     await parallel_request_handler.async_pre_call_hook(
         user_api_key_dict=user_api_key_dict, cache=local_cache, data={}, call_type=""
@@ -244,7 +307,9 @@ async def test_pre_call_hook_user_tpm_limits():
     res = dict(user_api_key_dict)
     print("dict user", res)
 
-    parallel_request_handler = MaxParallelRequestsHandler()
+    parallel_request_handler = MaxParallelRequestsHandler(
+        internal_usage_cache=local_cache
+    )
 
     await parallel_request_handler.async_pre_call_hook(
         user_api_key_dict=user_api_key_dict, cache=local_cache, data={}, call_type=""
@@ -287,7 +352,9 @@ async def test_success_call_hook():
     _api_key = hash_token("sk-12345")
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=1)
     local_cache = DualCache()
-    parallel_request_handler = MaxParallelRequestsHandler()
+    parallel_request_handler = MaxParallelRequestsHandler(
+        internal_usage_cache=local_cache
+    )
 
     await parallel_request_handler.async_pre_call_hook(
         user_api_key_dict=user_api_key_dict, cache=local_cache, data={}, call_type=""
@@ -300,7 +367,7 @@ async def test_success_call_hook():
     request_count_api_key = f"{_api_key}::{precise_minute}::request_count"
 
     assert (
-        parallel_request_handler.user_api_key_cache.get_cache(
+        parallel_request_handler.internal_usage_cache.get_cache(
             key=request_count_api_key
         )["current_requests"]
         == 1
@@ -313,7 +380,7 @@ async def test_success_call_hook():
     )
 
     assert (
-        parallel_request_handler.user_api_key_cache.get_cache(
+        parallel_request_handler.internal_usage_cache.get_cache(
             key=request_count_api_key
         )["current_requests"]
         == 0
@@ -329,7 +396,9 @@ async def test_failure_call_hook():
     _api_key = hash_token(_api_key)
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=1)
     local_cache = DualCache()
-    parallel_request_handler = MaxParallelRequestsHandler()
+    parallel_request_handler = MaxParallelRequestsHandler(
+        internal_usage_cache=local_cache
+    )
 
     await parallel_request_handler.async_pre_call_hook(
         user_api_key_dict=user_api_key_dict, cache=local_cache, data={}, call_type=""
@@ -342,7 +411,7 @@ async def test_failure_call_hook():
     request_count_api_key = f"{_api_key}::{precise_minute}::request_count"
 
     assert (
-        parallel_request_handler.user_api_key_cache.get_cache(
+        parallel_request_handler.internal_usage_cache.get_cache(
             key=request_count_api_key
         )["current_requests"]
         == 1
@@ -358,7 +427,7 @@ async def test_failure_call_hook():
     )
 
     assert (
-        parallel_request_handler.user_api_key_cache.get_cache(
+        parallel_request_handler.internal_usage_cache.get_cache(
             key=request_count_api_key
         )["current_requests"]
         == 0
@@ -423,7 +492,7 @@ async def test_normal_router_call():
     request_count_api_key = f"{_api_key}::{precise_minute}::request_count"
 
     assert (
-        parallel_request_handler.user_api_key_cache.get_cache(
+        parallel_request_handler.internal_usage_cache.get_cache(
             key=request_count_api_key
         )["current_requests"]
         == 1
@@ -440,7 +509,7 @@ async def test_normal_router_call():
     print(f"response: {response}")
 
     assert (
-        parallel_request_handler.user_api_key_cache.get_cache(
+        parallel_request_handler.internal_usage_cache.get_cache(
             key=request_count_api_key
         )["current_requests"]
         == 0
@@ -449,8 +518,9 @@ async def test_normal_router_call():
 
 @pytest.mark.asyncio
 async def test_normal_router_tpm_limit():
-    from litellm._logging import verbose_proxy_logger
     import logging
+
+    from litellm._logging import verbose_proxy_logger
 
     verbose_proxy_logger.setLevel(level=logging.DEBUG)
     model_list = [
@@ -504,7 +574,7 @@ async def test_normal_router_tpm_limit():
     print("Test: Checking current_requests for precise_minute=", precise_minute)
 
     assert (
-        parallel_request_handler.user_api_key_cache.get_cache(
+        parallel_request_handler.internal_usage_cache.get_cache(
             key=request_count_api_key
         )["current_requests"]
         == 1
@@ -522,7 +592,7 @@ async def test_normal_router_tpm_limit():
 
     try:
         assert (
-            parallel_request_handler.user_api_key_cache.get_cache(
+            parallel_request_handler.internal_usage_cache.get_cache(
                 key=request_count_api_key
             )["current_tpm"]
             > 0
@@ -583,7 +653,7 @@ async def test_streaming_router_call():
     request_count_api_key = f"{_api_key}::{precise_minute}::request_count"
 
     assert (
-        parallel_request_handler.user_api_key_cache.get_cache(
+        parallel_request_handler.internal_usage_cache.get_cache(
             key=request_count_api_key
         )["current_requests"]
         == 1
@@ -601,7 +671,7 @@ async def test_streaming_router_call():
         continue
     await asyncio.sleep(1)  # success is done in a separate thread
     assert (
-        parallel_request_handler.user_api_key_cache.get_cache(
+        parallel_request_handler.internal_usage_cache.get_cache(
             key=request_count_api_key
         )["current_requests"]
         == 0
@@ -661,7 +731,7 @@ async def test_streaming_router_tpm_limit():
     request_count_api_key = f"{_api_key}::{precise_minute}::request_count"
 
     assert (
-        parallel_request_handler.user_api_key_cache.get_cache(
+        parallel_request_handler.internal_usage_cache.get_cache(
             key=request_count_api_key
         )["current_requests"]
         == 1
@@ -680,7 +750,7 @@ async def test_streaming_router_tpm_limit():
     await asyncio.sleep(5)  # success is done in a separate thread
 
     assert (
-        parallel_request_handler.user_api_key_cache.get_cache(
+        parallel_request_handler.internal_usage_cache.get_cache(
             key=request_count_api_key
         )["current_tpm"]
         > 0
@@ -738,7 +808,7 @@ async def test_bad_router_call():
     request_count_api_key = f"{_api_key}::{precise_minute}::request_count"
 
     assert (
-        parallel_request_handler.user_api_key_cache.get_cache(  # type: ignore
+        parallel_request_handler.internal_usage_cache.get_cache(  # type: ignore
             key=request_count_api_key
         )["current_requests"]
         == 1
@@ -755,7 +825,7 @@ async def test_bad_router_call():
     except:
         pass
     assert (
-        parallel_request_handler.user_api_key_cache.get_cache(  # type: ignore
+        parallel_request_handler.internal_usage_cache.get_cache(  # type: ignore
             key=request_count_api_key
         )["current_requests"]
         == 0
@@ -814,7 +884,7 @@ async def test_bad_router_tpm_limit():
     request_count_api_key = f"{_api_key}::{precise_minute}::request_count"
 
     assert (
-        parallel_request_handler.user_api_key_cache.get_cache(
+        parallel_request_handler.internal_usage_cache.get_cache(
             key=request_count_api_key
         )["current_requests"]
         == 1
@@ -833,7 +903,7 @@ async def test_bad_router_tpm_limit():
     await asyncio.sleep(1)  # success is done in a separate thread
 
     assert (
-        parallel_request_handler.user_api_key_cache.get_cache(
+        parallel_request_handler.internal_usage_cache.get_cache(
             key=request_count_api_key
         )["current_tpm"]
         == 0

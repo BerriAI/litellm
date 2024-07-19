@@ -1,9 +1,11 @@
-import os
 import json
-from enum import Enum
-import requests  # type: ignore
+import os
 import time
+from enum import Enum
 from typing import Callable
+
+import requests  # type: ignore
+
 from litellm.utils import ModelResponse, Usage
 
 
@@ -106,28 +108,32 @@ def completion(
                     and "data" in completion_response["model_output"]
                     and isinstance(completion_response["model_output"]["data"], list)
                 ):
-                    model_response["choices"][0]["message"]["content"] = (
-                        completion_response["model_output"]["data"][0]
-                    )
+                    model_response.choices[0].message.content = completion_response[  # type: ignore
+                        "model_output"
+                    ][
+                        "data"
+                    ][
+                        0
+                    ]
                 elif isinstance(completion_response["model_output"], str):
-                    model_response["choices"][0]["message"]["content"] = (
-                        completion_response["model_output"]
-                    )
+                    model_response.choices[0].message.content = completion_response[  # type: ignore
+                        "model_output"
+                    ]
             elif "completion" in completion_response and isinstance(
                 completion_response["completion"], str
             ):
-                model_response["choices"][0]["message"]["content"] = (
-                    completion_response["completion"]
-                )
+                model_response.choices[0].message.content = completion_response[  # type: ignore
+                    "completion"
+                ]
             elif isinstance(completion_response, list) and len(completion_response) > 0:
                 if "generated_text" not in completion_response:
                     raise BasetenError(
                         message=f"Unable to parse response. Original response: {response.text}",
                         status_code=response.status_code,
                     )
-                model_response["choices"][0]["message"]["content"] = (
-                    completion_response[0]["generated_text"]
-                )
+                model_response.choices[0].message.content = completion_response[0][  # type: ignore
+                    "generated_text"
+                ]
                 ## GETTING LOGPROBS
                 if (
                     "details" in completion_response[0]
@@ -139,7 +145,7 @@ def completion(
                     sum_logprob = 0
                     for token in completion_response[0]["details"]["tokens"]:
                         sum_logprob += token["logprob"]
-                    model_response["choices"][0]["message"]._logprobs = sum_logprob
+                    model_response.choices[0].logprobs = sum_logprob
             else:
                 raise BasetenError(
                     message=f"Unable to parse response. Original response: {response.text}",
@@ -152,8 +158,8 @@ def completion(
             encoding.encode(model_response["choices"][0]["message"]["content"])
         )
 
-        model_response["created"] = int(time.time())
-        model_response["model"] = model
+        model_response.created = int(time.time())
+        model_response.model = model
         usage = Usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,

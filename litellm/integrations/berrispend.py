@@ -178,6 +178,5 @@ class BerriSpendLogger:
             print_verbose(f"BerriSpend Logging - final data object: {data}")
             response = requests.post(url, headers=headers, json=data)
         except:
-            # traceback.print_exc()
             print_verbose(f"BerriSpend Logging Error - {traceback.format_exc()}")
             pass

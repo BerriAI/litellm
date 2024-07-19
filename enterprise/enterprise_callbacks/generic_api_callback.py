@@ -120,6 +120,5 @@ class GenericAPILogger:
             )
             return response
         except Exception as e:
-            traceback.print_exc()
-            verbose_logger.debug(f"Generic - {str(e)}\n{traceback.format_exc()}")
+            verbose_logger.error(f"Generic - {str(e)}\n{traceback.format_exc()}")
             pass

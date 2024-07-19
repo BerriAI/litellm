@@ -1,5 +1,7 @@
 .venv
 .env
+.newenv
+newenv/*
 litellm/proxy/myenv/*
 litellm_uuid.txt
 __pycache__/
@@ -56,3 +58,9 @@ litellm/proxy/_super_secret_config.yaml
 litellm/proxy/myenv/bin/activate
 litellm/proxy/myenv/bin/Activate.ps1
 myenv/*
+litellm/proxy/_experimental/out/404/index.html
+litellm/proxy/_experimental/out/model_hub/index.html
+litellm/proxy/_experimental/out/onboarding/index.html
+litellm/tests/log.txt
+litellm/tests/langfuse.log
+litellm/tests/langfuse.log

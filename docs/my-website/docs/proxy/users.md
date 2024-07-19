@@ -62,8 +62,16 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 You can:
 - Add budgets to Teams
 
+:::info
 
-#### **Add budgets to users**
+**Step-by step tutorial on setting, resetting budgets on Teams here (API or using Admin UI)**
+
+👉 [https://docs.litellm.ai/docs/proxy/team_budgets](https://docs.litellm.ai/docs/proxy/team_budgets)
+
+:::
+
+
+#### **Add budgets to teams**
 ```shell 
 curl --location 'http://localhost:4000/team/new' \
 --header 'Authorization: Bearer <your-master-key>' \
@@ -102,6 +110,22 @@ curl --location 'http://localhost:4000/team/new' \
     "budget_reset_at": null
 }
 ```
+
+#### **Add budget duration to teams**
+
+`budget_duration`: Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
+
+```
+curl 'http://0.0.0.0:4000/team/new' \
+--header 'Authorization: Bearer <your-master-key>' \
+--header 'Content-Type: application/json' \
+--data-raw '{
+  "team_alias": "my-new-team_4",
+  "members_with_roles": [{"role": "admin", "user_id": "5c4a0aa3-a1e1-43dc-bd87-3c2da8382a3a"}],
+  "budget_duration": 10s,
+}'
+```
+
 </TabItem>
 <TabItem value="per-team-member" label="For Team Members">
 
@@ -223,7 +247,7 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 
 Error
 ```shell
-{"error":{"message":"Authentication Error, ExceededBudget: User ishaan3 has exceeded their budget. Current spend: 0.0008869999999999999; Max Budget: 0.0001","type":"auth_error","param":"None","code":401}}%                
+{"error":{"message":"Budget has been exceeded: User ishaan3 has exceeded their budget. Current spend: 0.0008869999999999999; Max Budget: 0.0001","type":"auth_error","param":"None","code":401}}%                
 ```
 
 </TabItem>
@@ -396,6 +420,63 @@ curl 'http://0.0.0.0:4000/key/generate' \
 
 </TabItem>
 </Tabs>
+
+### Reset Budgets 
+
+Reset budgets across keys/internal users/teams/customers
+
+`budget_duration`: Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
+
+<Tabs>
+<TabItem value="users" label="Internal Users">
+
+```bash
+curl 'http://0.0.0.0:4000/user/new' \
+--header 'Authorization: Bearer <your-master-key>' \
+--header 'Content-Type: application/json' \
+--data-raw '{
+  "max_budget": 10,
+  "budget_duration": 10s, # 👈 KEY CHANGE
+}'
+```
+</TabItem>
+<TabItem value="keys" label="Keys">
+
+```bash
+curl 'http://0.0.0.0:4000/key/generate' \
+--header 'Authorization: Bearer <your-master-key>' \
+--header 'Content-Type: application/json' \
+--data-raw '{
+  "max_budget": 10,
+  "budget_duration": 10s, # 👈 KEY CHANGE
+}'
+```
+
+</TabItem>
+<TabItem value="teams" label="Teams">
+
+```bash
+curl 'http://0.0.0.0:4000/team/new' \
+--header 'Authorization: Bearer <your-master-key>' \
+--header 'Content-Type: application/json' \
+--data-raw '{
+  "max_budget": 10,
+  "budget_duration": 10s, # 👈 KEY CHANGE
+}'
+```
+</TabItem>
+</Tabs>
+
+**Note:** By default, the server checks for resets every 10 minutes, to minimize DB calls.
+
+To change this, set `proxy_budget_rescheduler_min_time` and `proxy_budget_rescheduler_max_time`
+
+E.g.: Check every 1 seconds
+```yaml
+general_settings: 
+  proxy_budget_rescheduler_min_time: 1
+  proxy_budget_rescheduler_max_time: 1
+```
 
 ## Set Rate Limits 
 

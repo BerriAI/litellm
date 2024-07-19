@@ -95,7 +95,7 @@ print(response)
 - `router.image_generation()` - completion calls in OpenAI `/v1/images/generations` endpoint format
 - `router.aimage_generation()` - async image generation calls
 
-## Advanced - Routing Strategies
+## Advanced - Routing Strategies ⭐️
 #### Routing Strategies - Weighted Pick, Rate Limit Aware, Least Busy, Latency Based, Cost Based
 
 Router provides 4 strategies for routing your calls across multiple deployments: 
@@ -262,7 +262,7 @@ if response is not None:
 	)
 ```
 
-### Set Time Window 
+#### Set Time Window 
 
 Set time window for how far back to consider when averaging latency for a deployment. 
 
@@ -278,7 +278,7 @@ router_settings:
 	routing_strategy_args: {"ttl": 10}
 ```
 
-### Set Lowest Latency Buffer
+#### Set Lowest Latency Buffer
 
 Set a buffer within which deployments are candidates for making calls to. 
 
@@ -468,6 +468,122 @@ asyncio.run(router_acompletion())
 ```
 
 </TabItem>
+
+<TabItem value="custom" label="Custom Routing Strategy">
+
+**Plugin a custom routing strategy to select deployments**
+
+
+Step 1. Define your custom routing strategy
+
+```python
+
+from litellm.router import CustomRoutingStrategyBase
+class CustomRoutingStrategy(CustomRoutingStrategyBase):
+    async def async_get_available_deployment(
+        self,
+        model: str,
+        messages: Optional[List[Dict[str, str]]] = None,
+        input: Optional[Union[str, List]] = None,
+        specific_deployment: Optional[bool] = False,
+        request_kwargs: Optional[Dict] = None,
+    ):
+        """
+        Asynchronously retrieves the available deployment based on the given parameters.
+
+        Args:
+            model (str): The name of the model.
+            messages (Optional[List[Dict[str, str]]], optional): The list of messages for a given request. Defaults to None.
+            input (Optional[Union[str, List]], optional): The input for a given embedding request. Defaults to None.
+            specific_deployment (Optional[bool], optional): Whether to retrieve a specific deployment. Defaults to False.
+            request_kwargs (Optional[Dict], optional): Additional request keyword arguments. Defaults to None.
+
+        Returns:
+            Returns an element from litellm.router.model_list
+
+        """
+        print("In CUSTOM async get available deployment")
+        model_list = router.model_list
+        print("router model list=", model_list)
+        for model in model_list:
+            if isinstance(model, dict):
+                if model["litellm_params"]["model"] == "openai/very-special-endpoint":
+                    return model
+        pass
+
+    def get_available_deployment(
+        self,
+        model: str,
+        messages: Optional[List[Dict[str, str]]] = None,
+        input: Optional[Union[str, List]] = None,
+        specific_deployment: Optional[bool] = False,
+        request_kwargs: Optional[Dict] = None,
+    ):
+        """
+        Synchronously retrieves the available deployment based on the given parameters.
+
+        Args:
+            model (str): The name of the model.
+            messages (Optional[List[Dict[str, str]]], optional): The list of messages for a given request. Defaults to None.
+            input (Optional[Union[str, List]], optional): The input for a given embedding request. Defaults to None.
+            specific_deployment (Optional[bool], optional): Whether to retrieve a specific deployment. Defaults to False.
+            request_kwargs (Optional[Dict], optional): Additional request keyword arguments. Defaults to None.
+
+        Returns:
+            Returns an element from litellm.router.model_list
+
+        """
+        pass
+```
+
+Step 2. Initialize Router with custom routing strategy
+```python
+from litellm import Router
+
+router = Router(
+    model_list=[
+        {
+            "model_name": "azure-model",
+            "litellm_params": {
+                "model": "openai/very-special-endpoint",
+                "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",  # If you are Krrish, this is OpenAI Endpoint3 on our Railway endpoint :)
+                "api_key": "fake-key",
+            },
+            "model_info": {"id": "very-special-endpoint"},
+        },
+        {
+            "model_name": "azure-model",
+            "litellm_params": {
+                "model": "openai/fast-endpoint",
+                "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                "api_key": "fake-key",
+            },
+            "model_info": {"id": "fast-endpoint"},
+        },
+    ],
+    set_verbose=True,
+    debug_level="DEBUG",
+    timeout=1,
+)  # type: ignore
+
+router.set_custom_routing_strategy(CustomRoutingStrategy()) # 👈 Set your routing strategy here
+```
+
+Step 3. Test your routing strategy. Expect your custom routing strategy to be called when running `router.acompletion` requests
+```python
+for _ in range(10):
+	response = await router.acompletion(
+		model="azure-model", messages=[{"role": "user", "content": "hello"}]
+	)
+	print(response)
+	_picked_model_id = response._hidden_params["model_id"]
+	print("picked model=", _picked_model_id)
+```
+
+
+
+</TabItem>
+
 <TabItem value="lowest-cost" label="Lowest Cost Routing (Async)">
 
 Picks a deployment based on the lowest cost
@@ -563,7 +679,6 @@ asyncio.run(router_acompletion())
 ```
 
 </TabItem>
-
 </Tabs>
 
 ## Basic Reliability
@@ -647,6 +762,9 @@ asyncio.run(router_acompletion())
 
 Set the limit for how many calls a model is allowed to fail in a minute, before being cooled down for a minute. 
 
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
 ```python
 from litellm import Router
 
@@ -664,8 +782,67 @@ messages = [{"content": user_message, "role": "user"}]
 response = router.completion(model="gpt-3.5-turbo", messages=messages)
 
 print(f"response: {response}")
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+**Set Global Value**
+
+```yaml
+router_settings:
+	allowed_fails: 3 # cooldown model if it fails > 1 call in a minute. 
+  	cooldown_time: 30 # (in seconds) how long to cooldown model if fails/min > allowed_fails
+```
+
+Defaults:
+- allowed_fails: 0
+- cooldown_time: 60s 
+
+**Set Per Model**
+
+```yaml
+model_list:
+- model_name: fake-openai-endpoint
+  litellm_params:
+    model: predibase/llama-3-8b-instruct
+    api_key: os.environ/PREDIBASE_API_KEY
+    tenant_id: os.environ/PREDIBASE_TENANT_ID
+    max_new_tokens: 256
+    cooldown_time: 0 # 👈 KEY CHANGE
+```
+
+</TabItem>
+</Tabs>
+
+**Expected Response**
 
 ```
+No deployments available for selected model, Try again in 60 seconds. Passed model=claude-3-5-sonnet. pre-call-checks=False, allowed_model_region=n/a.
+```
+
+#### **Disable cooldowns**
+
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import Router 
+
+
+router = Router(..., disable_cooldowns=True)
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```yaml
+router_settings:
+	disable_cooldowns: True
+```
+
+</TabItem>
+</Tabs>
 
 ### Retries
 
@@ -713,24 +890,41 @@ response = router.completion(model="gpt-3.5-turbo", messages=messages)
 print(f"response: {response}")
 ```
 
-#### Retries based on Error Type
+### [Advanced]: Custom Retries, Cooldowns based on Error Type
 
-Use `RetryPolicy` if you want to set a `num_retries` based on the Exception receieved
+- Use `RetryPolicy` if you want to set a `num_retries` based on the Exception receieved
+- Use `AllowedFailsPolicy` to set a custom number of `allowed_fails`/minute before cooling down a deployment
 
 Example:
-- 4 retries for `ContentPolicyViolationError`
-- 0 retries for `RateLimitErrors` 
+
+```python
+retry_policy = RetryPolicy(
+    ContentPolicyViolationErrorRetries=3, 		  # run 3 retries for ContentPolicyViolationErrors
+    AuthenticationErrorRetries=0,         		  # run 0 retries for AuthenticationErrorRetries
+)
+
+allowed_fails_policy = AllowedFailsPolicy(
+	ContentPolicyViolationErrorAllowedFails=1000, # Allow 1000 ContentPolicyViolationError before cooling down a deployment
+	RateLimitErrorAllowedFails=100,               # Allow 100 RateLimitErrors before cooling down a deployment
+)
+```
 
 Example Usage
 
 ```python
-from litellm.router import RetryPolicy
+from litellm.router import RetryPolicy, AllowedFailsPolicy
+
 retry_policy = RetryPolicy(
-	ContentPolicyViolationErrorRetries=3, # run 3 retries for ContentPolicyViolationErrors
-	AuthenticationErrorRetries=0,		  # run 0 retries for AuthenticationErrorRetries
+	ContentPolicyViolationErrorRetries=3,         # run 3 retries for ContentPolicyViolationErrors
+	AuthenticationErrorRetries=0,		          # run 0 retries for AuthenticationErrorRetries
 	BadRequestErrorRetries=1,
 	TimeoutErrorRetries=2,
 	RateLimitErrorRetries=3,
+)
+
+allowed_fails_policy = AllowedFailsPolicy(
+	ContentPolicyViolationErrorAllowedFails=1000, # Allow 1000 ContentPolicyViolationError before cooling down a deployment
+	RateLimitErrorAllowedFails=100,               # Allow 100 RateLimitErrors before cooling down a deployment
 )
 
 router = litellm.Router(
@@ -755,6 +949,7 @@ router = litellm.Router(
 		},
 	],
 	retry_policy=retry_policy,
+	allowed_fails_policy=allowed_fails_policy,
 )
 
 response = await router.acompletion(
@@ -768,88 +963,241 @@ response = await router.acompletion(
 
 If a call fails after num_retries, fall back to another model group. 
 
+### Quick Start 
+
+```python
+from litellm import Router 
+router = Router(
+	model_list=[
+		{ # bad model
+			"model_name": "bad-model",
+			"litellm_params": {
+				"model": "openai/my-bad-model",
+				"api_key": "my-bad-api-key",
+				"mock_response": "Bad call"
+			},
+		},
+		{ # good model
+			"model_name": "my-good-model",
+			"litellm_params": {
+				"model": "gpt-4o",
+				"api_key": os.getenv("OPENAI_API_KEY"),
+				"mock_response": "Good call"
+			},
+		},
+	],
+	fallbacks=[{"bad-model": ["my-good-model"]}] # 👈 KEY CHANGE
+)
+
+response = router.completion(
+	model="bad-model",
+	messages=[{"role": "user", "content": "Hey, how's it going?"}],
+	mock_testing_fallbacks=True,
+)
+```
+
 If the error is a context window exceeded error, fall back to a larger model group (if given). 
 
 Fallbacks are done in-order - ["gpt-3.5-turbo, "gpt-4", "gpt-4-32k"], will do 'gpt-3.5-turbo' first, then 'gpt-4', etc.
 
-You can also set 'default_fallbacks', in case a specific model group is misconfigured / bad.
+You can also set `default_fallbacks`, in case a specific model group is misconfigured / bad.
+
+There are 3 types of fallbacks: 
+- `content_policy_fallbacks`: For litellm.ContentPolicyViolationError - LiteLLM maps content policy violation errors across providers [**See Code**](https://github.com/BerriAI/litellm/blob/89a43c872a1e3084519fb9de159bf52f5447c6c4/litellm/utils.py#L8495C27-L8495C54)
+- `context_window_fallbacks`: For litellm.ContextWindowExceededErrors - LiteLLM maps context window error messages across providers [**See Code**](https://github.com/BerriAI/litellm/blob/89a43c872a1e3084519fb9de159bf52f5447c6c4/litellm/utils.py#L8469)
+- `fallbacks`: For all remaining errors - e.g. litellm.RateLimitError
+
+**Content Policy Violation Fallback**
+
+Key change: 
 
 ```python
-from litellm import Router
-
-model_list = [
-    { # list of model deployments 
-		"model_name": "azure/gpt-3.5-turbo", # openai model name 
-		"litellm_params": { # params for litellm completion/embedding call 
-			"model": "azure/chatgpt-v-2", 
-			"api_key": "bad-key",
-			"api_version": os.getenv("AZURE_API_VERSION"),
-			"api_base": os.getenv("AZURE_API_BASE")
-		},
-		"tpm": 240000,
-		"rpm": 1800
-	}, 
-    { # list of model deployments 
-		"model_name": "azure/gpt-3.5-turbo-context-fallback", # openai model name 
-		"litellm_params": { # params for litellm completion/embedding call 
-			"model": "azure/chatgpt-v-2", 
-			"api_key": "bad-key",
-			"api_version": os.getenv("AZURE_API_VERSION"),
-			"api_base": os.getenv("AZURE_API_BASE")
-		},
-		"tpm": 240000,
-		"rpm": 1800
-	}, 
-	{
-		"model_name": "azure/gpt-3.5-turbo", # openai model name 
-		"litellm_params": { # params for litellm completion/embedding call 
-			"model": "azure/chatgpt-functioncalling", 
-			"api_key": "bad-key",
-			"api_version": os.getenv("AZURE_API_VERSION"),
-			"api_base": os.getenv("AZURE_API_BASE")
-		},
-		"tpm": 240000,
-		"rpm": 1800
-	}, 
-	{
-		"model_name": "gpt-3.5-turbo", # openai model name 
-		"litellm_params": { # params for litellm completion/embedding call 
-			"model": "gpt-3.5-turbo", 
-			"api_key": os.getenv("OPENAI_API_KEY"),
-		},
-		"tpm": 1000000,
-		"rpm": 9000
-	},
-    {
-		"model_name": "gpt-3.5-turbo-16k", # openai model name 
-		"litellm_params": { # params for litellm completion/embedding call 
-			"model": "gpt-3.5-turbo-16k", 
-			"api_key": os.getenv("OPENAI_API_KEY"),
-		},
-		"tpm": 1000000,
-		"rpm": 9000
-	}
-]
-
-
-router = Router(model_list=model_list, 
-                fallbacks=[{"azure/gpt-3.5-turbo": ["gpt-3.5-turbo"]}], 
-				default_fallbacks=["gpt-3.5-turbo-16k"],
-                context_window_fallbacks=[{"azure/gpt-3.5-turbo-context-fallback": ["gpt-3.5-turbo-16k"]}, {"gpt-3.5-turbo": ["gpt-3.5-turbo-16k"]}],
-                set_verbose=True)
-
-
-user_message = "Hello, whats the weather in San Francisco??"
-messages = [{"content": user_message, "role": "user"}]
-
-# normal fallback call 
-response = router.completion(model="azure/gpt-3.5-turbo", messages=messages)
-
-# context window fallback call
-response = router.completion(model="azure/gpt-3.5-turbo-context-fallback", messages=messages)
-
-print(f"response: {response}")
+content_policy_fallbacks=[{"claude-2": ["my-fallback-model"]}]
 ```
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import Router 
+
+router = Router(
+	model_list=[
+		{
+			"model_name": "claude-2",
+			"litellm_params": {
+				"model": "claude-2",
+				"api_key": "",
+				"mock_response": Exception("content filtering policy"),
+			},
+		},
+		{
+			"model_name": "my-fallback-model",
+			"litellm_params": {
+				"model": "claude-2",
+				"api_key": "",
+				"mock_response": "This works!",
+			},
+		},
+	],
+	content_policy_fallbacks=[{"claude-2": ["my-fallback-model"]}], # 👈 KEY CHANGE
+	# fallbacks=[..], # [OPTIONAL]
+	# context_window_fallbacks=[..], # [OPTIONAL]
+)
+
+response = router.completion(
+	model="claude-2",
+	messages=[{"role": "user", "content": "Hey, how's it going?"}],
+)
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+In your proxy config.yaml just add this line 👇
+
+```yaml
+router_settings:
+	content_policy_fallbacks=[{"claude-2": ["my-fallback-model"]}]
+```
+
+Start proxy 
+
+```bash
+litellm --config /path/to/config.yaml
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+</TabItem>
+</Tabs>
+
+**Context Window Exceeded Fallback**
+
+Key change: 
+
+```python
+context_window_fallbacks=[{"claude-2": ["my-fallback-model"]}]
+```
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import Router 
+
+router = Router(
+	model_list=[
+		{
+			"model_name": "claude-2",
+			"litellm_params": {
+				"model": "claude-2",
+				"api_key": "",
+				"mock_response": Exception("prompt is too long"),
+			},
+		},
+		{
+			"model_name": "my-fallback-model",
+			"litellm_params": {
+				"model": "claude-2",
+				"api_key": "",
+				"mock_response": "This works!",
+			},
+		},
+	],
+	context_window_fallbacks=[{"claude-2": ["my-fallback-model"]}], # 👈 KEY CHANGE
+	# fallbacks=[..], # [OPTIONAL]
+	# content_policy_fallbacks=[..], # [OPTIONAL]
+)
+
+response = router.completion(
+	model="claude-2",
+	messages=[{"role": "user", "content": "Hey, how's it going?"}],
+)
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+In your proxy config.yaml just add this line 👇
+
+```yaml
+router_settings:
+	context_window_fallbacks=[{"claude-2": ["my-fallback-model"]}]
+```
+
+Start proxy 
+
+```bash
+litellm --config /path/to/config.yaml
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+</TabItem>
+</Tabs>
+
+**Regular Fallbacks**
+
+Key change: 
+
+```python
+fallbacks=[{"claude-2": ["my-fallback-model"]}]
+```
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import Router 
+
+router = Router(
+	model_list=[
+		{
+			"model_name": "claude-2",
+			"litellm_params": {
+				"model": "claude-2",
+				"api_key": "",
+				"mock_response": Exception("this is a rate limit error"),
+			},
+		},
+		{
+			"model_name": "my-fallback-model",
+			"litellm_params": {
+				"model": "claude-2",
+				"api_key": "",
+				"mock_response": "This works!",
+			},
+		},
+	],
+	fallbacks=[{"claude-2": ["my-fallback-model"]}], # 👈 KEY CHANGE
+	# context_window_fallbacks=[..], # [OPTIONAL]
+	# content_policy_fallbacks=[..], # [OPTIONAL]
+)
+
+response = router.completion(
+	model="claude-2",
+	messages=[{"role": "user", "content": "Hey, how's it going?"}],
+)
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+In your proxy config.yaml just add this line 👇
+
+```yaml
+router_settings:
+	fallbacks=[{"claude-2": ["my-fallback-model"]}]
+```
+
+Start proxy 
+
+```bash
+litellm --config /path/to/config.yaml
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+</TabItem>
+</Tabs>
 
 ### Caching
 

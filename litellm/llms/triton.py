@@ -61,17 +61,25 @@ class TritonChatCompletion(BaseLLM):
         logging_obj.post_call(original_response=_text_response)
 
         _json_response = response.json()
+        _embedding_output = []
 
         _outputs = _json_response["outputs"]
-        _output_data = [output["data"] for output in _outputs]
-        _embedding_output = {
-            "object": "embedding",
-            "index": 0,
-            "embedding": _output_data,
-        }
+        for output in _outputs:
+            _shape = output["shape"]
+            _data = output["data"]
+            _split_output_data = self.split_embedding_by_shape(_data, _shape)
+
+            for idx, embedding in enumerate(_split_output_data):
+                _embedding_output.append(
+                    {
+                        "object": "embedding",
+                        "index": idx,
+                        "embedding": embedding,
+                    }
+                )
 
         model_response.model = _json_response.get("model_name", "None")
-        model_response.data = [_embedding_output]
+        model_response.data = _embedding_output
 
         return model_response
 
@@ -92,7 +100,7 @@ class TritonChatCompletion(BaseLLM):
             "inputs": [
                 {
                     "name": "input_text",
-                    "shape": [len(input)],  # size of the input data
+                    "shape": [len(input)],
                     "datatype": "BYTES",
                     "data": input,
                 }
@@ -315,3 +323,14 @@ class TritonChatCompletion(BaseLLM):
                 Choices(index=0, message=Message(content=_json_response["outputs"]))
             ]
         return model_response
+
+    @staticmethod
+    def split_embedding_by_shape(
+        data: List[float], shape: List[int]
+    ) -> List[List[float]]:
+        if len(shape) != 2:
+            raise ValueError("Shape must be of length 2.")
+        embedding_size = shape[1]
+        return [
+            data[i * embedding_size : (i + 1) * embedding_size] for i in range(shape[0])
+        ]
