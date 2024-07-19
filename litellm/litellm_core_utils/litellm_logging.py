@@ -1405,6 +1405,9 @@ class Logging:
                             end_time=end_time,
                         )
                 if callable(callback):  # custom logger functions
+                    global customLogger
+                    if customLogger is None:
+                        customLogger = CustomLogger()
                     if self.stream:
                         if (
                             "async_complete_streaming_response"

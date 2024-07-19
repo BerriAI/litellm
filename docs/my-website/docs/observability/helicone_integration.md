@@ -72,7 +72,7 @@ Helicone's proxy provides [advanced functionality](https://docs.helicone.ai/gett
 To use Helicone as a proxy for your LLM requests:
 
 1. Set Helicone as your base URL via: litellm.api_base
-2. Pass in Helicone request headers via: litellm.headers
+2. Pass in Helicone request headers via: litellm.metadata
 
 Complete Code:
 
@@ -99,7 +99,7 @@ print(response)
 You can add custom metadata and properties to your requests using Helicone headers. Here are some examples:
 
 ```python
-litellm.headers = {
+litellm.metadata = {
     "Helicone-Auth": f"Bearer {os.getenv('HELICONE_API_KEY')}",  # Authenticate to send requests to Helicone API
     "Helicone-User-Id": "user-abc",  # Specify the user making the request
     "Helicone-Property-App": "web",  # Custom property to add additional information
@@ -127,7 +127,7 @@ litellm.headers = {
 Enable caching and set up rate limiting policies:
 
 ```python
-litellm.headers = {
+litellm.metadata = {
     "Helicone-Auth": f"Bearer {os.getenv('HELICONE_API_KEY')}",  # Authenticate to send requests to Helicone API
     "Helicone-Cache-Enabled": "true",  # Enable caching of responses
     "Cache-Control": "max-age=3600",  # Set cache limit to 1 hour
@@ -140,7 +140,7 @@ litellm.headers = {
 Track multi-step and agentic LLM interactions using session IDs and paths:
 
 ```python
-litellm.headers = {
+litellm.metadata = {
     "Helicone-Auth": f"Bearer {os.getenv('HELICONE_API_KEY')}",  # Authenticate to send requests to Helicone API
     "Helicone-Session-Id": "session-abc-123",  # The session ID you want to track
     "Helicone-Session-Path": "parent-trace/child-trace",  # The path of the session
@@ -157,7 +157,7 @@ By using these two headers, you can effectively group and visualize multi-step L
 Set up retry mechanisms and fallback options:
 
 ```python
-litellm.headers = {
+litellm.metadata = {
     "Helicone-Auth": f"Bearer {os.getenv('HELICONE_API_KEY')}",  # Authenticate to send requests to Helicone API
     "Helicone-Retry-Enabled": "true",  # Enable retry mechanism
     "helicone-retry-num": "3",  # Set number of retries

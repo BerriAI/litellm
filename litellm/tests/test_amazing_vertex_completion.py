@@ -36,6 +36,20 @@ litellm.cache = None
 user_message = "Write a short poem about the sky"
 messages = [{"content": user_message, "role": "user"}]
 
+VERTEX_MODELS_TO_NOT_TEST = [
+    "medlm-medium",
+    "medlm-large",
+    "code-gecko",
+    "code-gecko@001",
+    "code-gecko@002",
+    "code-gecko@latest",
+    "codechat-bison@latest",
+    "code-bison@001",
+    "text-bison@001",
+    "gemini-1.5-pro",
+    "gemini-1.5-pro-preview-0215",
+]
+
 
 def get_vertex_ai_creds_json() -> dict:
     # Define the path to the vertex_key.json file
@@ -327,17 +341,7 @@ def test_vertex_ai():
     test_models += litellm.vertex_language_models  # always test gemini-pro
     for model in test_models:
         try:
-            if model in [
-                "code-gecko",
-                "code-gecko@001",
-                "code-gecko@002",
-                "code-gecko@latest",
-                "codechat-bison@latest",
-                "code-bison@001",
-                "text-bison@001",
-                "gemini-1.5-pro",
-                "gemini-1.5-pro-preview-0215",
-            ] or (
+            if model in VERTEX_MODELS_TO_NOT_TEST or (
                 "gecko" in model or "32k" in model or "ultra" in model or "002" in model
             ):
                 # our account does not have access to this model
@@ -382,17 +386,7 @@ def test_vertex_ai_stream():
     test_models += litellm.vertex_language_models  # always test gemini-pro
     for model in test_models:
         try:
-            if model in [
-                "code-gecko",
-                "code-gecko@001",
-                "code-gecko@002",
-                "code-gecko@latest",
-                "codechat-bison@latest",
-                "code-bison@001",
-                "text-bison@001",
-                "gemini-1.5-pro",
-                "gemini-1.5-pro-preview-0215",
-            ] or (
+            if model in VERTEX_MODELS_TO_NOT_TEST or (
                 "gecko" in model or "32k" in model or "ultra" in model or "002" in model
             ):
                 # our account does not have access to this model
@@ -437,17 +431,9 @@ async def test_async_vertexai_response():
     test_models += litellm.vertex_language_models  # always test gemini-pro
     for model in test_models:
         print(f"model being tested in async call: {model}")
-        if model in [
-            "code-gecko",
-            "code-gecko@001",
-            "code-gecko@002",
-            "code-gecko@latest",
-            "codechat-bison@latest",
-            "code-bison@001",
-            "text-bison@001",
-            "gemini-1.5-pro",
-            "gemini-1.5-pro-preview-0215",
-        ] or ("gecko" in model or "32k" in model or "ultra" in model or "002" in model):
+        if model in VERTEX_MODELS_TO_NOT_TEST or (
+            "gecko" in model or "32k" in model or "ultra" in model or "002" in model
+        ):
             # our account does not have access to this model
             continue
         try:
@@ -484,17 +470,9 @@ async def test_async_vertexai_streaming_response():
     test_models = random.sample(test_models, 1)
     test_models += litellm.vertex_language_models  # always test gemini-pro
     for model in test_models:
-        if model in [
-            "code-gecko",
-            "code-gecko@001",
-            "code-gecko@002",
-            "code-gecko@latest",
-            "codechat-bison@latest",
-            "code-bison@001",
-            "text-bison@001",
-            "gemini-1.5-pro",
-            "gemini-1.5-pro-preview-0215",
-        ] or ("gecko" in model or "32k" in model or "ultra" in model or "002" in model):
+        if model in VERTEX_MODELS_TO_NOT_TEST or (
+            "gecko" in model or "32k" in model or "ultra" in model or "002" in model
+        ):
             # our account does not have access to this model
             continue
         try:

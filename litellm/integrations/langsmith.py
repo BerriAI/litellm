@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Any, List, Optional, Union
 
 import dotenv  # type: ignore
+import httpx
 import requests  # type: ignore
 from pydantic import BaseModel  # type: ignore
 
@@ -59,7 +60,9 @@ class LangsmithLogger(CustomLogger):
         self.langsmith_base_url = os.getenv(
             "LANGSMITH_BASE_URL", "https://api.smith.langchain.com"
         )
-        self.async_httpx_client = AsyncHTTPHandler()
+        self.async_httpx_client = AsyncHTTPHandler(
+            timeout=httpx.Timeout(timeout=600.0, connect=5.0)
+        )
 
     def _prepare_log_data(self, kwargs, response_obj, start_time, end_time):
         import datetime

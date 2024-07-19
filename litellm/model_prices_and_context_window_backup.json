@@ -21,6 +21,30 @@
         "supports_parallel_function_calling": true,
         "supports_vision": true
     },
+    "gpt-4o-mini": {
+        "max_tokens": 4096,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.00000015,
+        "output_cost_per_token": 0.00000060,
+        "litellm_provider": "openai",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_vision": true
+    },
+    "gpt-4o-mini-2024-07-18": {
+        "max_tokens": 4096,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.00000015,
+        "output_cost_per_token": 0.00000060,
+        "litellm_provider": "openai",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_vision": true
+    },
     "gpt-4o-2024-05-13": {
         "max_tokens": 4096,
         "max_input_tokens": 128000,
@@ -1820,6 +1844,26 @@
         "supports_vision": true,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
+    "medlm-medium": {
+        "max_tokens": 8192,
+        "max_input_tokens": 32768,
+        "max_output_tokens": 8192,
+        "input_cost_per_character": 0.0000005,
+        "output_cost_per_character": 0.000001,
+        "litellm_provider": "vertex_ai-language-models",
+        "mode": "chat",
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
+    },
+    "medlm-large": {
+        "max_tokens": 1024,
+        "max_input_tokens": 8192,
+        "max_output_tokens": 1024,
+        "input_cost_per_character": 0.000005,
+        "output_cost_per_character": 0.000015,
+        "litellm_provider": "vertex_ai-language-models",
+        "mode": "chat",
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
+    },
     "vertex_ai/claude-3-sonnet@20240229": {
         "max_tokens": 4096,
         "max_input_tokens": 200000,
@@ -2118,6 +2162,28 @@
         "input_cost_per_token_above_128k_tokens": 0.0000007, 
         "output_cost_per_token": 0.00000105, 
         "output_cost_per_token_above_128k_tokens": 0.0000021, 
+        "litellm_provider": "gemini",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
+    },
+    "gemini/gemini-gemma-2-27b-it": {
+        "max_tokens": 8192,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 0.00000035, 
+        "output_cost_per_token": 0.00000105, 
+        "litellm_provider": "gemini",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
+    },
+    "gemini/gemini-gemma-2-9b-it": {
+        "max_tokens": 8192,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 0.00000035, 
+        "output_cost_per_token": 0.00000105, 
         "litellm_provider": "gemini",
         "mode": "chat",
         "supports_function_calling": true,
