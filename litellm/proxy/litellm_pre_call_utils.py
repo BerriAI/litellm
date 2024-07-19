@@ -132,15 +132,6 @@ async def add_litellm_data_to_request(
             for k, v in key_metadata["cache"].items():
                 if k in SupportedCacheControls:
                     data["cache"][k] = v
-    if "tier" in key_metadata:
-        if premium_user is not True:
-            verbose_logger.warning(
-                "Trying to use free/paid tier feature. This will not be applied %s",
-                CommonProxyErrors.not_premium_user.value,
-            )
-
-        # add request tier to metadata
-        data[_metadata_variable_name]["tier"] = key_metadata["tier"]
 
     # Team spend, budget - used by prometheus.py
     data[_metadata_variable_name][
