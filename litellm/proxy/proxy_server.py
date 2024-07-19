@@ -7791,7 +7791,7 @@ async def login(request: Request):
                 request_type="key",
                 **{
                     "user_role": LitellmUserRoles.PROXY_ADMIN,
-                    "duration": "12hr",
+                    "duration": "24hr",
                     "key_max_budget": 5,
                     "models": [],
                     "aliases": {},
@@ -7855,7 +7855,7 @@ async def login(request: Request):
                     request_type="key",
                     **{  # type: ignore
                         "user_role": user_role,
-                        "duration": "12hr",
+                        "duration": "24hr",
                         "key_max_budget": 5,
                         "models": [],
                         "aliases": {},
@@ -7996,7 +7996,7 @@ async def onboarding(invite_link: str):
         request_type="key",
         **{
             "user_role": user_obj.user_role,
-            "duration": "12hr",
+            "duration": "24hr",
             "key_max_budget": 5,
             "models": [],
             "aliases": {},
@@ -8334,7 +8334,7 @@ async def auth_callback(request: Request):
     # User might not be already created on first generation of key
     # But if it is, we want their models preferences
     default_ui_key_values = {
-        "duration": "12hr",
+        "duration": "24hr",
         "key_max_budget": 0.01,
         "aliases": {},
         "config": {},
