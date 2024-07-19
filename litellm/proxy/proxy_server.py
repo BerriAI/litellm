@@ -416,6 +416,7 @@ user_custom_key_generate = None
 use_background_health_checks = None
 use_queue = False
 health_check_interval = None
+health_check_details = None
 health_check_results = {}
 queue: List = []
 litellm_proxy_budget_name = "litellm-proxy-budget"
@@ -1204,14 +1205,14 @@ async def _run_background_health_check():
 
     Update health_check_results, based on this.
     """
-    global health_check_results, llm_model_list, health_check_interval
+    global health_check_results, llm_model_list, health_check_interval, health_check_details
 
     # make 1 deep copy of llm_model_list -> use this for all background health checks
     _llm_model_list = copy.deepcopy(llm_model_list)
 
     while True:
         healthy_endpoints, unhealthy_endpoints = await perform_health_check(
-            model_list=_llm_model_list
+            model_list=_llm_model_list, details=health_check_details
         )
 
         # Update the global variable with the health check results
@@ -1363,7 +1364,7 @@ class ProxyConfig:
         """
         Load config values into proxy global state
         """
-        global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, use_background_health_checks, health_check_interval, use_queue, custom_db_client, proxy_budget_rescheduler_max_time, proxy_budget_rescheduler_min_time, ui_access_mode, litellm_master_key_hash, proxy_batch_write_at, disable_spend_logs, prompt_injection_detection_obj, redis_usage_cache, store_model_in_db, premium_user, open_telemetry_logger
+        global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, use_background_health_checks, health_check_interval, use_queue, custom_db_client, proxy_budget_rescheduler_max_time, proxy_budget_rescheduler_min_time, ui_access_mode, litellm_master_key_hash, proxy_batch_write_at, disable_spend_logs, prompt_injection_detection_obj, redis_usage_cache, store_model_in_db, premium_user, open_telemetry_logger, health_check_details
 
         # Load existing config
         config = await self.get_config(config_file_path=config_file_path)
@@ -1733,6 +1734,9 @@ class ProxyConfig:
                 "background_health_checks", False
             )
             health_check_interval = general_settings.get("health_check_interval", 300)
+            health_check_details = general_settings.get(
+                "health_check_details", True
+            )
 
             ## check if user has set a premium feature in general_settings
             if (
@@ -3343,43 +3347,52 @@ async def embeddings(
             user_api_key_dict=user_api_key_dict, data=data, call_type="embeddings"
         )
 
+        tasks = []
+        tasks.append(
+            proxy_logging_obj.during_call_hook(
+                data=data,
+                user_api_key_dict=user_api_key_dict,
+                call_type="embeddings",
+            )
+        )
+
         ## ROUTE TO CORRECT ENDPOINT ##
         # skip router if user passed their key
         if "api_key" in data:
-            response = await litellm.aembedding(**data)
+            tasks.append(litellm.aembedding(**data))
         elif "user_config" in data:
             # initialize a new router instance. make request using this Router
             router_config = data.pop("user_config")
             user_router = litellm.Router(**router_config)
-            response = await user_router.aembedding(**data)
+            tasks.append(user_router.aembedding(**data))
         elif (
             llm_router is not None and data["model"] in router_model_names
         ):  # model in router model list
-            response = await llm_router.aembedding(**data)
+            tasks.append(llm_router.aembedding(**data))
         elif (
             llm_router is not None
             and llm_router.model_group_alias is not None
             and data["model"] in llm_router.model_group_alias
         ):  # model set in model_group_alias
-            response = await llm_router.aembedding(
-                **data
+            tasks.append(
+                llm_router.aembedding(**data)
             )  # ensure this goes the llm_router, router will do the correct alias mapping
         elif (
             llm_router is not None and data["model"] in llm_router.deployment_names
         ):  # model in router deployments, calling a specific deployment on the router
-            response = await llm_router.aembedding(**data, specific_deployment=True)
+            tasks.append(llm_router.aembedding(**data, specific_deployment=True))
         elif (
             llm_router is not None and data["model"] in llm_router.get_model_ids()
         ):  # model in router deployments, calling a specific deployment on the router
-            response = await llm_router.aembedding(**data)
+            tasks.append(llm_router.aembedding(**data))
         elif (
             llm_router is not None
             and data["model"] not in router_model_names
             and llm_router.default_deployment is not None
         ):  # model in router deployments, calling a specific deployment on the router
-            response = await llm_router.aembedding(**data)
+            tasks.append(llm_router.aembedding(**data))
         elif user_model is not None:  # `litellm --model <your-model-name>`
-            response = await litellm.aembedding(**data)
+            tasks.append(litellm.aembedding(**data))
         else:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -3388,6 +3401,15 @@ async def embeddings(
                     + data.get("model", "")
                 },
             )
+
+        # wait for call to end
+        llm_responses = asyncio.gather(
+            *tasks
+        )  # run the moderation check in parallel to the actual llm api call
+
+        responses = await llm_responses
+
+        response = responses[1]
 
         ### ALERTING ###
         asyncio.create_task(
@@ -9418,6 +9440,7 @@ def cleanup_router_config_variables():
     user_custom_key_generate = None
     use_background_health_checks = None
     health_check_interval = None
+    health_check_details = None
     prisma_client = None
     custom_db_client = None
 

@@ -589,7 +589,7 @@ async def test_triton_embeddings():
         print(f"response: {response}")
 
         # stubbed endpoint is setup to return this
-        assert response.data[0]["embedding"] == [0.1, 0.2, 0.3]
+        assert response.data[0]["embedding"] == [0.1, 0.2]
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 

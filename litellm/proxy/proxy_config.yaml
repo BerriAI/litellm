@@ -1,23 +1,19 @@
 model_list:
-  - model_name: fake-openai-endpoint
+  - model_name: gpt-4
     litellm_params:
       model: openai/fake
       api_key: fake-key
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
-  - model_name: gemini-flash
-    litellm_params:
-      model: gemini/gemini-1.5-flash
-  - model_name: whisper
-    litellm_params:
-      model: whisper-1
-      api_key: sk-*******
-      max_file_size_mb: 1000
     model_info:
-      mode: audio_transcription
+      tier: free # 👈 Key Change - set `tier`
+  - model_name: gpt-4
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      tier: paid # 👈 Key Change - set `tier`
 
 general_settings: 
   master_key: sk-1234 
 
-litellm_settings:
-  success_callback: ["langsmith"]
 
