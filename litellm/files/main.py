@@ -406,7 +406,7 @@ async def acreate_file(
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
-) -> Coroutine[Any, Any, FileObject]:
+) -> FileObject:
     """
     Async: Files are used to upload documents that can be used with features like Assistants, Fine-tuning, and Batch API.
 
@@ -537,7 +537,7 @@ async def afile_content(
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
-) -> Coroutine[Any, Any, HttpxBinaryResponseContent]:
+) -> HttpxBinaryResponseContent:
     """
     Async: Get file contents
 
