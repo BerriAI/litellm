@@ -110,28 +110,28 @@ class _ENTERPRISE_lakeraAI_Moderation(CustomLogger):
                         "content": content,
                     }
 
-        lakera_input = [
-            v
-            for k, v in sorted(
-                lakera_input_dict.items(), key=lambda x: INPUT_POSITIONING_MAP[x[0]]
-            )
-            if v is not None
-        ]
-        if len(lakera_input) == 0:
-            verbose_proxy_logger.debug(
-                "Skipping lakera prompt injection, no roles with messages found"
-            )
-            return
-
+            lakera_input = [
+                v
+                for k, v in sorted(
+                    lakera_input_dict.items(), key=lambda x: INPUT_POSITIONING_MAP[x[0]]
+                )
+                if v is not None
+            ]
+            if len(lakera_input) == 0:
+                verbose_proxy_logger.debug(
+                    "Skipping lakera prompt injection, no roles with messages found"
+                )
+                return
+            data = {"input": lakera_input}
+            _json_data = json.dumps(data)
         elif "input" in data and isinstance(data["input"], str):
             text = data["input"]
+            _json_data = json.dumps({"input": text})
         elif "input" in data and isinstance(data["input"], list):
             text = "\n".join(data["input"])
+            _json_data = json.dumps({"input": text})
 
         # https://platform.lakera.ai/account/api-keys
-        data = {"input": lakera_input}
-
-        _json_data = json.dumps(data)
 
         """
         export LAKERA_GUARD_API_KEY=<your key>
