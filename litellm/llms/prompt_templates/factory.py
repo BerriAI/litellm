@@ -14,6 +14,7 @@ import litellm
 import litellm.types
 import litellm.types.llms
 import litellm.types.llms.vertex_ai
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.types.completion import (
     ChatCompletionFunctionMessageParam,
     ChatCompletionMessageParam,
@@ -1989,8 +1990,9 @@ def get_image_details(image_url) -> Tuple[str, str]:
     try:
         import base64
 
+        client = HTTPHandler(concurrent_limit=1)
         # Send a GET request to the image URL
-        response = requests.get(image_url)
+        response = client.get(image_url)
         response.raise_for_status()  # Raise an exception for HTTP errors
 
         # Check the response's content type to ensure it is an image
