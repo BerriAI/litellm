@@ -325,6 +325,10 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     ## MOCK RESPONSES ##
     mock_response: Optional[Union[str, ModelResponse, Exception]]
 
+    # routing params
+    # use this for tag-based routing
+    tags: Optional[List[str]]
+
 
 class DeploymentTypedDict(TypedDict):
     model_name: str
