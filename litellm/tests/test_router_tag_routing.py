@@ -45,16 +45,18 @@ async def test_router_free_paid_tier():
                 "litellm_params": {
                     "model": "gpt-4o",
                     "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["free"],
                 },
-                "model_info": {"tier": "paid", "id": "very-expensive-model"},
+                "model_info": {"id": "very-cheap-model"},
             },
             {
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o-mini",
                     "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["paid"],
                 },
-                "model_info": {"tier": "free", "id": "very-cheap-model"},
+                "model_info": {"id": "very-expensive-model"},
             },
         ]
     )
@@ -64,7 +66,7 @@ async def test_router_free_paid_tier():
         response = await router.acompletion(
             model="gpt-4",
             messages=[{"role": "user", "content": "Tell me a joke."}],
-            metadata={"tier": "free"},
+            metadata={"tags": ["free"]},
         )
 
         print("Response: ", response)
@@ -79,7 +81,7 @@ async def test_router_free_paid_tier():
         response = await router.acompletion(
             model="gpt-4",
             messages=[{"role": "user", "content": "Tell me a joke."}],
-            metadata={"tier": "paid"},
+            metadata={"tags": ["paid"]},
         )
 
         print("Response: ", response)
