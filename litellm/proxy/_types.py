@@ -304,6 +304,7 @@ class LiteLLMRoutes(enum.Enum):
         "/routes",
         "/",
         "/health/liveliness",
+        "/health/liveness",
         "/health/readiness",
         "/test",
         "/config/yaml",
