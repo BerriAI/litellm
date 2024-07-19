@@ -400,6 +400,13 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
             <Form.Item className="mt-8" label="api_base" name="api_base">
               <TextInput />
             </Form.Item>
+            <Form.Item
+              label="organization"
+              name="organization"
+              tooltip="OpenAI Organization ID"
+            >
+                <TextInput />
+            </Form.Item>
 
             <Form.Item
               label="tpm"
@@ -1774,7 +1781,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                       </Form.Item>
                     )}
                   {selectedProvider == Providers.OpenAI && (
-                    <Form.Item label="Organization ID" name="organization_id">
+                    <Form.Item label="Organization ID" name="organization">
                       <TextInput placeholder="[OPTIONAL] my-unique-org" />
                     </Form.Item>
                   )}
