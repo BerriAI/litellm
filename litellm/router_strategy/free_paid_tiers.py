@@ -17,14 +17,19 @@ class Deployment(TypedDict):
 
 
 async def get_deployments_for_tier(
-    request_kwargs: dict,
-    healthy_deployments: Optional[
-        Union[List[DeploymentTypedDict], List[Dict[str, Any]]]
-    ] = None,
+    request_kwargs: Optional[Dict[Any, Any]] = None,
+    healthy_deployments: Optional[Union[List[Any], Dict[Any, Any]]] = None,
 ):
     """
     if request_kwargs contains {"metadata": {"tier": "free"}} or {"metadata": {"tier": "paid"}}, then routes the request to free/paid tier models
     """
+    if request_kwargs is None:
+        verbose_logger.debug(
+            "get_deployments_for_tier: request_kwargs is None returning healthy_deployments: %s",
+            healthy_deployments,
+        )
+        return healthy_deployments
+
     verbose_logger.debug("request metadata: %s", request_kwargs.get("metadata"))
     if "metadata" in request_kwargs:
         metadata = request_kwargs["metadata"]
