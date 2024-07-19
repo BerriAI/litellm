@@ -207,6 +207,33 @@ console.log(message);
 ```
 
 </TabItem>
+<TabItem value="openai JS" label="OpenAI JS">
+
+```js
+const { OpenAI } = require('openai');
+
+const openai = new OpenAI({
+  apiKey: "sk-1234", // This is the default and can be omitted
+  baseURL: "http://0.0.0.0:4000"
+});
+
+async function main() {
+  const chatCompletion = await openai.chat.completions.create({
+    messages: [{ role: 'user', content: 'Say this is a test' }],
+    model: 'gpt-3.5-turbo',
+  }, {"metadata": {
+            "generation_name": "ishaan-generation-openaijs-client",
+            "generation_id": "openaijs-client-gen-id22",
+            "trace_id": "openaijs-client-trace-id22",
+            "trace_user_id": "openaijs-client-user-id2"
+        }});
+}
+
+main();
+
+```
+
+</TabItem>
 <TabItem value="instructor" label="Instructor">
 
 ```python

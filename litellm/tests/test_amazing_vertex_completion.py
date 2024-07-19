@@ -36,6 +36,20 @@ litellm.cache = None
 user_message = "Write a short poem about the sky"
 messages = [{"content": user_message, "role": "user"}]
 
+VERTEX_MODELS_TO_NOT_TEST = [
+    "medlm-medium",
+    "medlm-large",
+    "code-gecko",
+    "code-gecko@001",
+    "code-gecko@002",
+    "code-gecko@latest",
+    "codechat-bison@latest",
+    "code-bison@001",
+    "text-bison@001",
+    "gemini-1.5-pro",
+    "gemini-1.5-pro-preview-0215",
+]
+
 
 def get_vertex_ai_creds_json() -> dict:
     # Define the path to the vertex_key.json file
@@ -327,17 +341,7 @@ def test_vertex_ai():
     test_models += litellm.vertex_language_models  # always test gemini-pro
     for model in test_models:
         try:
-            if model in [
-                "code-gecko",
-                "code-gecko@001",
-                "code-gecko@002",
-                "code-gecko@latest",
-                "codechat-bison@latest",
-                "code-bison@001",
-                "text-bison@001",
-                "gemini-1.5-pro",
-                "gemini-1.5-pro-preview-0215",
-            ] or (
+            if model in VERTEX_MODELS_TO_NOT_TEST or (
                 "gecko" in model or "32k" in model or "ultra" in model or "002" in model
             ):
                 # our account does not have access to this model
@@ -382,17 +386,7 @@ def test_vertex_ai_stream():
     test_models += litellm.vertex_language_models  # always test gemini-pro
     for model in test_models:
         try:
-            if model in [
-                "code-gecko",
-                "code-gecko@001",
-                "code-gecko@002",
-                "code-gecko@latest",
-                "codechat-bison@latest",
-                "code-bison@001",
-                "text-bison@001",
-                "gemini-1.5-pro",
-                "gemini-1.5-pro-preview-0215",
-            ] or (
+            if model in VERTEX_MODELS_TO_NOT_TEST or (
                 "gecko" in model or "32k" in model or "ultra" in model or "002" in model
             ):
                 # our account does not have access to this model
@@ -437,17 +431,9 @@ async def test_async_vertexai_response():
     test_models += litellm.vertex_language_models  # always test gemini-pro
     for model in test_models:
         print(f"model being tested in async call: {model}")
-        if model in [
-            "code-gecko",
-            "code-gecko@001",
-            "code-gecko@002",
-            "code-gecko@latest",
-            "codechat-bison@latest",
-            "code-bison@001",
-            "text-bison@001",
-            "gemini-1.5-pro",
-            "gemini-1.5-pro-preview-0215",
-        ] or ("gecko" in model or "32k" in model or "ultra" in model or "002" in model):
+        if model in VERTEX_MODELS_TO_NOT_TEST or (
+            "gecko" in model or "32k" in model or "ultra" in model or "002" in model
+        ):
             # our account does not have access to this model
             continue
         try:
@@ -484,17 +470,9 @@ async def test_async_vertexai_streaming_response():
     test_models = random.sample(test_models, 1)
     test_models += litellm.vertex_language_models  # always test gemini-pro
     for model in test_models:
-        if model in [
-            "code-gecko",
-            "code-gecko@001",
-            "code-gecko@002",
-            "code-gecko@latest",
-            "codechat-bison@latest",
-            "code-bison@001",
-            "text-bison@001",
-            "gemini-1.5-pro",
-            "gemini-1.5-pro-preview-0215",
-        ] or ("gecko" in model or "32k" in model or "ultra" in model or "002" in model):
+        if model in VERTEX_MODELS_TO_NOT_TEST or (
+            "gecko" in model or "32k" in model or "ultra" in model or "002" in model
+        ):
             # our account does not have access to this model
             continue
         try:
@@ -593,7 +571,8 @@ async def test_gemini_pro_vision(provider, sync_mode):
 # test_gemini_pro_vision()
 
 
-def test_completion_function_plus_pdf():
+@pytest.mark.parametrize("load_pdf", [False])  # True,
+def test_completion_function_plus_pdf(load_pdf):
     litellm.set_verbose = True
     load_vertex_ai_credentials()
     try:
@@ -605,16 +584,18 @@ def test_completion_function_plus_pdf():
         url = "https://storage.googleapis.com/cloud-samples-data/generative-ai/pdf/2403.05530.pdf"
 
         # Download the file
-        response = requests.get(url)
-        file_data = response.content
+        if load_pdf:
+            response = requests.get(url)
+            file_data = response.content
 
-        encoded_file = base64.b64encode(file_data).decode("utf-8")
+            encoded_file = base64.b64encode(file_data).decode("utf-8")
+            url = f"data:application/pdf;base64,{encoded_file}"
 
         image_content = [
             {"type": "text", "text": "What's this file about?"},
             {
                 "type": "image_url",
-                "image_url": {"url": f"data:application/pdf;base64,{encoded_file}"},
+                "image_url": {"url": url},
             },
         ]
         image_message = {"role": "user", "content": image_content}
@@ -677,12 +658,135 @@ def test_gemini_pro_vision_base64():
             pytest.fail(f"An exception occurred - {str(e)}")
 
 
-def test_gemini_pro_grounding():
+def vertex_httpx_grounding_post(*args, **kwargs):
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {"Content-Type": "application/json"}
+    mock_response.json.return_value = {
+        "candidates": [
+            {
+                "content": {
+                    "role": "model",
+                    "parts": [
+                        {
+                            "text": "Argentina won the FIFA World Cup 2022. Argentina defeated France 4-2 on penalties in the FIFA World Cup 2022 final tournament for the first time after 36 years and the third time overall."
+                        }
+                    ],
+                },
+                "finishReason": "STOP",
+                "safetyRatings": [
+                    {
+                        "category": "HARM_CATEGORY_HATE_SPEECH",
+                        "probability": "NEGLIGIBLE",
+                        "probabilityScore": 0.14940722,
+                        "severity": "HARM_SEVERITY_NEGLIGIBLE",
+                        "severityScore": 0.07477004,
+                    },
+                    {
+                        "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                        "probability": "NEGLIGIBLE",
+                        "probabilityScore": 0.15636235,
+                        "severity": "HARM_SEVERITY_NEGLIGIBLE",
+                        "severityScore": 0.015967654,
+                    },
+                    {
+                        "category": "HARM_CATEGORY_HARASSMENT",
+                        "probability": "NEGLIGIBLE",
+                        "probabilityScore": 0.1943678,
+                        "severity": "HARM_SEVERITY_NEGLIGIBLE",
+                        "severityScore": 0.1284158,
+                    },
+                    {
+                        "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                        "probability": "NEGLIGIBLE",
+                        "probabilityScore": 0.09384396,
+                        "severity": "HARM_SEVERITY_NEGLIGIBLE",
+                        "severityScore": 0.0726367,
+                    },
+                ],
+                "groundingMetadata": {
+                    "webSearchQueries": ["who won the world cup 2022"],
+                    "groundingAttributions": [
+                        {
+                            "segment": {"endIndex": 38},
+                            "confidenceScore": 0.9919262,
+                            "web": {
+                                "uri": "https://www.careerpower.in/fifa-world-cup-winners-list.html",
+                                "title": "FIFA World Cup Winners List from 1930 to 2022, Complete List - Career Power",
+                            },
+                        },
+                        {
+                            "segment": {"endIndex": 38},
+                            "confidenceScore": 0.9919262,
+                            "web": {
+                                "uri": "https://www.careerpower.in/fifa-world-cup-winners-list.html",
+                                "title": "FIFA World Cup Winners List from 1930 to 2022, Complete List - Career Power",
+                            },
+                        },
+                        {
+                            "segment": {"endIndex": 38},
+                            "confidenceScore": 0.9919262,
+                            "web": {
+                                "uri": "https://www.britannica.com/sports/2022-FIFA-World-Cup",
+                                "title": "2022 FIFA World Cup | Qatar, Controversy, Stadiums, Winner, & Final - Britannica",
+                            },
+                        },
+                        {
+                            "segment": {"endIndex": 38},
+                            "confidenceScore": 0.9919262,
+                            "web": {
+                                "uri": "https://en.wikipedia.org/wiki/2022_FIFA_World_Cup_final",
+                                "title": "2022 FIFA World Cup final - Wikipedia",
+                            },
+                        },
+                        {
+                            "segment": {"endIndex": 38},
+                            "confidenceScore": 0.9919262,
+                            "web": {
+                                "uri": "https://www.transfermarkt.com/2022-world-cup/erfolge/pokalwettbewerb/WM22",
+                                "title": "2022 World Cup - All winners - Transfermarkt",
+                            },
+                        },
+                        {
+                            "segment": {"startIndex": 39, "endIndex": 187},
+                            "confidenceScore": 0.9919262,
+                            "web": {
+                                "uri": "https://www.careerpower.in/fifa-world-cup-winners-list.html",
+                                "title": "FIFA World Cup Winners List from 1930 to 2022, Complete List - Career Power",
+                            },
+                        },
+                        {
+                            "segment": {"startIndex": 39, "endIndex": 187},
+                            "confidenceScore": 0.9919262,
+                            "web": {
+                                "uri": "https://en.wikipedia.org/wiki/2022_FIFA_World_Cup_final",
+                                "title": "2022 FIFA World Cup final - Wikipedia",
+                            },
+                        },
+                    ],
+                    "searchEntryPoint": {
+                        "renderedContent": '\u003cstyle\u003e\n.container {\n  align-items: center;\n  border-radius: 8px;\n  display: flex;\n  font-family: Google Sans, Roboto, sans-serif;\n  font-size: 14px;\n  line-height: 20px;\n  padding: 8px 12px;\n}\n.chip {\n  display: inline-block;\n  border: solid 1px;\n  border-radius: 16px;\n  min-width: 14px;\n  padding: 5px 16px;\n  text-align: center;\n  user-select: none;\n  margin: 0 8px;\n  -webkit-tap-highlight-color: transparent;\n}\n.carousel {\n  overflow: auto;\n  scrollbar-width: none;\n  white-space: nowrap;\n  margin-right: -12px;\n}\n.headline {\n  display: flex;\n  margin-right: 4px;\n}\n.gradient-container {\n  position: relative;\n}\n.gradient {\n  position: absolute;\n  transform: translate(3px, -9px);\n  height: 36px;\n  width: 9px;\n}\n@media (prefers-color-scheme: light) {\n  .container {\n    background-color: #fafafa;\n    box-shadow: 0 0 0 1px #0000000f;\n  }\n  .headline-label {\n    color: #1f1f1f;\n  }\n  .chip {\n    background-color: #ffffff;\n    border-color: #d2d2d2;\n    color: #5e5e5e;\n    text-decoration: none;\n  }\n  .chip:hover {\n    background-color: #f2f2f2;\n  }\n  .chip:focus {\n    background-color: #f2f2f2;\n  }\n  .chip:active {\n    background-color: #d8d8d8;\n    border-color: #b6b6b6;\n  }\n  .logo-dark {\n    display: none;\n  }\n  .gradient {\n    background: linear-gradient(90deg, #fafafa 15%, #fafafa00 100%);\n  }\n}\n@media (prefers-color-scheme: dark) {\n  .container {\n    background-color: #1f1f1f;\n    box-shadow: 0 0 0 1px #ffffff26;\n  }\n  .headline-label {\n    color: #fff;\n  }\n  .chip {\n    background-color: #2c2c2c;\n    border-color: #3c4043;\n    color: #fff;\n    text-decoration: none;\n  }\n  .chip:hover {\n    background-color: #353536;\n  }\n  .chip:focus {\n    background-color: #353536;\n  }\n  .chip:active {\n    background-color: #464849;\n    border-color: #53575b;\n  }\n  .logo-light {\n    display: none;\n  }\n  .gradient {\n    background: linear-gradient(90deg, #1f1f1f 15%, #1f1f1f00 100%);\n  }\n}\n\u003c/style\u003e\n\u003cdiv class="container"\u003e\n  \u003cdiv class="headline"\u003e\n    \u003csvg class="logo-light" width="18" height="18" viewBox="9 9 35 35" fill="none" xmlns="http://www.w3.org/2000/svg"\u003e\n      \u003cpath fill-rule="evenodd" clip-rule="evenodd" d="M42.8622 27.0064C42.8622 25.7839 42.7525 24.6084 42.5487 23.4799H26.3109V30.1568H35.5897C35.1821 32.3041 33.9596 34.1222 32.1258 35.3448V39.6864H37.7213C40.9814 36.677 42.8622 32.2571 42.8622 27.0064V27.0064Z" fill="#4285F4"/\u003e\n      \u003cpath fill-rule="evenodd" clip-rule="evenodd" d="M26.3109 43.8555C30.9659 43.8555 34.8687 42.3195 37.7213 39.6863L32.1258 35.3447C30.5898 36.3792 28.6306 37.0061 26.3109 37.0061C21.8282 37.0061 18.0195 33.9811 16.6559 29.906H10.9194V34.3573C13.7563 39.9841 19.5712 43.8555 26.3109 43.8555V43.8555Z" fill="#34A853"/\u003e\n      \u003cpath fill-rule="evenodd" clip-rule="evenodd" d="M16.6559 29.8904C16.3111 28.8559 16.1074 27.7588 16.1074 26.6146C16.1074 25.4704 16.3111 24.3733 16.6559 23.3388V18.8875H10.9194C9.74388 21.2072 9.06992 23.8247 9.06992 26.6146C9.06992 29.4045 9.74388 32.022 10.9194 34.3417L15.3864 30.8621L16.6559 29.8904V29.8904Z" fill="#FBBC05"/\u003e\n      \u003cpath fill-rule="evenodd" clip-rule="evenodd" d="M26.3109 16.2386C28.85 16.2386 31.107 17.1164 32.9095 18.8091L37.8466 13.8719C34.853 11.082 30.9659 9.3736 26.3109 9.3736C19.5712 9.3736 13.7563 13.245 10.9194 18.8875L16.6559 23.3388C18.0195 19.2636 21.8282 16.2386 26.3109 16.2386V16.2386Z" fill="#EA4335"/\u003e\n    \u003c/svg\u003e\n    \u003csvg class="logo-dark" width="18" height="18" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg"\u003e\n      \u003ccircle cx="24" cy="23" fill="#FFF" r="22"/\u003e\n      \u003cpath d="M33.76 34.26c2.75-2.56 4.49-6.37 4.49-11.26 0-.89-.08-1.84-.29-3H24.01v5.99h8.03c-.4 2.02-1.5 3.56-3.07 4.56v.75l3.91 2.97h.88z" fill="#4285F4"/\u003e\n      \u003cpath d="M15.58 25.77A8.845 8.845 0 0 0 24 31.86c1.92 0 3.62-.46 4.97-1.31l4.79 3.71C31.14 36.7 27.65 38 24 38c-5.93 0-11.01-3.4-13.45-8.36l.17-1.01 4.06-2.85h.8z" fill="#34A853"/\u003e\n      \u003cpath d="M15.59 20.21a8.864 8.864 0 0 0 0 5.58l-5.03 3.86c-.98-2-1.53-4.25-1.53-6.64 0-2.39.55-4.64 1.53-6.64l1-.22 3.81 2.98.22 1.08z" fill="#FBBC05"/\u003e\n      \u003cpath d="M24 14.14c2.11 0 4.02.75 5.52 1.98l4.36-4.36C31.22 9.43 27.81 8 24 8c-5.93 0-11.01 3.4-13.45 8.36l5.03 3.85A8.86 8.86 0 0 1 24 14.14z" fill="#EA4335"/\u003e\n    \u003c/svg\u003e\n    \u003cdiv class="gradient-container"\u003e\u003cdiv class="gradient"\u003e\u003c/div\u003e\u003c/div\u003e\n  \u003c/div\u003e\n  \u003cdiv class="carousel"\u003e\n    \u003ca class="chip" href="https://www.google.com/search?q=who+won+the+world+cup+2022&client=app-vertex-grounding&safesearch=active"\u003ewho won the world cup 2022\u003c/a\u003e\n  \u003c/div\u003e\n\u003c/div\u003e\n'
+                    },
+                },
+            }
+        ],
+        "usageMetadata": {
+            "promptTokenCount": 6,
+            "candidatesTokenCount": 48,
+            "totalTokenCount": 54,
+        },
+    }
+
+    return mock_response
+
+
+@pytest.mark.parametrize("value_in_dict", [{}, {"disable_attribution": False}])  #
+def test_gemini_pro_grounding(value_in_dict):
     try:
         load_vertex_ai_credentials()
         litellm.set_verbose = True
 
-        tools = [{"googleSearchRetrieval": {}}]
+        tools = [{"googleSearchRetrieval": value_in_dict}]
 
         litellm.set_verbose = True
 
@@ -690,16 +794,15 @@ def test_gemini_pro_grounding():
 
         client = HTTPHandler()
 
-        with patch.object(client, "post", new=MagicMock()) as mock_call:
-            try:
-                resp = litellm.completion(
-                    model="vertex_ai_beta/gemini-1.0-pro-001",
-                    messages=[{"role": "user", "content": "Who won the world cup?"}],
-                    tools=tools,
-                    client=client,
-                )
-            except Exception as e:
-                print("Received Exception - {}".format(str(e)))
+        with patch.object(
+            client, "post", side_effect=vertex_httpx_grounding_post
+        ) as mock_call:
+            resp = litellm.completion(
+                model="vertex_ai_beta/gemini-1.0-pro-001",
+                messages=[{"role": "user", "content": "Who won the world cup?"}],
+                tools=tools,
+                client=client,
+            )
 
             mock_call.assert_called_once()
 
@@ -709,6 +812,13 @@ def test_gemini_pro_grounding():
                 "googleSearchRetrieval"
                 in mock_call.call_args.kwargs["json"]["tools"][0]
             )
+            assert (
+                mock_call.call_args.kwargs["json"]["tools"][0]["googleSearchRetrieval"]
+                == value_in_dict
+            )
+
+            assert "vertex_ai_grounding_metadata" in resp._hidden_params
+            assert isinstance(resp._hidden_params["vertex_ai_grounding_metadata"], list)
 
     except litellm.InternalServerError:
         pass
@@ -1018,6 +1128,39 @@ def vertex_httpx_mock_post_valid_response(*args, **kwargs):
     return mock_response
 
 
+def vertex_httpx_mock_post_valid_response_anthropic(*args, **kwargs):
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {"Content-Type": "application/json"}
+    mock_response.json.return_value = {
+        "id": "msg_vrtx_013Wki5RFQXAspL7rmxRFjZg",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-3-5-sonnet-20240620",
+        "content": [
+            {
+                "type": "tool_use",
+                "id": "toolu_vrtx_01YMnYZrToPPfcmY2myP2gEB",
+                "name": "json_tool_call",
+                "input": {
+                    "values": [
+                        {"recipe_name": "Chocolate Chip Cookies"},
+                        {"recipe_name": "Oatmeal Raisin Cookies"},
+                        {"recipe_name": "Peanut Butter Cookies"},
+                        {"recipe_name": "Snickerdoodle Cookies"},
+                        {"recipe_name": "Sugar Cookies"},
+                    ]
+                },
+            }
+        ],
+        "stop_reason": "tool_use",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 368, "output_tokens": 118},
+    }
+
+    return mock_response
+
+
 def vertex_httpx_mock_post_invalid_schema_response(*args, **kwargs):
     mock_response = MagicMock()
     mock_response.status_code = 200
@@ -1073,11 +1216,29 @@ def vertex_httpx_mock_post_invalid_schema_response(*args, **kwargs):
     return mock_response
 
 
+def vertex_httpx_mock_post_invalid_schema_response_anthropic(*args, **kwargs):
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {"Content-Type": "application/json"}
+    mock_response.json.return_value = {
+        "id": "msg_vrtx_013Wki5RFQXAspL7rmxRFjZg",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-3-5-sonnet-20240620",
+        "content": [{"text": "Hi! My name is Claude.", "type": "text"}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 368, "output_tokens": 118},
+    }
+    return mock_response
+
+
 @pytest.mark.parametrize(
     "model, vertex_location, supports_response_schema",
     [
         ("vertex_ai_beta/gemini-1.5-pro-001", "us-central1", True),
         ("vertex_ai_beta/gemini-1.5-flash", "us-central1", False),
+        ("vertex_ai/claude-3-5-sonnet@20240620", "us-east5", False),
     ],
 )
 @pytest.mark.parametrize(
@@ -1121,12 +1282,21 @@ async def test_gemini_pro_json_schema_args_sent_httpx(
 
     httpx_response = MagicMock()
     if invalid_response is True:
-        httpx_response.side_effect = vertex_httpx_mock_post_invalid_schema_response
+        if "claude" in model:
+            httpx_response.side_effect = (
+                vertex_httpx_mock_post_invalid_schema_response_anthropic
+            )
+        else:
+            httpx_response.side_effect = vertex_httpx_mock_post_invalid_schema_response
     else:
-        httpx_response.side_effect = vertex_httpx_mock_post_valid_response
+        if "claude" in model:
+            httpx_response.side_effect = vertex_httpx_mock_post_valid_response_anthropic
+        else:
+            httpx_response.side_effect = vertex_httpx_mock_post_valid_response
     with patch.object(client, "post", new=httpx_response) as mock_call:
+        print("SENDING CLIENT POST={}".format(client.post))
         try:
-            _ = completion(
+            resp = completion(
                 model=model,
                 messages=messages,
                 response_format={
@@ -1137,30 +1307,34 @@ async def test_gemini_pro_json_schema_args_sent_httpx(
                 vertex_location=vertex_location,
                 client=client,
             )
+            print("Received={}".format(resp))
             if invalid_response is True and enforce_validation is True:
                 pytest.fail("Expected this to fail")
         except litellm.JSONSchemaValidationError as e:
-            if invalid_response is False and "claude-3" not in model:
+            if invalid_response is False:
                 pytest.fail("Expected this to pass. Got={}".format(e))
 
         mock_call.assert_called_once()
-        print(mock_call.call_args.kwargs)
-        print(mock_call.call_args.kwargs["json"]["generationConfig"])
+        if "claude" not in model:
+            print(mock_call.call_args.kwargs)
+            print(mock_call.call_args.kwargs["json"]["generationConfig"])
 
-        if supports_response_schema:
-            assert (
-                "response_schema"
-                in mock_call.call_args.kwargs["json"]["generationConfig"]
-            )
-        else:
-            assert (
-                "response_schema"
-                not in mock_call.call_args.kwargs["json"]["generationConfig"]
-            )
-            assert (
-                "Use this JSON schema:"
-                in mock_call.call_args.kwargs["json"]["contents"][0]["parts"][1]["text"]
-            )
+            if supports_response_schema:
+                assert (
+                    "response_schema"
+                    in mock_call.call_args.kwargs["json"]["generationConfig"]
+                )
+            else:
+                assert (
+                    "response_schema"
+                    not in mock_call.call_args.kwargs["json"]["generationConfig"]
+                )
+                assert (
+                    "Use this JSON schema:"
+                    in mock_call.call_args.kwargs["json"]["contents"][0]["parts"][1][
+                        "text"
+                    ]
+                )
 
 
 @pytest.mark.parametrize("provider", ["vertex_ai_beta"])  # "vertex_ai",

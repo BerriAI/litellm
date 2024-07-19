@@ -2,6 +2,7 @@ import ast
 import asyncio
 import copy
 import inspect
+import io
 import os
 import random
 import secrets
@@ -142,7 +143,10 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
 )
-from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+from litellm.proxy.common_utils.http_parsing_utils import (
+    _read_request_body,
+    check_file_size_under_limit,
+)
 from litellm.proxy.common_utils.init_callbacks import initialize_callbacks_on_proxy
 from litellm.proxy.common_utils.openai_endpoint_utils import (
     remove_sensitive_info_from_deployment,
@@ -329,6 +333,7 @@ class UserAPIKeyCacheTTLEnum(enum.Enum):
 @app.exception_handler(ProxyException)
 async def openai_exception_handler(request: Request, exc: ProxyException):
     # NOTE: DO NOT MODIFY THIS, its crucial to map to Openai exceptions
+    headers = exc.headers
     return JSONResponse(
         status_code=(
             int(exc.code) if exc.code else status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -341,6 +346,7 @@ async def openai_exception_handler(request: Request, exc: ProxyException):
                 "code": exc.code,
             }
         },
+        headers=headers,
     )
 
 
@@ -410,6 +416,7 @@ user_custom_key_generate = None
 use_background_health_checks = None
 use_queue = False
 health_check_interval = None
+health_check_details = None
 health_check_results = {}
 queue: List = []
 litellm_proxy_budget_name = "litellm-proxy-budget"
@@ -1198,14 +1205,14 @@ async def _run_background_health_check():
 
     Update health_check_results, based on this.
     """
-    global health_check_results, llm_model_list, health_check_interval
+    global health_check_results, llm_model_list, health_check_interval, health_check_details
 
     # make 1 deep copy of llm_model_list -> use this for all background health checks
     _llm_model_list = copy.deepcopy(llm_model_list)
 
     while True:
         healthy_endpoints, unhealthy_endpoints = await perform_health_check(
-            model_list=_llm_model_list
+            model_list=_llm_model_list, details=health_check_details
         )
 
         # Update the global variable with the health check results
@@ -1357,7 +1364,7 @@ class ProxyConfig:
         """
         Load config values into proxy global state
         """
-        global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, use_background_health_checks, health_check_interval, use_queue, custom_db_client, proxy_budget_rescheduler_max_time, proxy_budget_rescheduler_min_time, ui_access_mode, litellm_master_key_hash, proxy_batch_write_at, disable_spend_logs, prompt_injection_detection_obj, redis_usage_cache, store_model_in_db, premium_user, open_telemetry_logger
+        global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, use_background_health_checks, health_check_interval, use_queue, custom_db_client, proxy_budget_rescheduler_max_time, proxy_budget_rescheduler_min_time, ui_access_mode, litellm_master_key_hash, proxy_batch_write_at, disable_spend_logs, prompt_injection_detection_obj, redis_usage_cache, store_model_in_db, premium_user, open_telemetry_logger, health_check_details
 
         # Load existing config
         config = await self.get_config(config_file_path=config_file_path)
@@ -1727,6 +1734,9 @@ class ProxyConfig:
                 "background_health_checks", False
             )
             health_check_interval = general_settings.get("health_check_interval", 300)
+            health_check_details = general_settings.get(
+                "health_check_details", True
+            )
 
             ## check if user has set a premium feature in general_settings
             if (
@@ -3003,11 +3013,13 @@ async def chat_completion(
         router_model_names = llm_router.model_names if llm_router is not None else []
 
         if isinstance(e, HTTPException):
+            # print("e.headers={}".format(e.headers))
             raise ProxyException(
                 message=getattr(e, "detail", str(e)),
                 type=getattr(e, "type", "None"),
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+                headers=getattr(e, "headers", {}),
             )
         error_msg = f"{str(e)}"
         raise ProxyException(
@@ -3335,43 +3347,52 @@ async def embeddings(
             user_api_key_dict=user_api_key_dict, data=data, call_type="embeddings"
         )
 
+        tasks = []
+        tasks.append(
+            proxy_logging_obj.during_call_hook(
+                data=data,
+                user_api_key_dict=user_api_key_dict,
+                call_type="embeddings",
+            )
+        )
+
         ## ROUTE TO CORRECT ENDPOINT ##
         # skip router if user passed their key
         if "api_key" in data:
-            response = await litellm.aembedding(**data)
+            tasks.append(litellm.aembedding(**data))
         elif "user_config" in data:
             # initialize a new router instance. make request using this Router
             router_config = data.pop("user_config")
             user_router = litellm.Router(**router_config)
-            response = await user_router.aembedding(**data)
+            tasks.append(user_router.aembedding(**data))
         elif (
             llm_router is not None and data["model"] in router_model_names
         ):  # model in router model list
-            response = await llm_router.aembedding(**data)
+            tasks.append(llm_router.aembedding(**data))
         elif (
             llm_router is not None
             and llm_router.model_group_alias is not None
             and data["model"] in llm_router.model_group_alias
         ):  # model set in model_group_alias
-            response = await llm_router.aembedding(
-                **data
+            tasks.append(
+                llm_router.aembedding(**data)
             )  # ensure this goes the llm_router, router will do the correct alias mapping
         elif (
             llm_router is not None and data["model"] in llm_router.deployment_names
         ):  # model in router deployments, calling a specific deployment on the router
-            response = await llm_router.aembedding(**data, specific_deployment=True)
+            tasks.append(llm_router.aembedding(**data, specific_deployment=True))
         elif (
             llm_router is not None and data["model"] in llm_router.get_model_ids()
         ):  # model in router deployments, calling a specific deployment on the router
-            response = await llm_router.aembedding(**data)
+            tasks.append(llm_router.aembedding(**data))
         elif (
             llm_router is not None
             and data["model"] not in router_model_names
             and llm_router.default_deployment is not None
         ):  # model in router deployments, calling a specific deployment on the router
-            response = await llm_router.aembedding(**data)
+            tasks.append(llm_router.aembedding(**data))
         elif user_model is not None:  # `litellm --model <your-model-name>`
-            response = await litellm.aembedding(**data)
+            tasks.append(litellm.aembedding(**data))
         else:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -3380,6 +3401,15 @@ async def embeddings(
                     + data.get("model", "")
                 },
             )
+
+        # wait for call to end
+        llm_responses = asyncio.gather(
+            *tasks
+        )  # run the moderation check in parallel to the actual llm api call
+
+        responses = await llm_responses
+
+        response = responses[1]
 
         ### ALERTING ###
         asyncio.create_task(
@@ -3783,74 +3813,76 @@ async def audio_transcriptions(
 
         router_model_names = llm_router.model_names if llm_router is not None else []
 
-        assert (
-            file.filename is not None
-        )  # make sure filename passed in (needed for type)
+        if file.filename is None:
+            raise ProxyException(
+                message="File name is None. Please check your file name",
+                code=status.HTTP_400_BAD_REQUEST,
+                type="bad_request",
+                param="file",
+            )
 
-        _original_filename = file.filename
-        file_extension = os.path.splitext(file.filename)[1]
-        # rename the file to a random hash file name -> we eventuall remove the file and don't want to remove any local files
-        file.filename = f"tmp-request" + str(uuid.uuid4()) + file_extension
+        # Check if File can be read in memory before reading
+        check_file_size_under_limit(
+            request_data=data,
+            file=file,
+            router_model_names=router_model_names,
+        )
 
-        # IMP - Asserts that we've renamed the uploaded file, since we run os.remove(file.filename), we should rename the original file
-        assert file.filename != _original_filename
+        file_content = await file.read()
+        file_object = io.BytesIO(file_content)
+        file_object.name = file.filename
+        data["file"] = file_object
+        try:
+            ### CALL HOOKS ### - modify incoming data / reject request before calling the model
+            data = await proxy_logging_obj.pre_call_hook(
+                user_api_key_dict=user_api_key_dict,
+                data=data,
+                call_type="audio_transcription",
+            )
 
-        with open(file.filename, "wb+") as f:
-            f.write(await file.read())
-            try:
-                data["file"] = open(file.filename, "rb")
-                ### CALL HOOKS ### - modify incoming data / reject request before calling the model
-                data = await proxy_logging_obj.pre_call_hook(
-                    user_api_key_dict=user_api_key_dict,
-                    data=data,
-                    call_type="audio_transcription",
+            ## ROUTE TO CORRECT ENDPOINT ##
+            # skip router if user passed their key
+            if "api_key" in data:
+                response = await litellm.atranscription(**data)
+            elif (
+                llm_router is not None and data["model"] in router_model_names
+            ):  # model in router model list
+                response = await llm_router.atranscription(**data)
+
+            elif (
+                llm_router is not None and data["model"] in llm_router.deployment_names
+            ):  # model in router deployments, calling a specific deployment on the router
+                response = await llm_router.atranscription(
+                    **data, specific_deployment=True
                 )
-
-                ## ROUTE TO CORRECT ENDPOINT ##
-                # skip router if user passed their key
-                if "api_key" in data:
-                    response = await litellm.atranscription(**data)
-                elif (
-                    llm_router is not None and data["model"] in router_model_names
-                ):  # model in router model list
-                    response = await llm_router.atranscription(**data)
-
-                elif (
-                    llm_router is not None
-                    and data["model"] in llm_router.deployment_names
-                ):  # model in router deployments, calling a specific deployment on the router
-                    response = await llm_router.atranscription(
-                        **data, specific_deployment=True
-                    )
-                elif (
-                    llm_router is not None
-                    and llm_router.model_group_alias is not None
-                    and data["model"] in llm_router.model_group_alias
-                ):  # model set in model_group_alias
-                    response = await llm_router.atranscription(
-                        **data
-                    )  # ensure this goes the llm_router, router will do the correct alias mapping
-                elif (
-                    llm_router is not None
-                    and data["model"] not in router_model_names
-                    and llm_router.default_deployment is not None
-                ):  # model in router deployments, calling a specific deployment on the router
-                    response = await llm_router.atranscription(**data)
-                elif user_model is not None:  # `litellm --model <your-model-name>`
-                    response = await litellm.atranscription(**data)
-                else:
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail={
-                            "error": "audio_transcriptions: Invalid model name passed in model="
-                            + data.get("model", "")
-                        },
-                    )
-
-            except Exception as e:
-                raise HTTPException(status_code=500, detail=str(e))
-            finally:
-                os.remove(file.filename)  # Delete the saved file
+            elif (
+                llm_router is not None
+                and llm_router.model_group_alias is not None
+                and data["model"] in llm_router.model_group_alias
+            ):  # model set in model_group_alias
+                response = await llm_router.atranscription(
+                    **data
+                )  # ensure this goes the llm_router, router will do the correct alias mapping
+            elif (
+                llm_router is not None
+                and data["model"] not in router_model_names
+                and llm_router.default_deployment is not None
+            ):  # model in router deployments, calling a specific deployment on the router
+                response = await llm_router.atranscription(**data)
+            elif user_model is not None:  # `litellm --model <your-model-name>`
+                response = await litellm.atranscription(**data)
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "error": "audio_transcriptions: Invalid model name passed in model="
+                        + data.get("model", "")
+                    },
+                )
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+        finally:
+            file_object.close()  # close the file read in by io library
 
         ### ALERTING ###
         asyncio.create_task(
@@ -5470,8 +5502,19 @@ async def new_end_user(
 ):
     """
     Allow creating a new Customer 
-    NOTE: This used to be called `/end_user/new`, we will still be maintaining compatibility for /end_user/XXX for these endpoints
 
+
+    Parameters:
+    - user_id: str - The unique identifier for the user.
+    - alias: Optional[str] - A human-friendly alias for the user.
+    - blocked: bool - Flag to allow or disallow requests for this end-user. Default is False.
+    - max_budget: Optional[float] - The maximum budget allocated to the user. Either 'max_budget' or 'budget_id' should be provided, not both.
+    - budget_id: Optional[str] - The identifier for an existing budget allocated to the user. Either 'max_budget' or 'budget_id' should be provided, not both.
+    - allowed_model_region: Optional[Literal["eu"]] - Require all user requests to use models in this specific region.
+    - default_model: Optional[str] - If no equivalent model in the allowed region, default all requests to this model.
+    - metadata: Optional[dict] = Metadata for customer, store information for customer. Example metadata = {"data_training_opt_out": True}
+    
+    
     - Allow specifying allowed regions 
     - Allow specifying default model
 
@@ -5489,6 +5532,8 @@ async def new_end_user(
 
         # return end-user object
     ```
+
+    NOTE: This used to be called `/end_user/new`, we will still be maintaining compatibility for /end_user/XXX for these endpoints
     """
     global prisma_client, llm_router
     """
@@ -9395,6 +9440,7 @@ def cleanup_router_config_variables():
     user_custom_key_generate = None
     use_background_health_checks = None
     health_check_interval = None
+    health_check_details = None
     prisma_client = None
     custom_db_client = None
 

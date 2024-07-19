@@ -38,7 +38,7 @@ const APIRef: React.FC<ApiRefProps> = ({
   proxySettings,
 }) => {
 
-  let base_url = "http://localhost:4000";
+  let base_url = "<your_proxy_base_url>";
 
   if (proxySettings) {
     if (proxySettings.PROXY_BASE_URL && proxySettings.PROXY_BASE_URL !== undefined) {

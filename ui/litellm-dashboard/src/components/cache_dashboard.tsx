@@ -194,8 +194,9 @@ const CacheDashboard: React.FC<CachePageProps> = ({
     // set header cache statistics 
     setCachedResponses(valueFormatterNumbers(cache_hits));
     setCachedTokens(valueFormatterNumbers(cached_tokens));
-    if (llm_api_requests > 0) {
-      let cache_hit_ratio = ((cache_hits / llm_api_requests) * 100).toFixed(2);
+    let allRequests = cache_hits + llm_api_requests
+    if (allRequests > 0) {
+      let cache_hit_ratio = ((cache_hits / allRequests) * 100).toFixed(2);
       setCacheHitRatio(cache_hit_ratio);
     } else {
       setCacheHitRatio("0");
@@ -291,6 +292,7 @@ const CacheDashboard: React.FC<CachePageProps> = ({
       <BarChart
         title="Cache Hits vs API Requests"
         data={filteredData}
+        stack={true}
         index="name"
         valueFormatter={valueFormatterNumbers}
         categories={["LLM API requests", "Cache hit"]}
@@ -302,6 +304,7 @@ const CacheDashboard: React.FC<CachePageProps> = ({
     <BarChart
         className="mt-6"
         data={filteredData}
+        stack={true}
         index="name"
         valueFormatter={valueFormatterNumbers}
         categories={["Generated Completion Tokens", "Cached Completion Tokens"]}

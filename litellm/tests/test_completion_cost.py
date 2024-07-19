@@ -8,6 +8,7 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import asyncio
+import os
 import time
 from typing import Optional
 
@@ -41,6 +42,14 @@ class CustomLoggingHandler(CustomLogger):
 
         print(f"response_cost: {self.response_cost} ")
 
+    def log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        print("Reaches log failure event!")
+        self.response_cost = kwargs["response_cost"]
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        print("Reaches async log failure event!")
+        self.response_cost = kwargs["response_cost"]
+
 
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
@@ -65,6 +74,41 @@ async def test_custom_pricing(sync_mode):
             output_cost_per_token=0.0,
         )
 
+        await asyncio.sleep(5)
+
+    print(f"new_handler.response_cost: {new_handler.response_cost}")
+    assert new_handler.response_cost is not None
+
+    assert new_handler.response_cost == 0
+
+
+@pytest.mark.parametrize(
+    "sync_mode",
+    [True, False],
+)
+@pytest.mark.asyncio
+async def test_failure_completion_cost(sync_mode):
+    new_handler = CustomLoggingHandler()
+    litellm.callbacks = [new_handler]
+    if sync_mode:
+        try:
+            response = litellm.completion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "Hey!"}],
+                mock_response=Exception("this should trigger an error"),
+            )
+        except Exception:
+            pass
+        time.sleep(5)
+    else:
+        try:
+            response = await litellm.acompletion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "Hey!"}],
+                mock_response=Exception("this should trigger an error"),
+            )
+        except Exception:
+            pass
         await asyncio.sleep(5)
 
     print(f"new_handler.response_cost: {new_handler.response_cost}")
@@ -662,6 +706,33 @@ def test_vertex_ai_completion_cost():
     print("calculated_input_cost: {}".format(calculated_input_cost))
 
 
+# @pytest.mark.skip(reason="new test - WIP, working on fixing this")
+def test_vertex_ai_medlm_completion_cost():
+    """Test for medlm completion cost."""
+
+    with pytest.raises(Exception) as e:
+        model = "vertex_ai/medlm-medium"
+        messages = [{"role": "user", "content": "Test MedLM completion cost."}]
+        predictive_cost = completion_cost(
+            model=model, messages=messages, custom_llm_provider="vertex_ai"
+        )
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model = "vertex_ai/medlm-medium"
+    messages = [{"role": "user", "content": "Test MedLM completion cost."}]
+    predictive_cost = completion_cost(
+        model=model, messages=messages, custom_llm_provider="vertex_ai"
+    )
+    assert predictive_cost > 0
+
+    model = "vertex_ai/medlm-large"
+    messages = [{"role": "user", "content": "Test MedLM completion cost."}]
+    predictive_cost = completion_cost(model=model, messages=messages)
+    assert predictive_cost > 0
+
+
 def test_vertex_ai_claude_completion_cost():
     from litellm import Choices, Message, ModelResponse
     from litellm.utils import Usage
@@ -783,6 +854,28 @@ def test_vertex_ai_embedding_completion_cost(caplog):
 #     print("calculated_input_cost: {}".format(calculated_input_cost))
 
 #     assert False
+
+
+def test_completion_azure_ai():
+    try:
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+
+        litellm.set_verbose = True
+        response = litellm.completion(
+            model="azure_ai/Mistral-large-nmefg",
+            messages=[{"content": "what llm are you", "role": "user"}],
+            max_tokens=15,
+            num_retries=3,
+            api_base=os.getenv("AZURE_AI_MISTRAL_API_BASE"),
+            api_key=os.getenv("AZURE_AI_MISTRAL_API_KEY"),
+        )
+        print(response)
+
+        assert "response_cost" in response._hidden_params
+        assert isinstance(response._hidden_params["response_cost"], float)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])

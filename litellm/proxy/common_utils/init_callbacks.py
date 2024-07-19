@@ -14,6 +14,7 @@ def initialize_callbacks_on_proxy(
     premium_user: bool,
     config_file_path: str,
     litellm_settings: dict,
+    callback_specific_params: dict = {},
 ):
     from litellm.proxy.proxy_server import prisma_client
 
@@ -25,7 +26,6 @@ def initialize_callbacks_on_proxy(
         known_compatible_callbacks = list(
             get_args(litellm._custom_logger_compatible_callbacks_literal)
         )
-
         for callback in value:  # ["presidio", <my-custom-callback>]
             if isinstance(callback, str) and callback in known_compatible_callbacks:
                 imported_list.append(callback)
@@ -54,9 +54,11 @@ def initialize_callbacks_on_proxy(
                         presidio_logging_only
                     )  # validate boolean given
 
-                pii_masking_object = _OPTIONAL_PresidioPIIMasking(
-                    logging_only=presidio_logging_only
-                )
+                params = {
+                    "logging_only": presidio_logging_only,
+                    **callback_specific_params,
+                }
+                pii_masking_object = _OPTIONAL_PresidioPIIMasking(**params)
                 imported_list.append(pii_masking_object)
             elif isinstance(callback, str) and callback == "llamaguard_moderations":
                 from enterprise.enterprise_hooks.llama_guard import (
@@ -110,6 +112,17 @@ def initialize_callbacks_on_proxy(
 
                 lakera_moderations_object = _ENTERPRISE_lakeraAI_Moderation()
                 imported_list.append(lakera_moderations_object)
+            elif isinstance(callback, str) and callback == "aporio_prompt_injection":
+                from enterprise.enterprise_hooks.aporio_ai import _ENTERPRISE_Aporio
+
+                if premium_user is not True:
+                    raise Exception(
+                        "Trying to use Aporio AI Guardrail"
+                        + CommonProxyErrors.not_premium_user.value
+                    )
+
+                aporio_guardrail_object = _ENTERPRISE_Aporio()
+                imported_list.append(aporio_guardrail_object)
             elif isinstance(callback, str) and callback == "google_text_moderation":
                 from enterprise.enterprise_hooks.google_text_moderation import (
                     _ENTERPRISE_GoogleTextModeration,

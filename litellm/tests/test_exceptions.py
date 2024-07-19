@@ -388,6 +388,33 @@ def test_completion_openai_exception():
 # test_completion_openai_exception()
 
 
+def test_anthropic_openai_exception():
+    # test if anthropic raises litellm.AuthenticationError
+    try:
+        litellm.set_verbose = True
+        ## Test azure call
+        old_azure_key = os.environ["ANTHROPIC_API_KEY"]
+        os.environ.pop("ANTHROPIC_API_KEY")
+        response = completion(
+            model="anthropic/claude-3-sonnet-20240229",
+            messages=[{"role": "user", "content": "hello"}],
+        )
+        print(f"response: {response}")
+        print(response)
+    except litellm.AuthenticationError as e:
+        os.environ["ANTHROPIC_API_KEY"] = old_azure_key
+        print("Exception vars=", vars(e))
+        assert (
+            "Missing Anthropic API Key - A call is being made to anthropic but no key is set either in the environment variables or via params"
+            in e.message
+        )
+        print(
+            "ANTHROPIC_API_KEY: good job got the correct error for ANTHROPIC_API_KEY when key not set"
+        )
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
 def test_completion_mistral_exception():
     # test if mistral/mistral-tiny raises openai.AuthenticationError
     try:
@@ -412,6 +439,35 @@ def test_completion_mistral_exception():
 
 
 # test_completion_mistral_exception()
+
+
+def test_completion_bedrock_invalid_role_exception():
+    """
+    Test if litellm raises a BadRequestError for an invalid role on Bedrock
+    """
+    try:
+        litellm.set_verbose = True
+        response = completion(
+            model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+            messages=[{"role": "very-bad-role", "content": "hello"}],
+        )
+        print(f"response: {response}")
+        print(response)
+
+    except Exception as e:
+        assert isinstance(
+            e, litellm.BadRequestError
+        ), "Expected BadRequestError but got {}".format(type(e))
+        print("str(e) = {}".format(str(e)))
+
+        # This is important - We we previously returning a poorly formatted error string. Which was
+        #  litellm.BadRequestError: litellm.BadRequestError: Invalid Message passed in {'role': 'very-bad-role', 'content': 'hello'}
+
+        # IMPORTANT ASSERTION
+        assert (
+            (str(e))
+            == "litellm.BadRequestError: Invalid Message passed in {'role': 'very-bad-role', 'content': 'hello'}"
+        )
 
 
 def test_content_policy_exceptionimage_generation_openai():

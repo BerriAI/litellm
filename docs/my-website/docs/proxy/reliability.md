@@ -434,6 +434,33 @@ litellm_settings:
 
 
 
+### Default Fallbacks 
+
+You can also set default_fallbacks, in case a specific model group is misconfigured / bad.
+
+
+```yaml
+model_list:
+	- model_name: gpt-3.5-turbo-small
+	  litellm_params:
+		model: azure/chatgpt-v-2
+        api_base: os.environ/AZURE_API_BASE
+        api_key: os.environ/AZURE_API_KEY
+        api_version: "2023-07-01-preview"
+
+    - model_name: claude-opus
+      litellm_params:
+        model: claude-3-opus-20240229
+        api_key: os.environ/ANTHROPIC_API_KEY
+
+litellm_settings:
+  default_fallbacks: ["claude-opus"]
+```
+
+This will default to claude-opus in case any model fails.
+
+A model-specific fallbacks (e.g. {"gpt-3.5-turbo-small": ["claude-opus"]}) overrides default fallback.
+
 ### Test Fallbacks! 
 
 Check if your fallbacks are working as expected. 

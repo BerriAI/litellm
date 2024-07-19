@@ -1348,6 +1348,26 @@ def test_completion_fireworks_ai():
         pytest.fail(f"Error occurred: {e}")
 
 
+def test_completion_fireworks_ai_bad_api_base():
+    try:
+        litellm.set_verbose = True
+        messages = [
+            {"role": "system", "content": "You're a good bot"},
+            {
+                "role": "user",
+                "content": "Hey",
+            },
+        ]
+        response = completion(
+            model="fireworks_ai/accounts/fireworks/models/mixtral-8x7b-instruct",
+            messages=messages,
+            api_base="my-bad-api-base",
+        )
+        pytest.fail(f"This call should have failed!")
+    except Exception as e:
+        pass
+
+
 @pytest.mark.skip(reason="this test is flaky")
 def test_completion_perplexity_api():
     try:
@@ -2850,7 +2870,7 @@ def test_completion_together_ai_mixtral():
 
 def test_completion_together_ai_yi_chat():
     litellm.set_verbose = True
-    model_name = "together_ai/zero-one-ai/Yi-34B-Chat"
+    model_name = "together_ai/mistralai/Mistral-7B-Instruct-v0.1"
     try:
         messages = [
             {"role": "user", "content": "What llm are you?"},
@@ -3265,7 +3285,9 @@ def test_completion_anthropic_hanging():
         {"role": "function", "name": "get_capital", "content": "Kokoko"},
     ]
 
-    converted_messages = anthropic_messages_pt(messages)
+    converted_messages = anthropic_messages_pt(
+        messages, model="claude-3-sonnet-20240229", llm_provider="anthropic"
+    )
 
     print(f"converted_messages: {converted_messages}")
 

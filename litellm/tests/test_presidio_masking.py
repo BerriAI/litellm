@@ -263,3 +263,46 @@ async def test_presidio_pii_masking_logging_output_only_logged_response():
             mock_call.call_args.kwargs["kwargs"]["messages"][0]["content"]
             == "My name is <PERSON>, who are you? Say my name in your response"
         )
+
+
+@pytest.mark.asyncio
+async def test_presidio_pii_masking_logging_output_only_logged_response_guardrails_config():
+    from typing import Dict, List, Optional
+
+    import litellm
+    from litellm.proxy.guardrails.init_guardrails import initialize_guardrails
+    from litellm.types.guardrails import GuardrailItem, GuardrailItemSpec
+
+    os.environ["PRESIDIO_ANALYZER_API_BASE"] = "http://localhost:5002"
+    os.environ["PRESIDIO_ANONYMIZER_API_BASE"] = "http://localhost:5001"
+
+    guardrails_config: List[Dict[str, GuardrailItemSpec]] = [
+        {
+            "pii_masking": {
+                "callbacks": ["presidio"],
+                "default_on": True,
+                "logging_only": True,
+            }
+        }
+    ]
+    litellm_settings = {"guardrails": guardrails_config}
+
+    assert len(litellm.guardrail_name_config_map) == 0
+    initialize_guardrails(
+        guardrails_config=guardrails_config,
+        premium_user=True,
+        config_file_path="",
+        litellm_settings=litellm_settings,
+    )
+
+    assert len(litellm.guardrail_name_config_map) == 1
+
+    pii_masking_obj: Optional[_OPTIONAL_PresidioPIIMasking] = None
+    for callback in litellm.callbacks:
+        if isinstance(callback, _OPTIONAL_PresidioPIIMasking):
+            pii_masking_obj = callback
+
+    assert pii_masking_obj is not None
+
+    assert hasattr(pii_masking_obj, "logging_only")
+    assert pii_masking_obj.logging_only is True

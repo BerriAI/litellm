@@ -280,11 +280,22 @@ class ProxyLogging:
     async def update_request_status(
         self, litellm_call_id: str, status: Literal["success", "fail"]
     ):
+        # only use this if slack alerting is being used
+        if self.alerting is None:
+            return
+
+        # current alerting threshold
+        alerting_threshold: float = self.alerting_threshold
+
+        # add a 100 second buffer to the alerting threshold
+        # ensures we don't send errant hanging request slack alerts
+        alerting_threshold += 100
+
         await self.internal_usage_cache.async_set_cache(
             key="request_status:{}".format(litellm_call_id),
             value=status,
             local_only=True,
-            ttl=120,
+            ttl=alerting_threshold,
         )
 
     # The actual implementation of the function
@@ -299,6 +310,7 @@ class ProxyLogging:
             "image_generation",
             "moderation",
             "audio_transcription",
+            "pass_through_endpoint",
         ],
     ) -> dict:
         """
@@ -588,12 +600,41 @@ class ProxyLogging:
                 )
 
             if litellm_logging_obj is not None:
+                ## UPDATE LOGGING INPUT
+                _optional_params = {}
+                for k, v in request_data.items():
+                    if k != "model" and k != "user" and k != "litellm_params":
+                        _optional_params[k] = v
+                litellm_logging_obj.update_environment_variables(
+                    model=request_data.get("model", ""),
+                    user=request_data.get("user", ""),
+                    optional_params=_optional_params,
+                    litellm_params=request_data.get("litellm_params", {}),
+                )
+
+                input: Union[list, str, dict] = ""
+                if "messages" in request_data and isinstance(
+                    request_data["messages"], list
+                ):
+                    input = request_data["messages"]
+                elif "prompt" in request_data and isinstance(
+                    request_data["prompt"], str
+                ):
+                    input = request_data["prompt"]
+                elif "input" in request_data and isinstance(
+                    request_data["input"], list
+                ):
+                    input = request_data["input"]
+
+                litellm_logging_obj.pre_call(
+                    input=input,
+                    api_key="",
+                )
+
                 # log the custom exception
                 await litellm_logging_obj.async_failure_handler(
                     exception=original_exception,
                     traceback_exception=traceback.format_exc(),
-                    start_time=time.time(),
-                    end_time=time.time(),
                 )
 
                 threading.Thread(
@@ -601,8 +642,6 @@ class ProxyLogging:
                     args=(
                         original_exception,
                         traceback.format_exc(),
-                        time.time(),
-                        time.time(),
                     ),
                 ).start()
 

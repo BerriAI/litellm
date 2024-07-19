@@ -396,7 +396,8 @@ class VertexGeminiConfig:
                 optional_params["presence_penalty"] = value
             if param == "tools" and isinstance(value, list):
                 gtool_func_declarations = []
-                google_search_tool: Optional[dict] = None
+                googleSearchRetrieval: Optional[dict] = None
+                provider_specific_tools: List[dict] = []
                 for tool in value:
                     # check if grounding
                     try:
@@ -411,11 +412,14 @@ class VertexGeminiConfig:
                         verbose_logger.warning(
                             "Got KeyError parsing tool={}. Assuming it's a provider-specific param. Use `litellm.set_verbose` or `litellm --detailed_debug` to see raw request."
                         )
-                        google_search_tool = tool
-                _tools = Tools(function_declarations=gtool_func_declarations)
-                if google_search_tool is not None:
-                    _tools["googleSearchRetrieval"] = google_search_tool
-                optional_params["tools"] = [_tools]
+                        if tool.get("googleSearchRetrieval", None) is not None:
+                            googleSearchRetrieval = tool["googleSearchRetrieval"]
+                _tools = Tools(
+                    function_declarations=gtool_func_declarations,
+                )
+                if googleSearchRetrieval is not None:
+                    _tools["googleSearchRetrieval"] = googleSearchRetrieval
+                optional_params["tools"] = [_tools] + provider_specific_tools
             if param == "tool_choice" and (
                 isinstance(value, str) or isinstance(value, dict)
             ):
@@ -682,6 +686,8 @@ class VertexLLM(BaseLLM):
         model_response.choices = []  # type: ignore
 
         try:
+            ## CHECK IF GROUNDING METADATA IN REQUEST
+            grounding_metadata: List[dict] = []
             ## GET TEXT ##
             chat_completion_message = {"role": "assistant"}
             content_str = ""
@@ -689,6 +695,9 @@ class VertexLLM(BaseLLM):
             for idx, candidate in enumerate(completion_response["candidates"]):
                 if "content" not in candidate:
                     continue
+
+                if "groundingMetadata" in candidate:
+                    grounding_metadata.append(candidate["groundingMetadata"])
 
                 if "text" in candidate["content"]["parts"][0]:
                     content_str = candidate["content"]["parts"][0]["text"]
@@ -735,6 +744,11 @@ class VertexLLM(BaseLLM):
             )
 
             setattr(model_response, "usage", usage)
+
+            ## ADD GROUNDING METADATA ##
+            model_response._hidden_params["vertex_ai_grounding_metadata"] = (
+                grounding_metadata
+            )
         except Exception as e:
             raise VertexAIError(
                 message="Received={}, Error converting to valid response block={}. File an issue if litellm error - https://github.com/BerriAI/litellm/issues".format(

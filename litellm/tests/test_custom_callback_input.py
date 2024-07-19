@@ -165,6 +165,11 @@ class CompletionCustomHandler(
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
+            print(f"\n\nkwargs={kwargs}\n\n")
+            print(
+                json.dumps(kwargs, default=str)
+            )  # this is a test to confirm no circular references are in the logging object
+
             self.states.append("sync_success")
             ## START TIME
             assert isinstance(start_time, datetime)
@@ -193,7 +198,10 @@ class CompletionCustomHandler(
             assert isinstance(kwargs["user"], (str, type(None)))
             assert (
                 isinstance(kwargs["input"], list)
-                and isinstance(kwargs["input"][0], dict)
+                and (
+                    isinstance(kwargs["input"][0], dict)
+                    or isinstance(kwargs["input"][0], str)
+                )
             ) or isinstance(kwargs["input"], (dict, str))
             assert isinstance(kwargs["api_key"], (str, type(None)))
             assert isinstance(
@@ -830,7 +838,7 @@ async def test_async_embedding_openai():
 
 
 ## Test Azure + Async
-def test_sync_embedding():
+def test_amazing_sync_embedding():
     try:
         customHandler_success = CompletionCustomHandler()
         customHandler_failure = CompletionCustomHandler()
@@ -840,6 +848,7 @@ def test_sync_embedding():
         )
         print(f"customHandler_success.errors: {customHandler_success.errors}")
         print(f"customHandler_success.states: {customHandler_success.states}")
+        time.sleep(2)
         assert len(customHandler_success.errors) == 0
         assert len(customHandler_success.states) == 3  # pre, post, success
         # test failure callback
@@ -854,6 +863,7 @@ def test_sync_embedding():
             pass
         print(f"customHandler_failure.errors: {customHandler_failure.errors}")
         print(f"customHandler_failure.states: {customHandler_failure.states}")
+        time.sleep(2)
         assert len(customHandler_failure.errors) == 1
         assert len(customHandler_failure.states) == 3  # pre, post, failure
     except Exception as e:

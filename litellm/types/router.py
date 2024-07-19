@@ -91,6 +91,7 @@ class ModelInfo(BaseModel):
     base_model: Optional[str] = (
         None  # specify if the base model is azure/gpt-3.5-turbo etc for accurate cost tracking
     )
+    tier: Optional[Literal["free", "paid"]] = None
 
     def __init__(self, id: Optional[Union[str, int]] = None, **params):
         if id is None:
@@ -154,6 +155,8 @@ class GenericLiteLLMParams(BaseModel):
     input_cost_per_second: Optional[float] = None
     output_cost_per_second: Optional[float] = None
 
+    max_file_size_mb: Optional[float] = None
+
     model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
 
     def __init__(
@@ -185,6 +188,7 @@ class GenericLiteLLMParams(BaseModel):
         output_cost_per_token: Optional[float] = None,
         input_cost_per_second: Optional[float] = None,
         output_cost_per_second: Optional[float] = None,
+        max_file_size_mb: Optional[float] = None,
         **params,
     ):
         args = locals()
@@ -243,6 +247,9 @@ class LiteLLM_Params(GenericLiteLLMParams):
         aws_access_key_id: Optional[str] = None,
         aws_secret_access_key: Optional[str] = None,
         aws_region_name: Optional[str] = None,
+        # OpenAI / Azure Whisper
+        # set a max-size of file that can be passed to litellm proxy
+        max_file_size_mb: Optional[float] = None,
         **params,
     ):
         args = locals()
@@ -322,6 +329,7 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
 class DeploymentTypedDict(TypedDict):
     model_name: str
     litellm_params: LiteLLMParamsTypedDict
+    model_info: ModelInfo
 
 
 SPECIAL_MODEL_INFO_PARAMS = [

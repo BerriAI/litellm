@@ -212,7 +212,9 @@ def completion(
     headers = validate_environment(api_key)
     completion_url = api_base
     model = model
-    most_recent_message, chat_history = cohere_messages_pt_v2(messages=messages)
+    most_recent_message, chat_history = cohere_messages_pt_v2(
+        messages=messages, model=model, llm_provider="cohere_chat"
+    )
 
     ## Load Config
     config = litellm.CohereConfig.get_config()

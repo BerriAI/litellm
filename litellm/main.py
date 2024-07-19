@@ -479,7 +479,7 @@ def mock_completion(
         if isinstance(mock_response, Exception):
             if isinstance(mock_response, openai.APIError):
                 raise mock_response
-            raise litellm.APIError(
+            raise litellm.MockException(
                 status_code=getattr(mock_response, "status_code", 500),  # type: ignore
                 message=getattr(mock_response, "text", str(mock_response)),
                 llm_provider=getattr(mock_response, "llm_provider", custom_llm_provider or "openai"),  # type: ignore
@@ -1528,6 +1528,8 @@ def completion(
                     api_key=api_key,
                     logging_obj=logging,
                     headers=headers,
+                    timeout=timeout,
+                    client=client,
                 )
             if optional_params.get("stream", False) or acompletion == True:
                 ## LOGGING
@@ -2046,7 +2048,10 @@ def completion(
                     acompletion=acompletion,
                     headers=headers,
                     custom_prompt_dict=custom_prompt_dict,
+                    timeout=timeout,
+                    client=client,
                 )
+
             else:
                 model_response = vertex_ai.completion(
                     model=model,

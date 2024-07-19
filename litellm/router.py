@@ -47,6 +47,7 @@ from litellm.assistants.main import AssistantDeleted
 from litellm.caching import DualCache, InMemoryCache, RedisCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.azure import get_azure_ad_token_from_oidc
+from litellm.router_strategy.free_paid_tiers import get_deployments_for_tier
 from litellm.router_strategy.least_busy import LeastBusyLoggingHandler
 from litellm.router_strategy.lowest_cost import LowestCostLoggingHandler
 from litellm.router_strategy.lowest_latency import LowestLatencyLoggingHandler
@@ -717,6 +718,9 @@ class Router:
             timeout = (
                 data.get(
                     "timeout", None
+                )  # timeout set on litellm_params for this deployment
+                or data.get(
+                    "request_timeout", None
                 )  # timeout set on litellm_params for this deployment
                 or self.timeout  # timeout set on router
                 or kwargs.get(
@@ -2334,7 +2338,7 @@ class Router:
             original_exception = e
             fallback_model_group = None
             try:
-                verbose_router_logger.debug(f"Trying to fallback b/w models")
+                verbose_router_logger.debug("Trying to fallback b/w models")
                 if (
                     hasattr(e, "status_code")
                     and e.status_code == 400  # type: ignore
@@ -2343,6 +2347,9 @@ class Router:
                         or isinstance(e, litellm.ContentPolicyViolationError)
                     )
                 ):  # don't retry a malformed request
+                    verbose_router_logger.debug(
+                        "Not retrying request as it's malformed. Status code=400."
+                    )
                     raise e
                 if isinstance(e, litellm.ContextWindowExceededError):
                     if context_window_fallbacks is not None:
@@ -2481,6 +2488,12 @@ class Router:
             except Exception as e:
                 verbose_router_logger.error(f"An exception occurred - {str(e)}")
                 verbose_router_logger.debug(traceback.format_exc())
+
+            if hasattr(original_exception, "message"):
+                # add the available fallbacks to the exception
+                original_exception.message += "\nReceived Model Group={}\nAvailable Model Group Fallbacks={}".format(
+                    model_group, fallback_model_group
+                )
             raise original_exception
 
     async def async_function_with_retries(self, *args, **kwargs):
@@ -3684,6 +3697,24 @@ class Router:
                         raise Exception("Model invalid format - {}".format(type(model)))
         return None
 
+    def get_deployment_by_model_group_name(
+        self, model_group_name: str
+    ) -> Optional[Deployment]:
+        """
+        Returns -> Deployment or None
+
+        Raise Exception -> if model found in invalid format
+        """
+        for model in self.model_list:
+            if model["model_name"] == model_group_name:
+                if isinstance(model, dict):
+                    return Deployment(**model)
+                elif isinstance(model, Deployment):
+                    return model
+                else:
+                    raise Exception("Model Name invalid - {}".format(type(model)))
+        return None
+
     def get_router_model_info(self, deployment: dict) -> ModelMapInfo:
         """
         For a given model id, return the model info (max tokens, input cost, output cost, etc.).
@@ -4450,6 +4481,12 @@ class Router:
                     messages=messages,
                     request_kwargs=request_kwargs,
                 )
+
+            # check free / paid tier for each deployment
+            healthy_deployments = await get_deployments_for_tier(
+                request_kwargs=request_kwargs,
+                healthy_deployments=healthy_deployments,
+            )
 
             if len(healthy_deployments) == 0:
                 if _allowed_model_region is None:

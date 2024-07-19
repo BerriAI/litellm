@@ -77,7 +77,9 @@ BEDROCK_CONVERSE_MODELS = [
     "anthropic.claude-instant-v1",
 ]
 
+
 iam_cache = DualCache()
+_response_stream_shape_cache = None
 
 
 class AmazonCohereChatConfig:
@@ -1845,7 +1847,9 @@ class BedrockConverseLLM(BaseLLM):
             inference_params.pop(key, None)
 
         bedrock_messages: List[MessageBlock] = _bedrock_converse_messages_pt(
-            messages=messages
+            messages=messages,
+            model=model,
+            llm_provider="bedrock_converse",
         )
         bedrock_tools: List[ToolBlock] = _bedrock_tools_pt(
             inference_params.pop("tools", [])
@@ -1989,13 +1993,18 @@ class BedrockConverseLLM(BaseLLM):
 
 
 def get_response_stream_shape():
-    from botocore.loaders import Loader
-    from botocore.model import ServiceModel
+    global _response_stream_shape_cache
+    if _response_stream_shape_cache is None:
 
-    loader = Loader()
-    bedrock_service_dict = loader.load_service_model("bedrock-runtime", "service-2")
-    bedrock_service_model = ServiceModel(bedrock_service_dict)
-    return bedrock_service_model.shape_for("ResponseStream")
+        from botocore.loaders import Loader
+        from botocore.model import ServiceModel
+
+        loader = Loader()
+        bedrock_service_dict = loader.load_service_model("bedrock-runtime", "service-2")
+        bedrock_service_model = ServiceModel(bedrock_service_dict)
+        _response_stream_shape_cache = bedrock_service_model.shape_for("ResponseStream")
+
+    return _response_stream_shape_cache
 
 
 class AWSEventStreamDecoder:
