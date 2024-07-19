@@ -75,7 +75,7 @@ async def add_litellm_data_to_request(
         dict: The modified data dictionary.
 
     """
-    from litellm.proxy.proxy_server import premium_user
+    from litellm.proxy.proxy_server import llm_router, premium_user
 
     safe_add_api_version_from_query_params(data, request)
 
@@ -132,15 +132,6 @@ async def add_litellm_data_to_request(
             for k, v in key_metadata["cache"].items():
                 if k in SupportedCacheControls:
                     data["cache"][k] = v
-    if "tier" in key_metadata:
-        if premium_user is not True:
-            verbose_logger.warning(
-                "Trying to use free/paid tier feature. This will not be applied %s",
-                CommonProxyErrors.not_premium_user.value,
-            )
-
-        # add request tier to metadata
-        data[_metadata_variable_name]["tier"] = key_metadata["tier"]
 
     # Team spend, budget - used by prometheus.py
     data[_metadata_variable_name][
@@ -175,7 +166,8 @@ async def add_litellm_data_to_request(
     if user_api_key_dict.allowed_model_region is not None:
         data["allowed_model_region"] = user_api_key_dict.allowed_model_region
 
-    ## [Enterprise Only] Add User-IP Address
+    ## [Enterprise Only]
+    # Add User-IP Address
     requester_ip_address = ""
     if premium_user is True:
         # Only set the IP Address for Enterprise Users
@@ -187,6 +179,18 @@ async def add_litellm_data_to_request(
         ):
             requester_ip_address = request.client.host
     data[_metadata_variable_name]["requester_ip_address"] = requester_ip_address
+
+    # Enterprise Only - Check if using tag based routing
+    if llm_router and llm_router.enable_tag_filtering is True:
+        if premium_user is not True:
+            verbose_proxy_logger.warning(
+                "router.enable_tag_filtering is on %s \n switched off router.enable_tag_filtering",
+                CommonProxyErrors.not_premium_user.value,
+            )
+            llm_router.enable_tag_filtering = False
+        else:
+            if "tags" in data:
+                data[_metadata_variable_name]["tags"] = data["tags"]
 
     ### TEAM-SPECIFIC PARAMS ###
     if user_api_key_dict.team_id is not None:
