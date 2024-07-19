@@ -12,6 +12,30 @@ export interface Model {
   model_info: Object | null;
 }
 
+const baseUrl = "/"; // Assuming the base URL is the root
+
+
+let lastErrorTime = 0;
+
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+const handleError = async (errorData: string) => {
+  const currentTime = Date.now();
+  if (currentTime - lastErrorTime > 60000) { // 60000 milliseconds = 60 seconds
+    if (errorData.includes("Authentication Error - Expired Key")) {
+      message.info("UI Session Expired. Logging out.");
+      lastErrorTime = currentTime;
+      await sleep(3000); // 5 second sleep
+      window.location.href = baseUrl;
+    } else {
+      message.error(errorData);
+    }
+    lastErrorTime = currentTime;
+  } else {
+    console.log("Error suppressed to prevent spam:", errorData);
+  }
+};
+
 export const modelCostMap = async (
   accessToken: string,
 ) => {
@@ -31,6 +55,7 @@ export const modelCostMap = async (
     return jsonData;
   } catch (error) {
     console.error("Failed to get model cost map:", error);
+    handleError(error);
     throw error;
   }
 };
@@ -54,7 +79,6 @@ export const modelCreateCall = async (
 
     if (!response.ok) {
       const errorData = await response.text();
-      message.error("Failed to create key: " + errorData, 10);
       console.error("Error response from the server:", errorData);
       throw new Error("Network response was not ok");
     }
@@ -91,7 +115,7 @@ export const modelSettingsCall = async (accessToken: String) => {
 
     if (!response.ok) {
       const errorData = await response.text();
-      message.error(errorData, 10);
+      handleError(errorData);
       throw new Error("Network response was not ok");
     }
 
@@ -125,7 +149,7 @@ export const modelDeleteCall = async (
 
     if (!response.ok) {
       const errorData = await response.text();
-      message.error("Failed to create key: " + errorData, 10);
+      handleError(errorData);
       console.error("Error response from the server:", errorData);
       throw new Error("Network response was not ok");
     }
@@ -167,7 +191,7 @@ export const budgetDeleteCall = async (
 
     if (!response.ok) {
       const errorData = await response.text();
-      message.error("Failed to create key: " + errorData, 10);
+      handleError(errorData);
       console.error("Error response from the server:", errorData);
       throw new Error("Network response was not ok");
     }
@@ -202,7 +226,7 @@ export const budgetCreateCall = async (
 
     if (!response.ok) {
       const errorData = await response.text();
-      message.error("Failed to create key: " + errorData, 10);
+      handleError(errorData);
       console.error("Error response from the server:", errorData);
       throw new Error("Network response was not ok");
     }
@@ -238,7 +262,7 @@ export const invitationCreateCall = async (
 
     if (!response.ok) {
       const errorData = await response.text();
-      message.error("Failed to create key: " + errorData, 10);
+      handleError(errorData);
       console.error("Error response from the server:", errorData);
       throw new Error("Network response was not ok");
     }
@@ -277,7 +301,7 @@ export const invitationClaimCall = async (
 
     if (!response.ok) {
       const errorData = await response.text();
-      message.error("Failed to create key: " + errorData, 10);
+      handleError(errorData);
       console.error("Error response from the server:", errorData);
       throw new Error("Network response was not ok");
     }
@@ -312,7 +336,7 @@ export const alertingSettingsCall = async (accessToken: String) => {
 
     if (!response.ok) {
       const errorData = await response.text();
-      message.error(errorData, 10);
+      handleError(errorData);
       throw new Error("Network response was not ok");
     }
 
@@ -353,7 +377,7 @@ export const keyCreateCall = async (
       try {
         formValues.metadata = JSON.parse(formValues.metadata);
       } catch (error) {
-        message.error("Failed to parse metadata: " + error, 10);
+        handleError(errorData);
         throw new Error("Failed to parse metadata: " + error);
       }
     }
@@ -374,7 +398,7 @@ export const keyCreateCall = async (
 
     if (!response.ok) {
       const errorData = await response.text();
-      message.error("Failed to create key: " + errorData, 10);
+      handleError(errorData);
       console.error("Error response from the server:", errorData);
       throw new Error("Network response was not ok");
     }
@@ -416,7 +440,7 @@ export const userCreateCall = async (
       try {
         formValues.metadata = JSON.parse(formValues.metadata);
       } catch (error) {
-        message.error("Failed to parse metadata: " + error, 10);
+        handleError(errorData);
         throw new Error("Failed to parse metadata: " + error);
       }
     }
@@ -437,7 +461,7 @@ export const userCreateCall = async (
 
     if (!response.ok) {
       const errorData = await response.text();
-      message.error("Failed to create key: " + errorData, 10);
+      handleError(errorData);
       console.error("Error response from the server:", errorData);
       throw new Error("Network response was not ok");
     }
@@ -470,7 +494,7 @@ export const keyDeleteCall = async (accessToken: String, user_key: String) => {
 
     if (!response.ok) {
       const errorData = await response.text();
-      message.error("Failed to delete key: " + errorData, 10);
+      handleError(errorData);
       throw new Error("Network response was not ok");
     }
 
@@ -502,7 +526,7 @@ export const teamDeleteCall = async (accessToken: String, teamID: String) => {
 
     if (!response.ok) {
       const errorData = await response.text();
-      message.error("Failed to delete team: " + errorData, 10);
+      handleError(errorData);
       throw new Error("Network response was not ok");
     }
     const data = await response.json();
@@ -552,7 +576,7 @@ export const userInfoCall = async (
 
     if (!response.ok) {
       const errorData = await response.text();
-      message.error(errorData, 10);
+      handleError(errorData);
       throw new Error("Network response was not ok");
     }
 
@@ -587,7 +611,7 @@ export const teamInfoCall = async (
 
     if (!response.ok) {
       const errorData = await response.text();
-      message.error(errorData, 10);
+      handleError(errorData);
       throw new Error("Network response was not ok");
     }
 
@@ -619,7 +643,7 @@ export const getTotalSpendCall = async (accessToken: String) => {
 
     if (!response.ok) {
       const errorData = await response.text();
-      message.error(errorData, 10);
+      handleError(errorData);
       throw new Error("Network response was not ok");
     }
 
@@ -651,7 +675,7 @@ export const getOnboardingCredentials = async (inviteUUID: String) => {
 
     if (!response.ok) {
       const errorData = await response.text();
-      message.error(errorData, 10);
+      handleError(errorData);
       throw new Error("Network response was not ok");
     }
 
@@ -689,7 +713,7 @@ export const claimOnboardingToken = async (
 
     if (!response.ok) {
       const errorData = await response.text();
-      message.error("Failed to delete team: " + errorData, 10);
+      handleError(errorData);
       throw new Error("Network response was not ok");
     }
     const data = await response.json();
@@ -906,7 +930,7 @@ export const modelMetricsCall = async (
 
     if (!response.ok) {
       const errorData = await response.text();
-      message.error(errorData, 10);
+      handleError(errorData);
       throw new Error("Network response was not ok");
     }
     const data = await response.json();
@@ -945,7 +969,7 @@ export const streamingModelMetricsCall = async (
 
     if (!response.ok) {
       const errorData = await response.text();
-      message.error(errorData, 10);
+      handleError(errorData);
       throw new Error("Network response was not ok");
     }
     const data = await response.json();
@@ -990,7 +1014,7 @@ export const modelMetricsSlowResponsesCall = async (
 
     if (!response.ok) {
       const errorData = await response.text();
-      message.error(errorData, 10);
+      handleError(errorData);
       throw new Error("Network response was not ok");
     }
     const data = await response.json();
@@ -1034,7 +1058,7 @@ export const modelExceptionsCall = async (
 
     if (!response.ok) {
       const errorData = await response.text();
-      message.error(errorData, 10);
+      handleError(errorData);
       throw new Error("Network response was not ok");
     }
     const data = await response.json();
@@ -1069,7 +1093,7 @@ export const modelAvailableCall = async (
 
     if (!response.ok) {
       const errorData = await response.text();
-      message.error(errorData, 10);
+      handleError(errorData);
       throw new Error("Network response was not ok");
     }
 
@@ -1098,7 +1122,7 @@ export const keySpendLogsCall = async (accessToken: String, token: String) => {
     });
     if (!response.ok) {
       const errorData = await response.text();
-      message.error(errorData, 10);
+      handleError(errorData);
       throw new Error("Network response was not ok");
     }
 
@@ -1126,7 +1150,7 @@ export const teamSpendLogsCall = async (accessToken: String) => {
     });
     if (!response.ok) {
       const errorData = await response.text();
-      message.error(errorData, 10);
+      handleError(errorData);
       throw new Error("Network response was not ok");
     }
 
@@ -1263,7 +1287,7 @@ export const userSpendLogsCall = async (
     });
     if (!response.ok) {
       const errorData = await response.text();
-      message.error(errorData, 10);
+      handleError(errorData);
       throw new Error("Network response was not ok");
     }
 
@@ -1293,7 +1317,7 @@ export const adminSpendLogsCall = async (accessToken: String) => {
     });
     if (!response.ok) {
       const errorData = await response.text();
-      message.error(errorData, 10);
+      handleError(errorData);
       throw new Error("Network response was not ok");
     }
 
@@ -1323,7 +1347,7 @@ export const adminTopKeysCall = async (accessToken: String) => {
     });
     if (!response.ok) {
       const errorData = await response.text();
-      message.error(errorData, 10);
+      handleError(errorData);
       throw new Error("Network response was not ok");
     }
 
@@ -1382,7 +1406,7 @@ export const adminTopEndUsersCall = async (
     const response = await fetch(url, requestOptions);
     if (!response.ok) {
       const errorData = await response.text();
-      message.error(errorData, 10);
+      handleError(errorData);
       throw new Error("Network response was not ok");
     }
 
@@ -1431,7 +1455,7 @@ export const adminspendByProvider = async (
 
     if (!response.ok) {
       const errorData = await response.text();
-      message.error(errorData, 10);
+      handleError(errorData);
       throw new Error("Network response was not ok");
     }
 
@@ -1675,7 +1699,7 @@ export const adminTopModelsCall = async (accessToken: String) => {
     });
     if (!response.ok) {
       const errorData = await response.text();
-      message.error(errorData, 10);
+      handleError(errorData);
       throw new Error("Network response was not ok");
     }
 
@@ -1706,7 +1730,7 @@ export const keyInfoCall = async (accessToken: String, keys: String[]) => {
 
     if (!response.ok) {
       const errorData = await response.text();
-      message.error(errorData, 10);
+      handleError(errorData);
       throw new Error("Network response was not ok");
     }
 
@@ -1732,7 +1756,7 @@ export const spendUsersCall = async (accessToken: String, userID: String) => {
     });
     if (!response.ok) {
       const errorData = await response.text();
-      message.error(errorData, 10);
+      handleError(errorData);
       throw new Error("Network response was not ok");
     }
 
@@ -1770,7 +1794,7 @@ export const userRequestModelCall = async (
 
     if (!response.ok) {
       const errorData = await response.text();
-      message.error("Failed to delete key: " + errorData, 10);
+      handleError(errorData);
       throw new Error("Network response was not ok");
     }
     const data = await response.json();
@@ -1800,7 +1824,7 @@ export const userGetRequesedtModelsCall = async (accessToken: String) => {
 
     if (!response.ok) {
       const errorData = await response.text();
-      message.error("Failed to delete key: " + errorData, 10);
+      handleError(errorData);
       throw new Error("Network response was not ok");
     }
     const data = await response.json();
@@ -1840,7 +1864,7 @@ export const userGetAllUsersCall = async (
 
     if (!response.ok) {
       const errorData = await response.text();
-      message.error("Failed to delete key: " + errorData, 10);
+      handleError(errorData);
       throw new Error("Network response was not ok");
     }
     const data = await response.json();
@@ -1901,7 +1925,7 @@ export const teamCreateCall = async (
 
     if (!response.ok) {
       const errorData = await response.text();
-      message.error("Failed to create key: " + errorData, 10);
+      handleError(errorData);
       console.error("Error response from the server:", errorData);
       throw new Error("Network response was not ok");
     }
@@ -1937,7 +1961,7 @@ export const keyUpdateCall = async (
 
     if (!response.ok) {
       const errorData = await response.text();
-      message.error("Failed to update key: " + errorData, 10);
+      handleError(errorData);
       console.error("Error response from the server:", errorData);
       throw new Error("Network response was not ok");
     }
@@ -1972,7 +1996,7 @@ export const teamUpdateCall = async (
 
     if (!response.ok) {
       const errorData = await response.text();
-      message.error("Failed to update team: " + errorData, 10);
+      handleError(errorData);
       console.error("Error response from the server:", errorData);
       throw new Error("Network response was not ok");
     }
@@ -2007,7 +2031,7 @@ export const modelUpdateCall = async (
 
     if (!response.ok) {
       const errorData = await response.text();
-      message.error("Failed to update model: " + errorData, 10);
+      handleError(errorData);
       console.error("Error update from the server:", errorData);
       throw new Error("Network response was not ok");
     }
@@ -2052,7 +2076,7 @@ export const teamMemberAddCall = async (
 
     if (!response.ok) {
       const errorData = await response.text();
-      message.error("Failed to create key: " + errorData, 10);
+      handleError(errorData);
       console.error("Error response from the server:", errorData);
       throw new Error("Network response was not ok");
     }
@@ -2092,7 +2116,7 @@ export const userUpdateUserCall = async (
 
     if (!response.ok) {
       const errorData = await response.text();
-      message.error("Failed to create key: " + errorData, 10);
+      handleError(errorData);
       console.error("Error response from the server:", errorData);
       throw new Error("Network response was not ok");
     }
@@ -2132,7 +2156,7 @@ export const PredictedSpendLogsCall = async (
 
     if (!response.ok) {
       const errorData = await response.text();
-      message.error(errorData, 10);
+      handleError(errorData);
       throw new Error("Network response was not ok");
     }
 
@@ -2165,7 +2189,7 @@ export const slackBudgetAlertsHealthCheck = async (accessToken: String) => {
 
     if (!response.ok) {
       const errorData = await response.text();
-      message.error("Failed Slack Alert test: " + errorData);
+      handleError(errorData);
       // throw error with message
       throw new Error(errorData);
     }
@@ -2204,7 +2228,7 @@ export const serviceHealthCheck = async (
 
     if (!response.ok) {
       const errorData = await response.text();
-      message.error(`Failed ${service} service health check ` + errorData);
+      handleError(errorData);
       // throw error with message
       throw new Error(errorData);
     }
@@ -2239,7 +2263,7 @@ export const getBudgetList = async (accessToken: String) => {
 
     if (!response.ok) {
       const errorData = await response.text();
-      message.error(errorData, 10);
+      handleError(errorData);
       throw new Error("Network response was not ok");
     }
 
@@ -2272,7 +2296,7 @@ export const getBudgetSettings = async (accessToken: String) => {
 
     if (!response.ok) {
       const errorData = await response.text();
-      message.error(errorData, 10);
+      handleError(errorData);
       throw new Error("Network response was not ok");
     }
 
@@ -2310,7 +2334,7 @@ export const getCallbacksCall = async (
 
     if (!response.ok) {
       const errorData = await response.text();
-      message.error(errorData, 10);
+      handleError(errorData);
       throw new Error("Network response was not ok");
     }
 
@@ -2341,7 +2365,7 @@ export const getGeneralSettingsCall = async (accessToken: String) => {
 
     if (!response.ok) {
       const errorData = await response.text();
-      message.error(errorData, 10);
+      handleError(errorData);
       throw new Error("Network response was not ok");
     }
 
@@ -2414,7 +2438,7 @@ export const updateConfigFieldSetting = async (
 
     if (!response.ok) {
       const errorData = await response.text();
-      message.error(errorData, 10);
+      handleError(errorData);
       throw new Error("Network response was not ok");
     }
 
@@ -2454,7 +2478,7 @@ export const deleteConfigFieldSetting = async (
 
     if (!response.ok) {
       const errorData = await response.text();
-      message.error(errorData, 10);
+      handleError(errorData);
       throw new Error("Network response was not ok");
     }
 
@@ -2491,7 +2515,7 @@ export const setCallbacksCall = async (
 
     if (!response.ok) {
       const errorData = await response.text();
-      message.error(errorData, 10);
+      handleError(errorData);
       throw new Error("Network response was not ok");
     }
 
@@ -2523,7 +2547,7 @@ export const healthCheckCall = async (accessToken: String) => {
 
     if (!response.ok) {
       const errorData = await response.text();
-      message.error(errorData);
+      handleError(errorData);
       throw new Error("Network response was not ok");
     }
 
