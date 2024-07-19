@@ -58,7 +58,8 @@ async def test_router_free_paid_tier():
                 },
                 "model_info": {"id": "very-expensive-model"},
             },
-        ]
+        ],
+        enable_tag_filtering=True,
     )
 
     for _ in range(5):
