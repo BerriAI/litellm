@@ -1,24 +1,26 @@
-from openai import AuthenticationError, BadRequestError, RateLimitError, OpenAIError
+import asyncio
 import os
+import subprocess
 import sys
 import traceback
-import subprocess, asyncio
+from typing import Any
+
+from openai import AuthenticationError, BadRequestError, OpenAIError, RateLimitError
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-import litellm
-from litellm import (
-    embedding,
-    completion,
-    #     AuthenticationError,
-    ContextWindowExceededError,
-    #     RateLimitError,
-    #     ServiceUnavailableError,
-    #     OpenAIError,
-)
 from concurrent.futures import ThreadPoolExecutor
+from unittest.mock import MagicMock, patch
+
 import pytest
+
+import litellm
+from litellm import (  # AuthenticationError,; RateLimitError,; ServiceUnavailableError,; OpenAIError,
+    ContextWindowExceededError,
+    completion,
+    embedding,
+)
 
 litellm.vertex_project = "pathrise-convert-1606954137718"
 litellm.vertex_location = "us-central1"
@@ -53,8 +55,12 @@ async def test_content_policy_exception_azure():
     except litellm.ContentPolicyViolationError as e:
         print("caught a content policy violation error! Passed")
         print("exception", e)
+        assert e.litellm_debug_info is not None
+        assert isinstance(e.litellm_debug_info, str)
+        assert len(e.litellm_debug_info) > 0
         pass
     except Exception as e:
+        print()
         pytest.fail(f"An exception occurred - {str(e)}")
 
 
@@ -243,9 +249,29 @@ def test_completion_azure_exception():
 # test_completion_azure_exception()
 
 
+def test_azure_embedding_exceptions():
+    try:
+
+        response = litellm.embedding(
+            model="azure/azure-embedding-model",
+            input="hello",
+            messages="hello",
+        )
+        pytest.fail(f"Bad request this should have failed but got {response}")
+
+    except Exception as e:
+        print(vars(e))
+        # CRUCIAL Test - Ensures our exceptions are readable and not overly complicated. some users have complained exceptions will randomly have another exception raised in our exception mapping
+        assert (
+            e.message
+            == "litellm.APIError: AzureException APIError - Embeddings.create() got an unexpected keyword argument 'messages'"
+        )
+
+
 async def asynctest_completion_azure_exception():
     try:
         import openai
+
         import litellm
 
         print("azure gpt-3.5 test\n\n")
@@ -277,8 +303,11 @@ async def asynctest_completion_azure_exception():
 
 def asynctest_completion_openai_exception_bad_model():
     try:
+        import asyncio
+
         import openai
-        import litellm, asyncio
+
+        import litellm
 
         print("azure exception bad model\n\n")
         litellm.set_verbose = True
@@ -305,8 +334,11 @@ def asynctest_completion_openai_exception_bad_model():
 
 def asynctest_completion_azure_exception_bad_model():
     try:
+        import asyncio
+
         import openai
-        import litellm, asyncio
+
+        import litellm
 
         print("azure exception bad model\n\n")
         litellm.set_verbose = True
@@ -356,6 +388,33 @@ def test_completion_openai_exception():
 # test_completion_openai_exception()
 
 
+def test_anthropic_openai_exception():
+    # test if anthropic raises litellm.AuthenticationError
+    try:
+        litellm.set_verbose = True
+        ## Test azure call
+        old_azure_key = os.environ["ANTHROPIC_API_KEY"]
+        os.environ.pop("ANTHROPIC_API_KEY")
+        response = completion(
+            model="anthropic/claude-3-sonnet-20240229",
+            messages=[{"role": "user", "content": "hello"}],
+        )
+        print(f"response: {response}")
+        print(response)
+    except litellm.AuthenticationError as e:
+        os.environ["ANTHROPIC_API_KEY"] = old_azure_key
+        print("Exception vars=", vars(e))
+        assert (
+            "Missing Anthropic API Key - A call is being made to anthropic but no key is set either in the environment variables or via params"
+            in e.message
+        )
+        print(
+            "ANTHROPIC_API_KEY: good job got the correct error for ANTHROPIC_API_KEY when key not set"
+        )
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
 def test_completion_mistral_exception():
     # test if mistral/mistral-tiny raises openai.AuthenticationError
     try:
@@ -380,6 +439,35 @@ def test_completion_mistral_exception():
 
 
 # test_completion_mistral_exception()
+
+
+def test_completion_bedrock_invalid_role_exception():
+    """
+    Test if litellm raises a BadRequestError for an invalid role on Bedrock
+    """
+    try:
+        litellm.set_verbose = True
+        response = completion(
+            model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+            messages=[{"role": "very-bad-role", "content": "hello"}],
+        )
+        print(f"response: {response}")
+        print(response)
+
+    except Exception as e:
+        assert isinstance(
+            e, litellm.BadRequestError
+        ), "Expected BadRequestError but got {}".format(type(e))
+        print("str(e) = {}".format(str(e)))
+
+        # This is important - We we previously returning a poorly formatted error string. Which was
+        #  litellm.BadRequestError: litellm.BadRequestError: Invalid Message passed in {'role': 'very-bad-role', 'content': 'hello'}
+
+        # IMPORTANT ASSERTION
+        assert (
+            (str(e))
+            == "litellm.BadRequestError: Invalid Message passed in {'role': 'very-bad-role', 'content': 'hello'}"
+        )
 
 
 def test_content_policy_exceptionimage_generation_openai():
@@ -655,3 +743,71 @@ def test_litellm_predibase_exception():
 
 # accuracy_score = counts[True]/(counts[True] + counts[False])
 # print(f"accuracy_score: {accuracy_score}")
+
+
+@pytest.mark.parametrize("provider", ["predibase", "vertex_ai_beta", "anthropic"])
+def test_exception_mapping(provider):
+    """
+    For predibase, run through a set of mock exceptions
+
+    assert that they are being mapped correctly
+    """
+    litellm.set_verbose = True
+    error_map = {
+        400: litellm.BadRequestError,
+        401: litellm.AuthenticationError,
+        404: litellm.NotFoundError,
+        408: litellm.Timeout,
+        429: litellm.RateLimitError,
+        500: litellm.InternalServerError,
+        503: litellm.ServiceUnavailableError,
+    }
+
+    for code, expected_exception in error_map.items():
+        mock_response = Exception()
+        setattr(mock_response, "text", "This is an error message")
+        setattr(mock_response, "llm_provider", provider)
+        setattr(mock_response, "status_code", code)
+
+        response: Any = None
+        try:
+            response = completion(
+                model="{}/test-model".format(provider),
+                messages=[{"role": "user", "content": "Hey, how's it going?"}],
+                mock_response=mock_response,
+            )
+        except expected_exception:
+            continue
+        except Exception as e:
+            response = "{}\n{}".format(str(e), traceback.format_exc())
+        pytest.fail(
+            "Did not raise expected exception. Expected={}, Return={},".format(
+                expected_exception, response
+            )
+        )
+
+    pass
+
+
+def test_anthropic_tool_calling_exception():
+    """
+    Related - https://github.com/BerriAI/litellm/issues/4348
+    """
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {},
+            },
+        }
+    ]
+    try:
+        litellm.completion(
+            model="claude-3-5-sonnet-20240620",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+            tools=tools,
+        )
+    except litellm.BadRequestError:
+        pass

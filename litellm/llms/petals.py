@@ -1,12 +1,16 @@
-import os, types
 import json
-from enum import Enum
-import requests  # type: ignore
+import os
 import time
+import types
+from enum import Enum
 from typing import Callable, Optional
+
+import requests  # type: ignore
+
 import litellm
 from litellm.utils import ModelResponse, Usage
-from .prompt_templates.factory import prompt_factory, custom_prompt
+
+from .prompt_templates.factory import custom_prompt, prompt_factory
 
 
 class PetalsError(Exception):
@@ -151,8 +155,8 @@ def completion(
     else:
         try:
             import torch
-            from transformers import AutoTokenizer
             from petals import AutoDistributedModelForCausalLM  # type: ignore
+            from transformers import AutoTokenizer
         except:
             raise Exception(
                 "Importing torch, transformers, petals failed\nTry pip installing petals \npip install git+https://github.com/bigscience-workshop/petals"
@@ -189,15 +193,15 @@ def completion(
         output_text = tokenizer.decode(outputs[0])
 
     if len(output_text) > 0:
-        model_response["choices"][0]["message"]["content"] = output_text
+        model_response.choices[0].message.content = output_text  # type: ignore
 
     prompt_tokens = len(encoding.encode(prompt))
     completion_tokens = len(
         encoding.encode(model_response["choices"][0]["message"].get("content"))
     )
 
-    model_response["created"] = int(time.time())
-    model_response["model"] = model
+    model_response.created = int(time.time())
+    model_response.model = model
     usage = Usage(
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,

@@ -1,0 +1,141 @@
+# Text to Speech
+
+## Quick Start 
+
+```python
+from pathlib import Path
+from litellm import speech
+import os 
+
+os.environ["OPENAI_API_KEY"] = "sk-.."
+
+speech_file_path = Path(__file__).parent / "speech.mp3"
+response = speech(
+        model="openai/tts-1",
+        voice="alloy",
+        input="the quick brown fox jumped over the lazy dogs",
+    )
+response.stream_to_file(speech_file_path)
+```
+
+## Async Usage 
+
+```python
+from litellm import aspeech
+from pathlib import Path
+import os, asyncio
+
+os.environ["OPENAI_API_KEY"] = "sk-.."
+
+async def test_async_speech(): 
+    speech_file_path = Path(__file__).parent / "speech.mp3"
+    response = await litellm.aspeech(
+            model="openai/tts-1",
+            voice="alloy",
+            input="the quick brown fox jumped over the lazy dogs",
+            api_base=None,
+            api_key=None,
+            organization=None,
+            project=None,
+            max_retries=1,
+            timeout=600,
+            client=None,
+            optional_params={},
+        )
+    response.stream_to_file(speech_file_path)
+
+asyncio.run(test_async_speech())
+```
+
+## Proxy Usage 
+
+LiteLLM provides an openai-compatible `/audio/speech` endpoint for Text-to-speech calls.
+
+```bash
+curl http://0.0.0.0:4000/v1/audio/speech \
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "tts-1",
+    "input": "The quick brown fox jumped over the lazy dog.",
+    "voice": "alloy"
+  }' \
+  --output speech.mp3
+```
+
+**Setup**
+
+```bash
+- model_name: tts
+  litellm_params:
+    model: openai/tts-1
+    api_key: os.environ/OPENAI_API_KEY
+```
+
+```bash
+litellm --config /path/to/config.yaml
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+## Azure Usage 
+
+**PROXY**
+
+```yaml
+ - model_name: azure/tts-1
+    litellm_params:
+      model: azure/tts-1
+      api_base: "os.environ/AZURE_API_BASE_TTS"
+      api_key: "os.environ/AZURE_API_KEY_TTS"
+      api_version: "os.environ/AZURE_API_VERSION" 
+```
+
+**SDK**
+
+```python 
+from litellm import completion
+
+## set ENV variables
+os.environ["AZURE_API_KEY"] = ""
+os.environ["AZURE_API_BASE"] = ""
+os.environ["AZURE_API_VERSION"] = ""
+
+# azure call
+speech_file_path = Path(__file__).parent / "speech.mp3"
+response = speech(
+        model="azure/<your-deployment-name",
+        voice="alloy",
+        input="the quick brown fox jumped over the lazy dogs",
+    )
+response.stream_to_file(speech_file_path)
+```
+
+## ✨ Enterprise LiteLLM Proxy - Set Max Request File Size 
+
+Use this when you want to limit the file size for requests sent to `audio/transcriptions`
+
+```yaml
+- model_name: whisper
+  litellm_params:
+    model: whisper-1
+    api_key: sk-*******
+    max_file_size_mb: 0.00001 # 👈 max file size in MB  (Set this intentionally very small for testing)
+  model_info:
+    mode: audio_transcription
+```
+
+Make a test Request with a valid file
+```shell
+curl --location 'http://localhost:4000/v1/audio/transcriptions' \
+--header 'Authorization: Bearer sk-1234' \
+--form 'file=@"/Users/ishaanjaffer/Github/litellm/tests/gettysburg.wav"' \
+--form 'model="whisper"'
+```
+
+
+Expect to see the follow response 
+
+```shell
+{"error":{"message":"File size is too large. Please check your file size. Passed file size: 0.7392807006835938 MB. Max file size: 0.0001 MB","type":"bad_request","param":"file","code":500}}%  
+```

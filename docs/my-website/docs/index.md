@@ -310,6 +310,7 @@ LiteLLM exposes pre defined callbacks to send data to Lunary, Langfuse, Helicone
 from litellm import completion
 
 ## set env variables for logging tools
+os.environ["HELICONE_API_KEY"] = "your-helicone-key"
 os.environ["LANGFUSE_PUBLIC_KEY"] = ""
 os.environ["LANGFUSE_SECRET_KEY"] = ""
 os.environ["LUNARY_PUBLIC_KEY"] = "your-lunary-public-key"
@@ -317,7 +318,7 @@ os.environ["LUNARY_PUBLIC_KEY"] = "your-lunary-public-key"
 os.environ["OPENAI_API_KEY"]
 
 # set callbacks
-litellm.success_callback = ["lunary", "langfuse"] # log input/output to lunary, langfuse, supabase
+litellm.success_callback = ["lunary", "langfuse", "helicone"] # log input/output to lunary, langfuse, supabase, helicone
 
 #openai call
 response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}])

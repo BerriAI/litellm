@@ -2,22 +2,29 @@
 ## Unit tests for ProxyConfig class
 
 
-import sys, os
+import os
+import sys
 import traceback
+
 from dotenv import load_dotenv
 
 load_dotenv()
-import os, io
+import io
+import os
 
 sys.path.insert(
     0, os.path.abspath("../..")
-)  # Adds the parent directory to the, system path
-import pytest, litellm
-from pydantic import BaseModel
-from litellm.proxy.proxy_server import ProxyConfig
-from litellm.proxy.utils import encrypt_value, ProxyLogging, DualCache
-from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+)  # Adds the parent directory to the system path
 from typing import Literal
+
+import pytest
+from pydantic import BaseModel, ConfigDict
+
+import litellm
+from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value
+from litellm.proxy.proxy_server import ProxyConfig
+from litellm.proxy.utils import DualCache, ProxyLogging
+from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 
 
 class DBModel(BaseModel):
@@ -26,8 +33,7 @@ class DBModel(BaseModel):
     model_info: dict
     litellm_params: dict
 
-    class Config:
-        protected_namespaces = ()
+    model_config = ConfigDict(protected_namespaces=())
 
 
 @pytest.mark.asyncio

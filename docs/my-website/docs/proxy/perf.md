@@ -1,3 +1,5 @@
+import Image from '@theme/IdealImage';
+
 # LiteLLM Proxy Performance
 
 ### Throughput - 30% Increase

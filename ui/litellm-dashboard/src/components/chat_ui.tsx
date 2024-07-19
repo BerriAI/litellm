@@ -119,9 +119,24 @@ const ChatUI: React.FC<ChatUIProps> = ({
   
           // Now, 'options' contains the list you wanted
           console.log(options); // You can log it to verify the list
-          
-          // setModelInfo(options) should be inside the if block to avoid setting it when no data is available
-          setModelInfo(options);
+
+          // if options.length > 0, only store unique values
+          if (options.length > 0) {
+            const uniqueModels = Array.from(new Set(options));
+
+            console.log("Unique models:", uniqueModels);
+
+            // sort uniqueModels alphabetically
+            uniqueModels.sort((a: any, b: any) => a.label.localeCompare(b.label));
+
+
+            console.log("Model info:", modelInfo);
+            
+            // setModelInfo(options) should be inside the if block to avoid setting it when no data is available
+            setModelInfo(uniqueModels);
+          }
+
+
           setSelectedModel(fetchedAvailableModels.data[0].id);
         }
       } catch (error) {
@@ -147,6 +162,12 @@ const ChatUI: React.FC<ChatUIProps> = ({
         return [...prevHistory, { role, content: chunk }];
       }
     });
+  };
+
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Enter') {
+      handleSendMessage();
+    }
   };
 
   const handleSendMessage = async () => {
@@ -260,6 +281,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                       type="text"
                       value={inputMessage}
                       onChange={(e) => setInputMessage(e.target.value)}
+                      onKeyDown={handleKeyDown} // Add this line
                       placeholder="Type your message..."
                     />
                     <Button

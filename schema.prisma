@@ -91,7 +91,7 @@ model LiteLLM_TeamTable {
     updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")
     model_spend      Json @default("{}")
     model_max_budget Json @default("{}")
-    model_id Int? @unique
+    model_id Int? @unique // id for LiteLLM_ModelTable -> stores team-level model aliases
     litellm_organization_table LiteLLM_OrganizationTable?   @relation(fields: [organization_id], references: [organization_id])
     litellm_model_table LiteLLM_ModelTable? @relation(fields: [model_id], references: [id])
 }
@@ -191,6 +191,7 @@ model LiteLLM_SpendLogs {
   request_tags        Json     @default("[]")
   team_id             String? 
   end_user            String?
+  requester_ip_address String?
 }
 
 // View spend, model, api_key per request
@@ -243,4 +244,17 @@ model LiteLLM_InvitationLink {
   liteLLM_user_table_user    LiteLLM_UserTable  @relation("UserId", fields: [user_id], references: [user_id])
   liteLLM_user_table_created LiteLLM_UserTable  @relation("CreatedBy", fields: [created_by], references: [user_id])
   liteLLM_user_table_updated LiteLLM_UserTable  @relation("UpdatedBy", fields: [updated_by], references: [user_id])
+}
+
+
+model LiteLLM_AuditLog {
+  id                 String   @id @default(uuid())
+  updated_at         DateTime @default(now())
+  changed_by         String   @default("")   // user or system that performed the action
+  changed_by_api_key String   @default("")   // api key hash that performed the action
+  action             String      // create, update, delete
+  table_name         String      // on of  LitellmTableNames.TEAM_TABLE_NAME, LitellmTableNames.USER_TABLE_NAME, LitellmTableNames.PROXY_MODEL_TABLE_NAME,
+  object_id          String      // id of the object being audited. This can be the key id, team id, user id, model id
+  before_value       Json?       // value of the row 
+  updated_values     Json?       // value of the row after change
 }

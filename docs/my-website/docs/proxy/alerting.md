@@ -1,3 +1,5 @@
+import Image from '@theme/IdealImage';
+
 # 🚨 Alerting / Webhooks
 
 Get alerts for:
@@ -15,6 +17,11 @@ Get alerts for:
 - **Spend** Weekly & Monthly spend per Team, Tag
 
 
+Works across: 
+- [Slack](#quick-start)
+- [Discord](#advanced---using-discord-webhooks)
+- [Microsoft Teams](#advanced---using-ms-teams-webhooks)
+
 ## Quick Start
 
 Set up a slack alert channel to receive alerts from proxy.
@@ -25,42 +32,78 @@ Get a slack webhook url from https://api.slack.com/messaging/webhooks
 
 You can also use Discord Webhooks, see [here](#using-discord-webhooks)
 
-### Step 2: Update config.yaml 
 
-- Set `SLACK_WEBHOOK_URL` in your proxy env to enable Slack alerts.
-- Just for testing purposes, let's save a bad key to our proxy.
+Set `SLACK_WEBHOOK_URL` in your proxy env to enable Slack alerts.
+
+```bash
+export SLACK_WEBHOOK_URL="https://hooks.slack.com/services/<>/<>/<>"
+```
+
+### Step 2: Setup Proxy
 
 ```yaml
-model_list: 
-    model_name: "azure-model"
-    litellm_params:
-        model: "azure/gpt-35-turbo"
-        api_key: "my-bad-key" # 👈 bad key
-
 general_settings: 
     alerting: ["slack"]
     alerting_threshold: 300 # sends alerts if requests hang for 5min+ and responses take 5min+ 
-
-environment_variables:
-    SLACK_WEBHOOK_URL: "https://hooks.slack.com/services/<>/<>/<>"
-    SLACK_DAILY_REPORT_FREQUENCY: "86400"  # 24 hours; Optional: defaults to 12 hours
 ```
 
-
-### Step 3: Start proxy
-
+Start proxy 
 ```bash
 $ litellm --config /path/to/config.yaml
 ```
 
-## Testing Alerting is Setup Correctly
 
-Make a GET request to `/health/services`, expect to see a test slack alert in your provided webhook slack channel
+### Step 3: Test it!
+
+
+```bash
+curl -X GET 'http://0.0.0.0:4000/health/services?service=slack' \
+-H 'Authorization: Bearer sk-1234'
+```
+
+## Advanced - Redacting Messages from Alerts
+
+By default alerts show the `messages/input` passed to the LLM. If you want to redact this from slack alerting set the following setting on your config
+
 
 ```shell
-curl -X GET 'http://localhost:4000/health/services?service=slack' \
-  -H 'Authorization: Bearer sk-1234'
+general_settings:
+  alerting: ["slack"]
+  alert_types: ["spend_reports"] 
+
+litellm_settings:
+  redact_messages_in_exceptions: True
 ```
+
+
+## Advanced - Add Metadata to alerts 
+
+Add alerting metadata to proxy calls for debugging. 
+
+```python
+import openai
+client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://0.0.0.0:4000"
+)
+
+# request sent to model set on litellm proxy, `litellm --model`
+response = client.chat.completions.create(
+    model="gpt-3.5-turbo",
+    messages = [], 
+    extra_body={
+        "metadata": {
+            "alerting_metadata": {
+                "hello": "world"
+            }
+        }
+    }
+)
+```
+
+**Expected Response**
+
+<Image img={require('../../img/alerting_metadata.png')}/>
 
 ## Advanced - Opting into specific alert types
 
@@ -90,6 +133,48 @@ AlertType = Literal[
 
 ```
 
+
+## Advanced - Using MS Teams Webhooks
+
+MS Teams provides a slack compatible webhook url that you can use for alerting
+
+##### Quick Start
+
+1. [Get a webhook url](https://learn.microsoft.com/en-us/microsoftteams/platform/webhooks-and-connectors/how-to/add-incoming-webhook?tabs=newteams%2Cdotnet#create-an-incoming-webhook) for your Microsoft Teams channel 
+
+2. Add it to your .env
+
+```bash
+SLACK_WEBHOOK_URL="https://berriai.webhook.office.com/webhookb2/...6901/IncomingWebhook/b55fa0c2a48647be8e6effedcd540266/e04b1092-4a3e-44a2-ab6b-29a0a4854d1d"
+```
+
+3. Add it to your litellm config 
+
+```yaml
+model_list: 
+    model_name: "azure-model"
+    litellm_params:
+        model: "azure/gpt-35-turbo"
+        api_key: "my-bad-key" # 👈 bad key
+
+general_settings: 
+    alerting: ["slack"]
+    alerting_threshold: 300 # sends alerts if requests hang for 5min+ and responses take 5min+ 
+```
+
+4. Run health check!
+
+Call the proxy `/health/services` endpoint to test if your alerting connection is correctly setup.
+
+```bash
+curl --location 'http://0.0.0.0:4000/health/services?service=slack' \
+--header 'Authorization: Bearer sk-1234'
+```
+
+
+**Expected Response**
+
+<Image img={require('../../img/ms_teams_alerting.png')}/>
 
 ## Advanced - Using Discord Webhooks
 
@@ -122,7 +207,6 @@ environment_variables:
     SLACK_WEBHOOK_URL: "https://discord.com/api/webhooks/1240030362193760286/cTLWt5ATn1gKmcy_982rl5xmYHsrM1IWJdmCL1AyOmU9JdQXazrp8L1_PYgUtgxj8x4f/slack"
 ```
 
-That's it ! You're ready to go !
 
 ## Advanced - [BETA] Webhooks for Budget Alerts
 
@@ -178,23 +262,26 @@ curl -X GET --location 'http://0.0.0.0:4000/health/services?service=webhook' \
 }
 ```
 
-**API Spec for Webhook Event**
+## **API Spec for Webhook Event**
 
 - `spend` *float*: The current spend amount for the 'event_group'.
-- `max_budget` *float*: The maximum allowed budget for the 'event_group'.
+- `max_budget` *float or null*: The maximum allowed budget for the 'event_group'. null if not set. 
 - `token` *str*: A hashed value of the key, used for authentication or identification purposes.
-- `user_id` *str or null*: The ID of the user associated with the event (optional).
+- `customer_id` *str or null*: The ID of the customer associated with the event (optional).
+- `internal_user_id` *str or null*: The ID of the internal user associated with the event (optional).
 - `team_id` *str or null*: The ID of the team associated with the event (optional).
-- `user_email` *str or null*: The email of the user associated with the event (optional).
+- `user_email` *str or null*: The email of the internal user associated with the event (optional).
 - `key_alias` *str or null*: An alias for the key associated with the event (optional).
 - `projected_exceeded_date` *str or null*: The date when the budget is projected to be exceeded, returned when 'soft_budget' is set for key (optional).
 - `projected_spend` *float or null*: The projected spend amount, returned when 'soft_budget' is set for key (optional).
 - `event` *Literal["budget_crossed", "threshold_crossed", "projected_limit_exceeded"]*: The type of event that triggered the webhook. Possible values are:
+    * "spend_tracked": Emitted whenver spend is tracked for a customer id. 
     * "budget_crossed": Indicates that the spend has exceeded the max budget.
     * "threshold_crossed": Indicates that spend has crossed a threshold (currently sent when 85% and 95% of budget is reached).
     * "projected_limit_exceeded": For "key" only - Indicates that the projected spend is expected to exceed the soft budget threshold.
-- `event_group` *Literal["user", "key", "team", "proxy"]*: The group associated with the event. Possible values are:
-    * "user": The event is related to a specific user.
+- `event_group` *Literal["customer", "internal_user", "key", "team", "proxy"]*: The group associated with the event. Possible values are:
+    * "customer": The event is related to a specific customer
+    * "internal_user": The event is related to a specific internal user.
     * "key": The event is related to a specific key.
     * "team": The event is related to a team.
     * "proxy": The event is related to a proxy.

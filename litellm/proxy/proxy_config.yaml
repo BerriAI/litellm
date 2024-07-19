@@ -1,27 +1,17 @@
 model_list:
-  - model_name: fake-openai-endpoint
+  - model_name: gpt-4
     litellm_params:
       model: openai/fake
       api_key: fake-key
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
-  - model_name: llama3
+      tags: ["free"] # 👈 Key Change
+  - model_name: gpt-4
     litellm_params:
-      model: groq/llama3-8b-8192
-  - model_name: gpt-3.5-turbo
-    litellm_params:
-      model: gpt-3.5-turbo
-  - model_name: "*"
-    litellm_params:
-      model: openai/*
+      model: openai/gpt-4o
       api_key: os.environ/OPENAI_API_KEY
-  - model_name: my-triton-model
-    litellm_params:
-      model: triton/any"
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/triton/embeddings
+      tags: ["paid"] # 👈 Key Change
 
-general_settings:
+router_settings:
+  enable_tag_filtering: True # 👈 Key Change
+general_settings: 
   master_key: sk-1234
-  alerting: ["slack"]
-
-litellm_settings:
-  callbacks: custom_callbacks1.proxy_handler_instance

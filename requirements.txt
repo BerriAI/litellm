@@ -1,6 +1,6 @@
 # LITELLM PROXY DEPENDENCIES #
 anyio==4.2.0 # openai + http req.
-openai==1.27.0 # openai req. 
+openai==1.34.0 # openai req. 
 fastapi==0.111.0 # server dep
 backoff==2.2.1 # server dep
 pyyaml==6.0.0 # server dep
@@ -27,18 +27,24 @@ pyjwt[crypto]==2.8.0
 python-multipart==0.0.9 # admin UI
 Pillow==10.3.0
 azure-ai-contentsafety==1.0.0 # for azure content safety
-azure-identity==1.15.0 # for azure content safety
+azure-identity==1.16.1 # for azure content safety
+opentelemetry-api==1.25.0
+opentelemetry-sdk==1.25.0
+opentelemetry-exporter-otlp==1.25.0
+detect-secrets==1.5.0 # Enterprise - secret detection / masking in LLM requests
+cryptography==42.0.7
 
 ### LITELLM PACKAGE DEPENDENCIES
 python-dotenv==1.0.0 # for env 
-tiktoken==0.6.0 # for calculating usage
+tiktoken==0.7.0 # for calculating usage
 importlib-metadata==6.8.0 # for random utils
 tokenizers==0.14.0 # for calculating usage
 click==8.1.7 # for proxy cli 
 jinja2==3.1.4 # for prompt templates
-certifi==2023.7.22 # [TODO] clean up 
-aiohttp==3.9.0 # for network calls
+certifi==2024.7.4 # [TODO] clean up 
+aiohttp==3.9.4 # for network calls
 aioboto3==12.3.0 # for async sagemaker calls
 tenacity==8.2.3  # for retrying requests, when litellm.num_retries set
-pydantic==2.7.1 # openai req. 
+pydantic==2.7.1 # proxy + openai req.
+jsonschema==4.22.0 # validating json schema
 ####

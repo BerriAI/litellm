@@ -21,11 +21,17 @@ general_settings:
 
 litellm_settings:
   set_verbose: False      # Switch off Debug Logging, ensure your logs do not have any debugging on
+  json_logs: true         # Get debug logs in json format
 ```
 
 Set slack webhook url in your env
 ```shell
 export SLACK_WEBHOOK_URL="https://hooks.slack.com/services/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"
+```
+
+Turn off FASTAPI's default info logs
+```bash
+export LITELLM_LOG="ERROR"
 ```
 
 :::info
@@ -62,6 +68,14 @@ router_settings:
   redis_host: os.environ/REDIS_HOST
   redis_port: os.environ/REDIS_PORT
   redis_password: os.environ/REDIS_PASSWORD
+
+litellm_settings:
+  cache: True
+  cache_params:
+    type: redis
+    host: os.environ/REDIS_HOST
+    port: os.environ/REDIS_PORT
+    password: os.environ/REDIS_PASSWORD
 ```
 
 ## 4. Disable 'load_dotenv'

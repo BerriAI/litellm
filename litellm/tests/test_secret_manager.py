@@ -54,7 +54,10 @@ def test_oidc_github():
     print(f"secret_val: {redact_oidc_signature(secret_val)}")
 
 
-@pytest.mark.skip(reason="Cannot run without being in a CircleCI Runner")
+@pytest.mark.skipif(
+    os.environ.get("CIRCLE_OIDC_TOKEN") is None,
+    reason="Cannot run without being in CircleCI Runner",
+)
 def test_oidc_circleci():
     secret_val = get_secret(
         "oidc/circleci/https://bedrock-runtime.us-east-1.amazonaws.com/model/amazon.titan-text-express-v1/invoke"
@@ -63,7 +66,10 @@ def test_oidc_circleci():
     print(f"secret_val: {redact_oidc_signature(secret_val)}")
 
 
-@pytest.mark.skip(reason="Cannot run without being in a CircleCI Runner")
+@pytest.mark.skipif(
+    os.environ.get("CIRCLE_OIDC_TOKEN_V2") is None,
+    reason="Cannot run without being in CircleCI Runner",
+)
 def test_oidc_circleci_v2():
     secret_val = get_secret(
         "oidc/circleci_v2/https://bedrock-runtime.us-east-1.amazonaws.com/model/amazon.titan-text-express-v1/invoke"
