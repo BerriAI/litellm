@@ -2604,6 +2604,9 @@ async def startup_event():
     ### CHECK IF VIEW EXISTS ###
     if prisma_client is not None:
         create_view_response = await prisma_client.check_view_exists()
+        # Apply misc fixes on DB
+        # [non-blocking] helper to apply fixes from older litellm versions
+        asyncio.create_task(prisma_client.apply_db_fixes())
 
     ### START BATCH WRITING DB + CHECKING NEW MODELS###
     if prisma_client is not None:
