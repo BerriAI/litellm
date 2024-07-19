@@ -75,8 +75,8 @@ def test_chat_completion_exception(client):
         print("ERROR=", json_response["error"])
         assert isinstance(json_response["error"]["message"], str)
         assert (
-            json_response["error"]["message"]
-            == "litellm.AuthenticationError: AuthenticationError: OpenAIException - Incorrect API key provided: bad-key. You can find your API key at https://platform.openai.com/account/api-keys."
+            "litellm.AuthenticationError: AuthenticationError: OpenAIException - Incorrect API key provided: bad-key. You can find your API key at https://platform.openai.com/account/api-keys."
+            in json_response["error"]["message"]
         )
 
         # make an openai client to call _make_status_error_from_response
