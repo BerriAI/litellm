@@ -333,6 +333,7 @@ async def acompletion(
             or custom_llm_provider == "predibase"
             or custom_llm_provider == "bedrock"
             or custom_llm_provider == "databricks"
+            or custom_llm_provider == "triton"
             or custom_llm_provider in litellm.openai_compatible_providers
         ):  # currently implemented aiohttp calls for just azure, openai, hf, ollama, vertex ai soon all.
             init_response = await loop.run_in_executor(None, func_with_context)
@@ -2267,6 +2268,8 @@ def completion(
             model_response=model_response,
             optional_params=optional_params,
             logging_obj=logging,
+            stream=stream,
+            acompletion=acompletion
             )
 
             ## RESPONSE OBJECT
