@@ -44,7 +44,7 @@ const sidebars = {
         "proxy/cost_tracking",
         "proxy/self_serve",
         "proxy/virtual_keys",
-        "proxy/free_paid_tier",
+        "proxy/tag_routing",
         "proxy/users",
         "proxy/team_budgets",
         "proxy/customers",
