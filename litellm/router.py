@@ -47,6 +47,7 @@ from litellm.assistants.main import AssistantDeleted
 from litellm.caching import DualCache, InMemoryCache, RedisCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.azure import get_azure_ad_token_from_oidc
+from litellm.router_strategy.free_paid_tiers import get_deployments_for_tier
 from litellm.router_strategy.least_busy import LeastBusyLoggingHandler
 from litellm.router_strategy.lowest_cost import LowestCostLoggingHandler
 from litellm.router_strategy.lowest_latency import LowestLatencyLoggingHandler
@@ -4471,6 +4472,12 @@ class Router:
                     messages=messages,
                     request_kwargs=request_kwargs,
                 )
+
+            # check free / paid tier for each deployment
+            healthy_deployments = await get_deployments_for_tier(
+                request_kwargs=request_kwargs,
+                healthy_deployments=healthy_deployments,
+            )
 
             if len(healthy_deployments) == 0:
                 if _allowed_model_region is None:
