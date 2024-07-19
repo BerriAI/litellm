@@ -1,22 +1,29 @@
 #### What this tests ####
 #    This tests the router's ability to pick deployment with lowest latency
 
-import sys, os, asyncio, time, random
-from datetime import datetime, timedelta
+import asyncio
+import os
+import random
+import sys
+import time
 import traceback
+from datetime import datetime, timedelta
+
 from dotenv import load_dotenv
 
 load_dotenv()
-import os, copy
+import copy
+import os
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import pytest
-from litellm import Router
-from litellm.router_strategy.lowest_latency import LowestLatencyLoggingHandler
-from litellm.caching import DualCache
+
 import litellm
+from litellm import Router
+from litellm.caching import DualCache
+from litellm.router_strategy.lowest_latency import LowestLatencyLoggingHandler
 
 ### UNIT TESTS FOR LATENCY ROUTING ###
 
@@ -275,7 +282,7 @@ async def _deploy(lowest_latency_logger, deployment_id, tokens_used, duration):
     }
     start_time = time.time()
     response_obj = {"usage": {"total_tokens": tokens_used}}
-    time.sleep(duration)
+    await asyncio.sleep(duration)
     end_time = time.time()
     lowest_latency_logger.log_success_event(
         response_obj=response_obj,
@@ -325,6 +332,7 @@ def test_get_available_endpoints_tpm_rpm_check_async(ans_rpm):
     d1 = [(lowest_latency_logger, "1234", 50, 0.01)] * non_ans_rpm
     d2 = [(lowest_latency_logger, "5678", 50, 0.01)] * non_ans_rpm
     asyncio.run(_gather_deploy([*d1, *d2]))
+    time.sleep(3)
     ## CHECK WHAT'S SELECTED ##
     d_ans = lowest_latency_logger.get_available_deployments(
         model_group=model_group, healthy_deployments=model_list
@@ -521,6 +529,7 @@ async def test_router_completion_streaming():
                 "api_key": "os.environ/AZURE_FRANCE_API_KEY",
                 "api_base": "https://openai-france-1234.openai.azure.com",
                 "rpm": 1440,
+                "mock_response": "Hello world",
             },
             "model_info": {"id": 1},
         },
@@ -531,6 +540,7 @@ async def test_router_completion_streaming():
                 "api_key": "os.environ/AZURE_EUROPE_API_KEY",
                 "api_base": "https://my-endpoint-europe-berri-992.openai.azure.com",
                 "rpm": 6,
+                "mock_response": "Hello world",
             },
             "model_info": {"id": 2},
         },

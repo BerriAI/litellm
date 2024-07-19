@@ -12,7 +12,14 @@ import {
   AreaChart,
   Callout,
   Button,
+  MultiSelect,
+  MultiSelectItem,
 } from "@tremor/react";
+
+import {
+  Select as Select2
+} from "antd";
+
 import {
   userSpendLogsCall,
   keyInfoCall,
@@ -22,9 +29,9 @@ import {
   adminTopEndUsersCall,
   teamSpendLogsCall,
   tagsSpendLogsCall,
+  allTagNamesCall,
   modelMetricsCall,
   modelAvailableCall,
-  modelInfoCall,
   adminspendByProvider,
   adminGlobalActivity,
   adminGlobalActivityPerModel,
@@ -134,12 +141,14 @@ const UsagePage: React.FC<UsagePageProps> = ({
   const [topUsers, setTopUsers] = useState<any[]>([]);
   const [teamSpendData, setTeamSpendData] = useState<any[]>([]);
   const [topTagsData, setTopTagsData] = useState<any[]>([]);
+  const [allTagNames, setAllTagNames] = useState<string[]>([]);
   const [uniqueTeamIds, setUniqueTeamIds] = useState<any[]>([]);
   const [totalSpendPerTeam, setTotalSpendPerTeam] = useState<any[]>([]);
   const [spendByProvider, setSpendByProvider] = useState<any[]>([]);
   const [globalActivity, setGlobalActivity] = useState<GlobalActivityData>({} as GlobalActivityData);
   const [globalActivityPerModel, setGlobalActivityPerModel] = useState<any[]>([]);
   const [selectedKeyID, setSelectedKeyID] = useState<string | null>("");
+  const [selectedTags, setSelectedTags] = useState<string[]>(["all-tags"]);
   const [dateValue, setDateValue] = useState<DateRangePickerValue>({
     from: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000), 
     to: new Date(),
@@ -161,6 +170,21 @@ const UsagePage: React.FC<UsagePageProps> = ({
 
   console.log("keys in usage", keys);
   console.log("premium user in usage", premiumUser);
+
+  function valueFormatterNumbers(number: number) {
+    const formatter = new Intl.NumberFormat('en-US', {
+      maximumFractionDigits: 0,
+      notation: 'compact',
+      compactDisplay: 'short',
+    });
+  
+    return formatter.format(number);
+  }
+
+  useEffect(() => {
+    updateTagSpendData(dateValue.from, dateValue.to);
+  }, [dateValue, selectedTags]);
+  
 
   const updateEndUserData = async (startTime:  Date | undefined, endTime:  Date | undefined, uiSelectedKey: string | null) => {
     if (!startTime || !endTime || !accessToken) {
@@ -197,11 +221,14 @@ const UsagePage: React.FC<UsagePageProps> = ({
     // startTime put it to the first hour of the selected date
     startTime.setHours(0, 0, 0, 0);
 
-    let top_tags = await tagsSpendLogsCall(accessToken, startTime.toISOString(), endTime.toISOString());
+    let top_tags = await tagsSpendLogsCall(
+      accessToken, 
+      startTime.toISOString(), 
+      endTime.toISOString(),
+      selectedTags.length === 0 ? undefined : selectedTags
+    );
     setTopTagsData(top_tags.spend_per_tag);
     console.log("Tag spend data updated successfully");
-
-
 
   }
 
@@ -278,9 +305,14 @@ const UsagePage: React.FC<UsagePageProps> = ({
 
             setTotalSpendPerTeam(total_spend_per_team);
 
+            // all_tag_names -> used for dropdown
+            const all_tag_names = await allTagNamesCall(accessToken);
+            setAllTagNames(all_tag_names.tag_names);
+
             //get top tags
-            const top_tags = await tagsSpendLogsCall(accessToken, dateValue.from?.toISOString(), dateValue.to?.toISOString());
+            const top_tags = await tagsSpendLogsCall(accessToken, dateValue.from?.toISOString(), dateValue.to?.toISOString(), undefined);
             setTopTagsData(top_tags.spend_per_tag);
+
 
             // get spend per end-user
             let spend_user_call = await adminTopEndUsersCall(accessToken, null, undefined, undefined);
@@ -343,18 +375,12 @@ const UsagePage: React.FC<UsagePageProps> = ({
 
   return (
     <div style={{ width: "100%" }} className="p-8">
-      <ViewUserSpend
-            userID={userID}
-            userRole={userRole}
-            accessToken={accessToken}
-            userSpend={null}
-            selectedTeam={null}
-          />
+      
       <TabGroup>
         <TabList className="mt-2">
           <Tab>All Up</Tab>
           <Tab>Team Based Usage</Tab>
-          <Tab>End User Usage</Tab>
+          <Tab>Customer Usage</Tab>
            <Tab>Tag Based Usage</Tab>
         </TabList>
         <TabPanels>
@@ -368,6 +394,13 @@ const UsagePage: React.FC<UsagePageProps> = ({
         <TabPanels>
           <TabPanel>
             <Grid numItems={2} className="gap-2 h-[100vh] w-full">
+            <ViewUserSpend
+            userID={userID}
+            userRole={userRole}
+            accessToken={accessToken}
+            userSpend={null}
+            selectedTeam={null}
+          />
               <Col numColSpan={2}>
                 <Card>
                   <Title>Monthly Spend</Title>
@@ -482,10 +515,11 @@ const UsagePage: React.FC<UsagePageProps> = ({
                 <Title>All Up</Title>
                 <Grid numItems={2}>
                 <Col>
-                <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>API Requests {globalActivity.sum_api_requests}</Subtitle>
+                <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>API Requests { valueFormatterNumbers(globalActivity.sum_api_requests)}</Subtitle>
                 <AreaChart
                     className="h-40"
                     data={globalActivity.daily_data}
+                    valueFormatter={valueFormatterNumbers}
                     index="date"
                     colors={['cyan']}
                     categories={['api_requests']}
@@ -494,10 +528,11 @@ const UsagePage: React.FC<UsagePageProps> = ({
 
                 </Col>
                 <Col>
-                <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>Tokens {globalActivity.sum_total_tokens}</Subtitle>
+                <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>Tokens { valueFormatterNumbers(globalActivity.sum_total_tokens)}</Subtitle>
                 <BarChart
                     className="h-40"
                     data={globalActivity.daily_data}
+                    valueFormatter={valueFormatterNumbers}
                     index="date"
                     colors={['cyan']}
                     categories={['total_tokens']}
@@ -517,24 +552,26 @@ const UsagePage: React.FC<UsagePageProps> = ({
                   <Title>{globalActivity.model}</Title>
                   <Grid numItems={2}>
                     <Col>
-                      <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>API Requests {globalActivity.sum_api_requests}</Subtitle>
+                      <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>API Requests {valueFormatterNumbers(globalActivity.sum_api_requests)}</Subtitle>
                       <AreaChart
                         className="h-40"
                         data={globalActivity.daily_data}
                         index="date"
                         colors={['cyan']}
                         categories={['api_requests']}
+                        valueFormatter={valueFormatterNumbers}
                         onValueChange={(v) => console.log(v)}
                       />
                     </Col>
                     <Col>
-                      <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>Tokens {globalActivity.sum_total_tokens}</Subtitle>
+                      <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>Tokens {valueFormatterNumbers(globalActivity.sum_total_tokens)}</Subtitle>
                       <BarChart
                         className="h-40"
                         data={globalActivity.daily_data}
                         index="date"
                         colors={['cyan']}
                         categories={['total_tokens']}
+                        valueFormatter={valueFormatterNumbers}
                         onValueChange={(v) => console.log(v)}
                       />
                     </Col>
@@ -565,7 +602,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
                                 color: "#535452",
                               }}
                             >
-                              API Requests {globalActivity.sum_api_requests}
+                              API Requests {valueFormatterNumbers(globalActivity.sum_api_requests)}
                             </Subtitle>
                             <AreaChart
                               className="h-40"
@@ -573,6 +610,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
                               index="date"
                               colors={['cyan']}
                               categories={['api_requests']}
+                              valueFormatter={valueFormatterNumbers}
                               onValueChange={(v) => console.log(v)}
                             />
                           </Col>
@@ -584,13 +622,14 @@ const UsagePage: React.FC<UsagePageProps> = ({
                                 color: "#535452",
                               }}
                             >
-                              Tokens {globalActivity.sum_total_tokens}
+                              Tokens {valueFormatterNumbers(globalActivity.sum_total_tokens)}
                             </Subtitle>
                             <BarChart
                               className="h-40"
                               data={globalActivity.daily_data}
                               index="date"
                               colors={['cyan']}
+                              valueFormatter={valueFormatterNumbers}
                               categories={['total_tokens']}
                               onValueChange={(v) => console.log(v)}
                             />
@@ -627,9 +666,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
                   showLegend={true}
                   index="date"
                   categories={uniqueTeamIds}
-                  yAxisWidth={80}
-                  colors={["blue", "green", "yellow", "red", "purple"]}
-                  
+                  yAxisWidth={80}                  
                   stack={true}
                 />
               </Card>
@@ -639,7 +676,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
             </Grid>
             </TabPanel>
             <TabPanel>
-            <p className="mb-2 text-gray-500 italic text-[12px]">End-Users of your LLM API calls. Tracked when a `user` param is passed in your LLM calls <a className="text-blue-500" href="https://docs.litellm.ai/docs/proxy/users" target="_blank">docs here</a></p>
+            <p className="mb-2 text-gray-500 italic text-[12px]">Customers of your LLM API calls. Tracked when a `user` param is passed in your LLM calls <a className="text-blue-500" href="https://docs.litellm.ai/docs/proxy/users" target="_blank">docs here</a></p>
               <Grid numItems={2}>
                 <Col>
                 <Text>Select Time Range</Text>
@@ -700,7 +737,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
               <Table className="max-h-[70vh] min-h-[500px]">
                   <TableHead>
                     <TableRow>
-                      <TableHeaderCell>End User</TableHeaderCell>
+                      <TableHeaderCell>Customer</TableHeaderCell>
                       <TableHeaderCell>Spend</TableHeaderCell>
                       <TableHeaderCell>Total Events</TableHeaderCell>
                     </TableRow>
@@ -721,8 +758,8 @@ const UsagePage: React.FC<UsagePageProps> = ({
 
             </TabPanel>
             <TabPanel>
-            <Grid numItems={2} className="gap-2 h-[75vh] w-full mb-4">
-            <Col numColSpan={2}>
+              <Grid numItems={2}>
+              <Col numColSpan={1}>
             <DateRangePicker 
                   className="mb-4"
                   enableSelect={true} 
@@ -733,9 +770,89 @@ const UsagePage: React.FC<UsagePageProps> = ({
                   }}
               />
 
+              </Col>
+
+              <Col>
+                  {
+                    premiumUser ? (
+                      <div>
+                        <MultiSelect
+                            value={selectedTags}
+                            onValueChange={(value) => setSelectedTags(value as string[])}
+                          >
+                        <MultiSelectItem
+                          key={"all-tags"}
+                          value={"all-tags"}
+                          onClick={() => setSelectedTags(["all-tags"])}
+                        >
+                          All Tags
+                        </MultiSelectItem>
+                        {allTagNames &&
+                          allTagNames
+                            .filter((tag) => tag !== "all-tags")
+                            .map((tag: any, index: number) => {
+                              return (
+                                <MultiSelectItem
+                                  key={tag}
+                                  value={String(tag)}
+                                >
+                                  {tag}
+                                </MultiSelectItem>
+                              );
+                            })}
+                      </MultiSelect>
+
+                      </div>
+
+                    ) : (
+                      <div>
+
+<MultiSelect
+                            value={selectedTags}
+                            onValueChange={(value) => setSelectedTags(value as string[])}
+                          >
+                        <MultiSelectItem
+                          key={"all-tags"}
+                          value={"all-tags"}
+                          onClick={() => setSelectedTags(["all-tags"])}
+                        >
+                          All Tags
+                        </MultiSelectItem>
+                        {allTagNames &&
+                          allTagNames
+                            .filter((tag) => tag !== "all-tags")
+                            .map((tag: any, index: number) => {
+                              return (
+                                <SelectItem
+                                  key={tag}
+                                  value={String(tag)}
+                                  // @ts-ignore
+                                  disabled={true} 
+                                >
+                                  ✨ {tag} (Enterprise only Feature)
+                                </SelectItem>
+                              );
+                            })}
+                      </MultiSelect>
+
+
+
+
+                      </div>
+                    )
+                  }
+  
+              </Col>
+
+              </Grid>
+            <Grid numItems={2} className="gap-2 h-[75vh] w-full mb-4">
+            
+
+              <Col numColSpan={2}>
+
               <Card>
               <Title>Spend Per Tag</Title>
-              <Text>Get Started Tracking cost per tag <a className="text-blue-500" href="https://docs.litellm.ai/docs/proxy/enterprise#tracking-spend-for-custom-tags" target="_blank">here</a></Text>
+              <Text>Get Started Tracking cost per tag <a className="text-blue-500" href="https://docs.litellm.ai/docs/proxy/cost_tracking" target="_blank">here</a></Text>
              <BarChart
               className="h-72"
               data={topTagsData}

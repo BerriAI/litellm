@@ -1,20 +1,40 @@
-import logging, os, json
+import json
+import logging
+import os
+import traceback
+from datetime import datetime
 from logging import Formatter
 
 set_verbose = False
+
+if set_verbose is True:
+    logging.warning(
+        "`litellm.set_verbose` is deprecated. Please set `os.environ['LITELLM_LOG'] = 'DEBUG'` for debug logs."
+    )
 json_logs = bool(os.getenv("JSON_LOGS", False))
 # Create a handler for the logger (you may need to adapt this based on your needs)
+log_level = os.getenv("LITELLM_LOG", "DEBUG")
+numeric_level: str = getattr(logging, log_level.upper())
 handler = logging.StreamHandler()
-handler.setLevel(logging.DEBUG)
+handler.setLevel(numeric_level)
 
 
 class JsonFormatter(Formatter):
     def __init__(self):
         super(JsonFormatter, self).__init__()
 
+    def formatTime(self, record, datefmt=None):
+        # Use datetime to format the timestamp in ISO 8601 format
+        dt = datetime.fromtimestamp(record.created)
+        return dt.isoformat()
+
     def format(self, record):
-        json_record = {}
-        json_record["message"] = record.getMessage()
+        json_record = {
+            "message": record.getMessage(),
+            "level": record.levelname,
+            "timestamp": self.formatTime(record),
+        }
+
         return json.dumps(json_record)
 
 
@@ -37,6 +57,23 @@ verbose_logger = logging.getLogger("LiteLLM")
 verbose_router_logger.addHandler(handler)
 verbose_proxy_logger.addHandler(handler)
 verbose_logger.addHandler(handler)
+
+
+def _turn_on_json():
+    handler = logging.StreamHandler()
+    handler.setFormatter(JsonFormatter())
+
+    # Define a list of the loggers to update
+    loggers = [verbose_router_logger, verbose_proxy_logger, verbose_logger]
+
+    # Iterate through each logger and update its handlers
+    for logger in loggers:
+        # Remove all existing handlers
+        for h in logger.handlers[:]:
+            logger.removeHandler(h)
+
+        # Add the new handler
+        logger.addHandler(handler)
 
 
 def _turn_on_debug():

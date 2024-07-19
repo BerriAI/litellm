@@ -1,20 +1,29 @@
-import sys, os
+import os
+import sys
 import traceback
 from unittest import mock
+
 from dotenv import load_dotenv
 
+import litellm.proxy
+import litellm.proxy.proxy_server
+
 load_dotenv()
-import os, io
+import io
+import os
 
 # this file is to test litellm/proxy
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-import pytest, logging, asyncio
+import asyncio
+import logging
+
+import pytest
+
 import litellm
-from litellm import embedding, completion, completion_cost, Timeout
-from litellm import RateLimitError
+from litellm import RateLimitError, Timeout, completion, completion_cost, embedding
 
 # Configure logging
 logging.basicConfig(
@@ -22,14 +31,20 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
 )
 
+from unittest.mock import AsyncMock, MagicMock, patch
+
+from fastapi import FastAPI
+
 # test /chat/completion request to the proxy
 from fastapi.testclient import TestClient
-from fastapi import FastAPI
-from litellm.proxy.proxy_server import (
-    router,
-    save_worker_config,
+
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.proxy.proxy_server import (  # Replace with the actual module where your FastAPI router is defined
+    app,
     initialize,
-)  # Replace with the actual module where your FastAPI router is defined
+    save_worker_config,
+)
+from litellm.proxy.utils import ProxyLogging
 
 # Your bearer token
 token = "sk-1234"
@@ -41,49 +56,39 @@ example_completion_result = {
         {
             "message": {
                 "content": "Whispers of the wind carry dreams to me.",
-                "role": "assistant"
+                "role": "assistant",
             }
         }
     ],
 }
 example_embedding_result = {
-  "object": "list",
-  "data": [
-    {
-      "object": "embedding",
-      "index": 0,
-      "embedding": [
-        -0.006929283495992422,
-        -0.005336422007530928,
-        -4.547132266452536e-05,
-        -0.024047505110502243,
-        -0.006929283495992422,
-        -0.005336422007530928,
-        -4.547132266452536e-05,
-        -0.024047505110502243,
-        -0.006929283495992422,
-        -0.005336422007530928,
-        -4.547132266452536e-05,
-        -0.024047505110502243,
-      ],
-    }
-  ],
-  "model": "text-embedding-3-small",
-  "usage": {
-    "prompt_tokens": 5,
-    "total_tokens": 5
-  }
+    "object": "list",
+    "data": [
+        {
+            "object": "embedding",
+            "index": 0,
+            "embedding": [
+                -0.006929283495992422,
+                -0.005336422007530928,
+                -4.547132266452536e-05,
+                -0.024047505110502243,
+                -0.006929283495992422,
+                -0.005336422007530928,
+                -4.547132266452536e-05,
+                -0.024047505110502243,
+                -0.006929283495992422,
+                -0.005336422007530928,
+                -4.547132266452536e-05,
+                -0.024047505110502243,
+            ],
+        }
+    ],
+    "model": "text-embedding-3-small",
+    "usage": {"prompt_tokens": 5, "total_tokens": 5},
 }
 example_image_generation_result = {
-  "created": 1589478378,
-  "data": [
-    {
-      "url": "https://..."
-    },
-    {
-      "url": "https://..."
-    }
-  ]
+    "created": 1589478378,
+    "data": [{"url": "https://..."}, {"url": "https://..."}],
 }
 
 
@@ -129,9 +134,6 @@ def client_no_auth(fake_env_vars):
     config_fp = f"{filepath}/test_configs/test_config_no_auth.yaml"
     # initialize can get run in parallel, it sets specific variables for the fast api app, sinc eit gets run in parallel different tests use the wrong variables
     asyncio.run(initialize(config=config_fp, debug=True))
-    app = FastAPI()
-    app.include_router(router)  # Include your router in the test app
-
     return TestClient(app)
 
 
@@ -171,6 +173,61 @@ def test_chat_completion(mock_acompletion, client_no_auth):
         pytest.fail(f"LiteLLM Proxy test failed. Exception - {str(e)}")
 
 
+from litellm.tests.test_custom_callback_input import CompletionCustomHandler
+
+
+@mock_patch_acompletion()
+def test_custom_logger_failure_handler(mock_acompletion, client_no_auth):
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.proxy_server import hash_token, user_api_key_cache
+
+    rpm_limit = 0
+
+    mock_api_key = "sk-my-test-key"
+    cache_value = UserAPIKeyAuth(token=hash_token(mock_api_key), rpm_limit=rpm_limit)
+
+    user_api_key_cache.set_cache(key=hash_token(mock_api_key), value=cache_value)
+
+    mock_logger = CustomLogger()
+    mock_logger_unit_tests = CompletionCustomHandler()
+    proxy_logging_obj: ProxyLogging = getattr(
+        litellm.proxy.proxy_server, "proxy_logging_obj"
+    )
+
+    litellm.callbacks = [mock_logger, mock_logger_unit_tests]
+    proxy_logging_obj._init_litellm_callbacks(llm_router=None)
+
+    setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "prisma_client", "FAKE-VAR")
+    setattr(litellm.proxy.proxy_server, "proxy_logging_obj", proxy_logging_obj)
+
+    with patch.object(
+        mock_logger, "async_log_failure_event", new=AsyncMock()
+    ) as mock_failed_alert:
+        # Your test data
+        test_data = {
+            "model": "gpt-3.5-turbo",
+            "messages": [
+                {"role": "user", "content": "hi"},
+            ],
+            "max_tokens": 10,
+        }
+
+        print("testing proxy server with chat completions")
+        response = client_no_auth.post(
+            "/v1/chat/completions",
+            json=test_data,
+            headers={"Authorization": "Bearer {}".format(mock_api_key)},
+        )
+        assert response.status_code == 429
+
+        # confirm async_log_failure_event is called
+        mock_failed_alert.assert_called()
+
+        assert len(mock_logger_unit_tests.errors) == 0
+
+
 @mock_patch_acompletion()
 def test_engines_model_chat_completions(mock_acompletion, client_no_auth):
     global headers
@@ -185,7 +242,9 @@ def test_engines_model_chat_completions(mock_acompletion, client_no_auth):
         }
 
         print("testing proxy server with chat completions")
-        response = client_no_auth.post("/engines/gpt-3.5-turbo/chat/completions", json=test_data)
+        response = client_no_auth.post(
+            "/engines/gpt-3.5-turbo/chat/completions", json=test_data
+        )
         mock_acompletion.assert_called_once_with(
             model="gpt-3.5-turbo",
             messages=[
@@ -249,7 +308,9 @@ def test_chat_completion_azure(mock_acompletion, client_no_auth):
 
 
 @mock_patch_acompletion()
-def test_openai_deployments_model_chat_completions_azure(mock_acompletion, client_no_auth):
+def test_openai_deployments_model_chat_completions_azure(
+    mock_acompletion, client_no_auth
+):
     global headers
     try:
         # Your test data
@@ -388,10 +449,10 @@ def test_img_gen(mock_aimage_generation, client_no_auth):
         response = client_no_auth.post("/v1/images/generations", json=test_data)
 
         mock_aimage_generation.assert_called_once_with(
-            model='dall-e-3',
-            prompt='A cute baby sea otter',
+            model="dall-e-3",
+            prompt="A cute baby sea otter",
             n=1,
-            size='1024x1024',
+            size="1024x1024",
             metadata=mock.ANY,
             proxy_server_request=mock.ANY,
         )
@@ -431,7 +492,12 @@ def test_add_new_model(client_no_auth):
 
 def test_health(client_no_auth):
     global headers
+    import logging
     import time
+
+    from litellm._logging import verbose_logger, verbose_proxy_logger
+
+    verbose_proxy_logger.setLevel(logging.DEBUG)
 
     try:
         response = client_no_auth.get("/health")

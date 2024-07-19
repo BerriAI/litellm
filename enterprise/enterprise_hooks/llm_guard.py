@@ -92,7 +92,7 @@ class _ENTERPRISE_LLMGuard(CustomLogger):
                         },
                     )
         except Exception as e:
-            traceback.print_exc()
+            verbose_proxy_logger.error(traceback.format_exc())
             raise e
 
     def should_proceed(self, user_api_key_dict: UserAPIKeyAuth, data: dict) -> bool:

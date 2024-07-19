@@ -14,7 +14,76 @@ response = image_generation(prompt="A cute baby sea otter", model="dall-e-3")
 print(f"response: {response}")
 ```
 
-### Input Params for `litellm.image_generation()`
+## Proxy Usage
+
+### Setup config.yaml 
+
+```yaml
+model_list:
+  - model_name: dall-e-2 ### RECEIVED MODEL NAME ###
+    litellm_params: # all params accepted by litellm.image_generation()
+      model: azure/dall-e-2 ### MODEL NAME sent to `litellm.image_generation()` ###
+      api_base: https://my-endpoint-europe-berri-992.openai.azure.com/
+      api_key: "os.environ/AZURE_API_KEY_EU" # does os.getenv("AZURE_API_KEY_EU")
+      rpm: 6      # [OPTIONAL] Rate limit for this deployment: in requests per minute (rpm)
+
+```
+
+### Start proxy 
+
+```bash
+litellm --config /path/to/config.yaml 
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+### Test 
+
+<Tabs>
+<TabItem value="curl" label="Curl">
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/v1/images/generations' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-D '{
+    "model": "dall-e-2",
+    "prompt": "A cute baby sea otter",
+    "n": 1,
+    "size": "1024x1024"
+}'
+```
+
+</TabItem>
+<TabItem value="openai" label="OpenAI">
+
+```python
+from openai import OpenAI
+client = openai.OpenAI(
+    api_key="sk-1234",
+    base_url="http://0.0.0.0:4000"
+)
+
+
+image = client.images.generate(
+    prompt="A cute baby sea otter",
+    model="dall-e-3",
+)
+
+print(image)
+```
+</TabItem>
+</Tabs>
+
+## Input Params for `litellm.image_generation()`
+
+:::info
+
+Any non-openai params, will be treated as provider-specific params, and sent in the request body as kwargs to the provider.
+
+[**See Reserved Params**](https://github.com/BerriAI/litellm/blob/2f5f85cb52f36448d1f8bbfbd3b8af8167d0c4c8/litellm/main.py#L4082)
+:::
+
 ### Required Fields
 
 - `prompt`: *string* - A text description of the desired image(s).  
@@ -51,7 +120,7 @@ print(f"response: {response}")
 
 - `api_base`: *string (optional)* - The api endpoint you want to call the model with
 
-- `api_version`: *string (optional)* - (Azure-specific) the api version for the call
+- `api_version`: *string (optional)* - (Azure-specific) the api version for the call; required for dall-e-3 on Azure
 
 - `api_key`: *string (optional)* - The API key to authenticate and authorize requests. If not provided, the default API key is used.
 

@@ -1,25 +1,51 @@
 import React, { useState, useEffect } from "react";
-import { Button, Modal, Form, Input, message, Select, InputNumber } from "antd";
-import { Button as Button2, Text, TextInput } from "@tremor/react";
-import { userCreateCall, modelAvailableCall } from "./networking";
+import { useRouter } from "next/navigation";
+import {
+  Button,
+  Modal,
+  Form,
+  Input,
+  message,
+  Select,
+  InputNumber,
+  Select as Select2,
+} from "antd";
+import { Button as Button2, Text, TextInput, SelectItem } from "@tremor/react";
+import OnboardingModal from "./onboarding_link";
+import { InvitationLink } from "./onboarding_link";
+import {
+  userCreateCall,
+  modelAvailableCall,
+  invitationCreateCall,
+} from "./networking";
 const { Option } = Select;
 
 interface CreateuserProps {
   userID: string;
   accessToken: string;
   teams: any[] | null;
+  possibleUIRoles: null | Record<string, Record<string, string>>;
 }
 
 const Createuser: React.FC<CreateuserProps> = ({
   userID,
   accessToken,
   teams,
+  possibleUIRoles,
 }) => {
   const [form] = Form.useForm();
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [apiuser, setApiuser] = useState<string | null>(null);
   const [userModels, setUserModels] = useState<string[]>([]);
-
+  const [isInvitationLinkModalVisible, setIsInvitationLinkModalVisible] =
+    useState(false);
+  const [invitationLinkData, setInvitationLinkData] =
+    useState<InvitationLink | null>(null);
+  const router = useRouter();
+  const isLocal = process.env.NODE_ENV === "development";
+  const [baseUrl, setBaseUrl] = useState(
+    isLocal ? "http://localhost:4000" : ""
+  );
   // get all models
   useEffect(() => {
     const fetchData = async () => {
@@ -48,6 +74,14 @@ const Createuser: React.FC<CreateuserProps> = ({
 
     fetchData(); // Call the function to fetch model data when the component mounts
   }, []); // Empty dependency array to run only once
+
+  useEffect(() => {
+    if (router) {
+      const { protocol, host } = window.location;
+      const baseUrl = `${protocol}/${host}`;
+      setBaseUrl(baseUrl);
+    }
+  }, [router]);
   const handleOk = () => {
     setIsModalVisible(false);
     form.resetFields();
@@ -67,6 +101,11 @@ const Createuser: React.FC<CreateuserProps> = ({
       const response = await userCreateCall(accessToken, null, formValues);
       console.log("user create Response:", response);
       setApiuser(response["key"]);
+      const user_id = response.data?.user_id || response.user_id;
+      invitationCreateCall(accessToken, user_id).then((data) => {
+        setInvitationLinkData(data);
+        setIsInvitationLinkModalVisible(true);
+      });
       message.success("API user Created");
       form.resetFields();
       localStorage.removeItem("userData" + userID);
@@ -88,12 +127,7 @@ const Createuser: React.FC<CreateuserProps> = ({
         onOk={handleOk}
         onCancel={handleCancel}
       >
-        <Text className="mb-1">
-          Invite a user to login to the Admin UI and create Keys
-        </Text>
-        <Text className="mb-6">
-          <b>Note: SSO Setup Required for this</b>
-        </Text>
+        <Text className="mb-1">Create a User who can own keys</Text>
         <Form
           form={form}
           onFinish={handleCreate}
@@ -103,6 +137,26 @@ const Createuser: React.FC<CreateuserProps> = ({
         >
           <Form.Item label="User Email" name="user_email">
             <TextInput placeholder="" />
+          </Form.Item>
+          <Form.Item label="User Role" name="user_role">
+            <Select2>
+              {possibleUIRoles &&
+                Object.entries(possibleUIRoles).map(
+                  ([role, { ui_label, description }]) => (
+                    <SelectItem key={role} value={role} title={ui_label}>
+                      <div className="flex">
+                        {ui_label}{" "}
+                        <p
+                          className="ml-2"
+                          style={{ color: "gray", fontSize: "12px" }}
+                        >
+                          {description}
+                        </p>
+                      </div>
+                    </SelectItem>
+                  )
+                )}
+            </Select2>
           </Form.Item>
           <Form.Item label="Team ID" name="team_id">
             <Select placeholder="Select Team ID" style={{ width: "100%" }}>
@@ -119,6 +173,7 @@ const Createuser: React.FC<CreateuserProps> = ({
               )}
             </Select>
           </Form.Item>
+
           <Form.Item label="Metadata" name="metadata">
             <Input.TextArea rows={4} placeholder="Enter metadata as JSON" />
           </Form.Item>
@@ -128,25 +183,12 @@ const Createuser: React.FC<CreateuserProps> = ({
         </Form>
       </Modal>
       {apiuser && (
-        <Modal
-          title="User Created Successfully"
-          visible={isModalVisible}
-          onOk={handleOk}
-          onCancel={handleCancel}
-          footer={null}
-        >
-          <p>
-            User has been created to access your proxy. Please Ask them to Log
-            In.
-          </p>
-          <br></br>
-
-          <p>
-            <b>
-              Note: This Feature is only supported through SSO on the Admin UI
-            </b>
-          </p>
-        </Modal>
+        <OnboardingModal
+          isInvitationLinkModalVisible={isInvitationLinkModalVisible}
+          setIsInvitationLinkModalVisible={setIsInvitationLinkModalVisible}
+          baseUrl={baseUrl}
+          invitationLinkData={invitationLinkData}
+        />
       )}
     </div>
   );

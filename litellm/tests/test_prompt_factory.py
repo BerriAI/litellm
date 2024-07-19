@@ -1,18 +1,24 @@
 #### What this tests ####
 #    This tests if prompts are being correctly formatted
-import sys
 import os
+import sys
+
 import pytest
 
 sys.path.insert(0, os.path.abspath("../.."))
+
+from typing import Union
 
 # from litellm.llms.prompt_templates.factory import prompt_factory
 import litellm
 from litellm import completion
 from litellm.llms.prompt_templates.factory import (
-    anthropic_pt,
+    _bedrock_tools_pt,
     anthropic_messages_pt,
+    anthropic_pt,
     claude_2_1_pt,
+    convert_to_anthropic_image_obj,
+    convert_url_to_base64,
     llama_2_chat_pt,
     prompt_factory,
 )
@@ -117,14 +123,99 @@ def test_anthropic_messages_pt():
     litellm.modify_params = True
     messages = []
     expected_messages = [{"role": "user", "content": [{"type": "text", "text": "."}]}]
-    assert anthropic_messages_pt(messages) == expected_messages
+    assert (
+        anthropic_messages_pt(
+            messages, model="claude-3-sonnet-20240229", llm_provider="anthropic"
+        )
+        == expected_messages
+    )
 
     # Test case: No messages (filtered system messages only) when modify_params is False should raise error
     litellm.modify_params = False
     messages = []
     with pytest.raises(Exception) as err:
-        anthropic_messages_pt(messages)
-    assert "Invalid first message." in str(err.value)
+        anthropic_messages_pt(
+            messages, model="claude-3-sonnet-20240229", llm_provider="anthropic"
+        )
+    assert "Invalid first message" in str(err.value)
+
+
+def test_anthropic_messages_nested_pt():
+    from litellm.types.llms.anthropic import (
+        AnthopicMessagesAssistantMessageParam,
+        AnthropicMessagesUserMessageParam,
+    )
+
+    messages = [
+        {"content": [{"text": "here is a task", "type": "text"}], "role": "user"},
+        {
+            "content": [{"text": "sure happy to help", "type": "text"}],
+            "role": "assistant",
+        },
+        {
+            "content": [
+                {
+                    "text": "Here is a screenshot of the current desktop with the "
+                    "mouse coordinates (500, 350). Please select an action "
+                    "from the provided schema.",
+                    "type": "text",
+                }
+            ],
+            "role": "user",
+        },
+    ]
+
+    new_messages = anthropic_messages_pt(
+        messages, model="claude-3-sonnet-20240229", llm_provider="anthropic"
+    )
+
+    assert isinstance(new_messages[1]["content"][0]["text"], str)
 
 
 # codellama_prompt_format()
+def test_bedrock_tool_calling_pt():
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                    },
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+    converted_tools = _bedrock_tools_pt(tools=tools)
+
+    print(converted_tools)
+
+
+def test_convert_url_to_img():
+    response_url = convert_url_to_base64(
+        url="https://images.pexels.com/photos/1319515/pexels-photo-1319515.jpeg?auto=compress&cs=tinysrgb&w=1260&h=750&dpr=1"
+    )
+
+    assert "image/jpeg" in response_url
+
+
+@pytest.mark.parametrize(
+    "url, expected_media_type",
+    [
+        ("data:image/jpeg;base64,1234", "image/jpeg"),
+        ("data:application/pdf;base64,1234", "application/pdf"),
+        ("data:image\/jpeg;base64,1234", "image/jpeg"),
+    ],
+)
+def test_base64_image_input(url, expected_media_type):
+    response = convert_to_anthropic_image_obj(openai_image_url=url)
+
+    assert response["media_type"] == expected_media_type

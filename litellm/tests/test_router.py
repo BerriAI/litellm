@@ -1,22 +1,160 @@
 #### What this tests ####
 # This tests litellm router
 
-import sys, os, time, openai
-import traceback, asyncio
+import asyncio
+import os
+import sys
+import time
+import traceback
+
+import openai
 import pytest
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
+import os
+from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import httpx
+from dotenv import load_dotenv
+
 import litellm
 from litellm import Router
 from litellm.router import Deployment, LiteLLM_Params, ModelInfo
-from concurrent.futures import ThreadPoolExecutor
-from collections import defaultdict
-from dotenv import load_dotenv
-import os, httpx
 
 load_dotenv()
+
+
+def test_router_multi_org_list():
+    """
+    Pass list of orgs in 1 model definition,
+    expect a unique deployment for each to be created
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "*",
+                "litellm_params": {
+                    "model": "openai/*",
+                    "api_key": "my-key",
+                    "api_base": "https://api.openai.com/v1",
+                    "organization": ["org-1", "org-2", "org-3"],
+                },
+            }
+        ]
+    )
+
+    assert len(router.get_model_list()) == 3
+
+
+def test_router_specific_model_via_id():
+    """
+    Call a specific deployment by it's id
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "my-fake-key",
+                    "mock_response": "Hello world",
+                },
+                "model_info": {"id": "1234"},
+            }
+        ]
+    )
+
+    router.completion(model="1234", messages=[{"role": "user", "content": "Hey!"}])
+
+
+def test_router_azure_ai_client_init():
+
+    _deployment = {
+        "model_name": "meta-llama-3-70b",
+        "litellm_params": {
+            "model": "azure_ai/Meta-Llama-3-70B-instruct",
+            "api_base": "my-fake-route",
+            "api_key": "my-fake-key",
+        },
+        "model_info": {"id": "1234"},
+    }
+    router = Router(model_list=[_deployment])
+
+    _client = router._get_client(
+        deployment=_deployment,
+        client_type="async",
+        kwargs={"stream": False},
+    )
+    print(_client)
+    from openai import AsyncAzureOpenAI, AsyncOpenAI
+
+    assert isinstance(_client, AsyncOpenAI)
+    assert not isinstance(_client, AsyncAzureOpenAI)
+
+
+def test_router_sensitive_keys():
+    try:
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "gpt-3.5-turbo",  # openai model name
+                    "litellm_params": {  # params for litellm completion/embedding call
+                        "model": "azure/chatgpt-v-2",
+                        "api_key": "special-key",
+                    },
+                    "model_info": {"id": 12345},
+                },
+            ],
+        )
+    except Exception as e:
+        print(f"error msg - {str(e)}")
+        assert "special-key" not in str(e)
+
+
+def test_router_order():
+    """
+    Asserts for 2 models in a model group, model with order=1 always called first
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                    "mock_response": "Hello world",
+                    "order": 1,
+                },
+                "model_info": {"id": "1"},
+            },
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_key": "bad-key",
+                    "mock_response": Exception("this is a bad key"),
+                    "order": 2,
+                },
+                "model_info": {"id": "2"},
+            },
+        ],
+        num_retries=0,
+        allowed_fails=0,
+        enable_pre_call_checks=True,
+    )
+
+    for _ in range(100):
+        response = router.completion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+        )
+
+        assert isinstance(response, litellm.ModelResponse)
+        assert response._hidden_params["model_id"] == "1"
 
 
 @pytest.mark.parametrize("num_retries", [None, 2])
@@ -466,8 +604,9 @@ def test_router_context_window_fallback():
     - Send a 5k prompt
     - Assert it works
     """
-    from large_text import text
     import os
+
+    from large_text import text
 
     litellm.set_verbose = False
 
@@ -516,8 +655,9 @@ async def test_async_router_context_window_fallback():
     - Send a 5k prompt
     - Assert it works
     """
-    from large_text import text
     import os
+
+    from large_text import text
 
     litellm.set_verbose = False
 
@@ -593,14 +733,15 @@ def test_router_rpm_pre_call_check():
         pytest.fail(f"Got unexpected exception on router! - {str(e)}")
 
 
-def test_router_context_window_check_pre_call_check_in_group():
+def test_router_context_window_check_pre_call_check_in_group_custom_model_info():
     """
     - Give a gpt-3.5-turbo model group with different context windows (4k vs. 16k)
     - Send a 5k prompt
     - Assert it works
     """
-    from large_text import text
     import os
+
+    from large_text import text
 
     litellm.set_verbose = False
 
@@ -615,13 +756,70 @@ def test_router_context_window_check_pre_call_check_in_group():
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
                     "base_model": "azure/gpt-35-turbo",
+                    "mock_response": "Hello world 1!",
                 },
+                "model_info": {"max_input_tokens": 100},
             },
             {
                 "model_name": "gpt-3.5-turbo",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
                     "model": "gpt-3.5-turbo-1106",
                     "api_key": os.getenv("OPENAI_API_KEY"),
+                    "mock_response": "Hello world 2!",
+                },
+                "model_info": {"max_input_tokens": 0},
+            },
+        ]
+
+        router = Router(model_list=model_list, set_verbose=True, enable_pre_call_checks=True, num_retries=0)  # type: ignore
+
+        response = router.completion(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "user", "content": "Who was Alexander?"},
+            ],
+        )
+
+        print(f"response: {response}")
+
+        assert response.choices[0].message.content == "Hello world 1!"
+    except Exception as e:
+        pytest.fail(f"Got unexpected exception on router! - {str(e)}")
+
+
+def test_router_context_window_check_pre_call_check():
+    """
+    - Give a gpt-3.5-turbo model group with different context windows (4k vs. 16k)
+    - Send a 5k prompt
+    - Assert it works
+    """
+    import os
+
+    from large_text import text
+
+    litellm.set_verbose = False
+
+    print(f"len(text): {len(text)}")
+    try:
+        model_list = [
+            {
+                "model_name": "gpt-3.5-turbo",  # openai model name
+                "litellm_params": {  # params for litellm completion/embedding call
+                    "model": "azure/chatgpt-v-2",
+                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "api_base": os.getenv("AZURE_API_BASE"),
+                    "base_model": "azure/gpt-35-turbo",
+                    "mock_response": "Hello world 1!",
+                },
+                "model_info": {"base_model": "azure/gpt-35-turbo"},
+            },
+            {
+                "model_name": "gpt-3.5-turbo",  # openai model name
+                "litellm_params": {  # params for litellm completion/embedding call
+                    "model": "gpt-3.5-turbo-1106",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                    "mock_response": "Hello world 2!",
                 },
             },
         ]
@@ -637,6 +835,8 @@ def test_router_context_window_check_pre_call_check_in_group():
         )
 
         print(f"response: {response}")
+
+        assert response.choices[0].message.content == "Hello world 2!"
     except Exception as e:
         pytest.fail(f"Got unexpected exception on router! - {str(e)}")
 
@@ -647,8 +847,9 @@ def test_router_context_window_check_pre_call_check_out_group():
     - Send a 5k prompt
     - Assert it works
     """
-    from large_text import text
     import os
+
+    from large_text import text
 
     litellm.set_verbose = False
 
@@ -1214,6 +1415,21 @@ def test_openai_completion_on_router():
 # test_openai_completion_on_router()
 
 
+def test_model_group_info():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "command-r-plus",
+                "litellm_params": {"model": "cohere.command-r-plus-v1:0"},
+            }
+        ]
+    )
+
+    response = router.get_model_group_info(model_group="command-r-plus")
+
+    assert response is not None
+
+
 def test_consistent_model_id():
     """
     - For a given model group + litellm params, assert the model id is always the same
@@ -1460,8 +1676,9 @@ def test_router_anthropic_key_dynamic():
 
 def test_router_timeout():
     litellm.set_verbose = True
-    from litellm._logging import verbose_logger
     import logging
+
+    from litellm._logging import verbose_logger
 
     verbose_logger.setLevel(logging.DEBUG)
     model_list = [
@@ -1573,3 +1790,251 @@ async def test_router_text_completion_client():
         print(responses)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.fixture
+def mock_response() -> litellm.ModelResponse:
+    return litellm.ModelResponse(
+        **{
+            "id": "chatcmpl-abc123",
+            "object": "chat.completion",
+            "created": 1699896916,
+            "model": "gpt-3.5-turbo-0125",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "call_abc123",
+                                "type": "function",
+                                "function": {
+                                    "name": "get_current_weather",
+                                    "arguments": '{\n"location": "Boston, MA"\n}',
+                                },
+                            }
+                        ],
+                    },
+                    "logprobs": None,
+                    "finish_reason": "tool_calls",
+                }
+            ],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 5, "total_tokens": 10},
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_router_model_usage(mock_response):
+    """
+    Test if tracking used model tpm works as expected
+    """
+    model = "my-fake-model"
+    model_tpm = 100
+    setattr(
+        mock_response,
+        "usage",
+        litellm.Usage(prompt_tokens=5, completion_tokens=5, total_tokens=10),
+    )
+
+    print(f"mock_response: {mock_response}")
+    model_tpm = 100
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": model,
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "my-key",
+                    "api_base": "my-base",
+                    "tpm": model_tpm,
+                    "mock_response": mock_response,
+                },
+            }
+        ]
+    )
+
+    allowed_fails = 1  # allow for changing b/w minutes
+
+    for _ in range(2):
+        try:
+            _ = await llm_router.acompletion(
+                model=model, messages=[{"role": "user", "content": "Hey!"}]
+            )
+            await asyncio.sleep(3)
+
+            initial_usage_tuple = await llm_router.get_model_group_usage(
+                model_group=model
+            )
+            initial_usage = initial_usage_tuple[0]
+
+            # completion call - 10 tokens
+            _ = await llm_router.acompletion(
+                model=model, messages=[{"role": "user", "content": "Hey!"}]
+            )
+
+            await asyncio.sleep(3)
+            updated_usage_tuple = await llm_router.get_model_group_usage(
+                model_group=model
+            )
+            updated_usage = updated_usage_tuple[0]
+
+            assert updated_usage == initial_usage + 10  # type: ignore
+            break
+        except Exception as e:
+            if allowed_fails > 0:
+                print(
+                    f"Decrementing allowed_fails: {allowed_fails}.\nReceived error - {str(e)}"
+                )
+                allowed_fails -= 1
+            else:
+                print(f"allowed_fails: {allowed_fails}")
+                raise e
+
+
+@pytest.mark.skip(reason="Check if this is causing ci/cd issues.")
+@pytest.mark.asyncio
+async def test_is_proxy_set():
+    """
+    Assert if proxy is set
+    """
+    from httpx import AsyncHTTPTransport
+
+    os.environ["HTTPS_PROXY"] = "https://proxy.example.com:8080"
+    from openai import AsyncAzureOpenAI
+
+    # Function to check if a proxy is set on the client
+    # Function to check if a proxy is set on the client
+    def check_proxy(client: httpx.AsyncClient) -> bool:
+        print(f"client._mounts: {client._mounts}")
+        assert len(client._mounts) == 1
+        for k, v in client._mounts.items():
+            assert isinstance(v, AsyncHTTPTransport)
+        return True
+
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "azure/gpt-3.5-turbo",
+                    "api_key": "my-key",
+                    "api_base": "my-base",
+                    "mock_response": "hello world",
+                },
+                "model_info": {"id": "1"},
+            }
+        ]
+    )
+
+    _deployment = llm_router.get_deployment(model_id="1")
+    model_client: AsyncAzureOpenAI = llm_router._get_client(
+        deployment=_deployment, kwargs={}, client_type="async"
+    )  # type: ignore
+
+    assert check_proxy(client=model_client._client)
+
+
+@pytest.mark.parametrize(
+    "model, base_model, llm_provider",
+    [
+        ("azure/gpt-4", None, "azure"),
+        ("azure/gpt-4", "azure/gpt-4-0125-preview", "azure"),
+        ("gpt-4", None, "openai"),
+    ],
+)
+def test_router_get_model_info(model, base_model, llm_provider):
+    """
+    Test if router get model info works based on provider
+
+    For azure -> only if base model set
+    For openai -> use model=
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": model,
+                    "api_key": "my-fake-key",
+                    "api_base": "my-fake-base",
+                },
+                "model_info": {"base_model": base_model, "id": "1"},
+            }
+        ]
+    )
+
+    deployment = router.get_deployment(model_id="1")
+
+    assert deployment is not None
+
+    if llm_provider == "openai" or (base_model is not None and llm_provider == "azure"):
+        router.get_router_model_info(deployment=deployment.to_json())
+    else:
+        try:
+            router.get_router_model_info(deployment=deployment.to_json())
+            pytest.fail("Expected this to raise model not mapped error")
+        except Exception as e:
+            if "This model isn't mapped yet" in str(e):
+                pass
+
+
+@pytest.mark.parametrize(
+    "model, base_model, llm_provider",
+    [
+        ("azure/gpt-4", None, "azure"),
+        ("azure/gpt-4", "azure/gpt-4-0125-preview", "azure"),
+        ("gpt-4", None, "openai"),
+    ],
+)
+def test_router_context_window_pre_call_check(model, base_model, llm_provider):
+    """
+    - For an azure model
+    - if no base model set
+    - don't enforce context window limits
+    """
+    try:
+        model_list = [
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": model,
+                    "api_key": "my-fake-key",
+                    "api_base": "my-fake-base",
+                },
+                "model_info": {"base_model": base_model, "id": "1"},
+            }
+        ]
+        router = Router(
+            model_list=model_list,
+            set_verbose=True,
+            enable_pre_call_checks=True,
+            num_retries=0,
+        )
+
+        litellm.token_counter = MagicMock()
+
+        def token_counter_side_effect(*args, **kwargs):
+            # Process args and kwargs if needed
+            return 1000000
+
+        litellm.token_counter.side_effect = token_counter_side_effect
+        try:
+            updated_list = router._pre_call_checks(
+                model="gpt-4",
+                healthy_deployments=model_list,
+                messages=[{"role": "user", "content": "Hey, how's it going?"}],
+            )
+            if llm_provider == "azure" and base_model is None:
+                assert len(updated_list) == 1
+            else:
+                pytest.fail("Expected to raise an error. Got={}".format(updated_list))
+        except Exception as e:
+            if (
+                llm_provider == "azure" and base_model is not None
+            ) or llm_provider == "openai":
+                pass
+    except Exception as e:
+        pytest.fail(f"Got unexpected exception on router! - {str(e)}")

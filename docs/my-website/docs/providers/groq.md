@@ -1,7 +1,11 @@
 # Groq
 https://groq.com/
 
-**We support ALL Groq models, just set `groq/` as a prefix when sending completion requests**
+:::tip
+
+**We support ALL Groq models, just set `model=groq/<any-model-on-groq>` as a prefix when sending litellm requests**
+
+:::
 
 ## API Key
 ```python
@@ -46,13 +50,13 @@ for chunk in response:
 ## Supported Models - ALL Groq Models Supported!
 We support ALL Groq models, just set `groq/` as a prefix when sending completion requests
 
-| Model Name               | Function Call                                                                                                                                                      |
-|--------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| llama3-8b-8192 | `completion(model="groq/llama3-8b-8192", messages)` | 
-| llama3-70b-8192 | `completion(model="groq/llama3-70b-8192", messages)` | 
-| llama2-70b-4096 | `completion(model="groq/llama2-70b-4096", messages)` | 
+| Model Name         | Function Call                                           |
+|--------------------|---------------------------------------------------------|
+| llama3-8b-8192     | `completion(model="groq/llama3-8b-8192", messages)`     | 
+| llama3-70b-8192    | `completion(model="groq/llama3-70b-8192", messages)`    | 
+| llama2-70b-4096    | `completion(model="groq/llama2-70b-4096", messages)`    | 
 | mixtral-8x7b-32768 | `completion(model="groq/mixtral-8x7b-32768", messages)` |
-| gemma-7b-it | `completion(model="groq/gemma-7b-it", messages)` |  
+| gemma-7b-it        | `completion(model="groq/gemma-7b-it", messages)`        |  
 
 ## Groq - Tool / Function Calling Example
 
@@ -153,4 +157,21 @@ if tool_calls:
         model="groq/llama2-70b-4096", messages=messages
     )  # get a new response from the model where it can see the function response
     print("second response\n", second_response)
+```
+
+## Speech to Text - Whisper
+
+```python
+os.environ["GROQ_API_KEY"] = ""
+audio_file = open("/path/to/audio.mp3", "rb")
+
+transcript = litellm.transcription(
+    model="groq/whisper-large-v3",
+    file=audio_file,
+    prompt="Specify context or spelling",
+    temperature=0,
+    response_format="json"
+)
+
+print("response=", transcript)
 ```

@@ -283,7 +283,7 @@ litellm_settings:
 
 ### Turn on / off caching per request.  
 
-The proxy support 3 cache-controls:
+The proxy support 4 cache-controls:
 
 - `ttl`: *Optional(int)* - Will cache the response for the user-defined amount of time (in seconds).
 - `s-maxage`: *Optional(int)* Will only accept cached responses that are within user-defined range (in seconds).
@@ -372,6 +372,33 @@ chat_completion = client.chat.completions.create(
       }
     }
 )
+```
+
+### Turn on / off caching per Key.
+
+1. Add cache params when creating a key [full list](#turn-on--off-caching-per-key)
+
+```bash 
+curl -X POST 'http://0.0.0.0:4000/key/generate' \
+-H 'Authorization: Bearer sk-1234' \
+-H 'Content-Type: application/json' \
+-D '{
+    "user_id": "222",
+    "metadata": {
+        "cache": {
+            "no-cache": true
+        }
+    }
+}'
+```
+
+2. Test it! 
+
+```bash 
+curl -X POST 'http://localhost:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer <YOUR_NEW_KEY>' \
+-D '{"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "bom dia"}]}'
 ```
 
 ### Deleting Cache Keys - `/cache/delete` 

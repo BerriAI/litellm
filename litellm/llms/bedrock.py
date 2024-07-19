@@ -1,25 +1,32 @@
-import json, copy, types
+####################################
+######### DEPRECATED FILE ##########
+####################################
+# logic moved to `bedrock_httpx.py` #
+
+import copy
+import json
 import os
+import time
+import types
+import uuid
 from enum import Enum
-import time, uuid
-from typing import Callable, Optional, Any, Union, List
+from typing import Any, Callable, List, Optional, Union
+
+import httpx
+
 import litellm
-from litellm.utils import (
-    ModelResponse,
-    get_secret,
-    Usage,
-    ImageResponse,
-    map_finish_reason,
-)
+from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.types.utils import ImageResponse, ModelResponse, Usage
+from litellm.utils import get_secret
+
 from .prompt_templates.factory import (
-    prompt_factory,
-    custom_prompt,
     construct_tool_use_system_prompt,
+    contains_tag,
+    custom_prompt,
     extract_between_tags,
     parse_xml_params,
-    contains_tag,
+    prompt_factory,
 )
-import httpx
 
 
 class BedrockError(Exception):
@@ -633,7 +640,11 @@ def init_bedrock_client(
         config = boto3.session.Config()
 
     ### CHECK STS ###
-    if aws_web_identity_token is not None and aws_role_name is not None and aws_session_name is not None:
+    if (
+        aws_web_identity_token is not None
+        and aws_role_name is not None
+        and aws_session_name is not None
+    ):
         oidc_token = get_secret(aws_web_identity_token)
 
         if oidc_token is None:
@@ -642,9 +653,7 @@ def init_bedrock_client(
                 status_code=401,
             )
 
-        sts_client = boto3.client(
-            "sts"
-        )
+        sts_client = boto3.client("sts")
 
         # https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRoleWithWebIdentity.html
         # https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/sts/client/assume_role_with_web_identity.html
@@ -726,38 +735,31 @@ def init_bedrock_client(
 
 def convert_messages_to_prompt(model, messages, provider, custom_prompt_dict):
     # handle anthropic prompts and amazon titan prompts
-    if provider == "anthropic" or provider == "amazon":
-        if model in custom_prompt_dict:
-            # check if the model has a registered custom prompt
-            model_prompt_details = custom_prompt_dict[model]
-            prompt = custom_prompt(
-                role_dict=model_prompt_details["roles"],
-                initial_prompt_value=model_prompt_details["initial_prompt_value"],
-                final_prompt_value=model_prompt_details["final_prompt_value"],
-                messages=messages,
-            )
-        else:
+    chat_template_provider = ["anthropic", "amazon", "mistral", "meta"]
+    if model in custom_prompt_dict:
+        # check if the model has a registered custom prompt
+        model_prompt_details = custom_prompt_dict[model]
+        prompt = custom_prompt(
+            role_dict=model_prompt_details["roles"],
+            initial_prompt_value=model_prompt_details["initial_prompt_value"],
+            final_prompt_value=model_prompt_details["final_prompt_value"],
+            messages=messages,
+        )
+    else:
+        if provider in chat_template_provider:
             prompt = prompt_factory(
                 model=model, messages=messages, custom_llm_provider="bedrock"
             )
-    elif provider == "mistral":
-        prompt = prompt_factory(
-            model=model, messages=messages, custom_llm_provider="bedrock"
-        )
-    elif provider == "meta":
-        prompt = prompt_factory(
-            model=model, messages=messages, custom_llm_provider="bedrock"
-        )
-    else:
-        prompt = ""
-        for message in messages:
-            if "role" in message:
-                if message["role"] == "user":
-                    prompt += f"{message['content']}"
+        else:
+            prompt = ""
+            for message in messages:
+                if "role" in message:
+                    if message["role"] == "user":
+                        prompt += f"{message['content']}"
+                    else:
+                        prompt += f"{message['content']}"
                 else:
                     prompt += f"{message['content']}"
-            else:
-                prompt += f"{message['content']}"
     return prompt
 
 
@@ -1120,7 +1122,7 @@ def completion(
                             logging_obj=logging_obj,
                         )
 
-                model_response["finish_reason"] = map_finish_reason(
+                model_response.choices[0].finish_reason = map_finish_reason(
                     response_body["stop_reason"]
                 )
                 _usage = litellm.Usage(
@@ -1132,14 +1134,16 @@ def completion(
                 setattr(model_response, "usage", _usage)
             else:
                 outputText = response_body["completion"]
-                model_response["finish_reason"] = response_body["stop_reason"]
+                model_response.choices[0].finish_reason = response_body["stop_reason"]
         elif provider == "cohere":
             outputText = response_body["generations"][0]["text"]
         elif provider == "meta":
             outputText = response_body["generation"]
         elif provider == "mistral":
             outputText = response_body["outputs"][0]["text"]
-            model_response["finish_reason"] = response_body["outputs"][0]["stop_reason"]
+            model_response.choices[0].finish_reason = response_body["outputs"][0][
+                "stop_reason"
+            ]
         else:  # amazon titan
             outputText = response_body.get("results")[0].get("outputText")
 
@@ -1158,7 +1162,7 @@ def completion(
                     and getattr(model_response.choices[0].message, "tool_calls", None)
                     is None
                 ):
-                    model_response["choices"][0]["message"]["content"] = outputText
+                    model_response.choices[0].message.content = outputText
                 elif (
                     hasattr(model_response.choices[0], "message")
                     and getattr(model_response.choices[0].message, "tool_calls", None)
@@ -1197,8 +1201,8 @@ def completion(
             )
             setattr(model_response, "usage", usage)
 
-        model_response["created"] = int(time.time())
-        model_response["model"] = model
+        model_response.created = int(time.time())
+        model_response.model = model
 
         model_response._hidden_params["region_name"] = client.meta.region_name
         print_verbose(f"model_response._hidden_params: {model_response._hidden_params}")
@@ -1321,9 +1325,9 @@ def _embedding_func_single(
 def embedding(
     model: str,
     input: Union[list, str],
+    model_response: litellm.EmbeddingResponse,
     api_key: Optional[str] = None,
     logging_obj=None,
-    model_response=None,
     optional_params=None,
     encoding=None,
 ):
@@ -1389,9 +1393,9 @@ def embedding(
                 "embedding": embedding,
             }
         )
-    model_response["object"] = "list"
-    model_response["data"] = embedding_response
-    model_response["model"] = model
+    model_response.object = "list"
+    model_response.data = embedding_response
+    model_response.model = model
     input_tokens = 0
 
     input_str = "".join(input)

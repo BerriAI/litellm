@@ -14,6 +14,7 @@ def parse_usage(usage):
         "prompt": usage["prompt_tokens"] if "prompt_tokens" in usage else 0,
     }
 
+
 def parse_tool_calls(tool_calls):
     if tool_calls is None:
         return None
@@ -26,13 +27,13 @@ def parse_tool_calls(tool_calls):
             "function": {
                 "name": tool_call.function.name,
                 "arguments": tool_call.function.arguments,
-            }
+            },
         }
 
         return serialized
-    
+
     return [clean_tool_call(tool_call) for tool_call in tool_calls]
-    
+
 
 def parse_messages(input):
 
@@ -104,19 +105,18 @@ class LunaryLogger:
         end_time=datetime.now(timezone.utc),
         error=None,
     ):
-        # Method definition
         try:
             print_verbose(f"Lunary Logging - Logging request for model {model}")
 
+            template_id = None
             litellm_params = kwargs.get("litellm_params", {})
             optional_params = kwargs.get("optional_params", {})
             metadata = litellm_params.get("metadata", {}) or {}
 
             if optional_params:
-                # merge into extra
                 extra = {**extra, **optional_params}
 
-            tags = litellm_params.pop("tags", None) or []
+            tags = metadata.get("tags", None) 
 
             if extra:
                 extra.pop("extra_body", None)
@@ -176,6 +176,5 @@ class LunaryLogger:
             )
 
         except:
-            # traceback.print_exc()
             print_verbose(f"Lunary Logging Error - {traceback.format_exc()}")
             pass
