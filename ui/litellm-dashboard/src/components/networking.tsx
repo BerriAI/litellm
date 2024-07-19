@@ -17,7 +17,7 @@ const baseUrl = "/"; // Assuming the base URL is the root
 
 let lastErrorTime = 0;
 
-const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 const handleError = async (errorData: string) => {
   const currentTime = Date.now();
@@ -55,7 +55,6 @@ export const modelCostMap = async (
     return jsonData;
   } catch (error) {
     console.error("Failed to get model cost map:", error);
-    handleError(error);
     throw error;
   }
 };
@@ -377,7 +376,6 @@ export const keyCreateCall = async (
       try {
         formValues.metadata = JSON.parse(formValues.metadata);
       } catch (error) {
-        handleError(errorData);
         throw new Error("Failed to parse metadata: " + error);
       }
     }
@@ -440,7 +438,6 @@ export const userCreateCall = async (
       try {
         formValues.metadata = JSON.parse(formValues.metadata);
       } catch (error) {
-        handleError(errorData);
         throw new Error("Failed to parse metadata: " + error);
       }
     }
