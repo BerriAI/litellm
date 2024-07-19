@@ -709,6 +709,7 @@ def convert_to_anthropic_image_obj(openai_image_url: str) -> GenericImageParsing
             openai_image_url = convert_url_to_base64(url=openai_image_url)
         # Extract the media type and base64 data
         media_type, base64_data = openai_image_url.split("data:")[1].split(";base64,")
+        media_type = media_type.replace("\\/", "/")
 
         return GenericImageParsingChunk(
             type="base64",
