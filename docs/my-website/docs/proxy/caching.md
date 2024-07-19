@@ -294,6 +294,11 @@ The proxy support 4 cache-controls:
 
 **Turn off caching**
 
+Set `no-cache=True`, this will not return a cached response
+
+<Tabs>
+<TabItem value="openai" label="OpenAI Python SDK">
+
 ```python
 import os
 from openai import OpenAI
@@ -319,8 +324,80 @@ chat_completion = client.chat.completions.create(
     }
 )
 ```
+</TabItem>
+
+<TabItem value="curl" label="curl">
+
+```shell
+curl http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "gpt-3.5-turbo",
+    "cache": {"no-cache": True},
+    "messages": [
+      {"role": "user", "content": "Say this is a test"}
+    ]
+  }'
+```
+
+</TabItem>
+
+</Tabs>
 
 **Turn on caching**
+
+By default cache is always on
+
+<Tabs>
+<TabItem value="openai" label="OpenAI Python SDK">
+
+```python
+import os
+from openai import OpenAI
+
+client = OpenAI(
+    # This is the default and can be omitted
+    api_key=os.environ.get("OPENAI_API_KEY"),
+		base_url="http://0.0.0.0:4000"
+)
+
+chat_completion = client.chat.completions.create(
+    messages=[
+        {
+            "role": "user",
+            "content": "Say this is a test",
+        }
+    ],
+    model="gpt-3.5-turbo"
+)
+```
+</TabItem>
+
+<TabItem value="curl on" label="curl">
+
+```shell
+curl http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "gpt-3.5-turbo",
+    "messages": [
+      {"role": "user", "content": "Say this is a test"}
+    ]
+  }'
+```
+
+</TabItem>
+
+</Tabs>
+
+**Set `ttl`**
+
+Set `ttl=600`, this will caches response for 10 minutes (600 seconds)
+
+<Tabs>
+<TabItem value="openai" label="OpenAI Python SDK">
 
 ```python
 import os
@@ -347,6 +424,35 @@ chat_completion = client.chat.completions.create(
     }
 )
 ```
+</TabItem>
+
+<TabItem value="curl on" label="curl">
+
+```shell
+curl http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "gpt-3.5-turbo",
+    "cache": {"ttl": 600},
+    "messages": [
+      {"role": "user", "content": "Say this is a test"}
+    ]
+  }'
+```
+
+</TabItem>
+
+</Tabs>
+
+
+
+**Set `s-maxage`**
+
+Set `s-maxage`, this will only get responses cached within last 10 minutes 
+
+<Tabs>
+<TabItem value="openai" label="OpenAI Python SDK">
 
 ```python
 import os
@@ -373,6 +479,27 @@ chat_completion = client.chat.completions.create(
     }
 )
 ```
+</TabItem>
+
+<TabItem value="curl on" label="curl">
+
+```shell
+curl http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "gpt-3.5-turbo",
+    "cache": {"s-maxage": 600},
+    "messages": [
+      {"role": "user", "content": "Say this is a test"}
+    ]
+  }'
+```
+
+</TabItem>
+
+</Tabs>
+
 
 ### Turn on / off caching per Key.
 
