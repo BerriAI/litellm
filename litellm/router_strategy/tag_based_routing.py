@@ -2,19 +2,30 @@
 Use this to route requests between free and paid tiers
 """
 
-from typing import Any, Dict, List, Literal, Optional, TypedDict, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, TypedDict, Union
 
 from litellm._logging import verbose_logger
 from litellm.types.router import DeploymentTypedDict
 
+if TYPE_CHECKING:
+    from litellm.router import Router as _Router
+
+    LitellmRouter = _Router
+else:
+    LitellmRouter = Any
+
 
 async def get_deployments_for_tag(
+    llm_router_instance: LitellmRouter,
     request_kwargs: Optional[Dict[Any, Any]] = None,
     healthy_deployments: Optional[Union[List[Any], Dict[Any, Any]]] = None,
 ):
     """
     if request_kwargs contains {"metadata": {"tier": "free"}} or {"metadata": {"tier": "paid"}}, then routes the request to free/paid tier models
     """
+    if llm_router_instance.enable_tag_filtering is not True:
+        return healthy_deployments
+
     if request_kwargs is None:
         verbose_logger.debug(
             "get_deployments_for_tier: request_kwargs is None returning healthy_deployments: %s",
