@@ -48,7 +48,7 @@ const Sidebar: React.FC<SidebarProps> = ({
           style={{ height: "100%", borderRight: 0 }}
         >
           <Menu.Item key="1" onClick={() => setPage("api-keys")}>
-            <Text>API Keys</Text>
+            <Text>Virtual Keys</Text>
           </Menu.Item>
           <Menu.Item key="3" onClick={() => setPage("llm-playground")}>
             <Text>Test Key</Text>
