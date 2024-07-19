@@ -1528,6 +1528,8 @@ def completion(
                     api_key=api_key,
                     logging_obj=logging,
                     headers=headers,
+                    timeout=timeout,
+                    client=client,
                 )
             if optional_params.get("stream", False) or acompletion == True:
                 ## LOGGING
@@ -2046,7 +2048,10 @@ def completion(
                     acompletion=acompletion,
                     headers=headers,
                     custom_prompt_dict=custom_prompt_dict,
+                    timeout=timeout,
+                    client=client,
                 )
+
             else:
                 model_response = vertex_ai.completion(
                     model=model,
