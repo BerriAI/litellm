@@ -4,14 +4,12 @@ model_list:
       model: openai/fake
       api_key: fake-key
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
-    model_info:
-      tier: free # 👈 Key Change - set `tier`
+      tags: ["free"]
   - model_name: gpt-4
     litellm_params:
       model: openai/gpt-4o
       api_key: os.environ/OPENAI_API_KEY
-    model_info:
-      tier: paid # 👈 Key Change - set `tier`
+      tags: ["paid"]
 
 general_settings: 
   master_key: sk-1234 
