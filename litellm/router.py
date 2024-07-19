@@ -2337,7 +2337,7 @@ class Router:
             original_exception = e
             fallback_model_group = None
             try:
-                verbose_router_logger.debug(f"Trying to fallback b/w models")
+                verbose_router_logger.debug("Trying to fallback b/w models")
                 if (
                     hasattr(e, "status_code")
                     and e.status_code == 400  # type: ignore
@@ -2346,6 +2346,9 @@ class Router:
                         or isinstance(e, litellm.ContentPolicyViolationError)
                     )
                 ):  # don't retry a malformed request
+                    verbose_router_logger.debug(
+                        "Not retrying request as it's malformed. Status code=400."
+                    )
                     raise e
                 if isinstance(e, litellm.ContextWindowExceededError):
                     if context_window_fallbacks is not None:
@@ -2484,6 +2487,12 @@ class Router:
             except Exception as e:
                 verbose_router_logger.error(f"An exception occurred - {str(e)}")
                 verbose_router_logger.debug(traceback.format_exc())
+
+            if hasattr(original_exception, "message"):
+                # add the available fallbacks to the exception
+                original_exception.message += "\nReceived Model Group={}\nAvailable Model Group Fallbacks={}".format(
+                    model_group, fallback_model_group
+                )
             raise original_exception
 
     async def async_function_with_retries(self, *args, **kwargs):
