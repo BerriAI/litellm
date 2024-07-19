@@ -257,7 +257,7 @@ class CreateBatchRequest(TypedDict, total=False):
     """
 
     completion_window: Literal["24h"]
-    endpoint: Literal["/v1/chat/completions", "/v1/embeddings"]
+    endpoint: Literal["/v1/chat/completions", "/v1/embeddings", "/v1/completions"]
     input_file_id: str
     metadata: Optional[Dict[str, str]]
     extra_headers: Optional[Dict[str, str]]
