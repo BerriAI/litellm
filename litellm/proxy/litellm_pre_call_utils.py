@@ -188,6 +188,9 @@ async def add_litellm_data_to_request(
                 CommonProxyErrors.not_premium_user.value,
             )
             llm_router.enable_tag_filtering = False
+        else:
+            if "tags" in data:
+                data[_metadata_variable_name]["tags"] = data["tags"]
 
     ### TEAM-SPECIFIC PARAMS ###
     if user_api_key_dict.team_id is not None:
