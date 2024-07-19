@@ -47,12 +47,12 @@ from litellm.assistants.main import AssistantDeleted
 from litellm.caching import DualCache, InMemoryCache, RedisCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.azure import get_azure_ad_token_from_oidc
-from litellm.router_strategy.free_paid_tiers import get_deployments_for_tier
 from litellm.router_strategy.least_busy import LeastBusyLoggingHandler
 from litellm.router_strategy.lowest_cost import LowestCostLoggingHandler
 from litellm.router_strategy.lowest_latency import LowestLatencyLoggingHandler
 from litellm.router_strategy.lowest_tpm_rpm import LowestTPMLoggingHandler
 from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2
+from litellm.router_strategy.tag_based_routing import get_deployments_for_tag
 from litellm.router_utils.client_initalization_utils import (
     set_client,
     should_initialize_sync_client,
@@ -145,6 +145,7 @@ class Router:
         content_policy_fallbacks: List = [],
         model_group_alias: Optional[dict] = {},
         enable_pre_call_checks: bool = False,
+        enable_tag_filtering: bool = False,
         retry_after: int = 0,  # min time to wait before retrying a failed request
         retry_policy: Optional[
             RetryPolicy
@@ -246,6 +247,7 @@ class Router:
         self.set_verbose = set_verbose
         self.debug_level = debug_level
         self.enable_pre_call_checks = enable_pre_call_checks
+        self.enable_tag_filtering = enable_tag_filtering
         if self.set_verbose == True:
             if debug_level == "INFO":
                 verbose_router_logger.setLevel(logging.INFO)
@@ -4482,8 +4484,9 @@ class Router:
                     request_kwargs=request_kwargs,
                 )
 
-            # check free / paid tier for each deployment
-            healthy_deployments = await get_deployments_for_tier(
+            # check if user wants to do tag based routing
+            healthy_deployments = await get_deployments_for_tag(
+                llm_router_instance=self,
                 request_kwargs=request_kwargs,
                 healthy_deployments=healthy_deployments,
             )
