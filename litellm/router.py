@@ -145,6 +145,7 @@ class Router:
         content_policy_fallbacks: List = [],
         model_group_alias: Optional[dict] = {},
         enable_pre_call_checks: bool = False,
+        enable_tag_filtering: bool = False,
         retry_after: int = 0,  # min time to wait before retrying a failed request
         retry_policy: Optional[
             RetryPolicy
@@ -246,6 +247,7 @@ class Router:
         self.set_verbose = set_verbose
         self.debug_level = debug_level
         self.enable_pre_call_checks = enable_pre_call_checks
+        self.enable_tag_filtering = enable_tag_filtering
         if self.set_verbose == True:
             if debug_level == "INFO":
                 verbose_router_logger.setLevel(logging.INFO)
@@ -4484,6 +4486,7 @@ class Router:
 
             # check if user wants to do tag based routing
             healthy_deployments = await get_deployments_for_tag(
+                llm_router_instance=self,
                 request_kwargs=request_kwargs,
                 healthy_deployments=healthy_deployments,
             )
