@@ -929,6 +929,46 @@
         "litellm_provider": "mistral",
         "mode": "chat"
     },
+    "mistral/open-mistral-nemo": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000,
+        "input_cost_per_token":  0.0000003,
+        "output_cost_per_token": 0.0000003,
+        "litellm_provider": "mistral",
+        "mode": "chat",
+        "source": "https://mistral.ai/technology/"
+    },
+    "mistral/open-mistral-nemo-2407": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000,
+        "input_cost_per_token":  0.0000003,
+        "output_cost_per_token": 0.0000003,
+        "litellm_provider": "mistral",
+        "mode": "chat",
+        "source": "https://mistral.ai/technology/"
+    },
+    "mistral/open-codestral-mamba": {
+        "max_tokens": 256000,
+        "max_input_tokens": 256000,
+        "max_output_tokens": 256000,
+        "input_cost_per_token": 0.00000025,
+        "output_cost_per_token": 0.00000025,
+        "litellm_provider": "mistral",
+        "mode": "chat",
+        "source": "https://mistral.ai/technology/"
+    },
+    "mistral/codestral-mamba-latest": {
+        "max_tokens": 256000,
+        "max_input_tokens": 256000,
+        "max_output_tokens": 256000,
+        "input_cost_per_token": 0.00000025,
+        "output_cost_per_token": 0.00000025,
+        "litellm_provider": "mistral",
+        "mode": "chat",
+        "source": "https://mistral.ai/technology/"
+    },
     "mistral/mistral-embed": {
         "max_tokens": 8192,
         "max_input_tokens": 8192,
