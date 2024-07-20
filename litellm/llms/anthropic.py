@@ -895,7 +895,7 @@ class AnthropicChatCompletion(BaseLLM):
             ):  # if function call - fake the streaming (need complete blocks for output parsing in openai format)
                 print_verbose("makes anthropic streaming POST request")
                 data["stream"] = stream
-                response = requests.post(
+                response = client.post(
                     api_base,
                     headers=headers,
                     data=json.dumps(data),
