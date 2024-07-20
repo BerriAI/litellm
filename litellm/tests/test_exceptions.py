@@ -90,6 +90,7 @@ def test_context_window(model):
 models = ["command-nightly"]
 
 
+@pytest.mark.skip(reason="duplicate test.")
 @pytest.mark.parametrize("model", models)
 def test_context_window_with_fallbacks(model):
     ctx_window_fallback_dict = {
