@@ -1911,7 +1911,7 @@ def token_counter(
     # use tiktoken, anthropic, cohere, llama2, or llama3's tokenizer depending on the model
     is_tool_call = False
     num_tokens = 0
-    if text == None:
+    if text is None:
         if messages is not None:
             print_verbose(f"token_counter messages received: {messages}")
             text = ""
@@ -1937,7 +1937,7 @@ def token_counter(
                                     num_tokens += calculage_img_tokens(
                                         data=image_url_str, mode="auto"
                                     )
-                if "tool_calls" in message:
+                if message.get("tool_calls"):
                     is_tool_call = True
                     for tool_call in message["tool_calls"]:
                         if "function" in tool_call:
@@ -4398,44 +4398,44 @@ def get_llm_provider(
             if custom_llm_provider == "perplexity":
                 # perplexity is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.perplexity.ai
                 api_base = api_base or "https://api.perplexity.ai"
-                dynamic_api_key = get_secret("PERPLEXITYAI_API_KEY")
+                dynamic_api_key = api_key or get_secret("PERPLEXITYAI_API_KEY")
             elif custom_llm_provider == "anyscale":
                 # anyscale is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.endpoints.anyscale.com/v1
                 api_base = api_base or "https://api.endpoints.anyscale.com/v1"
-                dynamic_api_key = get_secret("ANYSCALE_API_KEY")
+                dynamic_api_key = api_key or get_secret("ANYSCALE_API_KEY")
             elif custom_llm_provider == "deepinfra":
                 # deepinfra is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.endpoints.anyscale.com/v1
                 api_base = api_base or "https://api.deepinfra.com/v1/openai"
-                dynamic_api_key = get_secret("DEEPINFRA_API_KEY")
+                dynamic_api_key = api_key or get_secret("DEEPINFRA_API_KEY")
             elif custom_llm_provider == "empower":
                 api_base = api_base or "https://app.empower.dev/api/v1"
-                dynamic_api_key = get_secret("EMPOWER_API_KEY")
+                dynamic_api_key = api_key or get_secret("EMPOWER_API_KEY")
             elif custom_llm_provider == "groq":
                 # groq is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.groq.com/openai/v1
                 api_base = api_base or "https://api.groq.com/openai/v1"
-                dynamic_api_key = get_secret("GROQ_API_KEY")
+                dynamic_api_key = api_key or get_secret("GROQ_API_KEY")
             elif custom_llm_provider == "nvidia_nim":
                 # nvidia_nim is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.endpoints.anyscale.com/v1
                 api_base = api_base or "https://integrate.api.nvidia.com/v1"
-                dynamic_api_key = get_secret("NVIDIA_NIM_API_KEY")
+                dynamic_api_key = api_key or get_secret("NVIDIA_NIM_API_KEY")
             elif custom_llm_provider == "volcengine":
                 # volcengine is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.endpoints.anyscale.com/v1
                 api_base = api_base or "https://ark.cn-beijing.volces.com/api/v3"
-                dynamic_api_key = get_secret("VOLCENGINE_API_KEY")
+                dynamic_api_key = api_key or get_secret("VOLCENGINE_API_KEY")
             elif custom_llm_provider == "codestral":
                 # codestral is openai compatible, we just need to set this to custom_openai and have the api_base be https://codestral.mistral.ai/v1
                 api_base = api_base or "https://codestral.mistral.ai/v1"
-                dynamic_api_key = get_secret("CODESTRAL_API_KEY")
+                dynamic_api_key = api_key or get_secret("CODESTRAL_API_KEY")
             elif custom_llm_provider == "deepseek":
                 # deepseek is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.deepseek.com/v1
                 api_base = api_base or "https://api.deepseek.com/v1"
-                dynamic_api_key = get_secret("DEEPSEEK_API_KEY")
+                dynamic_api_key = api_key or get_secret("DEEPSEEK_API_KEY")
             elif custom_llm_provider == "fireworks_ai":
                 # fireworks is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.fireworks.ai/inference/v1
                 if not model.startswith("accounts/fireworks/models"):
                     model = f"accounts/fireworks/models/{model}"
                 api_base = api_base or "https://api.fireworks.ai/inference/v1"
-                dynamic_api_key = (
+                dynamic_api_key = api_key or (
                     get_secret("FIREWORKS_API_KEY")
                     or get_secret("FIREWORKS_AI_API_KEY")
                     or get_secret("FIREWORKSAI_API_KEY")
@@ -4465,10 +4465,10 @@ def get_llm_provider(
             elif custom_llm_provider == "voyage":
                 # voyage is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.voyageai.com/v1
                 api_base = "https://api.voyageai.com/v1"
-                dynamic_api_key = get_secret("VOYAGE_API_KEY")
+                dynamic_api_key = api_key or get_secret("VOYAGE_API_KEY")
             elif custom_llm_provider == "together_ai":
                 api_base = "https://api.together.xyz/v1"
-                dynamic_api_key = (
+                dynamic_api_key = api_key or (
                     get_secret("TOGETHER_API_KEY")
                     or get_secret("TOGETHER_AI_API_KEY")
                     or get_secret("TOGETHERAI_API_KEY")
@@ -4476,8 +4476,10 @@ def get_llm_provider(
                 )
             elif custom_llm_provider == "friendliai":
                 api_base = "https://inference.friendli.ai/v1"
-                dynamic_api_key = get_secret("FRIENDLIAI_API_KEY") or get_secret(
-                    "FRIENDLI_TOKEN"
+                dynamic_api_key = (
+                    api_key
+                    or get_secret("FRIENDLIAI_API_KEY")
+                    or get_secret("FRIENDLI_TOKEN")
                 )
             if api_base is not None and not isinstance(api_base, str):
                 raise Exception(
@@ -6810,6 +6812,13 @@ def exception_type(
                     exception_mapping_worked = True
                     raise Timeout(
                         message=f"BedrockException: Timeout Error - {error_str}",
+                        model=model,
+                        llm_provider="bedrock",
+                    )
+                elif "Could not process image" in error_str:
+                    exception_mapping_worked = True
+                    raise litellm.InternalServerError(
+                        message=f"BedrockException - {error_str}",
                         model=model,
                         llm_provider="bedrock",
                     )

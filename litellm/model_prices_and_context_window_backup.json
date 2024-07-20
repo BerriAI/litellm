@@ -2803,6 +2803,16 @@
         "litellm_provider": "bedrock",
         "mode": "chat"
     },
+    "ai21.jamba-instruct-v1:0": {
+        "max_tokens": 4096,
+        "max_input_tokens": 70000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.0000005,
+        "output_cost_per_token": 0.0000007,
+        "litellm_provider": "bedrock",
+        "mode": "chat",
+        "supports_system_messages": true
+    },
     "amazon.titan-text-lite-v1": {
         "max_tokens": 4000, 
         "max_input_tokens": 42000,

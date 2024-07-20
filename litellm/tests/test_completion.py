@@ -1348,7 +1348,10 @@ def test_completion_fireworks_ai():
         pytest.fail(f"Error occurred: {e}")
 
 
-def test_completion_fireworks_ai_bad_api_base():
+@pytest.mark.parametrize(
+    "api_key, api_base", [(None, "my-bad-api-base"), ("my-bad-api-key", None)]
+)
+def test_completion_fireworks_ai_dynamic_params(api_key, api_base):
     try:
         litellm.set_verbose = True
         messages = [
@@ -1361,7 +1364,8 @@ def test_completion_fireworks_ai_bad_api_base():
         response = completion(
             model="fireworks_ai/accounts/fireworks/models/mixtral-8x7b-instruct",
             messages=messages,
-            api_base="my-bad-api-base",
+            api_base=api_base,
+            api_key=api_key,
         )
         pytest.fail(f"This call should have failed!")
     except Exception as e:
