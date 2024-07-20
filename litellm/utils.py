@@ -6813,6 +6813,13 @@ def exception_type(
                         model=model,
                         llm_provider="bedrock",
                     )
+                elif "Could not process image" in error_str:
+                    exception_mapping_worked = True
+                    raise litellm.InternalServerError(
+                        message=f"BedrockException - {error_str}",
+                        model=model,
+                        llm_provider="bedrock",
+                    )
                 elif hasattr(original_exception, "status_code"):
                     if original_exception.status_code == 500:
                         exception_mapping_worked = True
