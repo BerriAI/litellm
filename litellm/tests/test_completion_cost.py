@@ -708,7 +708,7 @@ def test_vertex_ai_completion_cost():
 
 @pytest.mark.skip(reason="new test - WIP, working on fixing this")
 def test_vertex_ai_medlm_completion_cost():
-    """Test for medlm completion cost."""
+    """Test for medlm completion cost ."""
 
     with pytest.raises(Exception) as e:
         model = "vertex_ai/medlm-medium"
