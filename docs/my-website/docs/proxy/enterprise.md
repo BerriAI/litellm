@@ -138,8 +138,6 @@ print(response)
 
 <TabItem value="openai js" label="OpenAI JS">
 
-Set `extra_body={"metadata": { }}` to `metadata` you want to pass
-
 ```js
 const openai = require('openai');
 
@@ -158,7 +156,9 @@ async function runOpenAI() {
           content: "this is a test request, write a short poem"
         },
       ],
-      tags: ["model-anthropic-claude-v2.1", "app-ishaan-prod"] // 👈 Key Change
+      metadata: {
+        tags: ["model-anthropic-claude-v2.1", "app-ishaan-prod"] // 👈 Key Change
+      }
     });
     console.log(response);
   } catch (error) {
@@ -303,6 +303,45 @@ response = client.chat.completions.create(
 )
 
 print(response)
+```
+</TabItem>
+
+
+<TabItem value="openai js" label="OpenAI JS">
+
+```js
+const openai = require('openai');
+
+async function runOpenAI() {
+  const client = new openai.OpenAI({
+    apiKey: 'sk-1234',
+    baseURL: 'http://0.0.0.0:4000'
+  });
+
+  try {
+    const response = await client.chat.completions.create({
+      model: 'gpt-3.5-turbo',
+      messages: [
+        {
+          role: 'user',
+          content: "this is a test request, write a short poem"
+        },
+      ],
+      metadata: {
+        spend_logs_metadata: { // 👈 Key Change
+            hello: "world"
+        }
+      }
+    });
+    console.log(response);
+  } catch (error) {
+    console.log("got this exception from server");
+    console.error(error);
+  }
+}
+
+// Call the asynchronous function
+runOpenAI();
 ```
 </TabItem>
 
