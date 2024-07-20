@@ -22,6 +22,7 @@ Anthropic API fails requests when `max_tokens` are not passed. Due to this litel
 import os
 
 os.environ["ANTHROPIC_API_KEY"] = "your-api-key"
+# os.environ["ANTHROPIC_API_BASE"] = "" # [OPTIONAL] or 'ANTHROPIC_BASE_URL'
 ```
 
 ## Usage
