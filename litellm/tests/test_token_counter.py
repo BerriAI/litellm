@@ -20,7 +20,12 @@ from litellm import (
     token_counter,
 )
 from litellm.tests.large_text import text
-from litellm.tests.messages_with_counts import MESSAGES_TEXT, MESSAGES_WITH_IMAGES, MESSAGES_WITH_TOOLS
+from litellm.tests.messages_with_counts import (
+    MESSAGES_TEXT,
+    MESSAGES_WITH_IMAGES,
+    MESSAGES_WITH_TOOLS,
+)
+
 
 def test_token_counter_normal_plus_function_calling():
     try:
@@ -55,7 +60,9 @@ def test_token_counter_normal_plus_function_calling():
     except Exception as e:
         pytest.fail(f"An exception occurred - {str(e)}")
 
+
 # test_token_counter_normal_plus_function_calling()
+
 
 @pytest.mark.parametrize(
     "message_count_pair",
@@ -63,10 +70,10 @@ def test_token_counter_normal_plus_function_calling():
 )
 def test_token_counter_textonly(message_count_pair):
     counted_tokens = token_counter(
-        model="gpt-35-turbo",
-        messages=[message_count_pair["message"]]
+        model="gpt-35-turbo", messages=[message_count_pair["message"]]
     )
     assert counted_tokens == message_count_pair["count"]
+
 
 @pytest.mark.parametrize(
     "message_count_pair",
@@ -74,8 +81,7 @@ def test_token_counter_textonly(message_count_pair):
 )
 def test_token_counter_with_images(message_count_pair):
     counted_tokens = token_counter(
-        model="gpt-4o",
-        messages=[message_count_pair["message"]]
+        model="gpt-4o", messages=[message_count_pair["message"]]
     )
     assert counted_tokens == message_count_pair["count"]
 
@@ -327,3 +333,13 @@ def test_get_modified_max_tokens(
         ), "Got={}, Expected={}, Params={}".format(
             calculated_value, expected_value, args
         )
+
+
+def test_empty_tools():
+    messages = [{"role": "user", "content": "hey, how's it going?", "tool_calls": None}]
+
+    result = token_counter(
+        messages=messages,
+    )
+
+    print(result)
