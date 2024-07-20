@@ -143,9 +143,11 @@ enum Providers {
   Anthropic = "Anthropic",
   Google_AI_Studio = "Google AI Studio",
   Bedrock = "Amazon Bedrock",
-  OpenAI_Compatible = "OpenAI-Compatible Endpoints (Groq, Together AI, Mistral AI, etc.)",
+  OpenAI_Compatible = "OpenAI-Compatible Endpoints (Groq, Mistral AI, etc.)",
   Vertex_AI = "Vertex AI (Anthropic, Gemini, etc.)",
   Databricks = "Databricks",
+  TogetherAI = "TogetherAI",
+  Groq = "Groq",
   Ollama = "Ollama",
 }
 
@@ -158,6 +160,8 @@ const provider_map: Record<string, string> = {
   Bedrock: "bedrock",
   OpenAI_Compatible: "openai",
   Vertex_AI: "vertex_ai",
+  TogetherAI: "together_ai",
+  Groq: "groq",
   Databricks: "databricks",
   Ollama: "ollama",
 
@@ -1724,7 +1728,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                     tooltip="Actual model name used for making litellm.completion() call."
                     className="mb-0"
                   >
-                    { (selectedProvider === Providers.Azure) || (selectedProvider === Providers.OpenAI_Compatible) || (selectedProvider === Providers.Ollama) ? (
+                    { (selectedProvider === Providers.Azure) || (selectedProvider === Providers.OpenAI_Compatible) || (selectedProvider === Providers.Ollama) || (selectedProvider === Providers.TogetherAI) ? (
                       <TextInput placeholder={getPlaceholder(selectedProvider.toString())} />
                     ) : providerModels.length > 0 ? (
                       <MultiSelect value={providerModels}>
