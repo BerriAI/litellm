@@ -784,6 +784,34 @@ class OpenAIChatCompletion(BaseLLM):
         except Exception as e:
             raise e
 
+    def make_sync_openai_chat_completion_request(
+        self,
+        openai_client: OpenAI,
+        data: dict,
+        timeout: Union[float, httpx.Timeout],
+    ):
+        """
+        Helper to:
+        - call chat.completions.create.with_raw_response when litellm.return_response_headers is True
+        - call chat.completions.create by default
+        """
+        try:
+            if litellm.return_response_headers is True:
+                raw_response = openai_client.chat.completions.with_raw_response.create(
+                    **data, timeout=timeout
+                )
+
+                headers = dict(raw_response.headers)
+                response = raw_response.parse()
+                return headers, response
+            else:
+                response = openai_client.chat.completions.create(
+                    **data, timeout=timeout
+                )
+                return None, response
+        except Exception as e:
+            raise e
+
     def completion(
         self,
         model_response: ModelResponse,
@@ -913,7 +941,15 @@ class OpenAIChatCompletion(BaseLLM):
                             },
                         )
 
-                        response = openai_client.chat.completions.create(**data, timeout=timeout)  # type: ignore
+                        headers, response = (
+                            self.make_sync_openai_chat_completion_request(
+                                openai_client=openai_client,
+                                data=data,
+                                timeout=timeout,
+                            )
+                        )
+
+                        logging_obj.model_call_details["response_headers"] = headers
                         stringified_response = response.model_dump()
                         logging_obj.post_call(
                             input=messages,
@@ -1059,7 +1095,13 @@ class OpenAIChatCompletion(BaseLLM):
                 "complete_input_dict": data,
             },
         )
-        response = openai_client.chat.completions.create(**data, timeout=timeout)
+        headers, response = self.make_sync_openai_chat_completion_request(
+            openai_client=openai_client,
+            data=data,
+            timeout=timeout,
+        )
+
+        logging_obj.model_call_details["response_headers"] = headers
         streamwrapper = CustomStreamWrapper(
             completion_stream=response,
             model=model,
@@ -1155,6 +1197,31 @@ class OpenAIChatCompletion(BaseLLM):
                 return headers, response
             else:
                 response = await openai_aclient.embeddings.create(**data, timeout=timeout)  # type: ignore
+                return None, response
+        except Exception as e:
+            raise e
+
+    async def make_sync_openai_embedding_request(
+        self,
+        openai_client: OpenAI,
+        data: dict,
+        timeout: Union[float, httpx.Timeout],
+    ):
+        """
+        Helper to:
+        - call embeddings.create.with_raw_response when litellm.return_response_headers is True
+        - call embeddings.create by default
+        """
+        try:
+            if litellm.return_response_headers is True:
+                raw_response = openai_client.embeddings.with_raw_response.create(
+                    **data, timeout=timeout
+                )  # type: ignore
+                headers = dict(raw_response.headers)
+                response = raw_response.parse()
+                return headers, response
+            else:
+                response = openai_client.embeddings.create(**data, timeout=timeout)  # type: ignore
                 return None, response
         except Exception as e:
             raise e
@@ -1255,15 +1322,19 @@ class OpenAIChatCompletion(BaseLLM):
             )
 
             ## COMPLETION CALL
-            response = openai_client.embeddings.create(**data, timeout=timeout)  # type: ignore
+            headers: Optional[Dict] = None
+            headers, response = self.make_sync_openai_embedding_request(
+                openai_client=openai_client, data=data, timeout=timeout
+            )  # type: ignore
+
             ## LOGGING
+            logging_obj.model_call_details["response_headers"] = headers
             logging_obj.post_call(
                 input=input,
                 api_key=api_key,
                 additional_args={"complete_input_dict": data},
                 original_response=response,
             )
-
             return convert_to_model_response_object(response_object=response.model_dump(), model_response_object=model_response, response_type="embedding")  # type: ignore
         except OpenAIError as e:
             exception_mapping_worked = True
@@ -1427,6 +1498,33 @@ class OpenAIChatCompletion(BaseLLM):
         except Exception as e:
             raise e
 
+    async def make_sync_openai_audio_transcriptions_request(
+        self,
+        openai_client: OpenAI,
+        data: dict,
+        timeout: Union[float, httpx.Timeout],
+    ):
+        """
+        Helper to:
+        - call openai_aclient.audio.transcriptions.with_raw_response when litellm.return_response_headers is True
+        - call openai_aclient.audio.transcriptions.create by default
+        """
+        try:
+            if litellm.return_response_headers is True:
+                raw_response = (
+                    openai_client.audio.transcriptions.with_raw_response.create(
+                        **data, timeout=timeout
+                    )
+                )  # type: ignore
+                headers = dict(raw_response.headers)
+                response = raw_response.parse()
+                return headers, response
+            else:
+                response = openai_client.audio.transcriptions.create(**data, timeout=timeout)  # type: ignore
+                return None, response
+        except Exception as e:
+            raise e
+
     def audio_transcriptions(
         self,
         model: str,
@@ -1462,8 +1560,10 @@ class OpenAIChatCompletion(BaseLLM):
             timeout=timeout,
             max_retries=max_retries,
         )
-        response = openai_client.audio.transcriptions.create(
-            **data, timeout=timeout  # type: ignore
+        response = self.make_sync_openai_audio_transcriptions_request(
+            openai_client=openai_client,
+            data=data,
+            timeout=timeout,
         )
 
         if isinstance(response, BaseModel):
