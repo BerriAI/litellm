@@ -1312,22 +1312,22 @@ async def test_completion_replicate_llama3_streaming(sync_mode):
 #         pytest.fail(f"Error occurred: {e}")
 
 
-@pytest.mark.parametrize("sync_mode", [True])  # False
+@pytest.mark.parametrize("sync_mode", [True, False])  #
 @pytest.mark.parametrize(
-    "model",
+    "model, region",
     [
-        "bedrock/cohere.command-r-plus-v1:0",
-        "anthropic.claude-3-sonnet-20240229-v1:0",
-        "anthropic.claude-instant-v1",
-        "bedrock/ai21.j2-mid",
-        "mistral.mistral-7b-instruct-v0:2",
-        "bedrock/amazon.titan-tg1-large",
-        "meta.llama3-8b-instruct-v1:0",
-        "cohere.command-text-v14",
+        ["bedrock/ai21.jamba-instruct-v1:0", "us-east-1"],
+        ["bedrock/cohere.command-r-plus-v1:0", None],
+        ["anthropic.claude-3-sonnet-20240229-v1:0", None],
+        ["anthropic.claude-instant-v1", None],
+        ["mistral.mistral-7b-instruct-v0:2", None],
+        ["bedrock/amazon.titan-tg1-large", None],
+        ["meta.llama3-8b-instruct-v1:0", None],
+        ["cohere.command-text-v14", None],
     ],
 )
 @pytest.mark.asyncio
-async def test_bedrock_httpx_streaming(sync_mode, model):
+async def test_bedrock_httpx_streaming(sync_mode, model, region):
     try:
         litellm.set_verbose = True
         if sync_mode:
@@ -1337,6 +1337,7 @@ async def test_bedrock_httpx_streaming(sync_mode, model):
                 messages=messages,
                 max_tokens=10,  # type: ignore
                 stream=True,
+                aws_region_name=region,
             )
             complete_response = ""
             # Add any assertions here to check the response
@@ -1358,6 +1359,7 @@ async def test_bedrock_httpx_streaming(sync_mode, model):
                 messages=messages,
                 max_tokens=100,  # type: ignore
                 stream=True,
+                aws_region_name=region,
             )
             complete_response = ""
             # Add any assertions here to check the response
