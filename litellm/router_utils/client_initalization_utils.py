@@ -79,7 +79,10 @@ def set_client(litellm_router_instance: LitellmRouter, model: dict):
     default_api_key = None
     if custom_llm_provider in litellm.openai_compatible_providers:
         _, custom_llm_provider, api_key, api_base = litellm.get_llm_provider(
-            model=model_name
+            model=model_name,
+            custom_llm_provider=custom_llm_provider,
+            api_key=litellm_params.get("api_key"),
+            api_base=litellm_params.get("api_base"),
         )
         default_api_base = api_base
         default_api_key = api_key
