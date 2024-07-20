@@ -984,47 +984,79 @@ class OpenAIChatCompletion(BaseLLM):
         headers=None,
     ):
         response = None
-        try:
-            openai_aclient = self._get_openai_client(
-                is_async=True,
-                api_key=api_key,
-                api_base=api_base,
-                timeout=timeout,
-                max_retries=max_retries,
-                organization=organization,
-                client=client,
-            )
+        for _ in range(
+            2
+        ):  # if call fails due to alternating messages, retry with reformatted message
+            try:
+                openai_aclient = self._get_openai_client(
+                    is_async=True,
+                    api_key=api_key,
+                    api_base=api_base,
+                    timeout=timeout,
+                    max_retries=max_retries,
+                    organization=organization,
+                    client=client,
+                )
 
-            ## LOGGING
-            logging_obj.pre_call(
-                input=data["messages"],
-                api_key=openai_aclient.api_key,
-                additional_args={
-                    "headers": {"Authorization": f"Bearer {openai_aclient.api_key}"},
-                    "api_base": openai_aclient._base_url._uri_reference,
-                    "acompletion": True,
-                    "complete_input_dict": data,
-                },
-            )
+                ## LOGGING
+                logging_obj.pre_call(
+                    input=data["messages"],
+                    api_key=openai_aclient.api_key,
+                    additional_args={
+                        "headers": {
+                            "Authorization": f"Bearer {openai_aclient.api_key}"
+                        },
+                        "api_base": openai_aclient._base_url._uri_reference,
+                        "acompletion": True,
+                        "complete_input_dict": data,
+                    },
+                )
 
-            headers, response = await self.make_openai_chat_completion_request(
-                openai_aclient=openai_aclient, data=data, timeout=timeout
-            )
-            stringified_response = response.model_dump()
-            logging_obj.post_call(
-                input=data["messages"],
-                api_key=api_key,
-                original_response=stringified_response,
-                additional_args={"complete_input_dict": data},
-            )
-            logging_obj.model_call_details["response_headers"] = headers
-            return convert_to_model_response_object(
-                response_object=stringified_response,
-                model_response_object=model_response,
-                hidden_params={"headers": headers},
-            )
-        except Exception as e:
-            raise e
+                headers, response = await self.make_openai_chat_completion_request(
+                    openai_aclient=openai_aclient, data=data, timeout=timeout
+                )
+                stringified_response = response.model_dump()
+                logging_obj.post_call(
+                    input=data["messages"],
+                    api_key=api_key,
+                    original_response=stringified_response,
+                    additional_args={"complete_input_dict": data},
+                )
+                logging_obj.model_call_details["response_headers"] = headers
+                return convert_to_model_response_object(
+                    response_object=stringified_response,
+                    model_response_object=model_response,
+                    hidden_params={"headers": headers},
+                )
+            except openai.UnprocessableEntityError as e:
+                ## check if body contains unprocessable params - related issue https://github.com/BerriAI/litellm/issues/4800
+                if litellm.drop_params is True:
+                    if e.body is not None and e.body.get("detail"):  # type: ignore
+                        detail = e.body.get("detail")  # type: ignore
+                        invalid_params: List[str] = []
+                        if (
+                            isinstance(detail, List)
+                            and len(detail) > 0
+                            and isinstance(detail[0], dict)
+                        ):
+                            for error_dict in detail:
+                                if (
+                                    error_dict.get("loc")
+                                    and isinstance(error_dict.get("loc"), list)
+                                    and len(error_dict.get("loc")) == 2
+                                ):
+                                    invalid_params.append(error_dict["loc"][1])
+
+                    new_data = {}
+                    for k, v in data.items():
+                        if k not in invalid_params:
+                            new_data[k] = v
+                    data = new_data
+                else:
+                    raise e
+                # e.message
+            except Exception as e:
+                raise e
 
     def streaming(
         self,
