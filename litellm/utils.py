@@ -1911,7 +1911,7 @@ def token_counter(
     # use tiktoken, anthropic, cohere, llama2, or llama3's tokenizer depending on the model
     is_tool_call = False
     num_tokens = 0
-    if text == None:
+    if text is None:
         if messages is not None:
             print_verbose(f"token_counter messages received: {messages}")
             text = ""
@@ -1937,7 +1937,7 @@ def token_counter(
                                     num_tokens += calculage_img_tokens(
                                         data=image_url_str, mode="auto"
                                     )
-                if "tool_calls" in message:
+                if message.get("tool_calls"):
                     is_tool_call = True
                     for tool_call in message["tool_calls"]:
                         if "function" in tool_call:
