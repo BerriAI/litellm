@@ -115,7 +115,7 @@ client = openai.OpenAI(
     base_url="http://0.0.0.0:4000"
 )
 
-# request sent to model set on litellm proxy, `litellm --model`
+
 response = client.chat.completions.create(
     model="gpt-3.5-turbo",
     messages = [
@@ -126,12 +126,49 @@ response = client.chat.completions.create(
     ],
     extra_body={
         "metadata": {
-            "tags": ["model-anthropic-claude-v2.1", "app-ishaan-prod"]
+            "tags": ["model-anthropic-claude-v2.1", "app-ishaan-prod"] # 👈 Key Change
         }
     }
 )
 
 print(response)
+```
+</TabItem>
+
+
+<TabItem value="openai js" label="OpenAI JS">
+
+```js
+const openai = require('openai');
+
+async function runOpenAI() {
+  const client = new openai.OpenAI({
+    apiKey: 'sk-1234',
+    baseURL: 'http://0.0.0.0:4000'
+  });
+
+  try {
+    const response = await client.chat.completions.create({
+      model: 'gpt-3.5-turbo',
+      messages: [
+        {
+          role: 'user',
+          content: "this is a test request, write a short poem"
+        },
+      ],
+      metadata: {
+        tags: ["model-anthropic-claude-v2.1", "app-ishaan-prod"] // 👈 Key Change
+      }
+    });
+    console.log(response);
+  } catch (error) {
+    console.log("got this exception from server");
+    console.error(error);
+  }
+}
+
+// Call the asynchronous function
+runOpenAI();
 ```
 </TabItem>
 
@@ -266,6 +303,45 @@ response = client.chat.completions.create(
 )
 
 print(response)
+```
+</TabItem>
+
+
+<TabItem value="openai js" label="OpenAI JS">
+
+```js
+const openai = require('openai');
+
+async function runOpenAI() {
+  const client = new openai.OpenAI({
+    apiKey: 'sk-1234',
+    baseURL: 'http://0.0.0.0:4000'
+  });
+
+  try {
+    const response = await client.chat.completions.create({
+      model: 'gpt-3.5-turbo',
+      messages: [
+        {
+          role: 'user',
+          content: "this is a test request, write a short poem"
+        },
+      ],
+      metadata: {
+        spend_logs_metadata: { // 👈 Key Change
+            hello: "world"
+        }
+      }
+    });
+    console.log(response);
+  } catch (error) {
+    console.log("got this exception from server");
+    console.error(error);
+  }
+}
+
+// Call the asynchronous function
+runOpenAI();
 ```
 </TabItem>
 
