@@ -1487,6 +1487,7 @@ def completion(
                     api_base
                     or litellm.api_base
                     or get_secret("ANTHROPIC_API_BASE")
+                    or get_secret("ANTHROPIC_BASE_URL")
                     or "https://api.anthropic.com/v1/complete"
                 )
                 response = anthropic_text_completions.completion(
@@ -1512,6 +1513,7 @@ def completion(
                     api_base
                     or litellm.api_base
                     or get_secret("ANTHROPIC_API_BASE")
+                    or get_secret("ANTHROPIC_BASE_URL")
                     or "https://api.anthropic.com/v1/messages"
                 )
                 response = anthropic_chat_completions.completion(
