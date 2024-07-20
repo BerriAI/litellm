@@ -467,12 +467,17 @@ async def user_api_key_auth(
                 key="team_id:{}".format(valid_token.team_id)
             )
 
-            team_obj_dict = team_obj.__dict__
+            if (
+                team_obj.last_refreshed_at is not None
+                and valid_token.last_refreshed_at is not None
+                and team_obj.last_refreshed_at > valid_token.last_refreshed_at
+            ):
+                team_obj_dict = team_obj.__dict__
 
-            for k, v in team_obj_dict.items():
-                field_name = f"team_{k}"
-                if field_name in valid_token.__fields__:
-                    setattr(valid_token, field_name, v)
+                for k, v in team_obj_dict.items():
+                    field_name = f"team_{k}"
+                    if field_name in valid_token.__fields__:
+                        setattr(valid_token, field_name, v)
 
         try:
             is_master_key_valid = secrets.compare_digest(api_key, master_key)  # type: ignore
@@ -541,10 +546,13 @@ async def user_api_key_auth(
                     parent_otel_span=parent_otel_span,
                     proxy_logging_obj=proxy_logging_obj,
                 )
+
                 if _valid_token is not None:
+                    ## update cached token
                     valid_token = UserAPIKeyAuth(
                         **_valid_token.model_dump(exclude_none=True)
                     )
+
             verbose_proxy_logger.debug("Token from db: %s", valid_token)
         elif valid_token is not None and isinstance(valid_token, UserAPIKeyAuth):
             verbose_proxy_logger.debug("API Key Cache Hit!")
