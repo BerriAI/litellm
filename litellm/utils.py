@@ -5666,7 +5666,7 @@ def convert_to_model_response_object(
     start_time=None,
     end_time=None,
     hidden_params: Optional[dict] = None,
-    response_headers: Optional[dict] = None,
+    _response_headers: Optional[dict] = None,
 ):
     received_args = locals()
     ### CHECK IF ERROR IN RESPONSE ### - openrouter returns these in the dictionary
@@ -5765,8 +5765,8 @@ def convert_to_model_response_object(
             if hidden_params is not None:
                 model_response_object._hidden_params = hidden_params
 
-            if response_headers is not None:
-                model_response_object.response_headers = response_headers
+            if _response_headers is not None:
+                model_response_object._response_headers = _response_headers
 
             return model_response_object
         elif response_type == "embedding" and (
@@ -5800,8 +5800,8 @@ def convert_to_model_response_object(
             if hidden_params is not None:
                 model_response_object._hidden_params = hidden_params
 
-            if response_headers is not None:
-                model_response_object.response_headers = response_headers
+            if _response_headers is not None:
+                model_response_object._response_headers = _response_headers
 
             return model_response_object
         elif response_type == "image_generation" and (
@@ -5845,8 +5845,8 @@ def convert_to_model_response_object(
             if hidden_params is not None:
                 model_response_object._hidden_params = hidden_params
 
-            if response_headers is not None:
-                model_response_object.response_headers = response_headers
+            if _response_headers is not None:
+                model_response_object._response_headers = _response_headers
 
             return model_response_object
     except Exception as e:
@@ -8273,7 +8273,7 @@ class CustomStreamWrapper:
         logging_obj=None,
         stream_options=None,
         make_call: Optional[Callable] = None,
-        response_headers: Optional[dict] = None,
+        _response_headers: Optional[dict] = None,
     ):
         self.model = model
         self.make_call = make_call
@@ -8305,7 +8305,7 @@ class CustomStreamWrapper:
         self._hidden_params = {
             "model_id": (_model_info.get("id", None))
         }  # returned as x-litellm-model-id response header in proxy
-        self.response_headers = response_headers
+        self._response_headers = _response_headers
         self.response_id = None
         self.logging_loop = None
         self.rules = Rules()
