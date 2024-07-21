@@ -960,7 +960,7 @@ class OpenAIChatCompletion(BaseLLM):
                         return convert_to_model_response_object(
                             response_object=stringified_response,
                             model_response_object=model_response,
-                            response_headers=headers,
+                            _response_headers=headers,
                         )
                 except Exception as e:
                     if print_verbose is not None:
@@ -1059,7 +1059,7 @@ class OpenAIChatCompletion(BaseLLM):
                 response_object=stringified_response,
                 model_response_object=model_response,
                 hidden_params={"headers": headers},
-                response_headers=headers,
+                _response_headers=headers,
             )
         except Exception as e:
             raise e
@@ -1110,7 +1110,7 @@ class OpenAIChatCompletion(BaseLLM):
             custom_llm_provider="openai",
             logging_obj=logging_obj,
             stream_options=data.get("stream_options", None),
-            response_headers=headers,
+            _response_headers=headers,
         )
         return streamwrapper
 
@@ -1160,7 +1160,7 @@ class OpenAIChatCompletion(BaseLLM):
                 custom_llm_provider="openai",
                 logging_obj=logging_obj,
                 stream_options=data.get("stream_options", None),
-                response_headers=headers,
+                _response_headers=headers,
             )
             return streamwrapper
         except (
@@ -1269,7 +1269,7 @@ class OpenAIChatCompletion(BaseLLM):
                 response_object=stringified_response,
                 model_response_object=model_response,
                 response_type="embedding",
-                response_headers=headers,
+                _response_headers=headers,
             )  # type: ignore
         except Exception as e:
             ## LOGGING
@@ -1348,7 +1348,7 @@ class OpenAIChatCompletion(BaseLLM):
             return convert_to_model_response_object(
                 response_object=sync_embedding_response.model_dump(),
                 model_response_object=model_response,
-                response_headers=headers,
+                _response_headers=headers,
                 response_type="embedding",
             )  # type: ignore
         except OpenAIError as e:

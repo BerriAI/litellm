@@ -1331,9 +1331,9 @@ def test_completion_openai_response_headers():
 
     print(f"response: {response}")
 
-    print("response_headers=", response.response_headers)
-    assert response.response_headers is not None
-    assert "x-ratelimit-remaining-tokens" in response.response_headers
+    print("response_headers=", response._response_headers)
+    assert response._response_headers is not None
+    assert "x-ratelimit-remaining-tokens" in response._response_headers
 
     # /chat/completion with streaming
 
@@ -1342,7 +1342,7 @@ def test_completion_openai_response_headers():
         messages=messages,
         stream=True,
     )
-    response_headers = streaming_response.response_headers
+    response_headers = streaming_response._response_headers
     print("streaming response_headers=", response_headers)
     assert response_headers is not None
     assert "x-ratelimit-remaining-tokens" in response_headers
@@ -1356,7 +1356,7 @@ def test_completion_openai_response_headers():
         input="hello",
     )
 
-    embedding_response_headers = embedding_response.response_headers
+    embedding_response_headers = embedding_response._response_headers
     print("embedding_response_headers=", embedding_response_headers)
     assert embedding_response_headers is not None
     assert "x-ratelimit-remaining-tokens" in embedding_response_headers
@@ -1386,9 +1386,9 @@ async def test_async_completion_openai_response_headers():
 
     print(f"response: {response}")
 
-    print("response_headers=", response.response_headers)
-    assert response.response_headers is not None
-    assert "x-ratelimit-remaining-tokens" in response.response_headers
+    print("response_headers=", response._response_headers)
+    assert response._response_headers is not None
+    assert "x-ratelimit-remaining-tokens" in response._response_headers
 
     # /chat/completion with streaming
 
@@ -1397,7 +1397,7 @@ async def test_async_completion_openai_response_headers():
         messages=messages,
         stream=True,
     )
-    response_headers = streaming_response.response_headers
+    response_headers = streaming_response._response_headers
     print("streaming response_headers=", response_headers)
     assert response_headers is not None
     assert "x-ratelimit-remaining-tokens" in response_headers
@@ -1411,7 +1411,7 @@ async def test_async_completion_openai_response_headers():
         input="hello",
     )
 
-    embedding_response_headers = embedding_response.response_headers
+    embedding_response_headers = embedding_response._response_headers
     print("embedding_response_headers=", embedding_response_headers)
     assert embedding_response_headers is not None
     assert "x-ratelimit-remaining-tokens" in embedding_response_headers
