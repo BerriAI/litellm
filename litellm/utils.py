@@ -3667,16 +3667,25 @@ def get_optional_params(
         + litellm.openai_compatible_providers
     ):
         # for openai, azure we should pass the extra/passed params within `extra_body` https://github.com/openai/openai-python/blob/ac33853ba10d13ac149b1fa3ca6dba7d613065c9/src/openai/resources/models.py#L46
-        extra_body = passed_params.pop("extra_body", {})
-        for k in passed_params.keys():
-            if k not in default_params.keys():
-                extra_body[k] = passed_params[k]
-        optional_params.setdefault("extra_body", {})
-        optional_params["extra_body"] = {**optional_params["extra_body"], **extra_body}
+        if (
+            _should_drop_param(
+                k="extra_body", additional_drop_params=additional_drop_params
+            )
+            is False
+        ):
+            extra_body = passed_params.pop("extra_body", {})
+            for k in passed_params.keys():
+                if k not in default_params.keys():
+                    extra_body[k] = passed_params[k]
+            optional_params.setdefault("extra_body", {})
+            optional_params["extra_body"] = {
+                **optional_params["extra_body"],
+                **extra_body,
+            }
 
-        optional_params["extra_body"] = _ensure_extra_body_is_safe(
-            extra_body=optional_params["extra_body"]
-        )
+            optional_params["extra_body"] = _ensure_extra_body_is_safe(
+                extra_body=optional_params["extra_body"]
+            )
     else:
         # if user passed in non-default kwargs for specific providers/models, pass them along
         for k in passed_params.keys():
