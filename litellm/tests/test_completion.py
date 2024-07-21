@@ -1335,7 +1335,7 @@ def test_completion_openai_response_headers():
     assert response._response_headers is not None
     assert "x-ratelimit-remaining-tokens" in response._response_headers
 
-    # /chat/completion with streaming
+    # /chat/completion - with streaming
 
     streaming_response = litellm.completion(
         model="gpt-4o-mini",
