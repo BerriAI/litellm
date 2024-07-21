@@ -279,6 +279,7 @@ def test_bedrock_embedding_titan():
         response = embedding(
             model="bedrock/amazon.titan-embed-text-v1",
             input=f"good morning from litellm, attempting to embed data {current_time}",  # input should always be a string in this test
+            aws_region_name="us-west-2",
         )
         print(f"response:", response)
         assert isinstance(
