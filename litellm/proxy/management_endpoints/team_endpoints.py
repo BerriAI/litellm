@@ -363,6 +363,7 @@ async def update_team(
         # set the budget_reset_at in DB
         updated_kv["budget_reset_at"] = reset_at
 
+    updated_kv = prisma_client.jsonify_object(data=updated_kv)
     team_row: Optional[
         LiteLLM_TeamTable
     ] = await prisma_client.db.litellm_teamtable.update(
