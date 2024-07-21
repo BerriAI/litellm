@@ -242,7 +242,7 @@ response = completion(
 
 Set `litellm.return_response_headers = True` to get raw response headers from OpenAI
 
-You can expect to always get the `response_headers` field from `litellm.completion()`, `litellm.embedding()` functions
+You can expect to always get the `_response_headers` field from `litellm.completion()`, `litellm.embedding()` functions
 
 <Tabs>
 <TabItem value="litellm.completion" label="litellm.completion">
@@ -261,7 +261,7 @@ response = completion(
     ],
 )
 print(f"response: {response}")
-print("response_headers=", response.response_headers)
+print("_response_headers=", response._response_headers)
 ```
 </TabItem>
 
@@ -282,7 +282,7 @@ response = completion(
     ],
 )
 print(f"response: {response}")
-print("response_headers=", response.response_headers)
+print("response_headers=", response._response_headers)
 for chunk in response:
     print(chunk)
 ```
@@ -299,7 +299,7 @@ embedding_response = litellm.embedding(
     input="hello",
 )
 
-embedding_response_headers = embedding_response.response_headers
+embedding_response_headers = embedding_response._response_headers
 print("embedding_response_headers=", embedding_response_headers)
 ```
 
