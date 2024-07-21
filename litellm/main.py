@@ -1176,6 +1176,7 @@ def completion(
                     client=client,  # pass AsyncOpenAI, OpenAI client
                     organization=organization,
                     custom_llm_provider=custom_llm_provider,
+                    drop_params=non_default_params.get("drop_params"),
                 )
             except Exception as e:
                 ## LOGGING - log the original exception returned
