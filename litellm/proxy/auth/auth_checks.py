@@ -57,6 +57,7 @@ def common_checks(
     4. If end_user (either via JWT or 'user' passed to /chat/completions, /embeddings endpoint) is in budget
     5. [OPTIONAL] If 'enforce_end_user' enabled - did developer pass in 'user' param for openai endpoints
     6. [OPTIONAL] If 'litellm.max_budget' is set (>0), is proxy under budget
+    7. [OPTIONAL] If guardrails modified - is request allowed to change this
     """
     _model = request_body.get("model", None)
     if team_object is not None and team_object.blocked is True:
@@ -157,6 +158,22 @@ def common_checks(
         if global_proxy_spend > litellm.max_budget:
             raise litellm.BudgetExceededError(
                 current_cost=global_proxy_spend, max_budget=litellm.max_budget
+            )
+
+    _request_metadata: dict = request_body.get("metadata", {}) or {}
+    if _request_metadata.get("guardrails"):
+        # check if team allowed to modify guardrails
+        from litellm.proxy.guardrails.guardrail_helpers import can_modify_guardrails
+
+        can_modify: bool = can_modify_guardrails(team_object)
+        if can_modify is False:
+            from fastapi import HTTPException
+
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "Your team does not have permission to modify guardrails."
+                },
             )
     return True
 

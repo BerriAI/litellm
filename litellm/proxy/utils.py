@@ -1315,6 +1315,7 @@ class PrismaClient:
                     t.models AS team_models,
                     t.blocked AS team_blocked,
                     t.team_alias AS team_alias,
+                    t.metadata AS team_metadata,
                     tm.spend AS team_member_spend,
                     m.aliases as team_model_aliases
                     FROM "LiteLLM_VerificationToken" AS v
