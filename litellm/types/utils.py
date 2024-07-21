@@ -536,7 +536,7 @@ class ModelResponse(OpenAIObject):
 
     _hidden_params: dict = {}
 
-    response_headers: Optional[dict] = None
+    _response_headers: Optional[dict] = None
 
     def __init__(
         self,
@@ -551,7 +551,7 @@ class ModelResponse(OpenAIObject):
         stream_options=None,
         response_ms=None,
         hidden_params=None,
-        response_headers=None,
+        _response_headers=None,
         **params,
     ) -> None:
         if stream is not None and stream is True:
@@ -601,8 +601,8 @@ class ModelResponse(OpenAIObject):
         if hidden_params:
             self._hidden_params = hidden_params
 
-        if response_headers:
-            self.response_headers = response_headers
+        if _response_headers:
+            self._response_headers = _response_headers
 
         init_values = {
             "id": id,
@@ -673,8 +673,7 @@ class EmbeddingResponse(OpenAIObject):
     """Usage statistics for the embedding request."""
 
     _hidden_params: dict = {}
-
-    response_headers: Optional[dict] = None
+    _response_headers: Optional[Dict] = None
 
     def __init__(
         self,
@@ -684,7 +683,7 @@ class EmbeddingResponse(OpenAIObject):
         response_ms=None,
         data=None,
         hidden_params=None,
-        response_headers=None,
+        _response_headers=None,
         **params,
     ):
         object = "list"
@@ -701,6 +700,9 @@ class EmbeddingResponse(OpenAIObject):
             usage = usage
         else:
             usage = Usage()
+
+        if _response_headers:
+            self._response_headers = _response_headers
 
         model = model
         super().__init__(model=model, object=object, data=data, usage=usage)
@@ -984,7 +986,7 @@ class TranscriptionResponse(OpenAIObject):
     text: Optional[str] = None
 
     _hidden_params: dict = {}
-    response_headers: Optional[dict] = None
+    _response_headers: Optional[dict] = None
 
     def __init__(self, text=None):
         super().__init__(text=text)
