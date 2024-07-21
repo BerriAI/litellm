@@ -1668,7 +1668,7 @@ class OpenAIChatCompletion(BaseLLM):
             timeout=timeout,
             max_retries=max_retries,
         )
-        response = self.make_sync_openai_audio_transcriptions_request(
+        _, response = self.make_sync_openai_audio_transcriptions_request(
             openai_client=openai_client,
             data=data,
             timeout=timeout,
