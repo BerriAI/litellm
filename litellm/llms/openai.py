@@ -1080,25 +1080,6 @@ class OpenAIChatCompletion(BaseLLM):
                     },
                 )
 
-            headers, response = await self.make_openai_chat_completion_request(
-                openai_aclient=openai_aclient, data=data, timeout=timeout
-            )
-            stringified_response = response.model_dump()
-            logging_obj.post_call(
-                input=data["messages"],
-                api_key=api_key,
-                original_response=stringified_response,
-                additional_args={"complete_input_dict": data},
-            )
-            logging_obj.model_call_details["response_headers"] = headers
-            return convert_to_model_response_object(
-                response_object=stringified_response,
-                model_response_object=model_response,
-                hidden_params={"headers": headers},
-                _response_headers=headers,
-            )
-        except Exception as e:
-            raise e
                 headers, response = await self.make_openai_chat_completion_request(
                     openai_aclient=openai_aclient, data=data, timeout=timeout
                 )
@@ -1114,6 +1095,7 @@ class OpenAIChatCompletion(BaseLLM):
                     response_object=stringified_response,
                     model_response_object=model_response,
                     hidden_params={"headers": headers},
+                    _response_headers=headers,
                 )
             except openai.UnprocessableEntityError as e:
                 ## check if body contains unprocessable params - related issue https://github.com/BerriAI/litellm/issues/4800
@@ -1233,30 +1215,8 @@ class OpenAIChatCompletion(BaseLLM):
                     },
                 )
 
-            headers, response = await self.make_openai_chat_completion_request(
-                openai_aclient=openai_aclient, data=data, timeout=timeout
-            )
-            logging_obj.model_call_details["response_headers"] = headers
-            streamwrapper = CustomStreamWrapper(
-                completion_stream=response,
-                model=model,
-                custom_llm_provider="openai",
-                logging_obj=logging_obj,
-                stream_options=data.get("stream_options", None),
-                _response_headers=headers,
-            )
-            return streamwrapper
-        except (
-            Exception
-        ) as e:  # need to exception handle here. async exceptions don't get caught in sync functions.
-            if response is not None and hasattr(response, "text"):
-                raise OpenAIError(
-                    status_code=500,
-                    message=f"{str(e)}\n\nOriginal Response: {response.text}",
-
                 headers, response = await self.make_openai_chat_completion_request(
                     openai_aclient=openai_aclient, data=data, timeout=timeout
-
                 )
                 logging_obj.model_call_details["response_headers"] = headers
                 streamwrapper = CustomStreamWrapper(
@@ -1265,6 +1225,7 @@ class OpenAIChatCompletion(BaseLLM):
                     custom_llm_provider="openai",
                     logging_obj=logging_obj,
                     stream_options=data.get("stream_options", None),
+                    _response_headers=headers,
                 )
                 return streamwrapper
             except openai.UnprocessableEntityError as e:
