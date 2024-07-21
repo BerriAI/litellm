@@ -1513,7 +1513,7 @@ class OpenAIChatCompletion(BaseLLM):
         except Exception as e:
             raise e
 
-    async def make_sync_openai_audio_transcriptions_request(
+    def make_sync_openai_audio_transcriptions_request(
         self,
         openai_client: OpenAI,
         data: dict,
