@@ -1176,6 +1176,7 @@ def completion(
                     client=client,  # pass AsyncOpenAI, OpenAI client
                     organization=organization,
                     custom_llm_provider=custom_llm_provider,
+                    drop_params=non_default_params.get("drop_params"),
                 )
             except Exception as e:
                 ## LOGGING - log the original exception returned
@@ -1487,6 +1488,7 @@ def completion(
                     api_base
                     or litellm.api_base
                     or get_secret("ANTHROPIC_API_BASE")
+                    or get_secret("ANTHROPIC_BASE_URL")
                     or "https://api.anthropic.com/v1/complete"
                 )
                 response = anthropic_text_completions.completion(
@@ -1512,6 +1514,7 @@ def completion(
                     api_base
                     or litellm.api_base
                     or get_secret("ANTHROPIC_API_BASE")
+                    or get_secret("ANTHROPIC_BASE_URL")
                     or "https://api.anthropic.com/v1/messages"
                 )
                 response = anthropic_chat_completions.completion(

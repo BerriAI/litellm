@@ -59,7 +59,7 @@ def common_checks(
     6. [OPTIONAL] If 'litellm.max_budget' is set (>0), is proxy under budget
     """
     _model = request_body.get("model", None)
-    if team_object is not None and team_object.blocked == True:
+    if team_object is not None and team_object.blocked is True:
         raise Exception(
             f"Team={team_object.team_id} is blocked. Update via `/team/unblock` if your admin."
         )
@@ -349,6 +349,15 @@ async def get_user_object(
         )
 
 
+async def _cache_team_object(
+    team_id: str,
+    team_table: LiteLLM_TeamTable,
+    user_api_key_cache: DualCache,
+):
+    key = "team_id:{}".format(team_id)
+    await user_api_key_cache.async_set_cache(key=key, value=team_table)
+
+
 @log_to_opentelemetry
 async def get_team_object(
     team_id: str,
@@ -386,7 +395,9 @@ async def get_team_object(
 
         _response = LiteLLM_TeamTable(**response.dict())
         # save the team object to cache
-        await user_api_key_cache.async_set_cache(key=key, value=_response)
+        await _cache_team_object(
+            team_id=team_id, team_table=_response, user_api_key_cache=user_api_key_cache
+        )
 
         return _response
     except Exception as e:
