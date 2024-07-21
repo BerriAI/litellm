@@ -417,14 +417,15 @@ class Router:
             litellm.failure_callback.append(self.deployment_callback_on_failure)
         else:
             litellm.failure_callback = [self.deployment_callback_on_failure]
-        print(  # noqa
+        verbose_router_logger.debug(
             f"Intialized router with Routing strategy: {self.routing_strategy}\n\n"
             f"Routing enable_pre_call_checks: {self.enable_pre_call_checks}\n\n"
             f"Routing fallbacks: {self.fallbacks}\n\n"
             f"Routing content fallbacks: {self.content_policy_fallbacks}\n\n"
             f"Routing context window fallbacks: {self.context_window_fallbacks}\n\n"
             f"Router Redis Caching={self.cache.redis_cache}\n"
-        )  # noqa
+        )
+
         self.routing_strategy_args = routing_strategy_args
         self.retry_policy: Optional[RetryPolicy] = retry_policy
         self.model_group_retry_policy: Optional[Dict[str, RetryPolicy]] = (

@@ -453,6 +453,32 @@ async def user_api_key_auth(
 
             return valid_token
 
+        if (
+            valid_token is not None
+            and isinstance(valid_token, UserAPIKeyAuth)
+            and valid_token.team_id is not None
+            and user_api_key_cache.get_cache(
+                key="team_id:{}".format(valid_token.team_id)
+            )
+            is not None
+        ):
+            ## UPDATE TEAM VALUES BASED ON CACHED TEAM OBJECT - allows `/team/update` values to work for cached token
+            team_obj: LiteLLM_TeamTable = user_api_key_cache.get_cache(
+                key="team_id:{}".format(valid_token.team_id)
+            )
+
+            if (
+                team_obj.last_refreshed_at is not None
+                and valid_token.last_refreshed_at is not None
+                and team_obj.last_refreshed_at > valid_token.last_refreshed_at
+            ):
+                team_obj_dict = team_obj.__dict__
+
+                for k, v in team_obj_dict.items():
+                    field_name = f"team_{k}"
+                    if field_name in valid_token.__fields__:
+                        setattr(valid_token, field_name, v)
+
         try:
             is_master_key_valid = secrets.compare_digest(api_key, master_key)  # type: ignore
         except Exception as e:
@@ -504,7 +530,6 @@ async def user_api_key_auth(
             raise Exception("No connected db.")
 
         ## check for cache hit (In-Memory Cache)
-        original_api_key = api_key  # (Patch: For DynamoDB Backwards Compatibility)
         _user_role = None
         if api_key.startswith("sk-"):
             api_key = hash_token(token=api_key)
@@ -521,10 +546,13 @@ async def user_api_key_auth(
                     parent_otel_span=parent_otel_span,
                     proxy_logging_obj=proxy_logging_obj,
                 )
+
                 if _valid_token is not None:
+                    ## update cached token
                     valid_token = UserAPIKeyAuth(
                         **_valid_token.model_dump(exclude_none=True)
                     )
+
             verbose_proxy_logger.debug("Token from db: %s", valid_token)
         elif valid_token is not None and isinstance(valid_token, UserAPIKeyAuth):
             verbose_proxy_logger.debug("API Key Cache Hit!")
