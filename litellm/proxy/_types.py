@@ -886,6 +886,7 @@ class LiteLLM_TeamTable(TeamBase):
     budget_duration: Optional[str] = None
     budget_reset_at: Optional[datetime] = None
     model_id: Optional[int] = None
+    last_refreshed_at: Optional[float] = None
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -1237,6 +1238,9 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     end_user_tpm_limit: Optional[int] = None
     end_user_rpm_limit: Optional[int] = None
     end_user_max_budget: Optional[float] = None
+
+    # Time stamps
+    last_refreshed_at: Optional[float] = None  # last time joint view was pulled from db
 
 
 class UserAPIKeyAuth(

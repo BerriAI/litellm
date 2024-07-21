@@ -44,3 +44,48 @@ def test_check_valid_ip(
     request = Request(client_ip)
 
     assert _check_valid_ip(allowed_ips, request) == expected_result  # type: ignore
+
+
+@pytest.mark.asyncio
+async def test_check_blocked_team():
+    """
+    cached valid_token obj has team_blocked = true
+
+    cached team obj has team_blocked = false
+
+    assert team is not blocked
+    """
+    import asyncio
+    import time
+
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    from litellm.proxy._types import LiteLLM_TeamTable, UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.proxy_server import hash_token, user_api_key_cache
+
+    _team_id = "1234"
+    user_key = "sk-12345678"
+
+    valid_token = UserAPIKeyAuth(
+        team_id=_team_id,
+        team_blocked=True,
+        token=hash_token(user_key),
+        last_refreshed_at=time.time(),
+    )
+    await asyncio.sleep(1)
+    team_obj = LiteLLM_TeamTable(
+        team_id=_team_id, blocked=False, last_refreshed_at=time.time()
+    )
+    user_api_key_cache.set_cache(key=hash_token(user_key), value=valid_token)
+    user_api_key_cache.set_cache(key="team_id:{}".format(_team_id), value=team_obj)
+
+    setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "prisma_client", "hello-world")
+
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+
+    await user_api_key_auth(request=request, api_key="Bearer " + user_key)
