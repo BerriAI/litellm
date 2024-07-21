@@ -137,25 +137,17 @@ interface ProviderSettings {
 }
 
 enum Providers {
-  Anthropic = "Anthropic",
-  Anyscale = "Anyscale",
+  OpenAI = "OpenAI",
   Azure = "Azure",
   Azure_AI_Studio = "Azure AI Studio",
-  Bedrock = "Amazon Bedrock",
-  Codestral = "Codestral API (MistralAI)",
-  Databricks = "Databricks",
+  Anthropic = "Anthropic",
   Google_AI_Studio = "Google AI Studio",
-  Groq = "Groq",
-  MistralAI = "MistralAI",
-  Ollama = "Ollama",
-  OpenAI = "OpenAI",
-  OpenAI_Compatible = "OpenAI-Compatible Endpoints (vLLM etc.)",
-  OpenRouter = "OpenRouter",
-  PerplexityAI = "PerplexityAI",
-  TogetherAI = "TogetherAI",
+  Bedrock = "Amazon Bedrock",
+  OpenAI_Compatible = "OpenAI-Compatible Endpoints (Groq, Together AI, Mistral AI, etc.)",
   Vertex_AI = "Vertex AI (Anthropic, Gemini, etc.)",
+  Databricks = "Databricks",
+  Ollama = "Ollama",
 }
-
 
 const provider_map: Record<string, string> = {
   OpenAI: "openai",
@@ -166,13 +158,6 @@ const provider_map: Record<string, string> = {
   Bedrock: "bedrock",
   OpenAI_Compatible: "openai",
   Vertex_AI: "vertex_ai",
-  TogetherAI: "together_ai",
-  MistralAI: "mistral",
-  Codestral: "codestral",
-  PerplexityAI:"perplexity",
-  OpenRouter: "openrouter",
-  Anyscale: "anyscale",
-  Groq: "groq",
   Databricks: "databricks",
   Ollama: "ollama",
 
@@ -1739,7 +1724,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                     tooltip="Actual model name used for making litellm.completion() call."
                     className="mb-0"
                   >
-                    { (selectedProvider === Providers.Azure) || (selectedProvider === Providers.OpenAI_Compatible) || (selectedProvider === Providers.Ollama) || (selectedProvider === Providers.TogetherAI) ? (
+                    { (selectedProvider === Providers.Azure) || (selectedProvider === Providers.OpenAI_Compatible) || (selectedProvider === Providers.Ollama) ? (
                       <TextInput placeholder={getPlaceholder(selectedProvider.toString())} />
                     ) : providerModels.length > 0 ? (
                       <MultiSelect value={providerModels}>
