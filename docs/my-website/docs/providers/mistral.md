@@ -53,6 +53,10 @@ All models listed here https://docs.mistral.ai/platform/endpoints are supported.
 | Mixtral 8x7B   | `completion(model="mistral/open-mixtral-8x7b", messages)`    |
 | Mixtral 8x22B  | `completion(model="mistral/open-mixtral-8x22b", messages)`   |
 | Codestral      | `completion(model="mistral/codestral-latest", messages)`     |
+| Mistral NeMo      | `completion(model="mistral/open-mistral-nemo", messages)`     |
+| Mistral NeMo 2407      | `completion(model="mistral/open-mistral-nemo-2407", messages)`     |
+| Codestral Mamba      | `completion(model="mistral/open-codestral-mamba", messages)`     |
+| Codestral Mamba    | `completion(model="mistral/codestral-mamba-latest"", messages)`     |
 
 ## Function Calling 
 
