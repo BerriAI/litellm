@@ -1131,6 +1131,52 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 Expect to see your log on Langfuse
 <Image img={require('../../img/langsmith_new.png')} />
 
+
+## Logging LLM IO to Arize AI
+
+1. Set `success_callback: ["arize"]` on litellm config.yaml
+
+```yaml
+model_list:
+  - model_name: gpt-4
+    litellm_params:
+      model: openai/fake
+      api_key: fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+
+litellm_settings:
+  callbacks: ["arize"]
+
+environment_variables:
+    ARIZE_SPACE_KEY: "d0*****"
+    ARIZE_API_KEY: "141a****"
+```
+
+2. Start Proxy
+
+```
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+--header 'Content-Type: application/json' \
+--data ' {
+      "model": "fake-openai-endpoint",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Hello, Claude gm!"
+        }
+      ],
+    }
+'
+```
+Expect to see your log on Langfuse
+<Image img={require('../../img/langsmith_new.png')} />
+
 ## Logging LLM IO to Galileo
 
 [BETA]
