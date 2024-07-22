@@ -18,6 +18,7 @@ def set_arize_ai_attributes(span: Span, kwargs, response_obj):
     from litellm.integrations._types.open_inference import (
         MessageAttributes,
         MessageContentAttributes,
+        OpenInferenceSpanKindValues,
         SpanAttributes,
     )
 
@@ -27,8 +28,9 @@ def set_arize_ai_attributes(span: Span, kwargs, response_obj):
     #############################################
     ############ LLM CALL METADATA ##############
     #############################################
-    metadata = litellm_params.get("metadata", {}) or {}
-    span.set_attribute(SpanAttributes.METADATA, str(metadata))
+    # commented out for now - looks like Arize AI could not log this
+    # metadata = litellm_params.get("metadata", {}) or {}
+    # span.set_attribute(SpanAttributes.METADATA, str(metadata))
 
     #############################################
     ########## LLM Request Attributes ###########
@@ -39,10 +41,30 @@ def set_arize_ai_attributes(span: Span, kwargs, response_obj):
         span.set_attribute(SpanAttributes.LLM_MODEL_NAME, kwargs.get("model"))
 
     span.set_attribute(
-        SpanAttributes.OPENINFERENCE_SPAN_KIND,
-        f"litellm-{str(kwargs.get('call_type', None))}",
+        SpanAttributes.OPENINFERENCE_SPAN_KIND, OpenInferenceSpanKindValues.LLM.value
     )
-    span.set_attribute(SpanAttributes.LLM_INPUT_MESSAGES, str(kwargs.get("messages")))
+    messages = kwargs.get("messages")
+
+    # for /chat/completions
+    # https://docs.arize.com/arize/large-language-models/tracing/semantic-conventions
+    if messages:
+        span.set_attribute(
+            SpanAttributes.INPUT_VALUE,
+            messages[-1].get("content", ""),  # get the last message for input
+        )
+
+        # LLM_INPUT_MESSAGES shows up under `input_messages` tab on the span page
+        for idx, msg in enumerate(messages):
+            # Set the role per message
+            span.set_attribute(
+                f"{SpanAttributes.LLM_INPUT_MESSAGES}.{idx}.{MessageAttributes.MESSAGE_ROLE}",
+                msg["role"],
+            )
+            # Set the content per message
+            span.set_attribute(
+                f"{SpanAttributes.LLM_INPUT_MESSAGES}.{idx}.{MessageAttributes.MESSAGE_CONTENT}",
+                msg.get("content", ""),
+            )
 
     # The Generative AI Provider: Azure, OpenAI, etc.
     span.set_attribute(SpanAttributes.LLM_INVOCATION_PARAMETERS, str(optional_params))
@@ -52,12 +74,25 @@ def set_arize_ai_attributes(span: Span, kwargs, response_obj):
 
     #############################################
     ########## LLM Response Attributes ##########
+    # https://docs.arize.com/arize/large-language-models/tracing/semantic-conventions
     #############################################
-    llm_output_messages = []
     for choice in response_obj.get("choices"):
-        llm_output_messages.append(choice.get("message"))
+        response_message = choice.get("message", {})
+        span.set_attribute(
+            SpanAttributes.OUTPUT_VALUE, response_message.get("content", "")
+        )
 
-    span.set_attribute(SpanAttributes.LLM_OUTPUT_MESSAGES, str(llm_output_messages))
+        # This shows up under `output_messages` tab on the span page
+        # This code assumes a single response
+        span.set_attribute(
+            f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.0.{MessageAttributes.MESSAGE_ROLE}",
+            response_message["role"],
+        )
+        span.set_attribute(
+            f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.0.{MessageAttributes.MESSAGE_CONTENT}",
+            response_message.get("content", ""),
+        )
+
     usage = response_obj.get("usage")
     if usage:
         span.set_attribute(
