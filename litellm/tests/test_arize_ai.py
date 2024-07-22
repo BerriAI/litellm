@@ -18,7 +18,7 @@ import logging
 @pytest.mark.asyncio()
 async def test_async_otel_callback():
     litellm.set_verbose = True
-    litellm.callbacks = ["arize"]
+    litellm.success_callback = ["arize"]
 
     await litellm.acompletion(
         model="gpt-3.5-turbo",
