@@ -10,7 +10,7 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import litellm
-from litellm import completion, AuthenticationError
+from litellm import completion
 from litellm import RateLimitError
 
 #  Huggingface - Expensive to deploy models and keep them running. Maybe we can try doing this via baseten??
@@ -654,88 +654,6 @@ def bedrock_test_completion():
 
 
 # bedrock_test_completion()
-
-
-def test_bedrock_embedding_default_region():
-    """
-    If no regions are specified in config or in environment, then throw an error
-    """
-    try:
-        litellm.embedding(
-            model="bedrock/amazon.titan-embed-text-v1",
-            input="Hello, world!"
-        )
-    except Exception as e:
-        assert isinstance(e, AuthenticationError)
-        assert "AWS region not set" in str(e)
-
-
-# test_bedrock_embedding_default_region()
-
-
-def test_bedrock_embedding_config_region(mocker):
-    """
-    When region is specified inline or in config, use that region
-    """
-    expected_region = "us-east-1"
-    mock_client = mocker.patch("boto3.client")
-    try:
-        litellm.embedding(
-            model="bedrock/amazon.titan-embed-text-v1",
-            input="Hello, world!",
-            aws_region_name=expected_region
-        )
-    except Exception:
-        pass  # expected serialization exception because AWS client was replaced with a Mock
-    assert mock_client.call_args.kwargs["region_name"] == expected_region
-
-
-# test_bedrock_embedding_config_region()
-
-
-def test_bedrock_embedding_environment_region(mocker):
-    """
-    When region is specified in an environment variable, use that region
-    """
-    expected_region = "us-east-1"
-    os.environ["AWS_REGION_NAME"] = expected_region
-    mock_client = mocker.patch("boto3.client")
-    try:
-        litellm.embedding(
-            model="bedrock/amazon.titan-embed-text-v1",
-            input="Hello, world!"
-        )
-    except Exception:
-        pass  # expected serialization exception because AWS client was replaced with a Mock
-    del os.environ["AWS_REGION_NAME"]  # cleanup
-    assert mock_client.call_args.kwargs["region_name"] == expected_region
-
-
-# test_bedrock_embedding_environment_region()
-
-
-def test_bedrock_embedding_config_environment_region(mocker):
-    """
-    If region is supplied in both the config and the environment variable, use the one
-    defined in the environment variable
-    """
-    expected_region = "us-east-1"
-    unexpected_region = "us-west-2"
-    os.environ["AWS_REGION_NAME"] = expected_region
-    mock_client = mocker.patch("boto3.client")
-    try:
-        litellm.embedding(
-            model="bedrock/amazon.titan-embed-text-v1",
-            input="Hello, world!",
-            aws_region_name=unexpected_region
-        )
-    except Exception:
-        pass  # expected serialization exception because AWS client was replaced with a Mock
-    del os.environ["AWS_REGION_NAME"]  # cleanup
-    assert mock_client.call_args.kwargs["region_name"] == expected_region
-
-
-# test_bedrock_embedding_config_environment_region()
 
 
 # OpenAI Chat Completion

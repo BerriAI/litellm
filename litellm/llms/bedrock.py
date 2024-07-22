@@ -605,13 +605,15 @@ def init_bedrock_client(
     ) = params_to_check
 
     ### SET REGION NAME
-    region_name = (
-        litellm_aws_region_name  # prefer environment variables before inline region parameters
-        or standard_aws_region_name
-        or region_name
-        or aws_region_name
-    )
-    if not region_name:
+    if region_name:
+        pass
+    elif aws_region_name:
+        region_name = aws_region_name
+    elif litellm_aws_region_name:
+        region_name = litellm_aws_region_name
+    elif standard_aws_region_name:
+        region_name = standard_aws_region_name
+    else:
         raise BedrockError(
             message="AWS region not set: set AWS_REGION_NAME or AWS_REGION env variable or in .env file",
             status_code=401,
