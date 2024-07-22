@@ -8808,11 +8808,14 @@ class CustomStreamWrapper:
                                 str_line.choices[0].content_filter_result
                             )
                         else:
-                            error_message = "Azure Response={}".format(
-                                str(dict(str_line))
+                            error_message = "{} Response={}".format(
+                                self.custom_llm_provider, str(dict(str_line))
                             )
-                        raise litellm.AzureOpenAIError(
-                            status_code=400, message=error_message
+
+                        raise litellm.ContentPolicyViolationError(
+                            message=error_message,
+                            llm_provider=self.custom_llm_provider,
+                            model=self.model,
                         )
 
                 # checking for logprobs
