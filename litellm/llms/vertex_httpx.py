@@ -1033,7 +1033,7 @@ class VertexLLM(BaseLLM):
                 model=model, custom_llm_provider=_custom_llm_provider
             )
         except Exception as e:
-            verbose_logger.error(
+            verbose_logger.warning(
                 "Unable to identify if system message supported. Defaulting to 'False'. Received error message - {}\nAdd it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json".format(
                     str(e)
                 )
