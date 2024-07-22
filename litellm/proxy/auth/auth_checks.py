@@ -24,7 +24,7 @@ from litellm.proxy._types import (
     LitellmUserRoles,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_utils import is_openai_route
+from litellm.proxy.auth.auth_utils import is_llm_api_route
 from litellm.proxy.utils import PrismaClient, ProxyLogging, log_to_opentelemetry
 from litellm.types.services import ServiceLoggerPayload, ServiceTypes
 
@@ -106,7 +106,7 @@ def common_checks(
         general_settings.get("enforce_user_param", None) is not None
         and general_settings["enforce_user_param"] == True
     ):
-        if is_openai_route(route=route) and "user" not in request_body:
+        if is_llm_api_route(route=route) and "user" not in request_body:
             raise Exception(
                 f"'user' param not passed in. 'enforce_user_param'={general_settings['enforce_user_param']}"
             )
@@ -122,7 +122,7 @@ def common_checks(
                 + CommonProxyErrors.not_premium_user.value
             )
 
-        if is_openai_route(route=route):
+        if is_llm_api_route(route=route):
             # loop through each enforced param
             # example enforced_params ['user', 'metadata', 'metadata.generation_name']
             for enforced_param in general_settings["enforced_params"]:
@@ -150,7 +150,7 @@ def common_checks(
         and global_proxy_spend is not None
         # only run global budget checks for OpenAI routes
         # Reason - the Admin UI should continue working if the proxy crosses it's global budget
-        and is_openai_route(route=route)
+        and is_llm_api_route(route=route)
         and route != "/v1/models"
         and route != "/models"
     ):

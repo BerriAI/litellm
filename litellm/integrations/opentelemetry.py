@@ -2,7 +2,7 @@ import os
 from dataclasses import dataclass
 from datetime import datetime
 from functools import wraps
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, Optional, Union
 
 import litellm
 from litellm._logging import verbose_logger
@@ -27,9 +27,10 @@ else:
 
 
 LITELLM_TRACER_NAME = os.getenv("OTEL_TRACER_NAME", "litellm")
-LITELLM_RESOURCE = {
+LITELLM_RESOURCE: Dict[Any, Any] = {
     "service.name": os.getenv("OTEL_SERVICE_NAME", "litellm"),
     "deployment.environment": os.getenv("OTEL_ENVIRONMENT_NAME", "production"),
+    "model_id": os.getenv("OTEL_SERVICE_NAME", "litellm"),
 }
 RAW_REQUEST_SPAN_NAME = "raw_gen_ai_request"
 LITELLM_REQUEST_SPAN_NAME = "litellm_request"
@@ -68,7 +69,9 @@ class OpenTelemetryConfig:
 
 
 class OpenTelemetry(CustomLogger):
-    def __init__(self, config=OpenTelemetryConfig.from_env()):
+    def __init__(
+        self, config=OpenTelemetryConfig.from_env(), callback_name: Optional[str] = None
+    ):
         from opentelemetry import trace
         from opentelemetry.sdk.resources import Resource
         from opentelemetry.sdk.trace import TracerProvider
@@ -79,6 +82,7 @@ class OpenTelemetry(CustomLogger):
         self.OTEL_HEADERS = self.config.headers
         provider = TracerProvider(resource=Resource(attributes=LITELLM_RESOURCE))
         provider.add_span_processor(self._get_span_processor())
+        self.callback_name = callback_name
 
         trace.set_tracer_provider(provider)
         self.tracer = trace.get_tracer(LITELLM_TRACER_NAME)
@@ -120,8 +124,8 @@ class OpenTelemetry(CustomLogger):
         from opentelemetry import trace
         from opentelemetry.trace import Status, StatusCode
 
-        _start_time_ns = start_time
-        _end_time_ns = end_time
+        _start_time_ns = 0
+        _end_time_ns = 0
 
         if isinstance(start_time, float):
             _start_time_ns = int(int(start_time) * 1e9)
@@ -159,8 +163,8 @@ class OpenTelemetry(CustomLogger):
         from opentelemetry import trace
         from opentelemetry.trace import Status, StatusCode
 
-        _start_time_ns = start_time
-        _end_time_ns = end_time
+        _start_time_ns = 0
+        _end_time_ns = 0
 
         if isinstance(start_time, float):
             _start_time_ns = int(int(start_time) * 1e9)
@@ -294,6 +298,11 @@ class OpenTelemetry(CustomLogger):
         return isinstance(value, (str, bool, int, float))
 
     def set_attributes(self, span: Span, kwargs, response_obj):
+        if self.callback_name == "arize":
+            from litellm.integrations.arize_ai import set_arize_ai_attributes
+
+            set_arize_ai_attributes(span, kwargs, response_obj)
+            return
         from litellm.proxy._types import SpanAttributes
 
         optional_params = kwargs.get("optional_params", {})
@@ -612,8 +621,8 @@ class OpenTelemetry(CustomLogger):
         from opentelemetry import trace
         from opentelemetry.trace import Status, StatusCode
 
-        _start_time_ns = logging_payload.start_time
-        _end_time_ns = logging_payload.end_time
+        _start_time_ns = 0
+        _end_time_ns = 0
 
         start_time = logging_payload.start_time
         end_time = logging_payload.end_time
@@ -658,8 +667,8 @@ class OpenTelemetry(CustomLogger):
         from opentelemetry import trace
         from opentelemetry.trace import Status, StatusCode
 
-        _start_time_ns = logging_payload.start_time
-        _end_time_ns = logging_payload.end_time
+        _start_time_ns = 0
+        _end_time_ns = 0
 
         start_time = logging_payload.start_time
         end_time = logging_payload.end_time
