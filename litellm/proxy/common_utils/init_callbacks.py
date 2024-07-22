@@ -23,11 +23,11 @@ def initialize_callbacks_on_proxy(
     )
     if isinstance(value, list):
         imported_list: List[Any] = []
-        known_compatible_callbacks = list(
-            get_args(litellm._custom_logger_compatible_callbacks_literal)
-        )
         for callback in value:  # ["presidio", <my-custom-callback>]
-            if isinstance(callback, str) and callback in known_compatible_callbacks:
+            if (
+                isinstance(callback, str)
+                and callback in litellm._known_custom_logger_compatible_callbacks
+            ):
                 imported_list.append(callback)
             elif isinstance(callback, str) and callback == "otel":
                 from litellm.integrations.opentelemetry import OpenTelemetry
