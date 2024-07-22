@@ -38,7 +38,13 @@ success_callback: List[Union[str, Callable]] = []
 failure_callback: List[Union[str, Callable]] = []
 service_callback: List[Union[str, Callable]] = []
 _custom_logger_compatible_callbacks_literal = Literal[
-    "lago", "openmeter", "logfire", "dynamic_rate_limiter", "langsmith", "galileo"
+    "lago",
+    "openmeter",
+    "logfire",
+    "dynamic_rate_limiter",
+    "langsmith",
+    "galileo",
+    "arize",
 ]
 callbacks: List[Union[Callable, _custom_logger_compatible_callbacks_literal]] = []
 _langfuse_default_tags: Optional[
