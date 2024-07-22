@@ -228,6 +228,10 @@ class LiteLLMRoutes(enum.Enum):
         "/utils/token_counter",
     ]
 
+    anthropic_routes: List = [
+        "/v1/messages",
+    ]
+
     info_routes: List = [
         "/key/info",
         "/team/info",
