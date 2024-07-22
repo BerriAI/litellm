@@ -192,6 +192,8 @@ const sidebars = {
       items: [
         "observability/langfuse_integration",
         "observability/logfire_integration",
+        "observability/langsmith_integration",
+        "observability/arize_integration",
         "debugging/local_debugging",
         "observability/raw_request_response",
         "observability/custom_callback",
@@ -202,7 +204,6 @@ const sidebars = {
         "observability/openmeter",
         "observability/promptlayer_integration",
         "observability/wandb_integration",
-        "observability/langsmith_integration",
         "observability/slack_integration",
         "observability/traceloop_integration",
         "observability/athina_integration",

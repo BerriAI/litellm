@@ -1,6 +1,6 @@
 import Image from '@theme/IdealImage';
 
-# Langsmith - Logging LLM Input/Output
+# 🦜 Langsmith - Logging LLM Input/Output
 
 
 :::tip
