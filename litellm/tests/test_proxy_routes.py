@@ -93,3 +93,8 @@ def test_is_llm_api_route(route: str, expected: bool):
 )
 def test_is_llm_api_route_similar_but_false(route: str):
     assert is_llm_api_route(route) == False
+
+
+def test_anthropic_api_routes():
+    # allow non proxy admins to call anthropic api routes
+    assert is_llm_api_route(route="/v1/messages") is True
