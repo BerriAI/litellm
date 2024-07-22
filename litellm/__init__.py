@@ -4,7 +4,7 @@ import warnings
 warnings.filterwarnings("ignore", message=".*conflict with protected namespace.*")
 ### INIT VARIABLES ###
 import threading, requests, os
-from typing import Callable, List, Optional, Dict, Union, Any, Literal
+from typing import Callable, List, Optional, Dict, Union, Any, Literal, get_args
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.caching import Cache
 from litellm._logging import (
@@ -46,6 +46,9 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "galileo",
     "arize",
 ]
+_known_custom_logger_compatible_callbacks: List = list(
+    get_args(_custom_logger_compatible_callbacks_literal)
+)
 callbacks: List[Union[Callable, _custom_logger_compatible_callbacks_literal]] = []
 _langfuse_default_tags: Optional[
     List[
