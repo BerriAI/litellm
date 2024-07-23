@@ -75,7 +75,10 @@ curl -i http://localhost:4000/v1/chat/completions \
 
 Expect this to be logged on the langfuse project specified on [Step 1. Set callback for team](#1-set-callback-for-team)
 
-## 
+## Team Logging Endpoints
+
+- [`POST /team/{team_id}/callback` Add a success/failure callback to a team](https://litellm-api.up.railway.app/#/team%20management/add_team_callbacks_team__team_id__callback_post)
+- [`GET /team/{team_id}/callback` - Get the success/failure callbacks and variables for a team](https://litellm-api.up.railway.app/#/team%20management/get_team_callbacks_team__team_id__callback_get)
 
 
 
