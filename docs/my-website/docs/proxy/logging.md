@@ -48,6 +48,20 @@ A number of these headers could be useful for troubleshooting, but the
 `x-litellm-call-id` is the one that is most useful for tracking a request across
 components in your system, including in logging tools.
 
+## Redacting UserAPIKeyInfo 
+
+Redact information about the user api key (hashed token, user_id, team id, etc.), from logs. 
+
+Currently supported for Langfuse, OpenTelemetry, Logfire, ArizeAI logging.
+
+```yaml
+litellm_settings: 
+  callbacks: ["langfuse"]
+  redact_user_api_key_info: true
+```
+
+Removes any field with `user_api_key_*` from metadata.
+
 ## Logging Proxy Input/Output - Langfuse
 
 We will use the `--config` to set `litellm.success_callback = ["langfuse"]` this will log all successfull LLM calls to langfuse. Make sure to set `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` in your environment
