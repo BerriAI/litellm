@@ -385,6 +385,11 @@ class AnthropicConfig:
             if "user_id" in anthropic_message_request["metadata"]:
                 new_kwargs["user"] = anthropic_message_request["metadata"]["user_id"]
 
+        # Pass litellm proxy specific metadata
+        if "litellm_metadata" in anthropic_message_request:
+            # metadata will be passed to litellm.acompletion(), it's a litellm_param
+            new_kwargs["metadata"] = anthropic_message_request.pop("litellm_metadata")
+
         ## CONVERT TOOL CHOICE
         if "tool_choice" in anthropic_message_request:
             new_kwargs["tool_choice"] = self.translate_anthropic_tool_choice_to_openai(

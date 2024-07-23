@@ -436,6 +436,7 @@ class ChatCompletionRequest(TypedDict, total=False):
     function_call: Union[str, dict]
     functions: List
     user: str
+    metadata: dict  # litellm specific param
 
 
 class ChatCompletionDeltaChunk(TypedDict, total=False):
