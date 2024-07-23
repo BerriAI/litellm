@@ -188,6 +188,7 @@ class ProxyLogging:
             "new_model_added",
             "outage_alerts",
         ]
+        self.alert_to_webhook_url: Optional[dict] = None
         self.slack_alerting_instance: SlackAlerting = SlackAlerting(
             alerting_threshold=self.alerting_threshold,
             alerting=self.alerting,
