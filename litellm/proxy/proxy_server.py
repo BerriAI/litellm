@@ -657,7 +657,11 @@ async def _PROXY_track_cost_callback(
     global prisma_client, custom_db_client
     try:
         # check if it has collected an entire stream response
-        verbose_proxy_logger.debug("Proxy: In track_cost_callback for: %s", kwargs)
+        verbose_proxy_logger.debug(
+            "Proxy: In track_cost_callback for: kwargs=%s and completion_response: %s",
+            kwargs,
+            completion_response,
+        )
         verbose_proxy_logger.debug(
             f"kwargs stream: {kwargs.get('stream', None)} + complete streaming response: {kwargs.get('complete_streaming_response', None)}"
         )
