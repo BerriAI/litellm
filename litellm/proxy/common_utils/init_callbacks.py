@@ -56,7 +56,7 @@ def initialize_callbacks_on_proxy(
 
                 params = {
                     "logging_only": presidio_logging_only,
-                    **callback_specific_params,
+                    **callback_specific_params.get("presidio", {}),
                 }
                 pii_masking_object = _OPTIONAL_PresidioPIIMasking(**params)
                 imported_list.append(pii_masking_object)
