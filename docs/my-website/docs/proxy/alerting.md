@@ -174,7 +174,7 @@ litellm_settings:
   success_callback: ["langfuse"]
 ```
 
-Test it - send a valid llm request - expect to see a `llm_too_slow` in it's own slack channel
+Test it - send a valid llm request - expect to see a `llm_too_slow` alert in it's own slack channel
 
 ```shell
 curl -i http://localhost:4000/v1/chat/completions \
