@@ -190,6 +190,91 @@ async def add_team_callbacks(
         )
 
 
+@router.post(
+    "/team/{team_id}/disable_logging",
+    tags=["team management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+@management_endpoint_wrapper
+async def disable_team_logging(
+    http_request: Request,
+    team_id: str,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    try:
+        from litellm.proxy.proxy_server import prisma_client
+
+        if prisma_client is None:
+            raise HTTPException(status_code=500, detail={"error": "No db connected"})
+
+        # Check if team exists
+        _existing_team = await prisma_client.get_data(
+            team_id=team_id, table_name="team", query_type="find_unique"
+        )
+        if _existing_team is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": f"Team id = {team_id} does not exist."},
+            )
+
+        # Update team metadata to disable logging
+        team_metadata = _existing_team.metadata
+        team_callback_settings = team_metadata.get("callback_settings", {})
+        team_callback_settings_obj = TeamCallbackMetadata(**team_callback_settings)
+
+        # Reset callbacks
+        team_callback_settings_obj.success_callback = []
+        team_callback_settings_obj.failure_callback = []
+
+        # Update metadata
+        team_metadata["callback_settings"] = team_callback_settings_obj.model_dump()
+        team_metadata_json = json.dumps(team_metadata)
+
+        # Update team in database
+        updated_team = await prisma_client.db.litellm_teamtable.update(
+            where={"team_id": team_id}, data={"metadata": team_metadata_json}  # type: ignore
+        )
+
+        if updated_team is None:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": f"Team id = {team_id} does not exist. Error updating team logging"
+                },
+            )
+
+        return {
+            "status": "success",
+            "message": f"Logging disabled for team {team_id}",
+            "data": {
+                "team_id": updated_team.team_id,
+                "success_callbacks": [],
+                "failure_callbacks": [],
+            },
+        }
+
+    except Exception as e:
+        verbose_proxy_logger.error(
+            f"litellm.proxy.proxy_server.disable_team_logging(): Exception occurred - {str(e)}"
+        )
+        verbose_proxy_logger.debug(traceback.format_exc())
+        if isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "detail", f"Internal Server Error({str(e)})"),
+                type=ProxyErrorTypes.internal_server_error.value,
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
+            )
+        elif isinstance(e, ProxyException):
+            raise e
+        raise ProxyException(
+            message="Internal Server Error, " + str(e),
+            type=ProxyErrorTypes.internal_server_error.value,
+            param=getattr(e, "param", "None"),
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
 @router.get(
     "/team/{team_id:path}/callback",
     tags=["team management"],
