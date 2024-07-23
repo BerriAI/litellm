@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional, Union
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
 from litellm.types.services import ServiceLoggerPayload
 
 if TYPE_CHECKING:
@@ -315,7 +316,9 @@ class OpenTelemetry(CustomLogger):
         #############################################
         metadata = litellm_params.get("metadata", {}) or {}
 
-        for key, value in metadata.items():
+        clean_metadata = redact_user_api_key_info(metadata=metadata)
+
+        for key, value in clean_metadata.items():
             if self.is_primitive(value):
                 span.set_attribute("metadata.{}".format(key), value)
 
