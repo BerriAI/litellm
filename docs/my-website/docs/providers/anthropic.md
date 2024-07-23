@@ -56,7 +56,7 @@ for chunk in response:
     print(chunk["choices"][0]["delta"]["content"])  # same as openai format
 ```
 
-## OpenAI Proxy Usage 
+## Usage with LiteLLM Proxy 
 
 Here's how to call Anthropic with the LiteLLM Proxy Server
 
@@ -69,14 +69,6 @@ export ANTHROPIC_API_KEY="your-api-key"
 ### 2. Start the proxy 
 
 <Tabs>
-<TabItem value="cli" label="cli">
-
-```bash
-$ litellm --model claude-3-opus-20240229
-
-# Server running on http://0.0.0.0:4000
-```
-</TabItem>
 <TabItem value="config" label="config.yaml">
 
 ```yaml
@@ -89,6 +81,14 @@ model_list:
 
 ```bash
 litellm --config /path/to/config.yaml
+```
+</TabItem>
+<TabItem value="cli" label="cli">
+
+```bash
+$ litellm --model claude-3-opus-20240229
+
+# Server running on http://0.0.0.0:4000
 ```
 </TabItem>
 </Tabs>
