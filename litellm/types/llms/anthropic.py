@@ -1,4 +1,4 @@
-from typing import Iterable, List, Optional, Union
+from typing import Any, Dict, Iterable, List, Optional, Union
 
 from pydantic import BaseModel, validator
 from typing_extensions import Literal, Required, TypedDict
@@ -112,6 +112,9 @@ class AnthropicMessagesRequest(TypedDict, total=False):
     tools: List[AnthropicMessagesTool]
     top_k: int
     top_p: float
+
+    # litellm param - used for tracking litellm proxy metadata in the request
+    litellm_metadata: dict
 
 
 class ContentTextBlockDelta(TypedDict):
