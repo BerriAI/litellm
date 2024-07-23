@@ -896,6 +896,9 @@ async def test_completion_cost_hidden_params(sync_mode):
 
     assert "response_cost" in response._hidden_params
     assert isinstance(response._hidden_params["response_cost"], float)
+    assert isinstance(
+        response._hidden_params["llm_provider-x-ratelimit-remaining-requests"], float
+    )
 
 
 def test_vertex_ai_gemini_predict_cost():
