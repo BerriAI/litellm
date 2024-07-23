@@ -196,7 +196,7 @@ The custom role below is the recommended minimum permissions for the Azure appli
         "roleName": "invoke-only",
         "description": "",
         "assignableScopes": [
-            "/subscriptions/24ebb700-ec2f-417f-afad-78fe15dcc91f/resourceGroups/openai-group"
+            "/subscriptions/24ebb700-ec2f-417f-afad-78fe15dcc91f/resourceGroups/your-openai-group-name"
         ],
         "permissions": [
             {
