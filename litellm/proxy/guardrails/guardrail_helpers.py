@@ -1,7 +1,24 @@
+from typing import Dict
+
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy.proxy_server import UserAPIKeyAuth
+from litellm.proxy.proxy_server import LiteLLM_TeamTable, UserAPIKeyAuth
 from litellm.types.guardrails import *
+
+
+def can_modify_guardrails(team_obj: Optional[LiteLLM_TeamTable]) -> bool:
+    if team_obj is None:
+        return True
+
+    team_metadata = team_obj.metadata or {}
+
+    if team_metadata.get("guardrails", None) is not None and isinstance(
+        team_metadata.get("guardrails"), Dict
+    ):
+        if team_metadata.get("guardrails", {}).get("modify_guardrails", None) is False:
+            return False
+
+    return True
 
 
 async def should_proceed_based_on_metadata(data: dict, guardrail_name: str) -> bool:
