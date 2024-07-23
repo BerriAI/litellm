@@ -44,6 +44,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "dynamic_rate_limiter",
     "langsmith",
     "galileo",
+    "braintrust",
     "arize",
 ]
 _known_custom_logger_compatible_callbacks: List = list(
