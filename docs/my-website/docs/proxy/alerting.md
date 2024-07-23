@@ -143,6 +143,8 @@ llm_exceptions -> go to slack channel #llm-exceptions
 spend_reports -> go to slack channel #llm-spend-reports
 ```
 
+Set `alert_to_webhook_url` on your config.yaml
+
 ```yaml
 model_list:
   - model_name: gpt-4
@@ -154,6 +156,7 @@ model_list:
 general_settings: 
   master_key: sk-1234
   alerting: ["slack"]
+  alerting_threshold: 0.0001 # (Seconds) set an artifically low threshold for testing alerting
   alert_to_webhook_url: {
     "llm_exceptions": "https://hooks.slack.com/services/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",
     "llm_too_slow": "https://hooks.slack.com/services/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",
@@ -169,6 +172,20 @@ general_settings:
 
 litellm_settings:
   success_callback: ["langfuse"]
+```
+
+Test it - send a valid llm request - expect to see a `llm_too_slow` in it's own slack channel
+
+```shell
+curl -i http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "gpt-4",
+    "messages": [
+      {"role": "user", "content": "Hello, Claude gm!"}
+    ]
+}'
 ```
 
 
