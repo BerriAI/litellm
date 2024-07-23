@@ -39,6 +39,9 @@ def _get_metadata_variable_name(request: Request) -> str:
     """
     if "thread" in request.url.path or "assistant" in request.url.path:
         return "litellm_metadata"
+    if "/v1/messages" in request.url.path:
+        # anthropic API has a field called metadata
+        return "litellm_metadata"
     else:
         return "metadata"
 
