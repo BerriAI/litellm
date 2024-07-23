@@ -5678,6 +5678,14 @@ def convert_to_model_response_object(
     _response_headers: Optional[dict] = None,
 ):
     received_args = locals()
+    if _response_headers is not None:
+        if hidden_params is not None:
+            hidden_params["additional_headers"] = {
+                "{}-{}".format("llm_provider", k): v
+                for k, v in _response_headers.items()
+            }
+        else:
+            hidden_params = {"additional_headers": _response_headers}
     ### CHECK IF ERROR IN RESPONSE ### - openrouter returns these in the dictionary
     if (
         response_object is not None
