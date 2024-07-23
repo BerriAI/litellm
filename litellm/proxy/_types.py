@@ -1703,3 +1703,4 @@ class ProxyErrorTypes(str, enum.Enum):
     expired_key = "expired_key"
     auth_error = "auth_error"
     internal_server_error = "internal_server_error"
+    bad_request_error = "bad_request_error"
