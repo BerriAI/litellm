@@ -1491,6 +1491,10 @@ def completion(
                     or get_secret("ANTHROPIC_BASE_URL")
                     or "https://api.anthropic.com/v1/complete"
                 )
+
+                if api_base is not None and not api_base.endswith("/v1/complete"):
+                    api_base += "/v1/complete"
+
                 response = anthropic_text_completions.completion(
                     model=model,
                     messages=messages,
@@ -1517,6 +1521,10 @@ def completion(
                     or get_secret("ANTHROPIC_BASE_URL")
                     or "https://api.anthropic.com/v1/messages"
                 )
+
+                if api_base is not None and not api_base.endswith("/v1/messages"):
+                    api_base += "/v1/messages"
+
                 response = anthropic_chat_completions.completion(
                     model=model,
                     messages=messages,

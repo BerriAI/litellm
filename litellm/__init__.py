@@ -4,7 +4,7 @@ import warnings
 warnings.filterwarnings("ignore", message=".*conflict with protected namespace.*")
 ### INIT VARIABLES ###
 import threading, requests, os
-from typing import Callable, List, Optional, Dict, Union, Any, Literal
+from typing import Callable, List, Optional, Dict, Union, Any, Literal, get_args
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.caching import Cache
 from litellm._logging import (
@@ -45,7 +45,11 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "langsmith",
     "galileo",
     "braintrust",
+    "arize",
 ]
+_known_custom_logger_compatible_callbacks: List = list(
+    get_args(_custom_logger_compatible_callbacks_literal)
+)
 callbacks: List[Union[Callable, _custom_logger_compatible_callbacks_literal]] = []
 _langfuse_default_tags: Optional[
     List[
@@ -73,6 +77,7 @@ post_call_rules: List[Callable] = []
 turn_off_message_logging: Optional[bool] = False
 log_raw_request_response: bool = False
 redact_messages_in_exceptions: Optional[bool] = False
+redact_user_api_key_info: Optional[bool] = False
 store_audit_logs = False  # Enterprise feature, allow users to see audit logs
 ## end of callbacks #############
 

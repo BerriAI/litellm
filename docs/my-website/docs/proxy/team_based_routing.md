@@ -71,7 +71,13 @@ curl --location 'http://0.0.0.0:4000/v1/chat/completions' \
 }'
 ```
 
+## Team Based Logging
 
+[👉 Tutorial - Allow each team to use their own Langfuse Project / custom callbacks](team_logging.md)
+
+
+
+<!-- 
 ## Logging / Caching
 
 Turn on/off logging and caching for a specific team id. 
@@ -102,4 +108,4 @@ curl -X POST 'http://0.0.0.0:4000/key/generate' \
 -d '{"team_id": "ishaans-secret-project"}'
 ```
 
-All requests made with these keys will log data to their team-specific logging.
+All requests made with these keys will log data to their team-specific logging. -->
