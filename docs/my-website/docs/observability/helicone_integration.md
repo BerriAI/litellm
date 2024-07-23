@@ -1,4 +1,4 @@
-# 🧠 Helicone - OSS LLM Observability Platform
+# 🧊 Helicone - OSS LLM Observability Platform
 
 :::tip
 
