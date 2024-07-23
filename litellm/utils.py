@@ -158,6 +158,7 @@ from typing import (
     Tuple,
     Union,
     cast,
+    get_args,
 )
 
 from .caching import Cache
@@ -405,7 +406,6 @@ def function_setup(
             # Pop the async items from input_callback in reverse order to avoid index issues
             for index in reversed(removed_async_items):
                 litellm.input_callback.pop(index)
-
         if len(litellm.success_callback) > 0:
             removed_async_items = []
             for index, callback in enumerate(litellm.success_callback):  # type: ignore
@@ -417,9 +417,9 @@ def function_setup(
                     # we only support async dynamo db logging for acompletion/aembedding since that's used on proxy
                     litellm._async_success_callback.append(callback)
                     removed_async_items.append(index)
-                elif callback == "langsmith":
+                elif callback in litellm._known_custom_logger_compatible_callbacks:
                     callback_class = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(  # type: ignore
-                        callback, internal_usage_cache=None, llm_router=None
+                        callback, internal_usage_cache=None, llm_router=None  # type: ignore
                     )
 
                     # don't double add a callback
@@ -8808,11 +8808,14 @@ class CustomStreamWrapper:
                                 str_line.choices[0].content_filter_result
                             )
                         else:
-                            error_message = "Azure Response={}".format(
-                                str(dict(str_line))
+                            error_message = "{} Response={}".format(
+                                self.custom_llm_provider, str(dict(str_line))
                             )
-                        raise litellm.AzureOpenAIError(
-                            status_code=400, message=error_message
+
+                        raise litellm.ContentPolicyViolationError(
+                            message=error_message,
+                            llm_provider=self.custom_llm_provider,
+                            model=self.model,
                         )
 
                 # checking for logprobs

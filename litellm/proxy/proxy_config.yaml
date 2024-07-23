@@ -1,10 +1,15 @@
 model_list:
+  - model_name: gpt-4
+    litellm_params:
+      model: openai/fake
+      api_key: fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
   - model_name: fireworks-llama-v3-70b-instruct
     litellm_params:
       model: fireworks_ai/accounts/fireworks/models/llama-v3-70b-instruct
-      api_key: "os.environ/FIREWORKS_AI_API_KEY"
-
-router_settings:
-  enable_tag_filtering: True # 👈 Key Change
+      api_key: "os.environ/FIREWORKS"
 general_settings: 
   master_key: sk-1234
+
+litellm_settings:
+  callbacks: ["arize"]
