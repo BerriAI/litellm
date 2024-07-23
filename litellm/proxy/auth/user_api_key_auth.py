@@ -924,6 +924,7 @@ async def user_api_key_auth(
                 rpm_limit=valid_token.team_rpm_limit,
                 blocked=valid_token.team_blocked,
                 models=valid_token.team_models,
+                metadata=valid_token.team_metadata,
             )
 
             user_api_key_cache.set_cache(
