@@ -351,8 +351,6 @@ async def test_callback_specific_param_run_pre_call_check_lakera():
     from litellm.proxy.guardrails.init_guardrails import initialize_guardrails
     from litellm.types.guardrails import GuardrailItem, GuardrailItemSpec
 
-    os.environ["LAKERA_API_KEY"] = "7a91a1a6059da*******"
-
     guardrails_config: List[Dict[str, GuardrailItemSpec]] = [
         {
             "prompt_injection": {
