@@ -76,6 +76,7 @@ post_call_rules: List[Callable] = []
 turn_off_message_logging: Optional[bool] = False
 log_raw_request_response: bool = False
 redact_messages_in_exceptions: Optional[bool] = False
+redact_user_api_key_info: Optional[bool] = False
 store_audit_logs = False  # Enterprise feature, allow users to see audit logs
 ## end of callbacks #############
 
