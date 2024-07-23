@@ -184,7 +184,14 @@ const sidebars = {
     "scheduler",
     "set_keys",
     "budget_manager",
-    "secret",
+    {
+      type: "category", 
+      label: "Secret Manager", 
+      items: [
+        "secret", 
+        "oidc"
+      ]
+    },
     "completion/token_usage",
     "load_test",
     {
