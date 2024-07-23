@@ -216,6 +216,9 @@ print(response)
 
 ### Team based Logging to Langfuse
 
+[👉 Tutorial - Allow each team to use their own Langfuse Project / custom callbacks](team_logging)
+<!-- 
+
 **Example:**
 
 This config would send langfuse logs to 2 different langfuse projects, based on the team id 
@@ -242,7 +245,7 @@ curl -X POST 'http://0.0.0.0:4000/key/generate' \
 -d '{"team_id": "ishaans-secret-project"}'
 ```
 
-All requests made with these keys will log data to their team-specific logging.
+All requests made with these keys will log data to their team-specific logging. -->
 
 ### Redacting Messages, Response Content from Langfuse Logging 
 
