@@ -884,6 +884,26 @@ class BlockTeamRequest(LiteLLMBase):
     team_id: str  # required
 
 
+class AddTeamCallback(LiteLLMBase):
+    callback_name: str
+    callback_type: Literal["success", "failure", "success_and_failure"]
+    # for now - only supported for langfuse
+    callback_vars: Dict[
+        Literal["langfuse_public_key", "langfuse_secret_key", "langfuse_host"], str
+    ]
+
+
+class TeamCallbackMetadata(LiteLLMBase):
+    success_callback: Optional[List[str]] = []
+    failure_callback: Optional[List[str]] = []
+    # for now - only supported for langfuse
+    callback_vars: Optional[
+        Dict[
+            Literal["langfuse_public_key", "langfuse_secret_key", "langfuse_host"], str
+        ]
+    ] = {}
+
+
 class LiteLLM_TeamTable(TeamBase):
     spend: Optional[float] = None
     max_parallel_requests: Optional[int] = None
@@ -1236,6 +1256,7 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     soft_budget: Optional[float] = None
     team_model_aliases: Optional[Dict] = None
     team_member_spend: Optional[float] = None
+    team_metadata: Optional[Dict] = None
 
     # End User Params
     end_user_id: Optional[str] = None
@@ -1681,3 +1702,5 @@ class ProxyErrorTypes(str, enum.Enum):
     budget_exceeded = "budget_exceeded"
     expired_key = "expired_key"
     auth_error = "auth_error"
+    internal_server_error = "internal_server_error"
+    bad_request_error = "bad_request_error"
