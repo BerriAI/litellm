@@ -53,6 +53,7 @@ from litellm.utils import (
 from ..integrations.aispend import AISpendLogger
 from ..integrations.athina import AthinaLogger
 from ..integrations.berrispend import BerriSpendLogger
+from ..integrations.braintrust_logging import BraintrustLogger
 from ..integrations.clickhouse import ClickhouseLogger
 from ..integrations.custom_logger import CustomLogger
 from ..integrations.datadog import DataDogLogger
@@ -1945,7 +1946,14 @@ def _init_custom_logger_compatible_class(
         _openmeter_logger = OpenMeterLogger()
         _in_memory_loggers.append(_openmeter_logger)
         return _openmeter_logger  # type: ignore
+    elif logging_integration == "braintrust":
+        for callback in _in_memory_loggers:
+            if isinstance(callback, BraintrustLogger):
+                return callback  # type: ignore
 
+        braintrust_logger = BraintrustLogger()
+        _in_memory_loggers.append(braintrust_logger)
+        return braintrust_logger  # type: ignore
     elif logging_integration == "langsmith":
         for callback in _in_memory_loggers:
             if isinstance(callback, LangsmithLogger):
@@ -2055,6 +2063,10 @@ def get_custom_logger_compatible_class(
     elif logging_integration == "openmeter":
         for callback in _in_memory_loggers:
             if isinstance(callback, OpenMeterLogger):
+                return callback
+    elif logging_integration == "braintrust":
+        for callback in _in_memory_loggers:
+            if isinstance(callback, BraintrustLogger):
                 return callback
     elif logging_integration == "galileo":
         for callback in _in_memory_loggers:
