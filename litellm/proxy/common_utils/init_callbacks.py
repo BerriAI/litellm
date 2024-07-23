@@ -27,6 +27,7 @@ def initialize_callbacks_on_proxy(
             get_args(litellm._custom_logger_compatible_callbacks_literal)
         )
         for callback in value:  # ["presidio", <my-custom-callback>]
+
             if isinstance(callback, str) and callback in known_compatible_callbacks:
                 imported_list.append(callback)
             elif isinstance(callback, str) and callback == "otel":
