@@ -46,7 +46,7 @@ def route_in_additonal_public_routes(current_route: str):
         return False
 
 
-def is_openai_route(route: str) -> bool:
+def is_llm_api_route(route: str) -> bool:
     """
     Helper to checks if provided route is an OpenAI route
 
@@ -57,6 +57,9 @@ def is_openai_route(route: str) -> bool:
     """
 
     if route in LiteLLMRoutes.openai_routes.value:
+        return True
+
+    if route in LiteLLMRoutes.anthropic_routes.value:
         return True
 
     # fuzzy match routes like "/v1/threads/thread_49EIN5QF32s4mH20M7GFKdlZ"

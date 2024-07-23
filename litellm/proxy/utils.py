@@ -25,7 +25,7 @@ from typing_extensions import overload
 import litellm
 import litellm.litellm_core_utils
 import litellm.litellm_core_utils.litellm_logging
-from litellm import EmbeddingResponse, ImageResponse, ModelResponse
+from litellm import EmbeddingResponse, ImageResponse, ModelResponse, get_litellm_params
 from litellm._logging import verbose_proxy_logger
 from litellm._service_logger import ServiceLogging, ServiceTypes
 from litellm.caching import DualCache, RedisCache
@@ -50,7 +50,7 @@ from litellm.proxy.hooks.max_budget_limiter import _PROXY_MaxBudgetLimiter
 from litellm.proxy.hooks.parallel_request_limiter import (
     _PROXY_MaxParallelRequestsHandler,
 )
-from litellm.types.utils import CallTypes
+from litellm.types.utils import CallTypes, LoggedLiteLLMParams
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -602,14 +602,20 @@ class ProxyLogging:
             if litellm_logging_obj is not None:
                 ## UPDATE LOGGING INPUT
                 _optional_params = {}
+                _litellm_params = {}
+
+                litellm_param_keys = LoggedLiteLLMParams.__annotations__.keys()
                 for k, v in request_data.items():
-                    if k != "model" and k != "user" and k != "litellm_params":
+                    if k in litellm_param_keys:
+                        _litellm_params[k] = v
+                    elif k != "model" and k != "user":
                         _optional_params[k] = v
+
                 litellm_logging_obj.update_environment_variables(
                     model=request_data.get("model", ""),
                     user=request_data.get("user", ""),
                     optional_params=_optional_params,
-                    litellm_params=request_data.get("litellm_params", {}),
+                    litellm_params=_litellm_params,
                 )
 
                 input: Union[list, str, dict] = ""
@@ -1313,8 +1319,10 @@ class PrismaClient:
                     t.tpm_limit AS team_tpm_limit,
                     t.rpm_limit AS team_rpm_limit,
                     t.models AS team_models,
+                    t.metadata AS team_metadata,
                     t.blocked AS team_blocked,
                     t.team_alias AS team_alias,
+                    t.metadata AS team_metadata,
                     tm.spend AS team_member_spend,
                     m.aliases as team_model_aliases
                     FROM "LiteLLM_VerificationToken" AS v
