@@ -188,3 +188,92 @@ async def add_team_callbacks(
             param=getattr(e, "param", "None"),
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
+
+
+@router.get(
+    "/team/{team_id:path}/callback",
+    tags=["team management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+@management_endpoint_wrapper
+async def get_team_callbacks(
+    http_request: Request,
+    team_id: str,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Get the success/failure callbacks and variables for a team
+
+    Example curl:
+    ```
+    curl -X GET 'http://localhost:4000/team/dbe2f686-a686-4896-864a-4c3924458709/callback' \
+        -H 'Authorization: Bearer sk-1234'
+    ```
+
+    This will return the callback settings for the team with id dbe2f686-a686-4896-864a-4c3924458709
+
+    Returns {
+            "status": "success",
+            "data": {
+                "team_id": team_id,
+                "success_callbacks": team_callback_settings_obj.success_callback,
+                "failure_callbacks": team_callback_settings_obj.failure_callback,
+                "callback_vars": team_callback_settings_obj.callback_vars,
+            },
+        }
+    """
+    try:
+        from litellm.proxy.proxy_server import prisma_client
+
+        if prisma_client is None:
+            raise HTTPException(status_code=500, detail={"error": "No db connected"})
+
+        # Check if team_id exists
+        _existing_team = await prisma_client.get_data(
+            team_id=team_id, table_name="team", query_type="find_unique"
+        )
+        if _existing_team is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": f"Team id = {team_id} does not exist."},
+            )
+
+        # Retrieve team callback settings from metadata
+        team_metadata = _existing_team.metadata
+        team_callback_settings = team_metadata.get("callback_settings", {})
+
+        # Convert to TeamCallbackMetadata object for consistent structure
+        team_callback_settings_obj = TeamCallbackMetadata(**team_callback_settings)
+
+        return {
+            "status": "success",
+            "data": {
+                "team_id": team_id,
+                "success_callbacks": team_callback_settings_obj.success_callback,
+                "failure_callbacks": team_callback_settings_obj.failure_callback,
+                "callback_vars": team_callback_settings_obj.callback_vars,
+            },
+        }
+
+    except Exception as e:
+        verbose_proxy_logger.error(
+            "litellm.proxy.proxy_server.get_team_callbacks(): Exception occurred - {}".format(
+                str(e)
+            )
+        )
+        verbose_proxy_logger.debug(traceback.format_exc())
+        if isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "detail", f"Internal Server Error({str(e)})"),
+                type=ProxyErrorTypes.internal_server_error.value,
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
+            )
+        elif isinstance(e, ProxyException):
+            raise e
+        raise ProxyException(
+            message="Internal Server Error, " + str(e),
+            type=ProxyErrorTypes.internal_server_error.value,
+            param=getattr(e, "param", "None"),
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
