@@ -2909,6 +2909,7 @@ async def chat_completion(
         fastest_response_batch_completion = hidden_params.get(
             "fastest_response_batch_completion", None
         )
+        additional_headers: dict = hidden_params.get("additional_headers", {}) or {}
 
         # Post Call Processing
         if llm_router is not None:
@@ -2931,6 +2932,7 @@ async def chat_completion(
                 response_cost=response_cost,
                 model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
                 fastest_response_batch_completion=fastest_response_batch_completion,
+                **additional_headers,
             )
             selected_data_generator = select_data_generator(
                 response=response,
@@ -2948,8 +2950,10 @@ async def chat_completion(
             user_api_key_dict=user_api_key_dict, response=response
         )
 
-        hidden_params = getattr(response, "_hidden_params", {}) or {}
-        additional_headers: dict = hidden_params.get("additional_headers", {}) or {}
+        hidden_params = (
+            getattr(response, "_hidden_params", {}) or {}
+        )  # get any updated response headers
+        additional_headers = hidden_params.get("additional_headers", {}) or {}
 
         fastapi_response.headers.update(
             get_custom_headers(

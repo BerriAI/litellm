@@ -1988,25 +1988,30 @@ async def test_hf_completion_tgi_stream():
 
 # test on openai completion call
 def test_openai_chat_completion_call():
-    try:
-        litellm.set_verbose = False
-        print(f"making openai chat completion call")
-        response = completion(model="gpt-3.5-turbo", messages=messages, stream=True)
-        complete_response = ""
-        start_time = time.time()
-        for idx, chunk in enumerate(response):
-            chunk, finished = streaming_format_tests(idx, chunk)
-            print(f"outside chunk: {chunk}")
-            if finished:
-                break
-            complete_response += chunk
-            # print(f'complete_chunk: {complete_response}')
-        if complete_response.strip() == "":
-            raise Exception("Empty response received")
-        print(f"complete response: {complete_response}")
-    except:
-        print(f"error occurred: {traceback.format_exc()}")
-        pass
+    litellm.set_verbose = False
+    litellm.return_response_headers = True
+    print(f"making openai chat completion call")
+    response = completion(model="gpt-3.5-turbo", messages=messages, stream=True)
+    assert isinstance(
+        response._hidden_params["additional_headers"][
+            "llm_provider-x-ratelimit-remaining-requests"
+        ],
+        str,
+    )
+
+    print(f"response._hidden_params: {response._hidden_params}")
+    complete_response = ""
+    start_time = time.time()
+    for idx, chunk in enumerate(response):
+        chunk, finished = streaming_format_tests(idx, chunk)
+        print(f"outside chunk: {chunk}")
+        if finished:
+            break
+        complete_response += chunk
+        # print(f'complete_chunk: {complete_response}')
+    if complete_response.strip() == "":
+        raise Exception("Empty response received")
+    print(f"complete response: {complete_response}")
 
 
 # test_openai_chat_completion_call()

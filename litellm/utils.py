@@ -5679,13 +5679,13 @@ def convert_to_model_response_object(
 ):
     received_args = locals()
     if _response_headers is not None:
+        llm_response_headers = {
+            "{}-{}".format("llm_provider", k): v for k, v in _response_headers.items()
+        }
         if hidden_params is not None:
-            hidden_params["additional_headers"] = {
-                "{}-{}".format("llm_provider", k): v
-                for k, v in _response_headers.items()
-            }
+            hidden_params["additional_headers"] = llm_response_headers
         else:
-            hidden_params = {"additional_headers": _response_headers}
+            hidden_params = {"additional_headers": llm_response_headers}
     ### CHECK IF ERROR IN RESPONSE ### - openrouter returns these in the dictionary
     if (
         response_object is not None
@@ -8320,8 +8320,13 @@ class CustomStreamWrapper:
             or {}
         )
         self._hidden_params = {
-            "model_id": (_model_info.get("id", None))
+            "model_id": (_model_info.get("id", None)),
         }  # returned as x-litellm-model-id response header in proxy
+        if _response_headers is not None:
+            self._hidden_params["additional_headers"] = {
+                "{}-{}".format("llm_provider", k): v
+                for k, v in _response_headers.items()
+            }
         self._response_headers = _response_headers
         self.response_id = None
         self.logging_loop = None
