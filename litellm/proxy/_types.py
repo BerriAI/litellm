@@ -1256,6 +1256,7 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     soft_budget: Optional[float] = None
     team_model_aliases: Optional[Dict] = None
     team_member_spend: Optional[float] = None
+    team_metadata: Optional[Dict] = None
 
     # End User Params
     end_user_id: Optional[str] = None
