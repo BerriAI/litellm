@@ -103,16 +103,48 @@ async def add_team_callbacks(
             if team_callback_settings_obj.success_callback is None:
                 team_callback_settings_obj.success_callback = []
 
+            if data.callback_name in team_callback_settings_obj.success_callback:
+                raise ProxyException(
+                    message=f"callback_name = {data.callback_name} already exists in failure_callback, for team_id = {team_id}. \n Existing failure_callback = {team_callback_settings_obj.success_callback}",
+                    code=status.HTTP_400_BAD_REQUEST,
+                    type=ProxyErrorTypes.bad_request_error,
+                    param="callback_name",
+                )
+
             team_callback_settings_obj.success_callback.append(data.callback_name)
         elif data.callback_type == "failure":
             if team_callback_settings_obj.failure_callback is None:
                 team_callback_settings_obj.failure_callback = []
+
+            if data.callback_name in team_callback_settings_obj.failure_callback:
+                raise ProxyException(
+                    message=f"callback_name = {data.callback_name} already exists in failure_callback, for team_id = {team_id}. \n Existing failure_callback = {team_callback_settings_obj.failure_callback}",
+                    code=status.HTTP_400_BAD_REQUEST,
+                    type=ProxyErrorTypes.bad_request_error,
+                    param="callback_name",
+                )
             team_callback_settings_obj.failure_callback.append(data.callback_name)
         elif data.callback_type == "success_and_failure":
             if team_callback_settings_obj.success_callback is None:
                 team_callback_settings_obj.success_callback = []
             if team_callback_settings_obj.failure_callback is None:
                 team_callback_settings_obj.failure_callback = []
+            if data.callback_name in team_callback_settings_obj.success_callback:
+                raise ProxyException(
+                    message=f"callback_name = {data.callback_name} already exists in success_callback, for team_id = {team_id}. \n Existing success_callback = {team_callback_settings_obj.success_callback}",
+                    code=status.HTTP_400_BAD_REQUEST,
+                    type=ProxyErrorTypes.bad_request_error,
+                    param="callback_name",
+                )
+
+            if data.callback_name in team_callback_settings_obj.failure_callback:
+                raise ProxyException(
+                    message=f"callback_name = {data.callback_name} already exists in failure_callback, for team_id = {team_id}. \n Existing failure_callback = {team_callback_settings_obj.failure_callback}",
+                    code=status.HTTP_400_BAD_REQUEST,
+                    type=ProxyErrorTypes.bad_request_error,
+                    param="callback_name",
+                )
+
             team_callback_settings_obj.success_callback.append(data.callback_name)
             team_callback_settings_obj.failure_callback.append(data.callback_name)
         for var, value in data.callback_vars.items():
