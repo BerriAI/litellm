@@ -20,6 +20,8 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
     AddTeamCallback,
     LiteLLM_TeamTable,
+    ProxyErrorTypes,
+    ProxyException,
     TeamCallbackMetadata,
     UserAPIKeyAuth,
 )
@@ -48,59 +50,109 @@ async def add_team_callbacks(
         description="The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
     ),
 ):
-    from litellm.proxy.proxy_server import (
-        _duration_in_seconds,
-        create_audit_log_for_update,
-        litellm_proxy_admin_name,
-        prisma_client,
-    )
+    """
+    Add a success/failure callback to a team
 
-    if prisma_client is None:
-        raise HTTPException(status_code=500, detail={"error": "No db connected"})
+    Use this if if you want different teams to have different success/failure callbacks
 
-    # Check if team_id exists already
-    _existing_team = await prisma_client.get_data(
-        team_id=team_id, table_name="team", query_type="find_unique"
-    )
-    if _existing_team is None:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": f"Team id = {team_id} does not exist. Please use a different team id."
-            },
+    Example curl:
+    ```
+    curl -X POST 'http:/localhost:4000/team/dbe2f686-a686-4896-864a-4c3924458709/callback' \
+        -H 'Content-Type: application/json' \
+        -H 'Authorization: Bearer sk-1234' \
+        -d '{
+        "callback_name": "langfuse",
+        "callback_type": "success",
+        "callback_vars": {"langfuse_public_key": "pk-lf-xxxx1", "langfuse_secret_key": "sk-xxxxx"}
+        
+    }'
+    ```
+
+    This means for the team where team_id = dbe2f686-a686-4896-864a-4c3924458709, all LLM calls will be logged to langfuse using the public key pk-lf-xxxx1 and the secret key sk-xxxxx
+
+    """
+    try:
+        from litellm.proxy.proxy_server import (
+            _duration_in_seconds,
+            create_audit_log_for_update,
+            litellm_proxy_admin_name,
+            prisma_client,
         )
 
-    # store team callback settings in metadata
-    team_metadata = _existing_team.metadata
-    team_callback_settings = team_metadata.get("callback_settings", {})
-    # expect callback settings to be
-    team_callback_settings_obj = TeamCallbackMetadata(**team_callback_settings)
-    if data.callback_type == "success":
-        if team_callback_settings_obj.success_callback is None:
-            team_callback_settings_obj.success_callback = []
+        if prisma_client is None:
+            raise HTTPException(status_code=500, detail={"error": "No db connected"})
 
-        team_callback_settings_obj.success_callback.append(data.callback_name)
-    elif data.callback_type == "failure":
-        if team_callback_settings_obj.failure_callback is None:
-            team_callback_settings_obj.failure_callback = []
-        team_callback_settings_obj.failure_callback.append(data.callback_name)
-    elif data.callback_type == "success_and_failure":
-        if team_callback_settings_obj.success_callback is None:
-            team_callback_settings_obj.success_callback = []
-        if team_callback_settings_obj.failure_callback is None:
-            team_callback_settings_obj.failure_callback = []
-        team_callback_settings_obj.success_callback.append(data.callback_name)
-        team_callback_settings_obj.failure_callback.append(data.callback_name)
-    for var, value in data.callback_vars.items():
-        if team_callback_settings_obj.callback_vars is None:
-            team_callback_settings_obj.callback_vars = {}
-        team_callback_settings_obj.callback_vars[var] = value
+        # Check if team_id exists already
+        _existing_team = await prisma_client.get_data(
+            team_id=team_id, table_name="team", query_type="find_unique"
+        )
+        if _existing_team is None:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": f"Team id = {team_id} does not exist. Please use a different team id."
+                },
+            )
 
-    team_callback_settings_obj_dict = team_callback_settings_obj.model_dump()
+        # store team callback settings in metadata
+        team_metadata = _existing_team.metadata
+        team_callback_settings = team_metadata.get("callback_settings", {})
+        # expect callback settings to be
+        team_callback_settings_obj = TeamCallbackMetadata(**team_callback_settings)
+        if data.callback_type == "success":
+            if team_callback_settings_obj.success_callback is None:
+                team_callback_settings_obj.success_callback = []
 
-    team_metadata["callback_settings"] = team_callback_settings_obj_dict
-    team_metadata_json = json.dumps(team_metadata)  # update team_metadata
+            team_callback_settings_obj.success_callback.append(data.callback_name)
+        elif data.callback_type == "failure":
+            if team_callback_settings_obj.failure_callback is None:
+                team_callback_settings_obj.failure_callback = []
+            team_callback_settings_obj.failure_callback.append(data.callback_name)
+        elif data.callback_type == "success_and_failure":
+            if team_callback_settings_obj.success_callback is None:
+                team_callback_settings_obj.success_callback = []
+            if team_callback_settings_obj.failure_callback is None:
+                team_callback_settings_obj.failure_callback = []
+            team_callback_settings_obj.success_callback.append(data.callback_name)
+            team_callback_settings_obj.failure_callback.append(data.callback_name)
+        for var, value in data.callback_vars.items():
+            if team_callback_settings_obj.callback_vars is None:
+                team_callback_settings_obj.callback_vars = {}
+            team_callback_settings_obj.callback_vars[var] = value
 
-    await prisma_client.db.litellm_teamtable.update(
-        where={"team_id": team_id}, data={"metadata": team_metadata_json}  # type: ignore
-    )
+        team_callback_settings_obj_dict = team_callback_settings_obj.model_dump()
+
+        team_metadata["callback_settings"] = team_callback_settings_obj_dict
+        team_metadata_json = json.dumps(team_metadata)  # update team_metadata
+
+        new_team_row = await prisma_client.db.litellm_teamtable.update(
+            where={"team_id": team_id}, data={"metadata": team_metadata_json}  # type: ignore
+        )
+
+        return {
+            "status": "success",
+            "data": new_team_row,
+        }
+
+    except Exception as e:
+        verbose_proxy_logger.error(
+            "litellm.proxy.proxy_server.add_team_callbacks(): Exception occured - {}".format(
+                str(e)
+            )
+        )
+        verbose_proxy_logger.debug(traceback.format_exc())
+        if isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "detail", f"Internal Server Error({str(e)})"),
+                type=ProxyErrorTypes.internal_server_error.value,
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
+            )
+        elif isinstance(e, ProxyException):
+            raise e
+        raise ProxyException(
+            message="Internal Server Error, " + str(e),
+            type=ProxyErrorTypes.internal_server_error.value,
+            param=getattr(e, "param", "None"),
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
