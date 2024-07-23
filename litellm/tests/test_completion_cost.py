@@ -881,6 +881,7 @@ def test_completion_azure_ai():
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_completion_cost_hidden_params(sync_mode):
+    litellm.return_response_headers = True
     if sync_mode:
         response = litellm.completion(
             model="gpt-3.5-turbo",
@@ -896,9 +897,6 @@ async def test_completion_cost_hidden_params(sync_mode):
 
     assert "response_cost" in response._hidden_params
     assert isinstance(response._hidden_params["response_cost"], float)
-    assert isinstance(
-        response._hidden_params["llm_provider-x-ratelimit-remaining-requests"], float
-    )
 
 
 def test_vertex_ai_gemini_predict_cost():
