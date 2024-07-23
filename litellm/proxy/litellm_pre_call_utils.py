@@ -213,6 +213,9 @@ async def add_litellm_data_to_request(
         if "callback_settings" in team_metadata:
             callback_settings = team_metadata.get("callback_settings", None) or {}
             callback_settings_obj = TeamCallbackMetadata(**callback_settings)
+            verbose_proxy_logger.debug(
+                "Team callback settings activated: %s", callback_settings_obj
+            )
             """
             callback_settings = {
               {
