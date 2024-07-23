@@ -5,6 +5,8 @@ import TabItem from '@theme/TabItem';
 # 👥📊 Team Based Logging
 
 Allow each team to use their own Langfuse Project / custom callbacks
+
+**This allows you to do the following**
 ```
 Team 1 -> Logs to Langfuse Project 1 
 Team 2 -> Logs to Langfuse Project 2
