@@ -206,6 +206,15 @@ def test_openai_azure_embedding_with_oidc_and_cf():
     os.environ["AZURE_TENANT_ID"] = "17c0a27a-1246-4aa1-a3b6-d294e80e783c"
     os.environ["AZURE_CLIENT_ID"] = "4faf5422-b2bd-45e8-a6d7-46543a38acd0"
 
+    original_api_key = os.environ["AZURE_API_KEY"]
+    original_api_base = os.environ["AZURE_API_BASE"]
+    original_api_version = os.environ["AZURE_API_VERSION"]
+
+    # unset defaults
+    os.environ["AZURE_API_VERSION"] = ""
+    os.environ["AZURE_API_BASE"] = ""
+    os.environ["AZURE_API_KEY"] = ""
+
     try:
         response = embedding(
             model="azure/text-embedding-ada-002",
@@ -218,6 +227,11 @@ def test_openai_azure_embedding_with_oidc_and_cf():
 
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+    # Restore the environment variables
+    os.environ["AZURE_API_VERSION"] = original_api_key
+    os.environ["AZURE_API_BASE"] = original_api_base
+    os.environ["AZURE_API_KEY"] = original_api_version
 
 
 def test_openai_azure_embedding_optional_arg(mocker):
