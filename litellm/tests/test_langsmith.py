@@ -36,6 +36,7 @@ async def test_async_langsmith_logging():
             temperature=0.2,
             metadata={
                 "id": run_id,
+                "tags": ["tag1", "tag2"],
                 "user_api_key": "6eb81e014497d89f3cc1aa9da7c2b37bda6b7fea68e4b710d33d94201e68970c",
                 "user_api_key_alias": "ishaans-langmsith-key",
                 "user_api_end_user_max_budget": None,
