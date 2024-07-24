@@ -13,6 +13,7 @@ import pytest
 from litellm import get_secret
 from litellm.proxy.secret_managers.aws_secret_manager import load_aws_secret_manager
 from litellm.llms.azure import get_azure_ad_token_from_oidc
+from litellm.llms.bedrock_httpx import BedrockLLM
 
 
 @pytest.mark.skip(reason="AWS Suspended Account")
@@ -61,7 +62,7 @@ def test_oidc_github():
 )
 def test_oidc_circleci():
     secret_val = get_secret(
-        "oidc/circleci/https://bedrock-runtime.us-east-1.amazonaws.com/model/amazon.titan-text-express-v1/invoke"
+        "oidc/circleci/"
     )
 
     print(f"secret_val: {redact_oidc_signature(secret_val)}")
@@ -90,3 +91,25 @@ def test_oidc_circleci_with_azure():
     azure_ad_token = get_azure_ad_token_from_oidc("oidc/circleci/")
 
     print(f"secret_val: {redact_oidc_signature(azure_ad_token)}")
+
+
+@pytest.mark.skipif(
+    os.environ.get("CIRCLE_OIDC_TOKEN") is None,
+    reason="Cannot run without being in CircleCI Runner",
+)
+def test_oidc_circle_v1_with_amazon():
+    # The purpose of this test is to get logs using the older v1 of the CircleCI OIDC token
+
+    # TODO: This is using ai.moda's IAM role, we should use LiteLLM's IAM role eventually
+    aws_role_name = (
+        "arn:aws:iam::335785316107:role/litellm-github-unit-tests-circleci-v1-assume-only"
+    )
+    aws_web_identity_token = "oidc/circleci/"
+
+    bllm = BedrockLLM()
+    creds = bllm.get_credentials(
+        aws_region_name="ca-west-1",
+        aws_web_identity_token=aws_web_identity_token,
+        aws_role_name=aws_role_name,
+        aws_session_name="assume-v1-session",
+    )
