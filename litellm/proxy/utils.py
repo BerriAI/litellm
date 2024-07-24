@@ -844,6 +844,30 @@ class PrismaClient:
 
         If the view doesn't exist, one will be created.
         """
+
+        # Check to see if all of the necessary views exist and if they do, simply return
+        # This is more efficient because it lets us check for all views in one
+        # query instead of multiple queries.
+        try:
+            ret = await self.db.query_raw(
+                """
+                    SELECT SUM(1) FROM pg_views
+                    WHERE schemaname = 'public' AND viewname IN (
+                        'LiteLLM_VerificationTokenView',
+                        'MonthlyGlobalSpend',
+                        'Last30dKeysBySpend',
+                        'Last30dModelsBySpend',
+                        'MonthlyGlobalSpendPerKey',
+                        'Last30dTopEndUsersSpend'
+                    )
+                    """
+            )
+            if ret[0]['sum'] == 6:
+                print("All necessary views exist!")  # noqa
+                return
+        except Exception:
+            pass
+
         try:
             # Try to select one row from the view
             await self.db.query_raw(
