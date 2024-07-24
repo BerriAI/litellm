@@ -2769,6 +2769,42 @@ def test_azure_openai_ad_token():
 # test_azure_openai_ad_token()
 
 
+@pytest.mark.skipif(
+    os.environ.get("CIRCLE_OIDC_TOKEN") is None,
+    reason="Cannot run without being in CircleCI Runner",
+)
+def test_openai_azure_completion_with_oidc_and_cf():
+    # TODO: Switch to our own Azure account, currently using ai.moda's account
+    os.environ["AZURE_TENANT_ID"] = "17c0a27a-1246-4aa1-a3b6-d294e80e783c"
+    os.environ["AZURE_CLIENT_ID"] = "4faf5422-b2bd-45e8-a6d7-46543a38acd0"
+
+    try:
+        response = completion(
+            model="azure/gpt-4o-2024-05-13",
+            messages=[
+                {
+                    "role": "user",
+                    "content": "Hello",
+                },
+            ],
+            azure_ad_token="oidc/circleci/",
+            api_base="https://gateway.ai.cloudflare.com/v1/0399b10e77ac6668c80404a5ff49eb37/litellm-test/azure-openai/eastus2-litellm",
+            api_version="2024-06-01",
+            seed=42,
+            max_tokens=1,
+            logprobs=True,
+            top_logprobs=5,
+            temperature=1.9,
+        )
+        print(response)
+
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+# test_openai_azure_completion_with_oidc_and_cf()
+
+
 # test_completion_azure()
 def test_completion_azure2():
     # test if we can pass api_base, api_version and api_key in compleition()
