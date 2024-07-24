@@ -760,6 +760,36 @@
         "litellm_provider": "azure_ai",
         "mode": "chat"
     },
+    "azure_ai/Meta-Llama-31-8B-Instruct": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000,
+        "input_cost_per_token": 0.0000003,
+        "output_cost_per_token": 0.00000061,
+        "litellm_provider": "azure_ai",
+        "mode": "chat",
+        "source":"https://azuremarketplace.microsoft.com/en-us/marketplace/apps/metagenai.meta-llama-3-1-8b-instruct-offer?tab=PlansAndPrice"
+    },
+    "azure_ai/Meta-Llama-31-70B-Instruct": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000,
+        "input_cost_per_token": 0.00000268,
+        "output_cost_per_token": 0.00000354,
+        "litellm_provider": "azure_ai",
+        "mode": "chat",
+        "source":"https://azuremarketplace.microsoft.com/en-us/marketplace/apps/metagenai.meta-llama-3-1-70b-instruct-offer?tab=PlansAndPrice"
+    },
+    "azure_ai/Meta-Llama-31-405B-Instruct": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000,
+        "input_cost_per_token": 0.00000533,
+        "output_cost_per_token": 0.000016,
+        "litellm_provider": "azure_ai",
+        "mode": "chat",
+        "source":"https://azuremarketplace.microsoft.com/en-us/marketplace/apps/metagenai.meta-llama-3-1-405b-instruct-offer?tab=PlansAndPrice"
+    },
     "babbage-002": {
         "max_tokens": 16384,
         "max_input_tokens": 16384,
