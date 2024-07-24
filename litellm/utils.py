@@ -5752,10 +5752,12 @@ def convert_to_model_response_object(
                 model_response_object.usage.total_tokens = response_object["usage"].get("total_tokens", 0)  # type: ignore
 
             if "created" in response_object:
-                model_response_object.created = response_object["created"]
+                model_response_object.created = response_object["created"] or int(
+                    time.time()
+                )
 
             if "id" in response_object:
-                model_response_object.id = response_object["id"]
+                model_response_object.id = response_object["id"] or str(uuid.uuid4())
 
             if "system_fingerprint" in response_object:
                 model_response_object.system_fingerprint = response_object[
