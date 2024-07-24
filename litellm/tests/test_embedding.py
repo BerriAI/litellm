@@ -681,9 +681,17 @@ def test_embedding_azure_ad_token():
     # If you want to remove it, speak to Ishaan!
     # Ishaan will be very disappointed if this test is removed -> this is a standard way to pass api_key + the router + proxy use this
 
+    original_api_key = os.environ["AZURE_API_KEY"]
+
+    # unset default to avoid accidentally using the non-Azure AD flow
+    os.environ["AZURE_API_KEY"] = ""
+
     response = embedding(
         model="azure/azure-embedding-model",
         input=["good morning from litellm"],
-        azure_ad_token=os.getenv("AZURE_API_KEY"),
+        azure_ad_token=original_api_key,
     )
     print(response)
+
+    # Restore the environment variables
+    os.environ["AZURE_API_KEY"] = original_api_key
