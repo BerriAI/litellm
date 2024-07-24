@@ -196,6 +196,28 @@ def test_openai_azure_embedding():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+@pytest.mark.skipif(
+    os.environ.get("CIRCLE_OIDC_TOKEN") is None,
+    reason="Cannot run without being in CircleCI Runner",
+)
+def test_openai_azure_embedding_with_oidc_and_cf():
+    # TODO: Switch to our own Azure account, currently using ai.moda's account
+    os.environ["AZURE_TENANT_ID"] = "17c0a27a-1246-4aa1-a3b6-d294e80e783c"
+    os.environ["AZURE_CLIENT_ID"] = "4faf5422-b2bd-45e8-a6d7-46543a38acd0"
+
+    try:
+        response = embedding(
+            model="azure/text-embedding-ada-002",
+            input=["Hello"],
+            azure_ad_token="oidc/circleci/",
+            api_base="https://gateway.ai.cloudflare.com/v1/0399b10e77ac6668c80404a5ff49eb37/litellm-test/azure-openai/eastus2-litellm",
+            api_version="2024-06-01",
+        )
+        print(response)
+
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
 
 def test_openai_azure_embedding_optional_arg(mocker):
     mocked_create_embeddings = mocker.patch.object(
