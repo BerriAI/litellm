@@ -749,6 +749,85 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 </TabItem>
 </Tabs>
 
+
+## Llama 3 API
+ 
+| Model Name       | Function Call                        |
+|------------------|--------------------------------------|
+| meta/llama3-405b-instruct-maas   | `completion('vertex_ai/meta/llama3-405b-instruct-maas', messages)` |
+
+### Usage
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+import os
+
+os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = ""
+
+model = "meta/llama3-405b-instruct-maas"
+
+vertex_ai_project = "your-vertex-project" # can also set this as os.environ["VERTEXAI_PROJECT"]
+vertex_ai_location = "your-vertex-location" # can also set this as os.environ["VERTEXAI_LOCATION"]
+
+response = completion(
+    model="vertex_ai/" + model,
+    messages=[{"role": "user", "content": "hi"}],
+    temperature=0.7,
+    vertex_ai_project=vertex_ai_project,
+    vertex_ai_location=vertex_ai_location,
+)
+print("\nModel Response", response)
+```
+</TabItem>
+<TabItem value="proxy" label="Proxy">
+
+**1. Add to config**
+
+```yaml
+model_list:
+    - model_name: anthropic-llama
+      litellm_params:
+        model: vertex_ai/meta/llama3-405b-instruct-maas
+        vertex_ai_project: "my-test-project"
+        vertex_ai_location: "us-east-1"
+    - model_name: anthropic-llama
+      litellm_params:
+        model: vertex_ai/meta/llama3-405b-instruct-maas
+        vertex_ai_project: "my-test-project"
+        vertex_ai_location: "us-west-1"
+```
+
+**2. Start proxy**
+
+```bash
+litellm --config /path/to/config.yaml
+
+# RUNNING at http://0.0.0.0:4000
+```
+
+**3. Test it!**
+
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+      --header 'Authorization: Bearer sk-1234' \
+      --header 'Content-Type: application/json' \
+      --data '{
+            "model": "anthropic-llama", # 👈 the 'model_name' in config
+            "messages": [
+                {
+                "role": "user",
+                "content": "what llm are you"
+                }
+            ],
+        }'
+```
+
+</TabItem>
+</Tabs>
+
 ## Model Garden
 | Model Name       | Function Call                        |
 |------------------|--------------------------------------|
