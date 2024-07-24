@@ -2607,6 +2607,26 @@ def test_completion_azure_extra_headers():
         assert auth_header == "my-bad-key"
 
 
+def test_completion_azure_ad_token():
+    # this tests if we can pass api_key to completion, when it's not in the env.
+    # DO NOT REMOVE THIS TEST. No MATTER WHAT Happens!
+    # If you want to remove it, speak to Ishaan!
+    # Ishaan will be very disappointed if this test is removed -> this is a standard way to pass api_key + the router + proxy use this
+    from httpx import Client
+    from openai import AzureOpenAI
+
+    from litellm import completion
+    from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
+
+    response = completion(
+        model="azure/chatgpt-v-2",
+        messages=messages,
+        # api_key="my-fake-ad-token",
+        azure_ad_token=os.getenv("AZURE_API_KEY"),
+    )
+    print(response)
+
+
 def test_completion_azure_key_completion_arg():
     # this tests if we can pass api_key to completion, when it's not in the env.
     # DO NOT REMOVE THIS TEST. No MATTER WHAT Happens!
