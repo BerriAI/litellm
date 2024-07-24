@@ -219,6 +219,9 @@ def test_openai_azure_embedding_with_oidc_and_cf():
         pytest.fail(f"Error occurred: {e}")
 
 
+# test_openai_azure_embedding_with_oidc_and_cf()
+
+
 def test_openai_azure_embedding_optional_arg(mocker):
     mocked_create_embeddings = mocker.patch.object(
         openai.resources.embeddings.Embeddings,
