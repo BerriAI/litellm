@@ -400,6 +400,9 @@ for key, value in model_cost.items():
     elif value.get("litellm_provider") == "vertex_ai-anthropic_models":
         key = key.replace("vertex_ai/", "")
         vertex_anthropic_models.append(key)
+    elif value.get("litellm_provider") == "vertex_ai-llama_models":
+        key = key.replace("vertex_ai/", "")
+        vertex_llama3_models.append(key)
     elif value.get("litellm_provider") == "ai21":
         ai21_models.append(key)
     elif value.get("litellm_provider") == "nlp_cloud":
