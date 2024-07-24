@@ -172,7 +172,7 @@ model LiteLLM_Config {
 model LiteLLM_SpendLogs {
   request_id          String @id
   call_type           String
-  api_key             String  @default ("")
+  api_key             String  @default ("") // Hashed API Token. Not the actual Virtual Key. Equivalent to 'token' column in LiteLLM_VerificationToken
   spend               Float    @default(0.0)
   total_tokens        Int     @default(0)
   prompt_tokens       Int     @default(0)
@@ -183,12 +183,12 @@ model LiteLLM_SpendLogs {
   model               String   @default("")
   model_id            String?   @default("") // the model id stored in proxy model db
   model_group         String?   @default("") // public model_name / model_group
-  api_base            String   @default("")
-  user                String   @default("")
-  metadata            Json     @default("{}")
-  cache_hit           String   @default("")
-  cache_key           String   @default("")
-  request_tags        Json     @default("[]")
+  api_base            String?   @default("")
+  user                String?   @default("")
+  metadata            Json?     @default("{}")
+  cache_hit           String?   @default("")
+  cache_key           String?   @default("")
+  request_tags        Json?     @default("[]")
   team_id             String? 
   end_user            String?
   requester_ip_address String?
