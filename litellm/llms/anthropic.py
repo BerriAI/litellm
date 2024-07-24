@@ -780,8 +780,17 @@ class AnthropicChatCompletion(BaseLLM):
             system_prompt = ""
             for idx, message in enumerate(messages):
                 if message["role"] == "system":
-                    system_prompt += message["content"]
-                    system_prompt_indices.append(idx)
+                    valid_content: bool = False
+                    if isinstance(message["content"], str):
+                        system_prompt += message["content"]
+                        valid_content = True
+                    elif isinstance(message["content"], list):
+                        for content in message["content"]:
+                            system_prompt += content.get("text", "")
+                        valid_content = True
+
+                    if valid_content:
+                        system_prompt_indices.append(idx)
             if len(system_prompt_indices) > 0:
                 for idx in reversed(system_prompt_indices):
                     messages.pop(idx)
