@@ -53,39 +53,20 @@ class VertexAIError(Exception):
 
 class VertexAILlama3Config:
     """
-    Reference:https://docs.anthropic.com/claude/reference/messages_post
+    Reference:https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/llama#streaming
 
-    Note that the API for Claude on Vertex differs from the Anthropic API documentation in the following ways:
-
-    - `model` is not a valid parameter. The model is instead specified in the Google Cloud endpoint URL.
-    - `anthropic_version` is a required parameter and must be set to "vertex-2023-10-16".
-
-    The class `VertexAIAnthropicConfig` provides configuration for the VertexAI's Anthropic API interface. Below are the parameters:
+    The class `VertexAILlama3Config` provides configuration for the VertexAI's Llama API interface. Below are the parameters:
 
     - `max_tokens` Required (integer) max tokens,
-    - `anthropic_version` Required (string) version of anthropic for bedrock - e.g. "bedrock-2023-05-31"
-    - `system` Optional (string) the system prompt, conversion from openai format to this is handled in factory.py
-    - `temperature` Optional (float) The amount of randomness injected into the response
-    - `top_p` Optional (float) Use nucleus sampling.
-    - `top_k` Optional (int) Only sample from the top K options for each subsequent token
-    - `stop_sequences` Optional (List[str]) Custom text sequences that cause the model to stop generating
 
     Note: Please make sure to modify the default parameters as required for your use case.
     """
 
-    max_tokens: Optional[int] = (
-        4096  # anthropic max - setting this doesn't impact response, but is required by anthropic.
-    )
-    system: Optional[str] = None
-    temperature: Optional[float] = None
-    top_p: Optional[float] = None
-    top_k: Optional[int] = None
-    stop_sequences: Optional[List[str]] = None
+    max_tokens: Optional[int] = None
 
     def __init__(
         self,
         max_tokens: Optional[int] = None,
-        anthropic_version: Optional[str] = None,
     ) -> None:
         locals_ = locals()
         for key, value in locals_.items():
@@ -115,61 +96,13 @@ class VertexAILlama3Config:
     def get_supported_openai_params(self):
         return [
             "max_tokens",
-            "tools",
-            "tool_choice",
             "stream",
-            "stop",
-            "temperature",
-            "top_p",
-            "response_format",
         ]
 
     def map_openai_params(self, non_default_params: dict, optional_params: dict):
         for param, value in non_default_params.items():
             if param == "max_tokens":
                 optional_params["max_tokens"] = value
-            if param == "tools":
-                optional_params["tools"] = value
-            if param == "tool_choice":
-                _tool_choice: Optional[AnthropicMessagesToolChoice] = None
-                if value == "auto":
-                    _tool_choice = {"type": "auto"}
-                elif value == "required":
-                    _tool_choice = {"type": "any"}
-                elif isinstance(value, dict):
-                    _tool_choice = {"type": "tool", "name": value["function"]["name"]}
-
-                if _tool_choice is not None:
-                    optional_params["tool_choice"] = _tool_choice
-            if param == "stream":
-                optional_params["stream"] = value
-            if param == "stop":
-                optional_params["stop_sequences"] = value
-            if param == "temperature":
-                optional_params["temperature"] = value
-            if param == "top_p":
-                optional_params["top_p"] = value
-            if param == "response_format" and "response_schema" in value:
-                """
-                When using tools in this way: - https://docs.anthropic.com/en/docs/build-with-claude/tool-use#json-mode
-                - You usually want to provide a single tool
-                - You should set tool_choice (see Forcing tool use) to instruct the model to explicitly use that tool
-                - Remember that the model will pass the input to the tool, so the name of the tool and description should be from the model’s perspective.
-                """
-                _tool_choice = None
-                _tool_choice = {"name": "json_tool_call", "type": "tool"}
-
-                _tool = AnthropicMessagesTool(
-                    name="json_tool_call",
-                    input_schema={
-                        "type": "object",
-                        "properties": {"values": value["response_schema"]},  # type: ignore
-                    },
-                )
-
-                optional_params["tools"] = [_tool]
-                optional_params["tool_choice"] = _tool_choice
-                optional_params["json_mode"] = True
 
         return optional_params
 
