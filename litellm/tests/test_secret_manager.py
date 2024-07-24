@@ -12,6 +12,7 @@ sys.path.insert(
 import pytest
 from litellm import get_secret
 from litellm.proxy.secret_managers.aws_secret_manager import load_aws_secret_manager
+from litellm.llms.azure import get_azure_ad_token_from_oidc
 
 
 @pytest.mark.skip(reason="AWS Suspended Account")
@@ -76,3 +77,16 @@ def test_oidc_circleci_v2():
     )
 
     print(f"secret_val: {redact_oidc_signature(secret_val)}")
+
+
+@pytest.mark.skipif(
+    os.environ.get("CIRCLE_OIDC_TOKEN") is None,
+    reason="Cannot run without being in CircleCI Runner",
+)
+def test_oidc_circleci_with_azure():
+    # TODO: Switch to our own Azure account, currently using ai.moda's account
+    os.environ["AZURE_TENANT_ID"] = "17c0a27a-1246-4aa1-a3b6-d294e80e783c"
+    os.environ["AZURE_CLIENT_ID"] = "4faf5422-b2bd-45e8-a6d7-46543a38acd0"
+    azure_ad_token = get_azure_ad_token_from_oidc("oidc/circleci/")
+
+    print(f"secret_val: {redact_oidc_signature(azure_ad_token)}")
