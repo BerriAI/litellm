@@ -76,6 +76,8 @@ BEDROCK_CONVERSE_MODELS = [
     "anthropic.claude-v1",
     "anthropic.claude-instant-v1",
     "ai21.jamba-instruct-v1:0",
+    "meta.llama3-1-8b-instruct-v1:0",
+    "meta.llama3-1-70b-instruct-v1:0",
 ]
 
 
