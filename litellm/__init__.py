@@ -361,7 +361,7 @@ ollama_models = ["llama2"]
 maritalk_models = ["maritalk"]
 
 # TODO: support more models
-heurist_models = ["mistralai/mixtral-8x7b-instruct", "mistralai/mixtral-8x22b-instruct", "mistralai/mistral-7b-instruct", "mistralai/mixtral-8x7b-instruct-v0.1", "mistralai/mistral-7b-instruct-v0.2", "meta-llama/llama-2-70b-chat", "meta-llama/llama-3-70b-instruct", "openhermes-2.5-mistral-7b-gptq", "openhermes-2-pro-mistral-7b", "openhermes-mixtral-8x7b-gptq", "openhermes-2-yi-34b-gptq", "dolphin-2.9-llama3-8b"]
+heurist_models = ["mistralai/mixtral-8x7b-instruct", "mistralai/mixtral-8x22b-instruct", "mistralai/mistral-7b-instruct", "mistralai/mixtral-8x7b-instruct-v0.1", "mistralai/mistral-7b-instruct-v0.2", "meta-llama/llama-2-70b-chat", "meta-llama/llama-3-70b-instruct", "meta-llama/llama-3.1-405b-instruct", "openhermes-2.5-mistral-7b-gptq", "openhermes-2-pro-mistral-7b", "openhermes-mixtral-8x7b-gptq", "openhermes-2-yi-34b-gptq", "dolphin-2.9-llama3-8b"]
 
 model_list = (
     heurist_models
