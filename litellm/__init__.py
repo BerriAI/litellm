@@ -888,6 +888,7 @@ from .exceptions import (
     APIError,
     Timeout,
     APIConnectionError,
+    UnsupportedParamsError,
     APIResponseValidationError,
     UnprocessableEntityError,
     InternalServerError,
