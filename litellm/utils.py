@@ -3088,6 +3088,15 @@ def get_optional_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
         )
+    elif custom_llm_provider == "vertex_ai" and model in litellm.vertex_llama3_models:
+        supported_params = get_supported_openai_params(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+        _check_valid_arg(supported_params=supported_params)
+        optional_params = litellm.VertexAILlama3Config().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+        )
     elif custom_llm_provider == "sagemaker":
         ## check if unsupported param passed in
         supported_params = get_supported_openai_params(
@@ -4189,6 +4198,9 @@ def get_supported_openai_params(
         return litellm.GoogleAIStudioGeminiConfig().get_supported_openai_params()
     elif custom_llm_provider == "vertex_ai":
         if request_type == "chat_completion":
+            if model.startswith("meta/"):
+                return litellm.VertexAILlama3Config().get_supported_openai_params()
+
             return litellm.VertexAIConfig().get_supported_openai_params()
         elif request_type == "embeddings":
             return litellm.VertexAITextEmbeddingConfig().get_supported_openai_params()
@@ -5752,10 +5764,12 @@ def convert_to_model_response_object(
                 model_response_object.usage.total_tokens = response_object["usage"].get("total_tokens", 0)  # type: ignore
 
             if "created" in response_object:
-                model_response_object.created = response_object["created"]
+                model_response_object.created = response_object["created"] or int(
+                    time.time()
+                )
 
             if "id" in response_object:
-                model_response_object.id = response_object["id"]
+                model_response_object.id = response_object["id"] or str(uuid.uuid4())
 
             if "system_fingerprint" in response_object:
                 model_response_object.system_fingerprint = response_object[

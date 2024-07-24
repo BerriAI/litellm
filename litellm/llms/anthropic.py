@@ -385,6 +385,11 @@ class AnthropicConfig:
             if "user_id" in anthropic_message_request["metadata"]:
                 new_kwargs["user"] = anthropic_message_request["metadata"]["user_id"]
 
+        # Pass litellm proxy specific metadata
+        if "litellm_metadata" in anthropic_message_request:
+            # metadata will be passed to litellm.acompletion(), it's a litellm_param
+            new_kwargs["metadata"] = anthropic_message_request.pop("litellm_metadata")
+
         ## CONVERT TOOL CHOICE
         if "tool_choice" in anthropic_message_request:
             new_kwargs["tool_choice"] = self.translate_anthropic_tool_choice_to_openai(
@@ -775,8 +780,17 @@ class AnthropicChatCompletion(BaseLLM):
             system_prompt = ""
             for idx, message in enumerate(messages):
                 if message["role"] == "system":
-                    system_prompt += message["content"]
-                    system_prompt_indices.append(idx)
+                    valid_content: bool = False
+                    if isinstance(message["content"], str):
+                        system_prompt += message["content"]
+                        valid_content = True
+                    elif isinstance(message["content"], list):
+                        for content in message["content"]:
+                            system_prompt += content.get("text", "")
+                        valid_content = True
+
+                    if valid_content:
+                        system_prompt_indices.append(idx)
             if len(system_prompt_indices) > 0:
                 for idx in reversed(system_prompt_indices):
                     messages.pop(idx)

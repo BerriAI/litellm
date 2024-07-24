@@ -346,7 +346,7 @@ def test_completion_claude_3_empty_response():
     messages = [
         {
             "role": "system",
-            "content": "You are 2twNLGfqk4GMOn3ffp4p.",
+            "content": [{"type": "text", "text": "You are 2twNLGfqk4GMOn3ffp4p."}],
         },
         {"role": "user", "content": "Hi gm!", "name": "ishaan"},
         {"role": "assistant", "content": "Good morning! How are you doing today?"},
