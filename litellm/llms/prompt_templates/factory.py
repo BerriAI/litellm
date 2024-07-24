@@ -642,7 +642,7 @@ def prompt_factory(
             return chatml_chat_pt(messages=messages)
         elif ("mistral" in model or "mixtral" in model) and "instruct" in model:
             return mistral_instruct_pt(messages=messages)
-        elif "llama-2" in model and "chat" in model:
+        elif "llama" in model and ("chat" in model or "instruct" in model):
             return llama_2_chat_pt(messages=messages)
         elif (
             "tiiuae/falcon" in model
