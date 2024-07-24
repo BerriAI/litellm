@@ -56,7 +56,7 @@ response = litellm.completion(
 ```
 
 ## Advanced
-### Set Custom Project & Run names
+### Set Langsmith fields - Custom Projec, Run names, tags
 
 ```python
 import litellm
@@ -77,6 +77,7 @@ response = litellm.completion(
     metadata={
         "run_name": "litellmRUN",               # langsmith run name
         "project_name": "litellm-completion",   # langsmith project name
+        "tags": ["model1", "prod-2"]            # tags to log on langsmith
     }
 )
 print(response)
