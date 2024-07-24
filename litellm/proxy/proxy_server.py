@@ -1765,12 +1765,16 @@ class ProxyConfig:
             print(  # noqa
                 f"\033[32mLiteLLM: Proxy initialized with Config, Set models:\033[0m"
             )  # noqa
+            printed_model_names = set()
             for model in model_list:
                 ### LOAD FROM os.environ/ ###
                 for k, v in model["litellm_params"].items():
                     if isinstance(v, str) and v.startswith("os.environ/"):
                         model["litellm_params"][k] = litellm.get_secret(v)
-                print(f"\033[32m    {model.get('model_name', '')}\033[0m")  # noqa
+                model_name = model.get("model_name", '')
+                if model_name not in printed_model_names:
+                    print(f"\033[32m    {model_name}\033[0m")  # noqa
+                    printed_model_names.add(model_name)
                 litellm_model_name = model["litellm_params"]["model"]
                 litellm_model_api_base = model["litellm_params"].get("api_base", None)
                 if "ollama" in litellm_model_name and litellm_model_api_base is None:
