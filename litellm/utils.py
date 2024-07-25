@@ -9262,7 +9262,10 @@ class CustomStreamWrapper:
         try:
             # return this for all models
             completion_obj = {"content": ""}
-            if self.custom_llm_provider and self.custom_llm_provider == "anthropic":
+            if self.custom_llm_provider and (
+                self.custom_llm_provider == "anthropic"
+                or self.custom_llm_provider in litellm._custom_providers
+            ):
                 from litellm.types.utils import GenericStreamingChunk as GChunk
 
                 if self.received_finish_reason is not None:
@@ -10981,3 +10984,8 @@ class ModelResponseIterator:
             raise StopAsyncIteration
         self.is_done = True
         return self.model_response
+
+
+class CustomModelResponseIterator(Iterable):
+    def __init__(self) -> None:
+        super().__init__()
