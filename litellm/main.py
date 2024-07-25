@@ -2713,6 +2713,14 @@ def completion(
 
             ## CALL FUNCTION
             response = handler_fn()
+            if stream is True:
+                return CustomStreamWrapper(
+                    completion_stream=response,
+                    model=model,
+                    custom_llm_provider=custom_llm_provider,
+                    logging_obj=logging,
+                )
+
         else:
             raise ValueError(
                 f"Unable to map your input to a model. Check your input - {args}"
