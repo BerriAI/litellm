@@ -107,6 +107,7 @@ from .llms.anthropic_text import AnthropicTextCompletion
 from .llms.azure import AzureChatCompletion
 from .llms.azure_text import AzureTextCompletion
 from .llms.bedrock_httpx import BedrockConverseLLM, BedrockLLM
+from .llms.custom_llm import CustomLLM, custom_chat_llm_router
 from .llms.databricks import DatabricksChatCompletion
 from .llms.huggingface_restapi import Huggingface
 from .llms.openai import OpenAIChatCompletion, OpenAITextCompletion
@@ -2690,6 +2691,20 @@ def completion(
             model_response.created = int(time.time())
             model_response.model = model
             response = model_response
+        elif (
+            custom_llm_provider in litellm._custom_providers
+        ):  # Assume custom LLM provider
+            # Get the Custom Handler
+            custom_handler: Optional[CustomLLM] = None
+            for item in litellm.custom_provider_map:
+                if item["provider"] == custom_llm_provider:
+                    custom_handler = item["custom_handler"]
+
+            if custom_handler is None:
+                raise ValueError(
+                    f"Unable to map your input to a model. Check your input - {args}"
+                )
+            response = custom_handler.completion()
         else:
             raise ValueError(
                 f"Unable to map your input to a model. Check your input - {args}"
