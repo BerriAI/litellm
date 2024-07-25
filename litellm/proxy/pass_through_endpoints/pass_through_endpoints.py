@@ -20,7 +20,8 @@ from fastapi.responses import StreamingResponse
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+from litellm.proxy._types import ProxyException, TeamCallbackMetadata, UserAPIKeyAuth
+from litellm.proxy.auth.auth_utils import get_team_callback_settings
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 
@@ -239,6 +240,50 @@ async def chat_completion_pass_through_endpoint(
         )
 
 
+async def insert_team_based_langfuse_keys_in_header(
+    custom_headers: dict, user_api_key_dict: UserAPIKeyAuth, route: str
+):
+    verbose_proxy_logger.debug("pass through endpoint route= %s", route)
+    # check if Langfuse route:
+    if "/public/ingestion" in route:
+        team_callback_settings: Optional[TeamCallbackMetadata] = (
+            get_team_callback_settings(user_api_key_dict=user_api_key_dict)
+        )
+        if team_callback_settings:
+            team_callback_vars = team_callback_settings.callback_vars
+            verbose_proxy_logger.debug(
+                "using team callback vars: %s only works for langfuse for now",
+                team_callback_vars,
+            )
+            if team_callback_vars:
+                for key, _ in team_callback_vars.items():
+                    if key == "langfuse_public_key" or key == "langfuse_secret_key":
+                        # langfuse requires b64 encoded headers - we construct that here
+                        _langfuse_public_key = team_callback_vars["langfuse_public_key"]
+                        _langfuse_secret_key = team_callback_vars["langfuse_secret_key"]
+                        if isinstance(
+                            _langfuse_public_key, str
+                        ) and _langfuse_public_key.startswith("os.environ/"):
+                            _langfuse_public_key = litellm.get_secret(
+                                _langfuse_public_key
+                            )
+                        if isinstance(
+                            _langfuse_secret_key, str
+                        ) and _langfuse_secret_key.startswith("os.environ/"):
+                            _langfuse_secret_key = litellm.get_secret(
+                                _langfuse_secret_key
+                            )
+                        custom_headers["Authorization"] = "Basic " + b64encode(
+                            f"{_langfuse_public_key}:{_langfuse_secret_key}".encode(
+                                "utf-8"
+                            )
+                        ).decode("ascii")
+                        verbose_proxy_logger.debug(
+                            "inserted langfuse keys in header: %s", custom_headers
+                        )
+    return custom_headers
+
+
 async def pass_through_request(
     request: Request,
     target: str,
@@ -254,6 +299,12 @@ async def pass_through_request(
 
         url = httpx.URL(target)
         headers = custom_headers
+
+        headers = await insert_team_based_langfuse_keys_in_header(
+            custom_headers=headers,
+            user_api_key_dict=user_api_key_dict,
+            route=url.path,
+        )
 
         request_body = await request.body()
         body_str = request_body.decode()
