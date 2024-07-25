@@ -2774,7 +2774,7 @@ def get_optional_params(
                 tool_function["parameters"] = new_parameters
 
     def _check_valid_arg(supported_params):
-        verbose_logger.debug(
+        verbose_logger.info(
             f"\nLiteLLM completion() model= {model}; provider = {custom_llm_provider}"
         )
         verbose_logger.debug(

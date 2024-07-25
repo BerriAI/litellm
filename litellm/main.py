@@ -3833,7 +3833,7 @@ def text_completion(
         optional_params["custom_llm_provider"] = custom_llm_provider
 
     # get custom_llm_provider
-    _, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider, api_base=api_base)  # type: ignore
+    _model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider, api_base=api_base)  # type: ignore
 
     if custom_llm_provider == "huggingface":
         # if echo == True, for TGI llms we need to set top_n_tokens to 3
@@ -3916,10 +3916,12 @@ def text_completion(
 
     kwargs.pop("prompt", None)
 
-    if model is not None and model.startswith(
-        "openai/"
+    if (
+        _model is not None and custom_llm_provider == "openai"
     ):  # for openai compatible endpoints - e.g. vllm, call the native /v1/completions endpoint for text completion calls
-        model = model.replace("openai/", "text-completion-openai/")
+        if _model not in litellm.open_ai_chat_completion_models:
+            model = "text-completion-openai/" + _model
+            optional_params.pop("custom_llm_provider", None)
 
     kwargs["text_completion"] = True
     response = completion(
