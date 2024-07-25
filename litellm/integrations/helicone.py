@@ -17,27 +17,50 @@ class HeliconeLogger:
         self.key = os.getenv("HELICONE_API_KEY")
 
     def claude_mapping(self, model, messages, response_obj):
-        from anthropic import HUMAN_PROMPT, AI_PROMPT
+      from anthropic import HUMAN_PROMPT, AI_PROMPT
 
-        prompt = f"{HUMAN_PROMPT}"
-        for message in messages:
-            if "role" in message:
-                if message["role"] == "user":
-                    prompt += f"{HUMAN_PROMPT}{message['content']}"
-                else:
-                    prompt += f"{AI_PROMPT}{message['content']}"
-            else:
-                prompt += f"{HUMAN_PROMPT}{message['content']}"
-        prompt += f"{AI_PROMPT}"
-        claude_provider_request = {"model": model, "prompt": prompt}
+      prompt = f"{HUMAN_PROMPT}"
+      for message in messages:
+          if "role" in message:
+              if message["role"] == "user":
+                  prompt += f"{HUMAN_PROMPT}{message['content']}"
+              else:
+                  prompt += f"{AI_PROMPT}{message['content']}"
+          else:
+              prompt += f"{HUMAN_PROMPT}{message['content']}"
+      prompt += f"{AI_PROMPT}"
+      claude_provider_request = {"model": model, "prompt": prompt}
 
-        claude_response_obj = {
-            "completion": response_obj["choices"][0]["message"]["content"],
-            "model": model,
-            "stop_reason": "stop_sequence",
-        }
+      choice = response_obj["choices"][0]
+      message = choice["message"]
 
-        return claude_provider_request, claude_response_obj
+      content = []
+      if "tool_calls" in message and message["tool_calls"]:
+          for tool_call in message["tool_calls"]:
+              content.append({
+                  "type": "tool_use",
+                  "id": tool_call["id"],
+                  "name": tool_call["function"]["name"],
+                  "input": tool_call["function"]["arguments"]
+              })
+      elif "content" in message and message["content"]:
+          content = [{"type": "text", "text": message["content"]}]
+
+      claude_response_obj = {
+          "id": response_obj["id"],
+          "type": "message",
+          "role": "assistant",
+          "model": model,
+          "content": content,
+          "stop_reason": choice["finish_reason"],
+          "stop_sequence": None,
+          "usage": {
+              "input_tokens": response_obj["usage"]["prompt_tokens"],
+              "output_tokens": response_obj["usage"]["completion_tokens"]
+          }
+      }
+
+      return claude_provider_request, claude_response_obj
     
     @staticmethod
     def add_metadata_from_header(litellm_params: dict, metadata: dict) -> dict:
