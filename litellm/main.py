@@ -382,6 +382,7 @@ async def acompletion(
             or custom_llm_provider == "clarifai"
             or custom_llm_provider == "watsonx"
             or custom_llm_provider in litellm.openai_compatible_providers
+            or custom_llm_provider in litellm._custom_providers
         ):  # currently implemented aiohttp calls for just azure, openai, hf, ollama, vertex ai soon all.
             init_response = await loop.run_in_executor(None, func_with_context)
             if isinstance(init_response, dict) or isinstance(
@@ -2704,7 +2705,14 @@ def completion(
                 raise ValueError(
                     f"Unable to map your input to a model. Check your input - {args}"
                 )
-            response = custom_handler.completion()
+
+            ## ROUTE LLM CALL ##
+            handler_fn = custom_chat_llm_router(
+                async_fn=acompletion, stream=stream, custom_llm=custom_handler
+            )
+
+            ## CALL FUNCTION
+            response = handler_fn()
         else:
             raise ValueError(
                 f"Unable to map your input to a model. Check your input - {args}"

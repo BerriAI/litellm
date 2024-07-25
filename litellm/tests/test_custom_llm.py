@@ -23,11 +23,20 @@ import httpx
 from dotenv import load_dotenv
 
 import litellm
-from litellm import CustomLLM, completion, get_llm_provider
+from litellm import CustomLLM, acompletion, completion, get_llm_provider
 
 
 class MyCustomLLM(CustomLLM):
     def completion(self, *args, **kwargs) -> litellm.ModelResponse:
+        return litellm.completion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Hello world"}],
+            mock_response="Hi!",
+        )  # type: ignore
+
+
+class MyCustomAsyncLLM(CustomLLM):
+    async def acompletion(self, *args, **kwargs) -> litellm.ModelResponse:
         return litellm.completion(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "Hello world"}],
@@ -56,6 +65,20 @@ def test_simple_completion():
         {"provider": "custom_llm", "custom_handler": my_custom_llm}
     ]
     resp = completion(
+        model="custom_llm/my-fake-model",
+        messages=[{"role": "user", "content": "Hello world!"}],
+    )
+
+    assert resp.choices[0].message.content == "Hi!"
+
+
+@pytest.mark.asyncio
+async def test_simple_acompletion():
+    my_custom_llm = MyCustomAsyncLLM()
+    litellm.custom_provider_map = [
+        {"provider": "custom_llm", "custom_handler": my_custom_llm}
+    ]
+    resp = await acompletion(
         model="custom_llm/my-fake-model",
         messages=[{"role": "user", "content": "Hello world!"}],
     )
