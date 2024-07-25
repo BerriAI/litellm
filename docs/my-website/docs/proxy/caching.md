@@ -59,6 +59,8 @@ litellm_settings:
   cache_params:        # set cache params for redis
     type: redis
     ttl: 600 # will be cached on redis for 600s
+    # default_in_memory_ttl: Optional[float], default is None. time in seconds. 
+    # default_in_redis_ttl: Optional[float], default is None. time in seconds. 
 ```
 
 
@@ -613,6 +615,11 @@ litellm_settings:
 
 ```yaml
 cache_params:
+  # ttl 
+  ttl: Optional[float]
+  default_in_memory_ttl: Optional[float]
+  default_in_redis_ttl: Optional[float]
+
   # Type of cache (options: "local", "redis", "s3")
   type: s3
 
@@ -628,6 +635,8 @@ cache_params:
   host: localhost  # Redis server hostname or IP address
   port: "6379"  # Redis server port (as a string)
   password: secret_password  # Redis server password
+  namespace: Optional[str] = None,
+  
 
   # S3 cache parameters
   s3_bucket_name: your_s3_bucket_name  # Name of the S3 bucket
