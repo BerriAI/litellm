@@ -370,9 +370,16 @@ async def _cache_team_object(
     team_id: str,
     team_table: LiteLLM_TeamTable,
     user_api_key_cache: DualCache,
+    proxy_logging_obj: Optional[ProxyLogging],
 ):
     key = "team_id:{}".format(team_id)
     await user_api_key_cache.async_set_cache(key=key, value=team_table)
+
+    ## UPDATE REDIS CACHE ##
+    if proxy_logging_obj is not None:
+        await proxy_logging_obj.internal_usage_cache.async_set_cache(
+            key=key, value=team_table
+        )
 
 
 @log_to_opentelemetry
@@ -395,7 +402,17 @@ async def get_team_object(
 
     # check if in cache
     key = "team_id:{}".format(team_id)
-    cached_team_obj = await user_api_key_cache.async_get_cache(key=key)
+
+    cached_team_obj: Optional[LiteLLM_TeamTable] = None
+    ## CHECK REDIS CACHE ##
+    if proxy_logging_obj is not None:
+        cached_team_obj = await proxy_logging_obj.internal_usage_cache.async_get_cache(
+            key=key
+        )
+
+    if cached_team_obj is None:
+        cached_team_obj = await user_api_key_cache.async_get_cache(key=key)
+
     if cached_team_obj is not None:
         if isinstance(cached_team_obj, dict):
             return LiteLLM_TeamTable(**cached_team_obj)
@@ -413,7 +430,10 @@ async def get_team_object(
         _response = LiteLLM_TeamTable(**response.dict())
         # save the team object to cache
         await _cache_team_object(
-            team_id=team_id, team_table=_response, user_api_key_cache=user_api_key_cache
+            team_id=team_id,
+            team_table=_response,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
         )
 
         return _response
