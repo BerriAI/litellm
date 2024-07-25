@@ -913,6 +913,7 @@ adapters: List[AdapterItem] = []
 
 ### CUSTOM LLMs ###
 from .types.llms.custom_llm import CustomLLMItem
+from .types.utils import GenericStreamingChunk
 
 custom_provider_map: List[CustomLLMItem] = []
 _custom_providers: List[str] = (
