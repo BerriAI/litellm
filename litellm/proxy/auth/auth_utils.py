@@ -75,3 +75,19 @@ def is_llm_api_route(route: str) -> bool:
                 return True
 
     return False
+
+
+def get_team_callback_settings(
+    user_api_key_dict: UserAPIKeyAuth,
+) -> Optional[TeamCallbackMetadata]:
+    """
+    Helper to get the callback settings for the team from the user_api_key_dict
+    """
+    callback_settings_obj = None
+    if user_api_key_dict.team_metadata is not None:
+        team_metadata = user_api_key_dict.team_metadata
+        if "callback_settings" in team_metadata:
+            callback_settings = team_metadata.get("callback_settings", None) or {}
+            callback_settings_obj = TeamCallbackMetadata(**callback_settings)
+
+    return callback_settings_obj
