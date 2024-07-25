@@ -158,6 +158,7 @@ const sidebars = {
         "providers/triton-inference-server",
         "providers/ollama", 
         "providers/perplexity", 
+        "providers/friendliai",
         "providers/groq", 
         "providers/deepseek", 
         "providers/fireworks_ai",
