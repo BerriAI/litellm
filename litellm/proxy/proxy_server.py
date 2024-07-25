@@ -3334,6 +3334,7 @@ async def embeddings(
         if (
             "input" in data
             and isinstance(data["input"], list)
+            and len(data["input"]) > 0
             and isinstance(data["input"][0], list)
             and isinstance(data["input"][0][0], int)
         ):  # check if array of tokens passed in
@@ -3464,8 +3465,8 @@ async def embeddings(
             litellm_debug_info,
         )
         verbose_proxy_logger.error(
-            "litellm.proxy.proxy_server.embeddings(): Exception occured - {}".format(
-                str(e)
+            "litellm.proxy.proxy_server.embeddings(): Exception occured - {}\n{}".format(
+                str(e), traceback.format_exc()
             )
         )
         verbose_proxy_logger.debug(traceback.format_exc())
