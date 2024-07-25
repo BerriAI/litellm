@@ -1316,6 +1316,7 @@ class AmazonConverseConfig:
             model.startswith("anthropic")
             or model.startswith("mistral")
             or model.startswith("cohere")
+            or model.startswith("meta.llama3-1")
         ):
             supported_params.append("tools")
 
