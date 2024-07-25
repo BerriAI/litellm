@@ -44,15 +44,6 @@ class CustomLLMError(Exception):  # use this for all your exceptions
         )  # Call the base class constructor with the parameters it needs
 
 
-def custom_chat_llm_router():
-    """
-    Routes call to CustomLLM completion/acompletion/streaming/astreaming functions, based on call type
-
-    Validates if response is in expected format
-    """
-    pass
-
-
 class CustomLLM(BaseLLM):
     def __init__(self) -> None:
         super().__init__()
@@ -68,3 +59,20 @@ class CustomLLM(BaseLLM):
 
     async def astreaming(self, *args, **kwargs):
         raise CustomLLMError(status_code=500, message="Not implemented yet!")
+
+
+def custom_chat_llm_router(
+    async_fn: bool, stream: Optional[bool], custom_llm: CustomLLM
+):
+    """
+    Routes call to CustomLLM completion/acompletion/streaming/astreaming functions, based on call type
+
+    Validates if response is in expected format
+    """
+    if async_fn:
+        if stream:
+            return custom_llm.astreaming
+        return custom_llm.acompletion
+    if stream:
+        return custom_llm.streaming
+    return custom_llm.completion
