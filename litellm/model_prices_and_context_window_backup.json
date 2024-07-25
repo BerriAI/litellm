@@ -893,11 +893,11 @@
         "mode": "chat"
     },
     "mistral/mistral-large-latest": {
-        "max_tokens": 8191,
-        "max_input_tokens": 32000,
-        "max_output_tokens": 8191,
-        "input_cost_per_token": 0.000004,
-        "output_cost_per_token": 0.000012,
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000,
+        "input_cost_per_token": 0.000003,
+        "output_cost_per_token": 0.000009,
         "litellm_provider": "mistral",
         "mode": "chat",
         "supports_function_calling": true
@@ -908,6 +908,16 @@
         "max_output_tokens": 8191,
         "input_cost_per_token": 0.000004,
         "output_cost_per_token": 0.000012,
+        "litellm_provider": "mistral",
+        "mode": "chat",
+        "supports_function_calling": true
+    },
+    "mistral/mistral-large-2407": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000,
+        "input_cost_per_token": 0.000003,
+        "output_cost_per_token": 0.000009,
         "litellm_provider": "mistral",
         "mode": "chat",
         "supports_function_calling": true
