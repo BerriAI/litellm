@@ -15,7 +15,17 @@ import time
 import types
 from enum import Enum
 from functools import partial
-from typing import Callable, List, Literal, Optional, Tuple, Union
+from typing import (
+    Any,
+    AsyncIterator,
+    Callable,
+    Iterator,
+    List,
+    Literal,
+    Optional,
+    Tuple,
+    Union,
+)
 
 import httpx  # type: ignore
 import requests  # type: ignore
@@ -23,8 +33,7 @@ import requests  # type: ignore
 import litellm
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.types.llms.databricks import GenericStreamingChunk
-from litellm.types.utils import ProviderField
+from litellm.types.utils import GenericStreamingChunk, ProviderField
 from litellm.utils import CustomStreamWrapper, EmbeddingResponse, ModelResponse, Usage
 
 from .base import BaseLLM
@@ -51,13 +60,13 @@ class CustomLLM(BaseLLM):
     def completion(self, *args, **kwargs) -> ModelResponse:
         raise CustomLLMError(status_code=500, message="Not implemented yet!")
 
-    def streaming(self, *args, **kwargs):
+    def streaming(self, *args, **kwargs) -> Iterator[GenericStreamingChunk]:
         raise CustomLLMError(status_code=500, message="Not implemented yet!")
 
     async def acompletion(self, *args, **kwargs) -> ModelResponse:
         raise CustomLLMError(status_code=500, message="Not implemented yet!")
 
-    async def astreaming(self, *args, **kwargs):
+    async def astreaming(self, *args, **kwargs) -> AsyncIterator[GenericStreamingChunk]:
         raise CustomLLMError(status_code=500, message="Not implemented yet!")
 
 
