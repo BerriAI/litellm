@@ -2573,21 +2573,17 @@ def test_completion_azure_extra_headers():
     http_client = Client()
 
     with patch.object(http_client, "send", new=MagicMock()) as mock_client:
-        client = AzureOpenAI(
-            azure_endpoint=os.getenv("AZURE_API_BASE"),
-            api_version=litellm.AZURE_DEFAULT_API_VERSION,
-            api_key=os.getenv("AZURE_API_KEY"),
-            http_client=http_client,
-        )
+        litellm.client_session = http_client
         try:
             response = completion(
                 model="azure/chatgpt-v-2",
                 messages=messages,
-                client=client,
+                api_base=os.getenv("AZURE_API_BASE"),
+                api_version="2023-07-01-preview",
+                api_key=os.getenv("AZURE_API_KEY"),
                 extra_headers={
                     "Authorization": "my-bad-key",
                     "Ocp-Apim-Subscription-Key": "hello-world-testing",
-                    "api-key": "my-bad-key",
                 },
             )
             print(response)
@@ -2603,8 +2599,10 @@ def test_completion_azure_extra_headers():
         print(request.url)  # This will print the full URL
         print(request.headers)  # This will print the full URL
         auth_header = request.headers.get("Authorization")
+        apim_key = request.headers.get("Ocp-Apim-Subscription-Key")
         print(auth_header)
         assert auth_header == "my-bad-key"
+        assert apim_key == "hello-world-testing"
 
 
 def test_completion_azure_ad_token():
