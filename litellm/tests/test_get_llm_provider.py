@@ -1,14 +1,18 @@
-import sys, os
+import os
+import sys
 import traceback
+
 from dotenv import load_dotenv
 
 load_dotenv()
-import os, io
+import io
+import os
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import pytest
+
 import litellm
 
 
@@ -19,6 +23,12 @@ def test_get_llm_provider():
 
 
 # test_get_llm_provider()
+
+
+def test_get_llm_provider_gpt_instruct():
+    _, response, _, _ = litellm.get_llm_provider(model="gpt-3.5-turbo-instruct-0914")
+
+    assert response == "text-completion-openai"
 
 
 def test_get_llm_provider_mistral_custom_api_base():
