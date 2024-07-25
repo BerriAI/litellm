@@ -881,6 +881,7 @@ def test_completion_azure_ai():
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_completion_cost_hidden_params(sync_mode):
+    litellm.return_response_headers = True
     if sync_mode:
         response = litellm.completion(
             model="gpt-3.5-turbo",

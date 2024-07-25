@@ -8,6 +8,7 @@ from packaging.version import Version
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
 
 
 class LangFuseLogger:
@@ -381,6 +382,8 @@ class LangFuseLogger:
             debug = clean_metadata.pop("debug_langfuse", None)
             mask_input = clean_metadata.pop("mask_input", False)
             mask_output = clean_metadata.pop("mask_output", False)
+
+            clean_metadata = redact_user_api_key_info(metadata=clean_metadata)
 
             if trace_name is None and existing_trace_id is None:
                 # just log `litellm-{call_type}` as the trace name

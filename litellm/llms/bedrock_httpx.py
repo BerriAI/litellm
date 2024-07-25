@@ -76,6 +76,8 @@ BEDROCK_CONVERSE_MODELS = [
     "anthropic.claude-v1",
     "anthropic.claude-instant-v1",
     "ai21.jamba-instruct-v1:0",
+    "meta.llama3-1-8b-instruct-v1:0",
+    "meta.llama3-1-70b-instruct-v1:0",
 ]
 
 
@@ -1729,7 +1731,7 @@ class BedrockConverseLLM(BaseLLM):
         headers={},
         client: Optional[AsyncHTTPHandler] = None,
     ) -> Union[ModelResponse, CustomStreamWrapper]:
-        if client is None:
+        if client is None or not isinstance(client, AsyncHTTPHandler):
             _params = {}
             if timeout is not None:
                 if isinstance(timeout, float) or isinstance(timeout, int):

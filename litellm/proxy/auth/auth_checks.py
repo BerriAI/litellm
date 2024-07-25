@@ -24,7 +24,7 @@ from litellm.proxy._types import (
     LitellmUserRoles,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_utils import is_openai_route
+from litellm.proxy.auth.auth_utils import is_llm_api_route
 from litellm.proxy.utils import PrismaClient, ProxyLogging, log_to_opentelemetry
 from litellm.types.services import ServiceLoggerPayload, ServiceTypes
 
@@ -57,6 +57,7 @@ def common_checks(
     4. If end_user (either via JWT or 'user' passed to /chat/completions, /embeddings endpoint) is in budget
     5. [OPTIONAL] If 'enforce_end_user' enabled - did developer pass in 'user' param for openai endpoints
     6. [OPTIONAL] If 'litellm.max_budget' is set (>0), is proxy under budget
+    7. [OPTIONAL] If guardrails modified - is request allowed to change this
     """
     _model = request_body.get("model", None)
     if team_object is not None and team_object.blocked is True:
@@ -106,7 +107,7 @@ def common_checks(
         general_settings.get("enforce_user_param", None) is not None
         and general_settings["enforce_user_param"] == True
     ):
-        if is_openai_route(route=route) and "user" not in request_body:
+        if is_llm_api_route(route=route) and "user" not in request_body:
             raise Exception(
                 f"'user' param not passed in. 'enforce_user_param'={general_settings['enforce_user_param']}"
             )
@@ -122,7 +123,7 @@ def common_checks(
                 + CommonProxyErrors.not_premium_user.value
             )
 
-        if is_openai_route(route=route):
+        if is_llm_api_route(route=route):
             # loop through each enforced param
             # example enforced_params ['user', 'metadata', 'metadata.generation_name']
             for enforced_param in general_settings["enforced_params"]:
@@ -150,13 +151,29 @@ def common_checks(
         and global_proxy_spend is not None
         # only run global budget checks for OpenAI routes
         # Reason - the Admin UI should continue working if the proxy crosses it's global budget
-        and is_openai_route(route=route)
+        and is_llm_api_route(route=route)
         and route != "/v1/models"
         and route != "/models"
     ):
         if global_proxy_spend > litellm.max_budget:
             raise litellm.BudgetExceededError(
                 current_cost=global_proxy_spend, max_budget=litellm.max_budget
+            )
+
+    _request_metadata: dict = request_body.get("metadata", {}) or {}
+    if _request_metadata.get("guardrails"):
+        # check if team allowed to modify guardrails
+        from litellm.proxy.guardrails.guardrail_helpers import can_modify_guardrails
+
+        can_modify: bool = can_modify_guardrails(team_object)
+        if can_modify is False:
+            from fastapi import HTTPException
+
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "Your team does not have permission to modify guardrails."
+                },
             )
     return True
 

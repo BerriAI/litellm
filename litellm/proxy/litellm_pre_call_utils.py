@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 from fastapi import Request
 
 from litellm._logging import verbose_logger, verbose_proxy_logger
-from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
+from litellm.proxy._types import CommonProxyErrors, TeamCallbackMetadata, UserAPIKeyAuth
 from litellm.types.utils import SupportedCacheControls
 
 if TYPE_CHECKING:
@@ -38,6 +38,9 @@ def _get_metadata_variable_name(request: Request) -> str:
     For ALL other endpoints we call this "metadata
     """
     if "thread" in request.url.path or "assistant" in request.url.path:
+        return "litellm_metadata"
+    if "/v1/messages" in request.url.path:
+        # anthropic API has a field called metadata
         return "litellm_metadata"
     else:
         return "metadata"
@@ -206,6 +209,32 @@ async def add_litellm_data_to_request(
                 **team_config,
                 **data,
             }  # add the team-specific configs to the completion call
+
+    # Team Callbacks controls
+    if user_api_key_dict.team_metadata is not None:
+        team_metadata = user_api_key_dict.team_metadata
+        if "callback_settings" in team_metadata:
+            callback_settings = team_metadata.get("callback_settings", None) or {}
+            callback_settings_obj = TeamCallbackMetadata(**callback_settings)
+            verbose_proxy_logger.debug(
+                "Team callback settings activated: %s", callback_settings_obj
+            )
+            """
+            callback_settings = {
+              {
+                'callback_vars': {'langfuse_public_key': 'pk', 'langfuse_secret_key': 'sk_'}, 
+                'failure_callback': [], 
+                'success_callback': ['langfuse', 'langfuse']
+            }
+            }
+            """
+            data["success_callback"] = callback_settings_obj.success_callback
+            data["failure_callback"] = callback_settings_obj.failure_callback
+
+            if callback_settings_obj.callback_vars is not None:
+                # unpack callback_vars in data
+                for k, v in callback_settings_obj.callback_vars.items():
+                    data[k] = v
 
     return data
 

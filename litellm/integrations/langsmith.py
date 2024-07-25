@@ -79,6 +79,7 @@ class LangsmithLogger(CustomLogger):
         project_name = metadata.get("project_name", self.langsmith_project)
         run_name = metadata.get("run_name", self.langsmith_default_run_name)
         run_id = metadata.get("id", None)
+        tags = metadata.get("tags", []) or []
         verbose_logger.debug(
             f"Langsmith Logging - project_name: {project_name}, run_name {run_name}"
         )
@@ -122,6 +123,7 @@ class LangsmithLogger(CustomLogger):
             "session_name": project_name,
             "start_time": start_time,
             "end_time": end_time,
+            "tags": tags,
         }
 
         if run_id:

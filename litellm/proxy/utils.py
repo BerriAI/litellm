@@ -25,7 +25,7 @@ from typing_extensions import overload
 import litellm
 import litellm.litellm_core_utils
 import litellm.litellm_core_utils.litellm_logging
-from litellm import EmbeddingResponse, ImageResponse, ModelResponse
+from litellm import EmbeddingResponse, ImageResponse, ModelResponse, get_litellm_params
 from litellm._logging import verbose_proxy_logger
 from litellm._service_logger import ServiceLogging, ServiceTypes
 from litellm.caching import DualCache, RedisCache
@@ -50,7 +50,7 @@ from litellm.proxy.hooks.max_budget_limiter import _PROXY_MaxBudgetLimiter
 from litellm.proxy.hooks.parallel_request_limiter import (
     _PROXY_MaxParallelRequestsHandler,
 )
-from litellm.types.utils import CallTypes
+from litellm.types.utils import CallTypes, LoggedLiteLLMParams
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -188,6 +188,7 @@ class ProxyLogging:
             "new_model_added",
             "outage_alerts",
         ]
+        self.alert_to_webhook_url: Optional[dict] = None
         self.slack_alerting_instance: SlackAlerting = SlackAlerting(
             alerting_threshold=self.alerting_threshold,
             alerting=self.alerting,
@@ -202,6 +203,7 @@ class ProxyLogging:
         redis_cache: Optional[RedisCache] = None,
         alert_types: Optional[List[AlertType]] = None,
         alerting_args: Optional[dict] = None,
+        alert_to_webhook_url: Optional[dict] = None,
     ):
         updated_slack_alerting: bool = False
         if alerting is not None:
@@ -213,6 +215,9 @@ class ProxyLogging:
         if alert_types is not None:
             self.alert_types = alert_types
             updated_slack_alerting = True
+        if alert_to_webhook_url is not None:
+            self.alert_to_webhook_url = alert_to_webhook_url
+            updated_slack_alerting = True
 
         if updated_slack_alerting is True:
             self.slack_alerting_instance.update_values(
@@ -220,6 +225,7 @@ class ProxyLogging:
                 alerting_threshold=self.alerting_threshold,
                 alert_types=self.alert_types,
                 alerting_args=alerting_args,
+                alert_to_webhook_url=self.alert_to_webhook_url,
             )
 
             if (
@@ -602,14 +608,20 @@ class ProxyLogging:
             if litellm_logging_obj is not None:
                 ## UPDATE LOGGING INPUT
                 _optional_params = {}
+                _litellm_params = {}
+
+                litellm_param_keys = LoggedLiteLLMParams.__annotations__.keys()
                 for k, v in request_data.items():
-                    if k != "model" and k != "user" and k != "litellm_params":
+                    if k in litellm_param_keys:
+                        _litellm_params[k] = v
+                    elif k != "model" and k != "user":
                         _optional_params[k] = v
+
                 litellm_logging_obj.update_environment_variables(
                     model=request_data.get("model", ""),
                     user=request_data.get("user", ""),
                     optional_params=_optional_params,
-                    litellm_params=request_data.get("litellm_params", {}),
+                    litellm_params=_litellm_params,
                 )
 
                 input: Union[list, str, dict] = ""
@@ -832,6 +844,30 @@ class PrismaClient:
 
         If the view doesn't exist, one will be created.
         """
+
+        # Check to see if all of the necessary views exist and if they do, simply return
+        # This is more efficient because it lets us check for all views in one
+        # query instead of multiple queries.
+        try:
+            ret = await self.db.query_raw(
+                """
+                    SELECT SUM(1) FROM pg_views
+                    WHERE schemaname = 'public' AND viewname IN (
+                        'LiteLLM_VerificationTokenView',
+                        'MonthlyGlobalSpend',
+                        'Last30dKeysBySpend',
+                        'Last30dModelsBySpend',
+                        'MonthlyGlobalSpendPerKey',
+                        'Last30dTopEndUsersSpend'
+                    )
+                    """
+            )
+            if ret[0]['sum'] == 6:
+                print("All necessary views exist!")  # noqa
+                return
+        except Exception:
+            pass
+
         try:
             # Try to select one row from the view
             await self.db.query_raw(
@@ -1313,8 +1349,10 @@ class PrismaClient:
                     t.tpm_limit AS team_tpm_limit,
                     t.rpm_limit AS team_rpm_limit,
                     t.models AS team_models,
+                    t.metadata AS team_metadata,
                     t.blocked AS team_blocked,
                     t.team_alias AS team_alias,
+                    t.metadata AS team_metadata,
                     tm.spend AS team_member_spend,
                     m.aliases as team_model_aliases
                     FROM "LiteLLM_VerificationToken" AS v

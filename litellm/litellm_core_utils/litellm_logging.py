@@ -53,6 +53,7 @@ from litellm.utils import (
 from ..integrations.aispend import AISpendLogger
 from ..integrations.athina import AthinaLogger
 from ..integrations.berrispend import BerriSpendLogger
+from ..integrations.braintrust_logging import BraintrustLogger
 from ..integrations.clickhouse import ClickhouseLogger
 from ..integrations.custom_logger import CustomLogger
 from ..integrations.datadog import DataDogLogger
@@ -1945,7 +1946,14 @@ def _init_custom_logger_compatible_class(
         _openmeter_logger = OpenMeterLogger()
         _in_memory_loggers.append(_openmeter_logger)
         return _openmeter_logger  # type: ignore
+    elif logging_integration == "braintrust":
+        for callback in _in_memory_loggers:
+            if isinstance(callback, BraintrustLogger):
+                return callback  # type: ignore
 
+        braintrust_logger = BraintrustLogger()
+        _in_memory_loggers.append(braintrust_logger)
+        return braintrust_logger  # type: ignore
     elif logging_integration == "langsmith":
         for callback in _in_memory_loggers:
             if isinstance(callback, LangsmithLogger):
@@ -1954,6 +1962,43 @@ def _init_custom_logger_compatible_class(
         _langsmith_logger = LangsmithLogger()
         _in_memory_loggers.append(_langsmith_logger)
         return _langsmith_logger  # type: ignore
+    elif logging_integration == "arize":
+        if "ARIZE_SPACE_KEY" not in os.environ:
+            raise ValueError("ARIZE_SPACE_KEY not found in environment variables")
+        if "ARIZE_API_KEY" not in os.environ:
+            raise ValueError("ARIZE_API_KEY not found in environment variables")
+        from litellm.integrations.opentelemetry import (
+            OpenTelemetry,
+            OpenTelemetryConfig,
+        )
+
+        otel_config = OpenTelemetryConfig(
+            exporter="otlp_grpc",
+            endpoint="https://otlp.arize.com/v1",
+        )
+        os.environ["OTEL_EXPORTER_OTLP_TRACES_HEADERS"] = (
+            f"space_key={os.getenv('ARIZE_SPACE_KEY')},api_key={os.getenv('ARIZE_API_KEY')}"
+        )
+        for callback in _in_memory_loggers:
+            if (
+                isinstance(callback, OpenTelemetry)
+                and callback.callback_name == "arize"
+            ):
+                return callback  # type: ignore
+        _otel_logger = OpenTelemetry(config=otel_config, callback_name="arize")
+        _in_memory_loggers.append(_otel_logger)
+        return _otel_logger  # type: ignore
+
+    elif logging_integration == "otel":
+        from litellm.integrations.opentelemetry import OpenTelemetry
+
+        for callback in _in_memory_loggers:
+            if isinstance(callback, OpenTelemetry):
+                return callback  # type: ignore
+
+        otel_logger = OpenTelemetry()
+        _in_memory_loggers.append(otel_logger)
+        return otel_logger  # type: ignore
 
     elif logging_integration == "galileo":
         for callback in _in_memory_loggers:
@@ -2019,6 +2064,10 @@ def get_custom_logger_compatible_class(
         for callback in _in_memory_loggers:
             if isinstance(callback, OpenMeterLogger):
                 return callback
+    elif logging_integration == "braintrust":
+        for callback in _in_memory_loggers:
+            if isinstance(callback, BraintrustLogger):
+                return callback
     elif logging_integration == "galileo":
         for callback in _in_memory_loggers:
             if isinstance(callback, GalileoObserve):
@@ -2026,6 +2075,25 @@ def get_custom_logger_compatible_class(
     elif logging_integration == "langsmith":
         for callback in _in_memory_loggers:
             if isinstance(callback, LangsmithLogger):
+                return callback
+    elif logging_integration == "otel":
+        from litellm.integrations.opentelemetry import OpenTelemetry
+
+        for callback in _in_memory_loggers:
+            if isinstance(callback, OpenTelemetry):
+                return callback
+    elif logging_integration == "arize":
+        from litellm.integrations.opentelemetry import OpenTelemetry
+
+        if "ARIZE_SPACE_KEY" not in os.environ:
+            raise ValueError("ARIZE_SPACE_KEY not found in environment variables")
+        if "ARIZE_API_KEY" not in os.environ:
+            raise ValueError("ARIZE_API_KEY not found in environment variables")
+        for callback in _in_memory_loggers:
+            if (
+                isinstance(callback, OpenTelemetry)
+                and callback.callback_name == "arize"
+            ):
                 return callback
     elif logging_integration == "logfire":
         if "LOGFIRE_TOKEN" not in os.environ:
