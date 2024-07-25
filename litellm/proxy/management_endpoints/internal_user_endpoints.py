@@ -27,6 +27,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.key_management_endpoints import (
+    _duration_in_seconds,
     generate_key_helper_fn,
 )
 from litellm.proxy.management_helpers.utils import (
@@ -485,6 +486,13 @@ async def user_update(
                 0,
             ):  # models default to [], spend defaults to 0, we should not reset these values
                 non_default_values[k] = v
+
+        if "budget_duration" in non_default_values:
+            duration_s = _duration_in_seconds(
+                duration=non_default_values["budget_duration"]
+            )
+            user_reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
+            non_default_values["budget_reset_at"] = user_reset_at
 
         ## ADD USER, IF NEW ##
         verbose_proxy_logger.debug("/user/update: Received data = %s", data)
