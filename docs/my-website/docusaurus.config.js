@@ -29,6 +29,15 @@ const config = {
 
   plugins: [
     [
+      require.resolve("@getcanary/docusaurus-pagefind"),
+      {
+        styles: {
+          "--canary-color-primary-c": 0.1,
+          "--canary-color-primary-h": 270,
+        },
+      },
+    ],
+    [
       '@docusaurus/plugin-ideal-image',
       {
         quality: 100,
