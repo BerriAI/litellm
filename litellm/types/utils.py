@@ -1029,3 +1029,22 @@ class GenericImageParsingChunk(TypedDict):
 class ResponseFormatChunk(TypedDict, total=False):
     type: Required[Literal["json_object", "text"]]
     response_schema: dict
+
+
+class LoggedLiteLLMParams(TypedDict, total=False):
+    force_timeout: Optional[float]
+    custom_llm_provider: Optional[str]
+    api_base: Optional[str]
+    litellm_call_id: Optional[str]
+    model_alias_map: Optional[dict]
+    metadata: Optional[dict]
+    model_info: Optional[dict]
+    proxy_server_request: Optional[dict]
+    acompletion: Optional[bool]
+    preset_cache_key: Optional[str]
+    no_log: Optional[bool]
+    input_cost_per_second: Optional[float]
+    input_cost_per_token: Optional[float]
+    output_cost_per_token: Optional[float]
+    output_cost_per_second: Optional[float]
+    cooldown_time: Optional[float]

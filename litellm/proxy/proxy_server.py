@@ -170,6 +170,9 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     router as key_management_router,
 )
+from litellm.proxy.management_endpoints.team_callback_endpoints import (
+    router as team_callback_router,
+)
 from litellm.proxy.management_endpoints.team_endpoints import router as team_router
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     router as openai_files_router,
@@ -654,7 +657,11 @@ async def _PROXY_track_cost_callback(
     global prisma_client, custom_db_client
     try:
         # check if it has collected an entire stream response
-        verbose_proxy_logger.debug("Proxy: In track_cost_callback for: %s", kwargs)
+        verbose_proxy_logger.debug(
+            "Proxy: In track_cost_callback for: kwargs=%s and completion_response: %s",
+            kwargs,
+            completion_response,
+        )
         verbose_proxy_logger.debug(
             f"kwargs stream: {kwargs.get('stream', None)} + complete streaming response: {kwargs.get('complete_streaming_response', None)}"
         )
@@ -1620,6 +1627,7 @@ class ProxyConfig:
                 alerting=general_settings.get("alerting", None),
                 alerting_threshold=general_settings.get("alerting_threshold", 600),
                 alert_types=general_settings.get("alert_types", None),
+                alert_to_webhook_url=general_settings.get("alert_to_webhook_url", None),
                 alerting_args=general_settings.get("alerting_args", None),
                 redis_cache=redis_usage_cache,
             )
@@ -2905,6 +2913,7 @@ async def chat_completion(
         fastest_response_batch_completion = hidden_params.get(
             "fastest_response_batch_completion", None
         )
+        additional_headers: dict = hidden_params.get("additional_headers", {}) or {}
 
         # Post Call Processing
         if llm_router is not None:
@@ -2927,6 +2936,7 @@ async def chat_completion(
                 response_cost=response_cost,
                 model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
                 fastest_response_batch_completion=fastest_response_batch_completion,
+                **additional_headers,
             )
             selected_data_generator = select_data_generator(
                 response=response,
@@ -2944,8 +2954,10 @@ async def chat_completion(
             user_api_key_dict=user_api_key_dict, response=response
         )
 
-        hidden_params = getattr(response, "_hidden_params", {}) or {}
-        additional_headers: dict = hidden_params.get("additional_headers", {}) or {}
+        hidden_params = (
+            getattr(response, "_hidden_params", {}) or {}
+        )  # get any updated response headers
+        additional_headers = hidden_params.get("additional_headers", {}) or {}
 
         fastapi_response.headers.update(
             get_custom_headers(
@@ -9457,3 +9469,4 @@ app.include_router(analytics_router)
 app.include_router(debugging_endpoints_router)
 app.include_router(ui_crud_endpoints_router)
 app.include_router(openai_files_router)
+app.include_router(team_callback_router)

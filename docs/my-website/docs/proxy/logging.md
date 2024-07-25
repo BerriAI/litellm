@@ -48,6 +48,20 @@ A number of these headers could be useful for troubleshooting, but the
 `x-litellm-call-id` is the one that is most useful for tracking a request across
 components in your system, including in logging tools.
 
+## Redacting UserAPIKeyInfo 
+
+Redact information about the user api key (hashed token, user_id, team id, etc.), from logs. 
+
+Currently supported for Langfuse, OpenTelemetry, Logfire, ArizeAI logging.
+
+```yaml
+litellm_settings: 
+  callbacks: ["langfuse"]
+  redact_user_api_key_info: true
+```
+
+Removes any field with `user_api_key_*` from metadata.
+
 ## Logging Proxy Input/Output - Langfuse
 
 We will use the `--config` to set `litellm.success_callback = ["langfuse"]` this will log all successfull LLM calls to langfuse. Make sure to set `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` in your environment
@@ -202,6 +216,9 @@ print(response)
 
 ### Team based Logging to Langfuse
 
+[👉 Tutorial - Allow each team to use their own Langfuse Project / custom callbacks](team_logging)
+<!-- 
+
 **Example:**
 
 This config would send langfuse logs to 2 different langfuse projects, based on the team id 
@@ -228,7 +245,7 @@ curl -X POST 'http://0.0.0.0:4000/key/generate' \
 -d '{"team_id": "ishaans-secret-project"}'
 ```
 
-All requests made with these keys will log data to their team-specific logging.
+All requests made with these keys will log data to their team-specific logging. -->
 
 ### Redacting Messages, Response Content from Langfuse Logging 
 
@@ -1105,6 +1122,52 @@ environment_variables:
   LANGSMITH_BASE_URL: "https://api.smith.langchain.com" # (Optional - only needed if you have a custom Langsmith instance)
 ```
 
+
+2. Start Proxy
+
+```
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+--header 'Content-Type: application/json' \
+--data ' {
+      "model": "fake-openai-endpoint",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Hello, Claude gm!"
+        }
+      ],
+    }
+'
+```
+Expect to see your log on Langfuse
+<Image img={require('../../img/langsmith_new.png')} />
+
+
+## Logging LLM IO to Arize AI
+
+1. Set `success_callback: ["arize"]` on litellm config.yaml
+
+```yaml
+model_list:
+  - model_name: gpt-4
+    litellm_params:
+      model: openai/fake
+      api_key: fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+
+litellm_settings:
+  callbacks: ["arize"]
+
+environment_variables:
+    ARIZE_SPACE_KEY: "d0*****"
+    ARIZE_API_KEY: "141a****"
+```
 
 2. Start Proxy
 
