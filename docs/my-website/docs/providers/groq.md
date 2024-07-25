@@ -148,8 +148,11 @@ print(response)
 ## Supported Models - ALL Groq Models Supported!
 We support ALL Groq models, just set `groq/` as a prefix when sending completion requests
 
-| Model Name         | Function Call                                           |
+| Model Name         | Usage                                           |
 |--------------------|---------------------------------------------------------|
+| llama-3.1-8b-instant     | `completion(model="groq/llama-3.1-8b-instant", messages)`     | 
+| llama-3.1-70b-versatile    | `completion(model="groq/llama-3.1-70b-versatile", messages)`    | 
+| llama-3.1-405b-reasoning    | `completion(model="groq/llama-3.1-405b-reasoning", messages)`    | 
 | llama3-8b-8192     | `completion(model="groq/llama3-8b-8192", messages)`     | 
 | llama3-70b-8192    | `completion(model="groq/llama3-70b-8192", messages)`    | 
 | llama2-70b-4096    | `completion(model="groq/llama2-70b-4096", messages)`    | 
