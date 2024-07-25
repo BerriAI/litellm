@@ -1,10 +1,21 @@
 model_list:
+  - model_name: gpt-4
+    litellm_params:
+      model: openai/fake
+      api_key: fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
   - model_name: fireworks-llama-v3-70b-instruct
     litellm_params:
       model: fireworks_ai/accounts/fireworks/models/llama-v3-70b-instruct
-      api_key: "os.environ/FIREWORKS_AI_API_KEY"
-
-router_settings:
-  enable_tag_filtering: True # 👈 Key Change
+      api_key: "os.environ/FIREWORKS"
 general_settings: 
   master_key: sk-1234
+  alerting: ["slack"]
+  alerting_threshold: 0.0001
+  alert_to_webhook_url: {
+    "llm_too_slow": "https://hooks.slack.com/services/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",
+    "llm_requests_hanging": "https://hooks.slack.com/services/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",
+  }
+
+litellm_settings:
+  success_callback: ["langfuse"]

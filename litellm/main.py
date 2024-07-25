@@ -120,6 +120,7 @@ from .llms.prompt_templates.factory import (
 )
 from .llms.text_completion_codestral import CodestralTextCompletion
 from .llms.triton import TritonChatCompletion
+from .llms.vertex_ai_llama import VertexAILlama3
 from .llms.vertex_httpx import VertexLLM
 from .llms.watsonx import IBMWatsonXAI
 from .types.llms.openai import HttpxBinaryResponseContent
@@ -156,6 +157,7 @@ triton_chat_completions = TritonChatCompletion()
 bedrock_chat_completion = BedrockLLM()
 bedrock_converse_chat_completion = BedrockConverseLLM()
 vertex_chat_completion = VertexLLM()
+vertex_llama_chat_completion = VertexAILlama3()
 watsonxai = IBMWatsonXAI()
 ####### COMPLETION ENDPOINTS ################
 
@@ -375,6 +377,7 @@ async def acompletion(
             or custom_llm_provider == "predibase"
             or custom_llm_provider == "bedrock"
             or custom_llm_provider == "databricks"
+            or custom_llm_provider == "triton"
             or custom_llm_provider == "clarifai"
             or custom_llm_provider == "watsonx"
             or custom_llm_provider in litellm.openai_compatible_providers
@@ -1491,6 +1494,10 @@ def completion(
                     or get_secret("ANTHROPIC_BASE_URL")
                     or "https://api.anthropic.com/v1/complete"
                 )
+
+                if api_base is not None and not api_base.endswith("/v1/complete"):
+                    api_base += "/v1/complete"
+
                 response = anthropic_text_completions.completion(
                     model=model,
                     messages=messages,
@@ -1517,6 +1524,10 @@ def completion(
                     or get_secret("ANTHROPIC_BASE_URL")
                     or "https://api.anthropic.com/v1/messages"
                 )
+
+                if api_base is not None and not api_base.endswith("/v1/messages"):
+                    api_base += "/v1/messages"
+
                 response = anthropic_chat_completions.completion(
                     model=model,
                     messages=messages,
@@ -2055,7 +2066,26 @@ def completion(
                     timeout=timeout,
                     client=client,
                 )
-
+            elif model.startswith("meta/"):
+                model_response = vertex_llama_chat_completion.completion(
+                    model=model,
+                    messages=messages,
+                    model_response=model_response,
+                    print_verbose=print_verbose,
+                    optional_params=new_params,
+                    litellm_params=litellm_params,
+                    logger_fn=logger_fn,
+                    encoding=encoding,
+                    vertex_location=vertex_ai_location,
+                    vertex_project=vertex_ai_project,
+                    vertex_credentials=vertex_credentials,
+                    logging_obj=logging,
+                    acompletion=acompletion,
+                    headers=headers,
+                    custom_prompt_dict=custom_prompt_dict,
+                    timeout=timeout,
+                    client=client,
+                )
             else:
                 model_response = vertex_ai.completion(
                     model=model,
@@ -2469,6 +2499,25 @@ def completion(
                 return generator
 
             response = generator
+
+        elif custom_llm_provider == "triton":
+            api_base = litellm.api_base or api_base
+            model_response = triton_chat_completions.completion(
+                api_base=api_base,
+                timeout=timeout,  # type: ignore
+                model=model,
+                messages=messages,
+                model_response=model_response,
+                optional_params=optional_params,
+                logging_obj=logging,
+                stream=stream,
+                acompletion=acompletion,
+            )
+
+            ## RESPONSE OBJECT
+            response = model_response
+            return response
+
         elif custom_llm_provider == "cloudflare":
             api_key = (
                 api_key

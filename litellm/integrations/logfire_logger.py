@@ -1,16 +1,20 @@
 #### What this does ####
 #    On success + failure, log events to Logfire
 
-import dotenv, os
+import os
+
+import dotenv
 
 dotenv.load_dotenv()  # Loading env variables using dotenv
 import traceback
 import uuid
-from litellm._logging import print_verbose, verbose_logger
-
 from enum import Enum
 from typing import Any, Dict, NamedTuple
+
 from typing_extensions import LiteralString
+
+from litellm._logging import print_verbose, verbose_logger
+from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
 
 
 class SpanConfig(NamedTuple):
@@ -134,6 +138,8 @@ class LogfireLogger:
                         continue
                     else:
                         clean_metadata[key] = value
+
+            clean_metadata = redact_user_api_key_info(metadata=clean_metadata)
 
             # Build the initial payload
             payload = {

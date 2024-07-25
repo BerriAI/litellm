@@ -333,6 +333,13 @@ async def update_key_fn(
             expires = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
             non_default_values["expires"] = expires
 
+        if "budget_duration" in non_default_values:
+            duration_s = _duration_in_seconds(
+                duration=non_default_values["budget_duration"]
+            )
+            key_reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
+            non_default_values["budget_reset_at"] = key_reset_at
+
         response = await prisma_client.update_data(
             token=key, data={**non_default_values, "token": key}
         )

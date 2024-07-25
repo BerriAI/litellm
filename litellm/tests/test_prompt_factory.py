@@ -212,7 +212,7 @@ def test_convert_url_to_img():
     [
         ("data:image/jpeg;base64,1234", "image/jpeg"),
         ("data:application/pdf;base64,1234", "application/pdf"),
-        ("data:image\/jpeg;base64,1234", "image/jpeg"),
+        (r"data:image\/jpeg;base64,1234", "image/jpeg"),
     ],
 )
 def test_base64_image_input(url, expected_media_type):

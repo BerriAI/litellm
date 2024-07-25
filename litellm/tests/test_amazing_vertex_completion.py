@@ -895,6 +895,52 @@ async def test_gemini_pro_function_calling_httpx(model, sync_mode):
             pytest.fail("An unexpected exception occurred - {}".format(str(e)))
 
 
+from litellm.tests.test_completion import response_format_tests
+
+
+@pytest.mark.parametrize(
+    "model", ["vertex_ai/meta/llama3-405b-instruct-maas"]
+)  # "vertex_ai",
+@pytest.mark.parametrize("sync_mode", [True, False])  # "vertex_ai",
+@pytest.mark.asyncio
+async def test_llama_3_httpx(model, sync_mode):
+    try:
+        load_vertex_ai_credentials()
+        litellm.set_verbose = True
+
+        messages = [
+            {
+                "role": "system",
+                "content": "Your name is Litellm Bot, you are a helpful assistant",
+            },
+            # User asks for their name and weather in San Francisco
+            {
+                "role": "user",
+                "content": "Hello, what is your name and can you tell me the weather?",
+            },
+        ]
+
+        data = {
+            "model": model,
+            "messages": messages,
+        }
+        if sync_mode:
+            response = litellm.completion(**data)
+        else:
+            response = await litellm.acompletion(**data)
+
+        response_format_tests(response=response)
+
+        print(f"response: {response}")
+    except litellm.RateLimitError as e:
+        pass
+    except Exception as e:
+        if "429 Quota exceeded" in str(e):
+            pass
+        else:
+            pytest.fail("An unexpected exception occurred - {}".format(str(e)))
+
+
 def vertex_httpx_mock_reject_prompt_post(*args, **kwargs):
     mock_response = MagicMock()
     mock_response.status_code = 200

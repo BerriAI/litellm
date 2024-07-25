@@ -1033,7 +1033,7 @@ class VertexLLM(BaseLLM):
                 model=model, custom_llm_provider=_custom_llm_provider
             )
         except Exception as e:
-            verbose_logger.error(
+            verbose_logger.warning(
                 "Unable to identify if system message supported. Defaulting to 'False'. Received error message - {}\nAdd it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json".format(
                     str(e)
                 )
@@ -1189,7 +1189,7 @@ class VertexLLM(BaseLLM):
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code = err.response.status_code
-            raise VertexAIError(status_code=error_code, message=response.text)
+            raise VertexAIError(status_code=error_code, message=err.response.text)
         except httpx.TimeoutException:
             raise VertexAIError(status_code=408, message="Timeout error occurred.")
 
