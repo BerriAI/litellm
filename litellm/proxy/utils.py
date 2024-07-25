@@ -862,7 +862,7 @@ class PrismaClient:
                     )
                     """
             )
-            if ret[0]['sum'] == 6:
+            if ret[0]["sum"] == 6:
                 print("All necessary views exist!")  # noqa
                 return
         except Exception:

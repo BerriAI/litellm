@@ -731,3 +731,67 @@ def test_load_router_config(mock_cache, fake_env_vars):
 
 
 # test_load_router_config()
+
+
+@pytest.mark.asyncio
+async def test_team_update_redis():
+    """
+    Tests if team update, updates the redis cache if set
+    """
+    from litellm.caching import DualCache, RedisCache
+    from litellm.proxy._types import LiteLLM_TeamTable
+    from litellm.proxy.auth.auth_checks import _cache_team_object
+
+    proxy_logging_obj: ProxyLogging = getattr(
+        litellm.proxy.proxy_server, "proxy_logging_obj"
+    )
+
+    proxy_logging_obj.internal_usage_cache.redis_cache = RedisCache()
+
+    with patch.object(
+        proxy_logging_obj.internal_usage_cache.redis_cache,
+        "async_set_cache",
+        new=MagicMock(),
+    ) as mock_client:
+        await _cache_team_object(
+            team_id="1234",
+            team_table=LiteLLM_TeamTable(),
+            user_api_key_cache=DualCache(),
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+        mock_client.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_get_team_redis(client_no_auth):
+    """
+    Tests if get_team_object gets value from redis cache, if set
+    """
+    from litellm.caching import DualCache, RedisCache
+    from litellm.proxy._types import LiteLLM_TeamTable
+    from litellm.proxy.auth.auth_checks import _cache_team_object, get_team_object
+
+    proxy_logging_obj: ProxyLogging = getattr(
+        litellm.proxy.proxy_server, "proxy_logging_obj"
+    )
+
+    proxy_logging_obj.internal_usage_cache.redis_cache = RedisCache()
+
+    with patch.object(
+        proxy_logging_obj.internal_usage_cache.redis_cache,
+        "async_get_cache",
+        new=AsyncMock(),
+    ) as mock_client:
+        try:
+            await get_team_object(
+                team_id="1234",
+                user_api_key_cache=DualCache(),
+                parent_otel_span=None,
+                proxy_logging_obj=proxy_logging_obj,
+                prisma_client=MagicMock(),
+            )
+        except Exception as e:
+            pass
+
+        mock_client.assert_called_once()
