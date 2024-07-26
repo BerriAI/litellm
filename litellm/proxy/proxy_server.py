@@ -2885,6 +2885,11 @@ async def chat_completion(
             and llm_router.default_deployment is not None
         ):  # model in router deployments, calling a specific deployment on the router
             tasks.append(llm_router.acompletion(**data))
+        elif (
+            llm_router is not None
+            and llm_router.router_general_settings.pass_through_all_models is True
+        ):
+            tasks.append(litellm.acompletion(**data))
         elif user_model is not None:  # `litellm --model <your-model-name>`
             tasks.append(litellm.acompletion(**data))
         else:
@@ -3147,6 +3152,11 @@ async def completion(
             llm_response = asyncio.create_task(llm_router.atext_completion(**data))
         elif user_model is not None:  # `litellm --model <your-model-name>`
             llm_response = asyncio.create_task(litellm.atext_completion(**data))
+        elif (
+            llm_router is not None
+            and llm_router.router_general_settings.pass_through_all_models is True
+        ):
+            llm_response = asyncio.create_task(litellm.atext_completion(**data))
         else:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -3405,6 +3415,11 @@ async def embeddings(
             and llm_router.default_deployment is not None
         ):  # model in router deployments, calling a specific deployment on the router
             tasks.append(llm_router.aembedding(**data))
+        elif (
+            llm_router is not None
+            and llm_router.router_general_settings.pass_through_all_models is True
+        ):
+            tasks.append(litellm.aembedding(**data))
         elif user_model is not None:  # `litellm --model <your-model-name>`
             tasks.append(litellm.aembedding(**data))
         else:
