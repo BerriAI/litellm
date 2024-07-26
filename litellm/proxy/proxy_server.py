@@ -2897,6 +2897,12 @@ async def chat_completion(
         elif (
             llm_router is not None
             and data["model"] not in router_model_names
+            and llm_router.router_general_settings.pass_through_all_models is True
+        ):
+            tasks.append(litellm.acompletion(**data))
+        elif (
+            llm_router is not None
+            and data["model"] not in router_model_names
             and llm_router.default_deployment is not None
         ):  # model in router deployments, calling a specific deployment on the router
             tasks.append(llm_router.acompletion(**data))
@@ -3157,6 +3163,12 @@ async def completion(
         elif (
             llm_router is not None
             and data["model"] not in router_model_names
+            and llm_router.router_general_settings.pass_through_all_models is True
+        ):
+            llm_response = asyncio.create_task(litellm.atext_completion(**data))
+        elif (
+            llm_router is not None
+            and data["model"] not in router_model_names
             and llm_router.default_deployment is not None
         ):  # model in router deployments, calling a specific deployment on the router
             llm_response = asyncio.create_task(llm_router.atext_completion(**data))
@@ -3414,6 +3426,12 @@ async def embeddings(
             llm_router is not None and data["model"] in llm_router.get_model_ids()
         ):  # model in router deployments, calling a specific deployment on the router
             tasks.append(llm_router.aembedding(**data))
+        elif (
+            llm_router is not None
+            and data["model"] not in router_model_names
+            and llm_router.router_general_settings.pass_through_all_models is True
+        ):
+            tasks.append(litellm.aembedding(**data))
         elif (
             llm_router is not None
             and data["model"] not in router_model_names
