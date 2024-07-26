@@ -85,6 +85,13 @@ model_list:
     litellm_params:
       model: openai/*
       api_key: os.environ/OPENAI_API_KEY
+  
+  # Pass through all llm requests to litellm.completion/litellm.embedding
+  # if user passes model="anthropic/claude-3-opus-20240229" proxy will make requests to anthropic claude-3-opus-20240229 using ANTHROPIC_API_KEY
+  - model_name: "*"
+    litellm_params:
+      model: "*"
+  
   - model_name: mistral-embed
     litellm_params:
       model: mistral/mistral-embed
