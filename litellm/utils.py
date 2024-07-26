@@ -330,6 +330,18 @@ class Rules:
 
 ####### CLIENT ###################
 # make it easy to log if completion/embedding runs succeeded or failed + see what happened | Non-Blocking
+def custom_llm_setup():
+    """
+    Add custom_llm provider to provider list
+    """
+    for custom_llm in litellm.custom_provider_map:
+        if custom_llm["provider"] not in litellm.provider_list:
+            litellm.provider_list.append(custom_llm["provider"])
+
+        if custom_llm["provider"] not in litellm._custom_providers:
+            litellm._custom_providers.append(custom_llm["provider"])
+
+
 def function_setup(
     original_function: str, rules_obj, start_time, *args, **kwargs
 ):  # just run once to check if user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
@@ -341,6 +353,10 @@ def function_setup(
     try:
         global callback_list, add_breadcrumb, user_logger_fn, Logging
 
+        ## CUSTOM LLM SETUP ##
+        custom_llm_setup()
+
+        ## LOGGING SETUP
         function_id = kwargs["id"] if "id" in kwargs else None
 
         if len(litellm.callbacks) > 0:
@@ -2774,7 +2790,7 @@ def get_optional_params(
                 tool_function["parameters"] = new_parameters
 
     def _check_valid_arg(supported_params):
-        verbose_logger.debug(
+        verbose_logger.info(
             f"\nLiteLLM completion() model= {model}; provider = {custom_llm_provider}"
         )
         verbose_logger.debug(
@@ -3121,7 +3137,19 @@ def get_optional_params(
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider
         )
-        if "ai21" in model:
+        if model in litellm.BEDROCK_CONVERSE_MODELS:
+            _check_valid_arg(supported_params=supported_params)
+            optional_params = litellm.AmazonConverseConfig().map_openai_params(
+                model=model,
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+                drop_params=(
+                    drop_params
+                    if drop_params is not None and isinstance(drop_params, bool)
+                    else False
+                ),
+            )
+        elif "ai21" in model:
             _check_valid_arg(supported_params=supported_params)
             # params "maxTokens":200,"temperature":0,"topP":250,"stop_sequences":[],
             # https://us-west-2.console.aws.amazon.com/bedrock/home?region=us-west-2#/providers?model=j2-ultra
@@ -3143,17 +3171,6 @@ def get_optional_params(
                             optional_params=optional_params,
                         )
                     )
-            elif model in litellm.BEDROCK_CONVERSE_MODELS:
-                optional_params = litellm.AmazonConverseConfig().map_openai_params(
-                    model=model,
-                    non_default_params=non_default_params,
-                    optional_params=optional_params,
-                    drop_params=(
-                        drop_params
-                        if drop_params is not None and isinstance(drop_params, bool)
-                        else False
-                    ),
-                )
             else:
                 optional_params = litellm.AmazonAnthropicConfig().map_openai_params(
                     non_default_params=non_default_params,
@@ -4486,7 +4503,11 @@ def get_llm_provider(
                     or get_secret("TOGETHER_AI_TOKEN")
                 )
             elif custom_llm_provider == "friendliai":
-                api_base = "https://inference.friendli.ai/v1"
+                api_base = (
+                    api_base
+                    or get_secret("FRIENDLI_API_BASE")
+                    or "https://inference.friendli.ai/v1"
+                )
                 dynamic_api_key = (
                     api_key
                     or get_secret("FRIENDLIAI_API_KEY")
@@ -9242,7 +9263,10 @@ class CustomStreamWrapper:
         try:
             # return this for all models
             completion_obj = {"content": ""}
-            if self.custom_llm_provider and self.custom_llm_provider == "anthropic":
+            if self.custom_llm_provider and (
+                self.custom_llm_provider == "anthropic"
+                or self.custom_llm_provider in litellm._custom_providers
+            ):
                 from litellm.types.utils import GenericStreamingChunk as GChunk
 
                 if self.received_finish_reason is not None:
@@ -10109,6 +10133,7 @@ class CustomStreamWrapper:
         try:
             if self.completion_stream is None:
                 await self.fetch_stream()
+
             if (
                 self.custom_llm_provider == "openai"
                 or self.custom_llm_provider == "azure"
@@ -10133,6 +10158,7 @@ class CustomStreamWrapper:
                 or self.custom_llm_provider == "triton"
                 or self.custom_llm_provider == "watsonx"
                 or self.custom_llm_provider in litellm.openai_compatible_endpoints
+                or self.custom_llm_provider in litellm._custom_providers
             ):
                 async for chunk in self.completion_stream:
                     print_verbose(f"value of async chunk: {chunk}")
@@ -10961,3 +10987,8 @@ class ModelResponseIterator:
             raise StopAsyncIteration
         self.is_done = True
         return self.model_response
+
+
+class CustomModelResponseIterator(Iterable):
+    def __init__(self) -> None:
+        super().__init__()

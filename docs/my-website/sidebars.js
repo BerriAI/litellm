@@ -158,6 +158,7 @@ const sidebars = {
         "providers/triton-inference-server",
         "providers/ollama", 
         "providers/perplexity", 
+        "providers/friendliai",
         "providers/groq", 
         "providers/deepseek", 
         "providers/fireworks_ai",
@@ -174,7 +175,8 @@ const sidebars = {
         "providers/aleph_alpha", 
         "providers/baseten", 
         "providers/openrouter", 
-        "providers/custom_openai_proxy",
+        // "providers/custom_openai_proxy",
+        "providers/custom_llm_server",
         "providers/petals",
         
       ],
