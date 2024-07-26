@@ -103,7 +103,8 @@ class VertexAILlama3Config:
         for param, value in non_default_params.items():
             if param == "max_tokens":
                 optional_params["max_tokens"] = value
-
+            if param == "stream":
+                optional_params["stream"] = value
         return optional_params
 
 
