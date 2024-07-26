@@ -15,6 +15,16 @@ model_list:
     litellm_params:
       model: openai/*
       api_key: os.environ/OPENAI_API_KEY
+  - model_name: mistral-small-latest
+    litellm_params:
+      model: mistral/mistral-small-latest
+      api_key: "os.environ/MISTRAL_API_KEY"
+  - model_name: tts
+    litellm_params:
+      model: openai/tts-1
+      api_key: "os.environ/OPENAI_API_KEY"
+    model_info:
+      mode: audio_speech
 general_settings: 
   master_key: sk-1234
   alerting: ["slack"]

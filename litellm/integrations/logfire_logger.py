@@ -2,10 +2,6 @@
 #    On success + failure, log events to Logfire
 
 import os
-
-import dotenv
-
-dotenv.load_dotenv()  # Loading env variables using dotenv
 import traceback
 import uuid
 from enum import Enum

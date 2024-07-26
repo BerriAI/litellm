@@ -334,6 +334,7 @@ async def update_team(
         create_audit_log_for_update,
         litellm_proxy_admin_name,
         prisma_client,
+        proxy_logging_obj,
         user_api_key_cache,
     )
 
@@ -380,6 +381,7 @@ async def update_team(
         team_id=team_row.team_id,
         team_table=team_row,
         user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
     )
 
     # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
