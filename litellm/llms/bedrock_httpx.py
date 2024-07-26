@@ -79,6 +79,7 @@ BEDROCK_CONVERSE_MODELS = [
     "meta.llama3-1-8b-instruct-v1:0",
     "meta.llama3-1-70b-instruct-v1:0",
     "meta.llama3-1-405b-instruct-v1:0",
+    "mistral.mistral-large-2407-v1:0",
 ]
 
 

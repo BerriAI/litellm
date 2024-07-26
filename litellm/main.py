@@ -107,6 +107,7 @@ from .llms.anthropic_text import AnthropicTextCompletion
 from .llms.azure import AzureChatCompletion
 from .llms.azure_text import AzureTextCompletion
 from .llms.bedrock_httpx import BedrockConverseLLM, BedrockLLM
+from .llms.custom_llm import CustomLLM, custom_chat_llm_router
 from .llms.databricks import DatabricksChatCompletion
 from .llms.huggingface_restapi import Huggingface
 from .llms.openai import OpenAIChatCompletion, OpenAITextCompletion
@@ -381,6 +382,7 @@ async def acompletion(
             or custom_llm_provider == "clarifai"
             or custom_llm_provider == "watsonx"
             or custom_llm_provider in litellm.openai_compatible_providers
+            or custom_llm_provider in litellm._custom_providers
         ):  # currently implemented aiohttp calls for just azure, openai, hf, ollama, vertex ai soon all.
             init_response = await loop.run_in_executor(None, func_with_context)
             if isinstance(init_response, dict) or isinstance(
@@ -2690,6 +2692,54 @@ def completion(
             model_response.created = int(time.time())
             model_response.model = model
             response = model_response
+        elif (
+            custom_llm_provider in litellm._custom_providers
+        ):  # Assume custom LLM provider
+            # Get the Custom Handler
+            custom_handler: Optional[CustomLLM] = None
+            for item in litellm.custom_provider_map:
+                if item["provider"] == custom_llm_provider:
+                    custom_handler = item["custom_handler"]
+
+            if custom_handler is None:
+                raise ValueError(
+                    f"Unable to map your input to a model. Check your input - {args}"
+                )
+
+            ## ROUTE LLM CALL ##
+            handler_fn = custom_chat_llm_router(
+                async_fn=acompletion, stream=stream, custom_llm=custom_handler
+            )
+
+            headers = headers or litellm.headers
+
+            ## CALL FUNCTION
+            response = handler_fn(
+                model=model,
+                messages=messages,
+                headers=headers,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                api_key=api_key,
+                api_base=api_base,
+                acompletion=acompletion,
+                logging_obj=logging,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                timeout=timeout,  # type: ignore
+                custom_prompt_dict=custom_prompt_dict,
+                client=client,  # pass AsyncOpenAI, OpenAI client
+                encoding=encoding,
+            )
+            if stream is True:
+                return CustomStreamWrapper(
+                    completion_stream=response,
+                    model=model,
+                    custom_llm_provider=custom_llm_provider,
+                    logging_obj=logging,
+                )
+
         else:
             raise ValueError(
                 f"Unable to map your input to a model. Check your input - {args}"
