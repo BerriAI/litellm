@@ -83,6 +83,47 @@ model_list:
 litellm --config /path/to/config.yaml
 ```
 </TabItem>
+<TabItem value="config-all" label="config - default all Anthropic Model">
+
+Use this if you want to make requests to `claude-3-haiku-20240307`,`claude-3-opus-20240229`,`claude-2.1` without defining them on the config.yaml
+
+#### Required env variables
+```
+ANTHROPIC_API_KEY=sk-ant****
+```
+
+```yaml
+model_list:
+  - model_name: "*" 
+    litellm_params:
+      model: "*"
+```
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+Example Request for this config.yaml
+
+**Ensure you use `anthropic/` prefix to route the request to Anthropic API**
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+--header 'Content-Type: application/json' \
+--data ' {
+      "model": "anthropic/claude-3-haiku-20240307",
+      "messages": [
+        {
+          "role": "user",
+          "content": "what llm are you"
+        }
+      ]
+    }
+'
+```
+
+
+</TabItem>
 <TabItem value="cli" label="cli">
 
 ```bash
