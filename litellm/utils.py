@@ -4919,6 +4919,9 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
         azure_llms = litellm.azure_llms
         if model in azure_llms:
             model = azure_llms[model]
+        if custom_llm_provider is not None and custom_llm_provider == "vertex_ai":
+            if "meta/" + model in litellm.vertex_llama3_models:
+                model = "meta/" + model
         ##########################
         if custom_llm_provider is None:
             # Get custom_llm_provider
