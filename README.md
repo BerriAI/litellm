@@ -168,7 +168,7 @@ $ litellm --model huggingface/bigcode/starcoder
 
 
 > [!IMPORTANT]
-> [Use with Langchain (Python, JS), OpenAI SDK (Python, JS) Anthropic SDK, Mistral SDK, LlamaIndex, Instructor, Curl](https://docs.litellm.ai/docs/migration)  
+> 💡 [Use LiteLLM Proxy with Langchain (Python, JS), OpenAI SDK (Python, JS) Anthropic SDK, Mistral SDK, LlamaIndex, Instructor, Curl](https://docs.litellm.ai/docs/proxy/user_keys)  
 
 ```python
 import openai # openai v1.0.0+
