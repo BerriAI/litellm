@@ -907,6 +907,17 @@ def test_vertex_ai_gemini_predict_cost():
     assert predictive_cost > 0
 
 
+def test_vertex_ai_llama_predict_cost():
+    model = "meta/llama3-405b-instruct-maas"
+    messages = [{"role": "user", "content": "Hey, hows it going???"}]
+    custom_llm_provider = "vertex_ai"
+    predictive_cost = completion_cost(
+        model=model, messages=messages, custom_llm_provider=custom_llm_provider
+    )
+
+    assert predictive_cost == 0
+
+
 @pytest.mark.parametrize("model", ["openai/tts-1", "azure/tts-1"])
 def test_completion_cost_tts(model):
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
