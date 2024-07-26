@@ -78,6 +78,8 @@ BEDROCK_CONVERSE_MODELS = [
     "ai21.jamba-instruct-v1:0",
     "meta.llama3-1-8b-instruct-v1:0",
     "meta.llama3-1-70b-instruct-v1:0",
+    "meta.llama3-1-405b-instruct-v1:0",
+    "mistral.mistral-large-2407-v1:0",
 ]
 
 
@@ -1315,6 +1317,7 @@ class AmazonConverseConfig:
             model.startswith("anthropic")
             or model.startswith("mistral")
             or model.startswith("cohere")
+            or model.startswith("meta.llama3-1")
         ):
             supported_params.append("tools")
 
