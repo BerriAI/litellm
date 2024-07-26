@@ -35,6 +35,14 @@ const config = {
           "--canary-color-primary-c": 0.1,
           "--canary-color-primary-h": 270,
         },
+        pagefind: {
+          ranking: {
+            pageLength: 0.9,
+            termFrequency: 1.0,
+            termSimilarity: 1.0,
+            termSaturation: 1.5,
+          }
+        }
       },
     ],
     [
