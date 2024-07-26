@@ -254,6 +254,15 @@ Your OpenAI proxy server is now running on `http://127.0.0.1:4000`.
 
 **That's it ! That's the quick start to deploy litellm**
 
+## Use with Langchain, OpenAI SDK, LlamaIndex, Instructor, Curl
+
+:::info
+💡 Go here 👉 [to make your first LLM API Request](user_keys)
+
+LiteLLM is compatible with several SDKs - including OpenAI SDK, Anthropic SDK, Mistral SDK, LLamaIndex, Langchain (Js, Python)
+
+:::
+
 ## Options to deploy LiteLLM 
 
 | Docs | When to Use |

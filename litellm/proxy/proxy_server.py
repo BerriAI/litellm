@@ -1507,6 +1507,21 @@ class ProxyConfig:
                     verbose_proxy_logger.debug(
                         f"litellm.post_call_rules: {litellm.post_call_rules}"
                     )
+                elif key == "custom_provider_map":
+                    from litellm.utils import custom_llm_setup
+
+                    litellm.custom_provider_map = [
+                        {
+                            "provider": item["provider"],
+                            "custom_handler": get_instance_fn(
+                                value=item["custom_handler"],
+                                config_file_path=config_file_path,
+                            ),
+                        }
+                        for item in value
+                    ]
+
+                    custom_llm_setup()
                 elif key == "success_callback":
                     litellm.success_callback = []
 
