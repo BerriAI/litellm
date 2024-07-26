@@ -9,6 +9,20 @@ import litellm, uuid
 from litellm._logging import print_verbose, verbose_logger
 
 
+def make_json_serializable(payload):
+    for key, value in payload.items():
+        try:
+            if isinstance(value, dict):
+                # recursively sanitize dicts
+                payload[key] = make_json_serializable(value.copy())
+            if not isinstance(value, (str, int, float, bool, type(None))):
+                # everything else becomes a string
+                payload[key] = str(value)
+        except:
+            # non blocking if it can't cast to a str
+            pass
+
+
 class DataDogLogger:
     # Class variables or attributes
     def __init__(
@@ -104,13 +118,7 @@ class DataDogLogger:
                 "metadata": clean_metadata,
             }
 
-            # Ensure everything in the payload is converted to str
-            for key, value in payload.items():
-                try:
-                    payload[key] = str(value)
-                except:
-                    # non blocking if it can't cast to a str
-                    pass
+            make_json_serializable(payload)
             import json
 
             payload = json.dumps(payload)
