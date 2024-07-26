@@ -43,7 +43,18 @@ export default function SearchBarWrapper(props) {
       }}
     >
       {!loaded || !path ? (
-        <span style={{ fontSize: "2rem" }}>🐤</span>
+        <button
+          style={{
+            fontSize: "2rem",
+            backgroundColor: "transparent",
+            border: "none",
+            outline: "none",
+            padding: "0",
+            marginRight: "6px",
+          }}
+        >
+          🐤
+        </button>
       ) : (
         <canary-root framework="docusaurus">
           <canary-provider-pagefind
