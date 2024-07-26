@@ -208,6 +208,7 @@ jobs:
               -e AZURE_EUROPE_API_KEY=$AZURE_EUROPE_API_KEY \
               -e MISTRAL_API_KEY=$MISTRAL_API_KEY \
               -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
+              -e GROQ_API_KEY=$GROQ_API_KEY \
               -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
               -e AWS_REGION_NAME=$AWS_REGION_NAME \
               -e AUTO_INFER_REGION=True \

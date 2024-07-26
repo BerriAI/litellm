@@ -174,7 +174,9 @@ class Router:
         routing_strategy_args: dict = {},  # just for latency-based routing
         semaphore: Optional[asyncio.Semaphore] = None,
         alerting_config: Optional[AlertingConfig] = None,
-        router_general_settings: Optional[RouterGeneralSettings] = None,
+        router_general_settings: Optional[
+            RouterGeneralSettings
+        ] = RouterGeneralSettings(),
     ) -> None:
         """
         Initialize the Router class with the given parameters for caching, reliability, and routing strategy.
@@ -253,8 +255,8 @@ class Router:
                 verbose_router_logger.setLevel(logging.INFO)
             elif debug_level == "DEBUG":
                 verbose_router_logger.setLevel(logging.DEBUG)
-        self.router_general_settings: Optional[RouterGeneralSettings] = (
-            router_general_settings
+        self.router_general_settings: RouterGeneralSettings = (
+            router_general_settings or RouterGeneralSettings()
         )
 
         self.assistants_config = assistants_config
@@ -3554,7 +3556,11 @@ class Router:
         # Check if user is trying to use model_name == "*"
         # this is a catch all model for their specific api key
         if deployment.model_name == "*":
-            self.default_deployment = deployment.to_json(exclude_none=True)
+            if deployment.litellm_params.model == "*":
+                # user wants to pass through all requests to litellm.acompletion for unknown deployments
+                self.router_general_settings.pass_through_all_models = True
+            else:
+                self.default_deployment = deployment.to_json(exclude_none=True)
 
         # Azure GPT-Vision Enhancements, users can pass os.environ/
         data_sources = deployment.litellm_params.get("dataSources", []) or []

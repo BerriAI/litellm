@@ -8,6 +8,13 @@ model_list:
     litellm_params:
       model: fireworks_ai/accounts/fireworks/models/llama-v3-70b-instruct
       api_key: "os.environ/FIREWORKS"
+  - model_name: "*"
+    litellm_params:
+      model: "*"
+  - model_name: "*"
+    litellm_params:
+      model: openai/*
+      api_key: os.environ/OPENAI_API_KEY
   - model_name: mistral-small-latest
     litellm_params:
       model: mistral/mistral-small-latest
