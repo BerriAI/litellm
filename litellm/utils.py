@@ -4650,6 +4650,8 @@ def get_llm_provider(
             custom_llm_provider = "openai"
         elif model in litellm.empower_models:
             custom_llm_provider = "empower"
+        elif model == "*":
+            custom_llm_provider = "openai"
         if custom_llm_provider is None or custom_llm_provider == "":
             if litellm.suppress_debug_info == False:
                 print()  # noqa

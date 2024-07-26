@@ -25,6 +25,11 @@ def test_get_llm_provider():
 # test_get_llm_provider()
 
 
+def test_get_llm_provider_catch_all():
+    _, response, _, _ = litellm.get_llm_provider(model="*")
+    assert response == "openai"
+
+
 def test_get_llm_provider_gpt_instruct():
     _, response, _, _ = litellm.get_llm_provider(model="gpt-3.5-turbo-instruct-0914")
 
