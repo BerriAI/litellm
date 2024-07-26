@@ -295,7 +295,7 @@ Dynamically call any model from any given provider without the need to predefine
 model_list:
   - model_name: "*"             # all requests where model not in your config go to this deployment
     litellm_params:
-      model: "openai/*"           # passes our validation check that a real provider is given
+      model: "*"           # passes our validation check that a real provider is given
 ```
 
 2. Start LiteLLM proxy 
