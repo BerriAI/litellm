@@ -255,6 +255,12 @@ litellm --config your_config.yaml
 
 ## Using LiteLLM Proxy - Curl Request, OpenAI Package, Langchain
 
+:::info
+LiteLLM is compatible with several SDKs - including OpenAI SDK, Anthropic SDK, Mistral SDK, LLamaIndex, Langchain (Js, Python)
+
+[More examples here](user_keys)
+:::
+
 <Tabs>
 <TabItem value="Curl" label="Curl Request">
 
