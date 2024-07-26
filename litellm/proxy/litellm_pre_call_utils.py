@@ -5,6 +5,7 @@ from fastapi import Request
 
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors, TeamCallbackMetadata, UserAPIKeyAuth
+from litellm.proxy.auth.auth_utils import get_team_callback_settings
 from litellm.types.utils import SupportedCacheControls
 
 if TYPE_CHECKING:
@@ -211,15 +212,14 @@ async def add_litellm_data_to_request(
             }  # add the team-specific configs to the completion call
 
     # Team Callbacks controls
-    if user_api_key_dict.team_metadata is not None:
-        team_metadata = user_api_key_dict.team_metadata
-        if "callback_settings" in team_metadata:
-            callback_settings = team_metadata.get("callback_settings", None) or {}
-            callback_settings_obj = TeamCallbackMetadata(**callback_settings)
-            verbose_proxy_logger.debug(
-                "Team callback settings activated: %s", callback_settings_obj
-            )
-            """
+    team_callback_settings: Optional[TeamCallbackMetadata] = get_team_callback_settings(
+        user_api_key_dict=user_api_key_dict
+    )
+    if team_callback_settings:
+        verbose_proxy_logger.debug(
+            "Team callback settings activated: %s", team_callback_settings
+        )
+        """
             callback_settings = {
               {
                 'callback_vars': {'langfuse_public_key': 'pk', 'langfuse_secret_key': 'sk_'}, 
@@ -228,13 +228,13 @@ async def add_litellm_data_to_request(
             }
             }
             """
-            data["success_callback"] = callback_settings_obj.success_callback
-            data["failure_callback"] = callback_settings_obj.failure_callback
+        data["success_callback"] = team_callback_settings.success_callback
+        data["failure_callback"] = team_callback_settings.failure_callback
 
-            if callback_settings_obj.callback_vars is not None:
-                # unpack callback_vars in data
-                for k, v in callback_settings_obj.callback_vars.items():
-                    data[k] = v
+        if team_callback_settings.callback_vars is not None:
+            # unpack callback_vars in data
+            for k, v in team_callback_settings.callback_vars.items():
+                data[k] = v
 
     return data
 
