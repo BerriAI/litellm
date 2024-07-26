@@ -31,6 +31,7 @@ const config = {
     [
       require.resolve("@getcanary/docusaurus-pagefind"),
       {
+        indexOnly: true,
         styles: {
           "--canary-color-primary-c": 0.1,
           "--canary-color-primary-h": 270,
