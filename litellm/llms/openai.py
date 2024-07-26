@@ -1881,8 +1881,15 @@ class OpenAIChatCompletion(BaseLLM):
                 model=model,  # type: ignore
                 prompt=prompt,  # type: ignore
             )
+        elif mode == "audio_speech":
+            # Get the current directory of the file being run
+            completion = await client.audio.speech.with_raw_response.create(
+                model=model,  # type: ignore
+                input=prompt,  # type: ignore
+                voice="alloy",
+            )
         else:
-            raise Exception("mode not set")
+            raise ValueError("mode not set, passed in mode: " + mode)
         response = {}
 
         if completion is None or not hasattr(completion, "headers"):
