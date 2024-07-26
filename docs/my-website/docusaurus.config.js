@@ -136,6 +136,11 @@ const config = {
             to: "docs/hosted"
           },
           {
+            href: 'https://contextlengthof.com/',
+            label: '💸 LLM Model Cost Map',
+            position: 'right',
+          },
+          {
             href: 'https://github.com/BerriAI/litellm',
             label: 'GitHub',
             position: 'right',
