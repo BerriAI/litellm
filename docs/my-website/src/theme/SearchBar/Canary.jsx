@@ -36,7 +36,7 @@ export default function Canary({ path }) {
               <canary-search-input slot="input"></canary-search-input>
               <canary-search-results-group
                 slot="results"
-                groups="SDK:*;Proxy:proxy"
+                groups="SDK:*;Proxy:/docs/(simple_proxy|proxy/.*)"
               ></canary-search-results-group>
               <canary-callout-discord
                 slot="callout"
