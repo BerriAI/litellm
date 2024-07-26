@@ -17,7 +17,7 @@ sys.path.insert(
 import os
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, AsyncIterator, Iterator, Union
+from typing import Any, AsyncGenerator, AsyncIterator, Coroutine, Iterator, Union
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -75,7 +75,7 @@ class CustomModelResponseIterator:
     # Async iterator
     def __aiter__(self):
         self.async_response_iterator = self.streaming_response.__aiter__()  # type: ignore
-        return self
+        return self.streaming_response
 
     async def __anext__(self) -> GenericStreamingChunk:
         try:
@@ -125,6 +125,18 @@ class MyCustomLLM(CustomLLM):
             streaming_response=completion_stream
         )
         return custom_iterator
+
+    async def astreaming(self, *args, **kwargs) -> AsyncIterator[GenericStreamingChunk]:  # type: ignore
+        generic_streaming_chunk: GenericStreamingChunk = {
+            "finish_reason": "stop",
+            "index": 0,
+            "is_finished": True,
+            "text": "Hello world",
+            "tool_use": None,
+            "usage": {"completion_tokens": 10, "prompt_tokens": 20, "total_tokens": 30},
+        }
+
+        yield generic_streaming_chunk  # type: ignore
 
 
 def test_get_llm_provider():
@@ -182,6 +194,26 @@ def test_simple_completion_streaming():
     )
 
     for chunk in resp:
+        print(chunk)
+        if chunk.choices[0].finish_reason is None:
+            assert isinstance(chunk.choices[0].delta.content, str)
+        else:
+            assert chunk.choices[0].finish_reason == "stop"
+
+
+@pytest.mark.asyncio
+async def test_simple_completion_async_streaming():
+    my_custom_llm = MyCustomLLM()
+    litellm.custom_provider_map = [
+        {"provider": "custom_llm", "custom_handler": my_custom_llm}
+    ]
+    resp = await litellm.acompletion(
+        model="custom_llm/my-fake-model",
+        messages=[{"role": "user", "content": "Hello world!"}],
+        stream=True,
+    )
+
+    async for chunk in resp:
         print(chunk)
         if chunk.choices[0].finish_reason is None:
             assert isinstance(chunk.choices[0].delta.content, str)
