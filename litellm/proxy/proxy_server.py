@@ -1387,7 +1387,9 @@ class ProxyConfig:
         environment_variables = config.get("environment_variables", None)
         if environment_variables:
             for key, value in environment_variables.items():
-                os.environ[key] = value
+                os.environ[key] = str(
+                    litellm.get_secret(secret_name=key, default_value=value)
+                )
 
         ## LITELLM MODULE SETTINGS (e.g. litellm.drop_params=True,..)
         litellm_settings = config.get("litellm_settings", None)
