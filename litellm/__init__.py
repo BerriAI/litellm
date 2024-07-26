@@ -813,6 +813,7 @@ from .utils import (
 )
 
 from .types.utils import ImageObject
+from .llms.custom_llm import CustomLLM
 from .llms.huggingface_restapi import HuggingfaceConfig
 from .llms.anthropic import AnthropicConfig
 from .llms.databricks import DatabricksConfig, DatabricksEmbeddingConfig
@@ -909,3 +910,12 @@ from .cost_calculator import response_cost_calculator, cost_per_token
 from .types.adapter import AdapterItem
 
 adapters: List[AdapterItem] = []
+
+### CUSTOM LLMs ###
+from .types.llms.custom_llm import CustomLLMItem
+from .types.utils import GenericStreamingChunk
+
+custom_provider_map: List[CustomLLMItem] = []
+_custom_providers: List[str] = (
+    []
+)  # internal helper util, used to track names of custom providers
