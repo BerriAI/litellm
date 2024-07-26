@@ -3137,7 +3137,19 @@ def get_optional_params(
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider
         )
-        if "ai21" in model:
+        if model in litellm.BEDROCK_CONVERSE_MODELS:
+            _check_valid_arg(supported_params=supported_params)
+            optional_params = litellm.AmazonConverseConfig().map_openai_params(
+                model=model,
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+                drop_params=(
+                    drop_params
+                    if drop_params is not None and isinstance(drop_params, bool)
+                    else False
+                ),
+            )
+        elif "ai21" in model:
             _check_valid_arg(supported_params=supported_params)
             # params "maxTokens":200,"temperature":0,"topP":250,"stop_sequences":[],
             # https://us-west-2.console.aws.amazon.com/bedrock/home?region=us-west-2#/providers?model=j2-ultra
@@ -3159,17 +3171,6 @@ def get_optional_params(
                             optional_params=optional_params,
                         )
                     )
-            elif model in litellm.BEDROCK_CONVERSE_MODELS:
-                optional_params = litellm.AmazonConverseConfig().map_openai_params(
-                    model=model,
-                    non_default_params=non_default_params,
-                    optional_params=optional_params,
-                    drop_params=(
-                        drop_params
-                        if drop_params is not None and isinstance(drop_params, bool)
-                        else False
-                    ),
-                )
             else:
                 optional_params = litellm.AmazonAnthropicConfig().map_openai_params(
                     non_default_params=non_default_params,
