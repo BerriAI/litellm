@@ -61,7 +61,7 @@ class DataDogLogger:
             id = response_obj.get("id", str(uuid.uuid4()))
             usage = dict(usage)
             try:
-                response_time = (end_time - start_time).total_seconds()
+                response_time = (end_time - start_time).total_seconds() * 1000
             except:
                 response_time = None
 
