@@ -31,13 +31,36 @@ class HeliconeLogger:
         prompt += f"{AI_PROMPT}"
         claude_provider_request = {"model": model, "prompt": prompt}
 
+        choice = response_obj["choices"][0]
+        message = choice["message"]
+
+        content = []
+        if "tool_calls" in message and message["tool_calls"]:
+            for tool_call in message["tool_calls"]:
+                content.append({
+                    "type": "tool_use",
+                    "id": tool_call["id"],
+                    "name": tool_call["function"]["name"],
+                    "input": tool_call["function"]["arguments"]
+                })
+        elif "content" in message and message["content"]:
+            content = [{"type": "text", "text": message["content"]}]
+
         claude_response_obj = {
-            "completion": response_obj["choices"][0]["message"]["content"],
+            "id": response_obj["id"],
+            "type": "message",
+            "role": "assistant",
             "model": model,
-            "stop_reason": "stop_sequence",
+            "content": content,
+            "stop_reason": choice["finish_reason"],
+            "stop_sequence": None,
+            "usage": {
+                "input_tokens": response_obj["usage"]["prompt_tokens"],
+                "output_tokens": response_obj["usage"]["completion_tokens"]
+            }
         }
 
-        return claude_provider_request, claude_response_obj
+        return claude_response_obj
     
     @staticmethod
     def add_metadata_from_header(litellm_params: dict, metadata: dict) -> dict:
@@ -96,7 +119,7 @@ class HeliconeLogger:
                 response_obj = response_obj.json()
 
             if "claude" in model:
-                provider_request, response_obj = self.claude_mapping(
+                response_obj = self.claude_mapping(
                     model=model, messages=messages, response_obj=response_obj
                 )
 
@@ -107,7 +130,11 @@ class HeliconeLogger:
             }
 
             # Code to be executed
+            provider_url = self.provider_url
             url = "https://api.hconeai.com/oai/v1/log"
+            if "claude" in model:
+                url = "https://api.hconeai.com/anthropic/v1/log"
+                provider_url = "https://api.anthropic.com/v1/messages"
             headers = {
                 "Authorization": f"Bearer {self.key}",
                 "Content-Type": "application/json",
@@ -124,7 +151,7 @@ class HeliconeLogger:
             meta.update(metadata)
             data = {
                 "providerRequest": {
-                    "url": self.provider_url,
+                    "url": provider_url,
                     "json": provider_request,
                     "meta": meta,
                 },
