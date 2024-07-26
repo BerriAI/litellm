@@ -2767,6 +2767,14 @@ async def chat_completion(
         except:
             data = json.loads(body_str)
 
+        # set user api keys from vault
+        if "user_id" in data:
+            import vault
+            vault_secrets = vault.get_api_keys(data['user_id'])
+            if 'OPENAI_API_KEY' in vault_secrets:
+                data["api_key"] = vault_secrets["OPENAI_API_KEY"]
+            del data["user_id"]
+
         verbose_proxy_logger.debug(
             "Request received by LiteLLM:\n{}".format(json.dumps(data, indent=4)),
         )
