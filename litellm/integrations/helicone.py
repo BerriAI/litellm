@@ -107,7 +107,7 @@ class HeliconeLogger:
             }
 
             # Code to be executed
-            url = "https://api.hconeai.com/oai/v1/log"
+            url = "https://api.worker.helicone.ai/oai/v1/log"
             headers = {
                 "Authorization": f"Bearer {self.key}",
                 "Content-Type": "application/json",
