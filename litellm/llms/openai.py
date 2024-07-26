@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 import time
 import traceback
 import types
@@ -1870,8 +1871,25 @@ class OpenAIChatCompletion(BaseLLM):
                 model=model,  # type: ignore
                 prompt=prompt,  # type: ignore
             )
+        elif mode == "audio_transcription":
+            # Get the current directory of the file being run
+            pwd = os.path.dirname(os.path.realpath(__file__))
+            file_path = os.path.join(pwd, "../tests/gettysburg.wav")
+            audio_file = open(file_path, "rb")
+            completion = await client.audio.transcriptions.with_raw_response.create(
+                file=audio_file,
+                model=model,  # type: ignore
+                prompt=prompt,  # type: ignore
+            )
+        elif mode == "audio_speech":
+            # Get the current directory of the file being run
+            completion = await client.audio.speech.with_raw_response.create(
+                model=model,  # type: ignore
+                input=prompt,  # type: ignore
+                voice="alloy",
+            )
         else:
-            raise Exception("mode not set")
+            raise ValueError("mode not set, passed in mode: " + mode)
         response = {}
 
         if completion is None or not hasattr(completion, "headers"):
