@@ -245,7 +245,7 @@ async def make_call(
         return completion_stream
     except httpx.HTTPStatusError as err:
         error_code = err.response.status_code
-        raise BedrockError(status_code=error_code, message=str(err))
+        raise BedrockError(status_code=error_code, message=err.response.text)
     except httpx.TimeoutException as e:
         raise BedrockError(status_code=408, message="Timeout error occurred.")
     except Exception as e:
