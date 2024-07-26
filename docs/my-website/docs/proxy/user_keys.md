@@ -1,7 +1,7 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Use with Langchain, OpenAI SDK, LlamaIndex, Instructor, Curl
+# 💡 Use with Langchain, OpenAI SDK, LlamaIndex, Instructor, Curl
 
 :::info
 
