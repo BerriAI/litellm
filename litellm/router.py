@@ -2937,8 +2937,8 @@ class Router:
                 model_group = kwargs["litellm_params"]["metadata"].get(
                     "model_group", None
                 )
-
-                id = kwargs["litellm_params"].get("model_info", {}).get("id", None)
+                model_info = kwargs["litellm_params"].get("model_info", {}) or {}
+                id = model_info.get("id", None)
                 if model_group is None or id is None:
                     return
                 elif isinstance(id, int):
