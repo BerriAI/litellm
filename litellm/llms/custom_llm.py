@@ -17,8 +17,10 @@ from enum import Enum
 from functools import partial
 from typing import (
     Any,
+    AsyncGenerator,
     AsyncIterator,
     Callable,
+    Coroutine,
     Iterator,
     List,
     Literal,
