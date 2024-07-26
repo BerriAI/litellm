@@ -8840,21 +8840,6 @@ class CustomStreamWrapper:
                 if str_line.choices[0].finish_reason:
                     is_finished = True
                     finish_reason = str_line.choices[0].finish_reason
-                    if finish_reason == "content_filter":
-                        if hasattr(str_line.choices[0], "content_filter_result"):
-                            error_message = json.dumps(
-                                str_line.choices[0].content_filter_result
-                            )
-                        else:
-                            error_message = "{} Response={}".format(
-                                self.custom_llm_provider, str(dict(str_line))
-                            )
-
-                        raise litellm.ContentPolicyViolationError(
-                            message=error_message,
-                            llm_provider=self.custom_llm_provider,
-                            model=self.model,
-                        )
 
                 # checking for logprobs
                 if (
