@@ -1,7 +1,6 @@
 # Custom API Server (Custom Format)
 
-LiteLLM allows you to call your custom endpoint in the OpenAI ChatCompletion format
-
+Call your custom torch-serve / internal LLM APIs via LiteLLM
 
 :::info
 
