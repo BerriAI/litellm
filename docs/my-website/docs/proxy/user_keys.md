@@ -234,6 +234,34 @@ main();
 ```
 
 </TabItem>
+
+<TabItem value="anthropic-py" label="Anthropic Python SDK">
+
+```python
+import os
+
+from anthropic import Anthropic
+
+client = Anthropic(
+    base_url="http://localhost:4000", # proxy endpoint
+    api_key="sk-s4xN1IiLTCytwtZFJaYQrA", # litellm proxy virtual key
+)
+
+message = client.messages.create(
+    max_tokens=1024,
+    messages=[
+        {
+            "role": "user",
+            "content": "Hello, Claude",
+        }
+    ],
+    model="claude-3-opus-20240229",
+)
+print(message.content)
+```
+
+</TabItem>
+
 <TabItem value="mistral-py" label="Mistral Python SDK">
 
 ```python
