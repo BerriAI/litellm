@@ -31,7 +31,18 @@ model_list:
       api_base: https://openai-france-1234.openai.azure.com/
       api_key: <your-azure-api-key>
       rpm: 1440
+routing_strategy: simple-shuffle # Literal["simple-shuffle", "least-busy", "usage-based-routing","latency-based-routing"], default="simple-shuffle"
+  model_group_alias: {"gpt-4": "gpt-3.5-turbo"} # all requests with `gpt-4` will be routed to models with `gpt-3.5-turbo`
+  num_retries: 2
+  timeout: 30                                  # 30 seconds
+  redis_host: <your redis host>                # set this when using multiple litellm proxy deployments, load balancing state stored in redis
+  redis_password: <your redis password>
+  redis_port: 1992
 ```
+
+:::info
+Detailed information about [routing strategies can be found here](../routing)
+:::
 
 #### Step 2: Start Proxy with config
 
