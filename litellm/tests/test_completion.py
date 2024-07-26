@@ -2573,21 +2573,17 @@ def test_completion_azure_extra_headers():
     http_client = Client()
 
     with patch.object(http_client, "send", new=MagicMock()) as mock_client:
-        client = AzureOpenAI(
-            azure_endpoint=os.getenv("AZURE_API_BASE"),
-            api_version=litellm.AZURE_DEFAULT_API_VERSION,
-            api_key=os.getenv("AZURE_API_KEY"),
-            http_client=http_client,
-        )
+        litellm.client_session = http_client
         try:
             response = completion(
                 model="azure/chatgpt-v-2",
                 messages=messages,
-                client=client,
+                api_base=os.getenv("AZURE_API_BASE"),
+                api_version="2023-07-01-preview",
+                api_key=os.getenv("AZURE_API_KEY"),
                 extra_headers={
                     "Authorization": "my-bad-key",
                     "Ocp-Apim-Subscription-Key": "hello-world-testing",
-                    "api-key": "my-bad-key",
                 },
             )
             print(response)
@@ -2603,8 +2599,10 @@ def test_completion_azure_extra_headers():
         print(request.url)  # This will print the full URL
         print(request.headers)  # This will print the full URL
         auth_header = request.headers.get("Authorization")
+        apim_key = request.headers.get("Ocp-Apim-Subscription-Key")
         print(auth_header)
         assert auth_header == "my-bad-key"
+        assert apim_key == "hello-world-testing"
 
 
 def test_completion_azure_ad_token():
@@ -2613,18 +2611,37 @@ def test_completion_azure_ad_token():
     # If you want to remove it, speak to Ishaan!
     # Ishaan will be very disappointed if this test is removed -> this is a standard way to pass api_key + the router + proxy use this
     from httpx import Client
-    from openai import AzureOpenAI
 
     from litellm import completion
-    from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
 
-    response = completion(
-        model="azure/chatgpt-v-2",
-        messages=messages,
-        # api_key="my-fake-ad-token",
-        azure_ad_token=os.getenv("AZURE_API_KEY"),
-    )
-    print(response)
+    litellm.set_verbose = True
+
+    old_key = os.environ["AZURE_API_KEY"]
+    os.environ.pop("AZURE_API_KEY", None)
+
+    http_client = Client()
+
+    with patch.object(http_client, "send", new=MagicMock()) as mock_client:
+        litellm.client_session = http_client
+        try:
+            response = completion(
+                model="azure/chatgpt-v-2",
+                messages=messages,
+                azure_ad_token="my-special-token",
+            )
+            print(response)
+        except Exception as e:
+            pass
+        finally:
+            os.environ["AZURE_API_KEY"] = old_key
+
+        mock_client.assert_called_once()
+        request = mock_client.call_args[0][0]
+        print(request.method)  # This will print 'POST'
+        print(request.url)  # This will print the full URL
+        print(request.headers)  # This will print the full URL
+        auth_header = request.headers.get("Authorization")
+        assert auth_header == "Bearer my-special-token"
 
 
 def test_completion_azure_key_completion_arg():

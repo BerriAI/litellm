@@ -107,6 +107,7 @@ from .llms.anthropic_text import AnthropicTextCompletion
 from .llms.azure import AzureChatCompletion
 from .llms.azure_text import AzureTextCompletion
 from .llms.bedrock_httpx import BedrockConverseLLM, BedrockLLM
+from .llms.custom_llm import CustomLLM, custom_chat_llm_router
 from .llms.databricks import DatabricksChatCompletion
 from .llms.huggingface_restapi import Huggingface
 from .llms.openai import OpenAIChatCompletion, OpenAITextCompletion
@@ -381,6 +382,7 @@ async def acompletion(
             or custom_llm_provider == "clarifai"
             or custom_llm_provider == "watsonx"
             or custom_llm_provider in litellm.openai_compatible_providers
+            or custom_llm_provider in litellm._custom_providers
         ):  # currently implemented aiohttp calls for just azure, openai, hf, ollama, vertex ai soon all.
             init_response = await loop.run_in_executor(None, func_with_context)
             if isinstance(init_response, dict) or isinstance(
@@ -2690,6 +2692,54 @@ def completion(
             model_response.created = int(time.time())
             model_response.model = model
             response = model_response
+        elif (
+            custom_llm_provider in litellm._custom_providers
+        ):  # Assume custom LLM provider
+            # Get the Custom Handler
+            custom_handler: Optional[CustomLLM] = None
+            for item in litellm.custom_provider_map:
+                if item["provider"] == custom_llm_provider:
+                    custom_handler = item["custom_handler"]
+
+            if custom_handler is None:
+                raise ValueError(
+                    f"Unable to map your input to a model. Check your input - {args}"
+                )
+
+            ## ROUTE LLM CALL ##
+            handler_fn = custom_chat_llm_router(
+                async_fn=acompletion, stream=stream, custom_llm=custom_handler
+            )
+
+            headers = headers or litellm.headers
+
+            ## CALL FUNCTION
+            response = handler_fn(
+                model=model,
+                messages=messages,
+                headers=headers,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                api_key=api_key,
+                api_base=api_base,
+                acompletion=acompletion,
+                logging_obj=logging,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                timeout=timeout,  # type: ignore
+                custom_prompt_dict=custom_prompt_dict,
+                client=client,  # pass AsyncOpenAI, OpenAI client
+                encoding=encoding,
+            )
+            if stream is True:
+                return CustomStreamWrapper(
+                    completion_stream=response,
+                    model=model,
+                    custom_llm_provider=custom_llm_provider,
+                    logging_obj=logging,
+                )
+
         else:
             raise ValueError(
                 f"Unable to map your input to a model. Check your input - {args}"
@@ -3833,7 +3883,7 @@ def text_completion(
         optional_params["custom_llm_provider"] = custom_llm_provider
 
     # get custom_llm_provider
-    _, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider, api_base=api_base)  # type: ignore
+    _model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider, api_base=api_base)  # type: ignore
 
     if custom_llm_provider == "huggingface":
         # if echo == True, for TGI llms we need to set top_n_tokens to 3
@@ -3916,10 +3966,12 @@ def text_completion(
 
     kwargs.pop("prompt", None)
 
-    if model is not None and model.startswith(
-        "openai/"
+    if (
+        _model is not None and custom_llm_provider == "openai"
     ):  # for openai compatible endpoints - e.g. vllm, call the native /v1/completions endpoint for text completion calls
-        model = model.replace("openai/", "text-completion-openai/")
+        if _model not in litellm.open_ai_chat_completion_models:
+            model = "text-completion-openai/" + _model
+            optional_params.pop("custom_llm_provider", None)
 
     kwargs["text_completion"] = True
     response = completion(
