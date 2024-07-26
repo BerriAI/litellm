@@ -1970,10 +1970,10 @@
     micromatch "^4.0.7"
     pagefind "^1.1.0"
 
-"@getcanary/web@^0.0.46":
-  version "0.0.46"
-  resolved "https://registry.yarnpkg.com/@getcanary/web/-/web-0.0.46.tgz#98bdf0576665f03a2d3f645458c2a286f9243e3a"
-  integrity sha512-PdI/jiKzBX6OashQxWL+kBvHRL+0ciK9ei6OE6Poukz1/P+W4We6TXXPqsjbrWryPg2l6sammJY04clFyPIqiQ==
+"@getcanary/web@^0.0.47":
+  version "0.0.47"
+  resolved "https://registry.yarnpkg.com/@getcanary/web/-/web-0.0.47.tgz#b2e8f843b65094208da2c92b8cf14ac91b0e1d95"
+  integrity sha512-ITNbhXZAcOffvDVCJWkCkQvXxSprA1OTOHn7AJa/efq09nQZIrI/YaluGhVf51g2jkUV0ixBmMnshWy0g5VG6w==
   dependencies:
     "@floating-ui/dom" "^1.6.8"
     "@lit-labs/observers" "^2.0.2"
