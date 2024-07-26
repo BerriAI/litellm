@@ -2711,8 +2711,27 @@ def completion(
                 async_fn=acompletion, stream=stream, custom_llm=custom_handler
             )
 
+            headers = headers or litellm.headers
+
             ## CALL FUNCTION
-            response = handler_fn()
+            response = handler_fn(
+                model=model,
+                messages=messages,
+                headers=headers,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                api_key=api_key,
+                api_base=api_base,
+                acompletion=acompletion,
+                logging_obj=logging,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                timeout=timeout,  # type: ignore
+                custom_prompt_dict=custom_prompt_dict,
+                client=client,  # pass AsyncOpenAI, OpenAI client
+                encoding=encoding,
+            )
             if stream is True:
                 return CustomStreamWrapper(
                     completion_stream=response,
