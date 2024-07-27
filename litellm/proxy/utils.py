@@ -31,6 +31,7 @@ from litellm._service_logger import ServiceLogging, ServiceTypes
 from litellm.caching import DualCache, RedisCache
 from litellm.exceptions import RejectedRequestError
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.opentelemetry import _get_parent_otel_span_from_kwargs
 from litellm.integrations.slack_alerting import SlackAlerting
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
@@ -125,6 +126,27 @@ def log_to_opentelemetry(func):
                     start_time=start_time,
                     end_time=end_time,
                 )
+            elif (
+                # in litellm custom callbacks kwargs is passed as arg[0]
+                # https://docs.litellm.ai/docs/observability/custom_callback#callback-functions
+                args is not None
+                and len(args) > 0
+            ):
+                passed_kwargs = args[0]
+                parent_otel_span = _get_parent_otel_span_from_kwargs(
+                    kwargs=passed_kwargs
+                )
+                if parent_otel_span is not None:
+                    from litellm.proxy.proxy_server import proxy_logging_obj
+
+                    await proxy_logging_obj.service_logging_obj.async_service_success_hook(
+                        service=ServiceTypes.DB,
+                        call_type=func.__name__,
+                        parent_otel_span=parent_otel_span,
+                        duration=0.0,
+                        start_time=start_time,
+                        end_time=end_time,
+                    )
             # end of logging to otel
             return result
         except Exception as e:
