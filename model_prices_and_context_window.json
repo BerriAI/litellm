@@ -2028,6 +2028,16 @@
         "mode": "chat",
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#partner-models"
     },
+    "vertex_ai/mistral-large@2407": {
+        "max_tokens": 8191,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8191,
+        "input_cost_per_token": 0.000003,
+        "output_cost_per_token": 0.000009,
+        "litellm_provider": "vertex_ai-mistral_models",
+        "mode": "chat",
+        "supports_function_calling": true
+    },
     "vertex_ai/imagegeneration@006": {
         "cost_per_image": 0.020,
         "litellm_provider": "vertex_ai-image-models",
@@ -2994,7 +3004,8 @@
         "input_cost_per_token": 0.000008,
         "output_cost_per_token": 0.000024,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_function_calling": true
     },
     "mistral.mistral-large-2407-v1:0": {
         "max_tokens": 8191,
@@ -3003,7 +3014,8 @@
         "input_cost_per_token": 0.000003,
         "output_cost_per_token": 0.000009,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_function_calling": true
     },
     "bedrock/us-west-2/mistral.mixtral-8x7b-instruct-v0:1": {
         "max_tokens": 8191,
@@ -3075,7 +3087,8 @@
         "input_cost_per_token": 0.000008,
         "output_cost_per_token": 0.000024,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_function_calling": true
     },
     "bedrock/eu-west-3/mistral.mistral-large-2402-v1:0": {
         "max_tokens": 8191,
@@ -3084,7 +3097,8 @@
         "input_cost_per_token": 0.0000104,
         "output_cost_per_token": 0.0000312,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_function_calling": true
     },
     "anthropic.claude-3-sonnet-20240229-v1:0": {
         "max_tokens": 4096, 
