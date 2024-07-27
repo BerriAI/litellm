@@ -4808,10 +4808,18 @@ async def create_batch(
     """
     global proxy_logging_obj
     data: Dict = {}
+
     try:
-        # Use orjson to parse JSON data, orjson speeds up requests significantly
-        form_data = await request.form()
-        data = {key: value for key, value in form_data.items() if key != "file"}
+        body = await request.body()
+        body_str = body.decode()
+        try:
+            data = ast.literal_eval(body_str)
+        except:
+            data = json.loads(body_str)
+
+        verbose_proxy_logger.debug(
+            "Request received by LiteLLM:\n{}".format(json.dumps(data, indent=4)),
+        )
 
         # Include original request and headers in the data
         data = await add_litellm_data_to_request(
@@ -4883,12 +4891,12 @@ async def create_batch(
 
 
 @router.get(
-    "/v1/batches{batch_id}",
+    "/v1/batches{batch_id:path}",
     dependencies=[Depends(user_api_key_auth)],
     tags=["batch"],
 )
 @router.get(
-    "/batches{batch_id}",
+    "/batches{batch_id:path}",
     dependencies=[Depends(user_api_key_auth)],
     tags=["batch"],
 )
@@ -4916,20 +4924,6 @@ async def retrieve_batch(
     global proxy_logging_obj
     data: Dict = {}
     try:
-        # Use orjson to parse JSON data, orjson speeds up requests significantly
-        form_data = await request.form()
-        data = {key: value for key, value in form_data.items() if key != "file"}
-
-        # Include original request and headers in the data
-        data = await add_litellm_data_to_request(
-            data=data,
-            request=request,
-            general_settings=general_settings,
-            user_api_key_dict=user_api_key_dict,
-            version=version,
-            proxy_config=proxy_config,
-        )
-
         _retrieve_batch_request = RetrieveBatchRequest(
             batch_id=batch_id,
         )

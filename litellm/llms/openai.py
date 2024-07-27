@@ -24,6 +24,7 @@ from pydantic import BaseModel
 from typing_extensions import overload, override
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.types.utils import ProviderField
 from litellm.utils import (
@@ -2534,6 +2535,7 @@ class OpenAIBatchesAPI(BaseLLM):
         retrieve_batch_data: RetrieveBatchRequest,
         openai_client: AsyncOpenAI,
     ) -> Batch:
+        verbose_logger.debug("retrieving batch, args= %s", retrieve_batch_data)
         response = await openai_client.batches.retrieve(**retrieve_batch_data)
         return response
 
