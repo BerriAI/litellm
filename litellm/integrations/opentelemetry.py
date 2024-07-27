@@ -463,7 +463,7 @@ class OpenTelemetry(CustomLogger):
         #############################################
 
         # OTEL Attributes for the RAW Request to https://docs.anthropic.com/en/api/messages
-        if complete_input_dict:
+        if complete_input_dict and isinstance(complete_input_dict, dict):
             for param, val in complete_input_dict.items():
                 if not isinstance(val, str):
                     val = str(val)

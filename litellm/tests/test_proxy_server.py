@@ -625,6 +625,7 @@ def test_chat_completion_optional_params(mock_acompletion, client_no_auth):
 # Run the test
 # test_chat_completion_optional_params()
 
+
 # Test Reading config.yaml file
 from litellm.proxy.proxy_server import ProxyConfig
 
