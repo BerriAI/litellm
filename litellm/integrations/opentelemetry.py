@@ -119,6 +119,7 @@ class OpenTelemetry(CustomLogger):
         parent_otel_span: Optional[Span] = None,
         start_time: Optional[Union[datetime, float]] = None,
         end_time: Optional[Union[datetime, float]] = None,
+        event_metadata: Optional[dict] = None,
     ):
         from datetime import datetime
 
@@ -149,6 +150,10 @@ class OpenTelemetry(CustomLogger):
             service_logging_span.set_attribute(
                 key="service", value=payload.service.value
             )
+
+            if event_metadata:
+                for key, value in event_metadata.items():
+                    service_logging_span.set_attribute(key, value)
             service_logging_span.set_status(Status(StatusCode.OK))
             service_logging_span.end(end_time=_end_time_ns)
 

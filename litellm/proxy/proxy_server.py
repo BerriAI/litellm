@@ -108,6 +108,7 @@ from litellm._logging import verbose_proxy_logger, verbose_router_logger
 from litellm.caching import DualCache, RedisCache
 from litellm.exceptions import RejectedRequestError
 from litellm.integrations.slack_alerting import SlackAlerting, SlackAlertingArgs
+from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
 from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
 from litellm.proxy._types import *
 from litellm.proxy.analytics_endpoints.analytics_endpoints import (
@@ -203,6 +204,7 @@ from litellm.proxy.utils import (
     get_error_message_str,
     get_instance_fn,
     hash_token,
+    log_to_opentelemetry,
     reset_budget,
     send_email,
     update_spend,
@@ -649,6 +651,7 @@ async def _PROXY_failure_handler(
     pass
 
 
+@log_to_opentelemetry
 async def _PROXY_track_cost_callback(
     kwargs,  # kwargs to completion
     completion_response: litellm.ModelResponse,  # response from completion
@@ -670,18 +673,15 @@ async def _PROXY_track_cost_callback(
         litellm_params = kwargs.get("litellm_params", {}) or {}
         proxy_server_request = litellm_params.get("proxy_server_request") or {}
         end_user_id = proxy_server_request.get("body", {}).get("user", None)
-        user_id = kwargs["litellm_params"]["metadata"].get("user_api_key_user_id", None)
-        team_id = kwargs["litellm_params"]["metadata"].get("user_api_key_team_id", None)
-        org_id = kwargs["litellm_params"]["metadata"].get("user_api_key_org_id", None)
-        key_alias = kwargs["litellm_params"]["metadata"].get("user_api_key_alias", None)
-        end_user_max_budget = kwargs["litellm_params"]["metadata"].get(
-            "user_api_end_user_max_budget", None
-        )
+        metadata = get_litellm_metadata_from_kwargs(kwargs=kwargs)
+        user_id = metadata.get("user_api_key_user_id", None)
+        team_id = metadata.get("user_api_key_team_id", None)
+        org_id = metadata.get("user_api_key_org_id", None)
+        key_alias = metadata.get("user_api_key_alias", None)
+        end_user_max_budget = metadata.get("user_api_end_user_max_budget", None)
         if kwargs.get("response_cost", None) is not None:
             response_cost = kwargs["response_cost"]
-            user_api_key = kwargs["litellm_params"]["metadata"].get(
-                "user_api_key", None
-            )
+            user_api_key = metadata.get("user_api_key", None)
 
             if kwargs.get("cache_hit", False) == True:
                 response_cost = 0.0

@@ -21,6 +21,7 @@ from openai._models import BaseModel as OpenAIObject
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
 from litellm.types.services import ServiceLoggerPayload, ServiceTypes
 
 
@@ -31,16 +32,6 @@ def print_verbose(print_statement):
             print(print_statement)  # noqa
     except:
         pass
-
-
-def _get_parent_otel_span_from_kwargs(kwargs: Optional[dict] = None):
-    try:
-        if kwargs is None:
-            return None
-        _metadata = kwargs.get("metadata") or {}
-        return _metadata.get("litellm_parent_otel_span")
-    except:
-        return None
 
 
 class BaseCache:
