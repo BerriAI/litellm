@@ -1,4 +1,5 @@
 import re
+import sys
 
 from fastapi import Request
 
@@ -88,7 +89,11 @@ async def check_if_request_size_is_safe(request: Request) -> bool:
         request (Request): The incoming request.
 
     Returns:
-        bool: True if the request size is within the limit, False otherwise.
+        bool: True if the request size is within the limit
+
+    Raises:
+        ProxyException: If the request size is too large
+
     """
     from litellm.proxy.proxy_server import general_settings, premium_user
 
@@ -134,6 +139,46 @@ async def check_if_request_size_is_safe(request: Request) -> bool:
                     code=400,
                     param="content-length",
                 )
+
+    return True
+
+
+async def check_response_size_is_safe(response: Any) -> bool:
+    """
+    Enterprise Only:
+        - Checks if the response size is within the limit
+
+    Args:
+        response (Any): The response to check.
+
+    Returns:
+        bool: True if the response size is within the limit
+
+    Raises:
+        ProxyException: If the response size is too large
+
+    """
+
+    from litellm.proxy.proxy_server import general_settings, premium_user
+
+    max_response_size_mb = general_settings.get("max_response_size_mb", None)
+    if max_response_size_mb is not None:
+        # Check if premium user
+        if premium_user is not True:
+            verbose_proxy_logger.warning(
+                f"using max_response_size_mb - not checking -  this is an enterprise only feature. {CommonProxyErrors.not_premium_user.value}"
+            )
+            return True
+
+        response_size_mb = bytes_to_mb(bytes_value=sys.getsizeof(response))
+        verbose_proxy_logger.debug(f"response size in MB={response_size_mb}")
+        if response_size_mb > max_response_size_mb:
+            raise ProxyException(
+                message=f"Response size is too large. Response size is {response_size_mb} MB. Max size is {max_response_size_mb} MB",
+                type=ProxyErrorTypes.bad_request_error.value,
+                code=400,
+                param="content-length",
+            )
 
     return True
 
