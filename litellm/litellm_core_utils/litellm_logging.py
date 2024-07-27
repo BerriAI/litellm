@@ -1220,7 +1220,9 @@ class Logging:
         """
         Implementing async callbacks, to handle asyncio event loop issues when custom integrations need to use async functions.
         """
-        print_verbose("Logging Details LiteLLM-Async Success Call")
+        print_verbose(
+            "Logging Details LiteLLM-Async Success Call, cache_hit={}".format(cache_hit)
+        )
         start_time, end_time, result = self._success_handler_helper_fn(
             start_time=start_time, end_time=end_time, result=result, cache_hit=cache_hit
         )
