@@ -5,6 +5,7 @@ import asyncio
 import aiohttp, openai
 from openai import OpenAI, AsyncOpenAI
 from typing import Optional, List, Union
+import uuid
 
 
 async def generate_key(
@@ -46,7 +47,7 @@ async def chat_completion(session, key, model: Union[str, List] = "gpt-4"):
     data = {
         "model": model,
         "messages": [
-            {"role": "user", "content": "Hello!"},
+            {"role": "user", "content": f"Hello! {str(uuid.uuid4())}"},
         ],
     }
 
