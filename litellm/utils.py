@@ -2089,6 +2089,7 @@ def supports_function_calling(model: str) -> bool:
     Raises:
     Exception: If the given model is not found in model_prices_and_context_window.json.
     """
+
     if model in litellm.model_cost:
         model_info = litellm.model_cost[model]
         if model_info.get("supports_function_calling", False) is True:
@@ -3293,7 +3294,9 @@ def get_optional_params(
         _check_valid_arg(supported_params=supported_params)
 
         optional_params = litellm.OllamaChatConfig().map_openai_params(
-            non_default_params=non_default_params, optional_params=optional_params
+            model=model,
+            non_default_params=non_default_params,
+            optional_params=optional_params,
         )
     elif custom_llm_provider == "nlp_cloud":
         supported_params = get_supported_openai_params(
@@ -4877,6 +4880,7 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
             supports_system_messages: Optional[bool]
             supports_response_schema: Optional[bool]
             supports_vision: Optional[bool]
+            supports_function_calling: Optional[bool]
     Raises:
         Exception: If the model is not mapped yet.
 
@@ -4951,6 +4955,7 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
                 supported_openai_params=supported_openai_params,
                 supports_system_messages=None,
                 supports_response_schema=None,
+                supports_function_calling=None,
             )
         else:
             """
@@ -5041,6 +5046,9 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
                     "supports_response_schema", None
                 ),
                 supports_vision=_model_info.get("supports_vision", False),
+                supports_function_calling=_model_info.get(
+                    "supports_function_calling", False
+                ),
             )
     except Exception:
         raise Exception(
