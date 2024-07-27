@@ -21,7 +21,7 @@ Features:
     - ✅ IP address‑based access control lists
     - ✅ Track Request IP Address
     - ✅ [Use LiteLLM keys/authentication on Pass Through Endpoints](pass_through#✨-enterprise---use-litellm-keysauthentication-on-pass-through-endpoints)
-    - ✅ Set Max Request / File Size on Requests
+    - ✅ [Set Max Request Size / File Size on Requests](#set-max-request--response-size-on-litellm-proxy)
     - ✅ [Enforce Required Params for LLM Requests (ex. Reject requests missing ["metadata"]["generation_name"])](#enforce-required-params-for-llm-requests)
 - **Enterprise Spend Tracking Features**
     - ✅ [Tracking Spend for Custom Tags](#tracking-spend-for-custom-tags)
@@ -1288,3 +1288,52 @@ How it works?
 
 **Note:** Setting an environment variable within a Python script using os.environ will not make that variable accessible via SSH sessions or any other new processes that are started independently of the Python script. Environment variables set this way only affect the current process and its child processes.
 
+
+## Set Max Request / Response Size on LiteLLM Proxy
+
+Use this if you want to set a maximum request / response size for your proxy server. If a request size is above the size it gets rejected + slack alert triggered
+
+#### Usage 
+**Step 1.** Set `max_request_size_mb` and `max_response_size_mb`
+
+For this example we set a very low limit on `max_request_size_mb` and expect it to get rejected 
+
+:::info
+In production we recommend setting a `max_request_size_mb` /  `max_response_size_mb` around `32 MB`
+
+:::
+
+```yaml
+model_list:
+  - model_name: fake-openai-endpoint
+    litellm_params:
+      model: openai/fake
+      api_key: fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+general_settings: 
+  master_key: sk-1234
+
+  # Security controls
+  max_request_size_mb: 0.000000001 # 👈 Key Change - Max Request Size in MB. Set this very low for testing 
+  max_response_size_mb: 100 # 👈 Key Change - Max Response Size in MB
+```
+
+**Step 2.** Test it with `/chat/completions` request
+
+```shell
+curl http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "fake-openai-endpoint",
+    "messages": [
+      {"role": "user", "content": "Hello, Claude!"}
+    ]
+  }'
+```
+
+**Expected Response from request**
+We expect this to fail since the request size is over `max_request_size_mb`
+```shell
+{"error":{"message":"Request size is too large. Request size is 0.0001125335693359375 MB. Max size is 1e-09 MB","type":"bad_request_error","param":"content-length","code":400}}
+```
