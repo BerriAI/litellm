@@ -160,7 +160,7 @@ class MistralConfig:
                 optional_params["max_tokens"] = value
             if param == "tools":
                 optional_params["tools"] = value
-            if param == "stream" and value == True:
+            if param == "stream" and value is True:
                 optional_params["stream"] = value
             if param == "temperature":
                 optional_params["temperature"] = value
