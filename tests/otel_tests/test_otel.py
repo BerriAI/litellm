@@ -115,3 +115,4 @@ async def test_chat_completion_check_otel_spans():
         assert "redis" in parent_trace_spans
         assert "raw_gen_ai_request" in parent_trace_spans
         assert "litellm_request" in parent_trace_spans
+        assert "batch_write_to_db" in parent_trace_spans
