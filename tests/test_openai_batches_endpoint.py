@@ -28,14 +28,37 @@ async def create_batch(session, input_file_id, endpoint, completion_window):
         return result
 
 
+async def get_batch_by_id(session, batch_id):
+    url = f"{BASE_URL}/v1/batches/{batch_id}"
+    headers = {"Authorization": f"Bearer {API_KEY}"}
+
+    async with session.get(url, headers=headers) as response:
+        if response.status == 200:
+            result = await response.json()
+            return result
+        else:
+            print(f"Error: Failed to get batch. Status code: {response.status}")
+            return None
+
+
 @pytest.mark.asyncio
-async def test_file_operations():
+async def test_batches_operations():
     async with aiohttp.ClientSession() as session:
         # Test file upload and get file_id
         file_id = await upload_file(session, purpose="batch")
 
-        batch_id = await create_batch(session, file_id, "/v1/chat/completions", "24h")
+        create_batch_response = await create_batch(
+            session, file_id, "/v1/chat/completions", "24h"
+        )
+        batch_id = create_batch_response.get("id")
         assert batch_id is not None
+
+        # Test get batch
+        get_batch_response = await get_batch_by_id(session, batch_id)
+        print("response from get batch", get_batch_response)
+
+        assert get_batch_response["id"] == batch_id
+        assert get_batch_response["input_file_id"] == file_id
 
         # Test delete file
         await delete_file(session, file_id)
