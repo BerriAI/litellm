@@ -4808,10 +4808,18 @@ async def create_batch(
     """
     global proxy_logging_obj
     data: Dict = {}
+
     try:
-        # Use orjson to parse JSON data, orjson speeds up requests significantly
-        form_data = await request.form()
-        data = {key: value for key, value in form_data.items() if key != "file"}
+        body = await request.body()
+        body_str = body.decode()
+        try:
+            data = ast.literal_eval(body_str)
+        except:
+            data = json.loads(body_str)
+
+        verbose_proxy_logger.debug(
+            "Request received by LiteLLM:\n{}".format(json.dumps(data, indent=4)),
+        )
 
         # Include original request and headers in the data
         data = await add_litellm_data_to_request(
@@ -4915,10 +4923,18 @@ async def retrieve_batch(
     """
     global proxy_logging_obj
     data: Dict = {}
+    data = {}
     try:
-        # Use orjson to parse JSON data, orjson speeds up requests significantly
-        form_data = await request.form()
-        data = {key: value for key, value in form_data.items() if key != "file"}
+        body = await request.body()
+        body_str = body.decode()
+        try:
+            data = ast.literal_eval(body_str)
+        except:
+            data = json.loads(body_str)
+
+        verbose_proxy_logger.debug(
+            "Request received by LiteLLM:\n{}".format(json.dumps(data, indent=4)),
+        )
 
         # Include original request and headers in the data
         data = await add_litellm_data_to_request(
