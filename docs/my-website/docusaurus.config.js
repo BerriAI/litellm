@@ -136,7 +136,7 @@ const config = {
             to: "docs/hosted"
           },
           {
-            href: 'https://contextlengthof.com/',
+            href: 'https://models.litellm.ai/',
             label: '💸 LLM Model Cost Map',
             position: 'right',
           },
