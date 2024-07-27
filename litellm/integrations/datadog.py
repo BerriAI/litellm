@@ -1,5 +1,5 @@
 #### What this does ####
-#    On success + failure, log events to Supabase
+#    On success + failure, log events to Datadog
 
 import dotenv, os
 import requests  # type: ignore
@@ -15,12 +15,13 @@ def make_json_serializable(payload):
             if isinstance(value, dict):
                 # recursively sanitize dicts
                 payload[key] = make_json_serializable(value.copy())
-            if not isinstance(value, (str, int, float, bool, type(None))):
+            elif not isinstance(value, (str, int, float, bool, type(None))):
                 # everything else becomes a string
                 payload[key] = str(value)
         except:
             # non blocking if it can't cast to a str
             pass
+    return payload
 
 
 class DataDogLogger:
