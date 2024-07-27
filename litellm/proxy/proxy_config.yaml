@@ -34,5 +34,10 @@ general_settings:
     "llm_requests_hanging": "https://hooks.slack.com/services/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",
   }
 
+  # Security controls
+  max_request_size_mb: 100
+  # google cloud run maximum repsonses size is 32MB
+  max_response_size_mb: 100
+
 litellm_settings:
   success_callback: ["langfuse"]
