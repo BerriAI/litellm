@@ -30,11 +30,11 @@ async def test_file_operations():
         await delete_file(session, file_id)
 
 
-async def upload_file(session):
+async def upload_file(session, purpose="fine-tune"):
     url = f"{BASE_URL}/v1/files"
     headers = {"Authorization": f"Bearer {API_KEY}"}
     data = aiohttp.FormData()
-    data.add_field("purpose", "fine-tune")
+    data.add_field("purpose", purpose)
     data.add_field(
         "file", b'{"prompt": "Hello", "completion": "Hi"}', filename="mydata.jsonl"
     )
