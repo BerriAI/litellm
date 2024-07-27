@@ -279,6 +279,8 @@ ui_link = f"/ui/"
 ui_message = (
     f"👉 [```LiteLLM Admin Panel on /ui```]({ui_link}). Create, Edit Keys with SSO"
 )
+ui_message += f"\n\n💸 [```LiteLLM Model Cost Map```](https://models.litellm.ai/)."
+
 custom_swagger_message = f"[**Customize Swagger Docs**](https://docs.litellm.ai/docs/proxy/enterprise#swagger-docs---custom-routes--branding)"
 
 ### CUSTOM BRANDING [ENTERPRISE FEATURE] ###
