@@ -9271,11 +9271,20 @@ class CustomStreamWrapper:
         try:
             # return this for all models
             completion_obj = {"content": ""}
-            if self.custom_llm_provider and (
-                self.custom_llm_provider == "anthropic"
-                or self.custom_llm_provider in litellm._custom_providers
+            from litellm.types.utils import GenericStreamingChunk as GChunk
+
+            if (
+                isinstance(chunk, dict)
+                and all(
+                    key in chunk for key in GChunk.__annotations__
+                )  # check if chunk is a generic streaming chunk
+            ) or (
+                self.custom_llm_provider
+                and (
+                    self.custom_llm_provider == "anthropic"
+                    or self.custom_llm_provider in litellm._custom_providers
+                )
             ):
-                from litellm.types.utils import GenericStreamingChunk as GChunk
 
                 if self.received_finish_reason is not None:
                     raise StopIteration

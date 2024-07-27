@@ -177,7 +177,6 @@ class VertexAIPartnerModels(BaseLLM):
                 credentials=vertex_credentials, project_id=vertex_project
             )
 
-            openai_chat_completions = OpenAIChatCompletion()
             openai_like_chat_completions = DatabricksChatCompletion()
 
             ## Load Config
@@ -223,6 +222,7 @@ class VertexAIPartnerModels(BaseLLM):
                 client=client,
                 timeout=timeout,
                 encoding=encoding,
+                custom_llm_provider="vertex_ai_beta",
             )
 
         except Exception as e:
