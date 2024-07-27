@@ -1,7 +1,39 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# 💡 Use with Langchain, OpenAI SDK, LlamaIndex, Instructor, Curl
+# 💡 Migrating from OpenAI (Langchain, OpenAI SDK, LlamaIndex, Instructor, Curl)
+
+LiteLLM Proxy is **OpenAI-Compatible**, and supports:
+* /chat/completions 
+* /embeddings
+* /completions 
+* /image/generations 
+* /moderations 
+* /audio/transcriptions
+* /audio/speech
+* [Assistants API endpoints](https://docs.litellm.ai/docs/assistants)
+* [Batches API endpoints](https://docs.litellm.ai/docs/batches)
+
+LiteLLM Proxy is **Azure OpenAI-compatible**:
+* /chat/completions
+* /completions
+* /embeddings 
+
+LiteLLM Proxy is **Anthropic-compatible**: 
+* /messages 
+
+This doc covers:
+
+*   /chat/completion
+*   /embedding
+
+
+These are **selected examples**. LiteLLM Proxy is **OpenAI-Compatible**, it works with any project that calls OpenAI. Just change the `base_url`, `api_key` and `model`.
+
+To pass provider-specific args, [go here](https://docs.litellm.ai/docs/completion/provider_specific_params#proxy-usage)
+
+To drop unsupported params (E.g. frequency_penalty for bedrock with librechat), [go here](https://docs.litellm.ai/docs/completion/drop_params#openai-proxy-usage)
+
 
 :::info
 
