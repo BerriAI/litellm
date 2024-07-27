@@ -3469,6 +3469,18 @@ class Router:
             model_info=_model_info,
         )
 
+        ## REGISTER MODEL INFO IN LITELLM MODEL COST MAP
+        _model_name = deployment.litellm_params.model
+        if deployment.litellm_params.custom_llm_provider is not None:
+            _model_name = (
+                deployment.litellm_params.custom_llm_provider + "/" + _model_name
+            )
+        litellm.register_model(
+            model_cost={
+                _model_name: _model_info,
+            }
+        )
+
         deployment = self._add_deployment(deployment=deployment)
 
         model = deployment.to_json(exclude_none=True)
