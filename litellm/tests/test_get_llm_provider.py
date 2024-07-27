@@ -25,6 +25,15 @@ def test_get_llm_provider():
 # test_get_llm_provider()
 
 
+def test_get_llm_provider_fireworks():  # tests finetuned fireworks models - https://github.com/BerriAI/litellm/issues/4923
+    model, custom_llm_provider, _, _ = litellm.get_llm_provider(
+        model="fireworks_ai/accounts/my-test-1234"
+    )
+
+    assert custom_llm_provider == "fireworks_ai"
+    assert model == "accounts/my-test-1234"
+
+
 def test_get_llm_provider_catch_all():
     _, response, _, _ = litellm.get_llm_provider(model="*")
     assert response == "openai"
