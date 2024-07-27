@@ -542,7 +542,7 @@ class DatabricksChatCompletion(BaseLLM):
                 )
             else:
                 try:
-                    response = self.client.post(
+                    response = client.post(
                         api_base, headers=headers, data=json.dumps(data)
                     )
                     response.raise_for_status()
