@@ -1,7 +1,7 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Batches API
+# [BETA] Batches API
 
 Covers Batches, Files
 
