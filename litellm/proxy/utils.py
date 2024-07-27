@@ -31,8 +31,11 @@ from litellm._service_logger import ServiceLogging, ServiceTypes
 from litellm.caching import DualCache, RedisCache
 from litellm.exceptions import RejectedRequestError
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.integrations.opentelemetry import _get_parent_otel_span_from_kwargs
 from litellm.integrations.slack_alerting import SlackAlerting
+from litellm.litellm_core_utils.core_helpers import (
+    _get_parent_otel_span_from_kwargs,
+    get_litellm_metadata_from_kwargs,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
 from litellm.proxy._types import (
@@ -139,13 +142,15 @@ def log_to_opentelemetry(func):
                 if parent_otel_span is not None:
                     from litellm.proxy.proxy_server import proxy_logging_obj
 
+                    metadata = get_litellm_metadata_from_kwargs(kwargs=passed_kwargs)
                     await proxy_logging_obj.service_logging_obj.async_service_success_hook(
-                        service=ServiceTypes.DB,
+                        service=ServiceTypes.BATCH_WRITE_TO_DB,
                         call_type=func.__name__,
                         parent_otel_span=parent_otel_span,
                         duration=0.0,
                         start_time=start_time,
                         end_time=end_time,
+                        event_metadata=metadata,
                     )
             # end of logging to otel
             return result
