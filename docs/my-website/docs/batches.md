@@ -8,8 +8,6 @@ Covers Batches, Files
 
 ## Quick Start 
 
-Call an existing Assistant. 
-
 - Create File for Batch Completion
 
 - Create Batch Request
