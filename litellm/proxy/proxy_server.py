@@ -203,6 +203,7 @@ from litellm.proxy.utils import (
     get_error_message_str,
     get_instance_fn,
     hash_token,
+    log_to_opentelemetry,
     reset_budget,
     send_email,
     update_spend,
@@ -649,6 +650,7 @@ async def _PROXY_failure_handler(
     pass
 
 
+@log_to_opentelemetry
 async def _PROXY_track_cost_callback(
     kwargs,  # kwargs to completion
     completion_response: litellm.ModelResponse,  # response from completion
