@@ -689,6 +689,7 @@ class VertexLLM(BaseLLM):
             ## CHECK IF GROUNDING METADATA IN REQUEST
             grounding_metadata: List[dict] = []
             safety_ratings: List = []
+            citation_metadata: List = []
             ## GET TEXT ##
             chat_completion_message = {"role": "assistant"}
             content_str = ""
@@ -702,6 +703,9 @@ class VertexLLM(BaseLLM):
 
                 if "safetyRatings" in candidate:
                     safety_ratings.append(candidate["safetyRatings"])
+
+                if "citationMetadata" in candidate:
+                    citation_metadata.append(candidate["citationMetadata"])
                 if "text" in candidate["content"]["parts"][0]:
                     content_str = candidate["content"]["parts"][0]["text"]
 
@@ -755,6 +759,11 @@ class VertexLLM(BaseLLM):
 
             ## ADD SAFETY RATINGS ##
             model_response._hidden_params["vertex_ai_safety_results"] = safety_ratings
+
+            ## ADD CITATION METADATA ##
+            model_response._hidden_params["vertex_ai_citation_metadata"] = (
+                citation_metadata
+            )
 
         except Exception as e:
             raise VertexAIError(
