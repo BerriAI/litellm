@@ -795,6 +795,8 @@ class ModelResponseIterator:
         try:
             chunk = chunk.replace("data:", "")
             chunk = chunk.strip()
+            if chunk == "[DONE]":
+                raise StopAsyncIteration
             if len(chunk) > 0:
                 json_chunk = json.loads(chunk)
                 return self.chunk_parser(chunk=json_chunk)
