@@ -21,7 +21,7 @@ from openai._models import BaseModel as OpenAIObject
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.integrations.opentelemetry import _get_parent_otel_span_from_kwargs
+from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
 from litellm.types.services import ServiceLoggerPayload, ServiceTypes
 
 

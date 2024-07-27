@@ -119,6 +119,7 @@ class OpenTelemetry(CustomLogger):
         parent_otel_span: Optional[Span] = None,
         start_time: Optional[Union[datetime, float]] = None,
         end_time: Optional[Union[datetime, float]] = None,
+        event_metadata: Optional[dict] = None,
     ):
         from datetime import datetime
 
@@ -149,6 +150,10 @@ class OpenTelemetry(CustomLogger):
             service_logging_span.set_attribute(
                 key="service", value=payload.service.value
             )
+
+            if event_metadata:
+                for key, value in event_metadata.items():
+                    service_logging_span.set_attribute(key, value)
             service_logging_span.set_status(Status(StatusCode.OK))
             service_logging_span.end(end_time=_end_time_ns)
 
@@ -703,24 +708,3 @@ class OpenTelemetry(CustomLogger):
             management_endpoint_span.set_attribute(f"exception", str(_exception))
             management_endpoint_span.set_status(Status(StatusCode.ERROR))
             management_endpoint_span.end(end_time=_end_time_ns)
-
-
-# Helper functions used for OTEL logging
-def _get_parent_otel_span_from_kwargs(kwargs: Optional[dict] = None):
-    try:
-        if kwargs is None:
-            return None
-        litellm_params = kwargs.get("litellm_params")
-        _metadata = kwargs.get("metadata") or {}
-        if "litellm_parent_otel_span" in _metadata:
-            return _metadata["litellm_parent_otel_span"]
-        elif (
-            litellm_params is not None
-            and litellm_params.get("metadata") is not None
-            and "litellm_parent_otel_span" in litellm_params.get("metadata", {})
-        ):
-            return litellm_params["metadata"]["litellm_parent_otel_span"]
-        elif "litellm_parent_otel_span" in kwargs:
-            return kwargs["litellm_parent_otel_span"]
-    except:
-        return None
