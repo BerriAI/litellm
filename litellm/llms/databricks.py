@@ -344,6 +344,7 @@ class DatabricksChatCompletion(BaseLLM):
         self,
         model: str,
         messages: list,
+        custom_llm_provider: str,
         api_base: str,
         custom_prompt_dict: dict,
         model_response: ModelResponse,
@@ -373,7 +374,7 @@ class DatabricksChatCompletion(BaseLLM):
                 logging_obj=logging_obj,
             ),
             model=model,
-            custom_llm_provider="databricks",
+            custom_llm_provider=custom_llm_provider,
             logging_obj=logging_obj,
         )
         return streamwrapper
@@ -426,6 +427,7 @@ class DatabricksChatCompletion(BaseLLM):
         model: str,
         messages: list,
         api_base: str,
+        custom_llm_provider: str,
         custom_prompt_dict: dict,
         model_response: ModelResponse,
         print_verbose: Callable,
@@ -499,6 +501,7 @@ class DatabricksChatCompletion(BaseLLM):
                     logger_fn=logger_fn,
                     headers=headers,
                     client=client,
+                    custom_llm_provider=custom_llm_provider,
                 )
             else:
                 return self.acompletion_function(
@@ -537,7 +540,7 @@ class DatabricksChatCompletion(BaseLLM):
                         logging_obj=logging_obj,
                     ),
                     model=model,
-                    custom_llm_provider="vertex_ai_beta",
+                    custom_llm_provider=custom_llm_provider,
                     logging_obj=logging_obj,
                 )
             else:

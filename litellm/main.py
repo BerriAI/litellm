@@ -1867,6 +1867,7 @@ def completion(
                     custom_prompt_dict=custom_prompt_dict,
                     client=client,  # pass AsyncOpenAI, OpenAI client
                     encoding=encoding,
+                    custom_llm_provider="databricks",
                 )
             except Exception as e:
                 ## LOGGING - log the original exception returned
