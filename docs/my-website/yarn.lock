@@ -1961,19 +1961,19 @@
   resolved "https://registry.yarnpkg.com/@floating-ui/utils/-/utils-0.2.5.tgz#105c37d9d9620ce69b7f692a20c821bf1ad2cbf9"
   integrity sha512-sTcG+QZ6fdEUObICavU+aB3Mp8HY4n14wYHdxK4fXjPmv3PXZZeY5RaguJmGyeH/CJQhX3fqKUtS4qc1LoHwhQ==
 
-"@getcanary/docusaurus-pagefind@^0.0.11":
-  version "0.0.11"
-  resolved "https://registry.yarnpkg.com/@getcanary/docusaurus-pagefind/-/docusaurus-pagefind-0.0.11.tgz#c4938b4f3d0f99c4d46d9b11a8800934f2bd7009"
-  integrity sha512-CN6nI8I5mdvE4Lt0+T95HNQdH8x6P4b2/T2YWbtjP0EB4TZl78lpuWXB3RZwiY7cY+C+aRL4Jo52SAqrBW2eqQ==
+"@getcanary/docusaurus-pagefind@^0.0.12":
+  version "0.0.12"
+  resolved "https://registry.yarnpkg.com/@getcanary/docusaurus-pagefind/-/docusaurus-pagefind-0.0.12.tgz#c843ad66b3703f58a3d27fc0380922406fe03ee0"
+  integrity sha512-F0OQ0Lb/GltewDEr0w+BgPbNyYpzAQZ/TtuG5rbtC3PnrOL+9pDMe/Gs0kE8AuY1uEd/YQOKr61rbY/k7kkFig==
   dependencies:
     cli-progress "^3.12.0"
     micromatch "^4.0.7"
     pagefind "^1.1.0"
 
-"@getcanary/web@^0.0.54":
-  version "0.0.54"
-  resolved "https://registry.yarnpkg.com/@getcanary/web/-/web-0.0.54.tgz#a80d3a93b79beae3216e28391f35da32cac011c1"
-  integrity sha512-6ghmuusVq7pWNMj3SonRJ9Ncn0Yz2GxdT0pb7LLUJRdQWyxeP5UmnrhQ3jpq4NKzSqaIb8nK4M61Wikfbyr24Q==
+"@getcanary/web@^0.0.55":
+  version "0.0.55"
+  resolved "https://registry.yarnpkg.com/@getcanary/web/-/web-0.0.55.tgz#8df5de51e3fd89d6334b9d51a37c61dc8136137e"
+  integrity sha512-DjIhTMeuLZaHT+/h+O6Keg9Gb58frPURpM4lkKrN/wmRMoCnOuly3oXIH2X37YhAoHXi4udDRJ60mtD0UZy0uw==
   dependencies:
     "@floating-ui/dom" "^1.6.8"
     "@lit-labs/observers" "^2.0.2"
