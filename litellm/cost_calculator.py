@@ -509,7 +509,7 @@ def completion_cost(
                 ):
                     model = completion_response._hidden_params.get("model", model)
                 custom_llm_provider = completion_response._hidden_params.get(
-                    "custom_llm_provider", ""
+                    "custom_llm_provider", custom_llm_provider or ""
                 )
                 region_name = completion_response._hidden_params.get(
                     "region_name", region_name
@@ -732,7 +732,7 @@ def response_cost_calculator(
                 )
         return response_cost
     except litellm.NotFoundError as e:
-        print_verbose(
+        verbose_logger.debug(  # debug since it can be spammy in logs, for calls
             f"Model={model} for LLM Provider={custom_llm_provider} not found in completion cost map."
         )
         return None
