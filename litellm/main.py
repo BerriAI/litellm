@@ -121,7 +121,7 @@ from .llms.prompt_templates.factory import (
 )
 from .llms.text_completion_codestral import CodestralTextCompletion
 from .llms.triton import TritonChatCompletion
-from .llms.vertex_ai_llama import VertexAILlama3
+from .llms.vertex_ai_partner import VertexAIPartnerModels
 from .llms.vertex_httpx import VertexLLM
 from .llms.watsonx import IBMWatsonXAI
 from .types.llms.openai import HttpxBinaryResponseContent
@@ -158,7 +158,7 @@ triton_chat_completions = TritonChatCompletion()
 bedrock_chat_completion = BedrockLLM()
 bedrock_converse_chat_completion = BedrockConverseLLM()
 vertex_chat_completion = VertexLLM()
-vertex_llama_chat_completion = VertexAILlama3()
+vertex_partner_models_chat_completion = VertexAIPartnerModels()
 watsonxai = IBMWatsonXAI()
 ####### COMPLETION ENDPOINTS ################
 
@@ -1867,6 +1867,7 @@ def completion(
                     custom_prompt_dict=custom_prompt_dict,
                     client=client,  # pass AsyncOpenAI, OpenAI client
                     encoding=encoding,
+                    custom_llm_provider="databricks",
                 )
             except Exception as e:
                 ## LOGGING - log the original exception returned
@@ -2068,8 +2069,8 @@ def completion(
                     timeout=timeout,
                     client=client,
                 )
-            elif model.startswith("meta/"):
-                model_response = vertex_llama_chat_completion.completion(
+            elif model.startswith("meta/") or model.startswith("mistral"):
+                model_response = vertex_partner_models_chat_completion.completion(
                     model=model,
                     messages=messages,
                     model_response=model_response,
