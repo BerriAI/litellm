@@ -40,36 +40,36 @@ response = completion(
 
 Here's how to call Anthropic with the LiteLLM Proxy Server
 
-### 1. Save key in your environment
-
-```bash
-export AWS_ACCESS_KEY_ID=""
-export AWS_SECRET_ACCESS_KEY=""
-export AWS_REGION_NAME=""
-```
-
-### 2. Start the proxy 
-
-<Tabs>
-<TabItem value="cli" label="CLI">
-
-```bash
-$ litellm --model anthropic.claude-3-sonnet-20240229-v1:0
-
-# Server running on http://0.0.0.0:4000
-```
-</TabItem>
-<TabItem value="config" label="config.yaml">
+### 1. Setup config.yaml
 
 ```yaml
 model_list:
   - model_name: bedrock-claude-v1
     litellm_params:
       model: bedrock/anthropic.claude-instant-v1
+      aws_access_key_id: os.environ/CUSTOM_AWS_ACCESS_KEY_ID
+      aws_secret_access_key: os.environ/CUSTOM_AWS_SECRET_ACCESS_KEY
+      aws_region_name: os.environ/CUSTOM_AWS_REGION_NAME
 ```
-</TabItem>
-</Tabs>
 
+All possible auth params: 
+
+```
+aws_access_key_id: Optional[str],
+aws_secret_access_key: Optional[str],
+aws_session_token: Optional[str],
+aws_region_name: Optional[str],
+aws_session_name: Optional[str],
+aws_profile_name: Optional[str],
+aws_role_name: Optional[str],
+aws_web_identity_token: Optional[str],
+```
+
+### 2. Start the proxy 
+
+```bash
+litellm --config /path/to/config.yaml
+```
 ### 3. Test it
 
 
@@ -623,7 +623,7 @@ response = litellm.embedding(
 
 
 ## Supported AWS Bedrock Models
-Here's an example of using a bedrock model with LiteLLM
+Here's an example of using a bedrock model with LiteLLM. For a complete list, refer to the [model cost map](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json)
 
 | Model Name                 | Command                                                          |
 |----------------------------|------------------------------------------------------------------|
@@ -641,6 +641,7 @@ Here's an example of using a bedrock model with LiteLLM
 | Cohere Command             | `completion(model='bedrock/cohere.command-text-v14', messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`, `os.environ['AWS_REGION_NAME']` |
 | AI21 J2-Mid                | `completion(model='bedrock/ai21.j2-mid-v1', messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`, `os.environ['AWS_REGION_NAME']` |
 | AI21 J2-Ultra              | `completion(model='bedrock/ai21.j2-ultra-v1', messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`, `os.environ['AWS_REGION_NAME']` |
+| AI21 Jamba-Instruct              | `completion(model='bedrock/ai21.jamba-instruct-v1:0', messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`, `os.environ['AWS_REGION_NAME']` |
 | Meta Llama 2 Chat 13b      | `completion(model='bedrock/meta.llama2-13b-chat-v1', messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`, `os.environ['AWS_REGION_NAME']` |
 | Meta Llama 2 Chat 70b      | `completion(model='bedrock/meta.llama2-70b-chat-v1', messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`, `os.environ['AWS_REGION_NAME']` |
 | Mistral 7B Instruct        | `completion(model='bedrock/mistral.mistral-7b-instruct-v0:2', messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`, `os.environ['AWS_REGION_NAME']` |

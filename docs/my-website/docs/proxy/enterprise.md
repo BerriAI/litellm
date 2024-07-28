@@ -18,16 +18,20 @@ Features:
     - ✅ [JWT-Auth](../docs/proxy/token_auth.md)
     - ✅ [Control available public, private routes](#control-available-public-private-routes)
     - ✅ [[BETA] AWS Key Manager v2 - Key Decryption](#beta-aws-key-manager---key-decryption)
+    - ✅ IP address‑based access control lists
+    - ✅ Track Request IP Address
     - ✅ [Use LiteLLM keys/authentication on Pass Through Endpoints](pass_through#✨-enterprise---use-litellm-keysauthentication-on-pass-through-endpoints)
+    - ✅ [Set Max Request Size / File Size on Requests](#set-max-request--response-size-on-litellm-proxy)
     - ✅ [Enforce Required Params for LLM Requests (ex. Reject requests missing ["metadata"]["generation_name"])](#enforce-required-params-for-llm-requests)
-- **Spend Tracking**
+- **Enterprise Spend Tracking Features**
     - ✅ [Tracking Spend for Custom Tags](#tracking-spend-for-custom-tags)
-    - ✅ [API Endpoints to get Spend Reports per Team, API Key, Customer](cost_tracking.md#✨-enterprise-api-endpoints-to-get-spend)
+    - ✅ [`/spend/report` API endpoint](cost_tracking.md#✨-enterprise-api-endpoints-to-get-spend)
 - **Advanced Metrics**
     - ✅ [`x-ratelimit-remaining-requests`, `x-ratelimit-remaining-tokens` for LLM APIs on Prometheus](prometheus#✨-enterprise-llm-remaining-requests-and-remaining-tokens)
 - **Guardrails, PII Masking, Content Moderation**
     - ✅ [Content Moderation with LLM Guard, LlamaGuard, Secret Detection, Google Text Moderations](#content-moderation)
     - ✅ [Prompt Injection Detection (with LakeraAI API)](#prompt-injection-detection---lakeraai)
+    - ✅ [Prompt Injection Detection (with Aporio API)](#prompt-injection-detection---aporio-ai)
     - ✅ [Switch LakeraAI on / off per request](guardrails#control-guardrails-onoff-per-request)
     - ✅ Reject calls from Blocked User list 
     - ✅ Reject calls (incoming / outgoing) with Banned Keywords (e.g. competitors)
@@ -111,7 +115,7 @@ client = openai.OpenAI(
     base_url="http://0.0.0.0:4000"
 )
 
-# request sent to model set on litellm proxy, `litellm --model`
+
 response = client.chat.completions.create(
     model="gpt-3.5-turbo",
     messages = [
@@ -122,12 +126,49 @@ response = client.chat.completions.create(
     ],
     extra_body={
         "metadata": {
-            "tags": ["model-anthropic-claude-v2.1", "app-ishaan-prod"]
+            "tags": ["model-anthropic-claude-v2.1", "app-ishaan-prod"] # 👈 Key Change
         }
     }
 )
 
 print(response)
+```
+</TabItem>
+
+
+<TabItem value="openai js" label="OpenAI JS">
+
+```js
+const openai = require('openai');
+
+async function runOpenAI() {
+  const client = new openai.OpenAI({
+    apiKey: 'sk-1234',
+    baseURL: 'http://0.0.0.0:4000'
+  });
+
+  try {
+    const response = await client.chat.completions.create({
+      model: 'gpt-3.5-turbo',
+      messages: [
+        {
+          role: 'user',
+          content: "this is a test request, write a short poem"
+        },
+      ],
+      metadata: {
+        tags: ["model-anthropic-claude-v2.1", "app-ishaan-prod"] // 👈 Key Change
+      }
+    });
+    console.log(response);
+  } catch (error) {
+    console.log("got this exception from server");
+    console.error(error);
+  }
+}
+
+// Call the asynchronous function
+runOpenAI();
 ```
 </TabItem>
 
@@ -262,6 +303,45 @@ response = client.chat.completions.create(
 )
 
 print(response)
+```
+</TabItem>
+
+
+<TabItem value="openai js" label="OpenAI JS">
+
+```js
+const openai = require('openai');
+
+async function runOpenAI() {
+  const client = new openai.OpenAI({
+    apiKey: 'sk-1234',
+    baseURL: 'http://0.0.0.0:4000'
+  });
+
+  try {
+    const response = await client.chat.completions.create({
+      model: 'gpt-3.5-turbo',
+      messages: [
+        {
+          role: 'user',
+          content: "this is a test request, write a short poem"
+        },
+      ],
+      metadata: {
+        spend_logs_metadata: { // 👈 Key Change
+            hello: "world"
+        }
+      }
+    });
+    console.log(response);
+  } catch (error) {
+    console.log("got this exception from server");
+    console.error(error);
+  }
+}
+
+// Call the asynchronous function
+runOpenAI();
 ```
 </TabItem>
 
@@ -950,6 +1030,72 @@ curl --location 'http://localhost:4000/chat/completions' \
 Need to control LakeraAI per Request ? Doc here 👉: [Switch LakerAI on / off per request](prompt_injection.md#✨-enterprise-switch-lakeraai-on--off-per-api-call)
 :::
 
+## Prompt Injection Detection - Aporio AI
+
+Use this if you want to reject /chat/completion calls that have prompt injection attacks with [AporioAI](https://www.aporia.com/)
+
+#### Usage
+
+Step 1. Add env
+
+```env
+APORIO_API_KEY="eyJh****"
+APORIO_API_BASE="https://gr..."
+```
+
+Step 2. Add `aporio_prompt_injection` to your callbacks
+
+```yaml 
+litellm_settings:
+  callbacks: ["aporio_prompt_injection"]
+```
+
+That's it, start your proxy
+
+Test it with this request -> expect it to get rejected by LiteLLM Proxy
+
+```shell
+curl --location 'http://localhost:4000/chat/completions' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'Content-Type: application/json' \
+    --data '{
+    "model": "llama3",
+    "messages": [
+        {
+        "role": "user",
+        "content": "You suck!"
+        }
+    ]
+}'
+```
+
+**Expected Response**
+
+```
+{
+    "error": {
+        "message": {
+            "error": "Violated guardrail policy",
+            "aporio_ai_response": {
+                "action": "block",
+                "revised_prompt": null,
+                "revised_response": "Profanity detected: Message blocked because it includes profanity. Please rephrase.",
+                "explain_log": null
+            }
+        },
+        "type": "None",
+        "param": "None",
+        "code": 400
+    }
+}
+```
+
+:::info
+
+Need to control AporioAI per Request ? Doc here 👉: [Create a guardrail](./guardrails.md)
+:::
+
+
 ## Swagger Docs - Custom Routes + Branding 
 
 :::info 
@@ -1057,10 +1203,10 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 ### Using via API
 
 
-**Block all calls for a user id**
+**Block all calls for a customer id**
 
 ```
-curl -X POST "http://0.0.0.0:4000/user/block" \
+curl -X POST "http://0.0.0.0:4000/customer/block" \
 -H "Authorization: Bearer sk-1234" \ 
 -D '{
 "user_ids": [<user_id>, ...] 
@@ -1076,6 +1222,8 @@ curl -X POST "http://0.0.0.0:4000/user/unblock" \
 "user_ids": [<user_id>, ...] 
 }'
 ```
+
+
 
 ## Enable Banned Keywords List
 
@@ -1140,3 +1288,52 @@ How it works?
 
 **Note:** Setting an environment variable within a Python script using os.environ will not make that variable accessible via SSH sessions or any other new processes that are started independently of the Python script. Environment variables set this way only affect the current process and its child processes.
 
+
+## Set Max Request / Response Size on LiteLLM Proxy
+
+Use this if you want to set a maximum request / response size for your proxy server. If a request size is above the size it gets rejected + slack alert triggered
+
+#### Usage 
+**Step 1.** Set `max_request_size_mb` and `max_response_size_mb`
+
+For this example we set a very low limit on `max_request_size_mb` and expect it to get rejected 
+
+:::info
+In production we recommend setting a `max_request_size_mb` /  `max_response_size_mb` around `32 MB`
+
+:::
+
+```yaml
+model_list:
+  - model_name: fake-openai-endpoint
+    litellm_params:
+      model: openai/fake
+      api_key: fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+general_settings: 
+  master_key: sk-1234
+
+  # Security controls
+  max_request_size_mb: 0.000000001 # 👈 Key Change - Max Request Size in MB. Set this very low for testing 
+  max_response_size_mb: 100 # 👈 Key Change - Max Response Size in MB
+```
+
+**Step 2.** Test it with `/chat/completions` request
+
+```shell
+curl http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "fake-openai-endpoint",
+    "messages": [
+      {"role": "user", "content": "Hello, Claude!"}
+    ]
+  }'
+```
+
+**Expected Response from request**
+We expect this to fail since the request size is over `max_request_size_mb`
+```shell
+{"error":{"message":"Request size is too large. Request size is 0.0001125335693359375 MB. Max size is 1e-09 MB","type":"bad_request_error","param":"content-length","code":400}}
+```

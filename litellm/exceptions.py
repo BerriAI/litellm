@@ -682,11 +682,39 @@ class JSONSchemaValidationError(APIError):
         )
 
 
+class UnsupportedParamsError(BadRequestError):
+    def __init__(
+        self,
+        message,
+        llm_provider: Optional[str] = None,
+        model: Optional[str] = None,
+        status_code: int = 400,
+        response: Optional[httpx.Response] = None,
+        litellm_debug_info: Optional[str] = None,
+        max_retries: Optional[int] = None,
+        num_retries: Optional[int] = None,
+    ):
+        self.status_code = 400
+        self.message = "litellm.UnsupportedParamsError: {}".format(message)
+        self.model = model
+        self.llm_provider = llm_provider
+        self.litellm_debug_info = litellm_debug_info
+        response = response or httpx.Response(
+            status_code=self.status_code,
+            request=httpx.Request(
+                method="GET", url="https://litellm.ai"
+            ),  # mock request object
+        )
+        self.max_retries = max_retries
+        self.num_retries = num_retries
+
+
 LITELLM_EXCEPTION_TYPES = [
     AuthenticationError,
     NotFoundError,
     BadRequestError,
     UnprocessableEntityError,
+    UnsupportedParamsError,
     Timeout,
     PermissionDeniedError,
     RateLimitError,
@@ -723,3 +751,28 @@ class InvalidRequestError(openai.BadRequestError):  # type: ignore
         super().__init__(
             self.message, f"{self.model}"
         )  # Call the base class constructor with the parameters it needs
+
+
+class MockException(openai.APIError):
+    # used for testing
+    def __init__(
+        self,
+        status_code,
+        message,
+        llm_provider,
+        model,
+        request: Optional[httpx.Request] = None,
+        litellm_debug_info: Optional[str] = None,
+        max_retries: Optional[int] = None,
+        num_retries: Optional[int] = None,
+    ):
+        self.status_code = status_code
+        self.message = "litellm.MockException: {}".format(message)
+        self.llm_provider = llm_provider
+        self.model = model
+        self.litellm_debug_info = litellm_debug_info
+        self.max_retries = max_retries
+        self.num_retries = num_retries
+        if request is None:
+            request = httpx.Request(method="POST", url="https://api.openai.com/v1")
+        super().__init__(self.message, request=request, body=None)  # type: ignore

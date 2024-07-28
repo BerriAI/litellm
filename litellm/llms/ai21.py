@@ -1,11 +1,16 @@
-import os, types, traceback
 import json
+import os
+import time  # type: ignore
+import traceback
+import types
 from enum import Enum
-import requests  # type: ignore
-import time, httpx  # type: ignore
 from typing import Callable, Optional
-from litellm.utils import ModelResponse, Choices, Message
+
+import httpx
+import requests  # type: ignore
+
 import litellm
+from litellm.utils import Choices, Message, ModelResponse
 
 
 class AI21Error(Exception):
@@ -185,7 +190,7 @@ def completion(
                     message=message_obj,
                 )
                 choices_list.append(choice_obj)
-            model_response["choices"] = choices_list
+            model_response.choices = choices_list  # type: ignore
         except Exception as e:
             raise AI21Error(
                 message=traceback.format_exc(), status_code=response.status_code
@@ -197,13 +202,17 @@ def completion(
             encoding.encode(model_response["choices"][0]["message"].get("content"))
         )
 
-        model_response["created"] = int(time.time())
-        model_response["model"] = model
-        model_response["usage"] = {
-            "prompt_tokens": prompt_tokens,
-            "completion_tokens": completion_tokens,
-            "total_tokens": prompt_tokens + completion_tokens,
-        }
+        model_response.created = int(time.time())
+        model_response.model = model
+        setattr(
+            model_response,
+            "usage",
+            litellm.Usage(
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=prompt_tokens + completion_tokens,
+            ),
+        )
         return model_response
 
 

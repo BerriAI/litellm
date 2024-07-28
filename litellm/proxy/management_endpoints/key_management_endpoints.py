@@ -261,7 +261,7 @@ async def generate_key_fn(
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"Authentication Error({str(e)})"),
-                type="auth_error",
+                type=ProxyErrorTypes.auth_error,
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
@@ -269,7 +269,7 @@ async def generate_key_fn(
             raise e
         raise ProxyException(
             message="Authentication Error, " + str(e),
-            type="auth_error",
+            type=ProxyErrorTypes.auth_error,
             param=getattr(e, "param", "None"),
             code=status.HTTP_400_BAD_REQUEST,
         )
@@ -333,6 +333,13 @@ async def update_key_fn(
             expires = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
             non_default_values["expires"] = expires
 
+        if "budget_duration" in non_default_values:
+            duration_s = _duration_in_seconds(
+                duration=non_default_values["budget_duration"]
+            )
+            key_reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
+            non_default_values["budget_reset_at"] = key_reset_at
+
         response = await prisma_client.update_data(
             token=key, data={**non_default_values, "token": key}
         )
@@ -374,7 +381,7 @@ async def update_key_fn(
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"Authentication Error({str(e)})"),
-                type="auth_error",
+                type=ProxyErrorTypes.auth_error,
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
@@ -382,7 +389,7 @@ async def update_key_fn(
             raise e
         raise ProxyException(
             message="Authentication Error, " + str(e),
-            type="auth_error",
+            type=ProxyErrorTypes.auth_error,
             param=getattr(e, "param", "None"),
             code=status.HTTP_400_BAD_REQUEST,
         )
@@ -427,7 +434,7 @@ async def delete_key_fn(
         if len(keys) == 0:
             raise ProxyException(
                 message=f"No keys provided, passed in: keys={keys}",
-                type="auth_error",
+                type=ProxyErrorTypes.auth_error,
                 param="keys",
                 code=status.HTTP_400_BAD_REQUEST,
             )
@@ -505,7 +512,7 @@ async def delete_key_fn(
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"Authentication Error({str(e)})"),
-                type="auth_error",
+                type=ProxyErrorTypes.auth_error,
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
@@ -513,7 +520,7 @@ async def delete_key_fn(
             raise e
         raise ProxyException(
             message="Authentication Error, " + str(e),
-            type="auth_error",
+            type=ProxyErrorTypes.auth_error,
             param=getattr(e, "param", "None"),
             code=status.HTTP_400_BAD_REQUEST,
         )
@@ -580,7 +587,7 @@ async def info_key_fn_v2(
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"Authentication Error({str(e)})"),
-                type="auth_error",
+                type=ProxyErrorTypes.auth_error,
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
@@ -588,7 +595,7 @@ async def info_key_fn_v2(
             raise e
         raise ProxyException(
             message="Authentication Error, " + str(e),
-            type="auth_error",
+            type=ProxyErrorTypes.auth_error,
             param=getattr(e, "param", "None"),
             code=status.HTTP_400_BAD_REQUEST,
         )
@@ -652,7 +659,7 @@ async def info_key_fn(
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"Authentication Error({str(e)})"),
-                type="auth_error",
+                type=ProxyErrorTypes.auth_error,
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
@@ -660,7 +667,7 @@ async def info_key_fn(
             raise e
         raise ProxyException(
             message="Authentication Error, " + str(e),
-            type="auth_error",
+            type=ProxyErrorTypes.auth_error,
             param=getattr(e, "param", "None"),
             code=status.HTTP_400_BAD_REQUEST,
         )

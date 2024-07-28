@@ -19,7 +19,8 @@ import pytest
 
 import litellm
 from litellm.proxy._types import LiteLLMRoutes
-from litellm.proxy.proxy_server import router
+from litellm.proxy.auth.auth_utils import is_llm_api_route
+from litellm.proxy.proxy_server import app
 
 # Configure logging
 logging.basicConfig(
@@ -36,7 +37,7 @@ def test_routes_on_litellm_proxy():
     this prevents accidentelly deleting /threads, or /batches etc
     """
     _all_routes = []
-    for route in router.routes:
+    for route in app.routes:
 
         _path_as_str = str(route.path)
         if ":path" in _path_as_str:
@@ -50,3 +51,50 @@ def test_routes_on_litellm_proxy():
 
     for route in LiteLLMRoutes.openai_routes.value:
         assert route in _all_routes
+
+
+@pytest.mark.parametrize(
+    "route,expected",
+    [
+        # Test exact matches
+        ("/chat/completions", True),
+        ("/v1/chat/completions", True),
+        ("/embeddings", True),
+        ("/v1/models", True),
+        ("/utils/token_counter", True),
+        # Test routes with placeholders
+        ("/engines/gpt-4/chat/completions", True),
+        ("/openai/deployments/gpt-3.5-turbo/chat/completions", True),
+        ("/threads/thread_49EIN5QF32s4mH20M7GFKdlZ", True),
+        ("/v1/threads/thread_49EIN5QF32s4mH20M7GFKdlZ", True),
+        ("/threads/thread_49EIN5QF32s4mH20M7GFKdlZ/messages", True),
+        ("/v1/threads/thread_49EIN5QF32s4mH20M7GFKdlZ/runs", True),
+        ("/v1/batches123456", True),
+        # Test non-OpenAI routes
+        ("/some/random/route", False),
+        ("/v2/chat/completions", False),
+        ("/threads/invalid/format", False),
+        ("/v1/non_existent_endpoint", False),
+    ],
+)
+def test_is_llm_api_route(route: str, expected: bool):
+    assert is_llm_api_route(route) == expected
+
+
+# Test case for routes that are similar but should return False
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/v1/threads/thread_id/invalid",
+        "/threads/thread_id/invalid",
+        "/v1/batches/123/invalid",
+        "/engines/model/invalid/completions",
+    ],
+)
+def test_is_llm_api_route_similar_but_false(route: str):
+    assert is_llm_api_route(route) == False
+
+
+def test_anthropic_api_routes():
+    # allow non proxy admins to call anthropic api routes
+    assert is_llm_api_route(route="/v1/messages") is True

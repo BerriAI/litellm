@@ -2,12 +2,15 @@
 #    On success, logs events to Promptlayer
 import os
 import traceback
-from typing import Literal, Optional, Union
+from typing import Any, Literal, Optional, Tuple, Union
 
 import dotenv
+from pydantic import BaseModel
 
 from litellm.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.types.llms.openai import ChatCompletionRequest
+from litellm.types.utils import ModelResponse
 
 
 class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callback#callback-class
@@ -55,6 +58,30 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     def pre_call_check(self, deployment: dict) -> Optional[dict]:
         pass
 
+    #### ADAPTERS #### Allow calling 100+ LLMs in custom format - https://github.com/BerriAI/litellm/pulls
+
+    def translate_completion_input_params(
+        self, kwargs
+    ) -> Optional[ChatCompletionRequest]:
+        """
+        Translates the input params, from the provider's native format to the litellm.completion() format.
+        """
+        pass
+
+    def translate_completion_output_params(
+        self, response: ModelResponse
+    ) -> Optional[BaseModel]:
+        """
+        Translates the output params, from the OpenAI format to the custom format.
+        """
+        pass
+
+    def translate_completion_output_params_streaming(self) -> Optional[BaseModel]:
+        """
+        Translates the streaming chunk, from the OpenAI format to the custom format.
+        """
+        pass
+
     #### CALL HOOKS - proxy only ####
     """
     Control the modify incoming / outgoung data before calling the model
@@ -72,6 +99,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
             "image_generation",
             "moderation",
             "audio_transcription",
+            "pass_through_endpoint",
         ],
     ) -> Optional[
         Union[Exception, str, dict]
@@ -89,6 +117,18 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         response,
     ):
         pass
+
+    async def async_logging_hook(
+        self, kwargs: dict, result: Any, call_type: str
+    ) -> Tuple[dict, Any]:
+        """For masking logged request/response. Return a modified version of the request/result."""
+        return kwargs, result
+
+    def logging_hook(
+        self, kwargs: dict, result: Any, call_type: str
+    ) -> Tuple[dict, Any]:
+        """For masking logged request/response. Return a modified version of the request/result."""
+        return kwargs, result
 
     async def async_moderation_hook(
         self,

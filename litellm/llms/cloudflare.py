@@ -1,13 +1,17 @@
-import os, types
 import json
-from enum import Enum
-import requests  # type: ignore
+import os
 import time
+import types
+from enum import Enum
 from typing import Callable, Optional
-import litellm
+
 import httpx  # type: ignore
+import requests  # type: ignore
+
+import litellm
 from litellm.utils import ModelResponse, Usage
-from .prompt_templates.factory import prompt_factory, custom_prompt
+
+from .prompt_templates.factory import custom_prompt, prompt_factory
 
 
 class CloudflareError(Exception):
@@ -147,9 +151,9 @@ def completion(
             )
         completion_response = response.json()
 
-        model_response["choices"][0]["message"]["content"] = completion_response[
-            "result"
-        ]["response"]
+        model_response.choices[0].message.content = completion_response["result"][  # type: ignore
+            "response"
+        ]
 
         ## CALCULATING USAGE
         print_verbose(
@@ -160,8 +164,8 @@ def completion(
             encoding.encode(model_response["choices"][0]["message"].get("content", ""))
         )
 
-        model_response["created"] = int(time.time())
-        model_response["model"] = "cloudflare/" + model
+        model_response.created = int(time.time())
+        model_response.model = "cloudflare/" + model
         usage = Usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,

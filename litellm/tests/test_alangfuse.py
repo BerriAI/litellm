@@ -237,6 +237,8 @@ async def test_langfuse_logging_without_request_response(stream, langfuse_client
         assert _trace_data[0].output == {
             "role": "assistant",
             "content": "redacted-by-litellm",
+            "function_call": None,
+            "tool_calls": None,
         }
 
     except Exception as e:
@@ -273,7 +275,12 @@ async def test_langfuse_masked_input_output(langfuse_client):
         expected_output = (
             "redacted-by-litellm"
             if mask_value
-            else {"content": "This is a test response", "role": "assistant"}
+            else {
+                "content": "This is a test response",
+                "role": "assistant",
+                "function_call": None,
+                "tool_calls": None,
+            }
         )
         langfuse_client.flush()
         await asyncio.sleep(2)

@@ -21,6 +21,7 @@ from openai._models import BaseModel as OpenAIObject
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
 from litellm.types.services import ServiceLoggerPayload, ServiceTypes
 
 
@@ -31,16 +32,6 @@ def print_verbose(print_statement):
             print(print_statement)  # noqa
     except:
         pass
-
-
-def _get_parent_otel_span_from_kwargs(kwargs: Optional[dict] = None):
-    try:
-        if kwargs is None:
-            return None
-        _metadata = kwargs.get("metadata") or {}
-        return _metadata.get("litellm_parent_otel_span")
-    except:
-        return None
 
 
 class BaseCache:
@@ -97,8 +88,15 @@ class InMemoryCache(BaseCache):
         """
         for key in list(self.ttl_dict.keys()):
             if time.time() > self.ttl_dict[key]:
-                self.cache_dict.pop(key, None)
-                self.ttl_dict.pop(key, None)
+                removed_item = self.cache_dict.pop(key, None)
+                removed_ttl_item = self.ttl_dict.pop(key, None)
+
+                # de-reference the removed item
+                # https://www.geeksforgeeks.org/diagnosing-and-fixing-memory-leaks-in-python/
+                # One of the most common causes of memory leaks in Python is the retention of objects that are no longer being used.
+                # This can occur when an object is referenced by another object, but the reference is never removed.
+                removed_item = None
+                removed_ttl_item = None
 
     def set_cache(self, key, value, **kwargs):
         print_verbose(
@@ -1661,6 +1659,9 @@ class DualCache(BaseCache):
             self.redis_cache.flush_cache()
 
     def delete_cache(self, key):
+        """
+        Delete a key from the cache
+        """
         if self.in_memory_cache is not None:
             self.in_memory_cache.delete_cache(key)
         if self.redis_cache is not None:

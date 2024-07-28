@@ -23,9 +23,11 @@ def encrypt_value_helper(value: str):
 
             return encrypted_value
 
-        raise ValueError(
+        verbose_proxy_logger.debug(
             f"Invalid value type passed to encrypt_value: {type(value)} for Value: {value}\n Value must be a string"
         )
+        # if it's not a string - do not encrypt it and return the value
+        return value
     except Exception as e:
         raise e
 
@@ -42,6 +44,9 @@ def decrypt_value_helper(value: str):
             decoded_b64 = base64.b64decode(value)
             value = decrypt_value(value=decoded_b64, signing_key=signing_key)  # type: ignore
             return value
+
+        # if it's not str - do not decrypt it, return the value
+        return value
     except Exception as e:
         verbose_proxy_logger.error(f"Error decrypting value: {value}\nError: {str(e)}")
         # [Non-Blocking Exception. - this should not block decrypting other values]

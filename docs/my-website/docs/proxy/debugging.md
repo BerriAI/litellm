@@ -35,6 +35,22 @@ $ litellm --detailed_debug
 os.environ["LITELLM_LOG"] = "DEBUG"
 ```
 
+### Debug Logs 
+
+Run the proxy with `--detailed_debug` to view detailed debug logs
+```shell
+litellm --config /path/to/config.yaml --detailed_debug
+```
+
+When making requests you should see the POST request sent by LiteLLM to the LLM on the Terminal output
+```shell
+POST Request Sent from LiteLLM:
+curl -X POST \
+https://api.openai.com/v1/chat/completions \
+-H 'content-type: application/json' -H 'Authorization: Bearer sk-qnWGUIW9****************************************' \
+-d '{"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "this is a test request, write a short poem"}]}'
+```
+
 ## JSON LOGS
 
 Set `JSON_LOGS="True"` in your env:

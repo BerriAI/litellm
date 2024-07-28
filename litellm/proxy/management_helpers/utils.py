@@ -1,16 +1,29 @@
 # What is this?
 ## Helper utils for the management endpoints (keys/users/teams)
+import uuid
 from datetime import datetime
 from functools import wraps
-from litellm.proxy._types import UserAPIKeyAuth, ManagementEndpointLoggingPayload
-from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
-from litellm._logging import verbose_logger
+from typing import Optional
+
 from fastapi import Request
 
-from litellm.proxy._types import LiteLLM_TeamTable, Member, UserAPIKeyAuth
+from litellm._logging import verbose_logger
+from litellm.proxy._types import (  # key request types; user request types; team request types; customer request types
+    DeleteCustomerRequest,
+    DeleteTeamRequest,
+    DeleteUserRequest,
+    KeyRequest,
+    LiteLLM_TeamTable,
+    ManagementEndpointLoggingPayload,
+    Member,
+    UpdateCustomerRequest,
+    UpdateKeyRequest,
+    UpdateTeamRequest,
+    UpdateUserRequest,
+    UserAPIKeyAuth,
+)
+from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.proxy.utils import PrismaClient
-import uuid
-from typing import Optional
 
 
 async def add_new_member(
@@ -29,9 +42,12 @@ async def add_new_member(
     """
     ## ADD TEAM ID, to USER TABLE IF NEW ##
     if new_member.user_id is not None:
-        await prisma_client.db.litellm_usertable.update(
+        await prisma_client.db.litellm_usertable.upsert(
             where={"user_id": new_member.user_id},
-            data={"teams": {"push": [team_id]}},
+            data={
+                "update": {"teams": {"push": [team_id]}},
+                "create": {"user_id": new_member.user_id, "teams": [team_id]},
+            },
         )
     elif new_member.user_email is not None:
         user_data = {"user_id": str(uuid.uuid4()), "user_email": new_member.user_email}
@@ -67,6 +83,66 @@ async def add_new_member(
                 "budget_id": _budget_id,
             }
         )
+
+
+def _delete_user_id_from_cache(kwargs):
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    if kwargs.get("data") is not None:
+        update_user_request = kwargs.get("data")
+        if isinstance(update_user_request, UpdateUserRequest):
+            user_api_key_cache.delete_cache(key=update_user_request.user_id)
+
+        # delete user request
+        if isinstance(update_user_request, DeleteUserRequest):
+            for user_id in update_user_request.user_ids:
+                user_api_key_cache.delete_cache(key=user_id)
+    pass
+
+
+def _delete_api_key_from_cache(kwargs):
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    if kwargs.get("data") is not None:
+        update_request = kwargs.get("data")
+        if isinstance(update_request, UpdateKeyRequest):
+            user_api_key_cache.delete_cache(key=update_request.key)
+
+        # delete key request
+        if isinstance(update_request, KeyRequest):
+            for key in update_request.keys:
+                user_api_key_cache.delete_cache(key=key)
+    pass
+
+
+def _delete_team_id_from_cache(kwargs):
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    if kwargs.get("data") is not None:
+        update_request = kwargs.get("data")
+        if isinstance(update_request, UpdateTeamRequest):
+            user_api_key_cache.delete_cache(key=update_request.team_id)
+
+        # delete team request
+        if isinstance(update_request, DeleteTeamRequest):
+            for team_id in update_request.team_ids:
+                user_api_key_cache.delete_cache(key=team_id)
+    pass
+
+
+def _delete_customer_id_from_cache(kwargs):
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    if kwargs.get("data") is not None:
+        update_request = kwargs.get("data")
+        if isinstance(update_request, UpdateCustomerRequest):
+            user_api_key_cache.delete_cache(key=update_request.user_id)
+
+        # delete customer request
+        if isinstance(update_request, DeleteCustomerRequest):
+            for user_id in update_request.user_ids:
+                user_api_key_cache.delete_cache(key=user_id)
+    pass
 
 
 def management_endpoint_wrapper(func):
@@ -116,22 +192,11 @@ def management_endpoint_wrapper(func):
                                 parent_otel_span=parent_otel_span,
                             )
 
-                    if _http_request:
-                        _route = _http_request.url.path
-                        # Flush user_api_key cache if this was an update/delete call to /key, /team, or /user
-                        if _route in [
-                            "/key/update",
-                            "/key/delete",
-                            "/team/update",
-                            "/team/delete",
-                            "/user/update",
-                            "/user/delete",
-                            "/customer/update",
-                            "/customer/delete",
-                        ]:
-                            from litellm.proxy.proxy_server import user_api_key_cache
-
-                            user_api_key_cache.flush_cache()
+                # Delete updated/deleted info from cache
+                _delete_api_key_from_cache(kwargs=kwargs)
+                _delete_user_id_from_cache(kwargs=kwargs)
+                _delete_team_id_from_cache(kwargs=kwargs)
+                _delete_customer_id_from_cache(kwargs=kwargs)
             except Exception as e:
                 # Non-Blocking Exception
                 verbose_logger.debug("Error in management endpoint wrapper: %s", str(e))
