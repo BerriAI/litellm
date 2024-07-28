@@ -2089,6 +2089,28 @@ def completion(
                     timeout=timeout,
                     client=client,
                 )
+            elif "gemini" in model:
+                model_response = vertex_chat_completion.completion(  # type: ignore
+                    model=model,
+                    messages=messages,
+                    model_response=model_response,
+                    print_verbose=print_verbose,
+                    optional_params=new_params,
+                    litellm_params=litellm_params,
+                    logger_fn=logger_fn,
+                    encoding=encoding,
+                    vertex_location=vertex_ai_location,
+                    vertex_project=vertex_ai_project,
+                    vertex_credentials=vertex_credentials,
+                    gemini_api_key=None,
+                    logging_obj=logging,
+                    acompletion=acompletion,
+                    timeout=timeout,
+                    custom_llm_provider=custom_llm_provider,
+                    client=client,
+                    api_base=api_base,
+                    extra_headers=extra_headers,
+                )
             else:
                 model_response = vertex_ai.completion(
                     model=model,
@@ -2108,8 +2130,8 @@ def completion(
 
                 if (
                     "stream" in optional_params
-                    and optional_params["stream"] == True
-                    and acompletion == False
+                    and optional_params["stream"] is True
+                    and acompletion is False
                 ):
                     response = CustomStreamWrapper(
                         model_response,
