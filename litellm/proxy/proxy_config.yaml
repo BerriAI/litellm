@@ -1,48 +1,37 @@
 model_list:
-  - model_name: fake-openai-endpoint
+  - model_name: gpt-4
     litellm_params:
       model: openai/fake
       api_key: fake-key
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
-  - model_name: llama3
+  - model_name: fireworks-llama-v3-70b-instruct
     litellm_params:
-      model: groq/llama3-8b-8192
-  - model_name: gpt-3.5-turbo
+      model: fireworks_ai/accounts/fireworks/models/llama-v3-70b-instruct
+      api_key: "os.environ/FIREWORKS"
+  - model_name: "*"
     litellm_params:
-      model: gpt-3.5-turbo
+      model: "*"
   - model_name: "*"
     litellm_params:
       model: openai/*
       api_key: os.environ/OPENAI_API_KEY
-  - model_name: mistral-embed
+  - model_name: mistral-small-latest
     litellm_params:
-      model: mistral/mistral-embed
+      model: mistral/mistral-small-latest
+      api_key: "os.environ/MISTRAL_API_KEY"
+  - model_name: tts
+    litellm_params:
+      model: openai/tts-1
+      api_key: "os.environ/OPENAI_API_KEY"
+    model_info:
+      mode: audio_speech
+general_settings: 
+  master_key: sk-1234
 
-general_settings:
-  pass_through_endpoints:
-    - path: "/v1/rerank"
-      target: "https://api.cohere.com/v1/rerank"
-      auth: true # 👈 Key change to use LiteLLM Auth / Keys
-      headers:
-        Authorization: "bearer os.environ/COHERE_API_KEY"
-        content-type: application/json
-        accept: application/json
-    - path: "/api/public/ingestion"
-      target: "https://us.cloud.langfuse.com/api/public/ingestion"
-      auth: true
-      headers:
-        LANGFUSE_PUBLIC_KEY: "os.environ/LANGFUSE_DEV_PUBLIC_KEY"
-        LANGFUSE_SECRET_KEY: "os.environ/LANGFUSE_DEV_SK_KEY"
+  # Security controls
+  max_request_size_mb: 100
+  # google cloud run maximum repsonses size is 32MB
+  max_response_size_mb: 10
 
 litellm_settings:
   callbacks: ["otel"]
-  guardrails:
-    - prompt_injection:
-        callbacks: [lakera_prompt_injection, hide_secrets]
-        default_on: true
-    - hide_secrets:
-        callbacks: [hide_secrets]
-        default_on: true
-    
-
-

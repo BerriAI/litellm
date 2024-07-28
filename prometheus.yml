@@ -1,0 +1,7 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: 'litellm'
+    static_configs:
+      - targets: ['litellm:4000']  # Assuming Litellm exposes metrics at port 4000

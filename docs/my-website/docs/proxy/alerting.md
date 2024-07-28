@@ -119,8 +119,8 @@ All Possible Alert Types
 
 ```python
 AlertType = Literal[
-    "llm_exceptions",
-    "llm_too_slow",
+    "llm_exceptions",        # LLM API Exceptions
+    "llm_too_slow",          # LLM Responses slower than alerting_threshold
     "llm_requests_hanging",
     "budget_alerts",
     "db_exceptions",
@@ -131,6 +131,61 @@ AlertType = Literal[
     "outage_alerts",
 ]
 
+```
+
+## Advanced - set specific slack channels per alert type
+
+Use this if you want to set specific channels per alert type
+
+**This allows you to do the following**
+```
+llm_exceptions -> go to slack channel #llm-exceptions
+spend_reports -> go to slack channel #llm-spend-reports
+```
+
+Set `alert_to_webhook_url` on your config.yaml
+
+```yaml
+model_list:
+  - model_name: gpt-4
+    litellm_params:
+      model: openai/fake
+      api_key: fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+
+general_settings: 
+  master_key: sk-1234
+  alerting: ["slack"]
+  alerting_threshold: 0.0001 # (Seconds) set an artifically low threshold for testing alerting
+  alert_to_webhook_url: {
+    "llm_exceptions": "https://hooks.slack.com/services/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",
+    "llm_too_slow": "https://hooks.slack.com/services/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",
+    "llm_requests_hanging": "https://hooks.slack.com/services/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",
+    "budget_alerts": "https://hooks.slack.com/services/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",
+    "db_exceptions": "https://hooks.slack.com/services/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",
+    "daily_reports": "https://hooks.slack.com/services/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",
+    "spend_reports": "https://hooks.slack.com/services/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",
+    "cooldown_deployment": "https://hooks.slack.com/services/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",
+    "new_model_added": "https://hooks.slack.com/services/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",
+    "outage_alerts": "https://hooks.slack.com/services/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",
+  }
+
+litellm_settings:
+  success_callback: ["langfuse"]
+```
+
+Test it - send a valid llm request - expect to see a `llm_too_slow` alert in it's own slack channel
+
+```shell
+curl -i http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "gpt-4",
+    "messages": [
+      {"role": "user", "content": "Hello, Claude gm!"}
+    ]
+}'
 ```
 
 

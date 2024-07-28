@@ -8,6 +8,7 @@ from packaging.version import Version
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
 
 
 class LangFuseLogger:
@@ -317,17 +318,22 @@ class LangFuseLogger:
 
         try:
             tags = []
-            new_metadata = {}
-            for key, value in metadata.items():
-                if (
-                    isinstance(value, list)
-                    or isinstance(value, dict)
-                    or isinstance(value, str)
-                    or isinstance(value, int)
-                    or isinstance(value, float)
-                ):
-                    new_metadata[key] = copy.deepcopy(value)
-            metadata = new_metadata
+            try:
+                metadata = copy.deepcopy(
+                    metadata
+                )  # Avoid modifying the original metadata
+            except:
+                new_metadata = {}
+                for key, value in metadata.items():
+                    if (
+                        isinstance(value, list)
+                        or isinstance(value, dict)
+                        or isinstance(value, str)
+                        or isinstance(value, int)
+                        or isinstance(value, float)
+                    ):
+                        new_metadata[key] = copy.deepcopy(value)
+                metadata = new_metadata
 
             supports_tags = Version(langfuse.version.__version__) >= Version("2.6.3")
             supports_prompt = Version(langfuse.version.__version__) >= Version("2.7.3")
@@ -376,6 +382,8 @@ class LangFuseLogger:
             debug = clean_metadata.pop("debug_langfuse", None)
             mask_input = clean_metadata.pop("mask_input", False)
             mask_output = clean_metadata.pop("mask_output", False)
+
+            clean_metadata = redact_user_api_key_info(metadata=clean_metadata)
 
             if trace_name is None and existing_trace_id is None:
                 # just log `litellm-{call_type}` as the trace name

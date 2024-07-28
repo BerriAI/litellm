@@ -1,20 +1,29 @@
-import sys, os
+import os
+import sys
 import traceback
 from unittest import mock
+
 from dotenv import load_dotenv
 
+import litellm.proxy
+import litellm.proxy.proxy_server
+
 load_dotenv()
-import os, io
+import io
+import os
 
 # this file is to test litellm/proxy
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-import pytest, logging, asyncio
+import asyncio
+import logging
+
+import pytest
+
 import litellm
-from litellm import embedding, completion, completion_cost, Timeout
-from litellm import RateLimitError
+from litellm import RateLimitError, Timeout, completion, completion_cost, embedding
 
 # Configure logging
 logging.basicConfig(
@@ -22,14 +31,20 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
 )
 
+from unittest.mock import AsyncMock, MagicMock, patch
+
+from fastapi import FastAPI
+
 # test /chat/completion request to the proxy
 from fastapi.testclient import TestClient
-from fastapi import FastAPI
-from litellm.proxy.proxy_server import (
+
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.proxy.proxy_server import (  # Replace with the actual module where your FastAPI router is defined
     app,
-    save_worker_config,
     initialize,
-)  # Replace with the actual module where your FastAPI router is defined
+    save_worker_config,
+)
+from litellm.proxy.utils import ProxyLogging
 
 # Your bearer token
 token = "sk-1234"
@@ -156,6 +171,118 @@ def test_chat_completion(mock_acompletion, client_no_auth):
         print(f"Received response: {result}")
     except Exception as e:
         pytest.fail(f"LiteLLM Proxy test failed. Exception - {str(e)}")
+
+
+@mock_patch_acompletion()
+@pytest.mark.asyncio
+async def test_team_disable_guardrails(mock_acompletion, client_no_auth):
+    """
+    If team not allowed to turn on/off guardrails
+
+    Raise 403 forbidden error, if request is made by team on `/key/generate` or `/chat/completions`.
+    """
+    import asyncio
+    import json
+    import time
+
+    from fastapi import HTTPException, Request
+    from starlette.datastructures import URL
+
+    from litellm.proxy._types import LiteLLM_TeamTable, ProxyException, UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.proxy_server import hash_token, user_api_key_cache
+
+    _team_id = "1234"
+    user_key = "sk-12345678"
+
+    valid_token = UserAPIKeyAuth(
+        team_id=_team_id,
+        team_blocked=True,
+        token=hash_token(user_key),
+        last_refreshed_at=time.time(),
+    )
+    await asyncio.sleep(1)
+    team_obj = LiteLLM_TeamTable(
+        team_id=_team_id,
+        blocked=False,
+        last_refreshed_at=time.time(),
+        metadata={"guardrails": {"modify_guardrails": False}},
+    )
+    user_api_key_cache.set_cache(key=hash_token(user_key), value=valid_token)
+    user_api_key_cache.set_cache(key="team_id:{}".format(_team_id), value=team_obj)
+
+    setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "prisma_client", "hello-world")
+
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+
+    body = {"metadata": {"guardrails": {"hide_secrets": False}}}
+    json_bytes = json.dumps(body).encode("utf-8")
+
+    request._body = json_bytes
+
+    try:
+        await user_api_key_auth(request=request, api_key="Bearer " + user_key)
+        pytest.fail("Expected to raise 403 forbidden error.")
+    except ProxyException as e:
+        assert e.code == 403
+
+
+from litellm.tests.test_custom_callback_input import CompletionCustomHandler
+
+
+@mock_patch_acompletion()
+def test_custom_logger_failure_handler(mock_acompletion, client_no_auth):
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.proxy_server import hash_token, user_api_key_cache
+
+    rpm_limit = 0
+
+    mock_api_key = "sk-my-test-key"
+    cache_value = UserAPIKeyAuth(token=hash_token(mock_api_key), rpm_limit=rpm_limit)
+
+    user_api_key_cache.set_cache(key=hash_token(mock_api_key), value=cache_value)
+
+    mock_logger = CustomLogger()
+    mock_logger_unit_tests = CompletionCustomHandler()
+    proxy_logging_obj: ProxyLogging = getattr(
+        litellm.proxy.proxy_server, "proxy_logging_obj"
+    )
+
+    litellm.callbacks = [mock_logger, mock_logger_unit_tests]
+    proxy_logging_obj._init_litellm_callbacks(llm_router=None)
+
+    setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "prisma_client", "FAKE-VAR")
+    setattr(litellm.proxy.proxy_server, "proxy_logging_obj", proxy_logging_obj)
+
+    with patch.object(
+        mock_logger, "async_log_failure_event", new=AsyncMock()
+    ) as mock_failed_alert:
+        # Your test data
+        test_data = {
+            "model": "gpt-3.5-turbo",
+            "messages": [
+                {"role": "user", "content": "hi"},
+            ],
+            "max_tokens": 10,
+        }
+
+        print("testing proxy server with chat completions")
+        response = client_no_auth.post(
+            "/v1/chat/completions",
+            json=test_data,
+            headers={"Authorization": "Bearer {}".format(mock_api_key)},
+        )
+        assert response.status_code == 429
+
+        # confirm async_log_failure_event is called
+        mock_failed_alert.assert_called()
+
+        assert len(mock_logger_unit_tests.errors) == 0
 
 
 @mock_patch_acompletion()
@@ -422,9 +549,10 @@ def test_add_new_model(client_no_auth):
 
 def test_health(client_no_auth):
     global headers
-    import time
-    from litellm._logging import verbose_logger, verbose_proxy_logger
     import logging
+    import time
+
+    from litellm._logging import verbose_logger, verbose_proxy_logger
 
     verbose_proxy_logger.setLevel(logging.DEBUG)
 
@@ -496,6 +624,7 @@ def test_chat_completion_optional_params(mock_acompletion, client_no_auth):
 
 # Run the test
 # test_chat_completion_optional_params()
+
 
 # Test Reading config.yaml file
 from litellm.proxy.proxy_server import ProxyConfig
@@ -603,3 +732,67 @@ def test_load_router_config(mock_cache, fake_env_vars):
 
 
 # test_load_router_config()
+
+
+@pytest.mark.asyncio
+async def test_team_update_redis():
+    """
+    Tests if team update, updates the redis cache if set
+    """
+    from litellm.caching import DualCache, RedisCache
+    from litellm.proxy._types import LiteLLM_TeamTable
+    from litellm.proxy.auth.auth_checks import _cache_team_object
+
+    proxy_logging_obj: ProxyLogging = getattr(
+        litellm.proxy.proxy_server, "proxy_logging_obj"
+    )
+
+    proxy_logging_obj.internal_usage_cache.redis_cache = RedisCache()
+
+    with patch.object(
+        proxy_logging_obj.internal_usage_cache.redis_cache,
+        "async_set_cache",
+        new=MagicMock(),
+    ) as mock_client:
+        await _cache_team_object(
+            team_id="1234",
+            team_table=LiteLLM_TeamTable(),
+            user_api_key_cache=DualCache(),
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+        mock_client.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_get_team_redis(client_no_auth):
+    """
+    Tests if get_team_object gets value from redis cache, if set
+    """
+    from litellm.caching import DualCache, RedisCache
+    from litellm.proxy._types import LiteLLM_TeamTable
+    from litellm.proxy.auth.auth_checks import _cache_team_object, get_team_object
+
+    proxy_logging_obj: ProxyLogging = getattr(
+        litellm.proxy.proxy_server, "proxy_logging_obj"
+    )
+
+    proxy_logging_obj.internal_usage_cache.redis_cache = RedisCache()
+
+    with patch.object(
+        proxy_logging_obj.internal_usage_cache.redis_cache,
+        "async_get_cache",
+        new=AsyncMock(),
+    ) as mock_client:
+        try:
+            await get_team_object(
+                team_id="1234",
+                user_api_key_cache=DualCache(),
+                parent_otel_span=None,
+                proxy_logging_obj=proxy_logging_obj,
+                prisma_client=MagicMock(),
+            )
+        except Exception as e:
+            pass
+
+        mock_client.assert_called_once()

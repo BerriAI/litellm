@@ -1,21 +1,25 @@
 # What is this?
 ## Unit Tests for OpenAI Batches API
-import sys, os, json
-import traceback
 import asyncio
+import json
+import os
+import sys
+import traceback
+
 from dotenv import load_dotenv
 
 load_dotenv()
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-import pytest, logging, asyncio
-import litellm
-from litellm import (
-    create_batch,
-    create_file,
-)
+import asyncio
+import logging
 import time
+
+import pytest
+
+import litellm
+from litellm import create_batch, create_file
 
 
 def test_create_batch():
@@ -143,6 +147,28 @@ async def test_async_create_batch():
     )
 
     print("file content = ", file_content)
+
+    # file obj
+    file_obj = await litellm.afile_retrieve(
+        file_id=batch_input_file_id, custom_llm_provider="openai"
+    )
+    print("file obj = ", file_obj)
+    assert file_obj.id == batch_input_file_id
+
+    # delete file
+    delete_file_response = await litellm.afile_delete(
+        file_id=batch_input_file_id, custom_llm_provider="openai"
+    )
+
+    print("delete file response = ", delete_file_response)
+
+    assert delete_file_response.id == batch_input_file_id
+
+    all_files_list = await litellm.afile_list(
+        custom_llm_provider="openai",
+    )
+
+    print("all_files_list = ", all_files_list)
 
     # # write this file content to a file
     # with open("file_content.json", "w") as f:

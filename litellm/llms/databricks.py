@@ -1,26 +1,26 @@
 # What is this?
 ## Handler file for databricks API https://docs.databricks.com/en/machine-learning/foundation-models/api-reference.html#chat-request
-from functools import partial
-import os, types
+import copy
 import json
-from enum import Enum
-import requests, copy  # type: ignore
+import os
 import time
-from typing import Callable, Optional, List, Union, Tuple, Literal
-from litellm.utils import (
-    ModelResponse,
-    Usage,
-    CustomStreamWrapper,
-    EmbeddingResponse,
-)
-from litellm.litellm_core_utils.core_helpers import map_finish_reason
-import litellm
-from .prompt_templates.factory import prompt_factory, custom_prompt
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from .base import BaseLLM
+import types
+from enum import Enum
+from functools import partial
+from typing import Callable, List, Literal, Optional, Tuple, Union
+
 import httpx  # type: ignore
+import requests  # type: ignore
+
+import litellm
+from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.llms.databricks import GenericStreamingChunk
 from litellm.types.utils import ProviderField
+from litellm.utils import CustomStreamWrapper, EmbeddingResponse, ModelResponse, Usage
+
+from .base import BaseLLM
+from .prompt_templates.factory import custom_prompt, prompt_factory
 
 
 class DatabricksError(Exception):
@@ -354,8 +354,8 @@ class DatabricksChatCompletion(BaseLLM):
         completion_tokens = completion_response["usage"]["output_tokens"]
         total_tokens = prompt_tokens + completion_tokens
 
-        model_response["created"] = int(time.time())
-        model_response["model"] = model
+        model_response.created = int(time.time())
+        model_response.model = model
         usage = Usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,

@@ -2,17 +2,18 @@
 #    This tests chaos monkeys - if random parts of the system are broken / things aren't sent correctly - what happens.
 #    Expect to add more edge cases to this over time.
 
-import sys, os
+import os
+import sys
 import traceback
+
 import pytest
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import litellm
-from litellm import embedding, completion
+from litellm import completion, embedding
 from litellm.utils import Message
-
 
 # litellm.set_verbose = True
 user_message = "Hello, how are you?"
@@ -74,6 +75,8 @@ def test_completion_invalid_param_cohere():
         response = completion(model="command-nightly", messages=messages, seed=12)
         pytest.fail(f"This should have failed cohere does not support `seed` parameter")
     except Exception as e:
+        assert isinstance(e, litellm.UnsupportedParamsError)
+        print("got an exception=", str(e))
         if " cohere does not support parameters: {'seed': 12}" in str(e):
             pass
         else:

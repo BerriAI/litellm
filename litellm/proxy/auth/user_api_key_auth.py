@@ -56,7 +56,11 @@ from litellm.proxy.auth.auth_checks import (
     get_user_object,
     log_to_opentelemetry,
 )
-from litellm.proxy.auth.auth_utils import route_in_additonal_public_routes
+from litellm.proxy.auth.auth_utils import (
+    check_if_request_size_is_safe,
+    is_llm_api_route,
+    route_in_additonal_public_routes,
+)
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.proxy.utils import _to_ns
 
@@ -67,6 +71,11 @@ azure_api_key_header = APIKeyHeader(
     name="API-Key",
     auto_error=False,
     description="Some older versions of the openai Python package will send an API-Key header with just the API key ",
+)
+anthropic_api_key_header = APIKeyHeader(
+    name="x-api-key",
+    auto_error=False,
+    description="If anthropic client used.",
 )
 
 
@@ -84,8 +93,10 @@ async def user_api_key_auth(
     request: Request,
     api_key: str = fastapi.Security(api_key_header),
     azure_api_key_header: str = fastapi.Security(azure_api_key_header),
+    anthropic_api_key_header: Optional[str] = fastapi.Security(
+        anthropic_api_key_header
+    ),
 ) -> UserAPIKeyAuth:
-
     from litellm.proxy.proxy_server import (
         allowed_routes_check,
         common_checks,
@@ -104,12 +115,50 @@ async def user_api_key_auth(
     )
 
     try:
+        route: str = request.url.path
+
+        ### LiteLLM Enterprise Security Checks
+        # Check 1. Check if request size is under max_request_size_mb
+        # Check 2. FILTER IP ADDRESS
+        await check_if_request_size_is_safe(request=request)
+
+        is_valid_ip = _check_valid_ip(
+            allowed_ips=general_settings.get("allowed_ips", None), request=request
+        )
+
+        if not is_valid_ip:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access forbidden: IP address not allowed.",
+            )
+
+        pass_through_endpoints: Optional[List[dict]] = general_settings.get(
+            "pass_through_endpoints", None
+        )
+
         if isinstance(api_key, str):
             passed_in_key = api_key
             api_key = _get_bearer_token(api_key=api_key)
-
         elif isinstance(azure_api_key_header, str):
             api_key = azure_api_key_header
+        elif isinstance(anthropic_api_key_header, str):
+            api_key = anthropic_api_key_header
+        elif pass_through_endpoints is not None:
+            for endpoint in pass_through_endpoints:
+                if endpoint.get("path", "") == route:
+                    headers: Optional[dict] = endpoint.get("headers", None)
+                    if headers is not None:
+                        header_key: str = headers.get("litellm_user_api_key", "")
+                        if request.headers.get(key=header_key) is not None:
+                            api_key = request.headers.get(key=header_key)
+
+        # if user wants to pass LiteLLM_Master_Key as a custom header, example pass litellm keys as X-LiteLLM-Key: Bearer sk-1234
+        custom_litellm_key_header_name = general_settings.get("litellm_key_header_name")
+        if custom_litellm_key_header_name is not None:
+            api_key = get_api_key_from_custom_header(
+                request=request,
+                custom_litellm_key_header_name=custom_litellm_key_header_name,
+            )
 
         parent_otel_span: Optional[Span] = None
         if open_telemetry_logger is not None:
@@ -136,7 +185,6 @@ async def user_api_key_auth(
             enable_jwt_auth: true
         ```
         """
-        route: str = request.url.path
 
         if (
             route in LiteLLMRoutes.public_routes.value
@@ -409,6 +457,32 @@ async def user_api_key_auth(
 
             return valid_token
 
+        if (
+            valid_token is not None
+            and isinstance(valid_token, UserAPIKeyAuth)
+            and valid_token.team_id is not None
+            and user_api_key_cache.get_cache(
+                key="team_id:{}".format(valid_token.team_id)
+            )
+            is not None
+        ):
+            ## UPDATE TEAM VALUES BASED ON CACHED TEAM OBJECT - allows `/team/update` values to work for cached token
+            team_obj: LiteLLM_TeamTable = user_api_key_cache.get_cache(
+                key="team_id:{}".format(valid_token.team_id)
+            )
+
+            if (
+                team_obj.last_refreshed_at is not None
+                and valid_token.last_refreshed_at is not None
+                and team_obj.last_refreshed_at > valid_token.last_refreshed_at
+            ):
+                team_obj_dict = team_obj.__dict__
+
+                for k, v in team_obj_dict.items():
+                    field_name = f"team_{k}"
+                    if field_name in valid_token.__fields__:
+                        setattr(valid_token, field_name, v)
+
         try:
             is_master_key_valid = secrets.compare_digest(api_key, master_key)  # type: ignore
         except Exception as e:
@@ -460,7 +534,6 @@ async def user_api_key_auth(
             raise Exception("No connected db.")
 
         ## check for cache hit (In-Memory Cache)
-        original_api_key = api_key  # (Patch: For DynamoDB Backwards Compatibility)
         _user_role = None
         if api_key.startswith("sk-"):
             api_key = hash_token(token=api_key)
@@ -477,10 +550,13 @@ async def user_api_key_auth(
                     parent_otel_span=parent_otel_span,
                     proxy_logging_obj=proxy_logging_obj,
                 )
+
                 if _valid_token is not None:
+                    ## update cached token
                     valid_token = UserAPIKeyAuth(
                         **_valid_token.model_dump(exclude_none=True)
                     )
+
             verbose_proxy_logger.debug("Token from db: %s", valid_token)
         elif valid_token is not None and isinstance(valid_token, UserAPIKeyAuth):
             verbose_proxy_logger.debug("API Key Cache Hit!")
@@ -726,9 +802,11 @@ async def user_api_key_auth(
                 )
                 if expiry_time < current_time:
                     # Token exists but is expired.
-                    raise HTTPException(
-                        status_code=status.HTTP_403_FORBIDDEN,
-                        detail=f"Authentication Error - Expired Key. Key Expiry time {expiry_time} and current time {current_time}",
+                    raise ProxyException(
+                        message=f"Authentication Error - Expired Key. Key Expiry time {expiry_time} and current time {current_time}",
+                        type=ProxyErrorTypes.expired_key,
+                        code=400,
+                        param=api_key,
                     )
 
             # Check 4. Token Spend is under budget
@@ -850,6 +928,7 @@ async def user_api_key_auth(
                 rpm_limit=valid_token.team_rpm_limit,
                 blocked=valid_token.team_blocked,
                 models=valid_token.team_models,
+                metadata=valid_token.team_metadata,
             )
 
             user_api_key_cache.set_cache(
@@ -920,9 +999,9 @@ async def user_api_key_auth(
             _user_role = _get_user_role(user_id_information=user_id_information)
 
             if not _is_user_proxy_admin(user_id_information):  # if non-admin
-                if route in LiteLLMRoutes.openai_routes.value:
+                if is_llm_api_route(route=route):
                     pass
-                elif request["route"].name in LiteLLMRoutes.openai_route_names.value:
+                elif is_llm_api_route(route=request["route"].name):
                     pass
                 elif (
                     route in LiteLLMRoutes.info_routes.value
@@ -975,7 +1054,7 @@ async def user_api_key_auth(
 
                     pass
                 elif _user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value:
-                    if route in LiteLLMRoutes.openai_routes.value:
+                    if is_llm_api_route(route=route):
                         raise HTTPException(
                             status_code=status.HTTP_403_FORBIDDEN,
                             detail=f"user not allowed to access this OpenAI routes, role= {_user_role}",
@@ -1129,12 +1208,15 @@ async def user_api_key_auth(
 
         if isinstance(e, litellm.BudgetExceededError):
             raise ProxyException(
-                message=e.message, type="auth_error", param=None, code=400
+                message=e.message,
+                type=ProxyErrorTypes.budget_exceeded,
+                param=None,
+                code=400,
             )
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"Authentication Error({str(e)})"),
-                type="auth_error",
+                type=ProxyErrorTypes.auth_error,
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_401_UNAUTHORIZED),
             )
@@ -1142,7 +1224,7 @@ async def user_api_key_auth(
             raise e
         raise ProxyException(
             message="Authentication Error, " + str(e),
-            type="auth_error",
+            type=ProxyErrorTypes.auth_error,
             param=getattr(e, "param", "None"),
             code=status.HTTP_401_UNAUTHORIZED,
         )
@@ -1205,3 +1287,46 @@ def _get_user_role(user_id_information: Optional[list]):
 
     _user = user_id_information[0]
     return _user.get("user_role")
+
+
+def _check_valid_ip(allowed_ips: Optional[List[str]], request: Request) -> bool:
+    """
+    Returns if ip is allowed or not
+    """
+    if allowed_ips is None:  # if not set, assume true
+        return True
+
+    if request.client is not None:
+        client_ip = request.client.host
+    else:
+        client_ip = None
+
+    # Check if IP address is allowed
+    if client_ip not in allowed_ips:
+        return False
+
+    return True
+
+
+def get_api_key_from_custom_header(
+    request: Request, custom_litellm_key_header_name: str
+):
+    # use this as the virtual key passed to litellm proxy
+    custom_litellm_key_header_name = custom_litellm_key_header_name.lower()
+    verbose_proxy_logger.debug(
+        "searching for custom_litellm_key_header_name= %s",
+        custom_litellm_key_header_name,
+    )
+    custom_api_key = request.headers.get(custom_litellm_key_header_name)
+    if custom_api_key:
+        api_key = _get_bearer_token(api_key=custom_api_key)
+        verbose_proxy_logger.debug(
+            "Found custom API key using header: {}, setting api_key={}".format(
+                custom_litellm_key_header_name, api_key
+            )
+        )
+    else:
+        raise ValueError(
+            f"No LiteLLM Virtual Key pass. Please set header={custom_litellm_key_header_name}: Bearer <api_key>"
+        )
+    return api_key

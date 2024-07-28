@@ -21,6 +21,8 @@ sys.path.insert(
 from dotenv import load_dotenv
 
 load_dotenv()
+import random
+
 import litellm
 from litellm import (
     AuthenticationError,
@@ -513,6 +515,7 @@ async def test_completion_predibase_streaming(sync_mode):
             response = completion(
                 model="predibase/llama-3-8b-instruct",
                 tenant_id="c4768f95",
+                max_tokens=10,
                 api_base="https://serving.app.predibase.com",
                 api_key=os.getenv("PREDIBASE_API_KEY"),
                 messages=[{"role": "user", "content": "What is the meaning of life?"}],
@@ -537,6 +540,7 @@ async def test_completion_predibase_streaming(sync_mode):
             response = await litellm.acompletion(
                 model="predibase/llama-3-8b-instruct",
                 tenant_id="c4768f95",
+                max_tokens=10,
                 api_base="https://serving.app.predibase.com",
                 api_key=os.getenv("PREDIBASE_API_KEY"),
                 messages=[{"role": "user", "content": "What is the meaning of life?"}],
@@ -1308,22 +1312,22 @@ async def test_completion_replicate_llama3_streaming(sync_mode):
 #         pytest.fail(f"Error occurred: {e}")
 
 
-@pytest.mark.parametrize("sync_mode", [True])  # False
+@pytest.mark.parametrize("sync_mode", [True, False])  #
 @pytest.mark.parametrize(
-    "model",
+    "model, region",
     [
-        "bedrock/cohere.command-r-plus-v1:0",
-        "anthropic.claude-3-sonnet-20240229-v1:0",
-        "anthropic.claude-instant-v1",
-        "bedrock/ai21.j2-mid",
-        "mistral.mistral-7b-instruct-v0:2",
-        "bedrock/amazon.titan-tg1-large",
-        "meta.llama3-8b-instruct-v1:0",
-        "cohere.command-text-v14",
+        ["bedrock/ai21.jamba-instruct-v1:0", "us-east-1"],
+        ["bedrock/cohere.command-r-plus-v1:0", None],
+        ["anthropic.claude-3-sonnet-20240229-v1:0", None],
+        ["anthropic.claude-instant-v1", None],
+        ["mistral.mistral-7b-instruct-v0:2", None],
+        ["bedrock/amazon.titan-tg1-large", None],
+        ["meta.llama3-8b-instruct-v1:0", None],
+        ["cohere.command-text-v14", None],
     ],
 )
 @pytest.mark.asyncio
-async def test_bedrock_httpx_streaming(sync_mode, model):
+async def test_bedrock_httpx_streaming(sync_mode, model, region):
     try:
         litellm.set_verbose = True
         if sync_mode:
@@ -1333,6 +1337,7 @@ async def test_bedrock_httpx_streaming(sync_mode, model):
                 messages=messages,
                 max_tokens=10,  # type: ignore
                 stream=True,
+                aws_region_name=region,
             )
             complete_response = ""
             # Add any assertions here to check the response
@@ -1354,6 +1359,7 @@ async def test_bedrock_httpx_streaming(sync_mode, model):
                 messages=messages,
                 max_tokens=100,  # type: ignore
                 stream=True,
+                aws_region_name=region,
             )
             complete_response = ""
             # Add any assertions here to check the response
@@ -1373,7 +1379,8 @@ async def test_bedrock_httpx_streaming(sync_mode, model):
             if complete_response.strip() == "":
                 raise Exception("Empty response received")
         print(f"completion_response: {complete_response}\n\nFinalChunk: {final_chunk}")
-    except RateLimitError:
+    except RateLimitError as e:
+        print("got rate limit error=", e)
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
@@ -1981,25 +1988,30 @@ async def test_hf_completion_tgi_stream():
 
 # test on openai completion call
 def test_openai_chat_completion_call():
-    try:
-        litellm.set_verbose = False
-        print(f"making openai chat completion call")
-        response = completion(model="gpt-3.5-turbo", messages=messages, stream=True)
-        complete_response = ""
-        start_time = time.time()
-        for idx, chunk in enumerate(response):
-            chunk, finished = streaming_format_tests(idx, chunk)
-            print(f"outside chunk: {chunk}")
-            if finished:
-                break
-            complete_response += chunk
-            # print(f'complete_chunk: {complete_response}')
-        if complete_response.strip() == "":
-            raise Exception("Empty response received")
-        print(f"complete response: {complete_response}")
-    except:
-        print(f"error occurred: {traceback.format_exc()}")
-        pass
+    litellm.set_verbose = False
+    litellm.return_response_headers = True
+    print(f"making openai chat completion call")
+    response = completion(model="gpt-3.5-turbo", messages=messages, stream=True)
+    assert isinstance(
+        response._hidden_params["additional_headers"][
+            "llm_provider-x-ratelimit-remaining-requests"
+        ],
+        str,
+    )
+
+    print(f"response._hidden_params: {response._hidden_params}")
+    complete_response = ""
+    start_time = time.time()
+    for idx, chunk in enumerate(response):
+        chunk, finished = streaming_format_tests(idx, chunk)
+        print(f"outside chunk: {chunk}")
+        if finished:
+            break
+        complete_response += chunk
+        # print(f'complete_chunk: {complete_response}')
+    if complete_response.strip() == "":
+        raise Exception("Empty response received")
+    print(f"complete response: {complete_response}")
 
 
 # test_openai_chat_completion_call()
@@ -2874,6 +2886,40 @@ def test_azure_streaming_and_function_calling():
         raise e
 
 
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_completion_azure_ai_mistral_invalid_params(sync_mode):
+    try:
+        import os
+
+        litellm.set_verbose = True
+
+        os.environ["AZURE_AI_API_BASE"] = os.getenv("AZURE_MISTRAL_API_BASE", "")
+        os.environ["AZURE_AI_API_KEY"] = os.getenv("AZURE_MISTRAL_API_KEY", "")
+
+        data = {
+            "model": "azure_ai/mistral",
+            "messages": [{"role": "user", "content": "What is the meaning of life?"}],
+            "frequency_penalty": 0.1,
+            "presence_penalty": 0.1,
+            "drop_params": True,
+            "stream": True,
+        }
+        if sync_mode:
+            response: litellm.ModelResponse = completion(**data)  # type: ignore
+            for chunk in response:
+                print(chunk)
+        else:
+            response: litellm.ModelResponse = await litellm.acompletion(**data)  # type: ignore
+
+            async for chunk in response:
+                print(chunk)
+    except litellm.Timeout as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
 @pytest.mark.asyncio
 async def test_azure_astreaming_and_function_calling():
     import uuid
@@ -3037,8 +3083,11 @@ def test_completion_claude_3_function_call_with_streaming():
 
 
 @pytest.mark.parametrize(
-    "model", ["gemini/gemini-1.5-flash"]
-)  # "claude-3-opus-20240229",
+    "model",
+    [
+        "gemini/gemini-1.5-flash",
+    ],  #  "claude-3-opus-20240229"
+)  #
 @pytest.mark.asyncio
 async def test_acompletion_claude_3_function_call_with_streaming(model):
     litellm.set_verbose = True
@@ -3046,41 +3095,45 @@ async def test_acompletion_claude_3_function_call_with_streaming(model):
         {
             "type": "function",
             "function": {
-                "name": "get_current_weather",
-                "description": "Get the current weather in a given location",
+                "name": "generate_series_of_questions",
+                "description": "Generate a series of questions, given a topic.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "location": {
-                            "type": "string",
-                            "description": "The city and state, e.g. San Francisco, CA",
+                        "questions": {
+                            "type": "array",
+                            "description": "The questions to be generated.",
+                            "items": {"type": "string"},
                         },
-                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
                     },
-                    "required": ["location"],
+                    "required": ["questions"],
                 },
             },
-        }
+        },
     ]
+    SYSTEM_PROMPT = "You are an AI assistant"
     messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
         {
             "role": "user",
-            "content": "What's the weather like in Boston today in fahrenheit?",
-        }
+            "content": "Generate 3 questions about civil engineering.",
+        },
     ]
     try:
         # test without max tokens
         response = await acompletion(
             model=model,
+            # model="claude-3-5-sonnet-20240620",
             messages=messages,
-            tools=tools,
-            tool_choice="required",
             stream=True,
+            temperature=0.75,
+            tools=tools,
+            stream_options={"include_usage": True},
         )
         idx = 0
         print(f"response: {response}")
         async for chunk in response:
-            # print(f"chunk: {chunk}")
+            print(f"chunk in test: {chunk}")
             if idx == 0:
                 assert (
                     chunk.choices[0].delta.tool_calls[0].function.arguments is not None
@@ -3193,6 +3246,56 @@ def test_unit_test_custom_stream_wrapper():
             if "How are you?" in chunk.choices[0].delta.content:
                 freq += 1
     assert freq == 1
+
+
+def test_unit_test_custom_stream_wrapper_openai():
+    """
+    Test if last streaming chunk ends with '?', if the message repeats itself.
+    """
+    litellm.set_verbose = False
+    chunk = {
+        "id": "chatcmpl-9mWtyDnikZZoB75DyfUzWUxiiE2Pi",
+        "choices": [
+            litellm.utils.StreamingChoices(
+                delta=litellm.utils.Delta(
+                    content=None, function_call=None, role=None, tool_calls=None
+                ),
+                finish_reason="content_filter",
+                index=0,
+                logprobs=None,
+            )
+        ],
+        "created": 1721353246,
+        "model": "gpt-3.5-turbo-0613",
+        "object": "chat.completion.chunk",
+        "system_fingerprint": None,
+        "usage": None,
+    }
+    chunk = litellm.ModelResponse(**chunk, stream=True)
+
+    completion_stream = ModelResponseIterator(model_response=chunk)
+
+    response = litellm.CustomStreamWrapper(
+        completion_stream=completion_stream,
+        model="gpt-3.5-turbo",
+        custom_llm_provider="azure",
+        logging_obj=litellm.Logging(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Hey"}],
+            stream=True,
+            call_type="completion",
+            start_time=time.time(),
+            litellm_call_id="12345",
+            function_id="1245",
+        ),
+    )
+
+    stream_finish_reason: Optional[str] = None
+    for chunk in response:
+        assert chunk.choices[0].delta.content is None
+        if chunk.choices[0].finish_reason is not None:
+            stream_finish_reason = chunk.choices[0].finish_reason
+    assert stream_finish_reason == "content_filter"
 
 
 def test_aamazing_unit_test_custom_stream_wrapper_n():
@@ -3510,3 +3613,56 @@ def test_unit_test_custom_stream_wrapper_function_call():
         if chunk.choices[0].finish_reason is not None:
             finish_reason = chunk.choices[0].finish_reason
     assert finish_reason == "tool_calls"
+
+    ## UNIT TEST RECREATING MODEL RESPONSE
+    from litellm.types.utils import (
+        ChatCompletionDeltaToolCall,
+        Delta,
+        Function,
+        StreamingChoices,
+        Usage,
+    )
+
+    initial_model_response = litellm.ModelResponse(
+        id="chatcmpl-842826b6-75a1-4ed4-8a68-7655e60654b3",
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(
+                    content="",
+                    role="assistant",
+                    function_call=None,
+                    tool_calls=[
+                        ChatCompletionDeltaToolCall(
+                            id="7ee88721-bfee-4584-8662-944a23d4c7a5",
+                            function=Function(
+                                arguments='{"questions": ["What are the main challenges facing civil engineers today?", "How has technology impacted the field of civil engineering?", "What are some of the most innovative projects in civil engineering in recent years?"]}',
+                                name="generate_series_of_questions",
+                            ),
+                            type="function",
+                            index=0,
+                        )
+                    ],
+                ),
+                logprobs=None,
+            )
+        ],
+        created=1720755257,
+        model="gemini-1.5-flash",
+        object="chat.completion.chunk",
+        system_fingerprint=None,
+        usage=Usage(prompt_tokens=67, completion_tokens=55, total_tokens=122),
+        stream=True,
+    )
+
+    obj_dict = initial_model_response.dict()
+
+    if "usage" in obj_dict:
+        del obj_dict["usage"]
+
+    new_model = response.model_response_creator(chunk=obj_dict)
+
+    print("\n\n{}\n\n".format(new_model))
+
+    assert len(new_model.choices[0].delta.tool_calls) > 0

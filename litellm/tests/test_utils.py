@@ -258,6 +258,13 @@ def test_validate_environment_empty_model():
         raise Exception()
 
 
+def test_validate_environment_api_key():
+    response_obj = validate_environment(model="gpt-3.5-turbo", api_key="sk-my-test-key")
+    assert (
+        response_obj["keys_in_environment"] is True
+    ), f"Missing keys={response_obj['missing_keys']}"
+
+
 @mock.patch.dict(os.environ, {"OLLAMA_API_BASE": "foo"}, clear=True)
 def test_validate_environment_ollama():
     for provider in ["ollama", "ollama_chat"]:

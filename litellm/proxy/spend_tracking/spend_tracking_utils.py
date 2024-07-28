@@ -55,6 +55,7 @@ def get_logging_payload(
         user_api_key_user_id=None,
         user_api_key_team_alias=None,
         spend_logs_metadata=None,
+        requester_ip_address=None,
     )
     if isinstance(metadata, dict):
         verbose_proxy_logger.debug(
@@ -109,6 +110,7 @@ def get_logging_payload(
             api_base=litellm_params.get("api_base", ""),
             model_group=_model_group,
             model_id=_model_id,
+            requester_ip_address=clean_metadata.get("requester_ip_address", None),
         )
 
         verbose_proxy_logger.debug(

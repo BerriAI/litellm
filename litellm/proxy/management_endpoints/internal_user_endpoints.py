@@ -27,7 +27,12 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.key_management_endpoints import (
+    _duration_in_seconds,
     generate_key_helper_fn,
+)
+from litellm.proxy.management_helpers.utils import (
+    add_new_member,
+    management_endpoint_wrapper,
 )
 
 router = APIRouter()
@@ -39,7 +44,10 @@ router = APIRouter()
     dependencies=[Depends(user_api_key_auth)],
     response_model=NewUserResponse,
 )
-async def new_user(data: NewUserRequest):
+@management_endpoint_wrapper
+async def new_user(
+    data: NewUserRequest,
+):
     """
     Use this to create a new INTERNAL user with a budget.
     Internal Users can access LiteLLM Admin UI to make keys, request access to models.
@@ -254,6 +262,7 @@ async def ui_get_available_role(
     tags=["Internal User management"],
     dependencies=[Depends(user_api_key_auth)],
 )
+@management_endpoint_wrapper
 async def user_info(
     user_id: Optional[str] = fastapi.Query(
         default=None, description="User ID in the request parameters"
@@ -422,7 +431,7 @@ async def user_info(
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"Authentication Error({str(e)})"),
-                type="auth_error",
+                type=ProxyErrorTypes.auth_error,
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
@@ -430,7 +439,7 @@ async def user_info(
             raise e
         raise ProxyException(
             message="Authentication Error, " + str(e),
-            type="auth_error",
+            type=ProxyErrorTypes.auth_error,
             param=getattr(e, "param", "None"),
             code=status.HTTP_400_BAD_REQUEST,
         )
@@ -441,7 +450,10 @@ async def user_info(
     tags=["Internal User management"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def user_update(data: UpdateUserRequest):
+@management_endpoint_wrapper
+async def user_update(
+    data: UpdateUserRequest,
+):
     """
     Example curl 
 
@@ -474,6 +486,13 @@ async def user_update(data: UpdateUserRequest):
                 0,
             ):  # models default to [], spend defaults to 0, we should not reset these values
                 non_default_values[k] = v
+
+        if "budget_duration" in non_default_values:
+            duration_s = _duration_in_seconds(
+                duration=non_default_values["budget_duration"]
+            )
+            user_reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
+            non_default_values["budget_reset_at"] = user_reset_at
 
         ## ADD USER, IF NEW ##
         verbose_proxy_logger.debug("/user/update: Received data = %s", data)
@@ -523,7 +542,7 @@ async def user_update(data: UpdateUserRequest):
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"Authentication Error({str(e)})"),
-                type="auth_error",
+                type=ProxyErrorTypes.auth_error,
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
@@ -531,7 +550,7 @@ async def user_update(data: UpdateUserRequest):
             raise e
         raise ProxyException(
             message="Authentication Error, " + str(e),
-            type="auth_error",
+            type=ProxyErrorTypes.auth_error,
             param=getattr(e, "param", "None"),
             code=status.HTTP_400_BAD_REQUEST,
         )
@@ -582,7 +601,7 @@ async def user_request_model(request: Request):
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"Authentication Error({str(e)})"),
-                type="auth_error",
+                type=ProxyErrorTypes.auth_error,
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
@@ -590,7 +609,7 @@ async def user_request_model(request: Request):
             raise e
         raise ProxyException(
             message="Authentication Error, " + str(e),
-            type="auth_error",
+            type=ProxyErrorTypes.auth_error,
             param=getattr(e, "param", "None"),
             code=status.HTTP_400_BAD_REQUEST,
         )
@@ -630,7 +649,7 @@ async def user_get_requests():
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"Authentication Error({str(e)})"),
-                type="auth_error",
+                type=ProxyErrorTypes.auth_error,
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
@@ -638,7 +657,7 @@ async def user_get_requests():
             raise e
         raise ProxyException(
             message="Authentication Error, " + str(e),
-            type="auth_error",
+            type=ProxyErrorTypes.auth_error,
             param=getattr(e, "param", "None"),
             code=status.HTTP_400_BAD_REQUEST,
         )
@@ -683,6 +702,7 @@ async def get_users(
     tags=["Internal User management"],
     dependencies=[Depends(user_api_key_auth)],
 )
+@management_endpoint_wrapper
 async def delete_user(
     data: DeleteUserRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -763,6 +783,11 @@ async def delete_user(
 
     ## DELETE ASSOCIATED KEYS
     await prisma_client.db.litellm_verificationtoken.delete_many(
+        where={"user_id": {"in": data.user_ids}}
+    )
+
+    ## DELETE ASSOCIATED INVITATION LINKS
+    await prisma_client.db.litellm_invitationlink.delete_many(
         where={"user_id": {"in": data.user_ids}}
     )
 

@@ -163,6 +163,8 @@ os.environ["OPENAI_API_BASE"] = "openaiai-api-base"     # OPTIONAL
 
 | Model Name            | Function Call                                                   |
 |-----------------------|-----------------------------------------------------------------|
+| gpt-4o-mini  | `response = completion(model="gpt-4o-mini", messages=messages)` |
+| gpt-4o-mini-2024-07-18   | `response = completion(model="gpt-4o-mini-2024-07-18", messages=messages)` |
 | gpt-4o   | `response = completion(model="gpt-4o", messages=messages)` |
 | gpt-4o-2024-05-13   | `response = completion(model="gpt-4o-2024-05-13", messages=messages)` |
 | gpt-4-turbo   | `response = completion(model="gpt-4-turbo", messages=messages)` |
@@ -235,6 +237,104 @@ response = completion(
 
 
 ## Advanced
+
+### Getting OpenAI API Response Headers 
+
+Set `litellm.return_response_headers = True` to get raw response headers from OpenAI
+
+You can expect to always get the `_response_headers` field from `litellm.completion()`, `litellm.embedding()` functions
+
+<Tabs>
+<TabItem value="litellm.completion" label="litellm.completion">
+
+```python
+litellm.return_response_headers = True
+
+# /chat/completion
+response = completion(
+    model="gpt-4o-mini",
+    messages=[
+        {
+            "role": "user",
+            "content": "hi",
+        }
+    ],
+)
+print(f"response: {response}")
+print("_response_headers=", response._response_headers)
+```
+</TabItem>
+
+<TabItem value="litellm.completion - streaming" label="litellm.completion + stream">
+
+```python
+litellm.return_response_headers = True
+
+# /chat/completion
+response = completion(
+    model="gpt-4o-mini",
+    stream=True,
+    messages=[
+        {
+            "role": "user",
+            "content": "hi",
+        }
+    ],
+)
+print(f"response: {response}")
+print("response_headers=", response._response_headers)
+for chunk in response:
+    print(chunk)
+```
+</TabItem>
+
+<TabItem value="litellm.embedding" label="litellm.embedding">
+
+```python
+litellm.return_response_headers = True
+
+# embedding
+embedding_response = litellm.embedding(
+    model="text-embedding-ada-002",
+    input="hello",
+)
+
+embedding_response_headers = embedding_response._response_headers
+print("embedding_response_headers=", embedding_response_headers)
+```
+
+</TabItem>
+</Tabs>
+Expected Response Headers from OpenAI
+
+```json
+{
+  "date": "Sat, 20 Jul 2024 22:05:23 GMT",
+  "content-type": "application/json",
+  "transfer-encoding": "chunked",
+  "connection": "keep-alive",
+  "access-control-allow-origin": "*",
+  "openai-model": "text-embedding-ada-002",
+  "openai-organization": "*****",
+  "openai-processing-ms": "20",
+  "openai-version": "2020-10-01",
+  "strict-transport-security": "max-age=15552000; includeSubDomains; preload",
+  "x-ratelimit-limit-requests": "5000",
+  "x-ratelimit-limit-tokens": "5000000",
+  "x-ratelimit-remaining-requests": "4999",
+  "x-ratelimit-remaining-tokens": "4999999",
+  "x-ratelimit-reset-requests": "12ms",
+  "x-ratelimit-reset-tokens": "0s",
+  "x-request-id": "req_cc37487bfd336358231a17034bcfb4d9",
+  "cf-cache-status": "DYNAMIC",
+  "set-cookie": "__cf_bm=E_FJY8fdAIMBzBE2RZI2.OkMIO3lf8Hz.ydBQJ9m3q8-1721513123-1.0.1.1-6OK0zXvtd5s9Jgqfz66cU9gzQYpcuh_RLaUZ9dOgxR9Qeq4oJlu.04C09hOTCFn7Hg.k.2tiKLOX24szUE2shw; path=/; expires=Sat, 20-Jul-24 22:35:23 GMT; domain=.api.openai.com; HttpOnly; Secure; SameSite=None, *cfuvid=SDndIImxiO3U0aBcVtoy1TBQqYeQtVDo1L6*Nlpp7EU-1721513123215-0.0.1.1-604800000; path=/; domain=.api.openai.com; HttpOnly; Secure; SameSite=None",
+  "x-content-type-options": "nosniff",
+  "server": "cloudflare",
+  "cf-ray": "8a66409b4f8acee9-SJC",
+  "content-encoding": "br",
+  "alt-svc": "h3=\":443\"; ma=86400"
+}
+```
 
 ### Parallel Function calling
 See a detailed walthrough of parallel function calling with litellm [here](https://docs.litellm.ai/docs/completion/function_call)

@@ -19,6 +19,7 @@ from typing import (
 import httpx  # type: ignore
 import requests
 from openai import AsyncAzureOpenAI, AzureOpenAI
+from pydantic import BaseModel
 from typing_extensions import overload
 
 import litellm
@@ -55,7 +56,6 @@ from ..types.llms.openai import (
     Thread,
 )
 from .base import BaseLLM
-from .custom_httpx.azure_dall_e_2 import AsyncCustomHTTPTransport, CustomHTTPTransport
 
 azure_ad_cache = DualCache()
 
@@ -1108,7 +1108,10 @@ class AzureChatCompletion(BaseLLM):
                     "api-key": api_key,
                 },
             )
-            operation_location_url = response.headers["operation-location"]
+            if "operation-location" in response.headers:
+                operation_location_url = response.headers["operation-location"]
+            else:
+                raise AzureOpenAIError(status_code=500, message=response.text)
             response = await async_handler.get(
                 url=operation_location_url,
                 headers={
@@ -1220,7 +1223,10 @@ class AzureChatCompletion(BaseLLM):
                     "api-key": api_key,
                 },
             )
-            operation_location_url = response.headers["operation-location"]
+            if "operation-location" in response.headers:
+                operation_location_url = response.headers["operation-location"]
+            else:
+                raise AzureOpenAIError(status_code=500, message=response.text)
             response = sync_handler.get(
                 url=operation_location_url,
                 headers={
@@ -1535,7 +1541,12 @@ class AzureChatCompletion(BaseLLM):
         response = azure_client.audio.transcriptions.create(
             **data, timeout=timeout  # type: ignore
         )
-        stringified_response = response.model_dump()
+
+        if isinstance(response, BaseModel):
+            stringified_response = response.model_dump()
+        else:
+            stringified_response = TranscriptionResponse(text=response).model_dump()
+
         ## LOGGING
         logging_obj.post_call(
             input=audio_file.name,
@@ -1588,7 +1599,10 @@ class AzureChatCompletion(BaseLLM):
                 **data, timeout=timeout
             )  # type: ignore
 
-            stringified_response = response.model_dump()
+            if isinstance(response, BaseModel):
+                stringified_response = response.model_dump()
+            else:
+                stringified_response = TranscriptionResponse(text=response).model_dump()
 
             ## LOGGING
             logging_obj.post_call(
@@ -1718,9 +1732,7 @@ class AzureChatCompletion(BaseLLM):
         input: Optional[list] = None,
         prompt: Optional[str] = None,
     ) -> dict:
-        client_session = litellm.client_session or httpx.Client(
-            transport=CustomHTTPTransport(),  # handle dall-e-2 calls
-        )
+        client_session = litellm.client_session or httpx.Client()
         if "gateway.ai.cloudflare.com" in api_base:
             ## build base url - assume api base includes resource name
             if not api_base.endswith("/"):
@@ -1793,9 +1805,10 @@ class AzureChatCompletion(BaseLLM):
         input: Optional[list] = None,
         prompt: Optional[str] = None,
     ) -> dict:
-        client_session = litellm.aclient_session or httpx.AsyncClient(
-            transport=AsyncCustomHTTPTransport(),  # handle dall-e-2 calls
-        )
+        client_session = (
+            litellm.aclient_session or httpx.AsyncClient()
+        )  # handle dall-e-2 calls
+
         if "gateway.ai.cloudflare.com" in api_base:
             ## build base url - assume api base includes resource name
             if not api_base.endswith("/"):
@@ -1850,6 +1863,23 @@ class AzureChatCompletion(BaseLLM):
             completion = await client.images.with_raw_response.generate(
                 model=model,  # type: ignore
                 prompt=prompt,  # type: ignore
+            )
+        elif mode == "audio_transcription":
+            # Get the current directory of the file being run
+            pwd = os.path.dirname(os.path.realpath(__file__))
+            file_path = os.path.join(pwd, "../tests/gettysburg.wav")
+            audio_file = open(file_path, "rb")
+            completion = await client.audio.transcriptions.with_raw_response.create(
+                file=audio_file,
+                model=model,  # type: ignore
+                prompt=prompt,  # type: ignore
+            )
+        elif mode == "audio_speech":
+            # Get the current directory of the file being run
+            completion = await client.audio.speech.with_raw_response.create(
+                model=model,  # type: ignore
+                input=prompt,  # type: ignore
+                voice="alloy",
             )
         else:
             raise Exception("mode not set")

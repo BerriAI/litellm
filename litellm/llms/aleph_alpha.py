@@ -1,12 +1,15 @@
-import os, types
 import json
-from enum import Enum
-import requests  # type: ignore
+import os
 import time
+import types
+from enum import Enum
 from typing import Callable, Optional
-import litellm
-from litellm.utils import ModelResponse, Choices, Message, Usage
+
 import httpx  # type: ignore
+import requests  # type: ignore
+
+import litellm
+from litellm.utils import Choices, Message, ModelResponse, Usage
 
 
 class AlephAlphaError(Exception):
@@ -275,7 +278,7 @@ def completion(
                         message=message_obj,
                     )
                     choices_list.append(choice_obj)
-                model_response["choices"] = choices_list
+                model_response.choices = choices_list  # type: ignore
             except:
                 raise AlephAlphaError(
                     message=json.dumps(completion_response),
@@ -291,8 +294,8 @@ def completion(
             )
         )
 
-        model_response["created"] = int(time.time())
-        model_response["model"] = model
+        model_response.created = int(time.time())
+        model_response.model = model
         usage = Usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,

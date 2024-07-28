@@ -57,7 +57,12 @@ const Navbar: React.FC<NavbarProps> = ({
 
   console.log("logoutUrl=", logoutUrl);
 
-
+  const handleLogout = () => {
+    // Clear cookies
+    document.cookie = "token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
+    window.location.href = logoutUrl;
+  }
+   
 
   const items: MenuProps["items"] = [
     {
@@ -72,11 +77,7 @@ const Navbar: React.FC<NavbarProps> = ({
     },
     {
       key: "2",
-      label: (
-        <a href={logoutUrl}>
-          <p>Logout</p>
-        </a>
-      ),
+      label: <p onClick={handleLogout}>Logout</p>,
     }
   ];
 
