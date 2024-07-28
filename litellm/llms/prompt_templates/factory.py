@@ -235,6 +235,12 @@ def mistral_api_pt(messages):
     """
     new_messages = []
     for m in messages:
+        special_keys = ["role", "content", "tool_calls"]
+        extra_args = {}
+        if isinstance(m, dict):
+            for k, v in m.items():
+                if k not in special_keys:
+                    extra_args[k] = v
         texts = ""
         if isinstance(m["content"], list):
             for c in m["content"]:
@@ -244,7 +250,8 @@ def mistral_api_pt(messages):
                     texts += c["text"]
         elif isinstance(m["content"], str):
             texts = m["content"]
-        new_m = {"role": m["role"], "content": texts}
+
+        new_m = {"role": m["role"], "content": texts, **extra_args}
 
         if new_m["role"] == "tool" and m.get("name"):
             new_m["name"] = m["name"]
