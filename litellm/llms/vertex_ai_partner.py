@@ -7,7 +7,7 @@ import time
 import types
 import uuid
 from enum import Enum
-from typing import Any, Callable, List, Optional, Tuple, Union
+from typing import Any, Callable, List, Literal, Optional, Tuple, Union
 
 import httpx  # type: ignore
 import requests  # type: ignore
@@ -108,14 +108,25 @@ class VertexAILlama3Config:
         return optional_params
 
 
-class VertexAILlama3(BaseLLM):
+class VertexAIPartnerModels(BaseLLM):
     def __init__(self) -> None:
         pass
 
-    def create_vertex_llama3_url(
-        self, vertex_location: str, vertex_project: str
+    def create_vertex_url(
+        self,
+        vertex_location: str,
+        vertex_project: str,
+        partner: Literal["llama", "mistralai"],
+        stream: Optional[bool],
+        model: str,
     ) -> str:
-        return f"https://{vertex_location}-aiplatform.googleapis.com/v1beta1/projects/{vertex_project}/locations/{vertex_location}/endpoints/openapi"
+        if partner == "llama":
+            return f"https://{vertex_location}-aiplatform.googleapis.com/v1beta1/projects/{vertex_project}/locations/{vertex_location}/endpoints/openapi"
+        elif partner == "mistralai":
+            if stream:
+                return f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/mistralai/models/{model}:streamRawPredict"
+            else:
+                return f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/mistralai/models/{model}:rawPredict"
 
     def completion(
         self,
@@ -141,6 +152,7 @@ class VertexAILlama3(BaseLLM):
             import vertexai
             from google.cloud import aiplatform
 
+            from litellm.llms.databricks import DatabricksChatCompletion
             from litellm.llms.openai import OpenAIChatCompletion
             from litellm.llms.vertex_httpx import VertexLLM
         except Exception:
@@ -165,7 +177,7 @@ class VertexAILlama3(BaseLLM):
                 credentials=vertex_credentials, project_id=vertex_project
             )
 
-            openai_chat_completions = OpenAIChatCompletion()
+            openai_like_chat_completions = DatabricksChatCompletion()
 
             ## Load Config
             # config = litellm.VertexAILlama3.get_config()
@@ -178,12 +190,23 @@ class VertexAILlama3(BaseLLM):
 
             optional_params["stream"] = stream
 
-            api_base = self.create_vertex_llama3_url(
+            if "llama" in model:
+                partner = "llama"
+            elif "mistral" in model:
+                partner = "mistralai"
+                optional_params["custom_endpoint"] = True
+
+            api_base = self.create_vertex_url(
                 vertex_location=vertex_location or "us-central1",
                 vertex_project=vertex_project or project_id,
+                partner=partner,  # type: ignore
+                stream=stream,
+                model=model,
             )
 
-            return openai_chat_completions.completion(
+            model = model.split("@")[0]
+
+            return openai_like_chat_completions.completion(
                 model=model,
                 messages=messages,
                 api_base=api_base,
@@ -198,6 +221,8 @@ class VertexAILlama3(BaseLLM):
                 logger_fn=logger_fn,
                 client=client,
                 timeout=timeout,
+                encoding=encoding,
+                custom_llm_provider="vertex_ai_beta",
             )
 
         except Exception as e:
