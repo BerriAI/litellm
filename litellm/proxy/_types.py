@@ -1144,6 +1144,14 @@ class ConfigGeneralSettings(LiteLLMBase):
     global_max_parallel_requests: Optional[int] = Field(
         None, description="global max parallel requests to allow for a proxy instance."
     )
+    max_request_size_mb: Optional[int] = Field(
+        None,
+        description="max request size in MB, if a request is larger than this size it will be rejected",
+    )
+    max_response_size_mb: Optional[int] = Field(
+        None,
+        description="max response size in MB, if a response is larger than this size it will be rejected",
+    )
     infer_model_from_keys: Optional[bool] = Field(
         None,
         description="for `/models` endpoint, infers available model based on environment keys (e.g. OPENAI_API_KEY)",
