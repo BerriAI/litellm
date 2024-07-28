@@ -57,6 +57,7 @@ from litellm.proxy.auth.auth_checks import (
     log_to_opentelemetry,
 )
 from litellm.proxy.auth.auth_utils import (
+    check_if_request_size_is_safe,
     is_llm_api_route,
     route_in_additonal_public_routes,
 )
@@ -116,6 +117,21 @@ async def user_api_key_auth(
     try:
         route: str = request.url.path
 
+        ### LiteLLM Enterprise Security Checks
+        # Check 1. Check if request size is under max_request_size_mb
+        # Check 2. FILTER IP ADDRESS
+        await check_if_request_size_is_safe(request=request)
+
+        is_valid_ip = _check_valid_ip(
+            allowed_ips=general_settings.get("allowed_ips", None), request=request
+        )
+
+        if not is_valid_ip:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access forbidden: IP address not allowed.",
+            )
+
         pass_through_endpoints: Optional[List[dict]] = general_settings.get(
             "pass_through_endpoints", None
         )
@@ -169,18 +185,6 @@ async def user_api_key_auth(
             enable_jwt_auth: true
         ```
         """
-
-        ### FILTER IP ADDRESS ###
-
-        is_valid_ip = _check_valid_ip(
-            allowed_ips=general_settings.get("allowed_ips", None), request=request
-        )
-
-        if not is_valid_ip:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Access forbidden: IP address not allowed.",
-            )
 
         if (
             route in LiteLLMRoutes.public_routes.value
