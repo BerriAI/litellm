@@ -9083,6 +9083,8 @@ async def get_config_list(
     allowed_args = {
         "max_parallel_requests": {"type": "Integer"},
         "global_max_parallel_requests": {"type": "Integer"},
+        "max_request_size_mb": {"type": "Integer"},
+        "max_response_size_mb": {"type": "Integer"},
     }
 
     return_val = []
