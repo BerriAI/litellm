@@ -124,6 +124,7 @@ from litellm.proxy.auth.auth_checks import (
     get_user_object,
     log_to_opentelemetry,
 )
+from litellm.proxy.auth.auth_utils import check_response_size_is_safe
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.litellm_license import LicenseCheck
 from litellm.proxy.auth.model_checks import (
@@ -3000,6 +3001,7 @@ async def chat_completion(
                 **additional_headers,
             )
         )
+        await check_response_size_is_safe(response=response)
 
         return response
     except RejectedRequestError as e:
@@ -3241,7 +3243,7 @@ async def completion(
                 response_cost=response_cost,
             )
         )
-
+        await check_response_size_is_safe(response=response)
         return response
     except RejectedRequestError as e:
         _data = e.request_data
@@ -3491,6 +3493,7 @@ async def embeddings(
                 call_id=litellm_call_id,
             )
         )
+        await check_response_size_is_safe(response=response)
 
         return response
     except Exception as e:
