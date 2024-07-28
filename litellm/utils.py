@@ -4216,7 +4216,7 @@ def get_supported_openai_params(
             if model.startswith("meta/"):
                 return litellm.VertexAILlama3Config().get_supported_openai_params()
 
-            return litellm.VertexAIConfig().get_supported_openai_params()
+            return litellm.VertexGeminiConfig().get_supported_openai_params()
         elif request_type == "embeddings":
             return litellm.VertexAITextEmbeddingConfig().get_supported_openai_params()
     elif custom_llm_provider == "vertex_ai_beta":
