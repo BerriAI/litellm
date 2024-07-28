@@ -156,6 +156,8 @@ POST /api/public/ingestion HTTP/1.1" 207 Multi-Status
 
 Use this if you want the pass through endpoint to honour LiteLLM keys/authentication
 
+This also enforces the key's rpm limits on pass-through endpoints.
+
 Usage - set `auth: true` on the config
 ```yaml
 general_settings:
@@ -218,3 +220,148 @@ general_settings:
     * `LANGFUSE_PUBLIC_KEY` *string*: Your Langfuse account public key - only set this when forwarding to Langfuse.
     * `LANGFUSE_SECRET_KEY` *string*: Your Langfuse account secret key - only set this when forwarding to Langfuse.
     * `<your-custom-header>` *string*: Pass any custom header key/value pair 
+
+
+## Custom Chat Endpoints (Anthropic/Bedrock/Vertex)
+
+Allow developers to call the proxy with Anthropic/boto3/etc. client sdk's.
+
+Test our [Anthropic Adapter](../anthropic_completion.md) for reference [**Code**](https://github.com/BerriAI/litellm/blob/fd743aaefd23ae509d8ca64b0c232d25fe3e39ee/litellm/adapters/anthropic_adapter.py#L50)
+
+### 1. Write an Adapter 
+
+Translate the request/response from your custom API schema to the OpenAI schema (used by litellm.completion()) and back. 
+
+For provider-specific params 👉 [**Provider-Specific Params**](../completion/provider_specific_params.md)
+
+```python
+from litellm import adapter_completion
+import litellm 
+from litellm import ChatCompletionRequest, verbose_logger
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.types.llms.anthropic import AnthropicMessagesRequest, AnthropicResponse
+import os
+
+# What is this?
+## Translates OpenAI call to Anthropic `/v1/messages` format
+import json
+import os
+import traceback
+import uuid
+from typing import Literal, Optional
+
+import dotenv
+import httpx
+from pydantic import BaseModel
+
+
+###################
+# CUSTOM ADAPTER ##
+###################
+ 
+class AnthropicAdapter(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+
+    def translate_completion_input_params(
+        self, kwargs
+    ) -> Optional[ChatCompletionRequest]:
+        """
+        - translate params, where needed
+        - pass rest, as is
+        """
+        request_body = AnthropicMessagesRequest(**kwargs)  # type: ignore
+
+        translated_body = litellm.AnthropicConfig().translate_anthropic_to_openai(
+            anthropic_message_request=request_body
+        )
+
+        return translated_body
+
+    def translate_completion_output_params(
+        self, response: litellm.ModelResponse
+    ) -> Optional[AnthropicResponse]:
+
+        return litellm.AnthropicConfig().translate_openai_response_to_anthropic(
+            response=response
+        )
+
+    def translate_completion_output_params_streaming(self) -> Optional[BaseModel]:
+        return super().translate_completion_output_params_streaming()
+
+
+anthropic_adapter = AnthropicAdapter()
+
+###########
+# TEST IT # 
+###########
+
+## register CUSTOM ADAPTER
+litellm.adapters = [{"id": "anthropic", "adapter": anthropic_adapter}]
+
+## set ENV variables
+os.environ["OPENAI_API_KEY"] = "your-openai-key"
+os.environ["COHERE_API_KEY"] = "your-cohere-key"
+
+messages = [{ "content": "Hello, how are you?","role": "user"}]
+
+# openai call
+response = adapter_completion(model="gpt-3.5-turbo", messages=messages, adapter_id="anthropic")
+
+# cohere call
+response = adapter_completion(model="command-nightly", messages=messages, adapter_id="anthropic")
+print(response)
+```
+
+### 2. Create new endpoint
+
+We pass the custom callback class defined in Step1 to the config.yaml. Set callbacks to python_filename.logger_instance_name
+
+In the config below, we pass
+
+python_filename: `custom_callbacks.py`
+logger_instance_name: `anthropic_adapter`. This is defined in Step 1
+
+`target: custom_callbacks.proxy_handler_instance`
+
+```yaml
+model_list:
+  - model_name: my-fake-claude-endpoint
+    litellm_params:
+      model: gpt-3.5-turbo
+      api_key: os.environ/OPENAI_API_KEY
+
+
+general_settings:
+  master_key: sk-1234
+  pass_through_endpoints:
+    - path: "/v1/messages"                 # route you want to add to LiteLLM Proxy Server
+      target: custom_callbacks.anthropic_adapter          # Adapter to use for this route
+      headers:
+        litellm_user_api_key: "x-api-key" # Field in headers, containing LiteLLM Key
+```
+
+### 3. Test it! 
+
+**Start proxy**
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+**Curl**
+
+```bash
+curl --location 'http://0.0.0.0:4000/v1/messages' \
+-H 'x-api-key: sk-1234' \
+-H 'anthropic-version: 2023-06-01' \ # ignored
+-H 'content-type: application/json' \
+-D '{
+    "model": "my-fake-claude-endpoint",
+    "max_tokens": 1024,
+    "messages": [
+        {"role": "user", "content": "Hello, world"}
+    ]
+}'
+```
+

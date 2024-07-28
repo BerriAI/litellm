@@ -17,8 +17,15 @@ git clone https://github.com/BerriAI/litellm
 # Go to folder
 cd litellm
 
-# Add the master key
+# Add the master key - you can change this after setup
 echo 'LITELLM_MASTER_KEY="sk-1234"' > .env
+
+# Add the litellm salt key - you cannot change this after adding a model
+# It is used to encrypt / decrypt your LLM API Key credentials
+# We recommned - https://1password.com/password-generator/ 
+# password generator to get a random hash for litellm salt key
+echo 'LITELLM_SALT_KEY="sk-1234"' > .env
+
 source .env
 
 # Start
@@ -246,6 +253,15 @@ Your OpenAI proxy server is now running on `http://127.0.0.1:4000`.
 </Tabs>
 
 **That's it ! That's the quick start to deploy litellm**
+
+## Use with Langchain, OpenAI SDK, LlamaIndex, Instructor, Curl
+
+:::info
+💡 Go here 👉 [to make your first LLM API Request](user_keys)
+
+LiteLLM is compatible with several SDKs - including OpenAI SDK, Anthropic SDK, Mistral SDK, LLamaIndex, Langchain (Js, Python)
+
+:::
 
 ## Options to deploy LiteLLM 
 

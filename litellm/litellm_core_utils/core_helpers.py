@@ -1,5 +1,6 @@
 # What is this?
 ## Helper utilities
+from typing import List, Literal, Optional, Tuple
 
 
 def map_finish_reason(
@@ -39,3 +40,46 @@ def map_finish_reason(
     elif finish_reason == "content_filtered":
         return "content_filter"
     return finish_reason
+
+
+def remove_index_from_tool_calls(messages, tool_calls):
+    for tool_call in tool_calls:
+        if "index" in tool_call:
+            tool_call.pop("index")
+
+    for message in messages:
+        if "tool_calls" in message:
+            tool_calls = message["tool_calls"]
+            for tool_call in tool_calls:
+                if "index" in tool_call:
+                    tool_call.pop("index")
+
+    return
+
+
+def get_litellm_metadata_from_kwargs(kwargs: dict):
+    """
+    Helper to get litellm metadata from all litellm request kwargs
+    """
+    return kwargs.get("litellm_params", {}).get("metadata", {})
+
+
+# Helper functions used for OTEL logging
+def _get_parent_otel_span_from_kwargs(kwargs: Optional[dict] = None):
+    try:
+        if kwargs is None:
+            return None
+        litellm_params = kwargs.get("litellm_params")
+        _metadata = kwargs.get("metadata") or {}
+        if "litellm_parent_otel_span" in _metadata:
+            return _metadata["litellm_parent_otel_span"]
+        elif (
+            litellm_params is not None
+            and litellm_params.get("metadata") is not None
+            and "litellm_parent_otel_span" in litellm_params.get("metadata", {})
+        ):
+            return litellm_params["metadata"]["litellm_parent_otel_span"]
+        elif "litellm_parent_otel_span" in kwargs:
+            return kwargs["litellm_parent_otel_span"]
+    except:
+        return None

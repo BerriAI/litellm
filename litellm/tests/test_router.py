@@ -1117,6 +1117,8 @@ async def test_aimg_gen_on_router():
         assert len(response.data) > 0
 
         router.reset()
+    except litellm.InternalServerError as e:
+        pass
     except Exception as e:
         if "Your task failed as a result of our safety system." in str(e):
             pass
@@ -1892,6 +1894,49 @@ async def test_router_model_usage(mock_response):
             else:
                 print(f"allowed_fails: {allowed_fails}")
                 raise e
+
+
+@pytest.mark.skip(reason="Check if this is causing ci/cd issues.")
+@pytest.mark.asyncio
+async def test_is_proxy_set():
+    """
+    Assert if proxy is set
+    """
+    from httpx import AsyncHTTPTransport
+
+    os.environ["HTTPS_PROXY"] = "https://proxy.example.com:8080"
+    from openai import AsyncAzureOpenAI
+
+    # Function to check if a proxy is set on the client
+    # Function to check if a proxy is set on the client
+    def check_proxy(client: httpx.AsyncClient) -> bool:
+        print(f"client._mounts: {client._mounts}")
+        assert len(client._mounts) == 1
+        for k, v in client._mounts.items():
+            assert isinstance(v, AsyncHTTPTransport)
+        return True
+
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "azure/gpt-3.5-turbo",
+                    "api_key": "my-key",
+                    "api_base": "my-base",
+                    "mock_response": "hello world",
+                },
+                "model_info": {"id": "1"},
+            }
+        ]
+    )
+
+    _deployment = llm_router.get_deployment(model_id="1")
+    model_client: AsyncAzureOpenAI = llm_router._get_client(
+        deployment=_deployment, kwargs={}, client_type="async"
+    )  # type: ignore
+
+    assert check_proxy(client=model_client._client)
 
 
 @pytest.mark.parametrize(

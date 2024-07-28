@@ -171,7 +171,9 @@ def _gemini_convert_messages_with_history(messages: list) -> List[ContentType]:
             assistant_content = []
             ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
             while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
-                if isinstance(messages[msg_i]["content"], list):
+                if messages[msg_i].get("content", None) is not None and isinstance(
+                    messages[msg_i]["content"], list
+                ):
                     _parts = []
                     for element in messages[msg_i]["content"]:
                         if isinstance(element, dict):
@@ -663,16 +665,14 @@ def completion(
 
         ## RESPONSE OBJECT
         if isinstance(completion_response, litellm.Message):
-            model_response["choices"][0]["message"] = completion_response
+            model_response.choices[0].message = completion_response  # type: ignore
         elif len(str(completion_response)) > 0:
-            model_response["choices"][0]["message"]["content"] = str(
-                completion_response
-            )
-        model_response["created"] = int(time.time())
-        model_response["model"] = model
+            model_response.choices[0].message.content = str(completion_response)  # type: ignore
+        model_response.created = int(time.time())
+        model_response.model = model
         ## CALCULATING USAGE
         if model in litellm.vertex_language_models and response_obj is not None:
-            model_response["choices"][0].finish_reason = map_finish_reason(
+            model_response.choices[0].finish_reason = map_finish_reason(
                 response_obj.candidates[0].finish_reason.name
             )
             usage = Usage(
@@ -723,7 +723,7 @@ async def async_completion(
     request_str: str,
     print_verbose: Callable,
     logging_obj,
-    encoding=None,
+    encoding,
     client_options=None,
     instances=None,
     vertex_project=None,
@@ -899,16 +899,16 @@ async def async_completion(
 
         ## RESPONSE OBJECT
         if isinstance(completion_response, litellm.Message):
-            model_response["choices"][0]["message"] = completion_response
+            model_response.choices[0].message = completion_response  # type: ignore
         elif len(str(completion_response)) > 0:
-            model_response["choices"][0]["message"]["content"] = str(
+            model_response.choices[0].message.content = str(  # type: ignore
                 completion_response
             )
-        model_response["created"] = int(time.time())
-        model_response["model"] = model
+        model_response.created = int(time.time())
+        model_response.model = model
         ## CALCULATING USAGE
         if model in litellm.vertex_language_models and response_obj is not None:
-            model_response["choices"][0].finish_reason = map_finish_reason(
+            model_response.choices[0].finish_reason = map_finish_reason(
                 response_obj.candidates[0].finish_reason.name
             )
             usage = Usage(
@@ -1188,16 +1188,16 @@ class VertexAITextEmbeddingConfig(BaseModel):
 def embedding(
     model: str,
     input: Union[list, str],
+    print_verbose,
+    model_response: litellm.EmbeddingResponse,
+    optional_params: dict,
     api_key: Optional[str] = None,
     logging_obj=None,
-    model_response=None,
-    optional_params=None,
     encoding=None,
     vertex_project=None,
     vertex_location=None,
     vertex_credentials=None,
     aembedding=False,
-    print_verbose=None,
 ):
     # logic for parsing in - calling - parsing out model embedding calls
     try:
@@ -1295,15 +1295,15 @@ def embedding(
                 "embedding": embedding.values,
             }
         )
-        input_tokens += embedding.statistics.token_count
-    model_response["object"] = "list"
-    model_response["data"] = embedding_response
-    model_response["model"] = model
+        input_tokens += embedding.statistics.token_count  # type: ignore
+    model_response.object = "list"
+    model_response.data = embedding_response
+    model_response.model = model
 
     usage = Usage(
         prompt_tokens=input_tokens, completion_tokens=0, total_tokens=input_tokens
     )
-    model_response.usage = usage
+    setattr(model_response, "usage", usage)
 
     return model_response
 
@@ -1311,8 +1311,8 @@ def embedding(
 async def async_embedding(
     model: str,
     input: Union[list, str],
+    model_response: litellm.EmbeddingResponse,
     logging_obj=None,
-    model_response=None,
     optional_params=None,
     encoding=None,
     client=None,
@@ -1352,11 +1352,11 @@ async def async_embedding(
         )
         input_tokens += embedding.statistics.token_count
 
-    model_response["object"] = "list"
-    model_response["data"] = embedding_response
-    model_response["model"] = model
+    model_response.object = "list"
+    model_response.data = embedding_response
+    model_response.model = model
     usage = Usage(
         prompt_tokens=input_tokens, completion_tokens=0, total_tokens=input_tokens
     )
-    model_response.usage = usage
+    setattr(model_response, "usage", usage)
     return model_response

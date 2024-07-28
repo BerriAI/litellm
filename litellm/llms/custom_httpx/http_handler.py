@@ -7,6 +7,15 @@ import httpx
 
 import litellm
 
+try:
+    from litellm._version import version
+except:
+    version = "0.0.0"
+
+headers = {
+    "User-Agent": f"litellm/{version}",
+}
+
 # https://www.python-httpx.org/advanced/timeouts
 _DEFAULT_TIMEOUT = httpx.Timeout(timeout=5.0, connect=5.0)
 
@@ -26,29 +35,11 @@ class AsyncHTTPHandler:
         self, timeout: Optional[Union[float, httpx.Timeout]], concurrent_limit: int
     ) -> httpx.AsyncClient:
 
-        async_proxy_mounts = None
         # Check if the HTTP_PROXY and HTTPS_PROXY environment variables are set and use them accordingly.
-        http_proxy = os.getenv("HTTP_PROXY", None)
-        https_proxy = os.getenv("HTTPS_PROXY", None)
-        no_proxy = os.getenv("NO_PROXY", None)
         ssl_verify = bool(os.getenv("SSL_VERIFY", litellm.ssl_verify))
         cert = os.getenv(
             "SSL_CERTIFICATE", litellm.ssl_certificate
         )  # /path/to/client.pem
-
-        if http_proxy is not None and https_proxy is not None:
-            async_proxy_mounts = {
-                "http://": httpx.AsyncHTTPTransport(proxy=httpx.Proxy(url=http_proxy)),
-                "https://": httpx.AsyncHTTPTransport(
-                    proxy=httpx.Proxy(url=https_proxy)
-                ),
-            }
-            # assume no_proxy is a list of comma separated urls
-            if no_proxy is not None and isinstance(no_proxy, str):
-                no_proxy_urls = no_proxy.split(",")
-
-                for url in no_proxy_urls:  # set no-proxy support for specific urls
-                    async_proxy_mounts[url] = None  # type: ignore
 
         if timeout is None:
             timeout = _DEFAULT_TIMEOUT
@@ -61,8 +52,8 @@ class AsyncHTTPHandler:
                 max_keepalive_connections=concurrent_limit,
             ),
             verify=ssl_verify,
-            mounts=async_proxy_mounts,
             cert=cert,
+            headers=headers,
         )
 
     async def close(self):
@@ -163,26 +154,10 @@ class HTTPHandler:
             timeout = _DEFAULT_TIMEOUT
 
         # Check if the HTTP_PROXY and HTTPS_PROXY environment variables are set and use them accordingly.
-        http_proxy = os.getenv("HTTP_PROXY", None)
-        https_proxy = os.getenv("HTTPS_PROXY", None)
-        no_proxy = os.getenv("NO_PROXY", None)
         ssl_verify = bool(os.getenv("SSL_VERIFY", litellm.ssl_verify))
         cert = os.getenv(
             "SSL_CERTIFICATE", litellm.ssl_certificate
         )  # /path/to/client.pem
-
-        sync_proxy_mounts = None
-        if http_proxy is not None and https_proxy is not None:
-            sync_proxy_mounts = {
-                "http://": httpx.HTTPTransport(proxy=httpx.Proxy(url=http_proxy)),
-                "https://": httpx.HTTPTransport(proxy=httpx.Proxy(url=https_proxy)),
-            }
-            # assume no_proxy is a list of comma separated urls
-            if no_proxy is not None and isinstance(no_proxy, str):
-                no_proxy_urls = no_proxy.split(",")
-
-                for url in no_proxy_urls:  # set no-proxy support for specific urls
-                    sync_proxy_mounts[url] = None  # type: ignore
 
         if client is None:
             # Create a client with a connection pool
@@ -193,8 +168,8 @@ class HTTPHandler:
                     max_keepalive_connections=concurrent_limit,
                 ),
                 verify=ssl_verify,
-                mounts=sync_proxy_mounts,
                 cert=cert,
+                headers=headers,
             )
         else:
             self.client = client

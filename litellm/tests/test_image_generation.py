@@ -190,21 +190,26 @@ async def test_aimage_generation_bedrock_with_optional_params():
             pytest.fail(f"An exception occurred - {str(e)}")
 
 
+@pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
-async def test_aimage_generation_vertex_ai():
+async def test_aimage_generation_vertex_ai(sync_mode):
     from test_amazing_vertex_completion import load_vertex_ai_credentials
 
     litellm.set_verbose = True
 
     load_vertex_ai_credentials()
+    data = {
+        "prompt": "An olympic size swimming pool",
+        "model": "vertex_ai/imagegeneration@006",
+        "vertex_ai_project": "adroit-crow-413218",
+        "vertex_ai_location": "us-central1",
+        "n": 1,
+    }
     try:
-        response = await litellm.aimage_generation(
-            prompt="An olympic size swimming pool",
-            model="vertex_ai/imagegeneration@006",
-            vertex_ai_project="adroit-crow-413218",
-            vertex_ai_location="us-central1",
-            n=1,
-        )
+        if sync_mode:
+            response = litellm.image_generation(**data)
+        else:
+            response = await litellm.aimage_generation(**data)
         assert response.data is not None
         assert len(response.data) > 0
 

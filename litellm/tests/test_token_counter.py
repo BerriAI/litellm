@@ -3,15 +3,14 @@
 
 import os
 import sys
-import traceback
+import time
+from unittest.mock import MagicMock
 
 import pytest
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-import time
-from unittest.mock import AsyncMock, MagicMock, patch
 
 from litellm import (
     create_pretrained_tokenizer,
@@ -21,6 +20,11 @@ from litellm import (
     token_counter,
 )
 from litellm.tests.large_text import text
+from litellm.tests.messages_with_counts import (
+    MESSAGES_TEXT,
+    MESSAGES_WITH_IMAGES,
+    MESSAGES_WITH_TOOLS,
+)
 
 
 def test_token_counter_normal_plus_function_calling():
@@ -58,6 +62,46 @@ def test_token_counter_normal_plus_function_calling():
 
 
 # test_token_counter_normal_plus_function_calling()
+
+
+@pytest.mark.parametrize(
+    "message_count_pair",
+    MESSAGES_TEXT,
+)
+def test_token_counter_textonly(message_count_pair):
+    counted_tokens = token_counter(
+        model="gpt-35-turbo", messages=[message_count_pair["message"]]
+    )
+    assert counted_tokens == message_count_pair["count"]
+
+
+@pytest.mark.parametrize(
+    "message_count_pair",
+    MESSAGES_WITH_IMAGES,
+)
+def test_token_counter_with_images(message_count_pair):
+    counted_tokens = token_counter(
+        model="gpt-4o", messages=[message_count_pair["message"]]
+    )
+    assert counted_tokens == message_count_pair["count"]
+
+
+@pytest.mark.parametrize(
+    "message_count_pair",
+    MESSAGES_WITH_TOOLS,
+)
+def test_token_counter_with_tools(message_count_pair):
+    counted_tokens = token_counter(
+        model="gpt-35-turbo",
+        messages=[message_count_pair["system_message"]],
+        tools=message_count_pair["tools"],
+        tool_choice=message_count_pair["tool_choice"],
+    )
+    expected_tokens = message_count_pair["count"]
+    diff = counted_tokens - expected_tokens
+    assert (
+        diff >= 0 and diff <= 3
+    ), f"Expected {expected_tokens} tokens, got {counted_tokens}. Counted tokens is only allowed to be off by 3 in the over-counting direction."
 
 
 def test_tokenizers():
@@ -289,3 +333,13 @@ def test_get_modified_max_tokens(
         ), "Got={}, Expected={}, Params={}".format(
             calculated_value, expected_value, args
         )
+
+
+def test_empty_tools():
+    messages = [{"role": "user", "content": "hey, how's it going?", "tool_calls": None}]
+
+    result = token_counter(
+        messages=messages,
+    )
+
+    print(result)

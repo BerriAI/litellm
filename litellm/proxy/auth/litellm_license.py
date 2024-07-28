@@ -20,6 +20,7 @@ class LicenseCheck:
 
     def __init__(self) -> None:
         self.license_str = os.getenv("LITELLM_LICENSE", None)
+        verbose_proxy_logger.debug("License Str value - {}".format(self.license_str))
         self.http_handler = HTTPHandler()
         self.public_key = None
         self.read_public_key()
@@ -70,6 +71,21 @@ class LicenseCheck:
         2. _verify: checks if license is valid calling litellm API. This is the old way we were generating/validating license
         """
         try:
+            verbose_proxy_logger.debug(
+                "litellm.proxy.auth.litellm_license.py::is_premium() - ENTERING 'IS_PREMIUM' - {}".format(
+                    self.license_str
+                )
+            )
+
+            if self.license_str is None:
+                self.license_str = os.getenv("LITELLM_LICENSE", None)
+
+            verbose_proxy_logger.debug(
+                "litellm.proxy.auth.litellm_license.py::is_premium() - Updated 'self.license_str' - {}".format(
+                    self.license_str
+                )
+            )
+
             if self.license_str is None:
                 return False
             elif (

@@ -16,23 +16,48 @@ from litellm import verbose_logger
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
+    HTTPHandler,
     _get_async_httpx_client,
     _get_httpx_client,
 )
 from litellm.types.llms.anthropic import (
+    AnthopicMessagesAssistantMessageParam,
+    AnthropicFinishReason,
+    AnthropicMessagesRequest,
+    AnthropicMessagesTool,
     AnthropicMessagesToolChoice,
+    AnthropicMessagesUserMessageParam,
+    AnthropicResponse,
+    AnthropicResponseContentBlockText,
+    AnthropicResponseContentBlockToolUse,
+    AnthropicResponseUsageBlock,
     ContentBlockDelta,
     ContentBlockStart,
     MessageBlockDelta,
     MessageStartBlock,
 )
 from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionAssistantMessage,
+    ChatCompletionAssistantToolCall,
+    ChatCompletionImageObject,
+    ChatCompletionImageUrlObject,
+    ChatCompletionRequest,
     ChatCompletionResponseMessage,
+    ChatCompletionSystemMessage,
+    ChatCompletionTextObject,
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
+    ChatCompletionToolChoiceFunctionParam,
+    ChatCompletionToolChoiceObjectParam,
+    ChatCompletionToolChoiceValues,
+    ChatCompletionToolMessage,
+    ChatCompletionToolParam,
+    ChatCompletionToolParamFunctionChunk,
     ChatCompletionUsageBlock,
+    ChatCompletionUserMessage,
 )
-from litellm.types.utils import GenericStreamingChunk
+from litellm.types.utils import Choices, GenericStreamingChunk
 from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
 
 from .base import BaseLLM
@@ -168,12 +193,300 @@ class AnthropicConfig:
                 optional_params["top_p"] = value
         return optional_params
 
+    ### FOR [BETA] `/v1/messages` endpoint support
+
+    def translatable_anthropic_params(self) -> List:
+        """
+        Which anthropic params, we need to translate to the openai format.
+        """
+        return ["messages", "metadata", "system", "tool_choice", "tools"]
+
+    def translate_anthropic_messages_to_openai(
+        self,
+        messages: List[
+            Union[
+                AnthropicMessagesUserMessageParam,
+                AnthopicMessagesAssistantMessageParam,
+            ]
+        ],
+    ) -> List:
+        new_messages: List[AllMessageValues] = []
+        for m in messages:
+            user_message: Optional[ChatCompletionUserMessage] = None
+            tool_message_list: List[ChatCompletionToolMessage] = []
+            ## USER MESSAGE ##
+            if m["role"] == "user":
+                ## translate user message
+                if isinstance(m["content"], str):
+                    user_message = ChatCompletionUserMessage(
+                        role="user", content=m["content"]
+                    )
+                elif isinstance(m["content"], list):
+                    new_user_content_list: List[
+                        Union[ChatCompletionTextObject, ChatCompletionImageObject]
+                    ] = []
+                    for content in m["content"]:
+                        if content["type"] == "text":
+                            text_obj = ChatCompletionTextObject(
+                                type="text", text=content["text"]
+                            )
+                            new_user_content_list.append(text_obj)
+                        elif content["type"] == "image":
+                            image_url = ChatCompletionImageUrlObject(
+                                url=f"data:{content['type']};base64,{content['source']}"
+                            )
+                            image_obj = ChatCompletionImageObject(
+                                type="image_url", image_url=image_url
+                            )
+
+                            new_user_content_list.append(image_obj)
+                        elif content["type"] == "tool_result":
+                            if "content" not in content:
+                                tool_result = ChatCompletionToolMessage(
+                                    role="tool",
+                                    tool_call_id=content["tool_use_id"],
+                                    content="",
+                                )
+                                tool_message_list.append(tool_result)
+                            elif isinstance(content["content"], str):
+                                tool_result = ChatCompletionToolMessage(
+                                    role="tool",
+                                    tool_call_id=content["tool_use_id"],
+                                    content=content["content"],
+                                )
+                                tool_message_list.append(tool_result)
+                            elif isinstance(content["content"], list):
+                                for c in content["content"]:
+                                    if c["type"] == "text":
+                                        tool_result = ChatCompletionToolMessage(
+                                            role="tool",
+                                            tool_call_id=content["tool_use_id"],
+                                            content=c["text"],
+                                        )
+                                        tool_message_list.append(tool_result)
+                                    elif c["type"] == "image":
+                                        image_str = (
+                                            f"data:{c['type']};base64,{c['source']}"
+                                        )
+                                        tool_result = ChatCompletionToolMessage(
+                                            role="tool",
+                                            tool_call_id=content["tool_use_id"],
+                                            content=image_str,
+                                        )
+                                        tool_message_list.append(tool_result)
+
+            if user_message is not None:
+                new_messages.append(user_message)
+
+            if len(tool_message_list) > 0:
+                new_messages.extend(tool_message_list)
+
+            ## ASSISTANT MESSAGE ##
+            assistant_message_str: Optional[str] = None
+            tool_calls: List[ChatCompletionAssistantToolCall] = []
+            if m["role"] == "assistant":
+                if isinstance(m["content"], str):
+                    assistant_message_str = m["content"]
+                elif isinstance(m["content"], list):
+                    for content in m["content"]:
+                        if content["type"] == "text":
+                            if assistant_message_str is None:
+                                assistant_message_str = content["text"]
+                            else:
+                                assistant_message_str += content["text"]
+                        elif content["type"] == "tool_use":
+                            function_chunk = ChatCompletionToolCallFunctionChunk(
+                                name=content["name"],
+                                arguments=json.dumps(content["input"]),
+                            )
+
+                            tool_calls.append(
+                                ChatCompletionAssistantToolCall(
+                                    id=content["id"],
+                                    type="function",
+                                    function=function_chunk,
+                                )
+                            )
+
+            if assistant_message_str is not None or len(tool_calls) > 0:
+                assistant_message = ChatCompletionAssistantMessage(
+                    role="assistant",
+                    content=assistant_message_str,
+                )
+                if len(tool_calls) > 0:
+                    assistant_message["tool_calls"] = tool_calls
+                new_messages.append(assistant_message)
+
+        return new_messages
+
+    def translate_anthropic_tool_choice_to_openai(
+        self, tool_choice: AnthropicMessagesToolChoice
+    ) -> ChatCompletionToolChoiceValues:
+        if tool_choice["type"] == "any":
+            return "required"
+        elif tool_choice["type"] == "auto":
+            return "auto"
+        elif tool_choice["type"] == "tool":
+            tc_function_param = ChatCompletionToolChoiceFunctionParam(
+                name=tool_choice.get("name", "")
+            )
+            return ChatCompletionToolChoiceObjectParam(
+                type="function", function=tc_function_param
+            )
+        else:
+            raise ValueError(
+                "Incompatible tool choice param submitted - {}".format(tool_choice)
+            )
+
+    def translate_anthropic_tools_to_openai(
+        self, tools: List[AnthropicMessagesTool]
+    ) -> List[ChatCompletionToolParam]:
+        new_tools: List[ChatCompletionToolParam] = []
+        for tool in tools:
+            function_chunk = ChatCompletionToolParamFunctionChunk(
+                name=tool["name"],
+                parameters=tool["input_schema"],
+            )
+            if "description" in tool:
+                function_chunk["description"] = tool["description"]
+            new_tools.append(
+                ChatCompletionToolParam(type="function", function=function_chunk)
+            )
+
+        return new_tools
+
+    def translate_anthropic_to_openai(
+        self, anthropic_message_request: AnthropicMessagesRequest
+    ) -> ChatCompletionRequest:
+        """
+        This is used by the beta Anthropic Adapter, for translating anthropic `/v1/messages` requests to the openai format.
+        """
+        new_messages: List[AllMessageValues] = []
+
+        ## CONVERT ANTHROPIC MESSAGES TO OPENAI
+        new_messages = self.translate_anthropic_messages_to_openai(
+            messages=anthropic_message_request["messages"]
+        )
+        ## ADD SYSTEM MESSAGE TO MESSAGES
+        if "system" in anthropic_message_request:
+            new_messages.insert(
+                0,
+                ChatCompletionSystemMessage(
+                    role="system", content=anthropic_message_request["system"]
+                ),
+            )
+
+        new_kwargs: ChatCompletionRequest = {
+            "model": anthropic_message_request["model"],
+            "messages": new_messages,
+        }
+        ## CONVERT METADATA (user_id)
+        if "metadata" in anthropic_message_request:
+            if "user_id" in anthropic_message_request["metadata"]:
+                new_kwargs["user"] = anthropic_message_request["metadata"]["user_id"]
+
+        # Pass litellm proxy specific metadata
+        if "litellm_metadata" in anthropic_message_request:
+            # metadata will be passed to litellm.acompletion(), it's a litellm_param
+            new_kwargs["metadata"] = anthropic_message_request.pop("litellm_metadata")
+
+        ## CONVERT TOOL CHOICE
+        if "tool_choice" in anthropic_message_request:
+            new_kwargs["tool_choice"] = self.translate_anthropic_tool_choice_to_openai(
+                tool_choice=anthropic_message_request["tool_choice"]
+            )
+        ## CONVERT TOOLS
+        if "tools" in anthropic_message_request:
+            new_kwargs["tools"] = self.translate_anthropic_tools_to_openai(
+                tools=anthropic_message_request["tools"]
+            )
+
+        translatable_params = self.translatable_anthropic_params()
+        for k, v in anthropic_message_request.items():
+            if k not in translatable_params:  # pass remaining params as is
+                new_kwargs[k] = v  # type: ignore
+
+        return new_kwargs
+
+    def _translate_openai_content_to_anthropic(
+        self, choices: List[Choices]
+    ) -> List[
+        Union[AnthropicResponseContentBlockText, AnthropicResponseContentBlockToolUse]
+    ]:
+        new_content: List[
+            Union[
+                AnthropicResponseContentBlockText, AnthropicResponseContentBlockToolUse
+            ]
+        ] = []
+        for choice in choices:
+            if (
+                choice.message.tool_calls is not None
+                and len(choice.message.tool_calls) > 0
+            ):
+                for tool_call in choice.message.tool_calls:
+                    new_content.append(
+                        AnthropicResponseContentBlockToolUse(
+                            type="tool_use",
+                            id=tool_call.id,
+                            name=tool_call.function.name or "",
+                            input=json.loads(tool_call.function.arguments),
+                        )
+                    )
+            elif choice.message.content is not None:
+                new_content.append(
+                    AnthropicResponseContentBlockText(
+                        type="text", text=choice.message.content
+                    )
+                )
+
+        return new_content
+
+    def _translate_openai_finish_reason_to_anthropic(
+        self, openai_finish_reason: str
+    ) -> AnthropicFinishReason:
+        if openai_finish_reason == "stop":
+            return "end_turn"
+        elif openai_finish_reason == "length":
+            return "max_tokens"
+        elif openai_finish_reason == "tool_calls":
+            return "tool_use"
+        return "end_turn"
+
+    def translate_openai_response_to_anthropic(
+        self, response: litellm.ModelResponse
+    ) -> AnthropicResponse:
+        ## translate content block
+        anthropic_content = self._translate_openai_content_to_anthropic(choices=response.choices)  # type: ignore
+        ## extract finish reason
+        anthropic_finish_reason = self._translate_openai_finish_reason_to_anthropic(
+            openai_finish_reason=response.choices[0].finish_reason  # type: ignore
+        )
+        # extract usage
+        usage: litellm.Usage = getattr(response, "usage")
+        anthropic_usage = AnthropicResponseUsageBlock(
+            input_tokens=usage.prompt_tokens, output_tokens=usage.completion_tokens
+        )
+        translated_obj = AnthropicResponse(
+            id=response.id,
+            type="message",
+            role="assistant",
+            model=response.model or "unknown-model",
+            stop_sequence=None,
+            usage=anthropic_usage,
+            content=anthropic_content,
+            stop_reason=anthropic_finish_reason,
+        )
+
+        return translated_obj
+
 
 # makes headers for API call
-def validate_environment(api_key, user_headers):
+def validate_environment(api_key, user_headers, model):
     if api_key is None:
-        raise ValueError(
-            "Missing Anthropic API Key - A call is being made to anthropic but no key is set either in the environment variables or via params"
+        raise litellm.AuthenticationError(
+            message="Missing Anthropic API Key - A call is being made to anthropic but no key is set either in the environment variables or via params. Please set `ANTHROPIC_API_KEY` in your environment vars",
+            llm_provider="anthropic",
+            model=model,
         )
     headers = {
         "accept": "application/json",
@@ -231,122 +544,7 @@ class AnthropicChatCompletion(BaseLLM):
     def __init__(self) -> None:
         super().__init__()
 
-    # def process_streaming_response(
-    #     self,
-    #     model: str,
-    #     response: Union[requests.Response, httpx.Response],
-    #     model_response: ModelResponse,
-    #     stream: bool,
-    #     logging_obj: litellm.litellm_core_utils.litellm_logging.Logging,
-    #     optional_params: dict,
-    #     api_key: str,
-    #     data: Union[dict, str],
-    #     messages: List,
-    #     print_verbose,
-    #     encoding,
-    # ) -> CustomStreamWrapper:
-    #     """
-    #     Return stream object for tool-calling + streaming
-    #     """
-    #     ## LOGGING
-    #     logging_obj.post_call(
-    #         input=messages,
-    #         api_key=api_key,
-    #         original_response=response.text,
-    #         additional_args={"complete_input_dict": data},
-    #     )
-    #     print_verbose(f"raw model_response: {response.text}")
-    #     ## RESPONSE OBJECT
-    #     try:
-    #         completion_response = response.json()
-    #     except:
-    #         raise AnthropicError(
-    #             message=response.text, status_code=response.status_code
-    #         )
-    #     text_content = ""
-    #     tool_calls = []
-    #     for content in completion_response["content"]:
-    #         if content["type"] == "text":
-    #             text_content += content["text"]
-    #         ## TOOL CALLING
-    #         elif content["type"] == "tool_use":
-    #             tool_calls.append(
-    #                 {
-    #                     "id": content["id"],
-    #                     "type": "function",
-    #                     "function": {
-    #                         "name": content["name"],
-    #                         "arguments": json.dumps(content["input"]),
-    #                     },
-    #                 }
-    #             )
-    #     if "error" in completion_response:
-    #         raise AnthropicError(
-    #             message=str(completion_response["error"]),
-    #             status_code=response.status_code,
-    #         )
-    #     _message = litellm.Message(
-    #         tool_calls=tool_calls,
-    #         content=text_content or None,
-    #     )
-    #     model_response.choices[0].message = _message  # type: ignore
-    #     model_response._hidden_params["original_response"] = completion_response[
-    #         "content"
-    #     ]  # allow user to access raw anthropic tool calling response
-
-    #     model_response.choices[0].finish_reason = map_finish_reason(
-    #         completion_response["stop_reason"]
-    #     )
-
-    #     print_verbose("INSIDE ANTHROPIC STREAMING TOOL CALLING CONDITION BLOCK")
-    #     # return an iterator
-    #     streaming_model_response = ModelResponse(stream=True)
-    #     streaming_model_response.choices[0].finish_reason = model_response.choices[  # type: ignore
-    #         0
-    #     ].finish_reason
-    #     # streaming_model_response.choices = [litellm.utils.StreamingChoices()]
-    #     streaming_choice = litellm.utils.StreamingChoices()
-    #     streaming_choice.index = model_response.choices[0].index
-    #     _tool_calls = []
-    #     print_verbose(
-    #         f"type of model_response.choices[0]: {type(model_response.choices[0])}"
-    #     )
-    #     print_verbose(f"type of streaming_choice: {type(streaming_choice)}")
-    #     if isinstance(model_response.choices[0], litellm.Choices):
-    #         if getattr(
-    #             model_response.choices[0].message, "tool_calls", None
-    #         ) is not None and isinstance(
-    #             model_response.choices[0].message.tool_calls, list
-    #         ):
-    #             for tool_call in model_response.choices[0].message.tool_calls:
-    #                 _tool_call = {**tool_call.dict(), "index": 0}
-    #                 _tool_calls.append(_tool_call)
-    #         delta_obj = litellm.utils.Delta(
-    #             content=getattr(model_response.choices[0].message, "content", None),
-    #             role=model_response.choices[0].message.role,
-    #             tool_calls=_tool_calls,
-    #         )
-    #         streaming_choice.delta = delta_obj
-    #         streaming_model_response.choices = [streaming_choice]
-    #         completion_stream = ModelResponseIterator(
-    #             model_response=streaming_model_response
-    #         )
-    #         print_verbose(
-    #             "Returns anthropic CustomStreamWrapper with 'cached_response' streaming object"
-    #         )
-    #         return CustomStreamWrapper(
-    #             completion_stream=completion_stream,
-    #             model=model,
-    #             custom_llm_provider="cached_response",
-    #             logging_obj=logging_obj,
-    #         )
-    #     else:
-    #         raise AnthropicError(
-    #             status_code=422,
-    #             message="Unprocessable response object - {}".format(response.text),
-    #         )
-
-    def process_response(
+    def _process_response(
         self,
         model: str,
         response: Union[requests.Response, httpx.Response],
@@ -359,6 +557,7 @@ class AnthropicChatCompletion(BaseLLM):
         messages: List,
         print_verbose,
         encoding,
+        json_mode: bool,
     ) -> ModelResponse:
         ## LOGGING
         logging_obj.post_call(
@@ -382,27 +581,40 @@ class AnthropicChatCompletion(BaseLLM):
             )
         else:
             text_content = ""
-            tool_calls = []
-            for content in completion_response["content"]:
+            tool_calls: List[ChatCompletionToolCallChunk] = []
+            for idx, content in enumerate(completion_response["content"]):
                 if content["type"] == "text":
                     text_content += content["text"]
                 ## TOOL CALLING
                 elif content["type"] == "tool_use":
                     tool_calls.append(
-                        {
-                            "id": content["id"],
-                            "type": "function",
-                            "function": {
-                                "name": content["name"],
-                                "arguments": json.dumps(content["input"]),
-                            },
-                        }
+                        ChatCompletionToolCallChunk(
+                            id=content["id"],
+                            type="function",
+                            function=ChatCompletionToolCallFunctionChunk(
+                                name=content["name"],
+                                arguments=json.dumps(content["input"]),
+                            ),
+                            index=idx,
+                        )
                     )
 
             _message = litellm.Message(
                 tool_calls=tool_calls,
                 content=text_content or None,
             )
+
+            ## HANDLE JSON MODE - anthropic returns single function call
+            if json_mode and len(tool_calls) == 1:
+                json_mode_content_str: Optional[str] = tool_calls[0]["function"].get(
+                    "arguments"
+                )
+                if json_mode_content_str is not None:
+                    args = json.loads(json_mode_content_str)
+                    values: Optional[dict] = args.get("values")
+                    if values is not None:
+                        _message = litellm.Message(content=json.dumps(values))
+                        completion_response["stop_reason"] = "stop"
             model_response.choices[0].message = _message  # type: ignore
             model_response._hidden_params["original_response"] = completion_response[
                 "content"
@@ -417,8 +629,8 @@ class AnthropicChatCompletion(BaseLLM):
         completion_tokens = completion_response["usage"]["output_tokens"]
         total_tokens = prompt_tokens + completion_tokens
 
-        model_response["created"] = int(time.time())
-        model_response["model"] = model
+        model_response.created = int(time.time())
+        model_response.model = model
         usage = Usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
@@ -495,9 +707,11 @@ class AnthropicChatCompletion(BaseLLM):
         _is_function_call,
         data: dict,
         optional_params: dict,
+        json_mode: bool,
         litellm_params=None,
         logger_fn=None,
         headers={},
+        client=None,
     ) -> Union[ModelResponse, CustomStreamWrapper]:
         async_handler = _get_async_httpx_client()
 
@@ -513,7 +727,7 @@ class AnthropicChatCompletion(BaseLLM):
             )
             raise e
 
-        return self.process_response(
+        return self._process_response(
             model=model,
             response=response,
             model_response=model_response,
@@ -525,6 +739,7 @@ class AnthropicChatCompletion(BaseLLM):
             print_verbose=print_verbose,
             optional_params=optional_params,
             encoding=encoding,
+            json_mode=json_mode,
         )
 
     def completion(
@@ -539,12 +754,14 @@ class AnthropicChatCompletion(BaseLLM):
         api_key,
         logging_obj,
         optional_params: dict,
+        timeout: Union[float, httpx.Timeout],
         acompletion=None,
         litellm_params=None,
         logger_fn=None,
         headers={},
+        client=None,
     ):
-        headers = validate_environment(api_key, headers)
+        headers = validate_environment(api_key, headers, model)
         _is_function_call = False
         messages = copy.deepcopy(messages)
         optional_params = copy.deepcopy(optional_params)
@@ -563,8 +780,17 @@ class AnthropicChatCompletion(BaseLLM):
             system_prompt = ""
             for idx, message in enumerate(messages):
                 if message["role"] == "system":
-                    system_prompt += message["content"]
-                    system_prompt_indices.append(idx)
+                    valid_content: bool = False
+                    if isinstance(message["content"], str):
+                        system_prompt += message["content"]
+                        valid_content = True
+                    elif isinstance(message["content"], list):
+                        for content in message["content"]:
+                            system_prompt += content.get("text", "")
+                        valid_content = True
+
+                    if valid_content:
+                        system_prompt_indices.append(idx)
             if len(system_prompt_indices) > 0:
                 for idx in reversed(system_prompt_indices):
                     messages.pop(idx)
@@ -595,14 +821,18 @@ class AnthropicChatCompletion(BaseLLM):
 
             anthropic_tools = []
             for tool in optional_params["tools"]:
-                new_tool = tool["function"]
-                new_tool["input_schema"] = new_tool.pop("parameters")  # rename key
-                anthropic_tools.append(new_tool)
+                if "input_schema" in tool:  # assume in anthropic format
+                    anthropic_tools.append(tool)
+                else:  # assume openai tool call
+                    new_tool = tool["function"]
+                    new_tool["input_schema"] = new_tool.pop("parameters")  # rename key
+                    anthropic_tools.append(new_tool)
 
             optional_params["tools"] = anthropic_tools
 
         stream = optional_params.pop("stream", None)
         is_vertex_request: bool = optional_params.pop("is_vertex_request", False)
+        json_mode: bool = optional_params.pop("json_mode", False)
 
         data = {
             "messages": messages,
@@ -623,7 +853,7 @@ class AnthropicChatCompletion(BaseLLM):
             },
         )
         print_verbose(f"_is_function_call: {_is_function_call}")
-        if acompletion == True:
+        if acompletion is True:
             if (
                 stream is True
             ):  # if function call - fake the streaming (need complete blocks for output parsing in openai format)
@@ -665,9 +895,15 @@ class AnthropicChatCompletion(BaseLLM):
                     litellm_params=litellm_params,
                     logger_fn=logger_fn,
                     headers=headers,
+                    client=client,
+                    json_mode=json_mode,
                 )
         else:
             ## COMPLETION CALL
+            if client is None or isinstance(client, AsyncHTTPHandler):
+                client = HTTPHandler(timeout=timeout)  # type: ignore
+            else:
+                client = client
             if (
                 stream is True
             ):  # if function call - fake the streaming (need complete blocks for output parsing in openai format)
@@ -697,15 +933,13 @@ class AnthropicChatCompletion(BaseLLM):
                 return streaming_response
 
             else:
-                response = requests.post(
-                    api_base, headers=headers, data=json.dumps(data)
-                )
+                response = client.post(api_base, headers=headers, data=json.dumps(data))
                 if response.status_code != 200:
                     raise AnthropicError(
                         status_code=response.status_code, message=response.text
                     )
 
-        return self.process_response(
+        return self._process_response(
             model=model,
             response=response,
             model_response=model_response,
@@ -717,6 +951,7 @@ class AnthropicChatCompletion(BaseLLM):
             print_verbose=print_verbose,
             optional_params=optional_params,
             encoding=encoding,
+            json_mode=json_mode,
         )
 
     def embedding(self):

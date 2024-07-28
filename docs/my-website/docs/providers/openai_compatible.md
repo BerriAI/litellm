@@ -63,6 +63,14 @@ Here's how to call an OpenAI-Compatible Endpoint with the LiteLLM Proxy Server
         api_key: api-key                 # api key to send your model
   ```
 
+  :::info
+
+  If you see `Not Found Error` when testing make sure your `api_base` has the `/v1` postfix
+
+  Example: `http://vllm-endpoint.xyz/v1`
+
+  :::
+
 2. Start the proxy 
 
   ```bash

@@ -175,10 +175,12 @@ class LiteLLMRoutes(enum.Enum):
         "/chat/completions",
         "/v1/chat/completions",
         # completions
+        "/engines/{model}/completions",
         "/openai/deployments/{model}/completions",
         "/completions",
         "/v1/completions",
         # embeddings
+        "/engines/{model}/embeddings",
         "/openai/deployments/{model}/embeddings",
         "/embeddings",
         "/v1/embeddings",
@@ -202,11 +204,32 @@ class LiteLLMRoutes(enum.Enum):
         # files
         "/v1/files",
         "/files",
+        "/v1/files/{file_id}",
+        "/files/{file_id}",
+        "/v1/files/{file_id}/content",
+        "/files/{file_id}/content",
+        # assistants-related routes
+        "/assistants",
+        "/v1/assistants",
+        "/v1/assistants/{assistant_id}",
+        "/assistants/{assistant_id}",
+        "/threads",
+        "/v1/threads",
+        "/threads/{thread_id}",
+        "/v1/threads/{thread_id}",
+        "/threads/{thread_id}/messages",
+        "/v1/threads/{thread_id}/messages",
+        "/threads/{thread_id}/runs",
+        "/v1/threads/{thread_id}/runs",
         # models
         "/models",
         "/v1/models",
         # token counter
         "/utils/token_counter",
+    ]
+
+    anthropic_routes: List = [
+        "/v1/messages",
     ]
 
     info_routes: List = [
@@ -285,6 +308,7 @@ class LiteLLMRoutes(enum.Enum):
         "/routes",
         "/",
         "/health/liveliness",
+        "/health/liveness",
         "/health/readiness",
         "/test",
         "/config/yaml",
@@ -860,12 +884,33 @@ class BlockTeamRequest(LiteLLMBase):
     team_id: str  # required
 
 
+class AddTeamCallback(LiteLLMBase):
+    callback_name: str
+    callback_type: Literal["success", "failure", "success_and_failure"]
+    # for now - only supported for langfuse
+    callback_vars: Dict[
+        Literal["langfuse_public_key", "langfuse_secret_key", "langfuse_host"], str
+    ]
+
+
+class TeamCallbackMetadata(LiteLLMBase):
+    success_callback: Optional[List[str]] = []
+    failure_callback: Optional[List[str]] = []
+    # for now - only supported for langfuse
+    callback_vars: Optional[
+        Dict[
+            Literal["langfuse_public_key", "langfuse_secret_key", "langfuse_host"], str
+        ]
+    ] = {}
+
+
 class LiteLLM_TeamTable(TeamBase):
     spend: Optional[float] = None
     max_parallel_requests: Optional[int] = None
     budget_duration: Optional[str] = None
     budget_reset_at: Optional[datetime] = None
     model_id: Optional[int] = None
+    last_refreshed_at: Optional[float] = None
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -1099,6 +1144,14 @@ class ConfigGeneralSettings(LiteLLMBase):
     global_max_parallel_requests: Optional[int] = Field(
         None, description="global max parallel requests to allow for a proxy instance."
     )
+    max_request_size_mb: Optional[int] = Field(
+        None,
+        description="max request size in MB, if a request is larger than this size it will be rejected",
+    )
+    max_response_size_mb: Optional[int] = Field(
+        None,
+        description="max response size in MB, if a response is larger than this size it will be rejected",
+    )
     infer_model_from_keys: Optional[bool] = Field(
         None,
         description="for `/models` endpoint, infers available model based on environment keys (e.g. OPENAI_API_KEY)",
@@ -1211,12 +1264,16 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     soft_budget: Optional[float] = None
     team_model_aliases: Optional[Dict] = None
     team_member_spend: Optional[float] = None
+    team_metadata: Optional[Dict] = None
 
     # End User Params
     end_user_id: Optional[str] = None
     end_user_tpm_limit: Optional[int] = None
     end_user_rpm_limit: Optional[int] = None
     end_user_max_budget: Optional[float] = None
+
+    # Time stamps
+    last_refreshed_at: Optional[float] = None  # last time joint view was pulled from db
 
 
 class UserAPIKeyAuth(
@@ -1319,6 +1376,7 @@ class LiteLLM_SpendLogs(LiteLLMBase):
     cache_hit: Optional[str] = "False"
     cache_key: Optional[str] = None
     request_tags: Optional[Json] = None
+    requester_ip_address: Optional[str] = None
 
 
 class LiteLLM_ErrorLogs(LiteLLMBase):
@@ -1510,6 +1568,7 @@ class SpendLogsMetadata(TypedDict):
     spend_logs_metadata: Optional[
         dict
     ]  # special param to log k,v pairs to spendlogs for a call
+    requester_ip_address: Optional[str]
 
 
 class SpendLogsPayload(TypedDict):
@@ -1534,6 +1593,7 @@ class SpendLogsPayload(TypedDict):
     request_tags: str  # json str
     team_id: Optional[str]
     end_user: Optional[str]
+    requester_ip_address: Optional[str]
 
 
 class SpanAttributes(str, enum.Enum):
@@ -1602,11 +1662,17 @@ class ProxyException(Exception):
         type: str,
         param: Optional[str],
         code: Optional[int],
+        headers: Optional[Dict[str, str]] = None,
     ):
         self.message = message
         self.type = type
         self.param = param
         self.code = code
+        if headers is not None:
+            for k, v in headers.items():
+                if not isinstance(v, str):
+                    headers[k] = str(v)
+        self.headers = headers or {}
 
         # rules for proxyExceptions
         # Litellm router.py returns "No healthy deployment available" when there are no deployments available
@@ -1638,3 +1704,11 @@ class SpendCalculateRequest(LiteLLMBase):
     model: Optional[str] = None
     messages: Optional[List] = None
     completion_response: Optional[dict] = None
+
+
+class ProxyErrorTypes(str, enum.Enum):
+    budget_exceeded = "budget_exceeded"
+    expired_key = "expired_key"
+    auth_error = "auth_error"
+    internal_server_error = "internal_server_error"
+    bad_request_error = "bad_request_error"

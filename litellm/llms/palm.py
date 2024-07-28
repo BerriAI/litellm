@@ -1,12 +1,14 @@
-import types
-import traceback
 import copy
 import time
+import traceback
+import types
 from typing import Callable, Optional
-from litellm.utils import ModelResponse, Choices, Message, Usage
-import litellm
+
 import httpx
+
+import litellm
 from litellm import verbose_logger
+from litellm.utils import Choices, Message, ModelResponse, Usage
 
 
 class PalmError(Exception):
@@ -164,7 +166,7 @@ def completion(
                 message_obj = Message(content=None)
             choice_obj = Choices(index=idx + 1, message=message_obj)
             choices_list.append(choice_obj)
-        model_response["choices"] = choices_list
+        model_response.choices = choices_list  # type: ignore
     except Exception as e:
         verbose_logger.error(
             "litellm.llms.palm.py::completion(): Exception occured - {}".format(str(e))
@@ -188,8 +190,8 @@ def completion(
         encoding.encode(model_response["choices"][0]["message"].get("content", ""))
     )
 
-    model_response["created"] = int(time.time())
-    model_response["model"] = "palm/" + model
+    model_response.created = int(time.time())
+    model_response.model = "palm/" + model
     usage = Usage(
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
