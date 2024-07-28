@@ -31,7 +31,7 @@ general_settings:
   # Security controls
   max_request_size_mb: 100
   # google cloud run maximum repsonses size is 32MB
-  max_response_size_mb: 100
+  max_response_size_mb: 10
 
 litellm_settings:
   callbacks: ["otel"]
