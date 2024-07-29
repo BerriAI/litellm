@@ -312,7 +312,14 @@ class Message(OpenAIObject):
                 FunctionCall(**function_call) if function_call is not None else None
             ),
             "tool_calls": (
-                [ChatCompletionMessageToolCall(**tool_call) for tool_call in tool_calls]
+                [
+                    (
+                        ChatCompletionMessageToolCall(**tool_call)
+                        if isinstance(tool_call, dict)
+                        else tool_call
+                    )
+                    for tool_call in tool_calls
+                ]
                 if tool_calls is not None
                 else None
             ),
