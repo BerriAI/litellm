@@ -1692,6 +1692,8 @@ class Cache:
                     "aembedding",
                     "atranscription",
                     "transcription",
+                    "atext_completion",
+                    "text_completion",
                 ]
             ]
         ] = [
@@ -1701,6 +1703,8 @@ class Cache:
             "aembedding",
             "atranscription",
             "transcription",
+            "atext_completion",
+            "text_completion",
         ],
         # s3 Bucket, boto3 configuration
         s3_bucket_name: Optional[str] = None,
@@ -2235,6 +2239,8 @@ def enable_cache(
                 "aembedding",
                 "atranscription",
                 "transcription",
+                "atext_completion",
+                "text_completion",
             ]
         ]
     ] = [
@@ -2244,6 +2250,8 @@ def enable_cache(
         "aembedding",
         "atranscription",
         "transcription",
+        "atext_completion",
+        "text_completion",
     ],
     **kwargs,
 ):
@@ -2300,6 +2308,8 @@ def update_cache(
                 "aembedding",
                 "atranscription",
                 "transcription",
+                "atext_completion",
+                "text_completion",
             ]
         ]
     ] = [
@@ -2309,6 +2319,8 @@ def update_cache(
         "aembedding",
         "atranscription",
         "transcription",
+        "atext_completion",
+        "text_completion",
     ],
     **kwargs,
 ):
