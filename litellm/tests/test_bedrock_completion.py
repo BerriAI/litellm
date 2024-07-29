@@ -81,6 +81,39 @@ def test_completion_bedrock_claude_completion_auth():
 # test_completion_bedrock_claude_completion_auth()
 
 
+def test_completion_bedrock_guardrails():
+    import os
+
+    litellm.set_verbose = True
+
+    try:
+        response = completion(
+            model="anthropic.claude-v2",
+            messages=[
+                {
+                    "content": "where do i buy coffee from? ",
+                    "role": "user",
+                }
+            ],
+            max_tokens=10,
+            guardrailConfig={
+                "guardrailIdentifier": "ff6ujrregl1q",
+                "guardrailVersion": "DRAFT",
+                "trace": "disabled",
+            },
+        )
+        # Add any assertions here to check the response
+        print(response)
+        assert (
+            "Sorry, the model cannot answer this question. coffee guardrail applied"
+            in response.choices[0].message.content
+        )
+    except RateLimitError:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
 def test_completion_bedrock_claude_2_1_completion_auth():
     print("calling bedrock claude 2.1 completion params auth")
     import os
