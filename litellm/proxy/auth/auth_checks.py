@@ -373,12 +373,13 @@ async def _cache_team_object(
     proxy_logging_obj: Optional[ProxyLogging],
 ):
     key = "team_id:{}".format(team_id)
-    await user_api_key_cache.async_set_cache(key=key, value=team_table)
+    value = team_table.model_dump_json(exclude_unset=True)
+    await user_api_key_cache.async_set_cache(key=key, value=value)
 
     ## UPDATE REDIS CACHE ##
     if proxy_logging_obj is not None:
         await proxy_logging_obj.internal_usage_cache.async_set_cache(
-            key=key, value=team_table
+            key=key, value=value
         )
 
 
