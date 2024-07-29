@@ -122,7 +122,7 @@ class BadRequestError(openai.BadRequestError):  # type: ignore
         self.model = model
         self.llm_provider = llm_provider
         self.litellm_debug_info = litellm_debug_info
-        response = response or httpx.Response(
+        response = httpx.Response(
             status_code=self.status_code,
             request=httpx.Request(
                 method="GET", url="https://litellm.ai"
@@ -287,16 +287,13 @@ class RateLimitError(openai.RateLimitError):  # type: ignore
         self.litellm_debug_info = litellm_debug_info
         self.max_retries = max_retries
         self.num_retries = num_retries
-        if response is None:
-            self.response = httpx.Response(
-                status_code=429,
-                request=httpx.Request(
-                    method="POST",
-                    url=" https://cloud.google.com/vertex-ai/",
-                ),
-            )
-        else:
-            self.response = response
+        self.response = httpx.Response(
+            status_code=429,
+            request=httpx.Request(
+                method="POST",
+                url=" https://cloud.google.com/vertex-ai/",
+            ),
+        )
         super().__init__(
             self.message, response=self.response, body=None
         )  # Call the base class constructor with the parameters it needs
@@ -334,7 +331,7 @@ class ContextWindowExceededError(BadRequestError):  # type: ignore
         self.llm_provider = llm_provider
         self.litellm_debug_info = litellm_debug_info
         request = httpx.Request(method="POST", url="https://api.openai.com/v1")
-        self.response = response or httpx.Response(status_code=400, request=request)
+        self.response = httpx.Response(status_code=400, request=request)
         super().__init__(
             message=self.message,
             model=self.model,  # type: ignore
@@ -377,7 +374,7 @@ class RejectedRequestError(BadRequestError):  # type: ignore
         self.litellm_debug_info = litellm_debug_info
         self.request_data = request_data
         request = httpx.Request(method="POST", url="https://api.openai.com/v1")
-        response = httpx.Response(status_code=500, request=request)
+        response = httpx.Response(status_code=400, request=request)
         super().__init__(
             message=self.message,
             model=self.model,  # type: ignore
@@ -419,7 +416,7 @@ class ContentPolicyViolationError(BadRequestError):  # type: ignore
         self.llm_provider = llm_provider
         self.litellm_debug_info = litellm_debug_info
         request = httpx.Request(method="POST", url="https://api.openai.com/v1")
-        self.response = response or httpx.Response(status_code=500, request=request)
+        self.response = httpx.Response(status_code=400, request=request)
         super().__init__(
             message=self.message,
             model=self.model,  # type: ignore
@@ -463,16 +460,13 @@ class ServiceUnavailableError(openai.APIStatusError):  # type: ignore
         self.litellm_debug_info = litellm_debug_info
         self.max_retries = max_retries
         self.num_retries = num_retries
-        if response is None:
-            self.response = httpx.Response(
-                status_code=self.status_code,
-                request=httpx.Request(
-                    method="POST",
-                    url=" https://cloud.google.com/vertex-ai/",
-                ),
-            )
-        else:
-            self.response = response
+        self.response = httpx.Response(
+            status_code=self.status_code,
+            request=httpx.Request(
+                method="POST",
+                url=" https://cloud.google.com/vertex-ai/",
+            ),
+        )
         super().__init__(
             self.message, response=self.response, body=None
         )  # Call the base class constructor with the parameters it needs
@@ -512,16 +506,13 @@ class InternalServerError(openai.InternalServerError):  # type: ignore
         self.litellm_debug_info = litellm_debug_info
         self.max_retries = max_retries
         self.num_retries = num_retries
-        if response is None:
-            self.response = httpx.Response(
-                status_code=self.status_code,
-                request=httpx.Request(
-                    method="POST",
-                    url=" https://cloud.google.com/vertex-ai/",
-                ),
-            )
-        else:
-            self.response = response
+        self.response = httpx.Response(
+            status_code=self.status_code,
+            request=httpx.Request(
+                method="POST",
+                url=" https://cloud.google.com/vertex-ai/",
+            ),
+        )
         super().__init__(
             self.message, response=self.response, body=None
         )  # Call the base class constructor with the parameters it needs
