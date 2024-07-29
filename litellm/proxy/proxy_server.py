@@ -2762,6 +2762,7 @@ async def chat_completion(
     try:
         body = await request.body()
         body_str = body.decode()
+        print(f"request body: {body_str}")
         try:
             data = ast.literal_eval(body_str)
         except:
@@ -2769,6 +2770,7 @@ async def chat_completion(
 
         # set user api keys from vault
         if "user_id" in data:
+            print(f"getting api keys for user: {data['user_id']}")
             import vault
             vault_secrets = vault.get_api_keys(data['user_id'])
             if 'OPENAI_API_KEY' in vault_secrets:
@@ -2845,6 +2847,7 @@ async def chat_completion(
         router_model_names = llm_router.model_names if llm_router is not None else []
         # skip router if user passed their key
         if "api_key" in data:
+
             tasks.append(litellm.acompletion(**data))
         elif "," in data["model"] and llm_router is not None:
             if (
