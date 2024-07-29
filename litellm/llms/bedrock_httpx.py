@@ -1889,12 +1889,14 @@ class BedrockConverseLLM(BaseLLM):
         additional_request_params = {}
         supported_converse_params = AmazonConverseConfig.__annotations__.keys()
         supported_tool_call_params = ["tools", "tool_choice"]
+        supported_guardrail_params = ["guardrailConfig"]
         ## TRANSFORMATION ##
         # send all model-specific params in 'additional_request_params'
         for k, v in inference_params.items():
             if (
                 k not in supported_converse_params
                 and k not in supported_tool_call_params
+                and k not in supported_guardrail_params
             ):
                 additional_request_params[k] = v
                 additional_request_keys.append(k)
@@ -1926,6 +1928,15 @@ class BedrockConverseLLM(BaseLLM):
             "system": system_content_blocks,
             "inferenceConfig": InferenceConfig(**inference_params),
         }
+
+        # Guardrail Config
+        guardrail_config: Optional[GuardrailConfigBlock] = None
+        request_guardrails_config = inference_params.pop("guardrailConfig", None)
+        if request_guardrails_config is not None:
+            guardrail_config = GuardrailConfigBlock(**request_guardrails_config)
+            _data["guardrailConfig"] = guardrail_config
+
+        # Tool Config
         if bedrock_tool_config is not None:
             _data["toolConfig"] = bedrock_tool_config
         data = json.dumps(_data)

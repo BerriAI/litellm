@@ -360,6 +360,71 @@ resp = litellm.completion(
 print(f"\nResponse: {resp}")
 ```
 
+
+## Usage - Bedrock Guardrails
+
+Example of using [Bedrock Guardrails with LiteLLM](https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-use-converse-api.html)
+
+<Tabs>
+<TabItem value="sdk" label="LiteLLM SDK">
+
+```python
+from litellm import completion
+
+# set env
+os.environ["AWS_ACCESS_KEY_ID"] = ""
+os.environ["AWS_SECRET_ACCESS_KEY"] = ""
+os.environ["AWS_REGION_NAME"] = ""
+
+response = completion(
+    model="anthropic.claude-v2",
+    messages=[
+        {
+            "content": "where do i buy coffee from? ",
+            "role": "user",
+        }
+    ],
+    max_tokens=10,
+    guardrailConfig={
+        "guardrailIdentifier": "ff6ujrregl1q", # The identifier (ID) for the guardrail.
+        "guardrailVersion": "DRAFT",           # The version of the guardrail.
+        "trace": "disabled",                   # The trace behavior for the guardrail. Can either be "disabled" or "enabled"
+    },
+)
+```
+</TabItem>
+<TabItem value="proxy" label="LiteLLM Proxy Server">
+
+```python
+
+import openai
+client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://0.0.0.0:4000"
+)
+
+# request sent to model set on litellm proxy, `litellm --model`
+response = client.chat.completions.create(model="anthropic.claude-v2", messages = [
+    {
+        "role": "user",
+        "content": "this is a test request, write a short poem"
+    }
+],
+temperature=0.7,
+extra_body={
+    "guardrailConfig": {
+        "guardrailIdentifier": "ff6ujrregl1q", # The identifier (ID) for the guardrail.
+        "guardrailVersion": "DRAFT",           # The version of the guardrail.
+        "trace": "disabled",                   # The trace behavior for the guardrail. Can either be "disabled" or "enabled"
+    },
+}
+)
+
+print(response)
+```
+</TabItem>
+</Tabs>
+
 ## Usage - "Assistant Pre-fill"
 
 If you're using Anthropic's Claude with Bedrock, you can "put words in Claude's mouth" by including an `assistant` role message as the last item in the `messages` array.
