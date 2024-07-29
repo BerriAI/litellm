@@ -5075,6 +5075,8 @@ def stream_chunk_builder(
         prev_id = None
         curr_id = None
         curr_index = 0
+        prev_name = None
+        curr_name = None
         for chunk in chunks:
             choices = chunk["choices"]
             for choice in choices:
@@ -5094,7 +5096,9 @@ def stream_chunk_builder(
                         arguments = tool_calls[0].function.arguments
                         argument_list.append(arguments)
                     if tool_calls[0].function.name:
-                        name = tool_calls[0].function.name
+                        curr_name = tool_calls[0].function.name
+                        if prev_name is None:
+                            prev_name = curr_name
                     if tool_calls[0].type:
                         type = tool_calls[0].type
             if curr_index != prev_index:  # new tool call
@@ -5103,19 +5107,21 @@ def stream_chunk_builder(
                     {
                         "id": prev_id,
                         "index": prev_index,
-                        "function": {"arguments": combined_arguments, "name": name},
+                        "function": {"arguments": combined_arguments, "name": prev_name},
                         "type": type,
                     }
                 )
                 argument_list = []  # reset
                 prev_index = curr_index
                 prev_id = curr_id
+                prev_name = curr_name
 
         combined_arguments = "".join(argument_list)
         tool_calls_list.append(
             {
                 "id": id,
-                "function": {"arguments": combined_arguments, "name": name},
+                "index": curr_index,
+                "function": {"arguments": combined_arguments, "name": curr_name},
                 "type": type,
             }
         )
