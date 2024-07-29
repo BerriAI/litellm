@@ -18,6 +18,7 @@ import Usage from "../components/usage";
 import CacheDashboard from "@/components/cache_dashboard";
 import { jwtDecode } from "jwt-decode";
 import { Typography } from "antd";
+import { setGlobalLitellmHeaderName } from "../components/networking"
 
 function getCookie(name: string) {
   console.log("COOKIES", document.cookie)
@@ -123,6 +124,11 @@ const CreateKeyPage = () => {
         if (decoded.premium_user) {
           setPremiumUser(decoded.premium_user);
         }
+
+        if (decoded.auth_header_name) {
+          setGlobalLitellmHeaderName(decoded.auth_header_name);
+        }
+        
       }
     }
   }, [token]);
