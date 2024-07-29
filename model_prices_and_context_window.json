@@ -3773,7 +3773,9 @@
         "input_cost_per_token": 0.0000004,
         "output_cost_per_token": 0.0000006,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_function_calling": true, 
+        "supports_tool_choice": false
     },
     "meta.llama3-1-70b-instruct-v1:0": {
         "max_tokens": 128000,
@@ -3782,7 +3784,9 @@
         "input_cost_per_token": 0.00000265,
         "output_cost_per_token": 0.0000035,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_function_calling": true, 
+        "supports_tool_choice": false
     },
     "meta.llama3-1-405b-instruct-v1:0": {
         "max_tokens": 128000,
@@ -3791,7 +3795,9 @@
         "input_cost_per_token": 0.00000532,
         "output_cost_per_token": 0.000016,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_function_calling": true, 
+        "supports_tool_choice": false
     },
     "512-x-512/50-steps/stability.stable-diffusion-xl-v0": {
         "max_tokens": 77, 
