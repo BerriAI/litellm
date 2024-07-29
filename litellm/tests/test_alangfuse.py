@@ -285,6 +285,7 @@ async def test_langfuse_logging_audio_transcriptions(langfuse_client):
 
     assert len(generations) == 1
     assert generations[0].name == "litellm-atranscription"
+    assert generations[0].output is not None
 
 
 @pytest.mark.asyncio
