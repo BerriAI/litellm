@@ -202,6 +202,11 @@ class LangFuseLogger:
             ):
                 input = prompt
                 output = response_obj["data"]
+            elif response_obj is not None and isinstance(
+                response_obj, litellm.TranscriptionResponse
+            ):
+                input = prompt
+                output = response_obj["text"]
             print_verbose(f"OUTPUT IN LANGFUSE: {output}; original: {response_obj}")
             trace_id = None
             generation_id = None
