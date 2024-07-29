@@ -245,6 +245,49 @@ async def test_langfuse_logging_without_request_response(stream, langfuse_client
         pytest.fail(f"An exception occurred - {e}")
 
 
+# Get the current directory of the file being run
+pwd = os.path.dirname(os.path.realpath(__file__))
+print(pwd)
+
+file_path = os.path.join(pwd, "gettysburg.wav")
+
+audio_file = open(file_path, "rb")
+
+
+@pytest.mark.asyncio
+async def test_langfuse_logging_audio_transcriptions(langfuse_client):
+    """
+    Test that creates a trace with masked input and output
+    """
+    import uuid
+
+    _unique_trace_name = f"litellm-test-{str(uuid.uuid4())}"
+    litellm.set_verbose = True
+    litellm.success_callback = ["langfuse"]
+    await litellm.atranscription(
+        model="whisper-1",
+        file=audio_file,
+        metadata={
+            "trace_id": _unique_trace_name,
+        },
+    )
+
+    langfuse_client.flush()
+    await asyncio.sleep(2)
+
+    # get trace with _unique_trace_name
+    trace = langfuse_client.get_trace(id=_unique_trace_name)
+    generations = list(
+        reversed(langfuse_client.get_generations(trace_id=_unique_trace_name).data)
+    )
+
+    print("generations for given trace=", generations)
+
+    assert len(generations) == 1
+    assert generations[0].name == "litellm-atranscription"
+    assert generations[0].output is not None
+
+
 @pytest.mark.asyncio
 async def test_langfuse_masked_input_output(langfuse_client):
     """

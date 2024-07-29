@@ -34,4 +34,4 @@ general_settings:
   max_response_size_mb: 10
 
 litellm_settings:
-  callbacks: ["otel"]
+  success_callback: ["langfuse"]
