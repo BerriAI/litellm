@@ -220,6 +220,9 @@ const handleSubmit = async (
         else if (key === "base_model") {
           // Add key-value pair to model_info dictionary
           modelInfoObj[key] = value;
+        }
+        else if (key === "custom_model_name") {
+          litellmParamsObj["model"] = value;
         } else if (key == "litellm_extra_params") {
           console.log("litellm_extra_params:", value);
           let litellmExtraParams = {};
@@ -1718,26 +1721,43 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                     </Col>
                   </Row>
                   <Form.Item
-                    rules={[{ required: true, message: "Required" }]}
-                    label="LiteLLM Model Name(s)"
+                  label="LiteLLM Model Name(s)"
+                  tooltip="Actual model name used for making litellm.completion() call."
+                  className="mb-0"
+                >
+                  <Form.Item
                     name="model"
-                    tooltip="Actual model name used for making litellm.completion() call."
-                    className="mb-0"
+                    rules={[{ required: true, message: "Required" }]}
+                    noStyle
                   >
-                    { (selectedProvider === Providers.Azure) || (selectedProvider === Providers.OpenAI_Compatible) || (selectedProvider === Providers.Ollama) ? (
-                      <TextInput placeholder={getPlaceholder(selectedProvider.toString())} />
-                    ) : providerModels.length > 0 ? (
-                      <MultiSelect value={providerModels}>
-                        {providerModels.map((model, index) => (
-                          <MultiSelectItem key={index} value={model}>
-                            {model}
-                          </MultiSelectItem>
-                        ))}
-                      </MultiSelect>
-                    ) : (
-                      <TextInput placeholder={getPlaceholder(selectedProvider.toString())} />
-                    )}
+                    <MultiSelect>
+                    <MultiSelectItem value="custom">Custom Model Name (Enter below)</MultiSelectItem>
+                      {providerModels.map((model, index) => (
+                        <MultiSelectItem key={index} value={model}>
+                          {model}
+                        </MultiSelectItem>
+                      ))}
+                    </MultiSelect>
                   </Form.Item>
+
+                  <Form.Item
+                    noStyle
+                    shouldUpdate={(prevValues, currentValues) => prevValues.model !== currentValues.model}
+                  >
+                    {({ getFieldValue }) => {
+                      const selectedModels = getFieldValue('model') || [];
+                      return selectedModels.includes('custom') && (
+                        <Form.Item
+                          name="custom_model_name"
+                          rules={[{ required: true, message: "Please enter a custom model name" }]}
+                          className="mt-2"
+                        >
+                          <TextInput placeholder="Enter custom model name" />
+                        </Form.Item>
+                      )
+                    }}
+                  </Form.Item>
+                </Form.Item>
                   <Row>
                     <Col span={10}></Col>
                     <Col span={10}>
