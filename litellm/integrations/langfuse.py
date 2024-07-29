@@ -144,6 +144,10 @@ class LangFuseLogger:
                 f"Langfuse Logging - Enters logging function for model {kwargs}"
             )
 
+            # set default values for input/output for langfuse logging
+            input = None
+            output = None
+
             litellm_params = kwargs.get("litellm_params", {})
             litellm_call_id = kwargs.get("litellm_call_id", None)
             metadata = (
