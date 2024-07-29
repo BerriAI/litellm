@@ -412,7 +412,7 @@ response = client.chat.completions.create(model="anthropic.claude-v2", messages 
 ],
 temperature=0.7,
 extra_body={
-    guardrailConfig={
+    "guardrailConfig": {
         "guardrailIdentifier": "ff6ujrregl1q", # The identifier (ID) for the guardrail.
         "guardrailVersion": "DRAFT",           # The version of the guardrail.
         "trace": "disabled",                   # The trace behavior for the guardrail. Can either be "disabled" or "enabled"
