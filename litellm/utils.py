@@ -2772,7 +2772,9 @@ def get_optional_params(
                     message=f"Function calling is not supported by {custom_llm_provider}.",
                 )
 
-    if "tools" in non_default_params:
+    if "tools" in non_default_params and isinstance(
+        non_default_params, list
+    ):  # fixes https://github.com/BerriAI/litellm/issues/4933
         tools = non_default_params["tools"]
         for (
             tool
