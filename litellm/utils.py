@@ -6845,7 +6845,6 @@ def exception_type(
                         message=f"BedrockException: Context Window Error - {error_str}",
                         model=model,
                         llm_provider="bedrock",
-                        response=original_exception.response,
                     )
                 elif "Malformed input request" in error_str:
                     exception_mapping_worked = True
