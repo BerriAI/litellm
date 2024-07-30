@@ -223,7 +223,7 @@ class AzureOpenAIFilesAPI(BaseLLM):
         api_key: Optional[str],
         timeout: Union[float, httpx.Timeout],
         max_retries: Optional[int],
-        organization: Optional[str],
+        organization: Optional[str] = None,
         api_version: Optional[str] = None,
         client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI]] = None,
     ):
