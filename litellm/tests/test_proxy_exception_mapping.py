@@ -79,6 +79,10 @@ def test_chat_completion_exception(client):
             in json_response["error"]["message"]
         )
 
+        code_in_error = json_response["error"]["code"]
+        # OpenAI SDK required code to be STR, https://github.com/BerriAI/litellm/issues/4970
+        assert type(code_in_error) == str
+
         # make an openai client to call _make_status_error_from_response
         openai_client = openai.OpenAI(api_key="anything")
         openai_exception = openai_client._make_status_error_from_response(
