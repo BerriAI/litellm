@@ -1,12 +1,12 @@
 import types
-import requests
-from typing import Callable, Optional, Dict, List
+from typing import Callable, Dict, List, Optional
+
 import httpx
+import requests
 
 import litellm
-from litellm.utils import ModelResponse
 from litellm._version import version
-
+from litellm.utils import ModelResponse
 
 # dict to map notdiamond providers and models to litellm providers and models
 ND2LITELLM = {
@@ -72,12 +72,15 @@ ND2LITELLM = {
 
 
 class NotDiamondError(Exception):
-    def __init__(self, status_code, message):
+    def __init__(
+        self,
+        status_code,
+        message,
+        url="https://not-diamond-server.onrender.com/v2/optimizer/modelSelect",
+    ):
         self.status_code = status_code
         self.message = message
-        self.request = httpx.Request(
-            method="POST", url="https://not-diamond-server.onrender.com/v2/optimizer/modelSelect"
-        )
+        self.request = httpx.Request(method="POST", url=url)
         self.response = httpx.Response(status_code=status_code, request=self.request)
         super().__init__(
             self.message
@@ -106,7 +109,7 @@ class NotDiamondConfig:
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
-    
+
     @classmethod
     def get_config(cls):
         return {
@@ -130,7 +133,7 @@ class NotDiamondConfig:
 def validate_environment(api_key):
     if api_key is None:
         raise ValueError(
-            "Missing NotDiamond API Key - A call is being made to notdiamond but no key is set either in the environment variables or via params"
+            "Missing NOTDIAMOND_API_KEY in env - A call is being made to Not Diamond but no key is set either in the environment variables or via params"
         )
     headers = {
         "Authorization": "Bearer " + api_key,
@@ -142,25 +145,28 @@ def validate_environment(api_key):
 
 
 def get_litellm_model(response: dict) -> str:
-    nd_provider = response['providers'][0]['provider']
-    nd_model = response['providers'][0]['model']
+    nd_provider = response["providers"][0]["provider"]
+    nd_model = response["providers"][0]["model"]
     nd_provider_model = f"{nd_provider}/{nd_model}"
     litellm_model = ND2LITELLM[nd_provider_model]
     return litellm_model
 
 
 def update_litellm_params(litellm_params: dict):
-    '''
+    """
     Create a new litellm_params dict with non-default litellm_params from the original call, custom_llm_provider and api_base
-    '''
+    """
     new_litellm_params = dict()
     for k, v in litellm_params.items():
         # all litellm_params have defaults of None or False, except force_timeout
         if (k == "force_timeout" and v != 600) or v:
             new_litellm_params[k] = v
-    if "custom_llm_provider" in new_litellm_params: del new_litellm_params["custom_llm_provider"]
-    if "api_base" in new_litellm_params: del new_litellm_params["api_base"]
-    if "api_key" in new_litellm_params: del new_litellm_params["api_key"]
+    if "custom_llm_provider" in new_litellm_params:
+        del new_litellm_params["custom_llm_provider"]
+    if "api_base" in new_litellm_params:
+        del new_litellm_params["api_base"]
+    if "api_key" in new_litellm_params:
+        del new_litellm_params["api_key"]
     return new_litellm_params
 
 
@@ -183,13 +189,18 @@ def completion(
     ## Load Config
     config = litellm.NotDiamondConfig.get_config()
     for k, v in config.items():
-        if (
-            k not in optional_params
-        ):
+        if k not in optional_params:
             optional_params[k] = v
 
     # separate ND optional params from litellm optional params
-    nd_params = ["llm_providers", "tools", "max_model_depth", "tradeoff", "preference_id", "hash_content"]
+    nd_params = [
+        "llm_providers",
+        "tools",
+        "max_model_depth",
+        "tradeoff",
+        "preference_id",
+        "hash_content",
+    ]
     selected_model_params = dict()
     for k, v in optional_params.items():
         if k not in nd_params:
@@ -221,7 +232,7 @@ def completion(
         headers=headers,
         json=data,
     )
-    print_verbose(f"raw not diamond response: {nd_response.text}")
+    print_verbose(f"Raw response from Not Diamond: {nd_response.text}")
 
     ## RESPONSE OBJECT
     if nd_response.status_code != 200:
