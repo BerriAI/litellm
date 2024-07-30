@@ -45,7 +45,7 @@ async function generateModelResponse(
 ) {
   // base url should be the current base_url
   const isLocal = process.env.NODE_ENV === "development";
-  if (isLocal === true) {
+  if (isLocal != true) {
     console.log = function() {};
   }
   console.log("isLocal:", isLocal);
