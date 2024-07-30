@@ -319,7 +319,7 @@ async def alist_fine_tuning_jobs(
 
         # Use a partial function to pass your keyword arguments
         func = partial(
-            cancel_fine_tuning_job,
+            list_fine_tuning_jobs,
             after,
             limit,
             custom_llm_provider,

@@ -53,7 +53,9 @@ class OpenAIFineTuningAPI(BaseLLM):
         create_fine_tuning_job_data: FineTuningJobCreate,
         openai_client: AsyncOpenAI,
     ) -> FineTuningJob:
-        response = await openai_client.batches.create(**create_fine_tuning_job_data)
+        response = await openai_client.fine_tuning.jobs.create(
+            **create_fine_tuning_job_data
+        )
         return response
 
     def create_fine_tuning_job(
