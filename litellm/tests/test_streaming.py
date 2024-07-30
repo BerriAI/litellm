@@ -1766,6 +1766,7 @@ async def test_sagemaker_streaming_async():
 # asyncio.run(test_sagemaker_streaming_async())
 
 
+@pytest.mark.skip(reason="costly sagemaker deployment. Move to mock implementation")
 def test_completion_sagemaker_stream():
     try:
         response = completion(
