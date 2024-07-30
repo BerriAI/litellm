@@ -95,7 +95,7 @@ class OpenAIFineTuningAPI(BaseLLM):
         verbose_logger.debug(
             "creating fine tuning job, args= %s", create_fine_tuning_job_data
         )
-        response = openai_client.fine_tuning.jobs.create(**create_fine_tuning_job_data)
+        response = openai_client.fine_tuning.jobs.create(**create_fine_tuning_job_data)  # type: ignore
         return response
 
     async def acancel_fine_tuning_job(
