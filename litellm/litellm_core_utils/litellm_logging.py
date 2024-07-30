@@ -231,6 +231,9 @@ class Logging:
         ):
             self.custom_pricing = True
 
+        if "custom_llm_provider" in self.model_call_details:
+            self.custom_llm_provider = self.model_call_details["custom_llm_provider"]
+
     def _pre_call(self, input, api_key, model=None, additional_args={}):
         """
         Common helper function across the sync + async pre-call function
