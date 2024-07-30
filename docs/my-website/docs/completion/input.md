@@ -58,7 +58,7 @@ Use `litellm.get_supported_openai_params()` for an updated list of params for ea
 |Palm| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |
 |NLP Cloud| ✅ | ✅ | ✅ | ✅ | ✅ | | |  |  |   |
 |Petals| ✅ | ✅ |  | ✅ | ✅ | |  |   |  |   |
-|Ollama| ✅ | ✅ | ✅ | ✅ | ✅ |  |   | ✅ |  |   | | | ✅ | | |
+|Ollama| ✅ | ✅ | ✅ | ✅ | ✅ |  |   | ✅ |  |   | | | ✅ |  | |✅| | | | | | |
 |Databricks| ✅ | ✅ | ✅ | ✅ | ✅ |  |   | |  |   | | | | | |
 |ClarifAI| ✅ | ✅ | |✅ | ✅ |  |   | |  |   | | | | | |
 :::note
