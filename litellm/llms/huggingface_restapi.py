@@ -310,7 +310,7 @@ class Huggingface(BaseLLM):
     def __init__(self) -> None:
         super().__init__()
 
-    def validate_environment(self, api_key, headers) -> dict:
+    def _validate_environment(self, api_key, headers) -> dict:
         default_headers = {
             "content-type": "application/json",
         }
@@ -460,7 +460,7 @@ class Huggingface(BaseLLM):
         super().completion()
         exception_mapping_worked = False
         try:
-            headers = self.validate_environment(api_key, headers)
+            headers = self._validate_environment(api_key, headers)
             task, model = get_hf_task_for_model(model)
             ## VALIDATE API FORMAT
             if task is None or not isinstance(task, str) or task not in hf_task_list:
@@ -890,7 +890,7 @@ class Huggingface(BaseLLM):
         model_response: litellm.EmbeddingResponse,
         model: str,
         input: List,
-        encoding: Callable,
+        encoding: Any,
     ) -> litellm.EmbeddingResponse:
         output_data = []
         if "similarities" in embeddings:
@@ -1025,7 +1025,7 @@ class Huggingface(BaseLLM):
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
     ) -> litellm.EmbeddingResponse:
         super().embedding()
-        headers = self.validate_environment(api_key, headers=None)
+        headers = self._validate_environment(api_key, headers=None)
         # print_verbose(f"{model}, {task}")
         embed_url = ""
         if "https" in model:
