@@ -257,14 +257,20 @@ def test_openai_azure_embedding_optional_arg(mocker):
 # test_openai_embedding()
 
 
-def test_cohere_embedding():
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_cohere_embedding(sync_mode):
     try:
         # litellm.set_verbose=True
-        response = embedding(
-            model="embed-english-v2.0",
-            input=["good morning from litellm", "this is another item"],
-            input_type="search_query",
-        )
+        data = {
+            "model": "embed-english-v2.0",
+            "input": ["good morning from litellm", "this is another item"],
+            "input_type": "search_query",
+        }
+        if sync_mode:
+            response = embedding(**data)
+        else:
+            response = await litellm.aembedding(**data)
         print(f"response:", response)
 
         assert isinstance(response.usage, litellm.Usage)
