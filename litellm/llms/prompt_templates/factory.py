@@ -1632,6 +1632,7 @@ def cohere_messages_pt_v2(
     Note:
     - cannot specify message if the last entry in chat history contains tool results
     - message must be at least 1 token long or tool results must be specified.
+    - cannot specify tool_results if the last entry in chat history contains a user message
     """
     tool_calls: List = get_all_tool_calls(messages=messages)
 
