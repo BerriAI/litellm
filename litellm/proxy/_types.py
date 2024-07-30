@@ -1667,6 +1667,10 @@ class ProxyException(Exception):
         self.message = message
         self.type = type
         self.param = param
+
+        # If we look on official python OpenAI lib, the code should be a string:
+        # https://github.com/openai/openai-python/blob/195c05a64d39c87b2dfdf1eca2d339597f1fce03/src/openai/types/shared/error_object.py#L11
+        # Related LiteLLM issue: https://github.com/BerriAI/litellm/discussions/4834
         self.code = str(code)
         if headers is not None:
             for k, v in headers.items():
