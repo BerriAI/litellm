@@ -7774,7 +7774,7 @@ async def fallback_login(request: Request):
     "/login", include_in_schema=False
 )  # hidden since this is a helper for UI sso login
 async def login(request: Request):
-    global premium_user
+    global premium_user, general_settings
     try:
         import multipart
     except ImportError:
@@ -7876,6 +7876,9 @@ async def login(request: Request):
                 "user_role": user_role,  # this is the path without sso - we can assume only admins will use this
                 "login_method": "username_password",
                 "premium_user": premium_user,
+                "auth_header_name": general_settings.get(
+                    "litellm_key_header_name", "Authorization"
+                ),
             },
             master_key,
             algorithm="HS256",
@@ -7940,6 +7943,9 @@ async def login(request: Request):
                     "user_role": user_role,
                     "login_method": "username_password",
                     "premium_user": premium_user,
+                    "auth_header_name": general_settings.get(
+                        "litellm_key_header_name", "Authorization"
+                    ),
                 },
                 master_key,
                 algorithm="HS256",
@@ -7988,7 +7994,7 @@ async def onboarding(invite_link: str):
     - Get user from db
     - Pass in user_email if set
     """
-    global prisma_client, master_key
+    global prisma_client, master_key, general_settings
     if master_key is None:
         raise ProxyException(
             message="Master Key not set for Proxy. Please set Master Key to use Admin UI. Set `LITELLM_MASTER_KEY` in .env or set general_settings:master_key in config.yaml.  https://docs.litellm.ai/docs/proxy/virtual_keys. If set, use `--detailed_debug` to debug issue.",
@@ -8075,6 +8081,9 @@ async def onboarding(invite_link: str):
             "user_role": user_obj.user_role,
             "login_method": "username_password",
             "premium_user": premium_user,
+            "auth_header_name": general_settings.get(
+                "litellm_key_header_name", "Authorization"
+            ),
         },
         master_key,
         algorithm="HS256",
@@ -8492,6 +8501,9 @@ async def auth_callback(request: Request):
             "user_role": user_role,
             "login_method": "sso",
             "premium_user": premium_user,
+            "auth_header_name": general_settings.get(
+                "litellm_key_header_name", "Authorization"
+            ),
         },
         master_key,
         algorithm="HS256",
