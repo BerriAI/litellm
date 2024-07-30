@@ -487,13 +487,11 @@ class FineTuningJobCreate(TypedDict):
     ```
     """
 
-    model: str = Field(..., description="The name of the model to fine-tune.")
-    training_file: str = Field(
-        ..., description="The ID of an uploaded file that contains training data."
-    )
-    hyperparameters: Optional[Hyperparameters] = Field(
-        default={}, description="The hyperparameters used for the fine-tuning job."
-    )
+    model: str  # "The name of the model to fine-tune."
+    training_file: str  # "The ID of an uploaded file that contains training data."
+    hyperparameters: Optional[
+        Hyperparameters
+    ]  # "The hyperparameters used for the fine-tuning job."
     suffix: Optional[
         str
     ]  # "A string of up to 18 characters that will be added to your fine-tuned model name."
@@ -504,21 +502,3 @@ class FineTuningJobCreate(TypedDict):
         List[str]
     ]  # "A list of integrations to enable for your fine-tuning job."
     seed: Optional[int]  # "The seed controls the reproducibility of the job."
-
-    class Config:
-        allow_population_by_field_name = True
-        schema_extra = {
-            "example": {
-                "model": "gpt-3.5-turbo",
-                "training_file": "file-abc123",
-                "hyperparameters": {
-                    "batch_size": "auto",
-                    "learning_rate_multiplier": 0.1,
-                    "n_epochs": 3,
-                },
-                "suffix": "custom-model-name",
-                "validation_file": "file-xyz789",
-                "integrations": ["slack"],
-                "seed": 42,
-            }
-        }

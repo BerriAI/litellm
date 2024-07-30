@@ -54,7 +54,7 @@ class OpenAIFineTuningAPI(BaseLLM):
         openai_client: AsyncOpenAI,
     ) -> FineTuningJob:
         response = await openai_client.fine_tuning.jobs.create(
-            **create_fine_tuning_job_data
+            **create_fine_tuning_job_data  # type: ignore
         )
         return response
 
@@ -68,7 +68,7 @@ class OpenAIFineTuningAPI(BaseLLM):
         max_retries: Optional[int],
         organization: Optional[str],
         client: Optional[Union[OpenAI, AsyncOpenAI]] = None,
-    ) -> Union[Coroutine[Any, Any, FineTuningJob]]:
+    ) -> Union[FineTuningJob, Union[Coroutine[Any, Any, FineTuningJob]]]:
         openai_client: Optional[Union[OpenAI, AsyncOpenAI]] = self.get_openai_client(
             api_key=api_key,
             api_base=api_base,
@@ -154,7 +154,7 @@ class OpenAIFineTuningAPI(BaseLLM):
         after: Optional[str] = None,
         limit: Optional[int] = None,
     ):
-        response = await openai_client.fine_tuning.jobs.list(after=after, limit=limit)
+        response = await openai_client.fine_tuning.jobs.list(after=after, limit=limit)  # type: ignore
         return response
 
     def list_fine_tuning_jobs(
@@ -194,6 +194,6 @@ class OpenAIFineTuningAPI(BaseLLM):
                 openai_client=openai_client,
             )
         verbose_logger.debug("list fine tuning job, after= %s, limit= %s", after, limit)
-        response = openai_client.fine_tuning.jobs.list(after=after, limit=limit)
+        response = openai_client.fine_tuning.jobs.list(after=after, limit=limit)  # type: ignore
         return response
         pass
