@@ -101,6 +101,7 @@ togetherai_api_key: Optional[str] = None
 cloudflare_api_key: Optional[str] = None
 baseten_key: Optional[str] = None
 aleph_alpha_key: Optional[str] = None
+notdiamond_key: Optional[str] = None
 nlp_cloud_key: Optional[str] = None
 common_cloud_provider_auth_params: dict = {
     "params": ["project", "region_name", "token"],
@@ -626,6 +627,7 @@ provider_list: List = [
     "sagemaker",
     "bedrock",
     "vllm",
+    "notdiamond",
     "nlp_cloud",
     "petals",
     "oobabooga",
@@ -777,6 +779,7 @@ from .llms.together_ai import TogetherAIConfig
 from .llms.cloudflare import CloudflareConfig
 from .llms.palm import PalmConfig
 from .llms.gemini import GeminiConfig
+from .llms.notdiamond import NotDiamondConfig
 from .llms.nlp_cloud import NLPCloudConfig
 from .llms.aleph_alpha import AlephAlphaConfig
 from .llms.petals import PetalsConfig

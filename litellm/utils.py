@@ -3975,6 +3975,9 @@ def get_llm_provider(
                     or get_secret("TOGETHERAI_API_KEY")
                     or get_secret("TOGETHER_AI_TOKEN")
                 )
+            elif custom_llm_provider == "notdiamond":
+                api_base = "https://not-diamond-server.onrender.com/v2/optimizer/modelSelect"
+                dynamic_api_key = get_secret("NOTDIAMOND_API_KEY") or None
             if api_base is not None and not isinstance(api_base, str):
                 raise Exception(
                     "api base needs to be a string. api_base={}".format(api_base)
@@ -4192,6 +4195,9 @@ def get_api_key(llm_provider: str, dynamic_api_key: Optional[str]):
         api_key = (
             api_key or litellm.huggingface_key or get_secret("HUGGINGFACE_API_KEY")
         )
+    # notdiamond
+    elif llm_provider == "notdiamond":
+        api_key = api_key or litellm.notdiamond_key or get_secret("NOTDIAMOND_API_KEY")
     # nlp_cloud
     elif llm_provider == "nlp_cloud":
         api_key = api_key or litellm.nlp_cloud_key or get_secret("NLP_CLOUD_API_KEY")
