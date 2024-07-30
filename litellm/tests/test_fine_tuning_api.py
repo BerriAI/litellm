@@ -31,17 +31,29 @@ def test_create_fine_tune_job():
     )
     print("Response from creating file=", file_obj)
 
-    response = litellm.create_fine_tuning_job(
-        model="gpt-3.5-turbo",
+    create_fine_tuning_response = litellm.create_fine_tuning_job(
+        model="gpt-3.5-turbo-0125",
         training_file=file_obj.id,
     )
 
-    print("response from litellm.create_fine_tuning_job=", response)
+    print("response from litellm.create_fine_tuning_job=", create_fine_tuning_response)
 
-    assert response.id is not None
-    assert response.model == "gpt-3.5-turbo"
+    assert create_fine_tuning_response.id is not None
+    assert create_fine_tuning_response.model == "gpt-3.5-turbo-0125"
 
     # delete file
 
+    litellm.file_delete(
+        file_id=file_obj.id,
+    )
+
     # cancel ft job
+    response = litellm.cancel_fine_tuning_job(
+        fine_tuning_job_id=create_fine_tuning_response.id,
+    )
+
+    print("response from litellm.cancel_fine_tuning_job=", response)
+
+    assert response.status == "cancelled"
+    assert response.id == create_fine_tuning_response.id
     pass
