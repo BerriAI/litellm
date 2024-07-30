@@ -439,10 +439,6 @@ def list_batches(
     pass
 
 
-async def alist_batch():
-    pass
-
-
 def cancel_batch():
     pass
 
