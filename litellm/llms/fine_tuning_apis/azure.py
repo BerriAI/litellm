@@ -91,13 +91,15 @@ class AzureOpenAIFineTuningAPI(BaseLLM):
         api_base: Optional[str],
         timeout: Union[float, httpx.Timeout],
         max_retries: Optional[int],
-        organization: Optional[str],
+        organization: Optional[str] = None,
+        api_version: Optional[str] = None,
         client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI]] = None,
     ):
         openai_client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI]] = (
             get_azure_openai_client(
                 api_key=api_key,
                 api_base=api_base,
+                api_version=api_version,
                 timeout=timeout,
                 max_retries=max_retries,
                 organization=organization,
@@ -141,8 +143,9 @@ class AzureOpenAIFineTuningAPI(BaseLLM):
         api_base: Optional[str],
         timeout: Union[float, httpx.Timeout],
         max_retries: Optional[int],
-        organization: Optional[str],
+        organization: Optional[str] = None,
         client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI]] = None,
+        api_version: Optional[str] = None,
         after: Optional[str] = None,
         limit: Optional[int] = None,
     ):
@@ -150,6 +153,7 @@ class AzureOpenAIFineTuningAPI(BaseLLM):
             get_azure_openai_client(
                 api_key=api_key,
                 api_base=api_base,
+                api_version=api_version,
                 timeout=timeout,
                 max_retries=max_retries,
                 organization=organization,
@@ -175,4 +179,3 @@ class AzureOpenAIFineTuningAPI(BaseLLM):
         verbose_logger.debug("list fine tuning job, after= %s, limit= %s", after, limit)
         response = openai_client.fine_tuning.jobs.list(after=after, limit=limit)  # type: ignore
         return response
-        pass
