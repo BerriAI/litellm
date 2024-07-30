@@ -1314,8 +1314,9 @@ def get_api_key_from_custom_header(
     # use this as the virtual key passed to litellm proxy
     custom_litellm_key_header_name = custom_litellm_key_header_name.lower()
     verbose_proxy_logger.debug(
-        "searching for custom_litellm_key_header_name= %s",
+        "searching for custom_litellm_key_header_name= %s, in headers=%s",
         custom_litellm_key_header_name,
+        request.headers,
     )
     custom_api_key = request.headers.get(custom_litellm_key_header_name)
     if custom_api_key:
