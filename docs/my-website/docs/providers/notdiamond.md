@@ -1,10 +1,13 @@
 # Not Diamond
+
 [Not Diamond](https://www.notdiamond.ai/) automatically determines which model is best-suited to respond to any query, for improved quality, and reduced cost and latency. LiteLLM supports automatic model routing to all [models supported by Not Diamond](https://notdiamond.readme.io/v1.0.0/docs/llm-models).
 
 ## Pre-Requisites
+
 `pip install litellm`
 
 ## Required API Keys
+
 Follow this [link](https://app.notdiamond.ai/keys) to create your Not Diamond API key. Additionally, provide API keys for all providers that you want to route between.
 
 ```python
@@ -27,7 +30,7 @@ os.environ["NOTDIAMOND_API_KEY"] = "NOTDIAMOND_API_KEY"
 os.environ["OPENAI_API_KEY"] = "OPENAI_API_KEY"
 os.environ["ANTHROPIC_API_KEY"] = "ANTHROPIC_API_KEY"
 
-messages = [{"role": "user", "content": "Hey! how's it going?"}]
+messages = [{"role": "user", "content": "Hey! How's it going?"}]
 
 llm_providers = [
     {
@@ -50,6 +53,7 @@ print(response)
 ```
 
 ## Usage - Streaming
+
 Set `stream=True` when calling completion to stream responses.
 
 ```python
@@ -60,7 +64,7 @@ os.environ["NOTDIAMOND_API_KEY"] = "NOTDIAMOND_API_KEY"
 os.environ["OPENAI_API_KEY"] = "OPENAI_API_KEY"
 os.environ["ANTHROPIC_API_KEY"] = "ANTHROPIC_API_KEY"
 
-messages = [{"role": "user", "content": "Hey! how's it going?"}]
+messages = [{"role": "user", "content": "Hey! How's it going?"}]
 
 llm_providers = [
     {
@@ -84,7 +88,8 @@ for chunk in response:
 ```
 
 ## Usage - Function Calling
-Function calling is also supported through the `tools` parameter for [models that support function calling](https://notdiamond.readme.io/v0.1.0-beta/docs/function-calling).
+
+Function calling is also supported through the `tools` parameter for [models that support function calling](https://notdiamond.readme.io/docs/function-calling).
 
 ```python
 import os
