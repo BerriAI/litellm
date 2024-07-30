@@ -235,7 +235,7 @@ def mistral_api_pt(messages):
     """
     new_messages = []
     for m in messages:
-        special_keys = ["role", "content", "tool_calls"]
+        special_keys = ["role", "content", "tool_calls", "function_call"]
         extra_args = {}
         if isinstance(m, dict):
             for k, v in m.items():
