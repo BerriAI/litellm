@@ -235,7 +235,7 @@ def completion(
         optional_params["message"] = most_recent_message
     data = {
         "model": model,
-        "chat_history": chat_histrory,
+        "chat_history": chat_history,
         **optional_params,
     }
 
