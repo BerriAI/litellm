@@ -4938,6 +4938,8 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
         if custom_llm_provider is not None and custom_llm_provider == "vertex_ai":
             if "meta/" + model in litellm.vertex_llama3_models:
                 model = "meta/" + model
+            elif model + "@latest" in litellm.vertex_mistral_models:
+                model = model + "@latest"
         ##########################
         if custom_llm_provider is None:
             # Get custom_llm_provider
