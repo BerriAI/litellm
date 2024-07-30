@@ -47,7 +47,6 @@ async def acreate_fine_tuning_job(
     """
     Async: Creates and executes a batch from an uploaded file of request
 
-    LiteLLM Equivalent of POST: https://api.openai.com/v1/batches
     """
     try:
         loop = asyncio.get_event_loop()
@@ -182,6 +181,43 @@ def create_fine_tuning_job(
         raise e
 
 
+async def acancel_fine_tuning_job(
+    fine_tuning_job_id: str,
+    custom_llm_provider: Literal["openai"] = "openai",
+    extra_headers: Optional[Dict[str, str]] = None,
+    extra_body: Optional[Dict[str, str]] = None,
+    **kwargs,
+) -> FineTuningJob:
+    """
+    Async: Immediately cancel a fine-tune job.
+    """
+    try:
+        loop = asyncio.get_event_loop()
+        kwargs["acancel_fine_tuning_job"] = True
+
+        # Use a partial function to pass your keyword arguments
+        func = partial(
+            cancel_fine_tuning_job,
+            fine_tuning_job_id,
+            custom_llm_provider,
+            extra_headers,
+            extra_body,
+            **kwargs,
+        )
+
+        # Add the context to the function
+        ctx = contextvars.copy_context()
+        func_with_context = partial(ctx.run, func)
+        init_response = await loop.run_in_executor(None, func_with_context)
+        if asyncio.iscoroutine(init_response):
+            response = await init_response
+        else:
+            response = init_response  # type: ignore
+        return response
+    except Exception as e:
+        raise e
+
+
 def cancel_fine_tuning_job(
     fine_tuning_job_id: str,
     custom_llm_provider: Literal["openai"] = "openai",
@@ -237,7 +273,7 @@ def cancel_fine_tuning_job(
             elif timeout is None:
                 timeout = 600.0
 
-            _is_async = kwargs.pop("acreate_fine_tuning_job", False) is True
+            _is_async = kwargs.pop("acancel_fine_tuning_job", False) is True
 
             response = openai_fine_tuning_instance.cancel_fine_tuning_job(
                 api_base=api_base,
