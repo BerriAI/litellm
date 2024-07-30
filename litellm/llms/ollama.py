@@ -258,7 +258,7 @@ def get_ollama_response(
                 logging_obj=logging_obj,
             )
         return response
-    elif stream == True:
+    elif stream is True:
         return ollama_completion_stream(url=url, data=data, logging_obj=logging_obj)
 
     response = requests.post(
@@ -326,7 +326,7 @@ def ollama_completion_stream(url, data, logging_obj):
         try:
             if response.status_code != 200:
                 raise OllamaError(
-                    status_code=response.status_code, message=response.text
+                    status_code=response.status_code, message=response.read()
                 )
 
             streamwrapper = litellm.CustomStreamWrapper(
