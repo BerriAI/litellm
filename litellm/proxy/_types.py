@@ -1661,13 +1661,13 @@ class ProxyException(Exception):
         message: str,
         type: str,
         param: Optional[str],
-        code: Optional[int],
+        code: Optional[Union[int, str]] = None,
         headers: Optional[Dict[str, str]] = None,
     ):
         self.message = message
         self.type = type
         self.param = param
-        self.code = code
+        self.code = str(code)
         if headers is not None:
             for k, v in headers.items():
                 if not isinstance(v, str):
@@ -1681,7 +1681,7 @@ class ProxyException(Exception):
             "No healthy deployment available" in self.message
             or "No deployments available" in self.message
         ):
-            self.code = 429
+            self.code = "429"
 
     def to_dict(self) -> dict:
         """Converts the ProxyException instance to a dictionary."""
