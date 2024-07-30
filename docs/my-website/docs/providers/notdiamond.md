@@ -1,6 +1,6 @@
 # Not Diamond
 
-[Not Diamond](https://www.notdiamond.ai/) automatically determines which model is best-suited to respond to any query, for improved quality, and reduced cost and latency. LiteLLM supports automatic model routing to all [models supported by Not Diamond](https://notdiamond.readme.io/v1.0.0/docs/llm-models).
+[Not Diamond](https://www.notdiamond.ai/) automatically determines which model is best-suited to respond to any query, for improved quality, and reduced cost and latency. LiteLLM supports automatic model routing to all [models supported by Not Diamond](https://notdiamond.readme.io/docs/llm-models).
 
 ## Pre-Requisites
 
