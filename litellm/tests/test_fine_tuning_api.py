@@ -41,6 +41,12 @@ def test_create_fine_tune_job():
     assert create_fine_tuning_response.id is not None
     assert create_fine_tuning_response.model == "gpt-3.5-turbo-0125"
 
+    # list fine tuning jobs
+    print("listing ft jobs")
+    ft_jobs = litellm.list_fine_tuning_jobs(limit=2)
+    print("response from litellm.list_fine_tuning_jobs=", ft_jobs)
+    assert len(ft_jobs) > 0
+
     # delete file
 
     litellm.file_delete(
