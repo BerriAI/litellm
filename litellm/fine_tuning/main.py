@@ -34,7 +34,7 @@ openai_fine_tuning_instance = OpenAIFineTuningAPI()
 async def acreate_fine_tuning_job(
     model: str,
     training_file: str,
-    hyperparameters: Optional[Hyperparameters] = None,
+    hyperparameters: Optional[Hyperparameters] = {},
     suffix: Optional[str] = None,
     validation_file: Optional[str] = None,
     integrations: Optional[List[str]] = None,
@@ -85,7 +85,7 @@ async def acreate_fine_tuning_job(
 def create_fine_tuning_job(
     model: str,
     training_file: str,
-    hyperparameters: Optional[Hyperparameters] = None,
+    hyperparameters: Optional[Hyperparameters] = {},
     suffix: Optional[str] = None,
     validation_file: Optional[str] = None,
     integrations: Optional[List[str]] = None,
