@@ -2609,7 +2609,7 @@ class OpenAIBatchesAPI(BaseLLM):
         limit: Optional[int] = None,
     ):
         verbose_logger.debug("listing batches, after= %s, limit= %s", after, limit)
-        response = await openai_client.batches.list(after=after, limit=limit)
+        response = await openai_client.batches.list(after=after, limit=limit)  # type: ignore
         return response
 
     def list_batches(
@@ -2646,7 +2646,7 @@ class OpenAIBatchesAPI(BaseLLM):
             return self.alist_batches(  # type: ignore
                 openai_client=openai_client, after=after, limit=limit
             )
-        response = openai_client.batches.list(after=after, limit=limit)
+        response = openai_client.batches.list(after=after, limit=limit)  # type: ignore
         return response
 
 

@@ -5052,7 +5052,9 @@ async def list_batches(
         return response
     except Exception as e:
         await proxy_logging_obj.post_call_failure_hook(
-            user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
+            user_api_key_dict=user_api_key_dict,
+            original_exception=e,
+            request_data={"after": after, "limit": limit},
         )
         verbose_proxy_logger.error(
             "litellm.proxy.proxy_server.retrieve_batch(): Exception occured - {}".format(
