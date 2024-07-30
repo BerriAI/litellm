@@ -2944,7 +2944,7 @@ class Router:
                 elif isinstance(id, int):
                     id = str(id)
 
-                total_tokens = completion_response["usage"]["total_tokens"]
+                total_tokens = completion_response["usage"].get("total_tokens", 0)
 
                 # ------------
                 # Setup values
