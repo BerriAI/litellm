@@ -571,6 +571,8 @@ async def test_completion_predibase_streaming(sync_mode):
         pass
     except litellm.InternalServerError as e:
         pass
+    except litellm.ServiceUnavailableError as e:
+        pass
     except Exception as e:
         print("ERROR class", e.__class__)
         print("ERROR message", e)
