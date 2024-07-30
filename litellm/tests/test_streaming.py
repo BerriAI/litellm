@@ -571,6 +571,8 @@ async def test_completion_predibase_streaming(sync_mode):
         pass
     except litellm.InternalServerError as e:
         pass
+    except litellm.ServiceUnavailableError as e:
+        pass
     except Exception as e:
         print("ERROR class", e.__class__)
         print("ERROR message", e)
@@ -1764,6 +1766,7 @@ async def test_sagemaker_streaming_async():
 # asyncio.run(test_sagemaker_streaming_async())
 
 
+@pytest.mark.skip(reason="costly sagemaker deployment. Move to mock implementation")
 def test_completion_sagemaker_stream():
     try:
         response = completion(
