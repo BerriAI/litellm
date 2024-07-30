@@ -17,7 +17,7 @@ from typing import Any, Coroutine, Dict, Literal, Optional, Union
 import httpx
 
 import litellm
-from litellm.llms.openai_fine_tuning.openai import (
+from litellm.llms.fine_tuning_apis.openai import (
     FineTuningJob,
     FineTuningJobCreate,
     OpenAIFineTuningAPI,
@@ -27,7 +27,7 @@ from litellm.types.router import *
 from litellm.utils import supports_httpx_timeout
 
 ####### ENVIRONMENT VARIABLES ###################
-openai_fine_tuning_instance = OpenAIFineTuningAPI()
+fine_tuning_apis_instance = OpenAIFineTuningAPI()
 #################################################
 
 
@@ -154,7 +154,7 @@ def create_fine_tuning_job(
                 seed=seed,
             )
 
-            response = openai_fine_tuning_instance.create_fine_tuning_job(
+            response = fine_tuning_apis_instance.create_fine_tuning_job(
                 api_base=api_base,
                 api_key=api_key,
                 organization=organization,
@@ -275,7 +275,7 @@ def cancel_fine_tuning_job(
 
             _is_async = kwargs.pop("acancel_fine_tuning_job", False) is True
 
-            response = openai_fine_tuning_instance.cancel_fine_tuning_job(
+            response = fine_tuning_apis_instance.cancel_fine_tuning_job(
                 api_base=api_base,
                 api_key=api_key,
                 organization=organization,
@@ -401,7 +401,7 @@ def list_fine_tuning_jobs(
 
             _is_async = kwargs.pop("alist_fine_tuning_jobs", False) is True
 
-            response = openai_fine_tuning_instance.list_fine_tuning_jobs(
+            response = fine_tuning_apis_instance.list_fine_tuning_jobs(
                 api_base=api_base,
                 api_key=api_key,
                 organization=organization,
