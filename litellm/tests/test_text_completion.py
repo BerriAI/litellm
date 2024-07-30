@@ -3840,7 +3840,26 @@ def test_completion_chatgpt_prompt():
     try:
         print("\n gpt3.5 test\n")
         response = text_completion(
-            model="gpt-3.5-turbo", prompt="What's the weather in SF?"
+            model="openai/gpt-3.5-turbo", prompt="What's the weather in SF?"
+        )
+        print(response)
+        response_str = response["choices"][0]["text"]
+        print("\n", response.choices)
+        print("\n", response.choices[0])
+        # print(response.choices[0].text)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+# test_completion_chatgpt_prompt()
+
+
+def test_completion_gpt_instruct():
+    try:
+        response = text_completion(
+            model="gpt-3.5-turbo-instruct-0914",
+            prompt="What's the weather in SF?",
+            custom_llm_provider="openai",
         )
         print(response)
         response_str = response["choices"][0]["text"]
@@ -4189,12 +4208,12 @@ def test_completion_vllm():
 
     with patch.object(client.completions, "create", side_effect=mock_post) as mock_call:
         response = text_completion(
-            model="openai/gemini-1.5-flash",
-            prompt="ping",
-            client=client,
+            model="openai/gemini-1.5-flash", prompt="ping", client=client, hello="world"
         )
         print(response)
 
         assert response.usage.prompt_tokens == 2
 
         mock_call.assert_called_once()
+
+        assert "hello" in mock_call.call_args.kwargs["extra_body"]

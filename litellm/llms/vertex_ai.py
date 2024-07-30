@@ -12,6 +12,7 @@ import requests  # type: ignore
 from pydantic import BaseModel
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.prompt_templates.factory import (
     convert_to_anthropic_image_obj,
@@ -154,6 +155,7 @@ class VertexAIConfig:
             "response_format",
             "n",
             "stop",
+            "extra_headers",
         ]
 
     def map_openai_params(self, non_default_params: dict, optional_params: dict):
@@ -327,78 +329,94 @@ def _gemini_convert_messages_with_history(messages: list) -> List[ContentType]:
     user_message_types = {"user", "system"}
     contents: List[ContentType] = []
 
+    last_message_with_tool_calls = None
+
     msg_i = 0
-    while msg_i < len(messages):
-        user_content: List[PartType] = []
-        init_msg_i = msg_i
-        ## MERGE CONSECUTIVE USER CONTENT ##
-        while msg_i < len(messages) and messages[msg_i]["role"] in user_message_types:
-            if isinstance(messages[msg_i]["content"], list):
-                _parts: List[PartType] = []
-                for element in messages[msg_i]["content"]:
-                    if isinstance(element, dict):
-                        if element["type"] == "text":
-                            _part = PartType(text=element["text"])
-                            _parts.append(_part)
-                        elif element["type"] == "image_url":
-                            image_url = element["image_url"]["url"]
-                            _part = _process_gemini_image(image_url=image_url)
-                            _parts.append(_part)  # type: ignore
-                user_content.extend(_parts)
-            else:
-                _part = PartType(text=messages[msg_i]["content"])
-                user_content.append(_part)
+    try:
+        while msg_i < len(messages):
+            user_content: List[PartType] = []
+            init_msg_i = msg_i
+            ## MERGE CONSECUTIVE USER CONTENT ##
+            while (
+                msg_i < len(messages) and messages[msg_i]["role"] in user_message_types
+            ):
+                if isinstance(messages[msg_i]["content"], list):
+                    _parts: List[PartType] = []
+                    for element in messages[msg_i]["content"]:
+                        if isinstance(element, dict):
+                            if element["type"] == "text" and len(element["text"]) > 0:
+                                _part = PartType(text=element["text"])
+                                _parts.append(_part)
+                            elif element["type"] == "image_url":
+                                image_url = element["image_url"]["url"]
+                                _part = _process_gemini_image(image_url=image_url)
+                                _parts.append(_part)  # type: ignore
+                    user_content.extend(_parts)
+                elif (
+                    isinstance(messages[msg_i]["content"], str)
+                    and len(messages[msg_i]["content"]) > 0
+                ):
+                    _part = PartType(text=messages[msg_i]["content"])
+                    user_content.append(_part)
 
-            msg_i += 1
+                msg_i += 1
 
-        if user_content:
-            contents.append(ContentType(role="user", parts=user_content))
-        assistant_content = []
-        ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
-        while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
-            if isinstance(messages[msg_i]["content"], list):
-                _parts = []
-                for element in messages[msg_i]["content"]:
-                    if isinstance(element, dict):
-                        if element["type"] == "text":
-                            _part = PartType(text=element["text"])
-                            _parts.append(_part)
-                        elif element["type"] == "image_url":
-                            image_url = element["image_url"]["url"]
-                            _part = _process_gemini_image(image_url=image_url)
-                            _parts.append(_part)  # type: ignore
-                assistant_content.extend(_parts)
-            elif messages[msg_i].get(
-                "tool_calls", []
-            ):  # support assistant tool invoke conversion
-                assistant_content.extend(
-                    convert_to_gemini_tool_call_invoke(messages[msg_i]["tool_calls"])
+            if user_content:
+                contents.append(ContentType(role="user", parts=user_content))
+            assistant_content = []
+            ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
+            while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
+                if messages[msg_i].get("content", None) is not None and isinstance(
+                    messages[msg_i]["content"], list
+                ):
+                    _parts = []
+                    for element in messages[msg_i]["content"]:
+                        if isinstance(element, dict):
+                            if element["type"] == "text":
+                                _part = PartType(text=element["text"])
+                                _parts.append(_part)
+                            elif element["type"] == "image_url":
+                                image_url = element["image_url"]["url"]
+                                _part = _process_gemini_image(image_url=image_url)
+                                _parts.append(_part)  # type: ignore
+                    assistant_content.extend(_parts)
+                elif messages[msg_i].get(
+                    "tool_calls", []
+                ):  # support assistant tool invoke conversion
+                    assistant_content.extend(
+                        convert_to_gemini_tool_call_invoke(
+                            messages[msg_i]["tool_calls"]
+                        )
+                    )
+                    last_message_with_tool_calls = messages[msg_i]
+                else:
+                    assistant_text = (
+                        messages[msg_i].get("content") or ""
+                    )  # either string or none
+                    if assistant_text:
+                        assistant_content.append(PartType(text=assistant_text))
+
+                msg_i += 1
+
+            if assistant_content:
+                contents.append(ContentType(role="model", parts=assistant_content))
+
+            ## APPEND TOOL CALL MESSAGES ##
+            if msg_i < len(messages) and messages[msg_i]["role"] == "tool":
+                _part = convert_to_gemini_tool_call_result(
+                    messages[msg_i], last_message_with_tool_calls
                 )
-            else:
-                assistant_text = (
-                    messages[msg_i].get("content") or ""
-                )  # either string or none
-                if assistant_text:
-                    assistant_content.append(PartType(text=assistant_text))
-
-            msg_i += 1
-
-        if assistant_content:
-            contents.append(ContentType(role="model", parts=assistant_content))
-
-        ## APPEND TOOL CALL MESSAGES ##
-        if msg_i < len(messages) and messages[msg_i]["role"] == "tool":
-            _part = convert_to_gemini_tool_call_result(messages[msg_i])
-            contents.append(ContentType(parts=[_part]))  # type: ignore
-            msg_i += 1
-        if msg_i == init_msg_i:  # prevent infinite loops
-            raise Exception(
-                "Invalid Message passed in - {}. File an issue https://github.com/BerriAI/litellm/issues".format(
-                    messages[msg_i]
+                contents.append(ContentType(parts=[_part]))  # type: ignore
+                msg_i += 1
+            if msg_i == init_msg_i:  # prevent infinite loops
+                raise Exception(
+                    "Invalid Message passed in - {}. File an issue https://github.com/BerriAI/litellm/issues".format(
+                        messages[msg_i]
+                    )
                 )
-            )
-
-    return contents
+        return contents
+    except Exception as e:
+        raise e
 
 
 def _get_client_cache_key(model: str, vertex_project: str, vertex_location: str):
@@ -434,7 +452,7 @@ def completion(
     except:
         raise VertexAIError(
             status_code=400,
-            message="vertexai import failed please run `pip install google-cloud-aiplatform`",
+            message="vertexai import failed please run `pip install google-cloud-aiplatform`. This is required for the 'vertex_ai/' route on LiteLLM",
         )
 
     if not (
@@ -834,16 +852,14 @@ def completion(
 
         ## RESPONSE OBJECT
         if isinstance(completion_response, litellm.Message):
-            model_response["choices"][0]["message"] = completion_response
+            model_response.choices[0].message = completion_response  # type: ignore
         elif len(str(completion_response)) > 0:
-            model_response["choices"][0]["message"]["content"] = str(
-                completion_response
-            )
-        model_response["created"] = int(time.time())
-        model_response["model"] = model
+            model_response.choices[0].message.content = str(completion_response)  # type: ignore
+        model_response.created = int(time.time())
+        model_response.model = model
         ## CALCULATING USAGE
         if model in litellm.vertex_language_models and response_obj is not None:
-            model_response["choices"][0].finish_reason = map_finish_reason(
+            model_response.choices[0].finish_reason = map_finish_reason(
                 response_obj.candidates[0].finish_reason.name
             )
             usage = Usage(
@@ -894,7 +910,7 @@ async def async_completion(
     request_str: str,
     print_verbose: Callable,
     logging_obj,
-    encoding=None,
+    encoding,
     client_options=None,
     instances=None,
     vertex_project=None,
@@ -1070,16 +1086,16 @@ async def async_completion(
 
         ## RESPONSE OBJECT
         if isinstance(completion_response, litellm.Message):
-            model_response["choices"][0]["message"] = completion_response
+            model_response.choices[0].message = completion_response  # type: ignore
         elif len(str(completion_response)) > 0:
-            model_response["choices"][0]["message"]["content"] = str(
+            model_response.choices[0].message.content = str(  # type: ignore
                 completion_response
             )
-        model_response["created"] = int(time.time())
-        model_response["model"] = model
+        model_response.created = int(time.time())
+        model_response.model = model
         ## CALCULATING USAGE
         if model in litellm.vertex_language_models and response_obj is not None:
-            model_response["choices"][0].finish_reason = map_finish_reason(
+            model_response.choices[0].finish_reason = map_finish_reason(
                 response_obj.candidates[0].finish_reason.name
             )
             usage = Usage(
@@ -1359,16 +1375,16 @@ class VertexAITextEmbeddingConfig(BaseModel):
 def embedding(
     model: str,
     input: Union[list, str],
+    print_verbose,
+    model_response: litellm.EmbeddingResponse,
+    optional_params: dict,
     api_key: Optional[str] = None,
     logging_obj=None,
-    model_response=None,
-    optional_params=None,
     encoding=None,
     vertex_project=None,
     vertex_location=None,
     vertex_credentials=None,
     aembedding=False,
-    print_verbose=None,
 ):
     # logic for parsing in - calling - parsing out model embedding calls
     try:
@@ -1466,15 +1482,15 @@ def embedding(
                 "embedding": embedding.values,
             }
         )
-        input_tokens += embedding.statistics.token_count
-    model_response["object"] = "list"
-    model_response["data"] = embedding_response
-    model_response["model"] = model
+        input_tokens += embedding.statistics.token_count  # type: ignore
+    model_response.object = "list"
+    model_response.data = embedding_response
+    model_response.model = model
 
     usage = Usage(
         prompt_tokens=input_tokens, completion_tokens=0, total_tokens=input_tokens
     )
-    model_response.usage = usage
+    setattr(model_response, "usage", usage)
 
     return model_response
 
@@ -1482,8 +1498,8 @@ def embedding(
 async def async_embedding(
     model: str,
     input: Union[list, str],
+    model_response: litellm.EmbeddingResponse,
     logging_obj=None,
-    model_response=None,
     optional_params=None,
     encoding=None,
     client=None,
@@ -1523,11 +1539,11 @@ async def async_embedding(
         )
         input_tokens += embedding.statistics.token_count
 
-    model_response["object"] = "list"
-    model_response["data"] = embedding_response
-    model_response["model"] = model
+    model_response.object = "list"
+    model_response.data = embedding_response
+    model_response.model = model
     usage = Usage(
         prompt_tokens=input_tokens, completion_tokens=0, total_tokens=input_tokens
     )
-    model_response.usage = usage
+    setattr(model_response, "usage", usage)
     return model_response

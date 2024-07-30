@@ -512,6 +512,106 @@ def sagemaker_test_completion():
 
 # sagemaker_test_completion()
 
+
+def test_sagemaker_default_region(mocker):
+    """
+    If no regions are specified in config or in environment, the default region is us-west-2
+    """
+    mock_client = mocker.patch("boto3.client")
+    try:
+        response = litellm.completion(
+            model="sagemaker/mock-endpoint",
+            messages=[
+                {
+                    "content": "Hello, world!",
+                    "role": "user"
+                }
+            ]
+        )
+    except Exception:
+        pass  # expected serialization exception because AWS client was replaced with a Mock
+    assert mock_client.call_args.kwargs["region_name"] == "us-west-2"
+
+# test_sagemaker_default_region()
+
+
+def test_sagemaker_environment_region(mocker):
+    """
+    If a region is specified in the environment, use that region instead of us-west-2
+    """
+    expected_region = "us-east-1"
+    os.environ["AWS_REGION_NAME"] = expected_region
+    mock_client = mocker.patch("boto3.client")
+    try:
+        response = litellm.completion(
+            model="sagemaker/mock-endpoint",
+            messages=[
+                {
+                    "content": "Hello, world!",
+                    "role": "user"
+                }
+            ]
+        )
+    except Exception:
+        pass  # expected serialization exception because AWS client was replaced with a Mock
+    del os.environ["AWS_REGION_NAME"]  # cleanup
+    assert mock_client.call_args.kwargs["region_name"] == expected_region
+
+# test_sagemaker_environment_region()
+
+
+def test_sagemaker_config_region(mocker):
+    """
+    If a region is specified as part of the optional parameters of the completion, including as
+    part of the config file, then use that region instead of us-west-2
+    """
+    expected_region = "us-east-1"
+    mock_client = mocker.patch("boto3.client")
+    try:
+        response = litellm.completion(
+            model="sagemaker/mock-endpoint",
+            messages=[
+                {
+                    "content": "Hello, world!",
+                    "role": "user"
+                }
+            ],
+            aws_region_name=expected_region,
+        )
+    except Exception:
+        pass  # expected serialization exception because AWS client was replaced with a Mock
+    assert mock_client.call_args.kwargs["region_name"] == expected_region
+
+# test_sagemaker_config_region()
+
+
+def test_sagemaker_config_and_environment_region(mocker):
+    """
+    If both the environment and config file specify a region, the environment region is expected
+    """
+    expected_region = "us-east-1"
+    unexpected_region = "us-east-2"
+    os.environ["AWS_REGION_NAME"] = expected_region
+    mock_client = mocker.patch("boto3.client")
+    try:
+        response = litellm.completion(
+            model="sagemaker/mock-endpoint",
+            messages=[
+                {
+                    "content": "Hello, world!",
+                    "role": "user"
+                }
+            ],
+            aws_region_name=unexpected_region,
+        )
+    except Exception:
+        pass  # expected serialization exception because AWS client was replaced with a Mock
+    del os.environ["AWS_REGION_NAME"]  # cleanup
+    assert mock_client.call_args.kwargs["region_name"] == expected_region
+
+# test_sagemaker_config_and_environment_region()
+
+
 #  Bedrock
 
 

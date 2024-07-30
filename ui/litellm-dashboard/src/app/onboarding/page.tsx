@@ -20,11 +20,20 @@ import {
 } from "@/components/networking";
 import { jwtDecode } from "jwt-decode";
 import { Form, Button as Button2, message } from "antd";
+
+function getCookie(name: string) {
+  console.log("COOKIES", document.cookie)
+  const cookieValue = document.cookie
+      .split('; ')
+      .find(row => row.startsWith(name + '='));
+  return cookieValue ? cookieValue.split('=')[1] : null;
+}
+
 export default function Onboarding() {
   const [form] = Form.useForm();
   const searchParams = useSearchParams();
-  const token = searchParams.get("token");
-  const inviteID = searchParams.get("id");
+  const token = getCookie('token');
+  const inviteID = searchParams.get("invitation_id");
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [defaultUserEmail, setDefaultUserEmail] = useState<string>("");
   const [userEmail, setUserEmail] = useState<string>("");
@@ -83,7 +92,10 @@ export default function Onboarding() {
     ).then((data) => {
       let litellm_dashboard_ui = "/ui/";
       const user_id = data.data?.user_id || data.user_id;
-      litellm_dashboard_ui += "?userID=" + user_id + "&token=" + jwtToken;
+      litellm_dashboard_ui += "?userID=" + user_id;
+
+      // set cookie "token" to jwtToken
+      document.cookie = "token=" + jwtToken;
       console.log("redirecting to:", litellm_dashboard_ui);
 
       window.location.href = litellm_dashboard_ui;
@@ -92,7 +104,7 @@ export default function Onboarding() {
     // redirect to login page
   };
   return (
-    <div className="mx-auto max-w-md mt-10">
+    <div className="mx-auto w-full max-w-md mt-10">
       <Card>
         <Title className="text-sm mb-5 text-center">🚅 LiteLLM</Title>
         <Title className="text-xl">Sign up</Title>

@@ -17,8 +17,15 @@ git clone https://github.com/BerriAI/litellm
 # Go to folder
 cd litellm
 
-# Add the master key
+# Add the master key - you can change this after setup
 echo 'LITELLM_MASTER_KEY="sk-1234"' > .env
+
+# Add the litellm salt key - you cannot change this after adding a model
+# It is used to encrypt / decrypt your LLM API Key credentials
+# We recommned - https://1password.com/password-generator/ 
+# password generator to get a random hash for litellm salt key
+echo 'LITELLM_SALT_KEY="sk-1234"' > .env
+
 source .env
 
 # Start
@@ -246,6 +253,15 @@ Your OpenAI proxy server is now running on `http://127.0.0.1:4000`.
 </Tabs>
 
 **That's it ! That's the quick start to deploy litellm**
+
+## Use with Langchain, OpenAI SDK, LlamaIndex, Instructor, Curl
+
+:::info
+💡 Go here 👉 [to make your first LLM API Request](user_keys)
+
+LiteLLM is compatible with several SDKs - including OpenAI SDK, Anthropic SDK, Mistral SDK, LLamaIndex, Langchain (Js, Python)
+
+:::
 
 ## Options to deploy LiteLLM 
 
@@ -540,6 +556,39 @@ docker run --name litellm-proxy \
 -e DATABASE_URL=postgresql://<user>:<password>@<host>:<port>/<dbname> \
 -p 4000:4000 \
 ghcr.io/berriai/litellm-database:main-latest --config your_config.yaml
+```
+
+## LiteLLM without Internet Connection
+
+By default `prisma generate` downloads [prisma's engine binaries](https://www.prisma.io/docs/orm/reference/environment-variables-reference#custom-engine-file-locations). This might cause errors when running without internet connection. 
+
+Use this dockerfile to build an image which pre-generates the prisma binaries.
+
+```Dockerfile
+# Use the provided base image
+FROM ghcr.io/berriai/litellm:main-latest
+
+# Set the working directory to /app
+WORKDIR /app
+
+### [👇 KEY STEP] ###
+# Install Prisma CLI and generate Prisma client
+RUN pip install prisma 
+RUN prisma generate
+### FIN #### 
+
+
+# Expose the necessary port
+EXPOSE 4000
+
+# Override the CMD instruction with your desired command and arguments
+# WARNING: FOR PROD DO NOT USE `--detailed_debug` it slows down response times, instead use the following CMD
+# CMD ["--port", "4000", "--config", "config.yaml"]
+
+# Define the command to run your app
+ENTRYPOINT ["litellm"]
+
+CMD ["--port", "4000"]
 ```
 
 ## Advanced Deployment Settings

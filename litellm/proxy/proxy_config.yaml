@@ -1,37 +1,37 @@
 model_list:
-  - model_name: fake-openai-endpoint
+  - model_name: gpt-4
     litellm_params:
       model: openai/fake
       api_key: fake-key
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
-  - model_name: llama3
+  - model_name: fireworks-llama-v3-70b-instruct
     litellm_params:
-      model: groq/llama3-8b-8192
-  - model_name: gpt-3.5-turbo
+      model: fireworks_ai/accounts/fireworks/models/llama-v3-70b-instruct
+      api_key: "os.environ/FIREWORKS"
+  - model_name: "*"
     litellm_params:
-      model: gpt-3.5-turbo
+      model: "*"
   - model_name: "*"
     litellm_params:
       model: openai/*
       api_key: os.environ/OPENAI_API_KEY
-  - model_name: mistral-embed
+  - model_name: mistral-small-latest
     litellm_params:
-      model: mistral/mistral-embed
-
-general_settings:
+      model: mistral/mistral-small-latest
+      api_key: "os.environ/MISTRAL_API_KEY"
+  - model_name: tts
+    litellm_params:
+      model: openai/tts-1
+      api_key: "os.environ/OPENAI_API_KEY"
+    model_info:
+      mode: audio_speech
+general_settings: 
   master_key: sk-1234
-  alerting: ["slack", "email"]
+
+  # Security controls
+  max_request_size_mb: 100
+  # google cloud run maximum repsonses size is 32MB
+  max_response_size_mb: 10
 
 litellm_settings:
-  success_callback: ["prometheus"]
-  callbacks: ["otel"]
-  failure_callback: ["prometheus"]
-  store_audit_logs: true
-  redact_messages_in_exceptions: True
-  enforced_params:  
-    - user
-    - metadata
-    - metadata.generation_name
-  cache: True
-
-
+  success_callback: ["langfuse"]

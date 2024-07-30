@@ -31,7 +31,18 @@ model_list:
       api_base: https://openai-france-1234.openai.azure.com/
       api_key: <your-azure-api-key>
       rpm: 1440
+routing_strategy: simple-shuffle # Literal["simple-shuffle", "least-busy", "usage-based-routing","latency-based-routing"], default="simple-shuffle"
+  model_group_alias: {"gpt-4": "gpt-3.5-turbo"} # all requests with `gpt-4` will be routed to models with `gpt-3.5-turbo`
+  num_retries: 2
+  timeout: 30                                  # 30 seconds
+  redis_host: <your redis host>                # set this when using multiple litellm proxy deployments, load balancing state stored in redis
+  redis_password: <your redis password>
+  redis_port: 1992
 ```
+
+:::info
+Detailed information about [routing strategies can be found here](../routing)
+:::
 
 #### Step 2: Start Proxy with config
 
@@ -272,6 +283,7 @@ litellm_settings:
   fallbacks: [{"zephyr-beta": ["gpt-3.5-turbo"]}] # fallback to gpt-3.5-turbo if call fails num_retries 
   context_window_fallbacks: [{"zephyr-beta": ["gpt-3.5-turbo-16k"]}, {"gpt-3.5-turbo": ["gpt-3.5-turbo-16k"]}] # fallback to gpt-3.5-turbo-16k if context window error
   allowed_fails: 3 # cooldown model if it fails > 1 call in a minute. 
+  cooldown_time: 30 # how long to cooldown model if fails/min > allowed_fails
 ```
 ### Context Window Fallbacks (Pre-Call Checks + Fallbacks)
 
@@ -429,6 +441,94 @@ model_list:
 
 litellm_settings:
   content_policy_fallbacks: [{"gpt-3.5-turbo-small": ["claude-opus"]}]
+```
+
+
+
+### Default Fallbacks 
+
+You can also set default_fallbacks, in case a specific model group is misconfigured / bad.
+
+
+```yaml
+model_list:
+	- model_name: gpt-3.5-turbo-small
+	  litellm_params:
+		model: azure/chatgpt-v-2
+        api_base: os.environ/AZURE_API_BASE
+        api_key: os.environ/AZURE_API_KEY
+        api_version: "2023-07-01-preview"
+
+    - model_name: claude-opus
+      litellm_params:
+        model: claude-3-opus-20240229
+        api_key: os.environ/ANTHROPIC_API_KEY
+
+litellm_settings:
+  default_fallbacks: ["claude-opus"]
+```
+
+This will default to claude-opus in case any model fails.
+
+A model-specific fallbacks (e.g. {"gpt-3.5-turbo-small": ["claude-opus"]}) overrides default fallback.
+
+### Test Fallbacks! 
+
+Check if your fallbacks are working as expected. 
+
+#### **Regular Fallbacks**
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-D '{
+  "model": "my-bad-model",
+  "messages": [
+    {
+      "role": "user",
+      "content": "ping"
+    }
+  ],
+  "mock_testing_fallbacks": true # 👈 KEY CHANGE
+}
+'
+```
+
+#### **Content Policy Fallbacks**
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-D '{
+  "model": "my-bad-model",
+  "messages": [
+    {
+      "role": "user",
+      "content": "ping"
+    }
+  ],
+  "mock_testing_content_policy_fallbacks": true # 👈 KEY CHANGE
+}
+'
+```
+
+#### **Context Window Fallbacks**
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-D '{
+  "model": "my-bad-model",
+  "messages": [
+    {
+      "role": "user",
+      "content": "ping"
+    }
+  ],
+  "mock_testing_context_window_fallbacks": true # 👈 KEY CHANGE
+}
+'
 ```
 
 ### EU-Region Filtering (Pre-Call Checks)

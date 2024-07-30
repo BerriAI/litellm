@@ -8,7 +8,7 @@
           <img src="https://railway.app/button.svg" alt="Deploy on Railway">
         </a>
         </p>
-        <p align="center">Call all LLM APIs using the OpenAI format [Bedrock, Huggingface, VertexAI, TogetherAI, Azure, OpenAI, etc.]
+        <p align="center">Call all LLM APIs using the OpenAI format [Bedrock, Huggingface, VertexAI, TogetherAI, Azure, OpenAI, Groq etc.]
         <br>
     </p>
 <h4 align="center"><a href="https://docs.litellm.ai/docs/simple_proxy" target="_blank">OpenAI Proxy Server</a> | <a href="https://docs.litellm.ai/docs/hosted" target="_blank"> Hosted Proxy (Preview)</a> | <a href="https://docs.litellm.ai/docs/enterprise"target="_blank">Enterprise Tier</a></h4>
@@ -47,7 +47,8 @@ Support for more providers. Missing a provider or LLM Platform, raise a [feature
 # Usage ([**Docs**](https://docs.litellm.ai/docs/))
 
 > [!IMPORTANT]
-> LiteLLM v1.0.0 now requires `openai>=1.0.0`. Migration guide [here](https://docs.litellm.ai/docs/migration)
+> LiteLLM v1.0.0 now requires `openai>=1.0.0`. Migration guide [here](https://docs.litellm.ai/docs/migration)  
+> LiteLLM v1.40.14+ now requires `pydantic>=2.0.0`. No changes required.
 
 <a target="_blank" href="https://colab.research.google.com/github/BerriAI/litellm/blob/main/cookbook/liteLLM_Getting_Started.ipynb">
   <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
@@ -119,6 +120,7 @@ from litellm import completion
 
 ## set env variables for logging tools
 os.environ["LUNARY_PUBLIC_KEY"] = "your-lunary-public-key"
+os.environ["HELICONE_API_KEY"] = "your-helicone-auth-key"
 os.environ["LANGFUSE_PUBLIC_KEY"] = ""
 os.environ["LANGFUSE_SECRET_KEY"] = ""
 os.environ["ATHINA_API_KEY"] = "your-athina-api-key"
@@ -126,7 +128,7 @@ os.environ["ATHINA_API_KEY"] = "your-athina-api-key"
 os.environ["OPENAI_API_KEY"]
 
 # set callbacks
-litellm.success_callback = ["lunary", "langfuse", "athina"] # log input/output to lunary, langfuse, supabase, athina etc
+litellm.success_callback = ["lunary", "langfuse", "athina", "helicone"] # log input/output to lunary, langfuse, supabase, athina, helicone etc
 
 #openai call
 response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}])
@@ -164,6 +166,10 @@ $ litellm --model huggingface/bigcode/starcoder
 
 ### Step 2: Make ChatCompletions Request to Proxy
 
+
+> [!IMPORTANT]
+> 💡 [Use LiteLLM Proxy with Langchain (Python, JS), OpenAI SDK (Python, JS) Anthropic SDK, Mistral SDK, LlamaIndex, Instructor, Curl](https://docs.litellm.ai/docs/proxy/user_keys)  
+
 ```python
 import openai # openai v1.0.0+
 client = openai.OpenAI(api_key="anything",base_url="http://0.0.0.0:4000") # set proxy to base_url
@@ -189,8 +195,15 @@ git clone https://github.com/BerriAI/litellm
 # Go to folder
 cd litellm
 
-# Add the master key
+# Add the master key - you can change this after setup
 echo 'LITELLM_MASTER_KEY="sk-1234"' > .env
+
+# Add the litellm salt key - you cannot change this after adding a model
+# It is used to encrypt / decrypt your LLM API Key credentials
+# We recommned - https://1password.com/password-generator/ 
+# password generator to get a random hash for litellm salt key
+echo 'LITELLM_SALT_KEY="sk-1234"' > .env
+
 source .env
 
 # Start
@@ -237,6 +250,7 @@ curl 'http://0.0.0.0:4000/key/generate' \
 | [cloudflare AI Workers](https://docs.litellm.ai/docs/providers/cloudflare_workers)  | ✅                                                       | ✅                                                                               | ✅                                                                                   | ✅                                                                                 |                                                                               |                                                                         |
 | [cohere](https://docs.litellm.ai/docs/providers/cohere)                             | ✅                                                       | ✅                                                                               | ✅                                                                                   | ✅                                                                                 | ✅                                                                             |                                                                         |
 | [anthropic](https://docs.litellm.ai/docs/providers/anthropic)                       | ✅                                                       | ✅                                                                               | ✅                                                                                   | ✅                                                                                 |                                                                               |                                                                         |
+| [empower](https://docs.litellm.ai/docs/providers/empower)                    | ✅                                                      | ✅                                                                              | ✅                                                                                  | ✅                                                                                |
 | [huggingface](https://docs.litellm.ai/docs/providers/huggingface)                   | ✅                                                       | ✅                                                                               | ✅                                                                                   | ✅                                                                                 | ✅                                                                             |                                                                         |
 | [replicate](https://docs.litellm.ai/docs/providers/replicate)                       | ✅                                                       | ✅                                                                               | ✅                                                                                   | ✅                                                                                 |                                                                               |                                                                         |
 | [together_ai](https://docs.litellm.ai/docs/providers/togetherai)                    | ✅                                                       | ✅                                                                               | ✅                                                                                   | ✅                                                                                 |                                                                               |                                                                         |
@@ -256,6 +270,7 @@ curl 'http://0.0.0.0:4000/key/generate' \
 | [IBM - watsonx.ai](https://docs.litellm.ai/docs/providers/watsonx)                  | ✅                                                       | ✅                                                                               | ✅                                                                                   | ✅                                                                                 | ✅                                                                             |                                                                         |
 | [voyage ai](https://docs.litellm.ai/docs/providers/voyage)                          |                                                         |                                                                                 |                                                                                     |                                                                                   | ✅                                                                             |                                                                         |
 | [xinference [Xorbits Inference]](https://docs.litellm.ai/docs/providers/xinference) |                                                         |                                                                                 |                                                                                     |                                                                                   | ✅                                                                             |                                                                         |
+| [FriendliAI](https://docs.litellm.ai/docs/providers/friendliai)                              | ✅                                                       | ✅                                                                               | ✅                                                                                   | ✅                                                                                 |                                                                               |                                                                         |
 
 [**Read the Docs**](https://docs.litellm.ai/docs/)
 

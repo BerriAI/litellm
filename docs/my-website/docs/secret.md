@@ -8,7 +8,13 @@ LiteLLM supports reading secrets from Azure Key Vault and Infisical
 - [Infisical Secret Manager](#infisical-secret-manager)
 - [.env Files](#env-files)
 
-## AWS Key Management Service
+## AWS Key Management V1
+
+:::tip
+
+[BETA] AWS Key Management v2 is on the enterprise tier. Go [here for docs](./proxy/enterprise.md#beta-aws-key-manager---key-decryption)
+
+:::
 
 Use AWS KMS to storing a hashed copy of your Proxy Master Key in the environment. 
 

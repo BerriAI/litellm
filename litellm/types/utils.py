@@ -44,15 +44,26 @@ class ModelInfo(TypedDict, total=False):
     max_input_tokens: Required[Optional[int]]
     max_output_tokens: Required[Optional[int]]
     input_cost_per_token: Required[float]
-    input_cost_per_token_above_128k_tokens: Optional[float]
-    input_cost_per_image: Optional[float]
-    input_cost_per_audio_per_second: Optional[float]
-    input_cost_per_video_per_second: Optional[float]
+    input_cost_per_character: Optional[float]  # only for vertex ai models
+    input_cost_per_token_above_128k_tokens: Optional[float]  # only for vertex ai models
+    input_cost_per_character_above_128k_tokens: Optional[
+        float
+    ]  # only for vertex ai models
+    input_cost_per_image: Optional[float]  # only for vertex ai models
+    input_cost_per_audio_per_second: Optional[float]  # only for vertex ai models
+    input_cost_per_video_per_second: Optional[float]  # only for vertex ai models
     output_cost_per_token: Required[float]
-    output_cost_per_token_above_128k_tokens: Optional[float]
+    output_cost_per_character: Optional[float]  # only for vertex ai models
+    output_cost_per_token_above_128k_tokens: Optional[
+        float
+    ]  # only for vertex ai models
+    output_cost_per_character_above_128k_tokens: Optional[
+        float
+    ]  # only for vertex ai models
     output_cost_per_image: Optional[float]
-    output_cost_per_video_per_second: Optional[float]
-    output_cost_per_audio_per_second: Optional[float]
+    output_vector_size: Optional[int]
+    output_cost_per_video_per_second: Optional[float]  # only for vertex ai models
+    output_cost_per_audio_per_second: Optional[float]  # only for vertex ai models
     litellm_provider: Required[str]
     mode: Required[
         Literal[
@@ -61,6 +72,9 @@ class ModelInfo(TypedDict, total=False):
     ]
     supported_openai_params: Required[Optional[List[str]]]
     supports_system_messages: Optional[bool]
+    supports_response_schema: Optional[bool]
+    supports_vision: Optional[bool]
+    supports_function_calling: Optional[bool]
 
 
 class GenericStreamingChunk(TypedDict):
@@ -154,15 +168,19 @@ class FunctionCall(OpenAIObject):
 
 class Function(OpenAIObject):
     arguments: str
-    name: Optional[str] = None
+    name: Optional[
+        str
+    ]  # can be None - openai e.g.: ChoiceDeltaToolCallFunction(arguments='{"', name=None), type=None)
 
     def __init__(
         self,
-        arguments: Union[Dict, str],
+        arguments: Optional[Union[Dict, str]],
         name: Optional[str] = None,
         **params,
     ):
-        if isinstance(arguments, Dict):
+        if arguments is None:
+            arguments = ""
+        elif isinstance(arguments, Dict):
             arguments = json.dumps(arguments)
         else:
             arguments = arguments
@@ -266,29 +284,50 @@ class ChatCompletionMessageToolCall(OpenAIObject):
         setattr(self, key, value)
 
 
+"""
+Reference:
+ChatCompletionMessage(content='This is a test', role='assistant', function_call=None, tool_calls=None))
+"""
+
+
 class Message(OpenAIObject):
+
+    content: Optional[str]
+    role: Literal["assistant"]
+    tool_calls: Optional[List[ChatCompletionMessageToolCall]]
+    function_call: Optional[FunctionCall]
+
     def __init__(
         self,
-        content: Optional[str] = "default",
-        role="assistant",
-        logprobs=None,
+        content: Optional[str] = None,
+        role: Literal["assistant"] = "assistant",
         function_call=None,
         tool_calls=None,
         **params,
     ):
-        super(Message, self).__init__(**params)
-        self.content = content
-        self.role = role
-        if function_call is not None:
-            self.function_call = FunctionCall(**function_call)
-
-        if tool_calls is not None:
-            self.tool_calls = []
-            for tool_call in tool_calls:
-                self.tool_calls.append(ChatCompletionMessageToolCall(**tool_call))
-
-        if logprobs is not None:
-            self._logprobs = ChoiceLogprobs(**logprobs)
+        init_values = {
+            "content": content,
+            "role": "assistant",
+            "function_call": (
+                FunctionCall(**function_call) if function_call is not None else None
+            ),
+            "tool_calls": (
+                [
+                    (
+                        ChatCompletionMessageToolCall(**tool_call)
+                        if isinstance(tool_call, dict)
+                        else tool_call
+                    )
+                    for tool_call in tool_calls
+                ]
+                if tool_calls is not None
+                else None
+            ),
+        }
+        super(Message, self).__init__(
+            **init_values,
+            **params,
+        )
 
     def get(self, key, default=None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
@@ -505,6 +544,8 @@ class ModelResponse(OpenAIObject):
 
     _hidden_params: dict = {}
 
+    _response_headers: Optional[dict] = None
+
     def __init__(
         self,
         id=None,
@@ -518,6 +559,7 @@ class ModelResponse(OpenAIObject):
         stream_options=None,
         response_ms=None,
         hidden_params=None,
+        _response_headers=None,
         **params,
     ) -> None:
         if stream is not None and stream is True:
@@ -542,6 +584,8 @@ class ModelResponse(OpenAIObject):
                         _new_choice = choice  # type: ignore
                     elif isinstance(choice, dict):
                         _new_choice = Choices(**choice)  # type: ignore
+                    else:
+                        _new_choice = choice
                     new_choices.append(_new_choice)
                 choices = new_choices
             else:
@@ -564,6 +608,9 @@ class ModelResponse(OpenAIObject):
             usage = Usage()
         if hidden_params:
             self._hidden_params = hidden_params
+
+        if _response_headers:
+            self._response_headers = _response_headers
 
         init_values = {
             "id": id,
@@ -593,10 +640,6 @@ class ModelResponse(OpenAIObject):
     def __getitem__(self, key):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
-
-    def __setitem__(self, key, value):
-        # Allow dictionary-style assignment of attributes
-        setattr(self, key, value)
 
     def json(self, **kwargs):
         try:
@@ -638,6 +681,7 @@ class EmbeddingResponse(OpenAIObject):
     """Usage statistics for the embedding request."""
 
     _hidden_params: dict = {}
+    _response_headers: Optional[Dict] = None
 
     def __init__(
         self,
@@ -646,6 +690,8 @@ class EmbeddingResponse(OpenAIObject):
         stream=False,
         response_ms=None,
         data=None,
+        hidden_params=None,
+        _response_headers=None,
         **params,
     ):
         object = "list"
@@ -662,6 +708,9 @@ class EmbeddingResponse(OpenAIObject):
             usage = usage
         else:
             usage = Usage()
+
+        if _response_headers:
+            self._response_headers = _response_headers
 
         model = model
         super().__init__(model=model, object=object, data=data, usage=usage)
@@ -945,6 +994,7 @@ class TranscriptionResponse(OpenAIObject):
     text: Optional[str] = None
 
     _hidden_params: dict = {}
+    _response_headers: Optional[dict] = None
 
     def __init__(self, text=None):
         super().__init__(text=text)
@@ -982,3 +1032,27 @@ class GenericImageParsingChunk(TypedDict):
     type: str
     media_type: str
     data: str
+
+
+class ResponseFormatChunk(TypedDict, total=False):
+    type: Required[Literal["json_object", "text"]]
+    response_schema: dict
+
+
+class LoggedLiteLLMParams(TypedDict, total=False):
+    force_timeout: Optional[float]
+    custom_llm_provider: Optional[str]
+    api_base: Optional[str]
+    litellm_call_id: Optional[str]
+    model_alias_map: Optional[dict]
+    metadata: Optional[dict]
+    model_info: Optional[dict]
+    proxy_server_request: Optional[dict]
+    acompletion: Optional[bool]
+    preset_cache_key: Optional[str]
+    no_log: Optional[bool]
+    input_cost_per_second: Optional[float]
+    input_cost_per_token: Optional[float]
+    output_cost_per_token: Optional[float]
+    output_cost_per_second: Optional[float]
+    cooldown_time: Optional[float]

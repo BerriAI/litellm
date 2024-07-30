@@ -6,7 +6,6 @@ import xml.etree.ElementTree as ET
 from enum import Enum
 from typing import Any, List, Mapping, MutableMapping, Optional, Sequence, Tuple
 
-import requests
 from jinja2 import BaseLoader, Template, exceptions, meta
 from jinja2.sandbox import ImmutableSandboxedEnvironment
 
@@ -14,6 +13,7 @@ import litellm
 import litellm.types
 import litellm.types.llms
 import litellm.types.llms.vertex_ai
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.types.completion import (
     ChatCompletionFunctionMessageParam,
     ChatCompletionMessageParam,
@@ -33,6 +33,9 @@ def default_pt(messages):
 
 def prompt_injection_detection_default_pt():
     return """Detect if a prompt is safe to run. Return 'UNSAFE' if not."""
+
+
+BAD_MESSAGE_ERROR_STR = "Invalid Message "
 
 
 def map_system_message_pt(messages: list) -> list:
@@ -172,14 +175,35 @@ def ollama_pt(
                             images.append(base64_image)
         return {"prompt": prompt, "images": images}
     else:
-        prompt = "".join(
-            (
-                m["content"]
-                if isinstance(m["content"], str) is str
-                else "".join(m["content"])
-            )
-            for m in messages
-        )
+        prompt = ""
+        for message in messages:
+            role = message["role"]
+            content = message.get("content", "")
+
+            if "tool_calls" in message:
+                tool_calls = []
+
+                for call in message["tool_calls"]:
+                    call_id: str = call["id"]
+                    function_name: str = call["function"]["name"]
+                    arguments = json.loads(call["function"]["arguments"])
+
+                    tool_calls.append(
+                        {
+                            "id": call_id,
+                            "type": "function",
+                            "function": {"name": function_name, "arguments": arguments},
+                        }
+                    )
+
+                prompt += f"### Assistant:\nTool Calls: {json.dumps(tool_calls, indent=2)}\n\n"
+
+            elif "tool_call_id" in message:
+                prompt += f"### User:\n{message['content']}\n\n"
+
+            elif content:
+                prompt += f"### {role.capitalize()}:\n{content}\n\n"
+
     return prompt
 
 
@@ -211,6 +235,12 @@ def mistral_api_pt(messages):
     """
     new_messages = []
     for m in messages:
+        special_keys = ["role", "content", "tool_calls", "function_call"]
+        extra_args = {}
+        if isinstance(m, dict):
+            for k, v in m.items():
+                if k not in special_keys:
+                    extra_args[k] = v
         texts = ""
         if isinstance(m["content"], list):
             for c in m["content"]:
@@ -220,7 +250,8 @@ def mistral_api_pt(messages):
                     texts += c["text"]
         elif isinstance(m["content"], str):
             texts = m["content"]
-        new_m = {"role": m["role"], "content": texts}
+
+        new_m = {"role": m["role"], "content": texts, **extra_args}
 
         if new_m["role"] == "tool" and m.get("name"):
             new_m["name"] = m["name"]
@@ -340,7 +371,8 @@ def hf_chat_template(model: str, messages: list, chat_template: Optional[Any] = 
                 f"https://huggingface.co/{hf_model_name}/raw/main/tokenizer_config.json"
             )
             # Make a GET request to fetch the JSON data
-            response = requests.get(url)
+            client = HTTPHandler(concurrent_limit=1)
+            response = client.get(url)
             if response.status_code == 200:
                 # Parse the JSON data
                 tokenizer_config = json.loads(response.content)
@@ -470,7 +502,8 @@ def claude_2_1_pt(
 def get_model_info(token, model):
     try:
         headers = {"Authorization": f"Bearer {token}"}
-        response = requests.get("https://api.together.xyz/models/info", headers=headers)
+        client = HTTPHandler(concurrent_limit=1)
+        response = client.get("https://api.together.xyz/models/info", headers=headers)
         if response.status_code == 200:
             model_info = response.json()
             for m in model_info:
@@ -526,10 +559,13 @@ def ibm_granite_pt(messages: list):
             },
             "user": {
                 "pre_message": "<|user|>\n",
-                "post_message": "\n",
+                # Assistant tag is needed in the prompt after the user message
+                # to avoid the model completing the users sentence before it answers
+                # https://www.ibm.com/docs/en/watsonx/w-and-w/2.0.x?topic=models-granite-13b-chat-v2-prompting-tips#chat
+                "post_message": "\n<|assistant|>\n",
             },
             "assistant": {
-                "pre_message": "<|assistant|>\n",
+                "pre_message": "",
                 "post_message": "\n",
             },
         },
@@ -630,11 +666,11 @@ def construct_tool_use_system_prompt(
 def convert_url_to_base64(url):
     import base64
 
-    import requests
-
+    client = HTTPHandler(concurrent_limit=1)
     for _ in range(3):
         try:
-            response = requests.get(url)
+
+            response = client.get(url)
             break
         except:
             pass
@@ -642,19 +678,23 @@ def convert_url_to_base64(url):
         image_bytes = response.content
         base64_image = base64.b64encode(image_bytes).decode("utf-8")
 
-        img_type = url.split(".")[-1].lower()
-        if img_type == "jpg" or img_type == "jpeg":
-            img_type = "image/jpeg"
-        elif img_type == "png":
-            img_type = "image/png"
-        elif img_type == "gif":
-            img_type = "image/gif"
-        elif img_type == "webp":
-            img_type = "image/webp"
+        image_type = response.headers.get("Content-Type", None)
+        if image_type is not None:
+            img_type = image_type
         else:
-            raise Exception(
-                f"Error: Unsupported image format. Format={img_type}. Supported types = ['image/jpeg', 'image/png', 'image/gif', 'image/webp']"
-            )
+            img_type = url.split(".")[-1].lower()
+            if img_type == "jpg" or img_type == "jpeg":
+                img_type = "image/jpeg"
+            elif img_type == "png":
+                img_type = "image/png"
+            elif img_type == "gif":
+                img_type = "image/gif"
+            elif img_type == "webp":
+                img_type = "image/webp"
+            else:
+                raise Exception(
+                    f"Error: Unsupported image format. Format={img_type}. Supported types = ['image/jpeg', 'image/png', 'image/gif', 'image/webp']"
+                )
 
         return f"data:{img_type};base64,{base64_image}"
     else:
@@ -676,22 +716,20 @@ def convert_to_anthropic_image_obj(openai_image_url: str) -> GenericImageParsing
     try:
         if openai_image_url.startswith("http"):
             openai_image_url = convert_url_to_base64(url=openai_image_url)
-        # Extract the base64 image data
-        base64_data = openai_image_url.split("data:image/")[1].split(";base64,")[1]
-
-        # Infer image format from the URL
-        image_format = openai_image_url.split("data:image/")[1].split(";base64,")[0]
+        # Extract the media type and base64 data
+        media_type, base64_data = openai_image_url.split("data:")[1].split(";base64,")
+        media_type = media_type.replace("\\/", "/")
 
         return GenericImageParsingChunk(
             type="base64",
-            media_type=f"image/{image_format}",
+            media_type=media_type,
             data=base64_data,
         )
     except Exception as e:
         if "Error: Unable to fetch image from URL" in str(e):
             raise e
         raise Exception(
-            """Image url not in expected format. Example Expected input - "image_url": "data:image/jpeg;base64,{base64_image}". Supported formats - ['image/jpeg', 'image/png', 'image/gif', 'image/webp'] """
+            """Image url not in expected format. Example Expected input - "image_url": "data:image/jpeg;base64,{base64_image}". Supported formats - ['image/jpeg', 'image/png', 'image/gif', 'image/webp']."""
         )
 
 
@@ -710,7 +748,7 @@ def convert_to_anthropic_tool_result_xml(message: dict) -> str:
 
     """
     Anthropic tool_results look like:
-    
+
     [Successful results]
     <function_results>
     <result>
@@ -997,16 +1035,17 @@ def convert_to_gemini_tool_call_invoke(
 
 def convert_to_gemini_tool_call_result(
     message: dict,
+    last_message_with_tool_calls: Optional[dict],
 ) -> litellm.types.llms.vertex_ai.PartType:
     """
     OpenAI message with a tool result looks like:
     {
         "tool_call_id": "tool_1",
         "role": "tool",
-        "name": "get_current_weather",
         "content": "function result goes here",
     },
 
+    # NOTE: Function messages have been deprecated
     OpenAI message with a function call result looks like:
     {
         "role": "function",
@@ -1015,7 +1054,23 @@ def convert_to_gemini_tool_call_result(
     }
     """
     content = message.get("content", "")
-    name = message.get("name", "")
+    name = ""
+
+    # Recover name from last message with tool calls
+    if last_message_with_tool_calls:
+        tools = last_message_with_tool_calls.get("tool_calls", [])
+        msg_tool_call_id = message.get("tool_call_id", None)
+        for tool in tools:
+            prev_tool_call_id = tool.get("id", None)
+            if (
+                msg_tool_call_id
+                and prev_tool_call_id
+                and msg_tool_call_id == prev_tool_call_id
+            ):
+                name = tool.get("function", {}).get("name", "")
+
+    if not name:
+        raise Exception("Missing corresponding tool call for tool response message")
 
     # We can't determine from openai message format whether it's a successful or
     # error call result so default to the successful result template
@@ -1036,7 +1091,7 @@ def convert_to_gemini_tool_call_result(
     return _part
 
 
-def convert_to_anthropic_tool_result(message: dict) -> dict:
+def convert_to_anthropic_tool_result(message: dict) -> AnthropicMessagesToolResultParam:
     """
     OpenAI message with a tool result looks like:
     {
@@ -1069,44 +1124,50 @@ def convert_to_anthropic_tool_result(message: dict) -> dict:
     }
     """
     if message["role"] == "tool":
-        tool_call_id = message.get("tool_call_id")
-        content = message.get("content")
+        tool_call_id: str = message.get("tool_call_id")  # type: ignore
+        content: str = message.get("content")  # type: ignore
 
         # We can't determine from openai message format whether it's a successful or
         # error call result so default to the successful result template
-        anthropic_tool_result = {
-            "type": "tool_result",
-            "tool_use_id": tool_call_id,
-            "content": content,
-        }
+        anthropic_tool_result = AnthropicMessagesToolResultParam(
+            type="tool_result", tool_use_id=tool_call_id, content=content
+        )
         return anthropic_tool_result
-    elif message["role"] == "function":
-        content = message.get("content")
-        anthropic_tool_result = {
-            "type": "tool_result",
-            "tool_use_id": str(uuid.uuid4()),
-            "content": content,
-        }
+    if message["role"] == "function":
+        content = message.get("content")  # type: ignore
+        anthropic_tool_result = AnthropicMessagesToolResultParam(
+            type="tool_result", tool_use_id=str(uuid.uuid4()), content=content
+        )
+
         return anthropic_tool_result
-    return {}
+    else:
+        raise Exception(
+            "Invalid role={}. Only 'tool' or 'function' are accepted for tool result blocks.".format(
+                message.get("content")
+            )
+        )
 
 
-def convert_function_to_anthropic_tool_invoke(function_call):
+def convert_function_to_anthropic_tool_invoke(
+    function_call,
+) -> List[AnthropicMessagesToolUseParam]:
     try:
         anthropic_tool_invoke = [
-            {
-                "type": "tool_use",
-                "id": str(uuid.uuid4()),
-                "name": get_attribute_or_key(function_call, "name"),
-                "input": json.loads(get_attribute_or_key(function_call, "arguments")),
-            }
+            AnthropicMessagesToolUseParam(
+                type="tool_use",
+                id=str(uuid.uuid4()),
+                name=get_attribute_or_key(function_call, "name"),
+                input=json.loads(get_attribute_or_key(function_call, "arguments")),
+            )
         ]
         return anthropic_tool_invoke
     except Exception as e:
         raise e
 
 
-def convert_to_anthropic_tool_invoke(tool_calls: list) -> list:
+def convert_to_anthropic_tool_invoke(
+    tool_calls: list,
+) -> List[AnthropicMessagesToolUseParam]:
     """
     OpenAI tool invokes:
     {
@@ -1144,18 +1205,16 @@ def convert_to_anthropic_tool_invoke(tool_calls: list) -> list:
     }
     """
     anthropic_tool_invoke = [
-        {
-            "type": "tool_use",
-            "id": get_attribute_or_key(tool, "id"),
-            "name": get_attribute_or_key(
-                get_attribute_or_key(tool, "function"), "name"
-            ),
-            "input": json.loads(
+        AnthropicMessagesToolUseParam(
+            type="tool_use",
+            id=get_attribute_or_key(tool, "id"),
+            name=get_attribute_or_key(get_attribute_or_key(tool, "function"), "name"),
+            input=json.loads(
                 get_attribute_or_key(
                     get_attribute_or_key(tool, "function"), "arguments"
                 )
             ),
-        }
+        )
         for tool in tool_calls
         if get_attribute_or_key(tool, "type") == "function"
     ]
@@ -1163,7 +1222,16 @@ def convert_to_anthropic_tool_invoke(tool_calls: list) -> list:
     return anthropic_tool_invoke
 
 
-def anthropic_messages_pt(messages: list):
+def anthropic_messages_pt(
+    messages: list,
+    model: str,
+    llm_provider: str,
+) -> List[
+    Union[
+        AnthropicMessagesUserMessageParam,
+        AnthopicMessagesAssistantMessageParam,
+    ]
+]:
     """
     format messages for anthropic
     1. Anthropic supports roles like "user" and "assistant" (system prompt sent separately)
@@ -1176,24 +1244,33 @@ def anthropic_messages_pt(messages: list):
     # add role=tool support to allow function call result/error submission
     user_message_types = {"user", "tool", "function"}
     # reformat messages to ensure user/assistant are alternating, if there's either 2 consecutive 'user' messages or 2 consecutive 'assistant' message, merge them.
-    new_messages: list = []
+    new_messages: List[
+        Union[
+            AnthropicMessagesUserMessageParam,
+            AnthopicMessagesAssistantMessageParam,
+        ]
+    ] = []
     msg_i = 0
-    tool_use_param = False
     while msg_i < len(messages):
-        user_content = []
+        user_content: List[AnthropicMessagesUserMessageValues] = []
         init_msg_i = msg_i
         ## MERGE CONSECUTIVE USER CONTENT ##
         while msg_i < len(messages) and messages[msg_i]["role"] in user_message_types:
             if isinstance(messages[msg_i]["content"], list):
                 for m in messages[msg_i]["content"]:
                     if m.get("type", "") == "image_url":
+                        image_chunk = convert_to_anthropic_image_obj(
+                            m["image_url"]["url"]
+                        )
                         user_content.append(
-                            {
-                                "type": "image",
-                                "source": convert_to_anthropic_image_obj(
-                                    m["image_url"]["url"]
+                            AnthropicMessagesImageParam(
+                                type="image",
+                                source=AnthropicImageParamSource(
+                                    type="base64",
+                                    media_type=image_chunk["media_type"],
+                                    data=image_chunk["data"],
                                 ),
-                            }
+                            )
                         )
                     elif m.get("type", "") == "text":
                         user_content.append({"type": "text", "text": m["text"]})
@@ -1213,14 +1290,30 @@ def anthropic_messages_pt(messages: list):
         if user_content:
             new_messages.append({"role": "user", "content": user_content})
 
-        assistant_content = []
+        assistant_content: List[AnthropicMessagesAssistantMessageValues] = []
         ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
         while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
-            assistant_text = (
-                messages[msg_i].get("content") or ""
-            )  # either string or none
-            if assistant_text:
-                assistant_content.append({"type": "text", "text": assistant_text})
+            if "content" in messages[msg_i] and isinstance(
+                messages[msg_i]["content"], list
+            ):
+                for m in messages[msg_i]["content"]:
+                    # handle text
+                    if (
+                        m.get("type", "") == "text" and len(m.get("text", "")) > 0
+                    ):  # don't pass empty text blocks. anthropic api raises errors.
+                        anthropic_message = AnthropicMessagesTextParam(
+                            type="text", text=m.get("text")
+                        )
+                        assistant_content.append(anthropic_message)
+            elif (
+                "content" in messages[msg_i]
+                and isinstance(messages[msg_i]["content"], str)
+                and len(messages[msg_i]["content"])
+                > 0  # don't pass empty text blocks. anthropic api raises errors.
+            ):
+                assistant_content.append(
+                    {"type": "text", "text": messages[msg_i]["content"]}
+                )
 
             if messages[msg_i].get(
                 "tool_calls", []
@@ -1242,10 +1335,10 @@ def anthropic_messages_pt(messages: list):
             new_messages.append({"role": "assistant", "content": assistant_content})
 
         if msg_i == init_msg_i:  # prevent infinite loops
-            raise Exception(
-                "Invalid Message passed in - {}. File an issue https://github.com/BerriAI/litellm/issues".format(
-                    messages[msg_i]
-                )
+            raise litellm.BadRequestError(
+                message=BAD_MESSAGE_ERROR_STR + f"passed in {messages[msg_i]}",
+                model=model,
+                llm_provider=llm_provider,
             )
     if not new_messages or new_messages[0]["role"] != "user":
         if litellm.modify_params:
@@ -1254,7 +1347,9 @@ def anthropic_messages_pt(messages: list):
             )
         else:
             raise Exception(
-                "Invalid first message. Should always start with 'role'='user' for Anthropic. System prompt is sent separately for Anthropic. set 'litellm.modify_params = True' or 'litellm_settings:modify_params = True' on proxy, to insert a placeholder user message - '.' as the first message, "
+                "Invalid first message={}. Should always start with 'role'='user' for Anthropic. System prompt is sent separately for Anthropic. set 'litellm.modify_params = True' or 'litellm_settings:modify_params = True' on proxy, to insert a placeholder user message - '.' as the first message, ".format(
+                    new_messages
+                )
             )
 
     if new_messages[-1]["role"] == "assistant":
@@ -1368,15 +1463,36 @@ def convert_to_documents(
     return documents
 
 
-def convert_openai_message_to_cohere_tool_result(message):
+from litellm.types.llms.cohere import (
+    CallObject,
+    ChatHistory,
+    ChatHistoryChatBot,
+    ChatHistorySystem,
+    ChatHistoryToolResult,
+    ChatHistoryUser,
+    ToolCallObject,
+    ToolResultObject,
+)
+
+
+def convert_openai_message_to_cohere_tool_result(
+    message, tool_calls: List
+) -> ToolResultObject:
     """
     OpenAI message with a tool result looks like:
     {
             "tool_call_id": "tool_1",
             "role": "tool",
-            "name": "get_current_weather",
             "content": {"location": "San Francisco, CA", "unit": "fahrenheit", "temperature": "72"},
     },
+    """
+    """
+    OpenAI message with a function call looks like:
+    {
+        "role": "function",
+        "name": "get_current_weather",
+        "content": "function result goes here",
+    }
     """
 
     """
@@ -1387,7 +1503,6 @@ def convert_openai_message_to_cohere_tool_result(message):
            "parameters": {
                "day": "2023-09-29"
            },
-           "generation_id": "4807c924-9003-4d6b-8069-eda03962c465"
        },
        "outputs": [
            {
@@ -1397,30 +1512,258 @@ def convert_openai_message_to_cohere_tool_result(message):
        ]
    },
     """
+    content_str: str = message.get("content", "")
+    if len(content_str) > 0:
+        try:
+            content = json.loads(content_str)
+        except json.JSONDecodeError:
+            content = {"result": content_str}
+    else:
+        content = {}
+    name = ""
+    arguments = {}
+    # Recover name from last message with tool calls
+    if len(tool_calls) > 0:
+        tools = tool_calls
+        msg_tool_call_id = message.get("tool_call_id", None)
+        for tool in tools:
+            prev_tool_call_id = tool.get("id", None)
+            if (
+                msg_tool_call_id
+                and prev_tool_call_id
+                and msg_tool_call_id == prev_tool_call_id
+            ):
+                name = tool.get("function", {}).get("name", "")
+                arguments_str = tool.get("function", {}).get("arguments", "")
+                if arguments_str is not None and len(arguments_str) > 0:
+                    arguments = json.loads(arguments_str)
 
-    tool_call_id = message.get("tool_call_id")
-    name = message.get("name")
-    content = message.get("content")
+    if message["role"] == "function":
+        name = message.get("name")
+        cohere_tool_result: ToolResultObject = {
+            "call": CallObject(name=name, parameters=arguments),
+            "outputs": [content],
+        }
+        return cohere_tool_result
+    else:
+        # We can't determine from openai message format whether it's a successful or
+        # error call result so default to the successful result template
 
-    # Create the Cohere tool_result dictionary
-    cohere_tool_result = {
-        "call": {
-            "name": name,
-            "parameters": {"location": "San Francisco, CA"},
-            "generation_id": tool_call_id,
-        },
-        "outputs": convert_to_documents(content),
+        cohere_tool_result = {
+            "call": CallObject(name=name, parameters=arguments),
+            "outputs": [content],
+        }
+        return cohere_tool_result
+
+
+def get_all_tool_calls(messages: List) -> List:
+    """
+    Returns extracted list of `tool_calls`.
+
+    Done to handle openai no longer returning tool call 'name' in tool results.
+    """
+    tool_calls: List = []
+    for m in messages:
+        if m.get("tool_calls", None) is not None:
+            if isinstance(m["tool_calls"], list):
+                tool_calls.extend(m["tool_calls"])
+
+    return tool_calls
+
+
+def convert_to_cohere_tool_invoke(tool_calls: list) -> List[ToolCallObject]:
+    """
+    OpenAI tool invokes:
+    {
+      "role": "assistant",
+      "content": null,
+      "tool_calls": [
+        {
+          "id": "call_abc123",
+          "type": "function",
+          "function": {
+            "name": "get_current_weather",
+            "arguments": "{\n\"location\": \"Boston, MA\"\n}"
+          }
+        }
+      ]
+    },
+    """
+
+    """
+    Cohere tool invokes:
+    {
+      "role": "CHATBOT",
+      "tool_calls": [{"name": "get_weather", "parameters": {"location": "San Francisco, CA"}}]
     }
-    return cohere_tool_result
+    """
+
+    cohere_tool_invoke: List[ToolCallObject] = [
+        {
+            "name": get_attribute_or_key(
+                get_attribute_or_key(tool, "function"), "name"
+            ),
+            "parameters": json.loads(
+                get_attribute_or_key(
+                    get_attribute_or_key(tool, "function"), "arguments"
+                )
+            ),
+        }
+        for tool in tool_calls
+        if get_attribute_or_key(tool, "type") == "function"
+    ]
+
+    return cohere_tool_invoke
+
+
+def cohere_messages_pt_v2(
+    messages: List,
+    model: str,
+    llm_provider: str,
+) -> Tuple[Union[str, ToolResultObject], ChatHistory]:
+    """
+    Returns a tuple(Union[tool_result, message], chat_history)
+
+    - if last message is tool result -> return 'tool_result'
+    - if last message is text -> return message (str)
+
+    - return preceding messages as 'chat_history'
+
+    Note:
+    - cannot specify message if the last entry in chat history contains tool results
+    - message must be at least 1 token long or tool results must be specified.
+    - cannot specify tool_results if the last entry in chat history contains a user message
+    """
+    tool_calls: List = get_all_tool_calls(messages=messages)
+
+    ## GET MOST RECENT MESSAGE
+    most_recent_message = messages.pop(-1)
+    returned_message: Union[ToolResultObject, str] = ""
+    if (
+        most_recent_message.get("role", "") is not None
+        and most_recent_message["role"] == "tool"
+    ):
+        # tool result
+        returned_message = convert_openai_message_to_cohere_tool_result(
+            most_recent_message, tool_calls
+        )
+    else:
+        content: Union[str, List] = most_recent_message.get("content")
+        if isinstance(content, str):
+            returned_message = content
+        else:
+            for chunk in content:
+                if chunk.get("type") == "text":
+                    returned_message += chunk.get("text")
+
+    ## CREATE CHAT HISTORY
+    user_message_types = {"user"}
+    tool_message_types = {"tool", "function"}
+    # reformat messages to ensure user/assistant are alternating, if there's either 2 consecutive 'user' messages or 2 consecutive 'assistant' message, merge them.
+    new_messages: ChatHistory = []
+    msg_i = 0
+
+    while msg_i < len(messages):
+        user_content: str = ""
+        init_msg_i = msg_i
+        ## MERGE CONSECUTIVE USER CONTENT ##
+        while msg_i < len(messages) and messages[msg_i]["role"] in user_message_types:
+            if isinstance(messages[msg_i]["content"], list):
+                for m in messages[msg_i]["content"]:
+                    if m.get("type", "") == "text":
+                        user_content += m["text"]
+            else:
+                user_content += messages[msg_i]["content"]
+            msg_i += 1
+
+        if len(user_content) > 0:
+            new_messages.append(ChatHistoryUser(role="USER", message=user_content))
+
+        system_content: str = ""
+        ## MERGE CONSECUTIVE SYSTEM CONTENT ##
+        while msg_i < len(messages) and messages[msg_i]["role"] == "system":
+            if isinstance(messages[msg_i]["content"], list):
+                for m in messages[msg_i]["content"]:
+                    if m.get("type", "") == "text":
+                        system_content += m["text"]
+            else:
+                system_content += messages[msg_i]["content"]
+            msg_i += 1
+
+        if len(system_content) > 0:
+            new_messages.append(
+                ChatHistorySystem(role="SYSTEM", message=system_content)
+            )
+
+        assistant_content: str = ""
+        assistant_tool_calls: List[ToolCallObject] = []
+        ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
+        while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
+            assistant_text = (
+                messages[msg_i].get("content") or ""
+            )  # either string or none
+            if assistant_text:
+                assistant_content += assistant_text
+
+            if messages[msg_i].get(
+                "tool_calls", []
+            ):  # support assistant tool invoke conversion
+                assistant_tool_calls.extend(
+                    convert_to_cohere_tool_invoke(messages[msg_i]["tool_calls"])
+                )
+
+            if messages[msg_i].get("function_call"):
+                assistant_tool_calls.extend(
+                    convert_to_cohere_tool_invoke(messages[msg_i]["function_call"])
+                )
+
+            msg_i += 1
+
+        if len(assistant_content) > 0:
+            new_messages.append(
+                ChatHistoryChatBot(
+                    role="CHATBOT",
+                    message=assistant_content,
+                    tool_calls=assistant_tool_calls,
+                )
+            )
+
+        ## MERGE CONSECUTIVE TOOL RESULTS
+        tool_results: List[ToolResultObject] = []
+        while msg_i < len(messages) and messages[msg_i]["role"] in tool_message_types:
+            tool_results.append(
+                convert_openai_message_to_cohere_tool_result(
+                    messages[msg_i], tool_calls
+                )
+            )
+
+            msg_i += 1
+
+        if len(tool_results) > 0:
+            new_messages.append(
+                ChatHistoryToolResult(role="TOOL", tool_results=tool_results)
+            )
+
+        if msg_i == init_msg_i:  # prevent infinite loops
+            raise litellm.BadRequestError(
+                message=BAD_MESSAGE_ERROR_STR + f"passed in {messages[msg_i]}",
+                model=model,
+                llm_provider=llm_provider,
+            )
+
+    return returned_message, new_messages
 
 
 def cohere_message_pt(messages: list):
+    tool_calls: List = get_all_tool_calls(messages=messages)
     prompt = ""
     tool_results = []
     for message in messages:
         # check if this is a tool_call result
         if message["role"] == "tool":
-            tool_result = convert_openai_message_to_cohere_tool_result(message)
+            tool_result = convert_openai_message_to_cohere_tool_result(
+                message, tool_calls=tool_calls
+            )
             tool_results.append(tool_result)
         elif message.get("content"):
             prompt += message["content"] + "\n\n"
@@ -1465,7 +1808,8 @@ def _load_image_from_url(image_url):
 
     try:
         # Send a GET request to the image URL
-        response = requests.get(image_url)
+        client = HTTPHandler(concurrent_limit=1)
+        response = client.get(image_url)
         response.raise_for_status()  # Raise an exception for HTTP errors
 
         # Check the response's content type to ensure it is an image
@@ -1478,8 +1822,6 @@ def _load_image_from_url(image_url):
         # Load the image from the response content
         return Image.open(BytesIO(response.content))
 
-    except requests.RequestException as e:
-        raise Exception(f"Request failed: {e}")
     except Exception as e:
         raise e
 
@@ -1611,6 +1953,26 @@ def azure_text_pt(messages: list):
     return prompt
 
 
+###### AZURE AI #######
+def stringify_json_tool_call_content(messages: List) -> List:
+    """
+
+    - Check 'content' in tool role -> convert to dict (if not) -> stringify
+
+    Done for azure_ai/cohere calls to handle results of a tool call
+    """
+
+    for m in messages:
+        if m["role"] == "tool" and isinstance(m["content"], str):
+            # check if content is a valid json object
+            try:
+                json.loads(m["content"])
+            except json.JSONDecodeError:
+                m["content"] = json.dumps({"result": m["content"]})
+
+    return messages
+
+
 ###### AMAZON BEDROCK #######
 
 from litellm.types.llms.bedrock import ContentBlock as BedrockContentBlock
@@ -1636,8 +1998,9 @@ def get_image_details(image_url) -> Tuple[str, str]:
     try:
         import base64
 
+        client = HTTPHandler(concurrent_limit=1)
         # Send a GET request to the image URL
-        response = requests.get(image_url)
+        response = client.get(image_url)
         response.raise_for_status()  # Raise an exception for HTTP errors
 
         # Check the response's content type to ensure it is an image
@@ -1657,8 +2020,6 @@ def get_image_details(image_url) -> Tuple[str, str]:
 
         return base64_bytes, mime_type
 
-    except requests.RequestException as e:
-        raise Exception(f"Request failed: {e}")
     except Exception as e:
         raise e
 
@@ -1835,7 +2196,11 @@ def _convert_to_bedrock_tool_call_result(
     return BedrockMessageBlock(role="user", content=[content_block])
 
 
-def _bedrock_converse_messages_pt(messages: List) -> List[BedrockMessageBlock]:
+def _bedrock_converse_messages_pt(
+    messages: List,
+    model: str,
+    llm_provider: str,
+) -> List[BedrockMessageBlock]:
     """
     Converts given messages from OpenAI format to Bedrock format
 
@@ -1875,7 +2240,9 @@ def _bedrock_converse_messages_pt(messages: List) -> List[BedrockMessageBlock]:
         assistant_content: List[BedrockContentBlock] = []
         ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
         while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
-            if isinstance(messages[msg_i]["content"], list):
+            if messages[msg_i].get("content", None) is not None and isinstance(
+                messages[msg_i]["content"], list
+            ):
                 assistants_parts: List[BedrockContentBlock] = []
                 for element in messages[msg_i]["content"]:
                     if isinstance(element, dict):
@@ -1917,12 +2284,11 @@ def _bedrock_converse_messages_pt(messages: List) -> List[BedrockMessageBlock]:
             contents.append(tool_call_result)
             msg_i += 1
         if msg_i == init_msg_i:  # prevent infinite loops
-            raise Exception(
-                "Invalid Message passed in - {}. File an issue https://github.com/BerriAI/litellm/issues".format(
-                    messages[msg_i]
-                )
+            raise litellm.BadRequestError(
+                message=BAD_MESSAGE_ERROR_STR + f"passed in {messages[msg_i]}",
+                model=model,
+                llm_provider=llm_provider,
             )
-
     return contents
 
 
@@ -2008,6 +2374,50 @@ def function_call_prompt(messages: list, functions: list):
     return messages
 
 
+def response_schema_prompt(model: str, response_schema: dict) -> str:
+    """
+    Decides if a user-defined custom prompt or default needs to be used
+
+    Returns the prompt str that's passed to the model as a user message
+    """
+    custom_prompt_details: Optional[dict] = None
+    response_schema_as_message = [
+        {"role": "user", "content": "{}".format(response_schema)}
+    ]
+    if f"{model}/response_schema_prompt" in litellm.custom_prompt_dict:
+
+        custom_prompt_details = litellm.custom_prompt_dict[
+            f"{model}/response_schema_prompt"
+        ]  # allow user to define custom response schema prompt by model
+    elif "response_schema_prompt" in litellm.custom_prompt_dict:
+        custom_prompt_details = litellm.custom_prompt_dict["response_schema_prompt"]
+
+    if custom_prompt_details is not None:
+        return custom_prompt(
+            role_dict=custom_prompt_details["roles"],
+            initial_prompt_value=custom_prompt_details["initial_prompt_value"],
+            final_prompt_value=custom_prompt_details["final_prompt_value"],
+            messages=response_schema_as_message,
+        )
+    else:
+        return default_response_schema_prompt(response_schema=response_schema)
+
+
+def default_response_schema_prompt(response_schema: dict) -> str:
+    """
+    Used if provider/model doesn't support 'response_schema' param.
+
+    This is the default prompt. Allow user to override this with a custom_prompt.
+    """
+    prompt_str = """Use this JSON schema: 
+    ```json 
+    {}
+    ```""".format(
+        response_schema
+    )
+    return prompt_str
+
+
 # Custom prompt template
 def custom_prompt(
     role_dict: dict,
@@ -2038,7 +2448,16 @@ def custom_prompt(
             if role in role_dict and "post_message" in role_dict[role]
             else ""
         )
-        prompt += pre_message_str + message["content"] + post_message_str
+        if isinstance(message["content"], str):
+            prompt += pre_message_str + message["content"] + post_message_str
+        elif isinstance(message["content"], list):
+            text_str = ""
+            for content in message["content"]:
+                if content.get("text", None) is not None and isinstance(
+                    content["text"], str
+                ):
+                    text_str += content["text"]
+            prompt += pre_message_str + text_str + post_message_str
 
         if role == "assistant":
             prompt += eos_token
@@ -2061,7 +2480,9 @@ def prompt_factory(
     elif custom_llm_provider == "anthropic":
         if model == "claude-instant-1" or model == "claude-2":
             return anthropic_pt(messages=messages)
-        return anthropic_messages_pt(messages=messages)
+        return anthropic_messages_pt(
+            messages=messages, model=model, llm_provider=custom_llm_provider
+        )
     elif custom_llm_provider == "anthropic_xml":
         return anthropic_messages_pt_xml(messages=messages)
     elif custom_llm_provider == "together_ai":

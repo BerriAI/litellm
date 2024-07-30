@@ -94,6 +94,14 @@ class FunctionDeclaration(TypedDict, total=False):
     response: Schema
 
 
+class VertexAISearch(TypedDict, total=False):
+    datastore: Required[str]
+
+
+class Retrieval(TypedDict):
+    source: VertexAISearch
+
+
 class FunctionCallingConfig(TypedDict, total=False):
     mode: Literal["ANY", "AUTO", "NONE"]
     allowed_function_names: List[str]
@@ -145,14 +153,27 @@ class GenerationConfig(TypedDict, total=False):
     presence_penalty: float
     frequency_penalty: float
     response_mime_type: Literal["text/plain", "application/json"]
+    seed: int
 
 
-class Tools(TypedDict):
+class Tools(TypedDict, total=False):
     function_declarations: List[FunctionDeclaration]
+    googleSearchRetrieval: dict
+    retrieval: Retrieval
 
 
 class ToolConfig(TypedDict):
     functionCallingConfig: FunctionCallingConfig
+
+
+class TTL(TypedDict, total=False):
+    seconds: Required[float]
+    nano: float
+
+
+class CachedContent(TypedDict, total=False):
+    ttl: TTL
+    expire_time: str
 
 
 class RequestBody(TypedDict, total=False):
@@ -162,6 +183,7 @@ class RequestBody(TypedDict, total=False):
     toolConfig: ToolConfig
     safetySettings: List[SafetSettingsConfig]
     generationConfig: GenerationConfig
+    cachedContent: str
 
 
 class SafetyRatings(TypedDict):
@@ -199,6 +221,7 @@ class SearchEntryPoint(TypedDict, total=False):
 class GroundingMetadata(TypedDict, total=False):
     webSearchQueries: List[str]
     searchEntryPoint: SearchEntryPoint
+    groundingAttributions: List[dict]
 
 
 class Candidates(TypedDict, total=False):
@@ -227,7 +250,7 @@ class PromptFeedback(TypedDict):
     blockReasonMessage: str
 
 
-class UsageMetadata(TypedDict):
+class UsageMetadata(TypedDict, total=False):
     promptTokenCount: int
     totalTokenCount: int
     candidatesTokenCount: int

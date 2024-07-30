@@ -1,8 +1,14 @@
 # What is this?
 ## unit tests for openai tts endpoint
 
-import sys, os, asyncio, time, random, uuid
+import asyncio
+import os
+import random
+import sys
+import time
 import traceback
+import uuid
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -11,23 +17,40 @@ import os
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-import pytest
-import litellm, openai
 from pathlib import Path
 
+import openai
+import pytest
 
-@pytest.mark.parametrize("sync_mode", [True, False])
+import litellm
+
+
+@pytest.mark.parametrize(
+    "sync_mode",
+    [True, False],
+)
+@pytest.mark.parametrize(
+    "model, api_key, api_base",
+    [
+        (
+            "azure/azure-tts",
+            os.getenv("AZURE_SWEDEN_API_KEY"),
+            os.getenv("AZURE_SWEDEN_API_BASE"),
+        ),
+        ("openai/tts-1", os.getenv("OPENAI_API_KEY"), None),
+    ],
+)  # ,
 @pytest.mark.asyncio
-async def test_audio_speech_litellm(sync_mode):
+async def test_audio_speech_litellm(sync_mode, model, api_base, api_key):
     speech_file_path = Path(__file__).parent / "speech.mp3"
 
     if sync_mode:
         response = litellm.speech(
-            model="openai/tts-1",
+            model=model,
             voice="alloy",
             input="the quick brown fox jumped over the lazy dogs",
-            api_base=None,
-            api_key=None,
+            api_base=api_base,
+            api_key=api_key,
             organization=None,
             project=None,
             max_retries=1,
@@ -41,11 +64,11 @@ async def test_audio_speech_litellm(sync_mode):
         assert isinstance(response, HttpxBinaryResponseContent)
     else:
         response = await litellm.aspeech(
-            model="openai/tts-1",
+            model=model,
             voice="alloy",
             input="the quick brown fox jumped over the lazy dogs",
-            api_base=None,
-            api_key=None,
+            api_base=api_base,
+            api_key=api_key,
             organization=None,
             project=None,
             max_retries=1,

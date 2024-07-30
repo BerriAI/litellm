@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .completion import CompletionRequest
 from .embedding import EmbeddingRequest
+from .utils import ModelResponse
 
 
 class ModelConfig(BaseModel):
@@ -90,6 +91,7 @@ class ModelInfo(BaseModel):
     base_model: Optional[str] = (
         None  # specify if the base model is azure/gpt-3.5-turbo etc for accurate cost tracking
     )
+    tier: Optional[Literal["free", "paid"]] = None
 
     def __init__(self, id: Optional[Union[str, int]] = None, **params):
         if id is None:
@@ -153,6 +155,8 @@ class GenericLiteLLMParams(BaseModel):
     input_cost_per_second: Optional[float] = None
     output_cost_per_second: Optional[float] = None
 
+    max_file_size_mb: Optional[float] = None
+
     model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
 
     def __init__(
@@ -184,6 +188,7 @@ class GenericLiteLLMParams(BaseModel):
         output_cost_per_token: Optional[float] = None,
         input_cost_per_second: Optional[float] = None,
         output_cost_per_second: Optional[float] = None,
+        max_file_size_mb: Optional[float] = None,
         **params,
     ):
         args = locals()
@@ -242,6 +247,9 @@ class LiteLLM_Params(GenericLiteLLMParams):
         aws_access_key_id: Optional[str] = None,
         aws_secret_access_key: Optional[str] = None,
         aws_region_name: Optional[str] = None,
+        # OpenAI / Azure Whisper
+        # set a max-size of file that can be passed to litellm proxy
+        max_file_size_mb: Optional[float] = None,
         **params,
     ):
         args = locals()
@@ -315,12 +323,25 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     input_cost_per_second: Optional[float]
     output_cost_per_second: Optional[float]
     ## MOCK RESPONSES ##
-    mock_response: Optional[str]
+    mock_response: Optional[Union[str, ModelResponse, Exception]]
+
+    # routing params
+    # use this for tag-based routing
+    tags: Optional[List[str]]
 
 
 class DeploymentTypedDict(TypedDict):
     model_name: str
     litellm_params: LiteLLMParamsTypedDict
+    model_info: ModelInfo
+
+
+SPECIAL_MODEL_INFO_PARAMS = [
+    "input_cost_per_token",
+    "output_cost_per_token",
+    "input_cost_per_character",
+    "output_cost_per_character",
+]
 
 
 class Deployment(BaseModel):
@@ -341,6 +362,16 @@ class Deployment(BaseModel):
             model_info = ModelInfo()
         elif isinstance(model_info, dict):
             model_info = ModelInfo(**model_info)
+
+        for (
+            key
+        ) in (
+            SPECIAL_MODEL_INFO_PARAMS
+        ):  # ensures custom pricing info is consistently in 'model_info'
+            field = getattr(litellm_params, key, None)
+            if field is not None:
+                setattr(model_info, key, field)
+
         super().__init__(
             model_info=model_info,
             model_name=model_name,
@@ -442,6 +473,8 @@ class ModelGroupInfo(BaseModel):
             "chat", "embedding", "completion", "image_generation", "audio_transcription"
         ]
     ] = Field(default="chat")
+    tpm: Optional[int] = None
+    rpm: Optional[int] = None
     supports_parallel_function_calling: bool = Field(default=False)
     supports_vision: bool = Field(default=False)
     supports_function_calling: bool = Field(default=False)
@@ -451,3 +484,62 @@ class ModelGroupInfo(BaseModel):
 class AssistantsTypedDict(TypedDict):
     custom_llm_provider: Literal["azure", "openai"]
     litellm_params: LiteLLMParamsTypedDict
+
+
+class CustomRoutingStrategyBase:
+    async def async_get_available_deployment(
+        self,
+        model: str,
+        messages: Optional[List[Dict[str, str]]] = None,
+        input: Optional[Union[str, List]] = None,
+        specific_deployment: Optional[bool] = False,
+        request_kwargs: Optional[Dict] = None,
+    ):
+        """
+        Asynchronously retrieves the available deployment based on the given parameters.
+
+        Args:
+            model (str): The name of the model.
+            messages (Optional[List[Dict[str, str]]], optional): The list of messages for a given request. Defaults to None.
+            input (Optional[Union[str, List]], optional): The input for a given embedding request. Defaults to None.
+            specific_deployment (Optional[bool], optional): Whether to retrieve a specific deployment. Defaults to False.
+            request_kwargs (Optional[Dict], optional): Additional request keyword arguments. Defaults to None.
+
+        Returns:
+            Returns an element from litellm.router.model_list
+
+        """
+        pass
+
+    def get_available_deployment(
+        self,
+        model: str,
+        messages: Optional[List[Dict[str, str]]] = None,
+        input: Optional[Union[str, List]] = None,
+        specific_deployment: Optional[bool] = False,
+        request_kwargs: Optional[Dict] = None,
+    ):
+        """
+        Synchronously retrieves the available deployment based on the given parameters.
+
+        Args:
+            model (str): The name of the model.
+            messages (Optional[List[Dict[str, str]]], optional): The list of messages for a given request. Defaults to None.
+            input (Optional[Union[str, List]], optional): The input for a given embedding request. Defaults to None.
+            specific_deployment (Optional[bool], optional): Whether to retrieve a specific deployment. Defaults to False.
+            request_kwargs (Optional[Dict], optional): Additional request keyword arguments. Defaults to None.
+
+        Returns:
+            Returns an element from litellm.router.model_list
+
+        """
+        pass
+
+
+class RouterGeneralSettings(BaseModel):
+    async_only_mode: bool = Field(
+        default=False
+    )  # this will only initialize async clients. Good for memory utils
+    pass_through_all_models: bool = Field(
+        default=False
+    )  # if passed a model not llm_router model list, pass through the request to litellm.acompletion/embedding

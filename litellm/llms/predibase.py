@@ -1,27 +1,28 @@
 # What is this?
 ## Controller file for Predibase Integration - https://predibase.com/
 
-from functools import partial
-import os, types
-import traceback
+import copy
 import json
-from enum import Enum
-import requests, copy  # type: ignore
+import os
 import time
-from typing import Callable, Optional, List, Literal, Union
-from litellm.utils import (
-    ModelResponse,
-    Usage,
-    CustomStreamWrapper,
-    Message,
-    Choices,
-)
-from litellm.litellm_core_utils.core_helpers import map_finish_reason
-import litellm
-from .prompt_templates.factory import prompt_factory, custom_prompt
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from .base import BaseLLM
+import traceback
+import types
+from enum import Enum
+from functools import partial
+from typing import Callable, List, Literal, Optional, Union
+
 import httpx  # type: ignore
+import requests  # type: ignore
+
+import litellm
+import litellm.litellm_core_utils
+import litellm.litellm_core_utils.litellm_logging
+from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.utils import Choices, CustomStreamWrapper, Message, ModelResponse, Usage
+
+from .base import BaseLLM
+from .prompt_templates.factory import custom_prompt, prompt_factory
 
 
 class PredibaseError(Exception):
@@ -146,7 +147,49 @@ class PredibaseConfig:
         }
 
     def get_supported_openai_params(self):
-        return ["stream", "temperature", "max_tokens", "top_p", "stop", "n"]
+        return [
+            "stream",
+            "temperature",
+            "max_tokens",
+            "top_p",
+            "stop",
+            "n",
+            "response_format",
+        ]
+
+    def map_openai_params(self, non_default_params: dict, optional_params: dict):
+        for param, value in non_default_params.items():
+            # temperature, top_p, n, stream, stop, max_tokens, n, presence_penalty default to None
+            if param == "temperature":
+                if value == 0.0 or value == 0:
+                    # hugging face exception raised when temp==0
+                    # Failed: Error occurred: HuggingfaceException - Input validation error: `temperature` must be strictly positive
+                    value = 0.01
+                optional_params["temperature"] = value
+            if param == "top_p":
+                optional_params["top_p"] = value
+            if param == "n":
+                optional_params["best_of"] = value
+                optional_params["do_sample"] = (
+                    True  # Need to sample if you want best of for hf inference endpoints
+                )
+            if param == "stream":
+                optional_params["stream"] = value
+            if param == "stop":
+                optional_params["stop"] = value
+            if param == "max_tokens":
+                # HF TGI raises the following exception when max_new_tokens==0
+                # Failed: Error occurred: HuggingfaceException - Input validation error: `max_new_tokens` must be strictly positive
+                if value == 0:
+                    value = 1
+                optional_params["max_new_tokens"] = value
+            if param == "echo":
+                # https://huggingface.co/docs/huggingface_hub/main/en/package_reference/inference_client#huggingface_hub.InferenceClient.text_generation.decoder_input_details
+                #  Return the decoder input token logprobs and ids. You must set details=True as well for it to be taken into account. Defaults to False
+                optional_params["decoder_input_details"] = True
+            if param == "response_format":
+                optional_params["response_format"] = value
+        return optional_params
 
 
 class PredibaseChatCompletion(BaseLLM):
@@ -225,17 +268,18 @@ class PredibaseChatCompletion(BaseLLM):
                 status_code=response.status_code,
             )
         else:
-            if (
-                not isinstance(completion_response, dict)
-                or "generated_text" not in completion_response
-            ):
+            if not isinstance(completion_response, dict):
                 raise PredibaseError(
                     status_code=422,
-                    message=f"response is not in expected format - {completion_response}",
+                    message=f"'completion_response' is not a dictionary - {completion_response}",
                 )
-
+            elif "generated_text" not in completion_response:
+                raise PredibaseError(
+                    status_code=422,
+                    message=f"'generated_text' is not a key response dictionary - {completion_response}",
+                )
             if len(completion_response["generated_text"]) > 0:
-                model_response["choices"][0]["message"]["content"] = self.output_parser(
+                model_response.choices[0].message.content = self.output_parser(  # type: ignore
                     completion_response["generated_text"]
                 )
             ## GETTING LOGPROBS + FINISH REASON
@@ -250,10 +294,10 @@ class PredibaseChatCompletion(BaseLLM):
                 for token in completion_response["details"]["tokens"]:
                     if token["logprob"] is not None:
                         sum_logprob += token["logprob"]
-                model_response["choices"][0][
-                    "message"
-                ]._logprob = (
-                    sum_logprob  # [TODO] move this to using the actual logprobs
+                setattr(
+                    model_response.choices[0].message,  # type: ignore
+                    "_logprob",
+                    sum_logprob,  # [TODO] move this to using the actual logprobs
                 )
             if "best_of" in optional_params and optional_params["best_of"] > 1:
                 if (
@@ -281,7 +325,7 @@ class PredibaseChatCompletion(BaseLLM):
                             message=message_obj,
                         )
                         choices_list.append(choice_obj)
-                    model_response["choices"].extend(choices_list)
+                    model_response.choices.extend(choices_list)
 
         ## CALCULATING USAGE
         prompt_tokens = 0
@@ -307,8 +351,8 @@ class PredibaseChatCompletion(BaseLLM):
 
         total_tokens = prompt_tokens + completion_tokens
 
-        model_response["created"] = int(time.time())
-        model_response["model"] = model
+        model_response.created = int(time.time())
+        model_response.model = model
         usage = Usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
@@ -496,7 +540,9 @@ class PredibaseChatCompletion(BaseLLM):
         except httpx.HTTPStatusError as e:
             raise PredibaseError(
                 status_code=e.response.status_code,
-                message="HTTPStatusError - {}".format(e.response.text),
+                message="HTTPStatusError - received status_code={}, error_message={}".format(
+                    e.response.status_code, e.response.text
+                ),
             )
         except Exception as e:
             raise PredibaseError(

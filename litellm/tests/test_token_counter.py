@@ -1,16 +1,30 @@
 #### What this tests ####
 #    This tests litellm.token_counter() function
 
-import sys, os
-import traceback
+import os
+import sys
+import time
+from unittest.mock import MagicMock
+
 import pytest
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-import time
-from litellm import token_counter, create_pretrained_tokenizer, encode, decode
+
+from litellm import (
+    create_pretrained_tokenizer,
+    decode,
+    encode,
+    get_modified_max_tokens,
+    token_counter,
+)
 from litellm.tests.large_text import text
+from litellm.tests.messages_with_counts import (
+    MESSAGES_TEXT,
+    MESSAGES_WITH_IMAGES,
+    MESSAGES_WITH_TOOLS,
+)
 
 
 def test_token_counter_normal_plus_function_calling():
@@ -48,6 +62,46 @@ def test_token_counter_normal_plus_function_calling():
 
 
 # test_token_counter_normal_plus_function_calling()
+
+
+@pytest.mark.parametrize(
+    "message_count_pair",
+    MESSAGES_TEXT,
+)
+def test_token_counter_textonly(message_count_pair):
+    counted_tokens = token_counter(
+        model="gpt-35-turbo", messages=[message_count_pair["message"]]
+    )
+    assert counted_tokens == message_count_pair["count"]
+
+
+@pytest.mark.parametrize(
+    "message_count_pair",
+    MESSAGES_WITH_IMAGES,
+)
+def test_token_counter_with_images(message_count_pair):
+    counted_tokens = token_counter(
+        model="gpt-4o", messages=[message_count_pair["message"]]
+    )
+    assert counted_tokens == message_count_pair["count"]
+
+
+@pytest.mark.parametrize(
+    "message_count_pair",
+    MESSAGES_WITH_TOOLS,
+)
+def test_token_counter_with_tools(message_count_pair):
+    counted_tokens = token_counter(
+        model="gpt-35-turbo",
+        messages=[message_count_pair["system_message"]],
+        tools=message_count_pair["tools"],
+        tool_choice=message_count_pair["tool_choice"],
+    )
+    expected_tokens = message_count_pair["count"]
+    diff = counted_tokens - expected_tokens
+    assert (
+        diff >= 0 and diff <= 3
+    ), f"Expected {expected_tokens} tokens, got {counted_tokens}. Counted tokens is only allowed to be off by 3 in the over-counting direction."
 
 
 def test_tokenizers():
@@ -227,3 +281,65 @@ def test_openai_token_with_image_and_text():
 
     token_count = token_counter(model=model, messages=messages)
     print(token_count)
+
+
+@pytest.mark.parametrize(
+    "model, base_model, input_tokens, user_max_tokens, expected_value",
+    [
+        ("random-model", "random-model", 1024, 1024, 1024),
+        ("command", "command", 1000000, None, None),  # model max = 4096
+        ("command", "command", 4000, 256, 96),  # model max = 4096
+        ("command", "command", 4000, 10, 10),  # model max = 4096
+        ("gpt-3.5-turbo", "gpt-3.5-turbo", 4000, 5000, 4096),  # model max output = 4096
+    ],
+)
+def test_get_modified_max_tokens(
+    model, base_model, input_tokens, user_max_tokens, expected_value
+):
+    """
+    - Test when max_output is not known => expect user_max_tokens
+    - Test when max_output == max_input,
+        - input > max_output, no max_tokens => expect None
+        - input + max_tokens > max_output => expect remainder
+        - input + max_tokens < max_output => expect max_tokens
+    - Test when max_tokens > max_output => expect max_output
+    """
+    args = locals()
+    import litellm
+
+    litellm.token_counter = MagicMock()
+
+    def _mock_token_counter(*args, **kwargs):
+        return input_tokens
+
+    litellm.token_counter.side_effect = _mock_token_counter
+    print(f"_mock_token_counter: {_mock_token_counter()}")
+    messages = [{"role": "user", "content": "Hello world!"}]
+
+    calculated_value = get_modified_max_tokens(
+        model=model,
+        base_model=base_model,
+        messages=messages,
+        user_max_tokens=user_max_tokens,
+        buffer_perc=0,
+        buffer_num=0,
+    )
+
+    if expected_value is None:
+        assert calculated_value is None
+    else:
+        assert (
+            calculated_value == expected_value
+        ), "Got={}, Expected={}, Params={}".format(
+            calculated_value, expected_value, args
+        )
+
+
+def test_empty_tools():
+    messages = [{"role": "user", "content": "hey, how's it going?", "tool_calls": None}]
+
+    result = token_counter(
+        messages=messages,
+    )
+
+    print(result)

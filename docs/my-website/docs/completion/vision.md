@@ -39,7 +39,7 @@ Use `litellm.supports_vision(model="")` -> returns `True` if model supports `vis
 
 ```python
 assert litellm.supports_vision(model="gpt-4-vision-preview") == True
-assert litellm.supports_vision(model="gemini-1.0-pro-visionn") == True
+assert litellm.supports_vision(model="gemini-1.0-pro-vision") == True
 assert litellm.supports_vision(model="gpt-3.5-turbo") == False
 ```
 

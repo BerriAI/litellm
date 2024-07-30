@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import sys
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 logging.basicConfig(level=logging.DEBUG)
@@ -24,10 +25,21 @@ import pytest
 def langfuse_client():
     import langfuse
 
-    langfuse_client = langfuse.Langfuse(
-        public_key=os.environ["LANGFUSE_PUBLIC_KEY"],
-        secret_key=os.environ["LANGFUSE_SECRET_KEY"],
+    _langfuse_cache_key = (
+        f"{os.environ['LANGFUSE_PUBLIC_KEY']}-{os.environ['LANGFUSE_SECRET_KEY']}"
     )
+    # use a in memory langfuse client for testing, RAM util on ci/cd gets too high when we init many langfuse clients
+    if _langfuse_cache_key in litellm.in_memory_llm_clients_cache:
+        langfuse_client = litellm.in_memory_llm_clients_cache[_langfuse_cache_key]
+    else:
+        langfuse_client = langfuse.Langfuse(
+            public_key=os.environ["LANGFUSE_PUBLIC_KEY"],
+            secret_key=os.environ["LANGFUSE_SECRET_KEY"],
+            host=None,
+        )
+        litellm.in_memory_llm_clients_cache[_langfuse_cache_key] = langfuse_client
+
+        print("NEW LANGFUSE CLIENT")
 
     with patch(
         "langfuse.Langfuse", MagicMock(return_value=langfuse_client)
@@ -210,7 +222,7 @@ async def test_langfuse_logging_without_request_response(stream, langfuse_client
                 print(chunk)
 
         langfuse_client.flush()
-        await asyncio.sleep(2)
+        await asyncio.sleep(5)
 
         # get trace with _unique_trace_name
         trace = langfuse_client.get_generations(trace_id=_unique_trace_name)
@@ -225,10 +237,55 @@ async def test_langfuse_logging_without_request_response(stream, langfuse_client
         assert _trace_data[0].output == {
             "role": "assistant",
             "content": "redacted-by-litellm",
+            "function_call": None,
+            "tool_calls": None,
         }
 
     except Exception as e:
         pytest.fail(f"An exception occurred - {e}")
+
+
+# Get the current directory of the file being run
+pwd = os.path.dirname(os.path.realpath(__file__))
+print(pwd)
+
+file_path = os.path.join(pwd, "gettysburg.wav")
+
+audio_file = open(file_path, "rb")
+
+
+@pytest.mark.asyncio
+async def test_langfuse_logging_audio_transcriptions(langfuse_client):
+    """
+    Test that creates a trace with masked input and output
+    """
+    import uuid
+
+    _unique_trace_name = f"litellm-test-{str(uuid.uuid4())}"
+    litellm.set_verbose = True
+    litellm.success_callback = ["langfuse"]
+    await litellm.atranscription(
+        model="whisper-1",
+        file=audio_file,
+        metadata={
+            "trace_id": _unique_trace_name,
+        },
+    )
+
+    langfuse_client.flush()
+    await asyncio.sleep(5)
+
+    # get trace with _unique_trace_name
+    trace = langfuse_client.get_trace(id=_unique_trace_name)
+    generations = list(
+        reversed(langfuse_client.get_generations(trace_id=_unique_trace_name).data)
+    )
+
+    print("generations for given trace=", generations)
+
+    assert len(generations) == 1
+    assert generations[0].name == "litellm-atranscription"
+    assert generations[0].output is not None
 
 
 @pytest.mark.asyncio
@@ -261,7 +318,12 @@ async def test_langfuse_masked_input_output(langfuse_client):
         expected_output = (
             "redacted-by-litellm"
             if mask_value
-            else {"content": "This is a test response", "role": "assistant"}
+            else {
+                "content": "This is a test response",
+                "role": "assistant",
+                "function_call": None,
+                "tool_calls": None,
+            }
         )
         langfuse_client.flush()
         await asyncio.sleep(2)
@@ -279,7 +341,7 @@ async def test_langfuse_masked_input_output(langfuse_client):
 
 
 @pytest.mark.asyncio
-async def test_langfuse_logging_metadata(langfuse_client):
+async def test_aaalangfuse_logging_metadata(langfuse_client):
     """
     Test that creates multiple traces, with a varying number of generations and sets various metadata fields
     Confirms that no metadata that is standard within Langfuse is duplicated in the respective trace or generation metadata
@@ -361,8 +423,9 @@ async def test_langfuse_logging_metadata(langfuse_client):
             print(response)
             metadata["existing_trace_id"] = trace_id
 
+            await asyncio.sleep(2)
     langfuse_client.flush()
-    await asyncio.sleep(10)
+    # await asyncio.sleep(10)
 
     # Tests the metadata filtering and the override of the output to be the last generation
     for trace_id, generation_ids in trace_identifiers.items():
@@ -866,3 +929,39 @@ async def test_make_request():
             }
         },
     )
+
+
+@pytest.mark.skip(
+    reason="local only test, use this to verify if dynamic langfuse logging works as expected"
+)
+def test_aaalangfuse_dynamic_logging():
+    """
+    pass in langfuse credentials via completion call
+
+    assert call is logged.
+
+    Covers the team-logging scenario.
+    """
+    import uuid
+
+    import langfuse
+
+    trace_id = str(uuid.uuid4())
+    _ = litellm.completion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "Hey"}],
+        mock_response="Hey! how's it going?",
+        langfuse_public_key=os.getenv("LANGFUSE_PROJECT2_PUBLIC"),
+        langfuse_secret_key=os.getenv("LANGFUSE_PROJECT2_SECRET"),
+        metadata={"trace_id": trace_id},
+        success_callback=["langfuse"],
+    )
+
+    time.sleep(3)
+
+    langfuse_client = langfuse.Langfuse(
+        public_key=os.getenv("LANGFUSE_PROJECT2_PUBLIC"),
+        secret_key=os.getenv("LANGFUSE_PROJECT2_SECRET"),
+    )
+
+    langfuse_client.get_trace(id=trace_id)

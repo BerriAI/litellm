@@ -1,12 +1,16 @@
-from typing import Optional
-import litellm, traceback, sys
-from litellm.caching import DualCache
-from litellm.proxy._types import UserAPIKeyAuth
-from litellm.integrations.custom_logger import CustomLogger
+import sys
+import traceback
+from datetime import datetime, timedelta
+from typing import Literal, Optional
+
 from fastapi import HTTPException
-from litellm._logging import verbose_proxy_logger
+
+import litellm
 from litellm import ModelResponse
-from datetime import datetime
+from litellm._logging import verbose_proxy_logger
+from litellm.caching import DualCache
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.proxy._types import UserAPIKeyAuth
 
 
 class _PROXY_MaxParallelRequestsHandler(CustomLogger):
@@ -33,6 +37,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         tpm_limit: int,
         rpm_limit: int,
         request_count_api_key: str,
+        rate_limit_type: Literal["user", "customer", "team"],
     ):
         current = await self.internal_usage_cache.async_get_cache(
             key=request_count_api_key
@@ -40,8 +45,8 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         if current is None:
             if max_parallel_requests == 0 or tpm_limit == 0 or rpm_limit == 0:
                 # base case
-                raise HTTPException(
-                    status_code=429, detail="Max parallel request limit reached."
+                return self.raise_rate_limit_error(
+                    additional_details=f"Hit limit for {rate_limit_type}. Current limits: max_parallel_requests: {max_parallel_requests}, tpm_limit: {tpm_limit}, rpm_limit: {rpm_limit}"
                 )
             new_val = {
                 "current_requests": 1,
@@ -68,8 +73,36 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         else:
             raise HTTPException(
                 status_code=429,
-                detail=f"LiteLLM Rate Limit Handler: Crossed TPM, RPM Limit. current rpm: {current['current_rpm']}, rpm limit: {rpm_limit}, current tpm: {current['current_tpm']}, tpm limit: {tpm_limit}",
+                detail=f"LiteLLM Rate Limit Handler for rate limit type = {rate_limit_type}. Crossed TPM, RPM Limit. current rpm: {current['current_rpm']}, rpm limit: {rpm_limit}, current tpm: {current['current_tpm']}, tpm limit: {tpm_limit}",
+                headers={"retry-after": str(self.time_to_next_minute())},
             )
+
+    def time_to_next_minute(self) -> float:
+        # Get the current time
+        now = datetime.now()
+
+        # Calculate the next minute
+        next_minute = (now + timedelta(minutes=1)).replace(second=0, microsecond=0)
+
+        # Calculate the difference in seconds
+        seconds_to_next_minute = (next_minute - now).total_seconds()
+
+        return seconds_to_next_minute
+
+    def raise_rate_limit_error(
+        self, additional_details: Optional[str] = None
+    ) -> HTTPException:
+        """
+        Raise an HTTPException with a 429 status code and a retry-after header
+        """
+        error_message = "Max parallel request limit reached"
+        if additional_details is not None:
+            error_message = error_message + " " + additional_details
+        raise HTTPException(
+            status_code=429,
+            detail=f"Max parallel request limit reached {additional_details}",
+            headers={"retry-after": str(self.time_to_next_minute())},
+        )
 
     async def async_pre_call_hook(
         self,
@@ -108,8 +141,8 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 current_global_requests = 1
             # if above -> raise error
             if current_global_requests >= global_max_parallel_requests:
-                raise HTTPException(
-                    status_code=429, detail="Max parallel request limit reached."
+                return self.raise_rate_limit_error(
+                    additional_details=f"Hit Global Limit: Limit={global_max_parallel_requests}, current: {current_global_requests}"
                 )
             # if below -> increment
             else:
@@ -138,8 +171,8 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             ):
                 pass
             elif max_parallel_requests == 0 or tpm_limit == 0 or rpm_limit == 0:
-                raise HTTPException(
-                    status_code=429, detail="Max parallel request limit reached."
+                return self.raise_rate_limit_error(
+                    additional_details=f"Hit limit for api_key: {api_key}. max_parallel_requests: {max_parallel_requests}, tpm_limit: {tpm_limit}, rpm_limit: {rpm_limit}"
                 )
             elif current is None:
                 new_val = {
@@ -165,8 +198,8 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     request_count_api_key, new_val
                 )
             else:
-                raise HTTPException(
-                    status_code=429, detail="Max parallel request limit reached."
+                return self.raise_rate_limit_error(
+                    additional_details=f"Hit limit for api_key: {api_key}. tpm_limit: {tpm_limit}, current_tpm {current['current_tpm']} , rpm_limit: {rpm_limit} current rpm {current['current_rpm']} "
                 )
 
         # check if REQUEST ALLOWED for user_id
@@ -199,6 +232,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     request_count_api_key=request_count_api_key,
                     tpm_limit=user_tpm_limit,
                     rpm_limit=user_rpm_limit,
+                    rate_limit_type="user",
                 )
 
         # TEAM RATE LIMITS
@@ -226,6 +260,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 request_count_api_key=request_count_api_key,
                 tpm_limit=team_tpm_limit,
                 rpm_limit=team_rpm_limit,
+                rate_limit_type="team",
             )
 
         # End-User Rate Limits
@@ -258,6 +293,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 request_count_api_key=request_count_api_key,
                 tpm_limit=end_user_tpm_limit,
                 rpm_limit=end_user_rpm_limit,
+                rate_limit_type="customer",
             )
 
         return
@@ -437,8 +473,10 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         try:
             self.print_verbose(f"Inside Max Parallel Request Failure Hook")
-            global_max_parallel_requests = kwargs["litellm_params"]["metadata"].get(
-                "global_max_parallel_requests", None
+            global_max_parallel_requests = (
+                kwargs["litellm_params"]
+                .get("metadata", {})
+                .get("global_max_parallel_requests", None)
             )
             user_api_key = (
                 kwargs["litellm_params"].get("metadata", {}).get("user_api_key", None)
@@ -500,5 +538,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 )  # save in cache for up to 1 min.
         except Exception as e:
             verbose_proxy_logger.info(
-                f"Inside Parallel Request Limiter: An exception occurred - {str(e)}."
+                "Inside Parallel Request Limiter: An exception occurred - {}\n{}".format(
+                    str(e), traceback.format_exc()
+                )
             )

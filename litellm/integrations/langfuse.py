@@ -8,12 +8,17 @@ from packaging.version import Version
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
 
 
 class LangFuseLogger:
     # Class variables or attributes
     def __init__(
-        self, langfuse_public_key=None, langfuse_secret=None, flush_interval=1
+        self,
+        langfuse_public_key=None,
+        langfuse_secret=None,
+        langfuse_host=None,
+        flush_interval=1,
     ):
         try:
             import langfuse
@@ -25,7 +30,15 @@ class LangFuseLogger:
         # Instance variables
         self.secret_key = langfuse_secret or os.getenv("LANGFUSE_SECRET_KEY")
         self.public_key = langfuse_public_key or os.getenv("LANGFUSE_PUBLIC_KEY")
-        self.langfuse_host = os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
+        self.langfuse_host = langfuse_host or os.getenv(
+            "LANGFUSE_HOST", "https://cloud.langfuse.com"
+        )
+        if not (
+            self.langfuse_host.startswith("http://")
+            or self.langfuse_host.startswith("https://")
+        ):
+            # add http:// if unset, assume communicating over private network - e.g. render
+            self.langfuse_host = "http://" + self.langfuse_host
         self.langfuse_release = os.getenv("LANGFUSE_RELEASE")
         self.langfuse_debug = os.getenv("LANGFUSE_DEBUG")
 
@@ -131,6 +144,10 @@ class LangFuseLogger:
                 f"Langfuse Logging - Enters logging function for model {kwargs}"
             )
 
+            # set default values for input/output for langfuse logging
+            input = None
+            output = None
+
             litellm_params = kwargs.get("litellm_params", {})
             litellm_call_id = kwargs.get("litellm_call_id", None)
             metadata = (
@@ -185,6 +202,11 @@ class LangFuseLogger:
             ):
                 input = prompt
                 output = response_obj["data"]
+            elif response_obj is not None and isinstance(
+                response_obj, litellm.TranscriptionResponse
+            ):
+                input = prompt
+                output = response_obj["text"]
             print_verbose(f"OUTPUT IN LANGFUSE: {output}; original: {response_obj}")
             trace_id = None
             generation_id = None
@@ -369,6 +391,8 @@ class LangFuseLogger:
             debug = clean_metadata.pop("debug_langfuse", None)
             mask_input = clean_metadata.pop("mask_input", False)
             mask_output = clean_metadata.pop("mask_output", False)
+
+            clean_metadata = redact_user_api_key_info(metadata=clean_metadata)
 
             if trace_name is None and existing_trace_id is None:
                 # just log `litellm-{call_type}` as the trace name

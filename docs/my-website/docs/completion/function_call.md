@@ -502,10 +502,10 @@ response = completion(model="gpt-3.5-turbo-0613", messages=messages, functions=f
 print(response)
 ```
 
-## Function calling for Non-OpenAI LLMs
+## Function calling for Models w/out function-calling support
 
 ### Adding Function to prompt
-For Non OpenAI LLMs LiteLLM allows you to add the function to the prompt set: `litellm.add_function_to_prompt = True`
+For Models/providers without function calling support, LiteLLM allows you to add the function to the prompt set: `litellm.add_function_to_prompt = True`
 
 #### Usage
 ```python

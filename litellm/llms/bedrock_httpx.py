@@ -1,65 +1,90 @@
 # What is this?
 ## Initial implementation of calling bedrock via httpx client (allows for async calls).
 ## V1 - covers cohere + anthropic claude-3 support
-from functools import partial
-import os, types
+import copy
 import json
-from enum import Enum
-import requests, copy  # type: ignore
+import os
 import time
+import types
+import urllib.parse
+import uuid
+from enum import Enum
+from functools import partial
 from typing import (
+    Any,
+    AsyncIterator,
     Callable,
-    Optional,
+    Iterator,
     List,
     Literal,
-    Union,
-    Any,
-    TypedDict,
+    Optional,
     Tuple,
-    Iterator,
-    AsyncIterator,
+    TypedDict,
+    Union,
 )
-from litellm.utils import (
-    ModelResponse,
-    Usage,
-    CustomStreamWrapper,
-    get_secret,
-)
+
+import httpx  # type: ignore
+import requests  # type: ignore
+
+import litellm
+from litellm.caching import DualCache
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.litellm_logging import Logging
-from litellm.types.utils import Message, Choices
-import litellm, uuid
-from .prompt_templates.factory import (
-    prompt_factory,
-    custom_prompt,
-    cohere_message_pt,
-    construct_tool_use_system_prompt,
-    extract_between_tags,
-    parse_xml_params,
-    contains_tag,
-    _bedrock_converse_messages_pt,
-    _bedrock_tools_pt,
-)
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
     _get_async_httpx_client,
     _get_httpx_client,
 )
-from .base import BaseLLM
-import httpx  # type: ignore
-from .bedrock import BedrockError, convert_messages_to_prompt, ModelResponseIterator
 from litellm.types.llms.bedrock import *
-import urllib.parse
 from litellm.types.llms.openai import (
+    ChatCompletionDeltaChunk,
     ChatCompletionResponseMessage,
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
-    ChatCompletionDeltaChunk,
 )
-from litellm.caching import DualCache
+from litellm.types.utils import Choices, Message
+from litellm.utils import (
+    CustomStreamWrapper,
+    ModelResponse,
+    Usage,
+    get_secret,
+    print_verbose,
+)
+
+from .base import BaseLLM
+from .bedrock import BedrockError, ModelResponseIterator, convert_messages_to_prompt
+from .prompt_templates.factory import (
+    _bedrock_converse_messages_pt,
+    _bedrock_tools_pt,
+    cohere_message_pt,
+    construct_tool_use_system_prompt,
+    contains_tag,
+    custom_prompt,
+    extract_between_tags,
+    parse_xml_params,
+    prompt_factory,
+)
+
+BEDROCK_CONVERSE_MODELS = [
+    "anthropic.claude-3-5-sonnet-20240620-v1:0",
+    "anthropic.claude-3-opus-20240229-v1:0",
+    "anthropic.claude-3-sonnet-20240229-v1:0",
+    "anthropic.claude-3-haiku-20240307-v1:0",
+    "anthropic.claude-v2",
+    "anthropic.claude-v2:1",
+    "anthropic.claude-v1",
+    "anthropic.claude-instant-v1",
+    "ai21.jamba-instruct-v1:0",
+    "meta.llama3-1-8b-instruct-v1:0",
+    "meta.llama3-1-70b-instruct-v1:0",
+    "meta.llama3-1-405b-instruct-v1:0",
+    "mistral.mistral-large-2407-v1:0",
+]
+
 
 iam_cache = DualCache()
+_response_stream_shape_cache = None
 
 
 class AmazonCohereChatConfig:
@@ -171,26 +196,60 @@ async def make_call(
     messages: list,
     logging_obj,
 ):
-    if client is None:
-        client = _get_async_httpx_client()  # Create a new client if none provided
+    try:
+        if client is None:
+            client = _get_async_httpx_client()  # Create a new client if none provided
 
-    response = await client.post(api_base, headers=headers, data=data, stream=True)
+        response = await client.post(
+            api_base,
+            headers=headers,
+            data=data,
+            stream=True if "ai21" not in api_base else False,
+        )
 
-    if response.status_code != 200:
-        raise BedrockError(status_code=response.status_code, message=response.text)
+        if response.status_code != 200:
+            raise BedrockError(status_code=response.status_code, message=response.text)
 
-    decoder = AWSEventStreamDecoder(model=model)
-    completion_stream = decoder.aiter_bytes(response.aiter_bytes(chunk_size=1024))
+        if "ai21" in api_base:
+            aws_bedrock_process_response = BedrockConverseLLM()
+            model_response: (
+                ModelResponse
+            ) = aws_bedrock_process_response.process_response(
+                model=model,
+                response=response,
+                model_response=litellm.ModelResponse(),
+                stream=True,
+                logging_obj=logging_obj,
+                optional_params={},
+                api_key="",
+                data=data,
+                messages=messages,
+                print_verbose=litellm.print_verbose,
+                encoding=litellm.encoding,
+            )  # type: ignore
+            completion_stream: Any = MockResponseIterator(model_response=model_response)
+        else:
+            decoder = AWSEventStreamDecoder(model=model)
+            completion_stream = decoder.aiter_bytes(
+                response.aiter_bytes(chunk_size=1024)
+            )
 
-    # LOGGING
-    logging_obj.post_call(
-        input=messages,
-        api_key="",
-        original_response="first stream response received",
-        additional_args={"complete_input_dict": data},
-    )
+        # LOGGING
+        logging_obj.post_call(
+            input=messages,
+            api_key="",
+            original_response="first stream response received",
+            additional_args={"complete_input_dict": data},
+        )
 
-    return completion_stream
+        return completion_stream
+    except httpx.HTTPStatusError as err:
+        error_code = err.response.status_code
+        raise BedrockError(status_code=error_code, message=err.response.text)
+    except httpx.TimeoutException as e:
+        raise BedrockError(status_code=408, message="Timeout error occurred.")
+    except Exception as e:
+        raise BedrockError(status_code=500, message=str(e))
 
 
 def make_sync_call(
@@ -205,13 +264,35 @@ def make_sync_call(
     if client is None:
         client = _get_httpx_client()  # Create a new client if none provided
 
-    response = client.post(api_base, headers=headers, data=data, stream=True)
+    response = client.post(
+        api_base,
+        headers=headers,
+        data=data,
+        stream=True if "ai21" not in api_base else False,
+    )
 
     if response.status_code != 200:
         raise BedrockError(status_code=response.status_code, message=response.read())
 
-    decoder = AWSEventStreamDecoder(model=model)
-    completion_stream = decoder.iter_bytes(response.iter_bytes(chunk_size=1024))
+    if "ai21" in api_base:
+        aws_bedrock_process_response = BedrockConverseLLM()
+        model_response: ModelResponse = aws_bedrock_process_response.process_response(
+            model=model,
+            response=response,
+            model_response=litellm.ModelResponse(),
+            stream=True,
+            logging_obj=logging_obj,
+            optional_params={},
+            api_key="",
+            data=data,
+            messages=messages,
+            print_verbose=litellm.print_verbose,
+            encoding=litellm.encoding,
+        )  # type: ignore
+        completion_stream: Any = MockResponseIterator(model_response=model_response)
+    else:
+        decoder = AWSEventStreamDecoder(model=model)
+        completion_stream = decoder.iter_bytes(response.iter_bytes(chunk_size=1024))
 
     # LOGGING
     logging_obj.post_call(
@@ -252,20 +333,24 @@ class BedrockLLM(BaseLLM):
         # handle anthropic prompts and amazon titan prompts
         prompt = ""
         chat_history: Optional[list] = None
+        ## CUSTOM PROMPT
+        if model in custom_prompt_dict:
+            # check if the model has a registered custom prompt
+            model_prompt_details = custom_prompt_dict[model]
+            prompt = custom_prompt(
+                role_dict=model_prompt_details["roles"],
+                initial_prompt_value=model_prompt_details.get(
+                    "initial_prompt_value", ""
+                ),
+                final_prompt_value=model_prompt_details.get("final_prompt_value", ""),
+                messages=messages,
+            )
+            return prompt, None
+        ## ELSE
         if provider == "anthropic" or provider == "amazon":
-            if model in custom_prompt_dict:
-                # check if the model has a registered custom prompt
-                model_prompt_details = custom_prompt_dict[model]
-                prompt = custom_prompt(
-                    role_dict=model_prompt_details["roles"],
-                    initial_prompt_value=model_prompt_details["initial_prompt_value"],
-                    final_prompt_value=model_prompt_details["final_prompt_value"],
-                    messages=messages,
-                )
-            else:
-                prompt = prompt_factory(
-                    model=model, messages=messages, custom_llm_provider="bedrock"
-                )
+            prompt = prompt_factory(
+                model=model, messages=messages, custom_llm_provider="bedrock"
+            )
         elif provider == "mistral":
             prompt = prompt_factory(
                 model=model, messages=messages, custom_llm_provider="bedrock"
@@ -292,6 +377,7 @@ class BedrockLLM(BaseLLM):
         self,
         aws_access_key_id: Optional[str] = None,
         aws_secret_access_key: Optional[str] = None,
+        aws_session_token: Optional[str] = None,
         aws_region_name: Optional[str] = None,
         aws_session_name: Optional[str] = None,
         aws_profile_name: Optional[str] = None,
@@ -303,10 +389,15 @@ class BedrockLLM(BaseLLM):
         """
         import boto3
 
+        print_verbose(
+            f"Boto3 get_credentials called variables passed to function {locals()}"
+        )
+
         ## CHECK IS  'os.environ/' passed in
         params_to_check: List[Optional[str]] = [
             aws_access_key_id,
             aws_secret_access_key,
+            aws_session_token,
             aws_region_name,
             aws_session_name,
             aws_profile_name,
@@ -324,6 +415,7 @@ class BedrockLLM(BaseLLM):
         (
             aws_access_key_id,
             aws_secret_access_key,
+            aws_session_token,
             aws_region_name,
             aws_session_name,
             aws_profile_name,
@@ -337,6 +429,9 @@ class BedrockLLM(BaseLLM):
             and aws_role_name is not None
             and aws_session_name is not None
         ):
+            print_verbose(
+                f"IN Web Identity Token: {aws_web_identity_token} | Role Name: {aws_role_name} | Session Name: {aws_session_name}"
+            )
             iam_creds_cache_key = json.dumps(
                 {
                     "aws_web_identity_token": aws_web_identity_token,
@@ -392,6 +487,9 @@ class BedrockLLM(BaseLLM):
 
             return iam_creds
         elif aws_role_name is not None and aws_session_name is not None:
+            print_verbose(
+                f"Using STS Client AWS aws_role_name: {aws_role_name} aws_session_name: {aws_session_name}"
+            )
             sts_client = boto3.client(
                 "sts",
                 aws_access_key_id=aws_access_key_id,  # [OPTIONAL]
@@ -414,10 +512,26 @@ class BedrockLLM(BaseLLM):
             return credentials
         elif aws_profile_name is not None:  ### CHECK SESSION ###
             # uses auth values from AWS profile usually stored in ~/.aws/credentials
+            print_verbose(f"Using AWS profile: {aws_profile_name}")
             client = boto3.Session(profile_name=aws_profile_name)
 
             return client.get_credentials()
+        elif (
+            aws_access_key_id is not None
+            and aws_secret_access_key is not None
+            and aws_session_token is not None
+        ):  ### CHECK FOR AWS SESSION TOKEN ###
+            print_verbose(f"Using AWS Session Token: {aws_session_token}")
+            from botocore.credentials import Credentials
+
+            credentials = Credentials(
+                access_key=aws_access_key_id,
+                secret_key=aws_secret_access_key,
+                token=aws_session_token,
+            )
+            return credentials
         else:
+            print_verbose("Using Default AWS Session")
             session = boto3.Session(
                 aws_access_key_id=aws_access_key_id,
                 aws_secret_access_key=aws_secret_access_key,
@@ -462,7 +576,7 @@ class BedrockLLM(BaseLLM):
                     outputText = completion_response["text"]  # type: ignore
                 elif "generations" in completion_response:
                     outputText = completion_response["generations"][0]["text"]
-                    model_response["finish_reason"] = map_finish_reason(
+                    model_response.choices[0].finish_reason = map_finish_reason(
                         completion_response["generations"][0]["finish_reason"]
                     )
             elif provider == "anthropic":
@@ -566,7 +680,7 @@ class BedrockLLM(BaseLLM):
                                 logging_obj=logging_obj,
                             )
 
-                    model_response["finish_reason"] = map_finish_reason(
+                    model_response.choices[0].finish_reason = map_finish_reason(
                         completion_response.get("stop_reason", "")
                     )
                     _usage = litellm.Usage(
@@ -579,7 +693,9 @@ class BedrockLLM(BaseLLM):
                 else:
                     outputText = completion_response["completion"]
 
-                    model_response["finish_reason"] = completion_response["stop_reason"]
+                    model_response.choices[0].finish_reason = completion_response[
+                        "stop_reason"
+                    ]
             elif provider == "ai21":
                 outputText = (
                     completion_response.get("completions")[0].get("data").get("text")
@@ -588,9 +704,9 @@ class BedrockLLM(BaseLLM):
                 outputText = completion_response["generation"]
             elif provider == "mistral":
                 outputText = completion_response["outputs"][0]["text"]
-                model_response["finish_reason"] = completion_response["outputs"][0][
-                    "stop_reason"
-                ]
+                model_response.choices[0].finish_reason = completion_response[
+                    "outputs"
+                ][0]["stop_reason"]
             else:  # amazon titan
                 outputText = completion_response.get("results")[0].get("outputText")
         except Exception as e:
@@ -608,7 +724,7 @@ class BedrockLLM(BaseLLM):
                 and getattr(model_response.choices[0].message, "tool_calls", None)
                 is None
             ):
-                model_response["choices"][0]["message"]["content"] = outputText
+                model_response.choices[0].message.content = outputText
             elif (
                 hasattr(model_response.choices[0], "message")
                 and getattr(model_response.choices[0].message, "tool_calls", None)
@@ -664,8 +780,8 @@ class BedrockLLM(BaseLLM):
             )
         )
 
-        model_response["created"] = int(time.time())
-        model_response["model"] = model
+        model_response.created = int(time.time())
+        model_response.model = model
         usage = Usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
@@ -704,7 +820,6 @@ class BedrockLLM(BaseLLM):
     ) -> Union[ModelResponse, CustomStreamWrapper]:
         try:
             import boto3
-
             from botocore.auth import SigV4Auth
             from botocore.awsrequest import AWSRequest
             from botocore.credentials import Credentials
@@ -722,9 +837,10 @@ class BedrockLLM(BaseLLM):
         provider = model.split(".")[0]
 
         ## CREDENTIALS ##
-        # pop aws_secret_access_key, aws_access_key_id, aws_region_name from kwargs, since completion calls fail with them
+        # pop aws_secret_access_key, aws_access_key_id, aws_session_token, aws_region_name from kwargs, since completion calls fail with them
         aws_secret_access_key = optional_params.pop("aws_secret_access_key", None)
         aws_access_key_id = optional_params.pop("aws_access_key_id", None)
+        aws_session_token = optional_params.pop("aws_session_token", None)
         aws_region_name = optional_params.pop("aws_region_name", None)
         aws_role_name = optional_params.pop("aws_role_name", None)
         aws_session_name = optional_params.pop("aws_session_name", None)
@@ -756,6 +872,7 @@ class BedrockLLM(BaseLLM):
         credentials: Credentials = self.get_credentials(
             aws_access_key_id=aws_access_key_id,
             aws_secret_access_key=aws_secret_access_key,
+            aws_session_token=aws_session_token,
             aws_region_name=aws_region_name,
             aws_session_name=aws_session_name,
             aws_profile_name=aws_profile_name,
@@ -1006,7 +1123,7 @@ class BedrockLLM(BaseLLM):
 
             if response.status_code != 200:
                 raise BedrockError(
-                    status_code=response.status_code, message=response.text
+                    status_code=response.status_code, message=response.read()
                 )
 
             decoder = AWSEventStreamDecoder(model=model)
@@ -1200,6 +1317,7 @@ class AmazonConverseConfig:
             model.startswith("anthropic")
             or model.startswith("mistral")
             or model.startswith("cohere")
+            or model.startswith("meta.llama3-1")
         ):
             supported_params.append("tools")
 
@@ -1284,7 +1402,7 @@ class BedrockConverseLLM(BaseLLM):
         response: Union[requests.Response, httpx.Response],
         model_response: ModelResponse,
         stream: bool,
-        logging_obj: Logging,
+        logging_obj: Optional[Logging],
         optional_params: dict,
         api_key: str,
         data: Union[dict, str],
@@ -1294,12 +1412,13 @@ class BedrockConverseLLM(BaseLLM):
     ) -> Union[ModelResponse, CustomStreamWrapper]:
 
         ## LOGGING
-        logging_obj.post_call(
-            input=messages,
-            api_key=api_key,
-            original_response=response.text,
-            additional_args={"complete_input_dict": data},
-        )
+        if logging_obj is not None:
+            logging_obj.post_call(
+                input=messages,
+                api_key=api_key,
+                original_response=response.text,
+                additional_args={"complete_input_dict": data},
+            )
         print_verbose(f"raw model_response: {response.text}")
 
         ## RESPONSE OBJECT
@@ -1353,7 +1472,7 @@ class BedrockConverseLLM(BaseLLM):
         content_str = ""
         tools: List[ChatCompletionToolCallChunk] = []
         if message is not None:
-            for content in message["content"]:
+            for idx, content in enumerate(message["content"]):
                 """
                 - Content is either a tool response or text
                 """
@@ -1368,6 +1487,7 @@ class BedrockConverseLLM(BaseLLM):
                         id=content["toolUse"]["toolUseId"],
                         type="function",
                         function=_function_chunk,
+                        index=idx,
                     )
                     tools.append(_tool_response_chunk)
         chat_completion_message["content"] = content_str
@@ -1385,8 +1505,8 @@ class BedrockConverseLLM(BaseLLM):
                 message=litellm.Message(**chat_completion_message),
             )
         ]
-        model_response["created"] = int(time.time())
-        model_response["model"] = model
+        model_response.created = int(time.time())
+        model_response.model = model
         usage = Usage(
             prompt_tokens=input_tokens,
             completion_tokens=output_tokens,
@@ -1410,6 +1530,7 @@ class BedrockConverseLLM(BaseLLM):
         self,
         aws_access_key_id: Optional[str] = None,
         aws_secret_access_key: Optional[str] = None,
+        aws_session_token: Optional[str] = None,
         aws_region_name: Optional[str] = None,
         aws_session_name: Optional[str] = None,
         aws_profile_name: Optional[str] = None,
@@ -1425,6 +1546,7 @@ class BedrockConverseLLM(BaseLLM):
         params_to_check: List[Optional[str]] = [
             aws_access_key_id,
             aws_secret_access_key,
+            aws_session_token,
             aws_region_name,
             aws_session_name,
             aws_profile_name,
@@ -1442,6 +1564,7 @@ class BedrockConverseLLM(BaseLLM):
         (
             aws_access_key_id,
             aws_secret_access_key,
+            aws_session_token,
             aws_region_name,
             aws_session_name,
             aws_profile_name,
@@ -1535,6 +1658,19 @@ class BedrockConverseLLM(BaseLLM):
             client = boto3.Session(profile_name=aws_profile_name)
 
             return client.get_credentials()
+        elif (
+            aws_access_key_id is not None
+            and aws_secret_access_key is not None
+            and aws_session_token is not None
+        ):  ### CHECK FOR AWS SESSION TOKEN ###
+            from botocore.credentials import Credentials
+
+            credentials = Credentials(
+                access_key=aws_access_key_id,
+                secret_key=aws_secret_access_key,
+                token=aws_session_token,
+            )
+            return credentials
         else:
             session = boto3.Session(
                 aws_access_key_id=aws_access_key_id,
@@ -1598,7 +1734,7 @@ class BedrockConverseLLM(BaseLLM):
         headers={},
         client: Optional[AsyncHTTPHandler] = None,
     ) -> Union[ModelResponse, CustomStreamWrapper]:
-        if client is None:
+        if client is None or not isinstance(client, AsyncHTTPHandler):
             _params = {}
             if timeout is not None:
                 if isinstance(timeout, float) or isinstance(timeout, int):
@@ -1650,7 +1786,6 @@ class BedrockConverseLLM(BaseLLM):
     ):
         try:
             import boto3
-
             from botocore.auth import SigV4Auth
             from botocore.awsrequest import AWSRequest
             from botocore.credentials import Credentials
@@ -1671,6 +1806,7 @@ class BedrockConverseLLM(BaseLLM):
         # pop aws_secret_access_key, aws_access_key_id, aws_region_name from kwargs, since completion calls fail with them
         aws_secret_access_key = optional_params.pop("aws_secret_access_key", None)
         aws_access_key_id = optional_params.pop("aws_access_key_id", None)
+        aws_session_token = optional_params.pop("aws_session_token", None)
         aws_region_name = optional_params.pop("aws_region_name", None)
         aws_role_name = optional_params.pop("aws_role_name", None)
         aws_session_name = optional_params.pop("aws_session_name", None)
@@ -1702,6 +1838,7 @@ class BedrockConverseLLM(BaseLLM):
         credentials: Credentials = self.get_credentials(
             aws_access_key_id=aws_access_key_id,
             aws_secret_access_key=aws_secret_access_key,
+            aws_session_token=aws_session_token,
             aws_region_name=aws_region_name,
             aws_session_name=aws_session_name,
             aws_profile_name=aws_profile_name,
@@ -1735,7 +1872,12 @@ class BedrockConverseLLM(BaseLLM):
         system_content_blocks: List[SystemContentBlock] = []
         for idx, message in enumerate(messages):
             if message["role"] == "system":
-                _system_content_block = SystemContentBlock(text=message["content"])
+                if isinstance(message["content"], str):
+                    _system_content_block = SystemContentBlock(text=message["content"])
+                elif isinstance(message["content"], list):
+                    for m in message["content"]:
+                        if m.get("type", "") == "text":
+                            _system_content_block = SystemContentBlock(text=m["text"])
                 system_content_blocks.append(_system_content_block)
                 system_prompt_indices.append(idx)
         if len(system_prompt_indices) > 0:
@@ -1747,12 +1889,14 @@ class BedrockConverseLLM(BaseLLM):
         additional_request_params = {}
         supported_converse_params = AmazonConverseConfig.__annotations__.keys()
         supported_tool_call_params = ["tools", "tool_choice"]
+        supported_guardrail_params = ["guardrailConfig"]
         ## TRANSFORMATION ##
         # send all model-specific params in 'additional_request_params'
         for k, v in inference_params.items():
             if (
                 k not in supported_converse_params
                 and k not in supported_tool_call_params
+                and k not in supported_guardrail_params
             ):
                 additional_request_params[k] = v
                 additional_request_keys.append(k)
@@ -1760,7 +1904,9 @@ class BedrockConverseLLM(BaseLLM):
             inference_params.pop(key, None)
 
         bedrock_messages: List[MessageBlock] = _bedrock_converse_messages_pt(
-            messages=messages
+            messages=messages,
+            model=model,
+            llm_provider="bedrock_converse",
         )
         bedrock_tools: List[ToolBlock] = _bedrock_tools_pt(
             inference_params.pop("tools", [])
@@ -1782,6 +1928,15 @@ class BedrockConverseLLM(BaseLLM):
             "system": system_content_blocks,
             "inferenceConfig": InferenceConfig(**inference_params),
         }
+
+        # Guardrail Config
+        guardrail_config: Optional[GuardrailConfigBlock] = None
+        request_guardrails_config = inference_params.pop("guardrailConfig", None)
+        if request_guardrails_config is not None:
+            guardrail_config = GuardrailConfigBlock(**request_guardrails_config)
+            _data["guardrailConfig"] = guardrail_config
+
+        # Tool Config
         if bedrock_tool_config is not None:
             _data["toolConfig"] = bedrock_tool_config
         data = json.dumps(_data)
@@ -1811,7 +1966,7 @@ class BedrockConverseLLM(BaseLLM):
         if acompletion:
             if isinstance(client, HTTPHandler):
                 client = None
-            if stream is True and provider != "ai21":
+            if stream is True:
                 return self.async_streaming(
                     model=model,
                     messages=messages,
@@ -1848,7 +2003,7 @@ class BedrockConverseLLM(BaseLLM):
                 client=client,
             )  # type: ignore
 
-        if (stream is not None and stream is True) and provider != "ai21":
+        if stream is not None and stream is True:
 
             streaming_response = CustomStreamWrapper(
                 completion_stream=None,
@@ -1892,7 +2047,7 @@ class BedrockConverseLLM(BaseLLM):
             model=model,
             response=response,
             model_response=model_response,
-            stream=stream,
+            stream=stream if isinstance(stream, bool) else False,
             logging_obj=logging_obj,
             optional_params=optional_params,
             api_key="",
@@ -1904,13 +2059,18 @@ class BedrockConverseLLM(BaseLLM):
 
 
 def get_response_stream_shape():
-    from botocore.model import ServiceModel
-    from botocore.loaders import Loader
+    global _response_stream_shape_cache
+    if _response_stream_shape_cache is None:
 
-    loader = Loader()
-    bedrock_service_dict = loader.load_service_model("bedrock-runtime", "service-2")
-    bedrock_service_model = ServiceModel(bedrock_service_dict)
-    return bedrock_service_model.shape_for("ResponseStream")
+        from botocore.loaders import Loader
+        from botocore.model import ServiceModel
+
+        loader = Loader()
+        bedrock_service_dict = loader.load_service_model("bedrock-runtime", "service-2")
+        bedrock_service_model = ServiceModel(bedrock_service_dict)
+        _response_stream_shape_cache = bedrock_service_model.shape_for("ResponseStream")
+
+    return _response_stream_shape_cache
 
 
 class AWSEventStreamDecoder:
@@ -1943,6 +2103,7 @@ class AWSEventStreamDecoder:
                             "name": start_obj["toolUse"]["name"],
                             "arguments": "",
                         },
+                        "index": index,
                     }
             elif "delta" in chunk_data:
                 delta_obj = ContentBlockDeltaEvent(**chunk_data["delta"])
@@ -1956,6 +2117,7 @@ class AWSEventStreamDecoder:
                             "name": None,
                             "arguments": delta_obj["toolUse"]["input"],
                         },
+                        "index": index,
                     }
             elif "stopReason" in chunk_data:
                 finish_reason = map_finish_reason(chunk_data.get("stopReason", "stop"))
@@ -2072,3 +2234,49 @@ class AWSEventStreamDecoder:
                 return None
 
             return chunk.decode()  # type: ignore[no-any-return]
+
+
+class MockResponseIterator:  # for returning ai21 streaming responses
+    def __init__(self, model_response):
+        self.model_response = model_response
+        self.is_done = False
+
+    # Sync iterator
+    def __iter__(self):
+        return self
+
+    def _chunk_parser(self, chunk_data: ModelResponse) -> GenericStreamingChunk:
+
+        try:
+            chunk_usage: litellm.Usage = getattr(chunk_data, "usage")
+            processed_chunk = GenericStreamingChunk(
+                text=chunk_data.choices[0].message.content or "",  # type: ignore
+                tool_use=None,
+                is_finished=True,
+                finish_reason=chunk_data.choices[0].finish_reason,  # type: ignore
+                usage=ConverseTokenUsageBlock(
+                    inputTokens=chunk_usage.prompt_tokens,
+                    outputTokens=chunk_usage.completion_tokens,
+                    totalTokens=chunk_usage.total_tokens,
+                ),
+                index=0,
+            )
+            return processed_chunk
+        except Exception:
+            raise ValueError(f"Failed to decode chunk: {chunk_data}")
+
+    def __next__(self):
+        if self.is_done:
+            raise StopIteration
+        self.is_done = True
+        return self._chunk_parser(self.model_response)
+
+    # Async iterator
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if self.is_done:
+            raise StopAsyncIteration
+        self.is_done = True
+        return self._chunk_parser(self.model_response)

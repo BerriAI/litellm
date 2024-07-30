@@ -1,15 +1,17 @@
-from typing import TypedDict, Any, Union, Optional, Literal, List
 import json
-from .openai import ChatCompletionToolCallChunk
+from typing import Any, List, Literal, Optional, TypedDict, Union
+
 from typing_extensions import (
-    Self,
     Protocol,
-    TypeGuard,
-    override,
-    get_origin,
-    runtime_checkable,
     Required,
+    Self,
+    TypeGuard,
+    get_origin,
+    override,
+    runtime_checkable,
 )
+
+from .openai import ChatCompletionToolCallChunk
 
 
 class SystemContentBlock(TypedDict):
@@ -108,6 +110,12 @@ class ToolConfigBlock(TypedDict, total=False):
     toolChoice: Union[str, ToolChoiceValuesBlock]
 
 
+class GuardrailConfigBlock(TypedDict, total=False):
+    guardrailIdentifier: str
+    guardrailVersion: str
+    trace: Literal["enabled", "disabled"]
+
+
 class InferenceConfig(TypedDict, total=False):
     maxTokens: int
     stopSequences: List[str]
@@ -144,6 +152,7 @@ class RequestObject(TypedDict, total=False):
     messages: Required[List[MessageBlock]]
     system: List[SystemContentBlock]
     toolConfig: ToolConfigBlock
+    guardrailConfig: Optional[GuardrailConfigBlock]
 
 
 class GenericStreamingChunk(TypedDict):

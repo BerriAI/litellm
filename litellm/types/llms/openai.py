@@ -1,32 +1,37 @@
+from os import PathLike
 from typing import (
-    Optional,
-    Union,
+    IO,
     Any,
     BinaryIO,
-    Literal,
     Iterable,
+    List,
+    Literal,
+    Mapping,
+    Optional,
+    Tuple,
+    TypedDict,
+    Union,
 )
-from typing_extensions import override, Required, Dict
-from pydantic import BaseModel
-from openai.types.beta.threads.message_content import MessageContent
-from openai.types.beta.threads.message import Message as OpenAIMessage
-from openai.types.beta.thread_create_params import (
-    Message as OpenAICreateThreadParamsMessage,
-)
+
+from openai._legacy_response import HttpxBinaryResponseContent
 from openai.lib.streaming._assistants import (
     AssistantEventHandler,
     AssistantStreamManager,
-    AsyncAssistantStreamManager,
     AsyncAssistantEventHandler,
+    AsyncAssistantStreamManager,
 )
-from openai.types.beta.assistant_tool_param import AssistantToolParam
-from openai.types.beta.threads.run import Run
+from openai.pagination import AsyncCursorPage, SyncCursorPage
+from openai.types import Batch, FileObject
 from openai.types.beta.assistant import Assistant
-from openai.pagination import SyncCursorPage, AsyncCursorPage
-from os import PathLike
-from openai.types import FileObject, Batch
-from openai._legacy_response import HttpxBinaryResponseContent
-from typing import TypedDict, List, Optional, Tuple, Mapping, IO
+from openai.types.beta.assistant_tool_param import AssistantToolParam
+from openai.types.beta.thread_create_params import (
+    Message as OpenAICreateThreadParamsMessage,
+)
+from openai.types.beta.threads.message import Message as OpenAIMessage
+from openai.types.beta.threads.message_content import MessageContent
+from openai.types.beta.threads.run import Run
+from pydantic import BaseModel, Field
+from typing_extensions import Dict, Required, override
 
 FileContent = Union[IO[bytes], bytes, PathLike]
 
@@ -252,7 +257,7 @@ class CreateBatchRequest(TypedDict, total=False):
     """
 
     completion_window: Literal["24h"]
-    endpoint: Literal["/v1/chat/completions", "/v1/embeddings"]
+    endpoint: Literal["/v1/chat/completions", "/v1/embeddings", "/v1/completions"]
     input_file_id: str
     metadata: Optional[Dict[str, str]]
     extra_headers: Optional[Dict[str, str]]
@@ -295,22 +300,143 @@ class ListBatchRequest(TypedDict, total=False):
     timeout: Optional[float]
 
 
-class ChatCompletionToolCallFunctionChunk(TypedDict):
+class ChatCompletionToolCallFunctionChunk(TypedDict, total=False):
     name: Optional[str]
     arguments: str
 
 
-class ChatCompletionToolCallChunk(TypedDict):
+class ChatCompletionAssistantToolCall(TypedDict):
     id: Optional[str]
     type: Literal["function"]
     function: ChatCompletionToolCallFunctionChunk
 
 
-class ChatCompletionDeltaToolCallChunk(TypedDict):
+class ChatCompletionToolCallChunk(TypedDict):  # result of /chat/completions call
+    id: Optional[str]
+    type: Literal["function"]
+    function: ChatCompletionToolCallFunctionChunk
+    index: int
+
+
+class ChatCompletionDeltaToolCallChunk(TypedDict, total=False):
     id: str
     type: Literal["function"]
     function: ChatCompletionToolCallFunctionChunk
     index: int
+
+
+class ChatCompletionTextObject(TypedDict):
+    type: Literal["text"]
+    text: str
+
+
+class ChatCompletionImageUrlObject(TypedDict, total=False):
+    url: Required[str]
+    detail: str
+
+
+class ChatCompletionImageObject(TypedDict):
+    type: Literal["image_url"]
+    image_url: ChatCompletionImageUrlObject
+
+
+class ChatCompletionUserMessage(TypedDict):
+    role: Literal["user"]
+    content: Union[
+        str, Iterable[Union[ChatCompletionTextObject, ChatCompletionImageObject]]
+    ]
+
+
+class ChatCompletionAssistantMessage(TypedDict, total=False):
+    role: Required[Literal["assistant"]]
+    content: Optional[str]
+    name: str
+    tool_calls: List[ChatCompletionAssistantToolCall]
+
+
+class ChatCompletionToolMessage(TypedDict):
+    role: Literal["tool"]
+    content: str
+    tool_call_id: str
+
+
+class ChatCompletionSystemMessage(TypedDict, total=False):
+    role: Required[Literal["system"]]
+    content: Required[str]
+    name: str
+
+
+AllMessageValues = Union[
+    ChatCompletionUserMessage,
+    ChatCompletionAssistantMessage,
+    ChatCompletionToolMessage,
+    ChatCompletionSystemMessage,
+]
+
+
+class ChatCompletionToolChoiceFunctionParam(TypedDict):
+    name: str
+
+
+class ChatCompletionToolChoiceObjectParam(TypedDict):
+    type: Literal["function"]
+    function: ChatCompletionToolChoiceFunctionParam
+
+
+ChatCompletionToolChoiceStringValues = Literal["none", "auto", "required"]
+
+ChatCompletionToolChoiceValues = Union[
+    ChatCompletionToolChoiceStringValues, ChatCompletionToolChoiceObjectParam
+]
+
+
+class ChatCompletionToolParamFunctionChunk(TypedDict, total=False):
+    name: Required[str]
+    description: str
+    parameters: dict
+
+
+class ChatCompletionToolParam(TypedDict):
+    type: Literal["function"]
+    function: ChatCompletionToolParamFunctionChunk
+
+
+class Function(TypedDict, total=False):
+    name: Required[str]
+    """The name of the function to call."""
+
+
+class ChatCompletionNamedToolChoiceParam(TypedDict, total=False):
+    function: Required[Function]
+
+    type: Required[Literal["function"]]
+    """The type of the tool. Currently, only `function` is supported."""
+
+
+class ChatCompletionRequest(TypedDict, total=False):
+    model: Required[str]
+    messages: Required[List[AllMessageValues]]
+    frequency_penalty: float
+    logit_bias: dict
+    logprobs: bool
+    top_logprobs: int
+    max_tokens: int
+    n: int
+    presence_penalty: float
+    response_format: dict
+    seed: int
+    service_tier: str
+    stop: Union[str, List[str]]
+    stream_options: dict
+    temperature: float
+    top_p: float
+    tools: List[ChatCompletionToolParam]
+    tool_choice: ChatCompletionToolChoiceValues
+    parallel_tool_calls: bool
+    function_call: Union[str, dict]
+    functions: List
+    user: str
+    metadata: dict  # litellm specific param
 
 
 class ChatCompletionDeltaChunk(TypedDict, total=False):
@@ -329,3 +455,50 @@ class ChatCompletionUsageBlock(TypedDict):
     prompt_tokens: int
     completion_tokens: int
     total_tokens: int
+
+
+class Hyperparameters(TypedDict):
+    batch_size: Optional[Union[str, int]]  # "Number of examples in each batch."
+    learning_rate_multiplier: Optional[
+        Union[str, float]
+    ]  # Scaling factor for the learning rate
+    n_epochs: Optional[Union[str, int]]  # "The number of epochs to train the model for"
+
+
+class FineTuningJobCreate(TypedDict):
+    """
+    FineTuningJobCreate - Create a fine-tuning job
+
+    Example Request
+    ```
+    {
+        "model": "gpt-3.5-turbo",
+        "training_file": "file-abc123",
+        "hyperparameters": {
+            "batch_size": "auto",
+            "learning_rate_multiplier": 0.1,
+            "n_epochs": 3
+        },
+        "suffix": "custom-model-name",
+        "validation_file": "file-xyz789",
+        "integrations": ["slack"],
+        "seed": 42
+    }
+    ```
+    """
+
+    model: str  # "The name of the model to fine-tune."
+    training_file: str  # "The ID of an uploaded file that contains training data."
+    hyperparameters: Optional[
+        Hyperparameters
+    ]  # "The hyperparameters used for the fine-tuning job."
+    suffix: Optional[
+        str
+    ]  # "A string of up to 18 characters that will be added to your fine-tuned model name."
+    validation_file: Optional[
+        str
+    ]  # "The ID of an uploaded file that contains validation data."
+    integrations: Optional[
+        List[str]
+    ]  # "A list of integrations to enable for your fine-tuning job."
+    seed: Optional[int]  # "The seed controls the reproducibility of the job."

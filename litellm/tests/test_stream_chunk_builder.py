@@ -1,15 +1,22 @@
-import sys, os, time
-import traceback, asyncio
+import asyncio
+import os
+import sys
+import time
+import traceback
+
 import pytest
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-from litellm import completion, stream_chunk_builder
-import litellm
-import os, dotenv
-from openai import OpenAI
+import os
+
+import dotenv
 import pytest
+from openai import OpenAI
+
+import litellm
+from litellm import completion, stream_chunk_builder
 
 dotenv.load_dotenv()
 
@@ -147,3 +154,45 @@ def test_stream_chunk_builder_litellm_tool_call_regular_message():
 
 
 # test_stream_chunk_builder_litellm_tool_call_regular_message()
+
+
+def test_stream_chunk_builder_litellm_usage_chunks():
+    """
+    Checks if stream_chunk_builder is able to correctly rebuild with given metadata from streaming chunks
+    """
+    messages = [
+        {"role": "user", "content": "Tell me the funniest joke you know."},
+        {
+            "role": "assistant",
+            "content": "Why did the chicken cross the road?\nYou will not guess this one I bet\n",
+        },
+        {"role": "user", "content": "I do not know, why?"},
+        {"role": "assistant", "content": "uhhhh\n\n\nhmmmm.....\nthinking....\n"},
+        {"role": "user", "content": "\nI am waiting...\n\n...\n"},
+    ]
+    # make a regular gemini call
+    response = completion(
+        model="gemini/gemini-1.5-flash",
+        messages=messages,
+    )
+
+    usage: litellm.Usage = response.usage
+
+    gemini_pt = usage.prompt_tokens
+
+    # make a streaming gemini call
+    response = completion(
+        model="gemini/gemini-1.5-flash",
+        messages=messages,
+        stream=True,
+        complete_response=True,
+        stream_options={"include_usage": True},
+    )
+
+    usage: litellm.Usage = response.usage
+
+    stream_rebuilt_pt = usage.prompt_tokens
+
+    # assert prompt tokens are the same
+
+    assert gemini_pt == stream_rebuilt_pt

@@ -1,3 +1,5 @@
+### DEPRECATED ###
+## unused file. initially written for json logging on proxy.
 import json
 import logging
 import os

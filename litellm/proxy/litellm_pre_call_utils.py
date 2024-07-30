@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 from fastapi import Request
 
 from litellm._logging import verbose_logger, verbose_proxy_logger
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import CommonProxyErrors, TeamCallbackMetadata, UserAPIKeyAuth
 from litellm.types.utils import SupportedCacheControls
 
 if TYPE_CHECKING:
@@ -33,14 +33,29 @@ def _get_metadata_variable_name(request: Request) -> str:
     """
     Helper to return what the "metadata" field should be called in the request data
 
-    For all /thread endpoints we need to call this "litellm_metadata"
+    For all /thread or /assistant endpoints we need to call this "litellm_metadata"
 
     For ALL other endpoints we call this "metadata
     """
-    if "thread" in request.url.path:
+    if "thread" in request.url.path or "assistant" in request.url.path:
+        return "litellm_metadata"
+    if "batches" in request.url.path:
+        return "litellm_metadata"
+    if "/v1/messages" in request.url.path:
+        # anthropic API has a field called metadata
         return "litellm_metadata"
     else:
         return "metadata"
+
+
+def safe_add_api_version_from_query_params(data: dict, request: Request):
+    try:
+        if hasattr(request, "query_params"):
+            query_params = dict(request.query_params)
+            if "api-version" in query_params:
+                data["api_version"] = query_params["api-version"]
+    except Exception as e:
+        verbose_logger.error("error checking api version in query params: %s", str(e))
 
 
 async def add_litellm_data_to_request(
@@ -65,9 +80,9 @@ async def add_litellm_data_to_request(
         dict: The modified data dictionary.
 
     """
-    query_params = dict(request.query_params)
-    if "api-version" in query_params:
-        data["api_version"] = query_params["api-version"]
+    from litellm.proxy.proxy_server import llm_router, premium_user
+
+    safe_add_api_version_from_query_params(data, request)
 
     # Include original request and headers in the data
     data["proxy_server_request"] = {
@@ -84,15 +99,6 @@ async def add_litellm_data_to_request(
     if cache_control_header:
         cache_dict = parse_cache_control(cache_control_header)
         data["ttl"] = cache_dict.get("s-maxage")
-
-    ### KEY-LEVEL CACHNG
-    key_metadata = user_api_key_dict.metadata
-    if "cache" in key_metadata:
-        data["cache"] = {}
-        if isinstance(key_metadata["cache"], dict):
-            for k, v in key_metadata["cache"].items():
-                if k in SupportedCacheControls:
-                    data["cache"][k] = v
 
     verbose_proxy_logger.debug("receiving data: %s", data)
 
@@ -123,6 +129,15 @@ async def add_litellm_data_to_request(
         user_api_key_dict, "team_alias", None
     )
 
+    ### KEY-LEVEL Contorls
+    key_metadata = user_api_key_dict.metadata
+    if "cache" in key_metadata:
+        data["cache"] = {}
+        if isinstance(key_metadata["cache"], dict):
+            for k, v in key_metadata["cache"].items():
+                if k in SupportedCacheControls:
+                    data["cache"][k] = v
+
     # Team spend, budget - used by prometheus.py
     data[_metadata_variable_name][
         "user_api_key_team_max_budget"
@@ -144,14 +159,43 @@ async def add_litellm_data_to_request(
     )  # do not store the original `sk-..` api key in the db
     data[_metadata_variable_name]["headers"] = _headers
     data[_metadata_variable_name]["endpoint"] = str(request.url)
+
+    # OTEL Controls / Tracing
     # Add the OTEL Parent Trace before sending it LiteLLM
     data[_metadata_variable_name][
         "litellm_parent_otel_span"
     ] = user_api_key_dict.parent_otel_span
+    _add_otel_traceparent_to_data(data, request=request)
 
     ### END-USER SPECIFIC PARAMS ###
     if user_api_key_dict.allowed_model_region is not None:
         data["allowed_model_region"] = user_api_key_dict.allowed_model_region
+
+    ## [Enterprise Only]
+    # Add User-IP Address
+    requester_ip_address = ""
+    if premium_user is True:
+        # Only set the IP Address for Enterprise Users
+        if (
+            request is not None
+            and hasattr(request, "client")
+            and hasattr(request.client, "host")
+            and request.client is not None
+        ):
+            requester_ip_address = request.client.host
+    data[_metadata_variable_name]["requester_ip_address"] = requester_ip_address
+
+    # Enterprise Only - Check if using tag based routing
+    if llm_router and llm_router.enable_tag_filtering is True:
+        if premium_user is not True:
+            verbose_proxy_logger.warning(
+                "router.enable_tag_filtering is on %s \n switched off router.enable_tag_filtering",
+                CommonProxyErrors.not_premium_user.value,
+            )
+            llm_router.enable_tag_filtering = False
+        else:
+            if "tags" in data:
+                data[_metadata_variable_name]["tags"] = data["tags"]
 
     ### TEAM-SPECIFIC PARAMS ###
     if user_api_key_dict.team_id is not None:
@@ -168,4 +212,51 @@ async def add_litellm_data_to_request(
                 **data,
             }  # add the team-specific configs to the completion call
 
+    # Team Callbacks controls
+    if user_api_key_dict.team_metadata is not None:
+        team_metadata = user_api_key_dict.team_metadata
+        if "callback_settings" in team_metadata:
+            callback_settings = team_metadata.get("callback_settings", None) or {}
+            callback_settings_obj = TeamCallbackMetadata(**callback_settings)
+            verbose_proxy_logger.debug(
+                "Team callback settings activated: %s", callback_settings_obj
+            )
+            """
+            callback_settings = {
+              {
+                'callback_vars': {'langfuse_public_key': 'pk', 'langfuse_secret_key': 'sk_'}, 
+                'failure_callback': [], 
+                'success_callback': ['langfuse', 'langfuse']
+            }
+            }
+            """
+            data["success_callback"] = callback_settings_obj.success_callback
+            data["failure_callback"] = callback_settings_obj.failure_callback
+
+            if callback_settings_obj.callback_vars is not None:
+                # unpack callback_vars in data
+                for k, v in callback_settings_obj.callback_vars.items():
+                    data[k] = v
+
     return data
+
+
+def _add_otel_traceparent_to_data(data: dict, request: Request):
+    from litellm.proxy.proxy_server import open_telemetry_logger
+
+    if data is None:
+        return
+    if open_telemetry_logger is None:
+        # if user is not use OTEL don't send extra_headers
+        # relevant issue: https://github.com/BerriAI/litellm/issues/4448
+        return
+    if request.headers:
+        if "traceparent" in request.headers:
+            # we want to forward this to the LLM Provider
+            # Relevant issue: https://github.com/BerriAI/litellm/issues/4419
+            # pass this in extra_headers
+            if "extra_headers" not in data:
+                data["extra_headers"] = {}
+            _exra_headers = data["extra_headers"]
+            if "traceparent" not in _exra_headers:
+                _exra_headers["traceparent"] = request.headers["traceparent"]

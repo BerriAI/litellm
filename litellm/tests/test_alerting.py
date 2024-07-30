@@ -1,33 +1,37 @@
 # What is this?
 ## Tests slack alerting on proxy logging object
 
-import sys, json, uuid, random, httpx
+import asyncio
+import io
+import json
 import os
-import io, asyncio
+import random
+import sys
+import time
+import uuid
 from datetime import datetime, timedelta
 from typing import Optional
+
+import httpx
 
 # import logging
 # logging.basicConfig(level=logging.DEBUG)
 sys.path.insert(0, os.path.abspath("../.."))
-from litellm.proxy.utils import ProxyLogging
-from litellm.caching import DualCache, RedisCache
-import litellm
-import pytest
 import asyncio
-from unittest.mock import patch, MagicMock
-from litellm.utils import get_api_base
-from litellm.caching import DualCache
-from litellm.integrations.slack_alerting import SlackAlerting, DeploymentMetrics
-import unittest.mock
-from unittest.mock import AsyncMock
-import pytest
-from litellm.router import AlertingConfig, Router
-from litellm.proxy._types import CallInfo
-from openai import APIError
-from litellm.router import AlertingConfig
-import litellm
 import os
+import unittest.mock
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+from openai import APIError
+
+import litellm
+from litellm.caching import DualCache, RedisCache
+from litellm.integrations.slack_alerting import DeploymentMetrics, SlackAlerting
+from litellm.proxy._types import CallInfo
+from litellm.proxy.utils import ProxyLogging
+from litellm.router import AlertingConfig, Router
+from litellm.utils import get_api_base
 
 
 @pytest.mark.parametrize(
@@ -123,8 +127,8 @@ def test_init():
     print("passed testing slack alerting init")
 
 
-from unittest.mock import patch, AsyncMock
 from datetime import datetime, timedelta
+from unittest.mock import AsyncMock, patch
 
 
 @pytest.fixture
@@ -805,3 +809,53 @@ async def test_alerting():
         pass
     finally:
         await asyncio.sleep(3)
+
+
+@pytest.mark.asyncio
+async def test_langfuse_trace_id():
+    """
+    - Unit test for `_add_langfuse_trace_id_to_alert` function in slack_alerting.py
+    """
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    litellm.success_callback = ["langfuse"]
+
+    litellm_logging_obj = Logging(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="acompletion",
+        litellm_call_id="1234",
+        start_time=datetime.now(),
+        function_id="1234",
+    )
+
+    litellm.completion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "Hey how's it going?"}],
+        mock_response="Hey!",
+        litellm_logging_obj=litellm_logging_obj,
+    )
+
+    await asyncio.sleep(3)
+
+    assert litellm_logging_obj._get_trace_id(service_name="langfuse") is not None
+
+    slack_alerting = SlackAlerting(
+        alerting_threshold=32,
+        alerting=["slack"],
+        alert_types=["llm_exceptions"],
+        internal_usage_cache=DualCache(),
+    )
+
+    trace_url = await slack_alerting._add_langfuse_trace_id_to_alert(
+        request_data={"litellm_logging_obj": litellm_logging_obj}
+    )
+
+    assert trace_url is not None
+
+    returned_trace_id = int(trace_url.split("/")[-1])
+
+    assert returned_trace_id == int(
+        litellm_logging_obj._get_trace_id(service_name="langfuse")
+    )

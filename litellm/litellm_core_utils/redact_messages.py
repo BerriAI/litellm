@@ -9,6 +9,7 @@
 
 import copy
 from typing import TYPE_CHECKING, Any
+
 import litellm
 
 if TYPE_CHECKING:
@@ -28,8 +29,25 @@ def redact_message_input_output_from_logging(
     Removes messages, prompts, input, response from logging. This modifies the data in-place
     only redacts when litellm.turn_off_message_logging == True
     """
+    _request_headers = (
+        litellm_logging_obj.model_call_details.get("litellm_params", {}).get(
+            "metadata", {}
+        )
+        or {}
+    )
+
+    request_headers = _request_headers.get("headers", {})
+
     # check if user opted out of logging message/response to callbacks
-    if litellm.turn_off_message_logging is not True:
+    if (
+        litellm.turn_off_message_logging is not True
+        and request_headers.get("litellm-enable-message-redaction", False) is not True
+    ):
+        return result
+
+    if request_headers and request_headers.get(
+        "litellm-disable-message-redaction", False
+    ):
         return result
 
     # remove messages, prompts, input, response from logging
@@ -69,3 +87,33 @@ def redact_message_input_output_from_logging(
 
     # by default return result
     return result
+
+
+def redact_user_api_key_info(metadata: dict) -> dict:
+    """
+    removes any user_api_key_info before passing to logging object, if flag set
+
+    Usage:
+
+    SDK
+    ```python
+    litellm.redact_user_api_key_info = True
+    ```
+
+    PROXY:
+    ```yaml
+    litellm_settings:
+        redact_user_api_key_info: true
+    ```
+    """
+    if litellm.redact_user_api_key_info is not True:
+        return metadata
+
+    new_metadata = {}
+    for k, v in metadata.items():
+        if isinstance(k, str) and k.startswith("user_api_key"):
+            pass
+        else:
+            new_metadata[k] = v
+
+    return new_metadata

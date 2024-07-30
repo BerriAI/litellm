@@ -1,5 +1,6 @@
 import copy
 import sys
+import time
 from datetime import datetime
 from unittest import mock
 
@@ -172,6 +173,71 @@ def test_trimming_with_system_message_exceeding_max_tokens():
     assert len(trimmed_messages) == 1
 
 
+def test_trimming_with_tool_calls():
+    from litellm.types.utils import ChatCompletionMessageToolCall, Function, Message
+
+    messages = [
+        {
+            "role": "user",
+            "content": "What's the weather like in San Francisco, Tokyo, and Paris?",
+        },
+        Message(
+            content=None,
+            role="assistant",
+            tool_calls=[
+                ChatCompletionMessageToolCall(
+                    function=Function(
+                        arguments='{"location": "San Francisco, CA", "unit": "celsius"}',
+                        name="get_current_weather",
+                    ),
+                    id="call_G11shFcS024xEKjiAOSt6Tc9",
+                    type="function",
+                ),
+                ChatCompletionMessageToolCall(
+                    function=Function(
+                        arguments='{"location": "Tokyo, Japan", "unit": "celsius"}',
+                        name="get_current_weather",
+                    ),
+                    id="call_e0ss43Bg7H8Z9KGdMGWyZ9Mj",
+                    type="function",
+                ),
+                ChatCompletionMessageToolCall(
+                    function=Function(
+                        arguments='{"location": "Paris, France", "unit": "celsius"}',
+                        name="get_current_weather",
+                    ),
+                    id="call_nRjLXkWTJU2a4l9PZAf5as6g",
+                    type="function",
+                ),
+            ],
+            function_call=None,
+        ),
+        {
+            "tool_call_id": "call_G11shFcS024xEKjiAOSt6Tc9",
+            "role": "tool",
+            "name": "get_current_weather",
+            "content": '{"location": "San Francisco", "temperature": "72", "unit": "fahrenheit"}',
+        },
+        {
+            "tool_call_id": "call_e0ss43Bg7H8Z9KGdMGWyZ9Mj",
+            "role": "tool",
+            "name": "get_current_weather",
+            "content": '{"location": "Tokyo", "temperature": "10", "unit": "celsius"}',
+        },
+        {
+            "tool_call_id": "call_nRjLXkWTJU2a4l9PZAf5as6g",
+            "role": "tool",
+            "name": "get_current_weather",
+            "content": '{"location": "Paris", "temperature": "22", "unit": "celsius"}',
+        },
+    ]
+    result = trim_messages(messages=messages, max_tokens=1, return_response_tokens=True)
+
+    print(result)
+
+    assert len(result[0]) == 3  # final 3 messages are tool calls
+
+
 def test_trimming_should_not_change_original_messages():
     messages = [
         {"role": "system", "content": "This is a short system message"},
@@ -255,6 +321,13 @@ def test_validate_environment_empty_model():
     api_key = validate_environment()
     if api_key is None:
         raise Exception()
+
+
+def test_validate_environment_api_key():
+    response_obj = validate_environment(model="gpt-3.5-turbo", api_key="sk-my-test-key")
+    assert (
+        response_obj["keys_in_environment"] is True
+    ), f"Missing keys={response_obj['missing_keys']}"
 
 
 @mock.patch.dict(os.environ, {"OLLAMA_API_BASE": "foo"}, clear=True)
@@ -548,3 +621,143 @@ def test_get_llm_provider_ft_models():
 
     model, custom_llm_provider, _, _ = get_llm_provider(model="ft:gpt-4o-2024-05-13")
     assert custom_llm_provider == "openai"
+
+
+@pytest.mark.parametrize("langfuse_trace_id", [None, "my-unique-trace-id"])
+@pytest.mark.parametrize(
+    "langfuse_existing_trace_id", [None, "my-unique-existing-trace-id"]
+)
+def test_logging_trace_id(langfuse_trace_id, langfuse_existing_trace_id):
+    """
+    - Unit test for `_get_trace_id` function in Logging obj
+    """
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    litellm.success_callback = ["langfuse"]
+    litellm_call_id = "my-unique-call-id"
+    litellm_logging_obj = Logging(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="acompletion",
+        litellm_call_id=litellm_call_id,
+        start_time=datetime.now(),
+        function_id="1234",
+    )
+
+    metadata = {}
+
+    if langfuse_trace_id is not None:
+        metadata["trace_id"] = langfuse_trace_id
+    if langfuse_existing_trace_id is not None:
+        metadata["existing_trace_id"] = langfuse_existing_trace_id
+
+    litellm.completion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "Hey how's it going?"}],
+        mock_response="Hey!",
+        litellm_logging_obj=litellm_logging_obj,
+        metadata=metadata,
+    )
+
+    time.sleep(3)
+    assert litellm_logging_obj._get_trace_id(service_name="langfuse") is not None
+
+    ## if existing_trace_id exists
+    if langfuse_existing_trace_id is not None:
+        assert (
+            litellm_logging_obj._get_trace_id(service_name="langfuse")
+            == langfuse_existing_trace_id
+        )
+    ## if trace_id exists
+    elif langfuse_trace_id is not None:
+        assert (
+            litellm_logging_obj._get_trace_id(service_name="langfuse")
+            == langfuse_trace_id
+        )
+    ## if existing_trace_id exists
+    else:
+        assert (
+            litellm_logging_obj._get_trace_id(service_name="langfuse")
+            == litellm_call_id
+        )
+
+
+def test_convert_model_response_object():
+    """
+    Unit test to ensure model response object correctly handles openrouter errors.
+    """
+    args = {
+        "response_object": {
+            "id": None,
+            "choices": None,
+            "created": None,
+            "model": None,
+            "object": None,
+            "service_tier": None,
+            "system_fingerprint": None,
+            "usage": None,
+            "error": {
+                "message": '{"type":"error","error":{"type":"invalid_request_error","message":"Output blocked by content filtering policy"}}',
+                "code": 400,
+            },
+        },
+        "model_response_object": litellm.ModelResponse(
+            id="chatcmpl-b88ce43a-7bfc-437c-b8cc-e90d59372cfb",
+            choices=[
+                litellm.Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=litellm.Message(content="default", role="assistant"),
+                )
+            ],
+            created=1719376241,
+            model="openrouter/anthropic/claude-3.5-sonnet",
+            object="chat.completion",
+            system_fingerprint=None,
+            usage=litellm.Usage(),
+        ),
+        "response_type": "completion",
+        "stream": False,
+        "start_time": None,
+        "end_time": None,
+        "hidden_params": None,
+    }
+
+    try:
+        litellm.convert_to_model_response_object(**args)
+        pytest.fail("Expected this to fail")
+    except Exception as e:
+        assert hasattr(e, "status_code")
+        assert e.status_code == 400
+        assert hasattr(e, "message")
+        assert (
+            e.message
+            == '{"type":"error","error":{"type":"invalid_request_error","message":"Output blocked by content filtering policy"}}'
+        )
+
+
+@pytest.mark.parametrize(
+    "model, expected_bool",
+    [
+        ("vertex_ai/gemini-1.5-pro", True),
+        ("gemini/gemini-1.5-pro", True),
+        ("predibase/llama3-8b-instruct", True),
+        ("gpt-4o", False),
+    ],
+)
+def test_supports_response_schema(model, expected_bool):
+    """
+    Unit tests for 'supports_response_schema' helper function.
+
+    Should be true for gemini-1.5-pro on google ai studio / vertex ai AND predibase models
+    Should be false otherwise
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    from litellm.utils import supports_response_schema
+
+    response = supports_response_schema(model=model, custom_llm_provider=None)
+
+    assert expected_bool == response

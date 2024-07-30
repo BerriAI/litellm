@@ -7,6 +7,9 @@ from openai import OpenAI, AsyncOpenAI
 from typing import Optional, List, Union
 
 
+LITELLM_MASTER_KEY = "sk-1234"
+
+
 def response_header_check(response):
     """
     - assert if response headers < 4kb (nginx limit).
@@ -70,6 +73,27 @@ async def new_user(session):
         response_header_check(
             response
         )  # calling the function to check response headers
+        return await response.json()
+
+
+async def moderation(session, key):
+    url = "http://0.0.0.0:4000/moderations"
+    headers = {
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+    }
+    data = {"input": "I want to kill the cat."}
+
+    async with session.post(url, headers=headers, json=data) as response:
+        status = response.status
+        response_text = await response.text()
+
+        print(response_text)
+        print()
+
+        if status != 200:
+            raise Exception(f"Request did not return a 200 status code: {status}")
+
         return await response.json()
 
 
@@ -447,6 +471,22 @@ async def test_openai_wildcard_chat_completion():
 
 
 @pytest.mark.asyncio
+async def test_proxy_all_models():
+    """
+    - proxy_server_config.yaml has model = * / *
+    - Make chat completion call
+    - groq is NOT defined on /models
+
+
+    """
+    async with aiohttp.ClientSession() as session:
+        # call chat/completions with a model that the key was not created for + the model is not on the config.yaml
+        await chat_completion(
+            session=session, key=LITELLM_MASTER_KEY, model="groq/llama3-8b-8192"
+        )
+
+
+@pytest.mark.asyncio
 async def test_batch_chat_completions():
     """
     - Make chat completion call using
@@ -465,3 +505,22 @@ async def test_batch_chat_completions():
 
         assert len(response) == 2
         assert isinstance(response, list)
+
+
+@pytest.mark.asyncio
+async def test_moderations_endpoint():
+    """
+    - Make chat completion call using
+
+    """
+    async with aiohttp.ClientSession() as session:
+
+        # call chat/completions with a model that the key was not created for + the model is not on the config.yaml
+        response = await moderation(
+            session=session,
+            key="sk-1234",
+        )
+
+        print(f"response: {response}")
+
+        assert "results" in response

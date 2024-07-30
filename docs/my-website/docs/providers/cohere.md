@@ -68,7 +68,7 @@ response = embedding(
 ```
 
 ### Setting - Input Type for v3 models
-v3 Models have a required parameter: `input_type`, it can be one of the following four values:
+v3 Models have a required parameter: `input_type`. LiteLLM defaults to `search_document`. It can be one of the following four values:
 
 - `input_type="search_document"`: (default) Use this for texts (documents) you want to store in your vector database
 - `input_type="search_query"`: Use this for search queries to find the most relevant documents in your vector database
@@ -76,6 +76,8 @@ v3 Models have a required parameter: `input_type`, it can be one of the followin
 - `input_type="clustering"`: Use this if you use the embeddings for text clustering
 
 https://txt.cohere.com/introducing-embed-v3/
+
+
 ```python
 from litellm import embedding
 os.environ["COHERE_API_KEY"] = "cohere key"

@@ -43,7 +43,6 @@ def test_load_config_with_custom_role_names():
             "litellm_proxy_roles": {"admin_jwt_scope": "litellm-proxy-admin"}
         }
     }
-
     proxy_roles = LiteLLM_JWTAuth(
         **config.get("general_settings", {}).get("litellm_proxy_roles", {})
     )
@@ -61,7 +60,6 @@ async def test_token_single_public_key():
     import jwt
 
     jwt_handler = JWTHandler()
-
     backend_keys = {
         "keys": [
             {

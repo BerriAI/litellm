@@ -2,11 +2,12 @@ import os
 from dataclasses import dataclass
 from datetime import datetime
 from functools import wraps
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, Optional, Union
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
 from litellm.types.services import ServiceLoggerPayload
 
 if TYPE_CHECKING:
@@ -27,8 +28,10 @@ else:
 
 
 LITELLM_TRACER_NAME = os.getenv("OTEL_TRACER_NAME", "litellm")
-LITELLM_RESOURCE = {
+LITELLM_RESOURCE: Dict[Any, Any] = {
     "service.name": os.getenv("OTEL_SERVICE_NAME", "litellm"),
+    "deployment.environment": os.getenv("OTEL_ENVIRONMENT_NAME", "production"),
+    "model_id": os.getenv("OTEL_SERVICE_NAME", "litellm"),
 }
 RAW_REQUEST_SPAN_NAME = "raw_gen_ai_request"
 LITELLM_REQUEST_SPAN_NAME = "litellm_request"
@@ -51,6 +54,12 @@ class OpenTelemetryConfig:
 
         OTEL_HEADERS gets sent as headers = {"x-honeycomb-team": "B85YgLm96******"}
         """
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+            InMemorySpanExporter,
+        )
+
+        if os.getenv("OTEL_EXPORTER") == "in_memory":
+            return cls(exporter=InMemorySpanExporter())
         return cls(
             exporter=os.getenv("OTEL_EXPORTER", "console"),
             endpoint=os.getenv("OTEL_ENDPOINT"),
@@ -61,7 +70,9 @@ class OpenTelemetryConfig:
 
 
 class OpenTelemetry(CustomLogger):
-    def __init__(self, config=OpenTelemetryConfig.from_env()):
+    def __init__(
+        self, config=OpenTelemetryConfig.from_env(), callback_name: Optional[str] = None
+    ):
         from opentelemetry import trace
         from opentelemetry.sdk.resources import Resource
         from opentelemetry.sdk.trace import TracerProvider
@@ -72,6 +83,7 @@ class OpenTelemetry(CustomLogger):
         self.OTEL_HEADERS = self.config.headers
         provider = TracerProvider(resource=Resource(attributes=LITELLM_RESOURCE))
         provider.add_span_processor(self._get_span_processor())
+        self.callback_name = callback_name
 
         trace.set_tracer_provider(provider)
         self.tracer = trace.get_tracer(LITELLM_TRACER_NAME)
@@ -105,16 +117,17 @@ class OpenTelemetry(CustomLogger):
         self,
         payload: ServiceLoggerPayload,
         parent_otel_span: Optional[Span] = None,
-        start_time: Optional[datetime] = None,
-        end_time: Optional[datetime] = None,
+        start_time: Optional[Union[datetime, float]] = None,
+        end_time: Optional[Union[datetime, float]] = None,
+        event_metadata: Optional[dict] = None,
     ):
         from datetime import datetime
 
         from opentelemetry import trace
         from opentelemetry.trace import Status, StatusCode
 
-        _start_time_ns = start_time
-        _end_time_ns = end_time
+        _start_time_ns = 0
+        _end_time_ns = 0
 
         if isinstance(start_time, float):
             _start_time_ns = int(int(start_time) * 1e9)
@@ -137,6 +150,10 @@ class OpenTelemetry(CustomLogger):
             service_logging_span.set_attribute(
                 key="service", value=payload.service.value
             )
+
+            if event_metadata:
+                for key, value in event_metadata.items():
+                    service_logging_span.set_attribute(key, value)
             service_logging_span.set_status(Status(StatusCode.OK))
             service_logging_span.end(end_time=_end_time_ns)
 
@@ -144,16 +161,16 @@ class OpenTelemetry(CustomLogger):
         self,
         payload: ServiceLoggerPayload,
         parent_otel_span: Optional[Span] = None,
-        start_time: Optional[datetime] = None,
-        end_time: Optional[datetime] = None,
+        start_time: Optional[Union[datetime, float]] = None,
+        end_time: Optional[Union[float, datetime]] = None,
     ):
         from datetime import datetime
 
         from opentelemetry import trace
         from opentelemetry.trace import Status, StatusCode
 
-        _start_time_ns = start_time
-        _end_time_ns = end_time
+        _start_time_ns = 0
+        _end_time_ns = 0
 
         if isinstance(start_time, float):
             _start_time_ns = int(int(start_time) * 1e9)
@@ -281,7 +298,17 @@ class OpenTelemetry(CustomLogger):
             )
             pass
 
+    def is_primitive(self, value):
+        if value is None:
+            return False
+        return isinstance(value, (str, bool, int, float))
+
     def set_attributes(self, span: Span, kwargs, response_obj):
+        if self.callback_name == "arize":
+            from litellm.integrations.arize_ai import set_arize_ai_attributes
+
+            set_arize_ai_attributes(span, kwargs, response_obj)
+            return
         from litellm.proxy._types import SpanAttributes
 
         optional_params = kwargs.get("optional_params", {})
@@ -289,6 +316,16 @@ class OpenTelemetry(CustomLogger):
 
         # https://github.com/open-telemetry/semantic-conventions/blob/main/model/registry/gen-ai.yaml
         # Following Conventions here: https://github.com/open-telemetry/semantic-conventions/blob/main/docs/gen-ai/llm-spans.md
+        #############################################
+        ############ LLM CALL METADATA ##############
+        #############################################
+        metadata = litellm_params.get("metadata", {}) or {}
+
+        clean_metadata = redact_user_api_key_info(metadata=metadata)
+
+        for key, value in clean_metadata.items():
+            if self.is_primitive(value):
+                span.set_attribute("metadata.{}".format(key), value)
 
         #############################################
         ########## LLM Request Attributes ###########
@@ -431,7 +468,7 @@ class OpenTelemetry(CustomLogger):
         #############################################
 
         # OTEL Attributes for the RAW Request to https://docs.anthropic.com/en/api/messages
-        if complete_input_dict:
+        if complete_input_dict and isinstance(complete_input_dict, dict):
             for param, val in complete_input_dict.items():
                 if not isinstance(val, str):
                     val = str(val)
@@ -447,16 +484,25 @@ class OpenTelemetry(CustomLogger):
             # cast sr -> dict
             import json
 
-            _raw_response = json.loads(_raw_response)
-            for param, val in _raw_response.items():
-                if not isinstance(val, str):
-                    val = str(val)
-                span.set_attribute(
-                    f"llm.{custom_llm_provider}.{param}",
-                    val,
+            try:
+                _raw_response = json.loads(_raw_response)
+                for param, val in _raw_response.items():
+                    if not isinstance(val, str):
+                        val = str(val)
+                    span.set_attribute(
+                        f"llm.{custom_llm_provider}.{param}",
+                        val,
+                    )
+            except json.JSONDecodeError:
+                verbose_logger.debug(
+                    "litellm.integrations.opentelemetry.py::set_raw_request_attributes() - raw_response not json string - {}".format(
+                        _raw_response
+                    )
                 )
-
-        pass
+                span.set_attribute(
+                    f"llm.{custom_llm_provider}.stringified_raw_response",
+                    _raw_response,
+                )
 
     def _to_ns(self, dt):
         return int(dt.timestamp() * 1e9)
@@ -583,8 +629,8 @@ class OpenTelemetry(CustomLogger):
         from opentelemetry import trace
         from opentelemetry.trace import Status, StatusCode
 
-        _start_time_ns = logging_payload.start_time
-        _end_time_ns = logging_payload.end_time
+        _start_time_ns = 0
+        _end_time_ns = 0
 
         start_time = logging_payload.start_time
         end_time = logging_payload.end_time
@@ -629,8 +675,8 @@ class OpenTelemetry(CustomLogger):
         from opentelemetry import trace
         from opentelemetry.trace import Status, StatusCode
 
-        _start_time_ns = logging_payload.start_time
-        _end_time_ns = logging_payload.end_time
+        _start_time_ns = 0
+        _end_time_ns = 0
 
         start_time = logging_payload.start_time
         end_time = logging_payload.end_time
