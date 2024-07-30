@@ -147,6 +147,9 @@ model_list:
         mock_response: "hello world!" 
         api_key: my-good-key
 
+litellm_settings:
+    request_timeout: 600 # 👈 Will keep retrying until timeout occurs
+
 router_settings:
     redis_host; os.environ/REDIS_HOST
     redis_password: os.environ/REDIS_PASSWORD
