@@ -458,15 +458,11 @@ class ChatCompletionUsageBlock(TypedDict):
 
 
 class Hyperparameters(TypedDict):
-    batch_size: Optional[Union[str, int]] = Field(
-        default="auto", description="Number of examples in each batch."
-    )
-    learning_rate_multiplier: Optional[Union[str, float]] = Field(
-        default="auto", description="Scaling factor for the learning rate."
-    )
-    n_epochs: Optional[Union[str, int]] = Field(
-        default="auto", description="The number of epochs to train the model for."
-    )
+    batch_size: Optional[Union[str, int]]  # "Number of examples in each batch."
+    learning_rate_multiplier: Optional[
+        Union[str, float]
+    ]  # Scaling factor for the learning rate
+    n_epochs: Optional[Union[str, int]]  # "The number of epochs to train the model for"
 
 
 class FineTuningJobCreate(TypedDict):
@@ -498,21 +494,16 @@ class FineTuningJobCreate(TypedDict):
     hyperparameters: Optional[Hyperparameters] = Field(
         default={}, description="The hyperparameters used for the fine-tuning job."
     )
-    suffix: Optional[str] = Field(
-        default=None,
-        description="A string of up to 18 characters that will be added to your fine-tuned model name.",
-    )
-    validation_file: Optional[str] = Field(
-        default=None,
-        description="The ID of an uploaded file that contains validation data.",
-    )
-    integrations: Optional[List[str]] = Field(
-        default=None,
-        description="A list of integrations to enable for your fine-tuning job.",
-    )
-    seed: Optional[int] = Field(
-        default=None, description="The seed controls the reproducibility of the job."
-    )
+    suffix: Optional[
+        str
+    ]  # "A string of up to 18 characters that will be added to your fine-tuned model name."
+    validation_file: Optional[
+        str
+    ]  # "The ID of an uploaded file that contains validation data."
+    integrations: Optional[
+        List[str]
+    ]  # "A list of integrations to enable for your fine-tuning job."
+    seed: Optional[int]  # "The seed controls the reproducibility of the job."
 
     class Config:
         allow_population_by_field_name = True
