@@ -3455,7 +3455,7 @@ def embedding(
             response = huggingface.embedding(
                 model=model,
                 input=input,
-                encoding=encoding,
+                encoding=encoding,  # type: ignore
                 api_key=api_key,
                 api_base=api_base,
                 logging_obj=logging,
