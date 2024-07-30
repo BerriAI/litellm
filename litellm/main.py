@@ -3114,6 +3114,7 @@ async def aembedding(*args, **kwargs) -> EmbeddingResponse:
             or custom_llm_provider == "vertex_ai"
             or custom_llm_provider == "databricks"
             or custom_llm_provider == "watsonx"
+            or custom_llm_provider == "cohere"
             or custom_llm_provider == "huggingface"
         ):  # currently implemented aiohttp calls for just azure and openai, soon all.
             # Await normally
@@ -3441,9 +3442,12 @@ def embedding(
                 input=input,
                 optional_params=optional_params,
                 encoding=encoding,
-                api_key=cohere_key,
+                api_key=cohere_key,  # type: ignore
                 logging_obj=logging,
                 model_response=EmbeddingResponse(),
+                aembedding=aembedding,
+                timeout=float(timeout),
+                client=client,
             )
         elif custom_llm_provider == "huggingface":
             api_key = (
