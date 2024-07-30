@@ -12,6 +12,8 @@ Covers Batches, Files
 
 - Create Batch Request
 
+- List Batches
+
 - Retrieve the Specific Batch and File Content
 
 
@@ -52,6 +54,15 @@ curl http://localhost:4000/v1/batches \
 
 ```bash
 curl http://localhost:4000/v1/batches/batch_abc123 \
+    -H "Authorization: Bearer sk-1234" \
+    -H "Content-Type: application/json" \
+```
+
+
+**List Batches**
+
+```bash
+curl http://localhost:4000/v1/batches \
     -H "Authorization: Bearer sk-1234" \
     -H "Content-Type: application/json" \
 ```
@@ -114,6 +125,13 @@ file_content = await litellm.afile_content(
 )
 
 print("file content = ", file_content)
+```
+
+**List Batches**
+
+```python
+list_batches_response = litellm.list_batches(custom_llm_provider="openai", limit=2)
+print("list_batches_response=", list_batches_response)
 ```
 
 </TabItem>
