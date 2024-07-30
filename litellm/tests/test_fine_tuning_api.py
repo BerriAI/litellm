@@ -146,11 +146,15 @@ async def test_azure_create_fine_tune_jobs_async():
     assert create_fine_tuning_response.id is not None
     assert create_fine_tuning_response.model == "gpt-35-turbo-1106"
 
-    # # list fine tuning jobs
-    # print("listing ft jobs")
-    # ft_jobs = await litellm.alist_fine_tuning_jobs(limit=2)
-    # print("response from litellm.list_fine_tuning_jobs=", ft_jobs)
-    # assert len(list(ft_jobs)) > 0
+    # list fine tuning jobs
+    print("listing ft jobs")
+    ft_jobs = await litellm.alist_fine_tuning_jobs(
+        limit=2,
+        custom_llm_provider="azure",
+        api_key=os.getenv("AZURE_SWEDEN_API_KEY"),
+        api_base="https://my-endpoint-sweden-berri992.openai.azure.com/",
+    )
+    print("response from litellm.list_fine_tuning_jobs=", ft_jobs)
 
     # # delete file
 
@@ -158,13 +162,15 @@ async def test_azure_create_fine_tune_jobs_async():
     #     file_id=file_obj.id,
     # )
 
-    # # cancel ft job
-    # response = await litellm.acancel_fine_tuning_job(
-    #     fine_tuning_job_id=create_fine_tuning_response.id,
-    # )
+    # cancel ft job
+    response = await litellm.acancel_fine_tuning_job(
+        fine_tuning_job_id=create_fine_tuning_response.id,
+        custom_llm_provider="azure",
+        api_key=os.getenv("AZURE_SWEDEN_API_KEY"),
+        api_base="https://my-endpoint-sweden-berri992.openai.azure.com/",
+    )
 
-    # print("response from litellm.cancel_fine_tuning_job=", response)
+    print("response from litellm.cancel_fine_tuning_job=", response)
 
-    # assert response.status == "cancelled"
-    # assert response.id == create_fine_tuning_response.id
-    # pass
+    assert response.status == "cancelled"
+    assert response.id == create_fine_tuning_response.id
