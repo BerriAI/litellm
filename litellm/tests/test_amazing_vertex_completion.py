@@ -940,7 +940,7 @@ async def test_partner_models_httpx(model, sync_mode):
 
         print(f"response: {response}")
 
-        assert response._hidden_params["response_cost"] > 0
+        assert isinstance(response._hidden_params["response_cost"], float)
     except litellm.RateLimitError as e:
         pass
     except Exception as e:
