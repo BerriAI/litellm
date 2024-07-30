@@ -3114,6 +3114,7 @@ async def aembedding(*args, **kwargs) -> EmbeddingResponse:
             or custom_llm_provider == "vertex_ai"
             or custom_llm_provider == "databricks"
             or custom_llm_provider == "watsonx"
+            or custom_llm_provider == "huggingface"
         ):  # currently implemented aiohttp calls for just azure and openai, soon all.
             # Await normally
             init_response = await loop.run_in_executor(None, func_with_context)
@@ -3450,15 +3451,18 @@ def embedding(
                 or litellm.huggingface_key
                 or get_secret("HUGGINGFACE_API_KEY")
                 or litellm.api_key
-            )
+            )  # type: ignore
             response = huggingface.embedding(
                 model=model,
                 input=input,
-                encoding=encoding,
+                encoding=encoding,  # type: ignore
                 api_key=api_key,
                 api_base=api_base,
                 logging_obj=logging,
                 model_response=EmbeddingResponse(),
+                optional_params=optional_params,
+                client=client,
+                aembedding=aembedding,
             )
         elif custom_llm_provider == "bedrock":
             response = bedrock.embedding(

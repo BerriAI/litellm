@@ -1,3 +1,6 @@
+#################### OLD ########################
+##### See `cohere_chat.py` for `/chat` calls ####
+#################################################
 import json
 import os
 import time
