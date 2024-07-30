@@ -122,20 +122,11 @@ async def test_azure_create_fine_tune_jobs_async():
     _current_dir = os.path.dirname(os.path.abspath(__file__))
     file_path = os.path.join(_current_dir, file_name)
 
-    file_obj = await litellm.acreate_file(
-        file=open(file_path, "rb"),
-        purpose="fine-tune",
-        custom_llm_provider="azure",
-        api_key=os.getenv("AZURE_SWEDEN_API_KEY"),
-        api_base="https://my-endpoint-sweden-berri992.openai.azure.com/",
-    )
-    print("Response from creating file=", file_obj)
-
-    await asyncio.sleep(5)
+    file_id = "file-5e4b20ecbd724182b9964f3cd2ab7212"
 
     create_fine_tuning_response = await litellm.acreate_fine_tuning_job(
         model="gpt-35-turbo-1106",
-        training_file=file_obj.id,
+        training_file=file_id,
         custom_llm_provider="azure",
         api_key=os.getenv("AZURE_SWEDEN_API_KEY"),
         api_base="https://my-endpoint-sweden-berri992.openai.azure.com/",
@@ -155,12 +146,6 @@ async def test_azure_create_fine_tune_jobs_async():
         api_base="https://my-endpoint-sweden-berri992.openai.azure.com/",
     )
     print("response from litellm.list_fine_tuning_jobs=", ft_jobs)
-
-    # # delete file
-
-    # await litellm.afile_delete(
-    #     file_id=file_obj.id,
-    # )
 
     # cancel ft job
     response = await litellm.acancel_fine_tuning_job(
