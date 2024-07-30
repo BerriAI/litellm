@@ -2602,26 +2602,52 @@ class OpenAIBatchesAPI(BaseLLM):
         response = openai_client.batches.cancel(**cancel_batch_data)
         return response
 
-    # def list_batch(
-    #     self,
-    #     list_batch_data: ListBatchRequest,
-    #     api_key: Optional[str],
-    #     api_base: Optional[str],
-    #     timeout: Union[float, httpx.Timeout],
-    #     max_retries: Optional[int],
-    #     organization: Optional[str],
-    #     client: Optional[OpenAI] = None,
-    # ):
-    #     openai_client: OpenAI = self.get_openai_client(
-    #         api_key=api_key,
-    #         api_base=api_base,
-    #         timeout=timeout,
-    #         max_retries=max_retries,
-    #         organization=organization,
-    #         client=client,
-    #     )
-    #     response = openai_client.batches.list(**list_batch_data)
-    #     return response
+    async def alist_batches(
+        self,
+        openai_client: AsyncOpenAI,
+        after: Optional[str] = None,
+        limit: Optional[int] = None,
+    ):
+        verbose_logger.debug("listing batches, after= %s, limit= %s", after, limit)
+        response = await openai_client.batches.list(after=after, limit=limit)  # type: ignore
+        return response
+
+    def list_batches(
+        self,
+        _is_async: bool,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        organization: Optional[str],
+        after: Optional[str] = None,
+        limit: Optional[int] = None,
+        client: Optional[OpenAI] = None,
+    ):
+        openai_client: Optional[Union[OpenAI, AsyncOpenAI]] = self.get_openai_client(
+            api_key=api_key,
+            api_base=api_base,
+            timeout=timeout,
+            max_retries=max_retries,
+            organization=organization,
+            client=client,
+            _is_async=_is_async,
+        )
+        if openai_client is None:
+            raise ValueError(
+                "OpenAI client is not initialized. Make sure api_key is passed or OPENAI_API_KEY is set in the environment."
+            )
+
+        if _is_async is True:
+            if not isinstance(openai_client, AsyncOpenAI):
+                raise ValueError(
+                    "OpenAI client is not an instance of AsyncOpenAI. Make sure you passed an AsyncOpenAI client."
+                )
+            return self.alist_batches(  # type: ignore
+                openai_client=openai_client, after=after, limit=limit
+            )
+        response = openai_client.batches.list(after=after, limit=limit)  # type: ignore
+        return response
 
 
 class OpenAIAssistantsAPI(BaseLLM):
