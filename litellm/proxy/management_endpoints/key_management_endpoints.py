@@ -914,22 +914,3 @@ async def delete_verification_token(tokens: List, user_id: Optional[str] = None)
         verbose_proxy_logger.debug(traceback.format_exc())
         raise e
     return deleted_tokens
-
-
-@router.get(
-    "/litellm_header_name",
-    include_in_schema=False,
-)
-async def get_litellm_header_name():
-    """
-    Used by LiteLLM Admin UI
-
-    returns the header name that should be used for the Authorization header on requests to litellm
-    """
-    from litellm.proxy.proxy_server import general_settings
-
-    if "litellm_key_header_name" in general_settings:
-        return {"litellm_key_header_name": general_settings["litellm_key_header_name"]}
-    else:
-        # default value
-        return {"litellm_key_header_name": "Authorization"}
