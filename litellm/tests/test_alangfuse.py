@@ -222,7 +222,7 @@ async def test_langfuse_logging_without_request_response(stream, langfuse_client
                 print(chunk)
 
         langfuse_client.flush()
-        await asyncio.sleep(2)
+        await asyncio.sleep(5)
 
         # get trace with _unique_trace_name
         trace = langfuse_client.get_generations(trace_id=_unique_trace_name)
@@ -273,7 +273,7 @@ async def test_langfuse_logging_audio_transcriptions(langfuse_client):
     )
 
     langfuse_client.flush()
-    await asyncio.sleep(2)
+    await asyncio.sleep(5)
 
     # get trace with _unique_trace_name
     trace = langfuse_client.get_trace(id=_unique_trace_name)
