@@ -43,7 +43,7 @@ const Navbar: React.FC<NavbarProps> = ({
 
   // const userColors = require('./ui_colors.json') || {};
   const isLocal = process.env.NODE_ENV === "development";
-  if (isLocal === true) {
+  if (isLocal != true) {
     console.log = function() {};
   }
   const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
