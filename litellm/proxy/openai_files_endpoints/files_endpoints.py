@@ -39,6 +39,9 @@ files_config = None
 
 def set_files_config(config):
     global files_config
+    if config is None:
+        return
+
     if not isinstance(config, list):
         raise ValueError("invalid files config, expected a list is not a list")
 
