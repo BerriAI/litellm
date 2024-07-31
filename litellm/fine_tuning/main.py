@@ -208,11 +208,15 @@ def create_fine_tuning_job(
                 seed=seed,
             )
 
+            create_fine_tuning_job_data_dict = create_fine_tuning_job_data.model_dump(
+                exclude_none=True
+            )
+
             response = azure_fine_tuning_apis_instance.create_fine_tuning_job(
                 api_base=api_base,
                 api_key=api_key,
                 api_version=api_version,
-                create_fine_tuning_job_data=create_fine_tuning_job_data,
+                create_fine_tuning_job_data=create_fine_tuning_job_data_dict,
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 _is_async=_is_async,
