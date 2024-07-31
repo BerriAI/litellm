@@ -1953,7 +1953,7 @@ async def test_upperbound_key_params(prisma_client):
         key = await generate_key_fn(request)
         # print(result)
     except Exception as e:
-        assert e.code == 400
+        assert e.code == str(400)
 
 
 def test_get_bearer_token():
