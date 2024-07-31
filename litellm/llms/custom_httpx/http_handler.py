@@ -111,11 +111,9 @@ class AsyncHTTPHandler:
             finally:
                 await new_client.aclose()
         except httpx.TimeoutException:
-            if data is None:
-                data = {}
             raise litellm.Timeout(
                 message=f"Connection timed out after {timeout} seconds.",
-                model=data.get("model"),
+                model="default-model-name",
                 llm_provider="litellm-httpx-handler",
             )
         except httpx.HTTPStatusError as e:
@@ -221,11 +219,9 @@ class HTTPHandler:
             response = self.client.send(req, stream=stream)
             return response
         except httpx.TimeoutException:
-            if data is None:
-                data = {}
             raise litellm.Timeout(
                 message=f"Connection timed out after {timeout} seconds.",
-                model=data.get("model"),
+                model="default-model-name",
                 llm_provider="litellm-httpx-handler",
             )
         except Exception as e:
