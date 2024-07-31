@@ -719,6 +719,8 @@ def test_completion_cohere_command_r_plus_function_call():
             force_single_step=True,
         )
         print(second_response)
+    except litellm.Timeout:
+        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
