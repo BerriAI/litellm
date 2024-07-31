@@ -211,7 +211,7 @@ async def test_completion_databricks(sync_mode):
     response_format_tests(response=response)
 
 
-def predibase_mock_post(url, data=None, json=None, headers=None):
+def predibase_mock_post(url, data=None, json=None, headers=None, timeout=None):
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_response.headers = {"Content-Type": "application/json"}
