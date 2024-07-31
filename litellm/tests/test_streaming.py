@@ -1495,6 +1495,11 @@ async def test_parallel_streaming_requests(sync_mode, model):
 
     except RateLimitError:
         pass
+    except litellm.ServiceUnavailableError as e:
+        if model == "predibase/llama-3-8b-instruct":
+            pass
+        else:
+            pytest.fail(f"Service Unavailable Error got{str(e)}")
     except litellm.InternalServerError as e:
         if "predibase" in str(e).lower():
             # only skip internal server error from predibase - their endpoint seems quite unstable
