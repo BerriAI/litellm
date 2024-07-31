@@ -211,7 +211,7 @@ async def list_fine_tuning_jobs(
     custom_llm_provider: Literal["openai", "azure"],
     after: Optional[str] = None,
     limit: Optional[int] = None,
-    user_api_key_dict: dict = Depends(user_api_key_auth),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
     Lists fine-tuning jobs for the organization.
@@ -316,7 +316,7 @@ async def retrieve_fine_tuning_job(
     request: Request,
     fastapi_response: Response,
     fine_tuning_job_id: str,
-    user_api_key_dict: dict = Depends(user_api_key_auth),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
     Cancel a fine-tuning job.
