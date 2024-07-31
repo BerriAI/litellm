@@ -5859,6 +5859,11 @@ def convert_to_model_response_object(
             if _response_headers is not None:
                 model_response_object._response_headers = _response_headers
 
+            special_keys = litellm.ModelResponse.model_fields.keys()
+            for k, v in response_object.items():
+                if k not in special_keys:
+                    setattr(model_response_object, k, v)
+
             return model_response_object
         elif response_type == "embedding" and (
             model_response_object is None
