@@ -2148,7 +2148,7 @@ def supports_parallel_function_calling(model: str):
 
 
 ####### HELPER FUNCTIONS ################
-def _update_dictionary(existing_dict: dict, new_dict: dict) -> dict:
+def _update_dictionary(existing_dict: Dict, new_dict: dict) -> dict:
     for k, v in new_dict.items():
         existing_dict[k] = v
 
@@ -2179,14 +2179,14 @@ def register_model(model_cost: Union[str, dict]):
     for key, value in loaded_model_cost.items():
         ## get model info ##
         try:
-            existing_model = get_model_info(model=key)
+            existing_model: Union[ModelInfo, dict] = get_model_info(model=key)
             model_cost_key = existing_model["key"]
         except Exception:
             existing_model = {}
             model_cost_key = key
         ## override / add new keys to the existing model cost dictionary
         litellm.model_cost.setdefault(model_cost_key, {}).update(
-            _update_dictionary(existing_model, value)
+            _update_dictionary(existing_model, value)  # type: ignore
         )
         verbose_logger.debug(f"{key} added to model cost map")
         # add new model names to provider lists
