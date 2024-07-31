@@ -40,11 +40,20 @@ fine_tuning_config = None
 
 def set_fine_tuning_config(config):
     global fine_tuning_config
+    if not isinstance(config, list):
+        raise ValueError("invalid fine_tuning config, expected a list is not a list")
+
+    for element in config:
+        if isinstance(element, dict):
+            for key, value in element.items():
+                if isinstance(value, str) and value.startswith("os.environ/"):
+                    element[key] = litellm.get_secret(value)
+
     fine_tuning_config = config
 
 
 # Function to search for specific custom_llm_provider and return its configuration
-def get_provider_config(
+def get_fine_tuning_provider_config(
     custom_llm_provider: str,
 ):
     global fine_tuning_config
@@ -122,7 +131,7 @@ async def create_fine_tuning_job(
         )
 
         # get configs for custom_llm_provider
-        llm_provider_config = get_provider_config(
+        llm_provider_config = get_fine_tuning_provider_config(
             custom_llm_provider=fine_tuning_request.custom_llm_provider,
         )
 
