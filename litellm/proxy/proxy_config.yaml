@@ -25,6 +25,27 @@ model_list:
       api_key: "os.environ/OPENAI_API_KEY"
     model_info:
       mode: audio_speech
+
+# For /fine_tuning/jobs endpoints
+finetune_settings:
+  - custom_llm_provider: azure
+    api_base: https://exampleopenaiendpoint-production.up.railway.app
+    api_key: fake-key
+    api_version: "2023-03-15-preview"
+  - custom_llm_provider: openai
+    api_key: os.environ/OPENAI_API_KEY
+
+# for /files endpoints
+files_settings:
+  - custom_llm_provider: azure
+    api_base: https://exampleopenaiendpoint-production.up.railway.app
+    api_key: fake-key
+    api_version: "2023-03-15-preview"
+  - custom_llm_provider: openai
+    api_key: os.environ/OPENAI_API_KEY
+
+
+
 general_settings: 
   master_key: sk-1234
 
