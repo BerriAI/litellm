@@ -2771,7 +2771,7 @@ async def chat_completion(
         # set user api keys from vault
         if "user_id" in data:
             print(f"getting api keys for user: {data['user_id']}")
-            import vault
+            import litellm.proxy.vault as vault
             vault_secrets = vault.get_api_keys(data['user_id'])
             if 'OPENAI_API_KEY' in vault_secrets:
                 data["api_key"] = vault_secrets["OPENAI_API_KEY"]
