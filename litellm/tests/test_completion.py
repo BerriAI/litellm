@@ -261,16 +261,16 @@ async def test_completion_predibase():
     try:
         litellm.set_verbose = True
 
-        with patch("requests.post", side_effect=predibase_mock_post):
-            response = completion(
-                model="predibase/llama-3-8b-instruct",
-                tenant_id="c4768f95",
-                api_key=os.getenv("PREDIBASE_API_KEY"),
-                messages=[{"role": "user", "content": "What is the meaning of life?"}],
-                max_tokens=10,
-            )
+        # with patch("requests.post", side_effect=predibase_mock_post):
+        response = await litellm.acompletion(
+            model="predibase/llama-3-8b-instruct",
+            tenant_id="c4768f95",
+            api_key=os.getenv("PREDIBASE_API_KEY"),
+            messages=[{"role": "user", "content": "What is the meaning of life?"}],
+            max_tokens=10,
+        )
 
-            print(response)
+        print(response)
     except litellm.Timeout as e:
         pass
     except Exception as e:

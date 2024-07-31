@@ -199,8 +199,12 @@ class Timeout(openai.APITimeoutError):  # type: ignore
         litellm_debug_info: Optional[str] = None,
         max_retries: Optional[int] = None,
         num_retries: Optional[int] = None,
+        headers: Optional[dict] = None,
     ):
-        request = httpx.Request(method="POST", url="https://api.openai.com/v1")
+        request = httpx.Request(
+            method="POST",
+            url="https://api.openai.com/v1",
+        )
         super().__init__(
             request=request
         )  # Call the base class constructor with the parameters it needs
@@ -211,6 +215,7 @@ class Timeout(openai.APITimeoutError):  # type: ignore
         self.litellm_debug_info = litellm_debug_info
         self.max_retries = max_retries
         self.num_retries = num_retries
+        self.headers = headers
 
     # custom function to convert to str
     def __str__(self):

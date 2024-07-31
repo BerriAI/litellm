@@ -84,20 +84,17 @@ class AsyncHTTPHandler:
         stream: bool = False,
     ):
         try:
-            if timeout is not None:
-                req = self.client.build_request(
-                    "POST", url, data=data, json=json, params=params, headers=headers, timeout=timeout  # type: ignore
-                )
-            else:
-                req = self.client.build_request(
-                    "POST", url, data=data, json=json, params=params, headers=headers  # type: ignore
-                )
+            if timeout is None:
+                timeout = self.timeout
+            req = self.client.build_request(
+                "POST", url, data=data, json=json, params=params, headers=headers, timeout=timeout  # type: ignore
+            )
             response = await self.client.send(req, stream=stream)
             response.raise_for_status()
             return response
         except (httpx.RemoteProtocolError, httpx.ConnectError):
             # Retry the request with a new session if there is a connection error
-            new_client = self.create_client(timeout=self.timeout, concurrent_limit=1)
+            new_client = self.create_client(timeout=timeout, concurrent_limit=1)
             try:
                 return await self.single_connection_post_request(
                     url=url,
@@ -110,11 +107,17 @@ class AsyncHTTPHandler:
                 )
             finally:
                 await new_client.aclose()
-        except httpx.TimeoutException:
+        except httpx.TimeoutException as e:
+            headers = {}
+            if hasattr(e, "response") and e.response is not None:
+                for key, value in e.response.headers.items():
+                    headers["response_headers-{}".format(key)] = value
+
             raise litellm.Timeout(
                 message=f"Connection timed out after {timeout} seconds.",
                 model="default-model-name",
                 llm_provider="litellm-httpx-handler",
+                headers=headers,
             )
         except httpx.HTTPStatusError as e:
             setattr(e, "status_code", e.response.status_code)
