@@ -110,7 +110,7 @@ class AsyncHTTPHandler:
                 )
             finally:
                 await new_client.aclose()
-        except httpx.ConnectTimeout:
+        except httpx.TimeoutException:
             if data is None:
                 data = {}
             raise litellm.Timeout(
@@ -220,7 +220,7 @@ class HTTPHandler:
                 )
             response = self.client.send(req, stream=stream)
             return response
-        except httpx.ConnectTimeout:
+        except httpx.TimeoutException:
             if data is None:
                 data = {}
             raise litellm.Timeout(
