@@ -461,14 +461,14 @@ async def user_api_key_auth(
             valid_token is not None
             and isinstance(valid_token, UserAPIKeyAuth)
             and valid_token.team_id is not None
-            and user_api_key_cache.get_cache(
-                key="team_id:{}".format(valid_token.team_id)
-            )
-            is not None
         ):
             ## UPDATE TEAM VALUES BASED ON CACHED TEAM OBJECT - allows `/team/update` values to work for cached token
-            team_obj: LiteLLM_TeamTable = user_api_key_cache.get_cache(
-                key="team_id:{}".format(valid_token.team_id)
+            team_obj: LiteLLM_TeamTableCachedObj = await get_team_object(
+                team_id=valid_token.team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
             )
 
             if (

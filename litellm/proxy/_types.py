@@ -910,7 +910,6 @@ class LiteLLM_TeamTable(TeamBase):
     budget_duration: Optional[str] = None
     budget_reset_at: Optional[datetime] = None
     model_id: Optional[int] = None
-    last_refreshed_at: Optional[float] = None
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -934,6 +933,10 @@ class LiteLLM_TeamTable(TeamBase):
                     raise ValueError(f"Field {field} should be a valid dictionary")
 
         return values
+
+
+class LiteLLM_TeamTableCachedObj(LiteLLM_TeamTable):
+    last_refreshed_at: Optional[float] = None
 
 
 class TeamRequest(LiteLLMBase):
