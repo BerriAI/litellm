@@ -362,6 +362,15 @@ class PredibaseChatCompletion(BaseLLM):
             total_tokens=total_tokens,
         )
         model_response.usage = usage  # type: ignore
+
+        ## RESPONSE HEADERS
+        predibase_headers = response.headers
+        response_headers = {}
+        for k, v in predibase_headers.items():
+            if k.startswith("x-"):
+                response_headers["llm_provider-{}".format(k)] = v
+
+        model_response._hidden_params["additional_headers"] = response_headers
         return model_response
 
     def completion(
@@ -550,6 +559,9 @@ class PredibaseChatCompletion(BaseLLM):
                 ),
             )
         except Exception as e:
+            for exception in litellm.LITELLM_EXCEPTION_TYPES:
+                if isinstance(e, exception):
+                    raise e
             raise PredibaseError(
                 status_code=500, message="{}\n{}".format(str(e), traceback.format_exc())
             )

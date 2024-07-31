@@ -3069,6 +3069,7 @@ async def chat_completion(
             type=getattr(e, "type", "None"),
             param=getattr(e, "param", "None"),
             code=getattr(e, "status_code", 500),
+            headers=getattr(e, "headers", {}),
         )
 
 
