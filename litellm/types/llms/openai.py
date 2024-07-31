@@ -9,7 +9,6 @@ from typing import (
     Mapping,
     Optional,
     Tuple,
-    TypedDict,
     Union,
 )
 
@@ -31,7 +30,7 @@ from openai.types.beta.threads.message import Message as OpenAIMessage
 from openai.types.beta.threads.message_content import MessageContent
 from openai.types.beta.threads.run import Run
 from pydantic import BaseModel, Field
-from typing_extensions import Dict, Required, override
+from typing_extensions import Dict, Required, TypedDict, override
 
 FileContent = Union[IO[bytes], bytes, PathLike]
 
@@ -457,15 +456,17 @@ class ChatCompletionUsageBlock(TypedDict):
     total_tokens: int
 
 
-class Hyperparameters(TypedDict):
-    batch_size: Optional[Union[str, int]]  # "Number of examples in each batch."
-    learning_rate_multiplier: Optional[
-        Union[str, float]
-    ]  # Scaling factor for the learning rate
-    n_epochs: Optional[Union[str, int]]  # "The number of epochs to train the model for"
+class Hyperparameters(BaseModel):
+    batch_size: Optional[Union[str, int]] = None  # "Number of examples in each batch."
+    learning_rate_multiplier: Optional[Union[str, float]] = (
+        None  # Scaling factor for the learning rate
+    )
+    n_epochs: Optional[Union[str, int]] = (
+        None  # "The number of epochs to train the model for"
+    )
 
 
-class FineTuningJobCreate(TypedDict):
+class FineTuningJobCreate(BaseModel):
     """
     FineTuningJobCreate - Create a fine-tuning job
 
@@ -489,16 +490,20 @@ class FineTuningJobCreate(TypedDict):
 
     model: str  # "The name of the model to fine-tune."
     training_file: str  # "The ID of an uploaded file that contains training data."
-    hyperparameters: Optional[
-        Hyperparameters
-    ]  # "The hyperparameters used for the fine-tuning job."
-    suffix: Optional[
-        str
-    ]  # "A string of up to 18 characters that will be added to your fine-tuned model name."
-    validation_file: Optional[
-        str
-    ]  # "The ID of an uploaded file that contains validation data."
-    integrations: Optional[
-        List[str]
-    ]  # "A list of integrations to enable for your fine-tuning job."
-    seed: Optional[int]  # "The seed controls the reproducibility of the job."
+    hyperparameters: Optional[Hyperparameters] = (
+        None  # "The hyperparameters used for the fine-tuning job."
+    )
+    suffix: Optional[str] = (
+        None  # "A string of up to 18 characters that will be added to your fine-tuned model name."
+    )
+    validation_file: Optional[str] = (
+        None  # "The ID of an uploaded file that contains validation data."
+    )
+    integrations: Optional[List[str]] = (
+        None  # "A list of integrations to enable for your fine-tuning job."
+    )
+    seed: Optional[int] = None  # "The seed controls the reproducibility of the job."
+
+
+class LiteLLMFineTuningJobCreate(FineTuningJobCreate):
+    custom_llm_provider: Literal["openai", "azure"]
