@@ -9608,12 +9608,12 @@ def cleanup_router_config_variables():
 
 
 app.include_router(router)
+app.include_router(fine_tuning_router)
 app.include_router(health_router)
 app.include_router(key_management_router)
 app.include_router(internal_user_router)
 app.include_router(team_router)
 app.include_router(spend_management_router)
-app.include_router(fine_tuning_router)
 app.include_router(caching_router)
 app.include_router(analytics_router)
 app.include_router(debugging_endpoints_router)
