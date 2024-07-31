@@ -7328,6 +7328,13 @@ def exception_type(
                             model=model,
                             response=original_exception.response,
                         )
+                    elif original_exception.status_code == 408:
+                        exception_mapping_worked = True
+                        raise Timeout(
+                            message=f"CohereException - {original_exception.message}",
+                            llm_provider="cohere",
+                            model=model,
+                        )
                     elif original_exception.status_code == 500:
                         exception_mapping_worked = True
                         raise ServiceUnavailableError(
