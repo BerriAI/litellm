@@ -18,6 +18,7 @@ import httpx
 
 import litellm
 from litellm import get_secret
+from litellm._logging import verbose_logger
 from litellm.llms.fine_tuning_apis.azure import AzureOpenAIFineTuningAPI
 from litellm.llms.fine_tuning_apis.openai import (
     FineTuningJob,
@@ -51,6 +52,9 @@ async def acreate_fine_tuning_job(
     Async: Creates and executes a batch from an uploaded file of request
 
     """
+    verbose_logger.debug(
+        "inside acreate_fine_tuning_job model=%s and kwargs=%s", model, kwargs
+    )
     try:
         loop = asyncio.get_event_loop()
         kwargs["acreate_fine_tuning_job"] = True
@@ -156,11 +160,15 @@ def create_fine_tuning_job(
                 seed=seed,
             )
 
+            create_fine_tuning_job_data_dict = create_fine_tuning_job_data.model_dump(
+                exclude_none=True
+            )
+
             response = openai_fine_tuning_apis_instance.create_fine_tuning_job(
                 api_base=api_base,
                 api_key=api_key,
                 organization=organization,
-                create_fine_tuning_job_data=create_fine_tuning_job_data,
+                create_fine_tuning_job_data=create_fine_tuning_job_data_dict,
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 _is_async=_is_async,

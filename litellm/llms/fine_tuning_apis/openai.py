@@ -50,18 +50,18 @@ class OpenAIFineTuningAPI(BaseLLM):
 
     async def acreate_fine_tuning_job(
         self,
-        create_fine_tuning_job_data: FineTuningJobCreate,
+        create_fine_tuning_job_data: dict,
         openai_client: AsyncOpenAI,
     ) -> FineTuningJob:
         response = await openai_client.fine_tuning.jobs.create(
-            **create_fine_tuning_job_data  # type: ignore
+            **create_fine_tuning_job_data
         )
         return response
 
     def create_fine_tuning_job(
         self,
         _is_async: bool,
-        create_fine_tuning_job_data: FineTuningJobCreate,
+        create_fine_tuning_job_data: dict,
         api_key: Optional[str],
         api_base: Optional[str],
         timeout: Union[float, httpx.Timeout],
@@ -95,7 +95,7 @@ class OpenAIFineTuningAPI(BaseLLM):
         verbose_logger.debug(
             "creating fine tuning job, args= %s", create_fine_tuning_job_data
         )
-        response = openai_client.fine_tuning.jobs.create(**create_fine_tuning_job_data)  # type: ignore
+        response = openai_client.fine_tuning.jobs.create(**create_fine_tuning_job_data)
         return response
 
     async def acancel_fine_tuning_job(
