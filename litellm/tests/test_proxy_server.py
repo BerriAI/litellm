@@ -227,7 +227,7 @@ async def test_team_disable_guardrails(mock_acompletion, client_no_auth):
         await user_api_key_auth(request=request, api_key="Bearer " + user_key)
         pytest.fail("Expected to raise 403 forbidden error.")
     except ProxyException as e:
-        assert e.code == 403
+        assert e.code == "403"
 
 
 from litellm.tests.test_custom_callback_input import CompletionCustomHandler
