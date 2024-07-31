@@ -153,6 +153,8 @@ from litellm.proxy.common_utils.init_callbacks import initialize_callbacks_on_pr
 from litellm.proxy.common_utils.openai_endpoint_utils import (
     remove_sensitive_info_from_deployment,
 )
+from litellm.proxy.fine_tuning_endpoints.endpoints import router as fine_tuning_router
+from litellm.proxy.fine_tuning_endpoints.endpoints import set_fine_tuning_config
 from litellm.proxy.guardrails.init_guardrails import initialize_guardrails
 from litellm.proxy.health_check import perform_health_check
 from litellm.proxy.health_endpoints._health_endpoints import router as health_router
@@ -179,6 +181,7 @@ from litellm.proxy.management_endpoints.team_endpoints import router as team_rou
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     router as openai_files_router,
 )
+from litellm.proxy.openai_files_endpoints.files_endpoints import set_files_config
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     initialize_pass_through_endpoints,
 )
@@ -1806,6 +1809,14 @@ class ProxyConfig:
                     v = os.getenv(_v)
                     assistant_settings["litellm_params"][k] = v
             assistants_config = AssistantsTypedDict(**assistant_settings)  # type: ignore
+
+        ## /fine_tuning/jobs endpoints config
+        finetuning_config = config.get("finetune_settings", None)
+        set_fine_tuning_config(config=finetuning_config)
+
+        ## /files endpoint config
+        files_config = config.get("files_settings", None)
+        set_files_config(config=files_config)
 
         ## ROUTER SETTINGS (e.g. routing_strategy, ...)
         router_settings = config.get("router_settings", None)
@@ -9598,6 +9609,7 @@ def cleanup_router_config_variables():
 
 
 app.include_router(router)
+app.include_router(fine_tuning_router)
 app.include_router(health_router)
 app.include_router(key_management_router)
 app.include_router(internal_user_router)

@@ -17,7 +17,10 @@ from typing import Any, Coroutine, Dict, Literal, Optional, Union
 import httpx
 
 import litellm
-from litellm.llms.openai_fine_tuning.openai import (
+from litellm import get_secret
+from litellm._logging import verbose_logger
+from litellm.llms.fine_tuning_apis.azure import AzureOpenAIFineTuningAPI
+from litellm.llms.fine_tuning_apis.openai import (
     FineTuningJob,
     FineTuningJobCreate,
     OpenAIFineTuningAPI,
@@ -27,7 +30,8 @@ from litellm.types.router import *
 from litellm.utils import supports_httpx_timeout
 
 ####### ENVIRONMENT VARIABLES ###################
-openai_fine_tuning_instance = OpenAIFineTuningAPI()
+openai_fine_tuning_apis_instance = OpenAIFineTuningAPI()
+azure_fine_tuning_apis_instance = AzureOpenAIFineTuningAPI()
 #################################################
 
 
@@ -39,7 +43,7 @@ async def acreate_fine_tuning_job(
     validation_file: Optional[str] = None,
     integrations: Optional[List[str]] = None,
     seed: Optional[int] = None,
-    custom_llm_provider: Literal["openai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure"] = "openai",
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
@@ -48,6 +52,9 @@ async def acreate_fine_tuning_job(
     Async: Creates and executes a batch from an uploaded file of request
 
     """
+    verbose_logger.debug(
+        "inside acreate_fine_tuning_job model=%s and kwargs=%s", model, kwargs
+    )
     try:
         loop = asyncio.get_event_loop()
         kwargs["acreate_fine_tuning_job"] = True
@@ -89,7 +96,7 @@ def create_fine_tuning_job(
     validation_file: Optional[str] = None,
     integrations: Optional[List[str]] = None,
     seed: Optional[int] = None,
-    custom_llm_provider: Literal["openai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure"] = "openai",
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
@@ -101,7 +108,25 @@ def create_fine_tuning_job(
 
     """
     try:
+        _is_async = kwargs.pop("acreate_fine_tuning_job", False) is True
         optional_params = GenericLiteLLMParams(**kwargs)
+        ### TIMEOUT LOGIC ###
+        timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
+        # set timeout for 10 minutes by default
+
+        if (
+            timeout is not None
+            and isinstance(timeout, httpx.Timeout)
+            and supports_httpx_timeout(custom_llm_provider) == False
+        ):
+            read_timeout = timeout.read or 600
+            timeout = read_timeout  # default 10 min timeout
+        elif timeout is not None and not isinstance(timeout, httpx.Timeout):
+            timeout = float(timeout)  # type: ignore
+        elif timeout is None:
+            timeout = 600.0
+
+        # OpenAI
         if custom_llm_provider == "openai":
 
             # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
@@ -124,25 +149,6 @@ def create_fine_tuning_job(
                 or litellm.openai_key
                 or os.getenv("OPENAI_API_KEY")
             )
-            ### TIMEOUT LOGIC ###
-            timeout = (
-                optional_params.timeout or kwargs.get("request_timeout", 600) or 600
-            )
-            # set timeout for 10 minutes by default
-
-            if (
-                timeout is not None
-                and isinstance(timeout, httpx.Timeout)
-                and supports_httpx_timeout(custom_llm_provider) == False
-            ):
-                read_timeout = timeout.read or 600
-                timeout = read_timeout  # default 10 min timeout
-            elif timeout is not None and not isinstance(timeout, httpx.Timeout):
-                timeout = float(timeout)  # type: ignore
-            elif timeout is None:
-                timeout = 600.0
-
-            _is_async = kwargs.pop("acreate_fine_tuning_job", False) is True
 
             create_fine_tuning_job_data = FineTuningJobCreate(
                 model=model,
@@ -154,11 +160,63 @@ def create_fine_tuning_job(
                 seed=seed,
             )
 
-            response = openai_fine_tuning_instance.create_fine_tuning_job(
+            create_fine_tuning_job_data_dict = create_fine_tuning_job_data.model_dump(
+                exclude_none=True
+            )
+
+            response = openai_fine_tuning_apis_instance.create_fine_tuning_job(
                 api_base=api_base,
                 api_key=api_key,
                 organization=organization,
-                create_fine_tuning_job_data=create_fine_tuning_job_data,
+                create_fine_tuning_job_data=create_fine_tuning_job_data_dict,
+                timeout=timeout,
+                max_retries=optional_params.max_retries,
+                _is_async=_is_async,
+            )
+        # Azure OpenAI
+        elif custom_llm_provider == "azure":
+            api_base = optional_params.api_base or litellm.api_base or get_secret("AZURE_API_BASE")  # type: ignore
+
+            api_version = (
+                optional_params.api_version
+                or litellm.api_version
+                or get_secret("AZURE_API_VERSION")
+            )  # type: ignore
+
+            api_key = (
+                optional_params.api_key
+                or litellm.api_key
+                or litellm.azure_key
+                or get_secret("AZURE_OPENAI_API_KEY")
+                or get_secret("AZURE_API_KEY")
+            )  # type: ignore
+
+            extra_body = optional_params.get("extra_body", {})
+            azure_ad_token: Optional[str] = None
+            if extra_body is not None:
+                azure_ad_token = extra_body.pop("azure_ad_token", None)
+            else:
+                azure_ad_token = get_secret("AZURE_AD_TOKEN")  # type: ignore
+
+            create_fine_tuning_job_data = FineTuningJobCreate(
+                model=model,
+                training_file=training_file,
+                hyperparameters=hyperparameters,
+                suffix=suffix,
+                validation_file=validation_file,
+                integrations=integrations,
+                seed=seed,
+            )
+
+            create_fine_tuning_job_data_dict = create_fine_tuning_job_data.model_dump(
+                exclude_none=True
+            )
+
+            response = azure_fine_tuning_apis_instance.create_fine_tuning_job(
+                api_base=api_base,
+                api_key=api_key,
+                api_version=api_version,
+                create_fine_tuning_job_data=create_fine_tuning_job_data_dict,
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 _is_async=_is_async,
@@ -233,6 +291,25 @@ def cancel_fine_tuning_job(
     """
     try:
         optional_params = GenericLiteLLMParams(**kwargs)
+        ### TIMEOUT LOGIC ###
+        timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
+        # set timeout for 10 minutes by default
+
+        if (
+            timeout is not None
+            and isinstance(timeout, httpx.Timeout)
+            and supports_httpx_timeout(custom_llm_provider) == False
+        ):
+            read_timeout = timeout.read or 600
+            timeout = read_timeout  # default 10 min timeout
+        elif timeout is not None and not isinstance(timeout, httpx.Timeout):
+            timeout = float(timeout)  # type: ignore
+        elif timeout is None:
+            timeout = 600.0
+
+        _is_async = kwargs.pop("acancel_fine_tuning_job", False) is True
+
+        # OpenAI
         if custom_llm_provider == "openai":
 
             # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
@@ -255,30 +332,45 @@ def cancel_fine_tuning_job(
                 or litellm.openai_key
                 or os.getenv("OPENAI_API_KEY")
             )
-            ### TIMEOUT LOGIC ###
-            timeout = (
-                optional_params.timeout or kwargs.get("request_timeout", 600) or 600
-            )
-            # set timeout for 10 minutes by default
 
-            if (
-                timeout is not None
-                and isinstance(timeout, httpx.Timeout)
-                and supports_httpx_timeout(custom_llm_provider) == False
-            ):
-                read_timeout = timeout.read or 600
-                timeout = read_timeout  # default 10 min timeout
-            elif timeout is not None and not isinstance(timeout, httpx.Timeout):
-                timeout = float(timeout)  # type: ignore
-            elif timeout is None:
-                timeout = 600.0
-
-            _is_async = kwargs.pop("acancel_fine_tuning_job", False) is True
-
-            response = openai_fine_tuning_instance.cancel_fine_tuning_job(
+            response = openai_fine_tuning_apis_instance.cancel_fine_tuning_job(
                 api_base=api_base,
                 api_key=api_key,
                 organization=organization,
+                fine_tuning_job_id=fine_tuning_job_id,
+                timeout=timeout,
+                max_retries=optional_params.max_retries,
+                _is_async=_is_async,
+            )
+        # Azure OpenAI
+        elif custom_llm_provider == "azure":
+            api_base = optional_params.api_base or litellm.api_base or get_secret("AZURE_API_BASE")  # type: ignore
+
+            api_version = (
+                optional_params.api_version
+                or litellm.api_version
+                or get_secret("AZURE_API_VERSION")
+            )  # type: ignore
+
+            api_key = (
+                optional_params.api_key
+                or litellm.api_key
+                or litellm.azure_key
+                or get_secret("AZURE_OPENAI_API_KEY")
+                or get_secret("AZURE_API_KEY")
+            )  # type: ignore
+
+            extra_body = optional_params.get("extra_body", {})
+            azure_ad_token: Optional[str] = None
+            if extra_body is not None:
+                azure_ad_token = extra_body.pop("azure_ad_token", None)
+            else:
+                azure_ad_token = get_secret("AZURE_AD_TOKEN")  # type: ignore
+
+            response = azure_fine_tuning_apis_instance.cancel_fine_tuning_job(
+                api_base=api_base,
+                api_key=api_key,
+                api_version=api_version,
                 fine_tuning_job_id=fine_tuning_job_id,
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
@@ -359,6 +451,25 @@ def list_fine_tuning_jobs(
     """
     try:
         optional_params = GenericLiteLLMParams(**kwargs)
+        ### TIMEOUT LOGIC ###
+        timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
+        # set timeout for 10 minutes by default
+
+        if (
+            timeout is not None
+            and isinstance(timeout, httpx.Timeout)
+            and supports_httpx_timeout(custom_llm_provider) == False
+        ):
+            read_timeout = timeout.read or 600
+            timeout = read_timeout  # default 10 min timeout
+        elif timeout is not None and not isinstance(timeout, httpx.Timeout):
+            timeout = float(timeout)  # type: ignore
+        elif timeout is None:
+            timeout = 600.0
+
+        _is_async = kwargs.pop("alist_fine_tuning_jobs", False) is True
+
+        # OpenAI
         if custom_llm_provider == "openai":
 
             # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
@@ -381,30 +492,46 @@ def list_fine_tuning_jobs(
                 or litellm.openai_key
                 or os.getenv("OPENAI_API_KEY")
             )
-            ### TIMEOUT LOGIC ###
-            timeout = (
-                optional_params.timeout or kwargs.get("request_timeout", 600) or 600
-            )
-            # set timeout for 10 minutes by default
 
-            if (
-                timeout is not None
-                and isinstance(timeout, httpx.Timeout)
-                and supports_httpx_timeout(custom_llm_provider) == False
-            ):
-                read_timeout = timeout.read or 600
-                timeout = read_timeout  # default 10 min timeout
-            elif timeout is not None and not isinstance(timeout, httpx.Timeout):
-                timeout = float(timeout)  # type: ignore
-            elif timeout is None:
-                timeout = 600.0
-
-            _is_async = kwargs.pop("alist_fine_tuning_jobs", False) is True
-
-            response = openai_fine_tuning_instance.list_fine_tuning_jobs(
+            response = openai_fine_tuning_apis_instance.list_fine_tuning_jobs(
                 api_base=api_base,
                 api_key=api_key,
                 organization=organization,
+                after=after,
+                limit=limit,
+                timeout=timeout,
+                max_retries=optional_params.max_retries,
+                _is_async=_is_async,
+            )
+        # Azure OpenAI
+        elif custom_llm_provider == "azure":
+            api_base = optional_params.api_base or litellm.api_base or get_secret("AZURE_API_BASE")  # type: ignore
+
+            api_version = (
+                optional_params.api_version
+                or litellm.api_version
+                or get_secret("AZURE_API_VERSION")
+            )  # type: ignore
+
+            api_key = (
+                optional_params.api_key
+                or litellm.api_key
+                or litellm.azure_key
+                or get_secret("AZURE_OPENAI_API_KEY")
+                or get_secret("AZURE_API_KEY")
+            )  # type: ignore
+
+            extra_body = optional_params.get("extra_body", {})
+            azure_ad_token: Optional[str] = None
+            if extra_body is not None:
+                azure_ad_token = extra_body.pop("azure_ad_token", None)
+            else:
+                azure_ad_token = get_secret("AZURE_AD_TOKEN")  # type: ignore
+
+            response = azure_fine_tuning_apis_instance.list_fine_tuning_jobs(
+                api_base=api_base,
+                api_key=api_key,
+                api_version=api_version,
                 after=after,
                 limit=limit,
                 timeout=timeout,
