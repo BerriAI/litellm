@@ -81,7 +81,7 @@ def test_is_llm_api_route(route: str, expected: bool):
     assert is_llm_api_route(route) == expected
 
 
-# Test case for routes that are similar but should return False
+# Test-case for routes that are similar but should return False
 @pytest.mark.parametrize(
     "route",
     [
