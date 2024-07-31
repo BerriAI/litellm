@@ -487,7 +487,7 @@ class PredibaseChatCompletion(BaseLLM):
                 headers=headers,
                 data=json.dumps(data),
                 stream=stream,
-                timeout=timeout,
+                timeout=timeout,  # type: ignore
             )
             _response = CustomStreamWrapper(
                 response.iter_lines(),
@@ -502,7 +502,7 @@ class PredibaseChatCompletion(BaseLLM):
                 url=completion_url,
                 headers=headers,
                 data=json.dumps(data),
-                timeout=timeout,
+                timeout=timeout,  # type: ignore
             )
         return self.process_response(
             model=model,
