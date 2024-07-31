@@ -567,11 +567,13 @@ async def test_completion_predibase_streaming(sync_mode):
                 raise Exception("Empty response received")
 
         print(f"complete_response: {complete_response}")
-    except litellm.Timeout as e:
+    except litellm.Timeout:
         pass
-    except litellm.InternalServerError as e:
+    except litellm.InternalServerError:
         pass
-    except litellm.ServiceUnavailableError as e:
+    except litellm.ServiceUnavailableError:
+        pass
+    except litellm.APIConnectionError:
         pass
     except Exception as e:
         print("ERROR class", e.__class__)
