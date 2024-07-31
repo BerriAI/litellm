@@ -69,7 +69,7 @@ def test_routes_on_litellm_proxy():
         ("/v1/threads/thread_49EIN5QF32s4mH20M7GFKdlZ", True),
         ("/threads/thread_49EIN5QF32s4mH20M7GFKdlZ/messages", True),
         ("/v1/threads/thread_49EIN5QF32s4mH20M7GFKdlZ/runs", True),
-        ("/v1/batches123456", True),
+        ("/v1/batches/123456", True),
         # Test non-OpenAI routes
         ("/some/random/route", False),
         ("/v2/chat/completions", False),
