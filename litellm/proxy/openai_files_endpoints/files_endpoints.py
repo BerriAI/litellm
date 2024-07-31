@@ -80,7 +80,7 @@ async def create_file(
     request: Request,
     fastapi_response: Response,
     purpose: str = Form(...),
-    custom_llm_provider: str = Form(...),
+    custom_llm_provider: str = Form(default="openai"),
     file: UploadFile = File(...),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
