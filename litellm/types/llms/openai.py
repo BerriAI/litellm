@@ -503,3 +503,7 @@ class FineTuningJobCreate(BaseModel):
         None  # "A list of integrations to enable for your fine-tuning job."
     )
     seed: Optional[int] = None  # "The seed controls the reproducibility of the job."
+
+
+class LiteLLMFineTuningJobCreate(FineTuningJobCreate):
+    custom_llm_provider: Literal["openai", "azure"]
