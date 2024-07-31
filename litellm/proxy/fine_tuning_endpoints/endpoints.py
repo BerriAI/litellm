@@ -33,11 +33,29 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 router = APIRouter()
 
-from litellm.llms.fine_tuning_apis.openai import (
-    FineTuningJob,
-    FineTuningJobCreate,
-    OpenAIFineTuningAPI,
-)
+from litellm.types.llms.openai import LiteLLMFineTuningJobCreate
+
+fine_tuning_config = None
+
+
+def set_fine_tuning_config(config):
+    global fine_tuning_config
+    fine_tuning_config = config
+
+
+# Function to search for specific custom_llm_provider and return its configuration
+def get_provider_config(
+    custom_llm_provider: str,
+):
+    global fine_tuning_config
+    if fine_tuning_config is None:
+        raise ValueError(
+            "fine_tuning_config is not set, set it on your config.yaml file."
+        )
+    for setting in fine_tuning_config:
+        if setting.get("custom_llm_provider") == custom_llm_provider:
+            return setting
+    return None
 
 
 @router.post(
@@ -53,7 +71,7 @@ from litellm.llms.fine_tuning_apis.openai import (
 async def create_fine_tuning_job(
     request: Request,
     fastapi_response: Response,
-    fine_tuning_request: FineTuningJobCreate,
+    fine_tuning_request: LiteLLMFineTuningJobCreate,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -103,10 +121,16 @@ async def create_fine_tuning_job(
             proxy_config=proxy_config,
         )
 
-        # For now, use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for fine-tuning
-        response = await litellm.acreate_fine_tuning_job(
-            custom_llm_provider="openai", **data
+        # get configs for custom_llm_provider
+        llm_provider_config = get_provider_config(
+            custom_llm_provider=fine_tuning_request.custom_llm_provider,
         )
+
+        # add llm_provider_config to data
+        data.update(llm_provider_config)
+
+        # For now, use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for fine-tuning
+        response = await litellm.acreate_fine_tuning_job(**data)
 
         ### ALERTING ###
         asyncio.create_task(
