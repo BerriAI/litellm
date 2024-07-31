@@ -21,7 +21,7 @@ class AzureOpenAIFineTuningAPI(BaseLLM):
 
     async def acreate_fine_tuning_job(
         self,
-        create_fine_tuning_job_data: FineTuningJobCreate,
+        create_fine_tuning_job_data: dict,
         openai_client: AsyncAzureOpenAI,
     ) -> FineTuningJob:
         response = await openai_client.fine_tuning.jobs.create(
@@ -32,7 +32,7 @@ class AzureOpenAIFineTuningAPI(BaseLLM):
     def create_fine_tuning_job(
         self,
         _is_async: bool,
-        create_fine_tuning_job_data: FineTuningJobCreate,
+        create_fine_tuning_job_data: dict,
         api_key: Optional[str],
         api_base: Optional[str],
         timeout: Union[float, httpx.Timeout],
