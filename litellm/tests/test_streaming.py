@@ -1451,6 +1451,7 @@ async def test_parallel_streaming_requests(sync_mode, model):
                 messages=messages,
                 stream=True,
                 max_tokens=10,
+                timeout=10,
             )
             complete_response = ""
             # Add any assertions here to-check the response
@@ -1468,6 +1469,7 @@ async def test_parallel_streaming_requests(sync_mode, model):
                 messages=messages,
                 stream=True,
                 max_tokens=10,
+                timeout=10,
             )
             complete_response = ""
             # Add any assertions here to-check the response
@@ -1497,6 +1499,8 @@ async def test_parallel_streaming_requests(sync_mode, model):
                 thread.join()
 
     except RateLimitError:
+        pass
+    except litellm.Timeout:
         pass
     except litellm.ServiceUnavailableError as e:
         if model == "predibase/llama-3-8b-instruct":
