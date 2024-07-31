@@ -1729,6 +1729,7 @@ def test_sagemaker_weird_response():
 # test_sagemaker_weird_response()
 
 
+@pytest.mark.skip(reason="Move to being a mock endpoint")
 @pytest.mark.asyncio
 async def test_sagemaker_streaming_async():
     try:
