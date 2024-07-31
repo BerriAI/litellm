@@ -396,6 +396,7 @@ async def get_team_object(
     user_api_key_cache: DualCache,
     parent_otel_span: Optional[Span] = None,
     proxy_logging_obj: Optional[ProxyLogging] = None,
+    check_cache_only: Optional[bool] = None,
 ) -> LiteLLM_TeamTableCachedObj:
     """
     - Check if team id in proxy Team Table
@@ -431,6 +432,12 @@ async def get_team_object(
             return LiteLLM_TeamTableCachedObj(**cached_team_obj)
         elif isinstance(cached_team_obj, LiteLLM_TeamTableCachedObj):
             return cached_team_obj
+
+    if check_cache_only:
+        raise Exception(
+            f"Team doesn't exist in cache + check_cache_only=True. Team={team_id}. Create team via `/team/new` call."
+        )
+
     # else, check db
     try:
         response = await prisma_client.db.litellm_teamtable.find_unique(
