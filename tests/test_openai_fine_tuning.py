@@ -33,17 +33,21 @@ async def test_openai_fine_tuning():
     print("response from ft job={}".format(ft_job))
 
     # response from example endpoint
-    assert ft_job.id == "file-abc123"
+    assert ft_job.id == "ftjob-abc123"
 
     # list all fine tuning jobs
     list_ft_jobs = await client.fine_tuning.jobs.list(
         extra_query={"custom_llm_provider": "azure"}
     )
 
+    print("list of ft jobs={}".format(list_ft_jobs))
+
     # cancel specific fine tuning job
     cancel_ft_job = await client.fine_tuning.jobs.cancel(
         fine_tuning_job_id="123",
         extra_body={"custom_llm_provider": "azure"},
     )
+
+    print("response from cancel ft job={}".format(cancel_ft_job))
 
     assert cancel_ft_job.id is not None
