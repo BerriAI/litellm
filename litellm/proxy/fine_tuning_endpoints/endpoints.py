@@ -39,6 +39,9 @@ fine_tuning_config = None
 
 
 def set_fine_tuning_config(config):
+    if config is None:
+        return
+
     global fine_tuning_config
     if not isinstance(config, list):
         raise ValueError("invalid fine_tuning config, expected a list is not a list")
