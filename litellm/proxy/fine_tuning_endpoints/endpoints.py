@@ -74,11 +74,13 @@ def get_fine_tuning_provider_config(
     "/v1/fine_tuning/jobs",
     dependencies=[Depends(user_api_key_auth)],
     tags=["fine-tuning"],
+    summary="✨ (Enterprise) Create Fine-Tuning Job",
 )
 @router.post(
     "/fine_tuning/jobs",
     dependencies=[Depends(user_api_key_auth)],
     tags=["fine-tuning"],
+    summary="✨ (Enterprise) Create Fine-Tuning Job",
 )
 async def create_fine_tuning_job(
     request: Request,
@@ -199,11 +201,13 @@ async def create_fine_tuning_job(
     "/v1/fine_tuning/jobs",
     dependencies=[Depends(user_api_key_auth)],
     tags=["fine-tuning"],
+    summary="✨ (Enterprise) List Fine-Tuning Jobs",
 )
 @router.get(
     "/fine_tuning/jobs",
     dependencies=[Depends(user_api_key_auth)],
     tags=["fine-tuning"],
+    summary="✨ (Enterprise) List Fine-Tuning Jobs",
 )
 async def list_fine_tuning_jobs(
     request: Request,
@@ -306,11 +310,13 @@ async def list_fine_tuning_jobs(
     "/v1/fine_tuning/jobs/{fine_tuning_job_id:path}/cancel",
     dependencies=[Depends(user_api_key_auth)],
     tags=["fine-tuning"],
+    summary="✨ (Enterprise) Cancel Fine-Tuning Jobs",
 )
 @router.post(
     "/fine_tuning/jobs/{fine_tuning_job_id:path}/cancel",
     dependencies=[Depends(user_api_key_auth)],
     tags=["fine-tuning"],
+    summary="✨ (Enterprise) Cancel Fine-Tuning Jobs",
 )
 async def retrieve_fine_tuning_job(
     request: Request,
