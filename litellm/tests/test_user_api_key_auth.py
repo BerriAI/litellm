@@ -61,7 +61,11 @@ async def test_check_blocked_team():
     from fastapi import Request
     from starlette.datastructures import URL
 
-    from litellm.proxy._types import LiteLLM_TeamTable, UserAPIKeyAuth
+    from litellm.proxy._types import (
+        LiteLLM_TeamTable,
+        LiteLLM_TeamTableCachedObj,
+        UserAPIKeyAuth,
+    )
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
     from litellm.proxy.proxy_server import hash_token, user_api_key_cache
 
@@ -75,7 +79,7 @@ async def test_check_blocked_team():
         last_refreshed_at=time.time(),
     )
     await asyncio.sleep(1)
-    team_obj = LiteLLM_TeamTable(
+    team_obj = LiteLLM_TeamTableCachedObj(
         team_id=_team_id, blocked=False, last_refreshed_at=time.time()
     )
     user_api_key_cache.set_cache(key=hash_token(user_key), value=valid_token)
