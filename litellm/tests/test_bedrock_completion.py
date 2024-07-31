@@ -558,7 +558,7 @@ def test_completion_bedrock_httpx_command_r_sts_oidc_auth():
     import os
 
     aws_web_identity_token = "oidc/circleci_v2/"
-    aws_region_name = os.environ["AWS_REGION_NAME"]
+    aws_region_name = "us-west-2"
     # aws_role_name = os.environ["AWS_TEMP_ROLE_NAME"]
     # TODO: This is using ai.moda's IAM role, we should use LiteLLM's IAM role eventually
     aws_role_name = "arn:aws:iam::335785316107:role/litellm-github-unit-tests-circleci"
@@ -575,6 +575,8 @@ def test_completion_bedrock_httpx_command_r_sts_oidc_auth():
             aws_web_identity_token=aws_web_identity_token,
             aws_role_name=aws_role_name,
             aws_session_name="my-test-session",
+            aws_sts_endpoint="https://sts-fips.us-west-2.amazonaws.com",
+            aws_bedrock_runtime_endpoint="https://bedrock-runtime-fips.us-west-2.amazonaws.com",
         )
         # Add any assertions here to check the response
         print(response)
