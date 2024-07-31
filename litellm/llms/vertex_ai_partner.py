@@ -192,7 +192,7 @@ class VertexAIPartnerModels(BaseLLM):
 
             if "llama" in model:
                 partner = "llama"
-            elif "mistral" in model:
+            elif "stral" in model:
                 partner = "mistralai"
                 optional_params["custom_endpoint"] = True
 

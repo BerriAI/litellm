@@ -902,6 +902,7 @@ from litellm.tests.test_completion import response_format_tests
     "model",
     [
         "vertex_ai/mistral-large@2407",
+        "vertex_ai/codestral@2405",
         "vertex_ai/meta/llama3-405b-instruct-maas",
     ],  #
 )  # "vertex_ai",
@@ -954,6 +955,7 @@ async def test_partner_models_httpx(model, sync_mode):
     "model",
     [
         "vertex_ai/mistral-large@2407",
+        "vertex_ai/codestral@2405",
         "vertex_ai/meta/llama3-405b-instruct-maas",
     ],  #
 )  # "vertex_ai",
@@ -1145,7 +1147,7 @@ async def test_gemini_pro_json_schema_httpx_content_policy_error(
         {
             "role": "user",
             "content": """
-    
+
 List 5 popular cookie recipes.
 
 Using this JSON schema:
