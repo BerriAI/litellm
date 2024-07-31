@@ -3,9 +3,8 @@ import traceback
 
 import hvac
 
-VAULT_ADDR = os.environ["VAULT_ADDR"]
-VAULT_TOKEN = os.environ["VAULT_TOKEN"]
-
+VAULT_ADDR = str(os.environ.get("VAULT_ADDR", "")).strip()
+VAULT_TOKEN = str(os.environ.get("VAULT_TOKEN", "")).strip()
 client = hvac.Client(url=VAULT_ADDR, token=VAULT_TOKEN, verify=False)
 
 
