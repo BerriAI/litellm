@@ -112,12 +112,17 @@ async def create_fine_tuning_job(
         add_litellm_data_to_request,
         general_settings,
         get_custom_headers,
+        premium_user,
         proxy_config,
         proxy_logging_obj,
         version,
     )
 
     try:
+        if premium_user is not True:
+            raise ValueError(
+                f"Only premium users can use this endpoint + {CommonProxyErrors.not_premium_user.value}"
+            )
         # Convert Pydantic model to dict
         data = fine_tuning_request.model_dump(exclude_none=True)
 
@@ -230,6 +235,7 @@ async def list_fine_tuning_jobs(
         add_litellm_data_to_request,
         general_settings,
         get_custom_headers,
+        premium_user,
         proxy_config,
         proxy_logging_obj,
         version,
@@ -237,6 +243,10 @@ async def list_fine_tuning_jobs(
 
     data: dict = {}
     try:
+        if premium_user is not True:
+            raise ValueError(
+                f"Only premium users can use this endpoint + {CommonProxyErrors.not_premium_user.value}"
+            )
         # Include original request and headers in the data
         data = await add_litellm_data_to_request(
             data=data,
@@ -337,6 +347,7 @@ async def retrieve_fine_tuning_job(
         add_litellm_data_to_request,
         general_settings,
         get_custom_headers,
+        premium_user,
         proxy_config,
         proxy_logging_obj,
         version,
@@ -344,6 +355,10 @@ async def retrieve_fine_tuning_job(
 
     data: dict = {}
     try:
+        if premium_user is not True:
+            raise ValueError(
+                f"Only premium users can use this endpoint + {CommonProxyErrors.not_premium_user.value}"
+            )
         # Include original request and headers in the data
         data = await add_litellm_data_to_request(
             data=data,
