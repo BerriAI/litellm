@@ -197,6 +197,11 @@ async def create_fine_tuning_job(
     dependencies=[Depends(user_api_key_auth)],
     tags=["fine-tuning"],
 )
+@router.get(
+    "/fine_tuning/jobs",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["fine-tuning"],
+)
 async def list_fine_tuning_jobs(
     request: Request,
     fastapi_response: Response,
@@ -299,10 +304,14 @@ async def list_fine_tuning_jobs(
     dependencies=[Depends(user_api_key_auth)],
     tags=["fine-tuning"],
 )
+@router.post(
+    "/fine_tuning/jobs/{fine_tuning_job_id:path}/cancel",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["fine-tuning"],
+)
 async def retrieve_fine_tuning_job(
     request: Request,
     fastapi_response: Response,
-    custom_llm_provider: Literal["openai", "azure"],
     fine_tuning_job_id: str,
     user_api_key_dict: dict = Depends(user_api_key_auth),
 ):
@@ -335,6 +344,10 @@ async def retrieve_fine_tuning_job(
             version=version,
             proxy_config=proxy_config,
         )
+
+        request_body = await request.json()
+
+        custom_llm_provider = request_body.get("custom_llm_provider", None)
 
         # get configs for custom_llm_provider
         llm_provider_config = get_fine_tuning_provider_config(
