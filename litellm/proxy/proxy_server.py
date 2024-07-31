@@ -154,6 +154,7 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
     remove_sensitive_info_from_deployment,
 )
 from litellm.proxy.fine_tuning_endpoints.endpoints import router as fine_tuning_router
+from litellm.proxy.fine_tuning_endpoints.endpoints import set_fine_tuning_config
 from litellm.proxy.guardrails.init_guardrails import initialize_guardrails
 from litellm.proxy.health_check import perform_health_check
 from litellm.proxy.health_endpoints._health_endpoints import router as health_router
@@ -1807,6 +1808,13 @@ class ProxyConfig:
                     v = os.getenv(_v)
                     assistant_settings["litellm_params"][k] = v
             assistants_config = AssistantsTypedDict(**assistant_settings)  # type: ignore
+
+        ## /fine_tuning/jobs endpoints config
+        finetuning_config = config.get("finetune_settings", None)
+        set_fine_tuning_config(config=finetuning_config)
+
+        ## /files endpoint config
+        files_config = config.get("files_settings", None)
 
         ## ROUTER SETTINGS (e.g. routing_strategy, ...)
         router_settings = config.get("router_settings", None)
