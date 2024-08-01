@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from fastapi import Request
 
+import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors, TeamCallbackMetadata, UserAPIKeyAuth
 from litellm.types.utils import SupportedCacheControls
@@ -250,13 +251,15 @@ def _add_otel_traceparent_to_data(data: dict, request: Request):
         # if user is not use OTEL don't send extra_headers
         # relevant issue: https://github.com/BerriAI/litellm/issues/4448
         return
-    if request.headers:
-        if "traceparent" in request.headers:
-            # we want to forward this to the LLM Provider
-            # Relevant issue: https://github.com/BerriAI/litellm/issues/4419
-            # pass this in extra_headers
-            if "extra_headers" not in data:
-                data["extra_headers"] = {}
-            _exra_headers = data["extra_headers"]
-            if "traceparent" not in _exra_headers:
-                _exra_headers["traceparent"] = request.headers["traceparent"]
+
+    if litellm.forward_traceparent_to_llm_provider is True:
+        if request.headers:
+            if "traceparent" in request.headers:
+                # we want to forward this to the LLM Provider
+                # Relevant issue: https://github.com/BerriAI/litellm/issues/4419
+                # pass this in extra_headers
+                if "extra_headers" not in data:
+                    data["extra_headers"] = {}
+                _exra_headers = data["extra_headers"]
+                if "traceparent" not in _exra_headers:
+                    _exra_headers["traceparent"] = request.headers["traceparent"]
