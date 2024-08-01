@@ -44,7 +44,9 @@ def cost_router(
     Returns
         - str, the specific google cost calc function it should route to.
     """
-    if custom_llm_provider == "vertex_ai" and ("claude" in model or "llama" in model):
+    if custom_llm_provider == "vertex_ai" and (
+        "claude" in model or "llama" in model or "mistral" in model
+    ):
         return "cost_per_token"
     elif custom_llm_provider == "gemini":
         return "cost_per_token"
