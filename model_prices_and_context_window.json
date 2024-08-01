@@ -2092,6 +2092,16 @@
         "mode": "chat",
         "supports_function_calling": true
     },
+    "vertex_ai/codestral@latest": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000,
+        "input_cost_per_token": 0.000001,
+        "output_cost_per_token": 0.000003,
+        "litellm_provider": "vertex_ai-mistral_models",
+        "mode": "chat",
+        "supports_function_calling": true
+    },
     "vertex_ai/codestral@2405": {
         "max_tokens": 128000,
         "max_input_tokens": 128000,
