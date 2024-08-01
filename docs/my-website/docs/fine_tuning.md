@@ -79,9 +79,31 @@ ft_job = await client.fine_tuning.jobs.create(
 ## Cancel fine-tuning job
 
 <Tabs>
+<TabItem value="openai" label="OpenAI Python v1.0.0+">
+
+```python
+ft_job = await client.fine_tuning.jobs.create(
+    model="gpt-35-turbo-1106",                   # Azure OpenAI model you want to fine-tune
+    training_file="file-abc123",                 # file_id from create file response
+    extra_body={"custom_llm_provider": "azure"}, # tell litellm proxy which provider to use
+)
+```
+</TabItem>
 </Tabs>
 
 ## List fine-tuning jobs
 
 <Tabs>
+
+<TabItem value="openai" label="OpenAI Python v1.0.0+">
+
+```python
+list_ft_jobs = await client.fine_tuning.jobs.list(
+    extra_query={"custom_llm_provider": "azure"}   # tell litellm proxy which provider to use
+)
+
+print("list of ft jobs={}".format(list_ft_jobs))
+```
+</TabItem>
+
 </Tabs>
