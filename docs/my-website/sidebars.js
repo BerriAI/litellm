@@ -47,7 +47,7 @@ const sidebars = {
         {
           type: "category",
           label: "🪢 Logging",
-          items: ["proxy/logging", "proxy/streaming_logging"],
+          items: ["proxy/logging", "proxy/bucket", "proxy/streaming_logging"],
         },
         "proxy/team_logging",
         "proxy/guardrails",
