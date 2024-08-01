@@ -10,7 +10,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from litellm.proxy._types import SpendLogsPayload
+from litellm.proxy._types import CommonProxyErrors, SpendLogsPayload
 
 
 class GCSBucketPayload(SpendLogsPayload):
@@ -20,6 +20,13 @@ class GCSBucketPayload(SpendLogsPayload):
 
 class GCSBucketLogger(CustomLogger):
     def __init__(self) -> None:
+        from litellm.proxy.proxy_server import premium_user
+
+        if premium_user is not True:
+            raise ValueError(
+                f"GCS Bucket logging is a premium feature. Please upgrade to use it. {CommonProxyErrors.not_premium_user.value}"
+            )
+
         self.async_httpx_client = AsyncHTTPHandler(
             timeout=httpx.Timeout(timeout=600.0, connect=5.0)
         )
@@ -39,6 +46,12 @@ class GCSBucketLogger(CustomLogger):
 
     #### ASYNC ####
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        from litellm.proxy.proxy_server import premium_user
+
+        if premium_user is not True:
+            raise ValueError(
+                f"GCS Bucket logging is a premium feature. Please upgrade to use it. {CommonProxyErrors.not_premium_user.value}"
+            )
         try:
             verbose_logger.debug(
                 "GCS Logger: async_log_success_event logging kwargs: %s, response_obj: %s",
