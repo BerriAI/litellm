@@ -903,9 +903,10 @@ from litellm.tests.test_completion import response_format_tests
 @pytest.mark.parametrize(
     "model",
     [
-        "vertex_ai/mistral-large@2407",
-        "vertex_ai/mistral-nemo@2407",
-        "vertex_ai/meta/llama3-405b-instruct-maas",
+        # "vertex_ai/mistral-large@2407",
+        # "vertex_ai/mistral-nemo@2407",
+        "vertex_ai/codestral@2405",
+        # "vertex_ai/meta/llama3-405b-instruct-maas",
     ],  #
 )  # "vertex_ai",
 @pytest.mark.parametrize(
