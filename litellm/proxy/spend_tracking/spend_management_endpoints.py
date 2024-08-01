@@ -1548,7 +1548,6 @@ async def view_spend_logs(
             raise Exception(
                 f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
-        spend_logs = []
         if (
             start_date is not None
             and isinstance(start_date, str)
@@ -1667,7 +1666,7 @@ async def view_spend_logs(
             else:
                 return [spend_log]
         else:
-            spend_logs = await prisma_client.get_data(
+            spend_log = await prisma_client.get_data(
                 table_name="spend", query_type="find_all"
             )
 
