@@ -15,7 +15,7 @@ This is an Enterprise only endpoint [Get Started with Enterprise here](https://c
 - OpenAI
 
 Add `finetune_settings` and `files_settings` to your litellm config.yaml to use the fine-tuning endpoints.
-## Usage
+## Example config.yaml for `finetune_settings` and `files_settings`
 ```yaml
 model_list:
   - model_name: gpt-4
@@ -43,7 +43,7 @@ files_settings:
     api_key: os.environ/OPENAI_API_KEY
 ```
 
-## Create File for Fine Tuning
+## Create File for fine-tuning
 
 <Tabs>
 <TabItem value="openai" label="OpenAI Python SDK">
