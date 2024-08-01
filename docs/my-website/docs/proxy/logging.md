@@ -714,6 +714,24 @@ Search for Trace=`80e1afed08e019fc1110464cfa66635c` on your OTEL Collector
 
 <Image img={require('../../img/otel_parent.png')} />
 
+### Forwarding `Traceparent HTTP Header` to LLM APIs
+
+Use this if you want to forward the traceparent headers to your self hosted LLMs like vLLM
+
+Set `forward_traceparent_to_llm_provider: True` in your `config.yaml`. This will forward the `traceparent` header to your LLM API
+
+:::warning
+
+Only use this for self hosted LLMs, this can cause Bedrock, VertexAI calls to fail
+
+:::
+
+```yaml
+litellm_settings:
+  forward_traceparent_to_llm_provider: True
+
+```
+
 ## Custom Callback Class [Async]
 
 Use this when you want to run custom callbacks in `python`
