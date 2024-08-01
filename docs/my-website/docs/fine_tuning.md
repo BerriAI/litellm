@@ -46,7 +46,7 @@ files_settings:
 ## Create File for Fine Tuning
 
 <Tabs>
-<TabItem value="openai" label="OpenAI Python v1.0.0+">
+<TabItem value="openai" label="OpenAI Python SDK">
 
 ```python
 client = AsyncOpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000") # base_url is your litellm proxy url
@@ -64,7 +64,7 @@ response = await client.files.create(
 ## Create fine-tuning job
 
 <Tabs>
-<TabItem value="openai" label="OpenAI Python v1.0.0+">
+<TabItem value="openai" label="OpenAI Python SDK">
 
 ```python
 ft_job = await client.fine_tuning.jobs.create(
@@ -79,7 +79,7 @@ ft_job = await client.fine_tuning.jobs.create(
 ## Cancel fine-tuning job
 
 <Tabs>
-<TabItem value="openai" label="OpenAI Python v1.0.0+">
+<TabItem value="openai" label="OpenAI Python SDK">
 
 ```python
 # cancel specific fine tuning job
@@ -97,7 +97,7 @@ print("response from cancel ft job={}".format(cancel_ft_job))
 
 <Tabs>
 
-<TabItem value="openai" label="OpenAI Python v1.0.0+">
+<TabItem value="openai" label="OpenAI Python SDK">
 
 ```python
 list_ft_jobs = await client.fine_tuning.jobs.list(
