@@ -6,19 +6,19 @@ import TabItem from '@theme/TabItem';
 
 Allow each team to use their own Langfuse Project / custom callbacks
 
-:::info
-
-This is an Enterprise only feature [Get Started with Enterprise here](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
-
-:::
-
-
 **This allows you to do the following**
 ```
 Team 1 -> Logs to Langfuse Project 1 
 Team 2 -> Logs to Langfuse Project 2
 Team 3 -> Disabled Logging (for GDPR compliance)
+
 ```
+:::info
+
+✨ This is an Enterprise only feature [Get Started with Enterprise here](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+
+:::
+
 
 ## Set Callbacks Per Team
 
