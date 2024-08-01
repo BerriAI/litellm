@@ -59,6 +59,16 @@ response = await client.files.create(
 )
 ```
 </TabItem>
+<TabItem value="curl" label="curl">
+
+```shell
+curl http://localhost:4000/v1/files \
+    -H "Authorization: Bearer sk-1234" \
+    -F purpose="batch" \
+    -F custom_llm_provider="azure"\
+    -F file="@mydata.jsonl"
+```
+</TabItem>
 </Tabs>
 
 ## Create fine-tuning job
@@ -72,6 +82,20 @@ ft_job = await client.fine_tuning.jobs.create(
     training_file="file-abc123",                 # file_id from create file response
     extra_body={"custom_llm_provider": "azure"}, # tell litellm proxy which provider to use
 )
+```
+</TabItem>
+
+<TabItem value="curl" label="curl">
+
+```shell
+curl http://localhost:4000/v1/fine_tuning/jobs \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer sk-1234" \
+    -d '{
+    "custom_llm_provider": "azure",
+    "model": "gpt-35-turbo-1106",
+    "training_file": "file-abc123"
+    }'
 ```
 </TabItem>
 </Tabs>
@@ -91,6 +115,17 @@ cancel_ft_job = await client.fine_tuning.jobs.cancel(
 print("response from cancel ft job={}".format(cancel_ft_job))
 ```
 </TabItem>
+
+<TabItem value="curl" label="curl">
+
+```shell
+curl -X POST http://localhost:4000/v1/fine_tuning/jobs/ftjob-abc123/cancel \
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -d '{"custom_llm_provider": "azure"}'
+```
+</TabItem>
+
 </Tabs>
 
 ## List fine-tuning jobs
@@ -105,6 +140,15 @@ list_ft_jobs = await client.fine_tuning.jobs.list(
 )
 
 print("list of ft jobs={}".format(list_ft_jobs))
+```
+</TabItem>
+
+<TabItem value="curl" label="curl">
+
+```shell
+curl -X GET 'http://localhost:4000/v1/fine_tuning/jobs?custom_llm_provider=azure' \
+     -H "Content-Type: application/json" \
+     -H "Authorization: Bearer sk-1234"
 ```
 </TabItem>
 
