@@ -203,6 +203,7 @@ const sidebars = {
       items: [
         "observability/langfuse_integration",
         "observability/logfire_integration",
+        "observability/gcs_bucket_integration",
         "observability/langsmith_integration",
         "observability/arize_integration",
         "debugging/local_debugging",
