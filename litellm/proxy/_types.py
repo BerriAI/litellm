@@ -1562,6 +1562,12 @@ class AllCallbacks(LiteLLMBase):
         ui_callback_name="Datadog",
     )
 
+    braintrust: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="braintrust",
+        litellm_callback_params=["BRAINTRUST_API_KEY"],
+        ui_callback_name="Braintrust",
+    )
+
 
 class SpendLogsMetadata(TypedDict):
     """
