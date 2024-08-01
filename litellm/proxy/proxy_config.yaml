@@ -55,4 +55,4 @@ general_settings:
   max_response_size_mb: 10
 
 litellm_settings:
-  success_callback: ["langfuse"]
+  callbacks: ["gcs_bucket"] # 👈 KEY CHANGE
