@@ -2074,7 +2074,11 @@ def completion(
                     timeout=timeout,
                     client=client,
                 )
-            elif model.startswith("meta/") or model.startswith("mistral"):
+            elif (
+                model.startswith("meta/")
+                or model.startswith("mistral")
+                or model.startswith("codestral")
+            ):
                 model_response = vertex_partner_models_chat_completion.completion(
                     model=model,
                     messages=messages,
