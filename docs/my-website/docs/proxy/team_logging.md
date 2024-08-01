@@ -2,9 +2,16 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# 👥📊 Team Based Logging
+# 👥📊 [BETA] Team Based Logging
 
 Allow each team to use their own Langfuse Project / custom callbacks
+
+:::info
+
+This is an Enterprise only feature [Get Started with Enterprise here](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+
+:::
+
 
 **This allows you to do the following**
 ```
