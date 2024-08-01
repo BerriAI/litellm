@@ -165,6 +165,7 @@ budget_duration: Optional[str] = (
 default_soft_budget: float = (
     50.0  # by default all litellm proxy keys have a soft budget of 50.0
 )
+forward_traceparent_to_llm_provider: bool = False
 _openai_finish_reasons = ["stop", "length", "function_call", "content_filter", "null"]
 _openai_completion_params = [
     "functions",
