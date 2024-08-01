@@ -989,24 +989,55 @@ class AzureChatCompletion(BaseLLM):
                     status_code=422, message="max retries must be an int"
                 )
 
-            # init AzureOpenAI Client
-            azure_client_params = {
-                "api_version": api_version,
-                "azure_endpoint": api_base,
-                "azure_deployment": model,
-                "http_client": litellm.client_session,
-                "max_retries": max_retries,
-                "timeout": timeout,
-            }
-            azure_client_params = select_azure_base_url_or_endpoint(
-                azure_client_params=azure_client_params
-            )
-            if api_key is not None:
-                azure_client_params["api_key"] = api_key
-            elif azure_ad_token is not None:
-                if azure_ad_token.startswith("oidc/"):
-                    azure_ad_token = get_azure_ad_token_from_oidc(azure_ad_token)
-                azure_client_params["azure_ad_token"] = azure_ad_token
+            # Check if it's Cloudflare AI Gateway
+            if "gateway.ai.cloudflare.com" in api_base:
+                if not api_base.endswith("/"):
+                    api_base += "/"
+                api_base += f"{model}"
+                azure_client_params = {
+                    "api_version": api_version,
+                    "base_url": api_base,
+                    "http_client": litellm.client_session,
+                    "max_retries": max_retries,
+                    "timeout": timeout,
+                }
+                if api_key is not None:
+                    azure_client_params["api_key"] = api_key
+                elif azure_ad_token is not None:
+                    if azure_ad_token.startswith("oidc/"):
+                        azure_ad_token = get_azure_ad_token_from_oidc(azure_ad_token)
+                    azure_client_params["azure_ad_token"] = azure_ad_token
+
+                if client is None:
+                    azure_client = AzureOpenAI(**azure_client_params)
+                else:
+                    azure_client = client
+
+                data["model"] = None  # Set model to None for Cloudflare AI Gateway
+            else:
+                # Existing Azure OpenAI logic
+                azure_client_params = {
+                    "api_version": api_version,
+                    "azure_endpoint": api_base,
+                    "azure_deployment": model,
+                    "http_client": litellm.client_session,
+                    "max_retries": max_retries,
+                    "timeout": timeout,
+                }
+                azure_client_params = select_azure_base_url_or_endpoint(
+                    azure_client_params=azure_client_params
+                )
+                if api_key is not None:
+                    azure_client_params["api_key"] = api_key
+                elif azure_ad_token is not None:
+                    if azure_ad_token.startswith("oidc/"):
+                        azure_ad_token = get_azure_ad_token_from_oidc(azure_ad_token)
+                    azure_client_params["azure_ad_token"] = azure_ad_token
+
+                if client is None:
+                    azure_client = AzureOpenAI(**azure_client_params)
+                else:
+                    azure_client = client
 
             ## LOGGING
             logging_obj.pre_call(
