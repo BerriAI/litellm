@@ -97,20 +97,26 @@ class GCSBucketLogger(CustomLogger):
             get_logging_payload,
         )
 
-        spend_logs_payload: GCSBucketPayload = get_logging_payload(
+        spend_logs_payload: SpendLogsPayload = get_logging_payload(
             kwargs=kwargs,
             response_obj=response_obj,
             start_time=start_time,
             end_time=end_time,
             end_user_id=kwargs.get("user"),
         )
-        spend_logs_payload["startTime"] = start_time.isoformat()
-        spend_logs_payload["endTime"] = end_time.isoformat()
-        spend_logs_payload["completionStartTime"] = spend_logs_payload[
-            "completionStartTime"
-        ].isoformat()
 
-        object_name = spend_logs_payload["request_id"]
+        gcs_payload: GCSBucketPayload = GCSBucketPayload(
+            **spend_logs_payload, messages=None, output=None
+        )
+        gcs_payload["messages"] = kwargs.get("messages", None)
+        gcs_payload["startTime"] = start_time.isoformat()
+        gcs_payload["endTime"] = end_time.isoformat()
+
+        if gcs_payload["completionStartTime"] is not None:
+            gcs_payload["completionStartTime"] = gcs_payload[  # type: ignore
+                "completionStartTime"  # type: ignore
+            ].isoformat()
+
         output = None
         if response_obj is not None and (
             kwargs.get("call_type", None) == "embedding"
@@ -140,8 +146,8 @@ class GCSBucketLogger(CustomLogger):
         ):
             output = response_obj["text"]
 
-        spend_logs_payload["output"] = output
-        return spend_logs_payload
+        gcs_payload["output"] = output
+        return gcs_payload
 
     async def download_gcs_object(self, object_name):
         """
