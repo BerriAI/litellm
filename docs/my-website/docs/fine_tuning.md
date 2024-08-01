@@ -64,6 +64,16 @@ response = await client.files.create(
 ## Create fine-tuning job
 
 <Tabs>
+<TabItem value="openai" label="OpenAI Python v1.0.0+">
+
+```python
+ft_job = await client.fine_tuning.jobs.create(
+    model="gpt-35-turbo-1106",                   # Azure OpenAI model you want to fine-tune
+    training_file="file-abc123",                 # file_id from create file response
+    extra_body={"custom_llm_provider": "azure"}, # tell litellm proxy which provider to use
+)
+```
+</TabItem>
 </Tabs>
 
 ## Cancel fine-tuning job
