@@ -273,6 +273,8 @@ async def test_completion_predibase():
         print(response)
     except litellm.Timeout as e:
         pass
+    except litellm.ServiceUnavailableError as e:
+        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
