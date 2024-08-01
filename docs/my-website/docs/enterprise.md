@@ -29,6 +29,9 @@ This covers:
         - ✅ [Use LiteLLM keys/authentication on Pass Through Endpoints](./proxy/pass_through#✨-enterprise---use-litellm-keysauthentication-on-pass-through-endpoints)
         - ✅ Set Max Request / File Size on Requests
         - ✅ [Enforce Required Params for LLM Requests (ex. Reject requests missing ["metadata"]["generation_name"])](./proxy/enterprise#enforce-required-params-for-llm-requests)
+    - **Customize Logging, Guardrails, Caching per project**
+        - ✅ [Team Based Logging](./proxy/team_logging.md) - Allow each team to use their own Langfuse Project / custom callbacks
+        - ✅ [Disable Logging for a Team](./proxy/team_logging.md#disable-logging-for-a-team) - Switch off all logging for a team/project (GDPR Compliance)
     - **Spend Tracking**
         - ✅ [Tracking Spend for Custom Tags](./proxy/enterprise#tracking-spend-for-custom-tags)
         - ✅ [API Endpoints to get Spend Reports per Team, API Key, Customer](./proxy/cost_tracking.md#✨-enterprise-api-endpoints-to-get-spend)
