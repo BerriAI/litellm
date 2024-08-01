@@ -543,7 +543,7 @@ class InternalServerError(openai.InternalServerError):  # type: ignore
 class APIError(openai.APIError):  # type: ignore
     def __init__(
         self,
-        status_code,
+        status_code: int,
         message,
         llm_provider,
         model,
@@ -754,7 +754,7 @@ class MockException(openai.APIError):
     # used for testing
     def __init__(
         self,
-        status_code,
+        status_code: int,
         message,
         llm_provider,
         model,
