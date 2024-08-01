@@ -729,7 +729,6 @@ Only use this for self hosted LLMs, this can cause Bedrock, VertexAI calls to fa
 ```yaml
 litellm_settings:
   forward_traceparent_to_llm_provider: True
-
 ```
 
 ## Custom Callback Class [Async]
