@@ -120,6 +120,7 @@ const sidebars = {
         "text_to_speech",
         "assistants",
         "batches",
+        "fine_tuning",
         "anthropic_completion"
       ],
     },
