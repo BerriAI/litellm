@@ -507,16 +507,19 @@ async def make_call(
     model: str,
     messages: list,
     logging_obj,
+    timeout=None,
 ):
     if client is None:
         client = _get_async_httpx_client()  # Create a new client if none provided
 
     try:
-        response = await client.post(api_base, headers=headers, data=data, stream=True)
+        response = await client.post(api_base, headers=headers, data=data, stream=True, timeout=timeout)
     except httpx.HTTPStatusError as e:
         raise AnthropicError(
             status_code=e.response.status_code, message=await e.response.aread()
         )
+    except litellm.Timeout as e:
+        raise e
     except Exception as e:
         raise AnthropicError(status_code=500, message=str(e))
 
@@ -657,6 +660,7 @@ class AnthropicChatCompletion(BaseLLM):
         litellm_params=None,
         logger_fn=None,
         headers={},
+        timeout=None,
     ):
         data["stream"] = True
         # async_handler = AsyncHTTPHandler(
@@ -685,6 +689,7 @@ class AnthropicChatCompletion(BaseLLM):
                 model=model,
                 messages=messages,
                 logging_obj=logging_obj,
+                timeout=timeout,
             ),
             model=model,
             custom_llm_provider="anthropic",
@@ -712,11 +717,12 @@ class AnthropicChatCompletion(BaseLLM):
         logger_fn=None,
         headers={},
         client=None,
+        timeout=None,
     ) -> Union[ModelResponse, CustomStreamWrapper]:
         async_handler = _get_async_httpx_client()
 
         try:
-            response = await async_handler.post(api_base, headers=headers, json=data)
+            response = await async_handler.post(api_base, headers=headers, json=data, timeout=timeout)
         except Exception as e:
             ## LOGGING
             logging_obj.post_call(
@@ -876,6 +882,7 @@ class AnthropicChatCompletion(BaseLLM):
                     litellm_params=litellm_params,
                     logger_fn=logger_fn,
                     headers=headers,
+                    timeout=timeout,
                 )
             else:
                 return self.acompletion_function(
@@ -897,11 +904,12 @@ class AnthropicChatCompletion(BaseLLM):
                     headers=headers,
                     client=client,
                     json_mode=json_mode,
+                    timeout=timeout,
                 )
         else:
             ## COMPLETION CALL
             if client is None or isinstance(client, AsyncHTTPHandler):
-                client = HTTPHandler(timeout=timeout)  # type: ignore
+                client = _get_httpx_client()
             else:
                 client = client
             if (
@@ -909,11 +917,12 @@ class AnthropicChatCompletion(BaseLLM):
             ):  # if function call - fake the streaming (need complete blocks for output parsing in openai format)
                 print_verbose("makes anthropic streaming POST request")
                 data["stream"] = stream
-                response = requests.post(
+                response = client.post(
                     api_base,
                     headers=headers,
                     data=json.dumps(data),
                     stream=stream,
+                    timeout=timeout
                 )
 
                 if response.status_code != 200:
@@ -933,7 +942,7 @@ class AnthropicChatCompletion(BaseLLM):
                 return streaming_response
 
             else:
-                response = client.post(api_base, headers=headers, data=json.dumps(data))
+                response = client.post(api_base, headers=headers, data=json.dumps(data), timeout=timeout)
                 if response.status_code != 200:
                     raise AnthropicError(
                         status_code=response.status_code, message=response.text

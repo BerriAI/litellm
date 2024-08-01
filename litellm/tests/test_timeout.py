@@ -245,3 +245,39 @@ def test_timeout_ollama():
 
 
 # test_timeout_ollama()
+
+
+@pytest.mark.parametrize("streaming", [True, False])
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_anthropic_timeout(streaming, sync_mode):
+    litellm.set_verbose = False
+
+    try:
+        if sync_mode:
+            response = litellm.completion(
+                model="claude-3-5-sonnet-20240620",
+                timeout=0.01,
+                messages=[{"role": "user", "content": "hello, write a 20 pg essay"}],
+                stream=streaming,
+            )
+            if streaming:
+                for chunk in response:
+                    pass
+        else:
+            response = await litellm.acompletion(
+                model="claude-3-5-sonnet-20240620",
+                timeout=0.01,
+                messages=[{"role": "user", "content": "hello, write a 20 pg essay"}],
+                stream=streaming,
+            )
+            if streaming:
+                async for chunk in response:
+                    pass
+        pytest.fail("Did not raise error `openai.APITimeoutError`")
+    except openai.APITimeoutError as e:
+        print(
+            "Passed: Raised correct exception. Got openai.APITimeoutError\nGood Job", e
+        )
+        print(type(e))
+        pass
