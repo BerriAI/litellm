@@ -5,6 +5,11 @@ import TabItem from '@theme/TabItem';
 
 LiteLLM supports all models on Databricks
 
+:::tip
+
+**We support ALL Databricks models, just set `model=databricks/<any-model-on-databricks>` as a prefix when sending litellm requests**
+
+:::
 
 ## Usage
 
@@ -185,6 +190,13 @@ response = litellm.embedding(
 
 ## Supported Databricks Chat Completion Models 
 
+:::tip
+
+**We support ALL Databricks models, just set `model=databricks/<any-model-on-databricks>` as a prefix when sending litellm requests**
+
+:::
+
+
 | Model Name                 | Command                                                          |
 |----------------------------|------------------------------------------------------------------|
 | databricks-meta-llama-3-1-70b-instruct    | `completion(model='databricks/databricks-meta-llama-3-1-70b-instruct', messages=messages)`   | 
@@ -197,6 +209,13 @@ response = litellm.embedding(
 | databricks-mpt-7b-instruct    | `completion(model='databricks/databricks-mpt-7b-instruct', messages=messages)`   | 
 
 ## Supported Databricks Embedding Models 
+
+:::tip
+
+**We support ALL Databricks models, just set `model=databricks/<any-model-on-databricks>` as a prefix when sending litellm requests**
+
+:::
+
 
 | Model Name                 | Command                                                          |
 |----------------------------|------------------------------------------------------------------|
