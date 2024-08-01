@@ -142,3 +142,65 @@ class GCSBucketLogger(CustomLogger):
 
         spend_logs_payload["output"] = output
         return spend_logs_payload
+
+    async def download_gcs_object(self, object_name):
+        """
+        Download an object from GCS.
+
+        https://cloud.google.com/storage/docs/downloading-objects#download-object-json
+        """
+        try:
+            headers = await self.construct_request_headers()
+            url = f"https://storage.googleapis.com/storage/v1/b/{self.BUCKET_NAME}/o/{object_name}?alt=media"
+
+            # Send the GET request to download the object
+            response = await self.async_httpx_client.get(url=url, headers=headers)
+
+            if response.status_code != 200:
+                verbose_logger.error(
+                    "GCS object download error: %s", str(response.text)
+                )
+                return None
+
+            verbose_logger.debug(
+                "GCS object download response status code: %s", response.status_code
+            )
+
+            # Return the content of the downloaded object
+            return response.content
+
+        except Exception as e:
+            verbose_logger.error("GCS object download error: %s", str(e))
+            return None
+
+    async def delete_gcs_object(self, object_name):
+        """
+        Delete an object from GCS.
+        """
+        try:
+            headers = await self.construct_request_headers()
+            url = f"https://storage.googleapis.com/storage/v1/b/{self.BUCKET_NAME}/o/{object_name}"
+
+            # Send the DELETE request to delete the object
+            response = await self.async_httpx_client.delete(url=url, headers=headers)
+
+            if (response.status_code != 200) or (response.status_code != 204):
+                verbose_logger.error(
+                    "GCS object delete error: %s, status code: %s",
+                    str(response.text),
+                    response.status_code,
+                )
+                return None
+
+            verbose_logger.debug(
+                "GCS object delete response status code: %s, response: %s",
+                response.status_code,
+                response.text,
+            )
+
+            # Return the content of the downloaded object
+            return response.text
+
+        except Exception as e:
+            verbose_logger.error("GCS object download error: %s", str(e))
+            return None
