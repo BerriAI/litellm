@@ -9694,11 +9694,7 @@ class CustomStreamWrapper:
                 print_verbose(f"completion obj content: {completion_obj['content']}")
                 if response_obj["is_finished"]:
                     self.received_finish_reason = response_obj["finish_reason"]
-                if (
-                    self.stream_options
-                    and self.stream_options.get("include_usage", False) == True
-                    and response_obj["usage"] is not None
-                ):
+                if response_obj["usage"] is not None:
                     model_response.usage = litellm.Usage(
                         prompt_tokens=response_obj["usage"].prompt_tokens,
                         completion_tokens=response_obj["usage"].completion_tokens,
@@ -9712,11 +9708,7 @@ class CustomStreamWrapper:
                 print_verbose(f"completion obj content: {completion_obj['content']}")
                 if response_obj["is_finished"]:
                     self.received_finish_reason = response_obj["finish_reason"]
-                if (
-                    self.stream_options
-                    and self.stream_options.get("include_usage", False) == True
-                    and response_obj["usage"] is not None
-                ):
+                if response_obj["usage"] is not None:
                     model_response.usage = litellm.Usage(
                         prompt_tokens=response_obj["usage"].prompt_tokens,
                         completion_tokens=response_obj["usage"].completion_tokens,
@@ -9784,16 +9776,26 @@ class CustomStreamWrapper:
                 if response_obj["logprobs"] is not None:
                     model_response.choices[0].logprobs = response_obj["logprobs"]
 
-                if (
-                    self.stream_options is not None
-                    and self.stream_options["include_usage"] == True
-                    and response_obj["usage"] is not None
-                ):
-                    model_response.usage = litellm.Usage(
-                        prompt_tokens=response_obj["usage"].prompt_tokens,
-                        completion_tokens=response_obj["usage"].completion_tokens,
-                        total_tokens=response_obj["usage"].total_tokens,
-                    )
+                if response_obj["usage"] is not None:
+                    if isinstance(response_obj["usage"], dict):
+                        model_response.usage = litellm.Usage(
+                            prompt_tokens=response_obj["usage"].get(
+                                "prompt_tokens", None
+                            )
+                            or None,
+                            completion_tokens=response_obj["usage"].get(
+                                "completion_tokens", None
+                            )
+                            or None,
+                            total_tokens=response_obj["usage"].get("total_tokens", None)
+                            or None,
+                        )
+                    elif isinstance(response_obj["usage"], BaseModel):
+                        model_response.usage = litellm.Usage(
+                            prompt_tokens=response_obj["usage"].prompt_tokens,
+                            completion_tokens=response_obj["usage"].completion_tokens,
+                            total_tokens=response_obj["usage"].total_tokens,
+                        )
 
             model_response.model = self.model
             print_verbose(
