@@ -47,7 +47,7 @@ const sidebars = {
         {
           type: "category",
           label: "🪢 Logging",
-          items: ["proxy/logging", "proxy/streaming_logging"],
+          items: ["proxy/logging", "proxy/bucket", "proxy/streaming_logging"],
         },
         "proxy/team_logging",
         "proxy/guardrails",
@@ -203,6 +203,7 @@ const sidebars = {
       items: [
         "observability/langfuse_integration",
         "observability/logfire_integration",
+        "observability/gcs_bucket_integration",
         "observability/langsmith_integration",
         "observability/arize_integration",
         "debugging/local_debugging",
