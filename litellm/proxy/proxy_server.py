@@ -9368,6 +9368,21 @@ async def get_config():
                 _data_to_return.append(
                     {"name": _callback, "variables": _langfuse_env_vars}
                 )
+            elif _callback == "braintrust":
+                env_vars = [
+                    "BRAINTRUST_API_KEY",
+                ]
+                env_vars_dict = {}
+                for _var in env_vars:
+                    env_variable = environment_variables.get(_var, None)
+                    if env_variable is None:
+                        env_vars_dict[_var] = None
+                    else:
+                        # decode + decrypt the value
+                        decrypted_value = decrypt_value_helper(value=env_variable)
+                        env_vars_dict[_var] = decrypted_value
+
+                _data_to_return.append({"name": _callback, "variables": env_vars_dict})
 
         # Check if slack alerting is on
         _alerting = _general_settings.get("alerting", [])
