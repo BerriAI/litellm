@@ -82,11 +82,13 @@ ft_job = await client.fine_tuning.jobs.create(
 <TabItem value="openai" label="OpenAI Python v1.0.0+">
 
 ```python
-ft_job = await client.fine_tuning.jobs.create(
-    model="gpt-35-turbo-1106",                   # Azure OpenAI model you want to fine-tune
-    training_file="file-abc123",                 # file_id from create file response
-    extra_body={"custom_llm_provider": "azure"}, # tell litellm proxy which provider to use
+# cancel specific fine tuning job
+cancel_ft_job = await client.fine_tuning.jobs.cancel(
+    fine_tuning_job_id="123",                          # fine tuning job id
+    extra_body={"custom_llm_provider": "azure"},       # tell litellm proxy which provider to use
 )
+
+print("response from cancel ft job={}".format(cancel_ft_job))
 ```
 </TabItem>
 </Tabs>
