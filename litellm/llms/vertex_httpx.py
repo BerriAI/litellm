@@ -790,7 +790,10 @@ class VertexLLM(BaseLLM):
         if credentials is not None and isinstance(credentials, str):
             import google.oauth2.service_account
 
-            json_obj = json.loads(credentials)
+            if os.path.exists(credentials):
+                json_obj = json.load(open(credentials))
+            else:
+                json_obj = json.loads(credentials)
 
             creds = google.oauth2.service_account.Credentials.from_service_account_info(
                 json_obj,
