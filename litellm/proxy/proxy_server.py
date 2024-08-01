@@ -9334,10 +9334,30 @@ async def get_config():
         
         """
         for _callback in _success_callbacks:
-            if _callback == "openmeter":
-                env_vars = [
-                    "OPENMETER_API_KEY",
-                ]
+            if _callback != "langfuse":
+                if _callback == "openmeter":
+                    env_vars = [
+                        "OPENMETER_API_KEY",
+                    ]
+                elif _callback == "braintrust":
+                    env_vars = [
+                        "BRAINTRUST_API_KEY",
+                    ]
+                elif _callback == "traceloop":
+                    env_vars = ["TRACELOOP_API_KEY"]
+                elif _callback == "custom_callback_api":
+                    env_vars = ["GENERIC_LOGGER_ENDPOINT"]
+                elif _callback == "otel":
+                    env_vars = ["OTEL_EXPORTER", "OTEL_ENDPOINT", "OTEL_HEADERS"]
+                elif _callback == "langsmith":
+                    env_vars = [
+                        "LANGSMITH_API_KEY",
+                        "LANGSMITH_PROJECT",
+                        "LANGSMITH_DEFAULT_RUN_NAME",
+                    ]
+                else:
+                    env_vars = []
+
                 env_vars_dict = {}
                 for _var in env_vars:
                     env_variable = environment_variables.get(_var, None)
@@ -9368,21 +9388,6 @@ async def get_config():
                 _data_to_return.append(
                     {"name": _callback, "variables": _langfuse_env_vars}
                 )
-            elif _callback == "braintrust":
-                env_vars = [
-                    "BRAINTRUST_API_KEY",
-                ]
-                env_vars_dict = {}
-                for _var in env_vars:
-                    env_variable = environment_variables.get(_var, None)
-                    if env_variable is None:
-                        env_vars_dict[_var] = None
-                    else:
-                        # decode + decrypt the value
-                        decrypted_value = decrypt_value_helper(value=env_variable)
-                        env_vars_dict[_var] = decrypted_value
-
-                _data_to_return.append({"name": _callback, "variables": env_vars_dict})
 
         # Check if slack alerting is on
         _alerting = _general_settings.get("alerting", [])
@@ -9459,8 +9464,8 @@ async def get_config():
         }
     except Exception as e:
         verbose_proxy_logger.error(
-            "litellm.proxy.proxy_server.get_config(): Exception occured - {}".format(
-                str(e)
+            "litellm.proxy.proxy_server.get_config(): Exception occured - {}\n{}".format(
+                str(e), traceback.format_exc()
             )
         )
         verbose_proxy_logger.debug(traceback.format_exc())

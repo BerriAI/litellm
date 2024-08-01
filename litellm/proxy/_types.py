@@ -1568,6 +1568,16 @@ class AllCallbacks(LiteLLMBase):
         ui_callback_name="Braintrust",
     )
 
+    langsmith: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="langsmith",
+        litellm_callback_params=[
+            "LANGSMITH_API_KEY",
+            "LANGSMITH_PROJECT",
+            "LANGSMITH_DEFAULT_RUN_NAME",
+        ],
+        ui_callback_name="Langsmith",
+    )
+
 
 class SpendLogsMetadata(TypedDict):
     """
