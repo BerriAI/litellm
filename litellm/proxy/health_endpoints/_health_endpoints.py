@@ -3,7 +3,7 @@ import copy
 import os
 import traceback
 from datetime import datetime, timedelta
-from typing import Literal, Optional
+from typing import Literal, Optional, Union
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
@@ -54,14 +54,17 @@ async def test_endpoint(request: Request):
 )
 async def health_services_endpoint(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    service: Literal[
-        "slack_budget_alerts",
-        "langfuse",
-        "slack",
-        "openmeter",
-        "webhook",
-        "email",
-        "braintrust",
+    service: Union[
+        Literal[
+            "slack_budget_alerts",
+            "langfuse",
+            "slack",
+            "openmeter",
+            "webhook",
+            "email",
+            "braintrust",
+        ],
+        str,
     ] = fastapi.Query(description="Specify the service being hit."),
 ):
     """
@@ -88,6 +91,9 @@ async def health_services_endpoint(
             "openmeter",
             "webhook",
             "braintrust",
+            "otel",
+            "custom_callback_api",
+            "langsmith",
         ]:
             raise HTTPException(
                 status_code=400,
@@ -96,7 +102,11 @@ async def health_services_endpoint(
                 },
             )
 
-        if service == "openmeter" or service == "braintrust":
+        if (
+            service == "openmeter"
+            or service == "braintrust"
+            or (service in litellm.success_callback and service != "langfuse")
+        ):
             _ = await litellm.acompletion(
                 model="openai/litellm-mock-response-model",
                 messages=[{"role": "user", "content": "Hey, how's it going?"}],
