@@ -13,7 +13,7 @@ Log LLM Logs to [Google Cloud Storage Buckets](https://cloud.google.com/storage?
 
 ### Usage
 
-1. Add to Config.yaml
+1. Add `gcs_bucket` to LiteLLM Config.yaml
 ```yaml
 model_list:
 - litellm_params:
@@ -29,7 +29,7 @@ litellm_settings:
 2. Set required env variables
 
 ```shell
-GCS_BUCKET_NAME = "<your-gcs-bucket-name>"
+GCS_BUCKET_NAME="<your-gcs-bucket-name>"
 GCS_PATH_SERVICE_ACCOUNT="/Users/ishaanjaffer/Downloads/adroit-crow-413218-a956eef1a2a8.json" # Add path to service account.json
 ```
 
@@ -93,6 +93,15 @@ Example payload of a `/chat/completion` request logged on GCS
     ]
 }
 ```
+
+## Getting `service_account.json` from Google Cloud Console
+
+1. Go to [Google Cloud Console](https://console.cloud.google.com/)
+2. Search for IAM & Admin
+3. Click on Service Accounts
+4. Select a Service Account
+5. Click on 'Keys' -> Add Key -> Create New Key -> JSON
+6. Save the JSON file and add the path to `GCS_PATH_SERVICE_ACCOUNT`
 
 ## Support & Talk to Founders
 
