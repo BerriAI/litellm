@@ -80,3 +80,17 @@ async def test_basic_gcs_logger():
     print("response", response)
 
     await asyncio.sleep(5)
+
+    # Check if object landed on GCS
+    object_from_gcs = await gcs_logger.download_gcs_object(object_name=response.id)
+    # convert object_from_gcs from bytes to DICT
+    object_from_gcs = json.loads(object_from_gcs)
+    print("object_from_gcs", object_from_gcs)
+
+    assert object_from_gcs["request_id"] == response.id
+    assert object_from_gcs["call_type"] == "acompletion"
+    assert object_from_gcs["model"] == "gpt-3.5-turbo"
+
+    # Delete Object from GCS
+    print("deleting object from GCS")
+    await gcs_logger.delete_gcs_object(object_name=response.id)
