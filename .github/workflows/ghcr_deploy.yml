@@ -186,6 +186,8 @@ jobs:
           platforms: local,linux/amd64,linux/arm64,linux/arm64/v8
 
   build-and-push-helm-chart:
+    if: github.event.inputs.release_type  != 'dev'
+    needs: [docker-hub-deploy, build-and-push-image, build-and-push-image-database]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -203,9 +205,17 @@ jobs:
       - name: lowercase github.repository_owner
         run: |
           echo "REPO_OWNER=`echo ${{github.repository_owner}} | tr '[:upper:]' '[:lower:]'`" >>${GITHUB_ENV}
+    
       - name: Get LiteLLM Latest Tag
         id: current_app_tag
-        uses: WyriHaximus/github-action-get-previous-tag@v1.3.0
+        shell: bash
+        run: |
+          LATEST_TAG=$(git describe --tags --exclude "*dev*" --abbrev=0)
+          if [ -z "${LATEST_TAG}" ]; then
+            echo "latest_tag=latest" | tee -a $GITHUB_OUTPUT
+          else
+            echo "latest_tag=${LATEST_TAG}" | tee -a $GITHUB_OUTPUT
+          fi
 
       - name: Get last published chart version
         id: current_version
@@ -233,7 +243,7 @@ jobs:
           name: ${{ env.CHART_NAME }}
           repository: ${{ env.REPO_OWNER }}
           tag: ${{ github.event.inputs.chartVersion || steps.bump_version.outputs.next-version || '0.1.0' }}
-          app_version: ${{ steps.current_app_tag.outputs.tag || 'latest' }}
+          app_version: ${{ steps.current_app_tag.outputs.latest_tag }}
           path: deploy/charts/${{ env.CHART_NAME }}
           registry: ${{ env.REGISTRY }}
           registry_username: ${{ github.actor }}
