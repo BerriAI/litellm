@@ -59,6 +59,7 @@ from ..integrations.custom_logger import CustomLogger
 from ..integrations.datadog import DataDogLogger
 from ..integrations.dynamodb import DyanmoDBLogger
 from ..integrations.galileo import GalileoObserve
+from ..integrations.gcs_bucket import GCSBucketLogger
 from ..integrations.greenscale import GreenscaleLogger
 from ..integrations.helicone import HeliconeLogger
 from ..integrations.lago import LagoLogger
@@ -1987,6 +1988,14 @@ def _init_custom_logger_compatible_class(
         _langsmith_logger = LangsmithLogger()
         _in_memory_loggers.append(_langsmith_logger)
         return _langsmith_logger  # type: ignore
+    elif logging_integration == "gcs_bucket":
+        for callback in _in_memory_loggers:
+            if isinstance(callback, GCSBucketLogger):
+                return callback  # type: ignore
+
+        _gcs_bucket_logger = GCSBucketLogger()
+        _in_memory_loggers.append(_gcs_bucket_logger)
+        return _gcs_bucket_logger  # type: ignore
     elif logging_integration == "arize":
         if "ARIZE_SPACE_KEY" not in os.environ:
             raise ValueError("ARIZE_SPACE_KEY not found in environment variables")
@@ -2100,6 +2109,10 @@ def get_custom_logger_compatible_class(
     elif logging_integration == "langsmith":
         for callback in _in_memory_loggers:
             if isinstance(callback, LangsmithLogger):
+                return callback
+    elif logging_integration == "gcs_bucket":
+        for callback in _in_memory_loggers:
+            if isinstance(callback, GCSBucketLogger):
                 return callback
     elif logging_integration == "otel":
         from litellm.integrations.opentelemetry import OpenTelemetry
