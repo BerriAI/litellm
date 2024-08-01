@@ -132,7 +132,7 @@ finetune_settings:
 # for /files endpoints
 files_settings:
   - custom_llm_provider: azure
-    api_base: http://0.0.0.0:8090
+    api_base: https://exampleopenaiendpoint-production.up.railway.app
     api_key: fake-key
     api_version: "2023-03-15-preview"
   - custom_llm_provider: openai
