@@ -4699,9 +4699,9 @@
         "mode": "embedding"
     },
     "databricks/databricks-meta-llama-3-1-405b-instruct": {
-        "max_tokens": 512,
-        "max_input_tokens": 512,
-        "output_vector_size": 1024, 
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000, 
         "input_cost_per_token": 0.000005,
         "output_cost_per_token": 0.000015,
         "litellm_provider": "databricks",
@@ -4709,9 +4709,9 @@
         "source": "https://www.databricks.com/product/pricing/foundation-model-serving"
     },
     "databricks/databricks-meta-llama-3-1-70b-instruct": {
-        "max_tokens": 512,
-        "max_input_tokens": 512,
-        "output_vector_size": 1024, 
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000, 
         "input_cost_per_token": 0.000001,
         "output_cost_per_token": 0.000003,
         "litellm_provider": "databricks",
