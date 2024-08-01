@@ -904,6 +904,7 @@ from litellm.tests.test_completion import response_format_tests
     "model",
     [
         "vertex_ai/mistral-large@2407",
+        "vertex_ai/mistral-nemo@2407",
         "vertex_ai/meta/llama3-405b-instruct-maas",
     ],  #
 )  # "vertex_ai",
