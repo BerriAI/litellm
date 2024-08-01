@@ -695,26 +695,31 @@ def test_completion_claude_2_stream():
 
 @pytest.mark.asyncio
 async def test_acompletion_claude_2_stream():
-    litellm.set_verbose = True
-    response = await litellm.acompletion(
-        model="claude-2",
-        messages=[{"role": "user", "content": "hello from litellm"}],
-        stream=True,
-    )
-    complete_response = ""
-    # Add any assertions here to check the response
-    idx = 0
-    async for chunk in response:
-        print(chunk)
-        # print(chunk.choices[0].delta)
-        chunk, finished = streaming_format_tests(idx, chunk)
-        if finished:
-            break
-        complete_response += chunk
-        idx += 1
-    if complete_response.strip() == "":
-        raise Exception("Empty response received")
-    print(f"completion_response: {complete_response}")
+    try:
+        litellm.set_verbose = True
+        response = await litellm.acompletion(
+            model="claude-2",
+            messages=[{"role": "user", "content": "hello from litellm"}],
+            stream=True,
+        )
+        complete_response = ""
+        # Add any assertions here to check the response
+        idx = 0
+        async for chunk in response:
+            print(chunk)
+            # print(chunk.choices[0].delta)
+            chunk, finished = streaming_format_tests(idx, chunk)
+            if finished:
+                break
+            complete_response += chunk
+            idx += 1
+        if complete_response.strip() == "":
+            raise Exception("Empty response received")
+        print(f"completion_response: {complete_response}")
+    except litellm.RateLimitError:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
 
 def test_completion_palm_stream():
