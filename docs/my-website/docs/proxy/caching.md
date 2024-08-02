@@ -261,7 +261,7 @@ curl --location 'http://0.0.0.0:4000/cache/ping'  -H "Authorization: Bearer sk-1
 
 ## Advanced
 
-## Control Call Types Caching is on for - (`/chat/completion`, `/embeddings`, etc.)
+### Control Call Types Caching is on for - (`/chat/completion`, `/embeddings`, etc.)
 
 By default, caching is on for all call types. You can control which call types caching is on for by setting `supported_call_types` in `cache_params`
 
