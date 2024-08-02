@@ -193,3 +193,5 @@ async def test_transcription_caching():
     print("response3 hidden params", response_3._hidden_params)
     assert response_3._hidden_params.get("cache_hit") is not True
     assert response_3.text != response_2.text
+
+    litellm.cache = None
