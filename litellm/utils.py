@@ -553,7 +553,8 @@ def function_setup(
             or call_type == CallTypes.transcription.value
         ):
             _file_name: BinaryIO = args[1] if len(args) > 1 else kwargs["file"]
-            messages = "audio_file"
+            file_name = getattr(_file_name, "name", "audio_file")
+            messages = file_name
         elif (
             call_type == CallTypes.aspeech.value or call_type == CallTypes.speech.value
         ):
