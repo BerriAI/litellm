@@ -43,7 +43,7 @@ router = Router(
     ],
     routing_strategy="simple-shuffle",
     num_retries=3,
-    retry_after=1.0,
+    retry_after=1,
     timeout=60.0,
     allowed_fails=2,
     cooldown_time=0,
@@ -77,29 +77,29 @@ def test_run(model: str):
     print(f"--------- {model} ---------")
     print(f"Prompt: {prompt}")
 
-    response = router.completion(**kwargs)
-    non_stream_output = response.choices[0].message.content.replace("\n", "")
+    response = router.completion(**kwargs)  # type: ignore
+    non_stream_output = response.choices[0].message.content.replace("\n", "")  # type: ignore
     non_stream_cost_calc = response._hidden_params["response_cost"] * 100
 
     print(f"Non-stream output: {non_stream_output}")
-    print(f"Non-stream usage : {response.usage}")
+    print(f"Non-stream usage : {response.usage}")  # type: ignore
     try:
         print(
             f"Non-stream cost  : {response._hidden_params['response_cost'] * 100:.4f}"
         )
     except TypeError:
-        print(f"Non-stream cost  : NONE")
+        print("Non-stream cost  : NONE")
     print(f"Non-stream cost  : {completion_cost(response) * 100:.4f} (response)")
 
-    response = router.completion(**kwargs, stream=True)
-    response = stream_chunk_builder(list(response), messages=kwargs["messages"])
-    output = response.choices[0].message.content.replace("\n", "")
+    response = router.completion(**kwargs, stream=True)  # type: ignore
+    response = stream_chunk_builder(list(response), messages=kwargs["messages"])  # type: ignore
+    output = response.choices[0].message.content.replace("\n", "")  # type: ignore
     streaming_cost_calc = completion_cost(response) * 100
     print(f"Stream output    : {output}")
 
     if output == non_stream_output:
         # assert cost is the same
         assert streaming_cost_calc == non_stream_cost_calc
-    print(f"Stream usage     : {response.usage}")
+    print(f"Stream usage     : {response.usage}")  # type: ignore
     print(f"Stream cost      : {streaming_cost_calc} (response)")
     print("")
