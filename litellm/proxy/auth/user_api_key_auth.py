@@ -1152,7 +1152,7 @@ async def user_api_key_auth(
                 ):
                     return UserAPIKeyAuth(
                         api_key=api_key,
-                        user_role=_user_role,
+                        user_role=_user_role,  # type: ignore
                         parent_otel_span=parent_otel_span,
                         **valid_token_dict,
                     )
@@ -1164,7 +1164,9 @@ async def user_api_key_auth(
             # No token was found when looking up in the DB
             raise Exception("Invalid proxy server token passed")
         if valid_token_dict is not None:
-            user_role = _get_user_role(user_id_information=user_id_information)
+            retrieved_user_role: Optional[str] = _get_user_role(
+                user_id_information=user_id_information
+            )
             if user_id_information is not None and _is_user_proxy_admin(
                 user_id_information
             ):
@@ -1177,14 +1179,14 @@ async def user_api_key_auth(
             elif _has_user_setup_sso() and route in LiteLLMRoutes.sso_only_routes.value:
                 return UserAPIKeyAuth(
                     api_key=api_key,
-                    user_role=user_role or LitellmUserRoles.INTERNAL_USER,
+                    user_role=retrieved_user_role or LitellmUserRoles.INTERNAL_USER,  # type: ignore
                     parent_otel_span=parent_otel_span,
                     **valid_token_dict,
                 )
             else:
                 return UserAPIKeyAuth(
                     api_key=api_key,
-                    user_role=user_role or LitellmUserRoles.INTERNAL_USER,
+                    user_role=retrieved_user_role or LitellmUserRoles.INTERNAL_USER,  # type: ignore
                     parent_otel_span=parent_otel_span,
                     **valid_token_dict,
                 )
