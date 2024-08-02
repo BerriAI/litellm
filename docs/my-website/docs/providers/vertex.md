@@ -833,7 +833,11 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
  
 | Model Name       | Function Call                        |
 |------------------|--------------------------------------|
-| meta/llama3-405b-instruct-maas   | `completion('vertex_ai/mistral-large@2407', messages)` |
+| mistral-large@latest   | `completion('vertex_ai/mistral-large@latest', messages)` |
+| mistral-large@2407   | `completion('vertex_ai/mistral-large@2407', messages)` |
+| mistral-nemo@latest   | `completion('vertex_ai/mistral-nemo@latest', messages)` |
+| codestral@latest   | `completion('vertex_ai/codestral@latest', messages)` |
+| codestral@@2405   | `completion('vertex_ai/codestral@2405', messages)` |
 
 ### Usage
 
@@ -866,12 +870,12 @@ print("\nModel Response", response)
 
 ```yaml
 model_list:
-    - model_name: anthropic-mistral
+    - model_name: vertex-mistral
       litellm_params:
         model: vertex_ai/mistral-large@2407
         vertex_ai_project: "my-test-project"
         vertex_ai_location: "us-east-1"
-    - model_name: anthropic-mistral
+    - model_name: vertex-mistral
       litellm_params:
         model: vertex_ai/mistral-large@2407
         vertex_ai_project: "my-test-project"
@@ -893,13 +897,101 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
       --header 'Authorization: Bearer sk-1234' \
       --header 'Content-Type: application/json' \
       --data '{
-            "model": "anthropic-mistral", # 👈 the 'model_name' in config
+            "model": "vertex-mistral", # 👈 the 'model_name' in config
             "messages": [
                 {
                 "role": "user",
                 "content": "what llm are you"
                 }
             ],
+        }'
+```
+
+</TabItem>
+</Tabs>
+
+
+
+### Usage - Codestral FIM
+
+Call Codestral on VertexAI via the OpenAI [`/v1/completion`](https://platform.openai.com/docs/api-reference/completions/create) endpoint for FIM tasks. 
+
+Note: You can also call Codestral via `/chat/completion`.
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+import os
+
+# os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = ""
+# OR run `!gcloud auth print-access-token` in your terminal
+
+model = "codestral@2405"
+
+vertex_ai_project = "your-vertex-project" # can also set this as os.environ["VERTEXAI_PROJECT"]
+vertex_ai_location = "your-vertex-location" # can also set this as os.environ["VERTEXAI_LOCATION"]
+
+response = text_completion(
+    model="vertex_ai/" + model,
+    vertex_ai_project=vertex_ai_project,
+    vertex_ai_location=vertex_ai_location,
+    prompt="def is_odd(n): \n return n % 2 == 1 \ndef test_is_odd():", 
+    suffix="return True",                                              # optional
+    temperature=0,                                                     # optional
+    top_p=1,                                                           # optional
+    max_tokens=10,                                                     # optional
+    min_tokens=10,                                                     # optional
+    seed=10,                                                           # optional
+    stop=["return"],                                                   # optional
+)
+
+print("\nModel Response", response)
+```
+</TabItem>
+<TabItem value="proxy" label="Proxy">
+
+**1. Add to config**
+
+```yaml
+model_list:
+    - model_name: vertex-codestral
+      litellm_params:
+        model: vertex_ai/codestral@2405
+        vertex_ai_project: "my-test-project"
+        vertex_ai_location: "us-east-1"
+    - model_name: vertex-codestral
+      litellm_params:
+        model: vertex_ai/codestral@2405
+        vertex_ai_project: "my-test-project"
+        vertex_ai_location: "us-west-1"
+```
+
+**2. Start proxy**
+
+```bash
+litellm --config /path/to/config.yaml
+
+# RUNNING at http://0.0.0.0:4000
+```
+
+**3. Test it!**
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/completions' \
+      -H 'Authorization: Bearer sk-1234' \
+      -H 'Content-Type: application/json' \
+      -d '{
+            "model": "vertex-codestral", # 👈 the 'model_name' in config
+            "prompt": "def is_odd(n): \n return n % 2 == 1 \ndef test_is_odd():", 
+            "suffix":"return True",                                              # optional
+            "temperature":0,                                                     # optional
+            "top_p":1,                                                           # optional
+            "max_tokens":10,                                                     # optional
+            "min_tokens":10,                                                     # optional
+            "seed":10,                                                           # optional
+            "stop":["return"],                                                   # optional
         }'
 ```
 
