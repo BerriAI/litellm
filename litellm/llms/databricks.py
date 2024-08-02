@@ -333,7 +333,7 @@ class DatabricksChatCompletion(BaseLLM):
         except httpx.HTTPStatusError as e:
             raise DatabricksError(
                 status_code=e.response.status_code,
-                message=response.text if response else str(e),
+                message=e.response.text,
             )
         except httpx.TimeoutException as e:
             raise DatabricksError(status_code=408, message="Timeout error occurred.")

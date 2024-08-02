@@ -18,6 +18,7 @@ from litellm.proxy._types import (
     LiteLLM_AuditLogs,
     LiteLLM_ModelTable,
     LiteLLM_TeamTable,
+    LiteLLM_TeamTableCachedObj,
     LitellmTableNames,
     LitellmUserRoles,
     Member,
@@ -379,7 +380,7 @@ async def update_team(
 
     await _cache_team_object(
         team_id=team_row.team_id,
-        team_table=team_row,
+        team_table=LiteLLM_TeamTableCachedObj(**team_row.model_dump()),
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
     )
