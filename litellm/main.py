@@ -5094,7 +5094,7 @@ def stream_chunk_builder(
         name = None
         type = None
         tool_calls_list = []
-        prev_index = 0
+        prev_index = None
         prev_id = None
         curr_id = None
         curr_index = 0
@@ -5120,6 +5120,8 @@ def stream_chunk_builder(
                         name = tool_calls[0].function.name
                     if tool_calls[0].type:
                         type = tool_calls[0].type
+            if prev_index is None:
+                prev_index = curr_index
             if curr_index != prev_index:  # new tool call
                 combined_arguments = "".join(argument_list)
                 tool_calls_list.append(
@@ -5138,6 +5140,7 @@ def stream_chunk_builder(
         tool_calls_list.append(
             {
                 "id": id,
+                "index": curr_index,
                 "function": {"arguments": combined_arguments, "name": name},
                 "type": type,
             }
