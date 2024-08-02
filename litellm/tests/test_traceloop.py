@@ -1,10 +1,12 @@
-import sys
 import os
+import sys
 import time
+
 import pytest
-import litellm
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from traceloop.sdk import Traceloop
+
+import litellm
 
 sys.path.insert(0, os.path.abspath("../.."))
 
@@ -25,11 +27,11 @@ def exporter():
 
 @pytest.mark.parametrize("model", ["claude-instant-1.2", "gpt-3.5-turbo"])
 def test_traceloop_logging(exporter, model):
-
     litellm.completion(
         model=model,
         messages=[{"role": "user", "content": "This is a test"}],
         max_tokens=1000,
         temperature=0.7,
         timeout=5,
+        mock_response="hi",
     )
