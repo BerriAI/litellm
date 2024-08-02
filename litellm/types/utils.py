@@ -5,7 +5,7 @@ from enum import Enum
 from typing import Dict, List, Literal, Optional, Tuple, Union
 
 from openai._models import BaseModel as OpenAIObject
-from pydantic import ConfigDict
+from pydantic import ConfigDict, Field, PrivateAttr
 from typing_extensions import Dict, Required, TypedDict, override
 
 from ..litellm_core_utils.core_helpers import map_finish_reason
@@ -445,16 +445,28 @@ class Choices(OpenAIObject):
 
 
 class Usage(OpenAIObject):
+    prompt_cache_hit_tokens: Optional[int] = Field(default=None)
+    prompt_cache_miss_tokens: Optional[int] = Field(default=None)
+    prompt_tokens: Optional[int] = Field(default=None)
+    completion_tokens: Optional[int] = Field(default=None)
+    total_tokens: Optional[int] = Field(default=None)
+
     def __init__(
-        self, prompt_tokens=None, completion_tokens=None, total_tokens=None, **params
+        self,
+        prompt_tokens: Optional[int] = None,
+        completion_tokens: Optional[int] = None,
+        total_tokens: Optional[int] = None,
+        prompt_cache_hit_tokens: Optional[int] = None,
+        prompt_cache_miss_tokens: Optional[int] = None,
     ):
-        super(Usage, self).__init__(**params)
-        if prompt_tokens:
-            self.prompt_tokens = prompt_tokens
-        if completion_tokens:
-            self.completion_tokens = completion_tokens
-        if total_tokens:
-            self.total_tokens = total_tokens
+        data = {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
+            "prompt_cache_hit_tokens": prompt_cache_hit_tokens,
+            "prompt_cache_miss_tokens": prompt_cache_miss_tokens,
+        }
+        super().__init__(**data)
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
