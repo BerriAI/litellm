@@ -986,6 +986,7 @@ def completion(
             output_cost_per_second=output_cost_per_second,
             output_cost_per_token=output_cost_per_token,
             cooldown_time=cooldown_time,
+            text_completion=kwargs.get("text_completion"),
         )
         logging.update_environment_variables(
             model=model,
