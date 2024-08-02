@@ -5825,6 +5825,8 @@ def convert_to_model_response_object(
                 model_response_object.usage.completion_tokens = response_object["usage"].get("completion_tokens", 0)  # type: ignore
                 model_response_object.usage.prompt_tokens = response_object["usage"].get("prompt_tokens", 0)  # type: ignore
                 model_response_object.usage.total_tokens = response_object["usage"].get("total_tokens", 0)  # type: ignore
+                model_response_object.usage.prompt_cache_hit_tokens = response_object["usage"].get("prompt_cache_hit_tokens", None)  # type: ignore
+                model_response_object.usage.prompt_cache_miss_tokens = response_object["usage"].get("prompt_cache_miss_tokens", None)  # type: ignore
 
             if "created" in response_object:
                 model_response_object.created = response_object["created"] or int(
