@@ -51,6 +51,7 @@ class DatabricksConfig:
     top_k: Optional[int] = None
     stop: Optional[Union[List[str], str]] = None
     n: Optional[int] = None
+    extra_headers: Optional[dict] = None
 
     def __init__(
         self,
@@ -60,6 +61,7 @@ class DatabricksConfig:
         top_k: Optional[int] = None,
         stop: Optional[Union[List[str], str]] = None,
         n: Optional[int] = None,
+        extra_headers: Optional[dict] = None,
     ) -> None:
         locals_ = locals()
         for key, value in locals_.items():
@@ -102,7 +104,7 @@ class DatabricksConfig:
         ]
 
     def get_supported_openai_params(self):
-        return ["stream", "stop", "temperature", "top_p", "max_tokens", "n"]
+        return ["stream", "stop", "temperature", "top_p", "max_tokens", "n", "extra_headers"]
 
     def map_openai_params(self, non_default_params: dict, optional_params: dict):
         for param, value in non_default_params.items():
@@ -118,6 +120,8 @@ class DatabricksConfig:
                 optional_params["top_p"] = value
             if param == "stop":
                 optional_params["stop"] = value
+            if param == "extra_headers":
+                optional_params["extra_headers"] = value
         return optional_params
 
 
@@ -235,6 +239,7 @@ class DatabricksChatCompletion(BaseLLM):
         api_base: Optional[str],
         endpoint_type: Literal["chat_completions", "embeddings"],
         custom_endpoint: Optional[bool],
+        extra_headers: Optional[dict] = None,
     ) -> Tuple[str, dict]:
         if api_key is None:
             raise DatabricksError(
@@ -252,6 +257,9 @@ class DatabricksChatCompletion(BaseLLM):
             "Authorization": "Bearer {}".format(api_key),
             "Content-Type": "application/json",
         }
+
+        if extra_headers:
+            headers.update(extra_headers)
 
         if endpoint_type == "chat_completions" and custom_endpoint is not True:
             api_base = "{}/chat/completions".format(api_base)
@@ -368,11 +376,13 @@ class DatabricksChatCompletion(BaseLLM):
     ):
         custom_endpoint: Optional[bool] = optional_params.pop("custom_endpoint", None)
         base_model: Optional[str] = optional_params.pop("base_model", None)
+        extra_headers: Optional[dict] = optional_params.pop("extra_headers", None)
         api_base, headers = self._validate_environment(
             api_base=api_base,
             api_key=api_key,
             endpoint_type="chat_completions",
             custom_endpoint=custom_endpoint,
+            extra_headers=extra_headers,
         )
         ## Load Config
         config = litellm.DatabricksConfig().get_config()
