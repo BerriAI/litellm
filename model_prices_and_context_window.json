@@ -4805,5 +4805,5 @@
         "litellm_provider": "databricks",
         "mode": "embedding",
         "source": "https://www.databricks.com/product/pricing/foundation-model-serving"
-    },
+    }
 }
