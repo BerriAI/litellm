@@ -966,3 +966,44 @@ def test_completion_cost_tts(model):
     )
 
     assert cost > 0
+
+
+def test_completion_cost_anthropic():
+    """
+    model_name: claude-3-haiku-20240307
+    litellm_params:
+      model: anthropic/claude-3-haiku-20240307
+      max_tokens: 4096
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "claude-3-haiku-20240307",
+                "litellm_params": {
+                    "model": "anthropic/claude-3-haiku-20240307",
+                    "max_tokens": 4096,
+                },
+            }
+        ]
+    )
+    data = {
+        "model": "claude-3-haiku-20240307",
+        "prompt_tokens": 21,
+        "completion_tokens": 20,
+        "response_time_ms": 871.7040000000001,
+        "custom_llm_provider": "anthropic",
+        "region_name": None,
+        "prompt_characters": 0,
+        "completion_characters": 0,
+        "custom_cost_per_token": None,
+        "custom_cost_per_second": None,
+        "call_type": "acompletion",
+    }
+
+    input_cost, output_cost = cost_per_token(**data)
+
+    assert input_cost > 0
+    assert output_cost > 0
+
+    print(input_cost)
+    print(output_cost)

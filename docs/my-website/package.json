@@ -24,8 +24,8 @@
     "clsx": "^1.2.1",
     "docusaurus": "^1.14.7",
     "prism-react-renderer": "^1.3.5",
-    "react": "^18.1.0",
-    "react-dom": "^18.1.0",
+    "react": "^17.0.2",
+    "react-dom": "^17.0.2",
     "sharp": "^0.32.6",
     "uuid": "^9.0.1"
   },

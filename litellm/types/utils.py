@@ -40,6 +40,8 @@ class ModelInfo(TypedDict, total=False):
     Model info for a given model, this is information found in litellm.model_prices_and_context_window.json
     """
 
+    key: Required[str]  # the key in litellm.model_cost which is returned
+
     max_tokens: Required[Optional[int]]
     max_input_tokens: Required[Optional[int]]
     max_output_tokens: Required[Optional[int]]

@@ -52,6 +52,11 @@ interface ViewUserDashboardProps {
   teams: any[] | null;
   setKeys: React.Dispatch<React.SetStateAction<Object[] | null>>;
 }
+const isLocal = process.env.NODE_ENV === "development";
+const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
+if (isLocal != true) {
+  console.log = function() {};
+}
 
 const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   accessToken,

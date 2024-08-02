@@ -13,6 +13,7 @@ LiteLLM Proxy is **OpenAI-Compatible**, and supports:
 * /audio/speech
 * [Assistants API endpoints](https://docs.litellm.ai/docs/assistants)
 * [Batches API endpoints](https://docs.litellm.ai/docs/batches)
+* [Fine-Tuning API endpoints](https://docs.litellm.ai/docs/fine_tuning)
 
 LiteLLM Proxy is **Azure OpenAI-compatible**:
 * /chat/completions
