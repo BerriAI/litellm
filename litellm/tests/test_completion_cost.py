@@ -1007,3 +1007,20 @@ def test_completion_cost_anthropic():
 
     print(input_cost)
     print(output_cost)
+
+
+def test_completion_cost_deepseek():
+    litellm.set_verbose = True
+    model_name = "deepseek/deepseek-chat"
+    messages = [{"role": "user", "content": "Hey, how's it going?"}]
+    try:
+        response_1 = litellm.completion(model=model_name, messages=messages)
+        response_2 = litellm.completion(model=model_name, messages=messages)
+        # Add any assertions here to check the response
+        print(response_2)
+        assert response_2.usage.prompt_cache_hit_tokens is not None
+        assert response_2.usage.prompt_cache_miss_tokens is not None
+    except litellm.APIError as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")

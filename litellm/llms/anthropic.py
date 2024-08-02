@@ -464,7 +464,8 @@ class AnthropicConfig:
         # extract usage
         usage: litellm.Usage = getattr(response, "usage")
         anthropic_usage = AnthropicResponseUsageBlock(
-            input_tokens=usage.prompt_tokens, output_tokens=usage.completion_tokens
+            input_tokens=usage.prompt_tokens or 0,
+            output_tokens=usage.completion_tokens or 0,
         )
         translated_obj = AnthropicResponse(
             id=response.id,
