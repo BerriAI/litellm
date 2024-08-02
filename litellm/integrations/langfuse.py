@@ -5,6 +5,7 @@ import os
 import traceback
 
 from packaging.version import Version
+from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_logger
@@ -43,8 +44,8 @@ class LangFuseLogger:
         self.langfuse_debug = os.getenv("LANGFUSE_DEBUG")
 
         parameters = {
-            "public_key": self.public_key,
-            "secret_key": self.secret_key,
+            "public_key": "pk-lf-b3db7e8e-c2f6-4fc7-825c-a541a8fbe003",
+            "secret_key": "sk-lf-b11ef3a8-361c-4445-9652-12318b8596e4",
             "host": self.langfuse_host,
             "release": self.langfuse_release,
             "debug": self.langfuse_debug,
@@ -331,7 +332,7 @@ class LangFuseLogger:
                 metadata = copy.deepcopy(
                     metadata
                 )  # Avoid modifying the original metadata
-            except:
+            except Exception:
                 new_metadata = {}
                 for key, value in metadata.items():
                     if (
@@ -342,6 +343,8 @@ class LangFuseLogger:
                         or isinstance(value, float)
                     ):
                         new_metadata[key] = copy.deepcopy(value)
+                    elif isinstance(value, BaseModel):
+                        new_metadata[key] = value.model_dump()
                 metadata = new_metadata
 
             supports_tags = Version(langfuse.version.__version__) >= Version("2.6.3")
