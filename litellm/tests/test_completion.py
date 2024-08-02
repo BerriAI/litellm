@@ -2574,6 +2574,7 @@ def test_completion_hf_model_no_provider():
 # test_completion_hf_model_no_provider()
 
 
+@pytest.mark.skip(reason="anyscale stopped serving public api endpoints")
 def test_completion_anyscale_with_functions():
     function1 = [
         {
@@ -3594,6 +3595,7 @@ def test_completion_anthropic_hanging():
             assert msg["role"] != converted_messages[i + 1]["role"]
 
 
+@pytest.mark.skip(reason="anyscale stopped serving public api endpoints")
 def test_completion_anyscale_api():
     try:
         # litellm.set_verbose=True
@@ -3711,6 +3713,7 @@ def test_azure_cloudflare_api():
 # test_azure_cloudflare_api()
 
 
+@pytest.mark.skip(reason="anyscale stopped serving public api endpoints")
 def test_completion_anyscale_2():
     try:
         # litellm.set_verbose = True
@@ -3733,6 +3736,7 @@ def test_completion_anyscale_2():
         pytest.fail(f"Error occurred: {e}")
 
 
+@pytest.mark.skip(reason="anyscale stopped serving public api endpoints")
 def test_mistral_anyscale_stream():
     litellm.set_verbose = False
     response = completion(
