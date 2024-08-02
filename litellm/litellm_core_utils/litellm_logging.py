@@ -10,7 +10,9 @@ import sys
 import time
 import traceback
 import uuid
-from typing import Any, Callable, Dict, List, Literal, Optional
+from typing import Any, Callable, Dict, List, Literal, Optional, Union
+
+from pydantic import BaseModel
 
 import litellm
 from litellm import (
@@ -504,6 +506,44 @@ class Logging:
                 )
             )
 
+    def _response_cost_calculator(
+        self,
+        result: Union[
+            ModelResponse,
+            EmbeddingResponse,
+            ImageResponse,
+            TranscriptionResponse,
+            TextCompletionResponse,
+            HttpxBinaryResponseContent,
+        ],
+    ):
+        """
+        Calculate response cost using result + logging object variables.
+
+        used for consistent cost calculation across response headers + logging integrations.
+        """
+        ## RESPONSE COST ##
+        custom_pricing = use_custom_pricing_for_model(
+            litellm_params=self.litellm_params
+        )
+
+        response_cost = litellm.response_cost_calculator(
+            response_object=result,
+            model=self.model,
+            cache_hit=self.model_call_details.get("cache_hit", False),
+            custom_llm_provider=self.model_call_details.get(
+                "custom_llm_provider", None
+            ),
+            base_model=_get_base_model_from_metadata(
+                model_call_details=self.model_call_details
+            ),
+            call_type=self.call_type,
+            optional_params=self.optional_params,
+            custom_pricing=custom_pricing,
+        )
+
+        return response_cost
+
     def _success_handler_helper_fn(
         self, result=None, start_time=None, end_time=None, cache_hit=None
     ):
@@ -538,20 +578,7 @@ class Logging:
                         litellm_params=self.litellm_params
                     )
                     self.model_call_details["response_cost"] = (
-                        litellm.response_cost_calculator(
-                            response_object=result,
-                            model=self.model,
-                            cache_hit=self.model_call_details.get("cache_hit", False),
-                            custom_llm_provider=self.model_call_details.get(
-                                "custom_llm_provider", None
-                            ),
-                            base_model=_get_base_model_from_metadata(
-                                model_call_details=self.model_call_details
-                            ),
-                            call_type=self.call_type,
-                            optional_params=self.optional_params,
-                            custom_pricing=custom_pricing,
-                        )
+                        self._response_cost_calculator(result=result)
                     )
 
                     ## HIDDEN PARAMS ##
