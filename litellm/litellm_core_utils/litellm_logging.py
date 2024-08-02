@@ -1516,6 +1516,13 @@ class Logging:
         self.model_call_details["end_time"] = end_time
         self.model_call_details.setdefault("original_response", None)
         self.model_call_details["response_cost"] = 0
+
+        if hasattr(exception, "headers") and isinstance(exception.headers, dict):
+            self.model_call_details.setdefault("litellm_params", {})
+            metadata = (
+                self.model_call_details["litellm_params"].get("metadata", {}) or {}
+            )
+            metadata.update(exception.headers)
         return start_time, end_time
 
     def failure_handler(
