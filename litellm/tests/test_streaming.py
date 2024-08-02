@@ -3096,6 +3096,7 @@ def test_completion_claude_3_function_call_with_streaming():
             elif idx == 1 and chunk.choices[0].finish_reason is None:
                 validate_second_streaming_function_calling_chunk(chunk=chunk)
             elif chunk.choices[0].finish_reason is not None:  # last chunk
+                assert "usage" in chunk._hidden_params
                 validate_final_streaming_function_calling_chunk(chunk=chunk)
             idx += 1
         # raise Exception("it worked!")
