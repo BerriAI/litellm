@@ -1,18 +1,24 @@
 # Tests for router.get_available_deployment
 # specifically test if it can pick the correct LLM when rpm/tpm set
 # These are fast Tests, and make no API calls
-import sys, os, time
-import traceback, asyncio
+import asyncio
+import os
+import sys
+import time
+import traceback
+
 import pytest
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
+from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
+
+from dotenv import load_dotenv
+
 import litellm
 from litellm import Router
-from concurrent.futures import ThreadPoolExecutor
-from collections import defaultdict
-from dotenv import load_dotenv
 
 load_dotenv()
 
@@ -510,6 +516,77 @@ async def test_wildcard_openai_routing():
         assert selection_counts["gpt-3.5-turbo"] == 25
         assert selection_counts["gpt-4-turbo-preview"] == 25
 
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.asyncio
+async def test_wildcard_provider_routing():
+    try:
+        model_list = [
+            {
+                "model_name": "openai/*",
+                "litellm_params": {
+                    "model": "openai/*",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                    "organization": ["org-1", "org-2", "org-3"],
+                },
+                "tpm": 100,
+            },
+            {
+                "model_name": "anthropic/*",
+                "litellm_params": {
+                    "model": "anthropic/*",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                },
+                "tpm": 100,
+            },
+            {
+                "model_name": "databricks/*",
+                "litellm_params": {
+                    "model": "databricks/*",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                },
+                "tpm": 100,
+            },
+        ]
+
+        router = Router(
+            model_list=model_list,
+        )
+
+        messages = [
+            {"content": "Tell me a joke.", "role": "user"},
+        ]
+
+        selection_counts = defaultdict(int)
+        for _ in range(25):
+            response = await router.acompletion(
+                model="openai/gpt-4",
+                messages=messages,
+                mock_response="good morning",
+            )
+            # print("response1", response)
+
+            selection_counts[response["model"]] += 1
+
+            response = await router.acompletion(
+                model="anthropic/claude-3-sonnet-20240229",
+                messages=messages,
+                mock_response="good morning",
+            )
+            # print("response2", response)
+
+            selection_counts[response["model"]] += 1
+
+            response = await router.acompletion(
+                model="databricks/databricks-meta-llama-3-1-405b-instruct",
+                messages=messages,
+                mock_response="good morning",
+            )
+            selection_counts[response["model"]] += 1
+
+        print("selection_counts", selection_counts)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
