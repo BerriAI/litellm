@@ -2258,6 +2258,7 @@ def get_litellm_params(
     output_cost_per_token=None,
     output_cost_per_second=None,
     cooldown_time=None,
+    text_completion=None,
 ):
     litellm_params = {
         "acompletion": acompletion,
@@ -2281,6 +2282,7 @@ def get_litellm_params(
         "output_cost_per_token": output_cost_per_token,
         "output_cost_per_second": output_cost_per_second,
         "cooldown_time": cooldown_time,
+        "text_completion": text_completion,
     }
 
     return litellm_params
@@ -3127,10 +3129,15 @@ def get_optional_params(
             model=model, custom_llm_provider=custom_llm_provider
         )
         _check_valid_arg(supported_params=supported_params)
-        optional_params = litellm.MistralConfig().map_openai_params(
-            non_default_params=non_default_params,
-            optional_params=optional_params,
-        )
+        if "codestral" in model:
+            optional_params = litellm.MistralTextCompletionConfig().map_openai_params(
+                non_default_params=non_default_params, optional_params=optional_params
+            )
+        else:
+            optional_params = litellm.MistralConfig().map_openai_params(
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+            )
     elif custom_llm_provider == "sagemaker":
         ## check if unsupported param passed in
         supported_params = get_supported_openai_params(
@@ -4239,6 +4246,10 @@ def get_supported_openai_params(
                 return litellm.VertexAILlama3Config().get_supported_openai_params()
             if model.startswith("mistral"):
                 return litellm.MistralConfig().get_supported_openai_params()
+            if model.startswith("codestral"):
+                return (
+                    litellm.MistralTextCompletionConfig().get_supported_openai_params()
+                )
             return litellm.VertexAIConfig().get_supported_openai_params()
         elif request_type == "embeddings":
             return litellm.VertexAITextEmbeddingConfig().get_supported_openai_params()
