@@ -272,12 +272,8 @@ litellm_settings:
   cache: True
   cache_params:
     type: redis
-    supported_call_types: [
-      "acompletion",      # /chat/completions
-      "atext_completion", # /completions
-      "aembedding",       # /embeddings
-      "atranscription",   # /audio/transcriptions
-    ]
+    supported_call_types: ["acompletion", "atext_completion", "aembedding", "atranscription"]
+                          # /chat/completions, /completions, /embeddings, /audio/transcriptions
 ```
 ### Set Cache Params on config.yaml
 ```yaml
@@ -299,12 +295,8 @@ litellm_settings:
     password: "your_password"  # The password for the Redis cache. Required if type is "redis".
     
     # Optional configurations
-    supported_call_types: [
-      "acompletion",      # /chat/completions
-      "atext_completion", # /completions
-      "aembedding",       # /embeddings
-      "atranscription",   # /audio/transcriptions
-    ]
+    supported_call_types: ["acompletion", "atext_completion", "aembedding", "atranscription"]
+                      # /chat/completions, /completions, /embeddings, /audio/transcriptions
 ```
 
 ### Turn on / off caching per request.  
@@ -649,12 +641,8 @@ cache_params:
 
   # List of litellm call types to cache for
   # Options: "completion", "acompletion", "embedding", "aembedding"
-  supported_call_types: [
-      "acompletion",      # /chat/completions
-      "atext_completion", # /completions
-      "aembedding",       # /embeddings
-      "atranscription",   # /audio/transcriptions
-    ]
+  supported_call_types: ["acompletion", "atext_completion", "aembedding", "atranscription"]
+                      # /chat/completions, /completions, /embeddings, /audio/transcriptions
 
   # Redis cache parameters
   host: localhost  # Redis server hostname or IP address
