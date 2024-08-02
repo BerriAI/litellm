@@ -1,19 +1,21 @@
 #### What this tests ####
 #    This tests the model alias mapping - if user passes in an alias, and has set an alias, set it to the actual value
 
-import sys, os
+import os
+import sys
 import traceback
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-import litellm
-from litellm import embedding, completion
 import pytest
+
+import litellm
+from litellm import completion, embedding
 
 litellm.set_verbose = True
 
-model_alias_map = {"good-model": "anyscale/meta-llama/Llama-2-7b-chat-hf"}
+model_alias_map = {"good-model": "groq/llama3-8b-8192"}
 
 
 def test_model_alias_map(caplog):
@@ -33,7 +35,7 @@ def test_model_alias_map(caplog):
         for log in captured_logs:
             assert "ERROR" not in log
 
-        assert "Llama-2-7b-chat-hf" in response.model
+        assert "groq/llama3-8b-8192" in response.model
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
