@@ -766,7 +766,11 @@ async def team_info(
                 detail={"message": "Malformed request. No team id passed in."},
             )
 
-        if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        if (
+            user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
+            or user_api_key_dict.user_role
+            == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value
+        ):
             pass
         elif user_api_key_dict.team_id is None or (
             team_id != user_api_key_dict.team_id
@@ -916,7 +920,10 @@ async def list_team(
         prisma_client,
     )
 
-    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+    if (
+        user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
+        and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
+    ):
         raise HTTPException(
             status_code=401,
             detail={

@@ -1037,14 +1037,7 @@ async def user_api_key_auth(
                         # /model/info just shows models user has access to
                         pass
                     elif route == "/team/info":
-                        # check if key can access this team's info
-                        query_params = request.query_params
-                        team_id = query_params.get("team_id")
-                        if team_id != valid_token.team_id:
-                            raise HTTPException(
-                                status_code=status.HTTP_403_FORBIDDEN,
-                                detail="key not allowed to access this team's info",
-                            )
+                        pass  # handled by function itself
                 elif (
                     _has_user_setup_sso()
                     and route in LiteLLMRoutes.sso_only_routes.value
@@ -1171,6 +1164,7 @@ async def user_api_key_auth(
             # No token was found when looking up in the DB
             raise Exception("Invalid proxy server token passed")
         if valid_token_dict is not None:
+            user_role = _get_user_role(user_id_information=user_id_information)
             if user_id_information is not None and _is_user_proxy_admin(
                 user_id_information
             ):
@@ -1183,14 +1177,14 @@ async def user_api_key_auth(
             elif _has_user_setup_sso() and route in LiteLLMRoutes.sso_only_routes.value:
                 return UserAPIKeyAuth(
                     api_key=api_key,
-                    user_role=LitellmUserRoles.INTERNAL_USER,
+                    user_role=user_role or LitellmUserRoles.INTERNAL_USER,
                     parent_otel_span=parent_otel_span,
                     **valid_token_dict,
                 )
             else:
                 return UserAPIKeyAuth(
                     api_key=api_key,
-                    user_role=LitellmUserRoles.INTERNAL_USER,
+                    user_role=user_role or LitellmUserRoles.INTERNAL_USER,
                     parent_otel_span=parent_otel_span,
                     **valid_token_dict,
                 )
@@ -1282,7 +1276,7 @@ def _is_user_proxy_admin(user_id_information: Optional[list]):
     return False
 
 
-def _get_user_role(user_id_information: Optional[list]):
+def _get_user_role(user_id_information: Optional[list]) -> Optional[str]:
     if user_id_information is None:
         return None
 
