@@ -44,8 +44,8 @@ class LangFuseLogger:
         self.langfuse_debug = os.getenv("LANGFUSE_DEBUG")
 
         parameters = {
-            "public_key": "pk-lf-b3db7e8e-c2f6-4fc7-825c-a541a8fbe003",
-            "secret_key": "sk-lf-b11ef3a8-361c-4445-9652-12318b8596e4",
+            "public_key": self.public_key,
+            "secret_key": self.secret_key,
             "host": self.langfuse_host,
             "release": self.langfuse_release,
             "debug": self.langfuse_debug,
