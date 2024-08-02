@@ -10,7 +10,7 @@ import sys
 import time
 import traceback
 import uuid
-from typing import Any, Callable, Dict, List, Literal, Optional
+from typing import Any, Callable, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel
 
@@ -505,7 +505,17 @@ class Logging:
                 )
             )
 
-    def _response_cost_calculator(self, result: BaseModel):
+    def _response_cost_calculator(
+        self,
+        result: Union[
+            ModelResponse,
+            EmbeddingResponse,
+            ImageResponse,
+            TranscriptionResponse,
+            TextCompletionResponse,
+            HttpxBinaryResponseContent,
+        ],
+    ):
         """
         Calculate response cost using result + logging object variables.
 
