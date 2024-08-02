@@ -102,3 +102,5 @@ async def test_traceparent_not_added_by_default(endpoint, mock_request):
 
     _extra_headers = data.get("extra_headers") or {}
     assert "traceparent" not in _extra_headers
+
+    setattr(litellm.proxy.proxy_server, "open_telemetry_logger", None)
