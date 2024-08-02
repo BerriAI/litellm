@@ -1214,6 +1214,7 @@ def client(original_function):
                             hidden_params = {
                                 "model": "whisper-1",
                                 "custom_llm_provider": custom_llm_provider,
+                                "cache_hit": True,
                             }
                             cached_result = convert_to_model_response_object(
                                 response_object=cached_result,
