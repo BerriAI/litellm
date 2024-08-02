@@ -8381,6 +8381,28 @@ def get_secret(
 ######## Streaming Class ############################
 # wraps the completion stream to return the correct format for the model
 # replicate/anthropic/cohere
+
+
+def calculate_total_usage(chunks: List[ModelResponse]) -> Usage:
+    """Assume most recent usage chunk has total usage uptil then."""
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    for chunk in chunks:
+        if "usage" in chunk:
+            if "prompt_tokens" in chunk["usage"]:
+                prompt_tokens = chunk["usage"].get("prompt_tokens", 0) or 0
+            if "completion_tokens" in chunk["usage"]:
+                completion_tokens = chunk["usage"].get("completion_tokens", 0) or 0
+
+    returned_usage_chunk = Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+    )
+
+    return returned_usage_chunk
+
+
 class CustomStreamWrapper:
     def __init__(
         self,
@@ -9270,7 +9292,9 @@ class CustomStreamWrapper:
             verbose_logger.debug(traceback.format_exc())
             return ""
 
-    def model_response_creator(self, chunk: Optional[dict] = None):
+    def model_response_creator(
+        self, chunk: Optional[dict] = None, hidden_params: Optional[dict] = None
+    ):
         _model = self.model
         _received_llm_provider = self.custom_llm_provider
         _logging_obj_llm_provider = self.logging_obj.model_call_details.get("custom_llm_provider", None)  # type: ignore
@@ -9284,6 +9308,7 @@ class CustomStreamWrapper:
         else:
             # pop model keyword
             chunk.pop("model", None)
+
         model_response = ModelResponse(
             stream=True, model=_model, stream_options=self.stream_options, **chunk
         )
@@ -9293,6 +9318,8 @@ class CustomStreamWrapper:
             self.response_id = model_response.id  # type: ignore
         if self.system_fingerprint is not None:
             model_response.system_fingerprint = self.system_fingerprint
+        if hidden_params is not None:
+            model_response._hidden_params = hidden_params
         model_response._hidden_params["custom_llm_provider"] = _logging_obj_llm_provider
         model_response._hidden_params["created_at"] = time.time()
 
@@ -9347,11 +9374,7 @@ class CustomStreamWrapper:
                         "finish_reason"
                     ]
 
-                if (
-                    self.stream_options
-                    and self.stream_options.get("include_usage", False) is True
-                    and anthropic_response_obj["usage"] is not None
-                ):
+                if anthropic_response_obj["usage"] is not None:
                     model_response.usage = litellm.Usage(
                         prompt_tokens=anthropic_response_obj["usage"]["prompt_tokens"],
                         completion_tokens=anthropic_response_obj["usage"][
@@ -9674,11 +9697,7 @@ class CustomStreamWrapper:
                 print_verbose(f"completion obj content: {completion_obj['content']}")
                 if response_obj["is_finished"]:
                     self.received_finish_reason = response_obj["finish_reason"]
-                if (
-                    self.stream_options
-                    and self.stream_options.get("include_usage", False) == True
-                    and response_obj["usage"] is not None
-                ):
+                if response_obj["usage"] is not None:
                     model_response.usage = litellm.Usage(
                         prompt_tokens=response_obj["usage"].prompt_tokens,
                         completion_tokens=response_obj["usage"].completion_tokens,
@@ -9692,11 +9711,7 @@ class CustomStreamWrapper:
                 print_verbose(f"completion obj content: {completion_obj['content']}")
                 if response_obj["is_finished"]:
                     self.received_finish_reason = response_obj["finish_reason"]
-                if (
-                    self.stream_options
-                    and self.stream_options.get("include_usage", False) == True
-                    and response_obj["usage"] is not None
-                ):
+                if response_obj["usage"] is not None:
                     model_response.usage = litellm.Usage(
                         prompt_tokens=response_obj["usage"].prompt_tokens,
                         completion_tokens=response_obj["usage"].completion_tokens,
@@ -9764,16 +9779,26 @@ class CustomStreamWrapper:
                 if response_obj["logprobs"] is not None:
                     model_response.choices[0].logprobs = response_obj["logprobs"]
 
-                if (
-                    self.stream_options is not None
-                    and self.stream_options["include_usage"] == True
-                    and response_obj["usage"] is not None
-                ):
-                    model_response.usage = litellm.Usage(
-                        prompt_tokens=response_obj["usage"].prompt_tokens,
-                        completion_tokens=response_obj["usage"].completion_tokens,
-                        total_tokens=response_obj["usage"].total_tokens,
-                    )
+                if response_obj["usage"] is not None:
+                    if isinstance(response_obj["usage"], dict):
+                        model_response.usage = litellm.Usage(
+                            prompt_tokens=response_obj["usage"].get(
+                                "prompt_tokens", None
+                            )
+                            or None,
+                            completion_tokens=response_obj["usage"].get(
+                                "completion_tokens", None
+                            )
+                            or None,
+                            total_tokens=response_obj["usage"].get("total_tokens", None)
+                            or None,
+                        )
+                    elif isinstance(response_obj["usage"], BaseModel):
+                        model_response.usage = litellm.Usage(
+                            prompt_tokens=response_obj["usage"].prompt_tokens,
+                            completion_tokens=response_obj["usage"].completion_tokens,
+                            total_tokens=response_obj["usage"].total_tokens,
+                        )
 
             model_response.model = self.model
             print_verbose(
@@ -9888,19 +9913,6 @@ class CustomStreamWrapper:
             ## RETURN ARG
             if (
                 "content" in completion_obj
-                and isinstance(completion_obj["content"], str)
-                and len(completion_obj["content"]) == 0
-                and hasattr(model_response, "usage")
-                and hasattr(model_response.usage, "prompt_tokens")
-            ):
-                if self.sent_first_chunk is False:
-                    completion_obj["role"] = "assistant"
-                    self.sent_first_chunk = True
-                model_response.choices[0].delta = Delta(**completion_obj)
-                print_verbose(f"returning model_response: {model_response}")
-                return model_response
-            elif (
-                "content" in completion_obj
                 and (
                     isinstance(completion_obj["content"], str)
                     and len(completion_obj["content"]) > 0
@@ -9994,6 +10006,7 @@ class CustomStreamWrapper:
                     model_response.choices[0].finish_reason = map_finish_reason(
                         finish_reason=self.received_finish_reason
                     )  # ensure consistent output to openai
+
                     self.sent_last_chunk = True
 
                 return model_response
@@ -10006,6 +10019,8 @@ class CustomStreamWrapper:
                     self.sent_first_chunk = True
                 return model_response
             else:
+                if hasattr(model_response, "usage"):
+                    self.chunks.append(model_response)
                 return
         except StopIteration:
             raise StopIteration
@@ -10122,17 +10137,22 @@ class CustomStreamWrapper:
                             del obj_dict["usage"]
 
                         # Create a new object without the removed attribute
-                        response = self.model_response_creator(chunk=obj_dict)
-
+                        response = self.model_response_creator(
+                            chunk=obj_dict, hidden_params=response._hidden_params
+                        )
+                    # add usage as hidden param
+                    if self.sent_last_chunk is True and self.stream_options is None:
+                        usage = calculate_total_usage(chunks=self.chunks)
+                        response._hidden_params["usage"] = usage
                     # RETURN RESULT
                     return response
 
         except StopIteration:
             if self.sent_last_chunk is True:
                 if (
-                    self.sent_stream_usage == False
+                    self.sent_stream_usage is False
                     and self.stream_options is not None
-                    and self.stream_options.get("include_usage", False) == True
+                    and self.stream_options.get("include_usage", False) is True
                 ):
                     # send the final chunk with stream options
                     complete_streaming_response = litellm.stream_chunk_builder(
@@ -10140,6 +10160,7 @@ class CustomStreamWrapper:
                     )
                     response = self.model_response_creator()
                     response.usage = complete_streaming_response.usage  # type: ignore
+                    response._hidden_params["usage"] = complete_streaming_response.usage  # type: ignore
                     ## LOGGING
                     threading.Thread(
                         target=self.logging_obj.success_handler,
@@ -10151,6 +10172,9 @@ class CustomStreamWrapper:
             else:
                 self.sent_last_chunk = True
                 processed_chunk = self.finish_reason_handler()
+                if self.stream_options is None:  # add usage as hidden param
+                    usage = calculate_total_usage(chunks=self.chunks)
+                setattr(processed_chunk, "usage", usage)
                 ## LOGGING
                 threading.Thread(
                     target=self.logging_obj.success_handler,
