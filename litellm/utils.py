@@ -10174,7 +10174,7 @@ class CustomStreamWrapper:
                 processed_chunk = self.finish_reason_handler()
                 if self.stream_options is None:  # add usage as hidden param
                     usage = calculate_total_usage(chunks=self.chunks)
-                setattr(processed_chunk, "usage", usage)
+                    processed_chunk._hidden_params["usage"] = usage
                 ## LOGGING
                 threading.Thread(
                     target=self.logging_obj.success_handler,
