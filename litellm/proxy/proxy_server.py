@@ -7,6 +7,9 @@ import secrets, subprocess
 import hashlib, uuid
 import warnings
 import importlib
+from prometheus_client import Counter, Histogram, Gauge
+from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+
 
 messages: list = []
 sys.path.insert(
@@ -158,6 +161,18 @@ celery_app_conn = None
 celery_fn = None  # Redis Queue for handling requests
 ### logger ###
 
+""" Prometheus Metric starts from here"""
+# Request counter
+REQUEST_COUNT = Counter('image_generation_requests_total', 'Total image generation requests')
+
+# Request duration
+REQUEST_DURATION = Histogram('image_generation_request_duration_seconds', 'Image generation request duration in seconds')
+
+# Server up gauge
+SERVER_UP = Gauge('server_up', 'Whether the server is up (1) or down (0)')
+
+#ping lateny gauge
+PING_LATENCY = Gauge('ping_latency_seconds', 'Ping latency in seconds')
 
 def usage_telemetry(
     feature: str,
@@ -1775,101 +1790,103 @@ async def image_generation(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     background_tasks: BackgroundTasks = BackgroundTasks(),
 ):
-    global proxy_logging_obj
-    try:
-        # Use orjson to parse JSON data, orjson speeds up requests significantly
-        body = await request.body()
-        data = orjson.loads(body)
+    REQUEST_COUNT.inc()
+    with REQUEST_DURATION.time():
+        global proxy_logging_obj
+        try:
+            # Use orjson to parse JSON data, orjson speeds up requests significantly
+            body = await request.body()
+            data = orjson.loads(body)
 
-        # Include original request and headers in the data
-        data["proxy_server_request"] = {
-            "url": str(request.url),
-            "method": request.method,
-            "headers": dict(request.headers),
-            "body": copy.copy(data),  # use copy instead of deepcopy
-        }
+            # Include original request and headers in the data
+            data["proxy_server_request"] = {
+                "url": str(request.url),
+                "method": request.method,
+                "headers": dict(request.headers),
+                "body": copy.copy(data),  # use copy instead of deepcopy
+            }
 
-        if data.get("user", None) is None and user_api_key_dict.user_id is not None:
-            data["user"] = user_api_key_dict.user_id
+            if data.get("user", None) is None and user_api_key_dict.user_id is not None:
+                data["user"] = user_api_key_dict.user_id
 
-        data["model"] = (
-            general_settings.get("image_generation_model", None)  # server default
-            or user_model  # model name passed via cli args
-            or data["model"]  # default passed in http request
-        )
-        if user_model:
-            data["model"] = user_model
-        if "metadata" in data:
-            data["metadata"]["user_api_key"] = user_api_key_dict.api_key
-            data["metadata"]["headers"] = dict(request.headers)
-            data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
-        else:
-            data["metadata"] = {"user_api_key": user_api_key_dict.api_key}
-            data["metadata"]["headers"] = dict(request.headers)
-            data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
-
-        router_model_names = (
-            [m["model_name"] for m in llm_model_list]
-            if llm_model_list is not None
-            else []
-        )
-
-        ### CALL HOOKS ### - modify incoming data / reject request before calling the model
-        data = await proxy_logging_obj.pre_call_hook(
-            user_api_key_dict=user_api_key_dict, data=data, call_type="embeddings"
-        )
-
-        start_time = time.time()
-
-        ## ROUTE TO CORRECT ENDPOINT ##
-        # skip router if user passed their key
-        if "api_key" in data:
-            response = await litellm.aimage_generation(**data)
-        elif (
-            llm_router is not None and data["model"] in router_model_names
-        ):  # model in router model list
-            response = await llm_router.aimage_generation(**data)
-        elif (
-            llm_router is not None and data["model"] in llm_router.deployment_names
-        ):  # model in router deployments, calling a specific deployment on the router
-            response = await llm_router.aimage_generation(
-                **data, specific_deployment=True
+            data["model"] = (
+                general_settings.get("image_generation_model", None)  # server default
+                or user_model  # model name passed via cli args
+                or data["model"]  # default passed in http request
             )
-        elif (
-            llm_router is not None
-            and llm_router.model_group_alias is not None
-            and data["model"] in llm_router.model_group_alias
-        ):  # model set in model_group_alias
-            response = await llm_router.aimage_generation(
-                **data
-            )  # ensure this goes the llm_router, router will do the correct alias mapping
-        else:
-            response = await litellm.aimage_generation(**data)
+            if user_model:
+                data["model"] = user_model
+            if "metadata" in data:
+                data["metadata"]["user_api_key"] = user_api_key_dict.api_key
+                data["metadata"]["headers"] = dict(request.headers)
+                data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
+            else:
+                data["metadata"] = {"user_api_key": user_api_key_dict.api_key}
+                data["metadata"]["headers"] = dict(request.headers)
+                data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
 
-        ### ALERTING ###
-        end_time = time.time()
-        asyncio.create_task(
-            proxy_logging_obj.response_taking_too_long(
-                start_time=start_time, end_time=end_time, type="slow_response"
+            router_model_names = (
+                [m["model_name"] for m in llm_model_list]
+                if llm_model_list is not None
+                else []
             )
-        )
 
-        return response
-    except Exception as e:
-        await proxy_logging_obj.post_call_failure_hook(
-            user_api_key_dict=user_api_key_dict, original_exception=e
-        )
-        traceback.print_exc()
-        if isinstance(e, HTTPException):
-            raise e
-        else:
-            error_traceback = traceback.format_exc()
-            error_msg = f"{str(e)}\n\n{error_traceback}"
-            try:
-                status = e.status_code  # type: ignore
-            except:
-                status = 500
-            raise HTTPException(status_code=status, detail=error_msg)
+            ### CALL HOOKS ### - modify incoming data / reject request before calling the model
+            data = await proxy_logging_obj.pre_call_hook(
+                user_api_key_dict=user_api_key_dict, data=data, call_type="embeddings"
+            )
+
+            start_time = time.time()
+
+            ## ROUTE TO CORRECT ENDPOINT ##
+            # skip router if user passed their key
+            if "api_key" in data:
+                response = await litellm.aimage_generation(**data)
+            elif (
+                llm_router is not None and data["model"] in router_model_names
+            ):  # model in router model list
+                response = await llm_router.aimage_generation(**data)
+            elif (
+                llm_router is not None and data["model"] in llm_router.deployment_names
+            ):  # model in router deployments, calling a specific deployment on the router
+                response = await llm_router.aimage_generation(
+                    **data, specific_deployment=True
+                )
+            elif (
+                llm_router is not None
+                and llm_router.model_group_alias is not None
+                and data["model"] in llm_router.model_group_alias
+            ):  # model set in model_group_alias
+                response = await llm_router.aimage_generation(
+                    **data
+                )  # ensure this goes the llm_router, router will do the correct alias mapping
+            else:
+                response = await litellm.aimage_generation(**data)
+
+            ### ALERTING ###
+            end_time = time.time()
+            asyncio.create_task(
+                proxy_logging_obj.response_taking_too_long(
+                    start_time=start_time, end_time=end_time, type="slow_response"
+                )
+            )
+
+            return response
+        except Exception as e:
+            await proxy_logging_obj.post_call_failure_hook(
+                user_api_key_dict=user_api_key_dict, original_exception=e
+            )
+            traceback.print_exc()
+            if isinstance(e, HTTPException):
+                raise e
+            else:
+                error_traceback = traceback.format_exc()
+                error_msg = f"{str(e)}\n\n{error_traceback}"
+                try:
+                    status = e.status_code  # type: ignore
+                except:
+                    status = 500
+                raise HTTPException(status_code=status, detail=error_msg)
 
 
 #### KEY MANAGEMENT ####
@@ -2584,11 +2601,23 @@ async def health_readiness():
 
 @router.get("/health/liveliness", tags=["health"])
 async def health_liveliness():
-    """
-    Unprotected endpoint for checking if worker is alive
-    """
-    return "I'm alive!"
+    try:
+        start_time = time.time()
+        # Simulate a ping 
+        await asyncio.sleep(0.01)
+        end_time = time.time()
+        ping_latency = end_time - start_time
+        
+        PING_LATENCY.set(ping_latency)
+        SERVER_UP.set(1)  # Set to 1 when the server is up
+        return {"status_code": 200, "message": "Service healthy", "ping_latency": ping_latency}
+    except Exception as e:
+        SERVER_UP.set(0)  # Set to 0 when the server is down
+        raise HTTPException(status_code=503, detail="Service Unhealthy")
 
+@router.get("/metrics", tags=["Prometheus Metric"])
+async def metrics():
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 @router.get("/")
 async def home(request: Request):
