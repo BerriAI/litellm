@@ -13,7 +13,7 @@ LiteLLM Supports the following methods for detecting prompt injection attacks
 
 Use this if you want to reject /chat, /completions, /embeddings calls that have prompt injection attacks
 
-LiteLLM uses [LakerAI API](https://platform.lakera.ai/) to detect if a request has a prompt injection attack
+LiteLLM uses [LakeraAI API](https://platform.lakera.ai/) to detect if a request has a prompt injection attack
 
 #### Usage
 
