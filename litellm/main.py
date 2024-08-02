@@ -5078,12 +5078,16 @@ def stream_chunk_builder(
     combined_content = ""
     combined_arguments = ""
 
-    if (
-        "tool_calls" in chunks[0]["choices"][0]["delta"]
-        and chunks[0]["choices"][0]["delta"]["tool_calls"] is not None
-    ):
+    tool_call_chunks = [
+        chunk
+        for chunk in chunks
+        if "tool_calls" in chunk["choices"][0]["delta"]
+        and chunk["choices"][0]["delta"]["tool_calls"] is not None
+    ]
+
+    if len(tool_call_chunks) > 0:
         argument_list = []
-        delta = chunks[0]["choices"][0]["delta"]
+        delta = tool_call_chunks[0]["choices"][0]["delta"]
         message = response["choices"][0]["message"]
         message["tool_calls"] = []
         id = None
@@ -5094,7 +5098,7 @@ def stream_chunk_builder(
         prev_id = None
         curr_id = None
         curr_index = 0
-        for chunk in chunks:
+        for chunk in tool_call_chunks:
             choices = chunk["choices"]
             for choice in choices:
                 delta = choice.get("delta", {})
@@ -5140,12 +5144,17 @@ def stream_chunk_builder(
         )
         response["choices"][0]["message"]["content"] = None
         response["choices"][0]["message"]["tool_calls"] = tool_calls_list
-    elif (
-        "function_call" in chunks[0]["choices"][0]["delta"]
-        and chunks[0]["choices"][0]["delta"]["function_call"] is not None
-    ):
+
+    function_call_chunks = [
+        chunk
+        for chunk in chunks
+        if "function_calls" in chunk["choices"][0]["delta"]
+        and chunk["choices"][0]["delta"]["function_calls"] is not None
+    ]
+
+    if len(function_call_chunks) > 0:
         argument_list = []
-        delta = chunks[0]["choices"][0]["delta"]
+        delta = function_call_chunks[0]["choices"][0]["delta"]
         function_call = delta.get("function_call", "")
         function_call_name = function_call.name
 
@@ -5153,7 +5162,7 @@ def stream_chunk_builder(
         message["function_call"] = {}
         message["function_call"]["name"] = function_call_name
 
-        for chunk in chunks:
+        for chunk in function_call_chunks:
             choices = chunk["choices"]
             for choice in choices:
                 delta = choice.get("delta", {})
@@ -5170,7 +5179,15 @@ def stream_chunk_builder(
         response["choices"][0]["message"]["function_call"][
             "arguments"
         ] = combined_arguments
-    else:
+    
+    content_chunks = [
+        chunk
+        for chunk in chunks
+        if "content" in chunk["choices"][0]["delta"]
+        and chunk["choices"][0]["delta"]["content"] is not None
+    ]
+
+    if len(content_chunks) > 0:
         for chunk in chunks:
             choices = chunk["choices"]
             for choice in choices:
@@ -5186,12 +5203,12 @@ def stream_chunk_builder(
         # Update the "content" field within the response dictionary
         response["choices"][0]["message"]["content"] = combined_content
 
+    completion_output = ""
     if len(combined_content) > 0:
-        completion_output = combined_content
-    elif len(combined_arguments) > 0:
-        completion_output = combined_arguments
-    else:
-        completion_output = ""
+        completion_output += combined_content
+    if len(combined_arguments) > 0:
+        completion_output += combined_arguments
+
     # # Update usage information if needed
     prompt_tokens = 0
     completion_tokens = 0
