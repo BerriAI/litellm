@@ -304,6 +304,8 @@ def test_completion_claude():
         print(response.usage.completion_tokens)
         print(response["usage"]["completion_tokens"])
         # print("new cost tracking")
+    except litellm.RateLimitError as e:
+        pass
     except Exception as e:
         if "overloaded_error" in str(e):
             pass
