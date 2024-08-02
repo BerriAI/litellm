@@ -1883,16 +1883,15 @@ class Cache:
                         caching_group or model_group or kwargs[param]
                     )  # use caching_group, if set then model_group if it exists, else use kwargs["model"]
                 elif param == "file":
-                    metadata_file_name = kwargs.get("metadata", {}).get(
-                        "file_name", None
+                    file = kwargs.get("file")
+                    metadata = kwargs.get("metadata", {})
+                    litellm_params = kwargs.get("litellm_params", {})
+
+                    param_value = (
+                        getattr(file, "name", None)
+                        or metadata.get("file_name")
+                        or litellm_params.get("file_name")
                     )
-                    litellm_params_file_name = kwargs.get("litellm_params", {}).get(
-                        "file_name", None
-                    )
-                    if metadata_file_name is not None:
-                        param_value = metadata_file_name
-                    elif litellm_params_file_name is not None:
-                        param_value = litellm_params_file_name
                 else:
                     if kwargs[param] is None:
                         continue  # ignore None params
