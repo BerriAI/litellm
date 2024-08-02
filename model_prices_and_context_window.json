@@ -4698,6 +4698,26 @@
         "litellm_provider": "voyage",
         "mode": "embedding"
     },
+    "databricks/databricks-meta-llama-3-1-405b-instruct": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000, 
+        "input_cost_per_token": 0.000005,
+        "output_cost_per_token": 0.000015,
+        "litellm_provider": "databricks",
+        "mode": "chat",
+        "source": "https://www.databricks.com/product/pricing/foundation-model-serving"
+    },
+    "databricks/databricks-meta-llama-3-1-70b-instruct": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000, 
+        "input_cost_per_token": 0.000001,
+        "output_cost_per_token": 0.000003,
+        "litellm_provider": "databricks",
+        "mode": "chat",
+        "source": "https://www.databricks.com/product/pricing/foundation-model-serving"
+    },
     "databricks/databricks-dbrx-instruct": {
         "max_tokens": 32768,
         "max_input_tokens": 32768,
@@ -4768,5 +4788,5 @@
         "litellm_provider": "databricks",
         "mode": "embedding",
         "source": "https://www.databricks.com/product/pricing/foundation-model-serving"
-    }
+    },
 }
