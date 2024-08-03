@@ -158,7 +158,11 @@ def test_image_generation_bedrock():
             model="bedrock/stability.stable-diffusion-xl-v1",
             aws_region_name="us-west-2",
         )
+
         print(f"response: {response}")
+        from openai.types.images_response import ImagesResponse
+
+        ImagesResponse.model_validate(response.model_dump())
     except litellm.RateLimitError as e:
         pass
     except litellm.ContentPolicyViolationError:
