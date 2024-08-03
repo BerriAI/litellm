@@ -88,7 +88,7 @@ class VertexFineTuningAPI(VertexLLM):
 
     def convert_openai_request_to_vertex(
         self, create_fine_tuning_job_data: FineTuningJobCreate, **kwargs
-    ) -> FineTuningJobCreate:
+    ) -> FineTuneJobCreate:
         """
         convert request from OpenAI format to Vertex format
         https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/tuning
@@ -122,7 +122,7 @@ class VertexFineTuningAPI(VertexLLM):
         self,
         fine_tuning_url: str,
         headers: dict,
-        request_data: FineTuningJobCreate,
+        request_data: FineTuneJobCreate,
     ):
         from litellm.fine_tuning.main import FineTuningJob
 
