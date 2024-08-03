@@ -386,6 +386,7 @@ class BedrockLLM(BaseLLM):
         aws_profile_name: Optional[str] = None,
         aws_role_name: Optional[str] = None,
         aws_web_identity_token: Optional[str] = None,
+        aws_sts_endpoint: Optional[str] = None,
     ):
         """
         Return a boto3.Credentials object
@@ -406,6 +407,7 @@ class BedrockLLM(BaseLLM):
             aws_profile_name,
             aws_role_name,
             aws_web_identity_token,
+            aws_sts_endpoint,
         ]
 
         # Iterate over parameters and update if needed
@@ -424,6 +426,7 @@ class BedrockLLM(BaseLLM):
             aws_profile_name,
             aws_role_name,
             aws_web_identity_token,
+            aws_sts_endpoint,
         ) = params_to_check
 
         ### CHECK STS ###
@@ -435,12 +438,19 @@ class BedrockLLM(BaseLLM):
             print_verbose(
                 f"IN Web Identity Token: {aws_web_identity_token} | Role Name: {aws_role_name} | Session Name: {aws_session_name}"
             )
+
+            if aws_sts_endpoint is None:
+                sts_endpoint = f"https://sts.{aws_region_name}.amazonaws.com"
+            else:
+                sts_endpoint = aws_sts_endpoint
+
             iam_creds_cache_key = json.dumps(
                 {
                     "aws_web_identity_token": aws_web_identity_token,
                     "aws_role_name": aws_role_name,
                     "aws_session_name": aws_session_name,
                     "aws_region_name": aws_region_name,
+                    "aws_sts_endpoint": sts_endpoint,
                 }
             )
 
@@ -457,7 +467,7 @@ class BedrockLLM(BaseLLM):
                 sts_client = boto3.client(
                     "sts",
                     region_name=aws_region_name,
-                    endpoint_url=f"https://sts.{aws_region_name}.amazonaws.com",
+                    endpoint_url=sts_endpoint,
                 )
 
                 # https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRoleWithWebIdentity.html
@@ -852,6 +862,7 @@ class BedrockLLM(BaseLLM):
             "aws_bedrock_runtime_endpoint", None
         )  # https://bedrock-runtime.{region_name}.amazonaws.com
         aws_web_identity_token = optional_params.pop("aws_web_identity_token", None)
+        aws_sts_endpoint = optional_params.pop("aws_sts_endpoint", None)
 
         ### SET REGION NAME ###
         if aws_region_name is None:
@@ -881,6 +892,7 @@ class BedrockLLM(BaseLLM):
             aws_profile_name=aws_profile_name,
             aws_role_name=aws_role_name,
             aws_web_identity_token=aws_web_identity_token,
+            aws_sts_endpoint=aws_sts_endpoint,
         )
 
         ### SET RUNTIME ENDPOINT ###
@@ -1539,6 +1551,7 @@ class BedrockConverseLLM(BaseLLM):
         aws_profile_name: Optional[str] = None,
         aws_role_name: Optional[str] = None,
         aws_web_identity_token: Optional[str] = None,
+        aws_sts_endpoint: Optional[str] = None,
     ):
         """
         Return a boto3.Credentials object
@@ -1555,6 +1568,7 @@ class BedrockConverseLLM(BaseLLM):
             aws_profile_name,
             aws_role_name,
             aws_web_identity_token,
+            aws_sts_endpoint,
         ]
 
         # Iterate over parameters and update if needed
@@ -1573,6 +1587,7 @@ class BedrockConverseLLM(BaseLLM):
             aws_profile_name,
             aws_role_name,
             aws_web_identity_token,
+            aws_sts_endpoint,
         ) = params_to_check
 
         ### CHECK STS ###
@@ -1581,12 +1596,22 @@ class BedrockConverseLLM(BaseLLM):
             and aws_role_name is not None
             and aws_session_name is not None
         ):
+            print_verbose(
+                f"IN Web Identity Token: {aws_web_identity_token} | Role Name: {aws_role_name} | Session Name: {aws_session_name}"
+            )
+
+            if aws_sts_endpoint is None:
+                sts_endpoint = f"https://sts.{aws_region_name}.amazonaws.com"
+            else:
+                sts_endpoint = aws_sts_endpoint
+
             iam_creds_cache_key = json.dumps(
                 {
                     "aws_web_identity_token": aws_web_identity_token,
                     "aws_role_name": aws_role_name,
                     "aws_session_name": aws_session_name,
                     "aws_region_name": aws_region_name,
+                    "aws_sts_endpoint": sts_endpoint,
                 }
             )
 
@@ -1603,7 +1628,7 @@ class BedrockConverseLLM(BaseLLM):
                 sts_client = boto3.client(
                     "sts",
                     region_name=aws_region_name,
-                    endpoint_url=f"https://sts.{aws_region_name}.amazonaws.com",
+                    endpoint_url=sts_endpoint,
                 )
 
                 # https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRoleWithWebIdentity.html
@@ -1818,6 +1843,7 @@ class BedrockConverseLLM(BaseLLM):
             "aws_bedrock_runtime_endpoint", None
         )  # https://bedrock-runtime.{region_name}.amazonaws.com
         aws_web_identity_token = optional_params.pop("aws_web_identity_token", None)
+        aws_sts_endpoint = optional_params.pop("aws_sts_endpoint", None)
 
         ### SET REGION NAME ###
         if aws_region_name is None:
@@ -1847,6 +1873,7 @@ class BedrockConverseLLM(BaseLLM):
             aws_profile_name=aws_profile_name,
             aws_role_name=aws_role_name,
             aws_web_identity_token=aws_web_identity_token,
+            aws_sts_endpoint=aws_sts_endpoint,
         )
 
         ### SET RUNTIME ENDPOINT ###
