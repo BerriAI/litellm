@@ -31,6 +31,9 @@ const Sidebar: React.FC<SidebarProps> = ({
             <Menu.Item key="1" onClick={() => setPage("usage")}>
               Usage
             </Menu.Item>
+            <Menu.Item key="6" onClick={() => setPage("teams")}>
+              <Text>Teams</Text>
+            </Menu.Item>
             <Menu.Item key="9" onClick={() => setPage("caching")}>
               <Text>Caching</Text>
             </Menu.Item>
