@@ -20,10 +20,10 @@ const sidebars = {
     { type: "doc", id: "index" }, // NEW
     {
       type: "category",
-      label: "💥 OpenAI Proxy Server",
+      label: "💥 LiteLLM Proxy Server",
       link: {
         type: "generated-index",
-        title: "💥 OpenAI Proxy Server",
+        title: "💥 LiteLLM Proxy Server",
         description: `Proxy Server to call 100+ LLMs in a unified interface & track spend, set budgets per virtual key/user`,
         slug: "/simple_proxy",
       },
