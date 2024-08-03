@@ -282,4 +282,26 @@ class FineTunesupervisedTuningSpec(TypedDict, total=False):
 class FineTuneJobCreate(TypedDict, total=False):
     baseModel: str
     supervisedTuningSpec: FineTunesupervisedTuningSpec
-    tunedModelDisplayName: str
+    tunedModelDisplayName: Optional[str]
+
+
+class ResponseSupervisedTuningSpec(TypedDict):
+    trainingDatasetUri: Optional[str]
+
+
+class ResponseTuningJob(TypedDict):
+    name: Optional[str]
+    tunedModelDisplayName: Optional[str]
+    baseModel: Optional[str]
+    supervisedTuningSpec: Optional[ResponseSupervisedTuningSpec]
+    state: Optional[
+        Literal[
+            "JOB_STATE_PENDING",
+            "JOB_STATE_RUNNING",
+            "JOB_STATE_SUCCEEDED",
+            "JOB_STATE_FAILED",
+            "JOB_STATE_CANCELLED",
+        ]
+    ]
+    createTime: Optional[str]
+    updateTime: Optional[str]
