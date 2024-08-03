@@ -184,10 +184,6 @@ const sidebars = {
       ],
     },
     "proxy/custom_pricing",
-    "routing",
-    "scheduler",
-    "set_keys",
-    "budget_manager",
     {
       type: "category", 
       label: "Secret Manager", 
@@ -195,6 +191,22 @@ const sidebars = {
         "secret", 
         "oidc"
       ]
+    },
+    {
+      type: "category",
+      label: "🚅 LiteLLM Python SDK",
+      items: [
+        "routing",
+        "scheduler",
+        "set_keys",
+        "budget_manager",
+        "caching/all_caches",
+        {
+          type: "category",
+          label: "LangChain, LlamaIndex, Instructor Integration",
+          items: ["langchain/langchain", "tutorials/instructor"],
+        },
+      ],
     },
     "completion/token_usage",
     "load_test",
@@ -227,14 +239,12 @@ const sidebars = {
         `observability/telemetry`,
       ],
     },
-    "caching/all_caches",
     {
       type: "category",
       label: "Tutorials",
       items: [
         'tutorials/azure_openai',
         'tutorials/instructor',
-        'tutorials/oobabooga',
         "tutorials/gradio_integration",
         "tutorials/huggingface_codellama",
         "tutorials/huggingface_tutorial",
@@ -245,11 +255,6 @@ const sidebars = {
         "tutorials/first_playground",
         "tutorials/model_fallbacks",
       ],
-    },
-    {
-      type: "category",
-      label: "LangChain, LlamaIndex, Instructor Integration",
-      items: ["langchain/langchain", "tutorials/instructor"],
     },
     {
       type: "category",
