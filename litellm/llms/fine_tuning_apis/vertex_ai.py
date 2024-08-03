@@ -86,6 +86,29 @@ class VertexFineTuningAPI(VertexLLM):
             integrations=[],
         )
 
+    def convert_openai_request_to_vertex(
+        self, create_fine_tuning_job_data: FineTuningJobCreate, **kwargs
+    ) -> dict:
+        """
+        convert request from OpenAI format to Vertex format
+        https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/tuning
+        supervised_tuning_spec = FineTunesupervisedTuningSpec(
+        """
+        supervised_tuning_spec = FineTunesupervisedTuningSpec(
+            training_dataset_uri=create_fine_tuning_job_data.training_file,
+            validation_dataset=create_fine_tuning_job_data.validation_file,
+            epoch_count=create_fine_tuning_job_data.hyperparameters.n_epochs,
+            learning_rate_multiplier=create_fine_tuning_job_data.hyperparameters.learning_rate_multiplier,
+            adapter_size=kwargs.get("AdapterSize"),
+        )
+        fine_tune_job = FineTuneJobCreate(
+            baseModel=create_fine_tuning_job_data.model,
+            supervisedTuningSpec=supervised_tuning_spec,
+            tunedModelDisplayName=create_fine_tuning_job_data.suffix,
+        )
+
+        return fine_tune_job
+
     async def acreate_fine_tuning_job(
         self,
         fine_tuning_url: str,
@@ -144,6 +167,7 @@ class VertexFineTuningAPI(VertexLLM):
         vertex_credentials: Optional[str],
         api_base: Optional[str],
         timeout: Union[float, httpx.Timeout],
+        **kwargs,
     ):
 
         verbose_logger.debug(
@@ -166,12 +190,8 @@ class VertexFineTuningAPI(VertexLLM):
             "Content-Type": "application/json",
         }
 
-        supervised_tuning_spec = FineTunesupervisedTuningSpec(
-            training_dataset_uri=create_fine_tuning_job_data.training_file
-        )
-        fine_tune_job = FineTuneJobCreate(
-            baseModel=create_fine_tuning_job_data.model,
-            supervisedTuningSpec=supervised_tuning_spec,
+        fine_tune_job = self.convert_openai_request_to_vertex(
+            create_fine_tuning_job_data=create_fine_tuning_job_data, **kwargs
         )
 
         fine_tuning_url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/tuningJobs"
