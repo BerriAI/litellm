@@ -16,6 +16,7 @@ import asyncio
 import logging
 
 import openai
+from test_gcs_bucket import load_vertex_ai_credentials
 
 from litellm import create_fine_tuning_job
 from litellm._logging import verbose_logger
@@ -183,3 +184,23 @@ async def test_azure_create_fine_tune_jobs_async():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
     pass
+
+
+@pytest.mark.asyncio()
+async def test_create_vertex_fine_tune_jobs():
+    try:
+        verbose_logger.setLevel(logging.DEBUG)
+        load_vertex_ai_credentials()
+
+        vertex_credentials = os.getenv("GCS_PATH_SERVICE_ACCOUNT")
+        print("creating fine tuning job")
+        create_fine_tuning_response = await litellm.acreate_fine_tuning_job(
+            model="gemini-1.0-pro-002",
+            custom_llm_provider="vertex_ai",
+            training_file="gs://cloud-samples-data/ai-platform/generative_ai/sft_train_data.jsonl",
+            vertex_project="adroit-crow-413218",
+            vertex_location="us-central1",
+            vertex_credentials=vertex_credentials,
+        )
+    except:
+        pass
