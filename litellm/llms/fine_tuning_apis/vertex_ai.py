@@ -241,12 +241,13 @@ class VertexFineTuningAPI(VertexLLM):
         )
         return open_ai_response
 
-    async def pass_through_vertex_ai_fine_tuning_job(
+    async def pass_through_vertex_ai_POST_request(
         self,
         request_data: dict,
         vertex_project: str,
         vertex_location: str,
         vertex_credentials: str,
+        request_route: str,
     ):
         auth_header, _ = self._get_token_and_url(
             model="",
@@ -264,14 +265,16 @@ class VertexFineTuningAPI(VertexLLM):
             "Content-Type": "application/json",
         }
 
-        fine_tuning_url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/tuningJobs"
+        url = None
+        if request_route == "tuningJobs":
+            url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/tuningJobs"
 
         if self.async_handler is None:
             raise ValueError("VertexAI Fine Tuning - async_handler is not initialized")
 
         response = await self.async_handler.post(
             headers=headers,
-            url=fine_tuning_url,
+            url=url,
             json=request_data,  # type: ignore
         )
 
