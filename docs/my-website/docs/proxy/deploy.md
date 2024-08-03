@@ -246,7 +246,7 @@ helm install lite-helm ./litellm-helm
 kubectl --namespace default port-forward $POD_NAME 8080:$CONTAINER_PORT
 ```
 
-Your OpenAI proxy server is now running on `http://127.0.0.1:4000`.
+Your LiteLLM Proxy Server is now running on `http://127.0.0.1:4000`.
 
 </TabItem>
 
@@ -301,7 +301,7 @@ docker run \
     --config /app/config.yaml --detailed_debug
 ```
 
-Your OpenAI proxy server is now running on `http://0.0.0.0:4000`.
+Your LiteLLM Proxy Server is now running on `http://0.0.0.0:4000`.
 
 </TabItem>
 <TabItem value="kubernetes-deploy" label="Kubernetes">
@@ -399,7 +399,7 @@ kubectl apply -f /path/to/service.yaml
 kubectl port-forward service/litellm-service 4000:4000
 ```
 
-Your OpenAI proxy server is now running on `http://0.0.0.0:4000`.
+Your LiteLLM Proxy Server is now running on `http://0.0.0.0:4000`.
 
 </TabItem>
 
@@ -441,7 +441,7 @@ kubectl \
   4000:4000
 ```
 
-Your OpenAI proxy server is now running on `http://127.0.0.1:4000`.
+Your LiteLLM Proxy Server is now running on `http://127.0.0.1:4000`.
 
 
 If you need to set your litellm proxy config.yaml, you can find this in [values.yaml](https://github.com/BerriAI/litellm/blob/main/deploy/charts/litellm-helm/values.yaml)
@@ -486,7 +486,7 @@ helm install lite-helm ./litellm-helm
 kubectl --namespace default port-forward $POD_NAME 8080:$CONTAINER_PORT
 ```
 
-Your OpenAI proxy server is now running on `http://127.0.0.1:4000`.
+Your LiteLLM Proxy Server is now running on `http://127.0.0.1:4000`.
 
 </TabItem>
 </Tabs>
