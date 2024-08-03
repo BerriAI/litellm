@@ -266,7 +266,7 @@ class VertexFineTuningAPI(VertexLLM):
         }
 
         url = None
-        if request_route == "tuningJobs":
+        if request_route == "/tuningJobs":
             url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/tuningJobs"
 
         if self.async_handler is None:
