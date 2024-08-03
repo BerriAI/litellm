@@ -4444,6 +4444,11 @@ def get_llm_provider(
                 return model, custom_llm_provider, dynamic_api_key, api_base
 
         if custom_llm_provider:
+            if (
+                model.split("/")[0] == custom_llm_provider
+            ):  # handle scenario where model="azure/*" and custom_llm_provider="azure"
+                model = model.replace("{}/".format(custom_llm_provider), "")
+
             return model, custom_llm_provider, dynamic_api_key, api_base
 
         if api_key and api_key.startswith("os.environ/"):
@@ -5825,9 +5830,10 @@ def convert_to_model_response_object(
                 model_response_object.usage.completion_tokens = response_object["usage"].get("completion_tokens", 0)  # type: ignore
                 model_response_object.usage.prompt_tokens = response_object["usage"].get("prompt_tokens", 0)  # type: ignore
                 model_response_object.usage.total_tokens = response_object["usage"].get("total_tokens", 0)  # type: ignore
-                model_response_object.usage.prompt_cache_hit_tokens = response_object["usage"].get("prompt_cache_hit_tokens", None)  # type: ignore
-                model_response_object.usage.prompt_cache_miss_tokens = response_object["usage"].get("prompt_cache_miss_tokens", None)  # type: ignore
-
+                special_keys = ["completion_tokens", "prompt_tokens", "total_tokens"]
+                for k, v in response_object["usage"].items():
+                    if k not in special_keys:
+                        setattr(model_response_object.usage, k, v)  # type: ignore
             if "created" in response_object:
                 model_response_object.created = response_object["created"] or int(
                     time.time()
