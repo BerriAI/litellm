@@ -1959,6 +1959,7 @@ class ProxyConfig:
                         if len(_value) > 0:
                             _litellm_params[k] = _value
                 _litellm_params = LiteLLM_Params(**_litellm_params)
+
             else:
                 verbose_proxy_logger.error(
                     f"Invalid model added to proxy db. Invalid litellm params. litellm_params={_litellm_params}"
