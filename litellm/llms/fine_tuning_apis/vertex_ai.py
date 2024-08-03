@@ -7,7 +7,7 @@ from openai.types.fine_tuning.fine_tuning_job import FineTuningJob, Hyperparamet
 
 from litellm._logging import verbose_logger
 from litellm.llms.base import BaseLLM
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.vertex_httpx import VertexLLM
 from litellm.types.llms.openai import FineTuningJobCreate
 from litellm.types.llms.vertex_ai import (
@@ -170,8 +170,32 @@ class VertexFineTuningAPI(VertexLLM):
                 headers=headers,
                 request_data=fine_tune_job,
             )
-        # response = self.async_handler.post(
-        #     url=fine_tuning_url,
-        #     headers=headers,
-        #     json=fine_tune_job,
-        # )
+        sync_handler = HTTPHandler(timeout=httpx.Timeout(timeout=600.0, connect=5.0))
+
+        request_data = fine_tune_job
+        verbose_logger.debug(
+            "about to create fine tuning job: %s, request_data: %s",
+            fine_tuning_url,
+            request_data,
+        )
+        response = self.sync_handler.post(
+            headers=headers,
+            url=fine_tuning_url,
+            json=request_data,
+        )
+
+        if response.status_code != 200:
+            raise Exception(
+                f"Error creating fine tuning job. Status code: {response.status_code}. Response: {response.text}"
+            )
+
+        verbose_logger.debug(
+            "got response from creating fine tuning job: %s", response.json()
+        )
+        vertex_response = ResponseTuningJob(**response.json())
+
+        verbose_logger.debug("vertex_response %s", vertex_response)
+        open_ai_response = self.convert_vertex_response_to_open_ai_response(
+            vertex_response
+        )
+        return open_ai_response
