@@ -62,6 +62,7 @@ import {
   teamMemberAddCall,
   Member,
   modelAvailableCall,
+  teamListCall
 } from "./networking";
 
 const Team: React.FC<TeamProps> = ({
@@ -72,6 +73,27 @@ const Team: React.FC<TeamProps> = ({
   userID,
   userRole,
 }) => {
+
+  if (teams && teams.length > 0) {
+    console.log(`Received teams: ${JSON.stringify(teams, null, 2)}`);
+  } else {
+    console.log("No teams received or teams array is empty.");
+  }
+
+  useEffect(() => {
+    console.log(`inside useeffect - ${teams}`)
+    if (teams === null && accessToken) {
+      // Call your function here
+      const fetchData = async () => {
+        const givenTeams = await teamListCall(accessToken)
+        console.log(`givenTeams: ${givenTeams}`)
+
+        setTeams(givenTeams)
+      }
+      fetchData()
+    }
+  }, [teams]);
+
   const [form] = Form.useForm();
   const [memberForm] = Form.useForm();
   const { Title, Paragraph } = Typography;
