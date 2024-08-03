@@ -134,7 +134,10 @@ async def test_create_fine_tune_jobs_async():
     except openai.RateLimitError:
         pass
     except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
+        if "Job has already completed" in str(e):
+            pass
+        else:
+            pytest.fail(f"Error occurred: {e}")
     pass
 
 
@@ -188,7 +191,10 @@ async def test_azure_create_fine_tune_jobs_async():
     except openai.RateLimitError:
         pass
     except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
+        if "Job has already completed" in str(e):
+            pass
+        else:
+            pytest.fail(f"Error occurred: {e}")
     pass
 
 
