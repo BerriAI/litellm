@@ -458,6 +458,7 @@ openai_compatible_providers: List = [
     "empower",
     "friendliai",
     "azure_ai",
+    "github",
 ]
 
 
@@ -698,6 +699,7 @@ provider_list: List = [
     "predibase",
     "databricks",
     "empower",
+    "github",
     "custom",  # custom apis
 ]
 
