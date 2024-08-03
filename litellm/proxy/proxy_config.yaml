@@ -34,6 +34,10 @@ finetune_settings:
     api_version: "2023-03-15-preview"
   - custom_llm_provider: openai
     api_key: os.environ/OPENAI_API_KEY
+  - custom_llm_provider: "vertex_ai"
+    vertex_project: "adroit-crow-413218"
+    vertex_location: "us-central1"
+    vertex_credentials: "/Users/ishaanjaffer/Downloads/adroit-crow-413218-a956eef1a2a8.json"
 
 # for /files endpoints
 files_settings:
@@ -54,5 +58,3 @@ general_settings:
   # google cloud run maximum repsonses size is 32MB
   max_response_size_mb: 10
 
-litellm_settings:
-  callbacks: ["gcs_bucket"] # 👈 KEY CHANGE
