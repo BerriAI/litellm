@@ -20,6 +20,12 @@ from test_gcs_bucket import load_vertex_ai_credentials
 
 from litellm import create_fine_tuning_job
 from litellm._logging import verbose_logger
+from litellm.llms.fine_tuning_apis.vertex_ai import (
+    FineTuningJobCreate,
+    VertexFineTuningAPI,
+)
+
+vertex_finetune_api = VertexFineTuningAPI()
 
 
 def test_create_fine_tune_job():
@@ -210,3 +216,58 @@ async def test_create_vertex_fine_tune_jobs():
         assert create_fine_tuning_response.object == "fine_tuning.job"
     except:
         pass
+
+
+# Testing OpenAI -> Vertex AI param mapping
+
+
+def test_convert_openai_request_to_vertex_basic():
+    openai_data = FineTuningJobCreate(
+        training_file="gs://bucket/train.jsonl",
+        validation_file="gs://bucket/val.jsonl",
+        model="text-davinci-002",
+        hyperparameters={"n_epochs": 3, "learning_rate_multiplier": 0.1},
+        suffix="my_fine_tuned_model",
+    )
+
+    result = vertex_finetune_api.convert_openai_request_to_vertex(openai_data)
+
+    print("converted vertex ai result=", result)
+
+    assert result["baseModel"] == "text-davinci-002"
+    assert result["tunedModelDisplayName"] == "my_fine_tuned_model"
+    assert (
+        result["supervisedTuningSpec"]["training_dataset_uri"]
+        == "gs://bucket/train.jsonl"
+    )
+    assert (
+        result["supervisedTuningSpec"]["validation_dataset"] == "gs://bucket/val.jsonl"
+    )
+    assert result["supervisedTuningSpec"]["epoch_count"] == 3
+    assert result["supervisedTuningSpec"]["learning_rate_multiplier"] == 0.1
+
+
+def test_convert_openai_request_to_vertex_with_adapter_size():
+    openai_data = FineTuningJobCreate(
+        training_file="gs://bucket/train.jsonl",
+        model="text-davinci-002",
+        hyperparameters={"n_epochs": 5, "learning_rate_multiplier": 0.2},
+        suffix="custom_model",
+    )
+
+    result = vertex_finetune_api.convert_openai_request_to_vertex(
+        openai_data, adapter_size="SMALL"
+    )
+
+    print("converted vertex ai result=", result)
+
+    assert result["baseModel"] == "text-davinci-002"
+    assert result["tunedModelDisplayName"] == "custom_model"
+    assert (
+        result["supervisedTuningSpec"]["training_dataset_uri"]
+        == "gs://bucket/train.jsonl"
+    )
+    assert result["supervisedTuningSpec"]["validation_dataset"] is None
+    assert result["supervisedTuningSpec"]["epoch_count"] == 5
+    assert result["supervisedTuningSpec"]["learning_rate_multiplier"] == 0.2
+    assert result["supervisedTuningSpec"]["adapter_size"] == "SMALL"

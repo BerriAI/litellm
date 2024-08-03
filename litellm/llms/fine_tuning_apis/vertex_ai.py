@@ -86,6 +86,38 @@ class VertexFineTuningAPI(VertexLLM):
             integrations=[],
         )
 
+    def convert_openai_request_to_vertex(
+        self, create_fine_tuning_job_data: FineTuningJobCreate, **kwargs
+    ) -> FineTuneJobCreate:
+        """
+        convert request from OpenAI format to Vertex format
+        https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/tuning
+        supervised_tuning_spec = FineTunesupervisedTuningSpec(
+        """
+        hyperparameters = create_fine_tuning_job_data.hyperparameters
+        supervised_tuning_spec = FineTunesupervisedTuningSpec(
+            training_dataset_uri=create_fine_tuning_job_data.training_file,
+            validation_dataset=create_fine_tuning_job_data.validation_file,
+        )
+
+        if hyperparameters:
+            if hyperparameters.n_epochs:
+                supervised_tuning_spec["epoch_count"] = int(hyperparameters.n_epochs)
+            if hyperparameters.learning_rate_multiplier:
+                supervised_tuning_spec["learning_rate_multiplier"] = float(
+                    hyperparameters.learning_rate_multiplier
+                )
+
+        supervised_tuning_spec["adapter_size"] = kwargs.get("adapter_size")
+
+        fine_tune_job = FineTuneJobCreate(
+            baseModel=create_fine_tuning_job_data.model,
+            supervisedTuningSpec=supervised_tuning_spec,
+            tunedModelDisplayName=create_fine_tuning_job_data.suffix,
+        )
+
+        return fine_tune_job
+
     async def acreate_fine_tuning_job(
         self,
         fine_tuning_url: str,
@@ -144,6 +176,7 @@ class VertexFineTuningAPI(VertexLLM):
         vertex_credentials: Optional[str],
         api_base: Optional[str],
         timeout: Union[float, httpx.Timeout],
+        **kwargs,
     ):
 
         verbose_logger.debug(
@@ -166,12 +199,8 @@ class VertexFineTuningAPI(VertexLLM):
             "Content-Type": "application/json",
         }
 
-        supervised_tuning_spec = FineTunesupervisedTuningSpec(
-            training_dataset_uri=create_fine_tuning_job_data.training_file
-        )
-        fine_tune_job = FineTuneJobCreate(
-            baseModel=create_fine_tuning_job_data.model,
-            supervisedTuningSpec=supervised_tuning_spec,
+        fine_tune_job = self.convert_openai_request_to_vertex(
+            create_fine_tuning_job_data=create_fine_tuning_job_data, **kwargs
         )
 
         fine_tuning_url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/tuningJobs"
