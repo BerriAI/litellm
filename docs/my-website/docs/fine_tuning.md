@@ -13,6 +13,7 @@ This is an Enterprise only endpoint [Get Started with Enterprise here](https://c
 ## Supported Providers
 - Azure OpenAI
 - OpenAI
+- Vertex AI
 
 Add `finetune_settings` and `files_settings` to your litellm config.yaml to use the fine-tuning endpoints.
 ## Example config.yaml for `finetune_settings` and `files_settings`
@@ -32,6 +33,10 @@ finetune_settings:
     api_version: "2023-03-15-preview"
   - custom_llm_provider: openai
     api_key: os.environ/OPENAI_API_KEY
+  - custom_llm_provider: "vertex_ai"
+    vertex_project: "adroit-crow-413218"
+    vertex_location: "us-central1"
+    vertex_credentials: "/Users/ishaanjaffer/Downloads/adroit-crow-413218-a956eef1a2a8.json"
 
 # for /files endpoints
 files_settings:
@@ -74,6 +79,9 @@ curl http://localhost:4000/v1/files \
 ## Create fine-tuning job
 
 <Tabs>
+<TabItem value="azure" label="Azure OpenAI">
+
+<Tabs>
 <TabItem value="openai" label="OpenAI Python SDK">
 
 ```python
@@ -97,6 +105,40 @@ curl http://localhost:4000/v1/fine_tuning/jobs \
     "training_file": "file-abc123"
     }'
 ```
+</TabItem>
+</Tabs>
+
+</TabItem>
+
+<TabItem value="Vertex" label="VertexAI">
+
+<Tabs>
+<TabItem value="openai" label="OpenAI Python SDK">
+
+```python
+ft_job = await client.fine_tuning.jobs.create(
+    model="gemini-1.0-pro-002",                  # Vertex model you want to fine-tune
+    training_file="gs://cloud-samples-data/ai-platform/generative_ai/sft_train_data.jsonl",                 # file_id from create file response
+    extra_body={"custom_llm_provider": "vertex_ai"}, # tell litellm proxy which provider to use
+)
+```
+</TabItem>
+
+<TabItem value="curl" label="curl">
+
+```shell
+curl http://localhost:4000/v1/fine_tuning/jobs \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer sk-1234" \
+    -d '{
+    "custom_llm_provider": "vertex_ai",
+    "model": "gemini-1.0-pro-002",
+    "training_file": "gs://cloud-samples-data/ai-platform/generative_ai/sft_train_data.jsonl"
+    }'
+```
+</TabItem>
+</Tabs>
+
 </TabItem>
 </Tabs>
 
