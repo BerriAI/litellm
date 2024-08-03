@@ -187,6 +187,7 @@ async def test_azure_create_fine_tune_jobs_async():
 
 
 @pytest.mark.asyncio()
+@pytest.mark.skip(reason="skipping until we can cancel fine tuning jobs")
 async def test_create_vertex_fine_tune_jobs():
     try:
         verbose_logger.setLevel(logging.DEBUG)
