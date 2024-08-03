@@ -90,7 +90,7 @@ litellm.secret_manager = client
 litellm.get_secret("your-test-key")
 ```
 
-### Usage with OpenAI Proxy Server
+### Usage with LiteLLM Proxy Server
 
 1. Install Proxy dependencies 
 ```bash
@@ -129,7 +129,7 @@ litellm --config /path/to/config.yaml
 
 Use encrypted keys from Google KMS on the proxy
 
-### Usage with OpenAI Proxy Server
+### Usage with LiteLLM Proxy Server
 
 ## Step 1. Add keys to env 
 ```
