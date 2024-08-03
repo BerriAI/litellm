@@ -2,13 +2,18 @@ import traceback
 from typing import Any, Coroutine, Optional, Union
 
 import httpx
+from openai.types.fine_tuning.fine_tuning_job import FineTuningJob, Hyperparameters
 
 from litellm._logging import verbose_logger
 from litellm.llms.base import BaseLLM
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.vertex_httpx import VertexLLM
 from litellm.types.llms.openai import FineTuningJobCreate
-from litellm.types.llms.vertex_ai import FineTuneJobCreate, FineTunesupervisedTuningSpec
+from litellm.types.llms.vertex_ai import (
+    FineTuneJobCreate,
+    FineTunesupervisedTuningSpec,
+    ResponseTuningJob,
+)
 
 
 class VertexFineTuningAPI(VertexLLM):
@@ -22,12 +27,39 @@ class VertexFineTuningAPI(VertexLLM):
             timeout=httpx.Timeout(timeout=600.0, connect=5.0)
         )
 
+    def convert_vertex_response_to_open_ai_response(
+        self, response: ResponseTuningJob
+    ) -> FineTuningJob:
+        return FineTuningJob(
+            id=response["name"],
+            created_at=1722645989,
+            fine_tuned_model=response["tunedModelDisplayName"],
+            finished_at=None,
+            hyperparameters=Hyperparameters(
+                n_epochs=0, batch_size="", learning_rate_multiplier=""
+            ),
+            model=response["baseModel"],
+            object="fine_tuning.job",
+            organization_id="",
+            result_files=[],
+            seed=0,
+            status="validating_files",
+            trained_tokens=None,
+            training_file=response["supervisedTuningSpec"]["trainingDatasetUri"],
+            validation_file=None,
+            estimated_finish=None,
+            integrations=[],
+            user_provided_suffix=None,
+        )
+
     async def acreate_fine_tuning_job(
         self,
         fine_tuning_url: str,
         headers: dict,
         request_data: dict,
     ):
+        from litellm.fine_tuning.main import FineTuningJob
+
         try:
             verbose_logger.debug(
                 "about to create fine tuning job: %s, request_data: %s",
@@ -49,7 +81,13 @@ class VertexFineTuningAPI(VertexLLM):
                 "got response from creating fine tuning job: %s", response.json()
             )
 
-            return response
+            vertex_response = ResponseTuningJob(**response.json())
+
+            verbose_logger.debug("vertex_response %s", vertex_response)
+            open_ai_response = self.convert_vertex_response_to_open_ai_response(
+                vertex_response
+            )
+            return open_ai_response
 
         except Exception as e:
             verbose_logger.error("asyncerror creating fine tuning job %s", e)
@@ -94,7 +132,6 @@ class VertexFineTuningAPI(VertexLLM):
         fine_tune_job = FineTuneJobCreate(
             baseModel=create_fine_tuning_job_data.model,
             supervisedTuningSpec=supervised_tuning_spec,
-            tunedModelDisplayName="ishaan-test",
         )
 
         fine_tuning_url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/tuningJobs"
@@ -109,5 +146,3 @@ class VertexFineTuningAPI(VertexLLM):
         #     headers=headers,
         #     json=fine_tune_job,
         # )
-
-        # response = openai_client.fine_tuning.jobs.create(**create_fine_tuning_job_data)  # type: ignore
