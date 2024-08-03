@@ -61,7 +61,7 @@ litellm --config /path/to/config.yaml
 ```
 
 ## Azure Key Vault
-
+<!-- 
 ### Quick Start
 
 ```python 
@@ -88,7 +88,7 @@ import litellm
 litellm.secret_manager = client
 
 litellm.get_secret("your-test-key")
-```
+``` -->
 
 ### Usage with LiteLLM Proxy Server
 
@@ -160,29 +160,6 @@ $ litellm --test
 
 [Quick Test Proxy](./proxy/quick_start#using-litellm-proxy---curl-request-openai-package-langchain-langchain-js)
 
-
-## Infisical Secret Manager
-Integrates with [Infisical's Secret Manager](https://infisical.com/) for secure storage and retrieval of API keys and sensitive data.
-
-### Usage
-liteLLM manages reading in your LLM API secrets/env variables from Infisical for you
-
-```python
-import litellm
-from infisical import InfisicalClient
-
-litellm.secret_manager = InfisicalClient(token="your-token")
-
-messages = [
-    {"role": "system", "content": "You are a helpful assistant."},
-    {"role": "user", "content": "What's the weather like today?"},
-]
-
-response = litellm.completion(model="gpt-3.5-turbo", messages=messages)
-
-print(response)
-```
-
-
+<!-- 
 ## .env Files
-If no secret manager client is specified, Litellm automatically uses the `.env` file to manage sensitive data.
+If no secret manager client is specified, Litellm automatically uses the `.env` file to manage sensitive data. -->
