@@ -202,5 +202,10 @@ async def test_create_vertex_fine_tune_jobs():
             vertex_location="us-central1",
             vertex_credentials=vertex_credentials,
         )
+        print("vertex ai create fine tuning response=", create_fine_tuning_response)
+
+        assert create_fine_tuning_response.id is not None
+        assert create_fine_tuning_response.model == "gemini-1.0-pro-002"
+        assert create_fine_tuning_response.object == "fine_tuning.job"
     except:
         pass
