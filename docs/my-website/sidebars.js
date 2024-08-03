@@ -42,6 +42,7 @@ const sidebars = {
         "proxy/configs",
         "proxy/reliability",
         "proxy/cost_tracking",
+        "proxy/custom_pricing",
         "proxy/self_serve",
         "proxy/virtual_keys",
         {
@@ -183,7 +184,6 @@ const sidebars = {
         "anthropic_completion"
       ],
     },
-    "proxy/custom_pricing",
     {
       type: "category", 
       label: "Secret Manager", 
@@ -199,6 +199,8 @@ const sidebars = {
         "routing",
         "scheduler",
         "set_keys",
+        "completion/token_usage",
+        "sdk_custom_pricing",
         "budget_manager",
         "caching/all_caches",
         {
@@ -208,7 +210,6 @@ const sidebars = {
         },
       ],
     },
-    "completion/token_usage",
     "load_test",
     {
       type: "category",
