@@ -48,10 +48,10 @@ Use `litellm.get_supported_openai_params()` for an updated list of params for ea
 |Anyscale | ✅ | ✅ | ✅ | ✅ | ✅ |
 |Cohere| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |   |   |
 |Huggingface| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |   |    |
-|Openrouter| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | | | | | ✅ | | | | |
+|Openrouter| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | | | | | ✅ |✅ | | | |
 |AI21| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |
 |VertexAI| ✅ | ✅ |  | ✅ | ✅ |  |  |  |  |   | | | | ✅ | ✅ | | |
-|Bedrock| ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |  |   | | | | | ✅ (for anthropic) | |
+|Bedrock| ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |  |   | | | | | ✅ (model dependent) | |
 |Sagemaker| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |
 |TogetherAI| ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |  |   | ✅ |
 |AlephAlpha| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |   |  |   |
@@ -61,6 +61,7 @@ Use `litellm.get_supported_openai_params()` for an updated list of params for ea
 |Ollama| ✅ | ✅ | ✅ | ✅ | ✅ |  |   | ✅ |  |   | | | ✅ |  | |✅| | | | | | |
 |Databricks| ✅ | ✅ | ✅ | ✅ | ✅ |  |   | |  |   | | | | | |
 |ClarifAI| ✅ | ✅ | |✅ | ✅ |  |   | |  |   | | | | | |
+|Github| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | | | | | ✅ |✅ (model dependent)|✅ (model dependent)| | |
 :::note
 
 By default, LiteLLM raises an exception if the openai param being passed in isn't supported. 
