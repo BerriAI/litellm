@@ -6,7 +6,7 @@ https://github.com/marketplace/models
 
 :::tip
 
-**We support ALL Github models, just set `model=groq/<any-model-on-github>` as a prefix when sending litellm requests**
+**We support ALL Github models, just set `model=github/<any-model-on-github>` as a prefix when sending litellm requests**
 
 :::
 
