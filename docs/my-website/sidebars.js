@@ -161,6 +161,7 @@ const sidebars = {
         "providers/perplexity", 
         "providers/friendliai",
         "providers/groq", 
+        "providers/github", 
         "providers/deepseek", 
         "providers/fireworks_ai",
         "providers/clarifai", 
