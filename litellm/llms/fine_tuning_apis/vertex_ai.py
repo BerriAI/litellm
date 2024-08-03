@@ -47,7 +47,7 @@ class VertexFineTuningAPI(VertexLLM):
             "validating_files", "queued", "running", "succeeded", "failed", "cancelled"
         ] = "queued"
         if response["state"] == "JOB_STATE_PENDING":
-            status = "validating_files"
+            status = "queued"
         if response["state"] == "JOB_STATE_SUCCEEDED":
             status = "succeeded"
         if response["state"] == "JOB_STATE_FAILED":
