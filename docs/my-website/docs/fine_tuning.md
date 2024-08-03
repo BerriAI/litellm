@@ -124,7 +124,7 @@ ft_job = await client.fine_tuning.jobs.create(
 ```
 </TabItem>
 
-<TabItem value="curl" label="curl">
+<TabItem value="curl" label="curl (Unified API)">
 
 ```shell
 curl http://localhost:4000/v1/fine_tuning/jobs \
@@ -136,6 +136,28 @@ curl http://localhost:4000/v1/fine_tuning/jobs \
     "training_file": "gs://cloud-samples-data/ai-platform/generative_ai/sft_train_data.jsonl"
     }'
 ```
+</TabItem>
+
+<TabItem value="curl-vtx" label="curl (VertexAI API)">
+
+:::info
+
+Use this to create Fine tuning Jobs in [the Vertex AI API Format](https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/tuning#create-tuning)
+
+:::
+
+```shell
+curl http://localhost:4000/v1/projects/tuningJobs \
+      -H "Content-Type: application/json" \
+      -H "Authorization: Bearer sk-1234" \
+      -d '{
+  "baseModel": "gemini-1.0-pro-002",
+  "supervisedTuningSpec" : {
+      "training_dataset_uri": "gs://cloud-samples-data/ai-platform/generative_ai/sft_train_data.jsonl"
+  }
+}'
+```
+
 </TabItem>
 </Tabs>
 
