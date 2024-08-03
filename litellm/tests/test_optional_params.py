@@ -420,3 +420,21 @@ def test_dynamic_drop_additional_params_e2e():
         print(mock_response.call_args.kwargs["data"])
         assert "response_format" not in mock_response.call_args.kwargs["data"]
         assert "additional_drop_params" not in mock_response.call_args.kwargs["data"]
+
+
+def test_get_optional_params_image_gen():
+    response = litellm.utils.get_optional_params_image_gen(
+        aws_region_name="us-east-1", custom_llm_provider="openai"
+    )
+
+    print(response)
+
+    assert "aws_region_name" not in response
+
+    response = litellm.utils.get_optional_params_image_gen(
+        aws_region_name="us-east-1", custom_llm_provider="bedrock"
+    )
+
+    print(response)
+
+    assert "aws_region_name" in response
