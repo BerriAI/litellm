@@ -119,14 +119,7 @@ class VertexFineTuningAPI(VertexLLM):
                 "got response from creating fine tuning job: %s", response.json()
             )
 
-            vertex_response = ResponseTuningJob(
-                name=None,
-                tunedModelDisplayName=None,
-                baseModel=None,
-                supervisedTuningSpec=None,
-                state=None,
-                createTime=None,
-                updateTime=None,
+            vertex_response = ResponseTuningJob(  # type: ignore
                 **response.json(),
             )
 
@@ -209,14 +202,7 @@ class VertexFineTuningAPI(VertexLLM):
         verbose_logger.debug(
             "got response from creating fine tuning job: %s", response.json()
         )
-        vertex_response = ResponseTuningJob(
-            name=None,
-            tunedModelDisplayName=None,
-            baseModel=None,
-            supervisedTuningSpec=None,
-            state=None,
-            createTime=None,
-            updateTime=None,
+        vertex_response = ResponseTuningJob(  # type: ignore
             **response.json(),
         )
 
