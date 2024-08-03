@@ -976,9 +976,7 @@ class ImageResponse(OpenAIImageResponse):
         else:
             created = int(time.time())
 
-        _data = {"data": data, "created": created}
-
-        super().__init__(**_data)
+        super().__init__(created=created, data=data)
         self.usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
     def __contains__(self, key):
