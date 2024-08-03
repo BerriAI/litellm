@@ -1,5 +1,6 @@
 import traceback
-from typing import Any, Coroutine, Optional, Union
+from datetime import datetime
+from typing import Any, Coroutine, Literal, Optional, Union
 
 import httpx
 from openai.types.fine_tuning.fine_tuning_job import FineTuningJob, Hyperparameters
@@ -27,12 +28,40 @@ class VertexFineTuningAPI(VertexLLM):
             timeout=httpx.Timeout(timeout=600.0, connect=5.0)
         )
 
+    def convert_response_created_at(self, response: ResponseTuningJob):
+        try:
+            create_time = datetime.fromisoformat(
+                response["createTime"].replace("Z", "+00:00")
+            )
+            # Convert to Unix timestamp (seconds since epoch)
+            created_at = int(create_time.timestamp())
+
+            return created_at
+        except Exception as e:
+            return 0
+
     def convert_vertex_response_to_open_ai_response(
         self, response: ResponseTuningJob
     ) -> FineTuningJob:
+        status: Literal[
+            "validating_files", "queued", "running", "succeeded", "failed", "cancelled"
+        ] = "queued"
+        if response["state"] == "JOB_STATE_PENDING":
+            status = "validating_files"
+        if response["state"] == "JOB_STATE_SUCCEEDED":
+            status = "succeeded"
+        if response["state"] == "JOB_STATE_FAILED":
+            status = "failed"
+        if response["state"] == "JOB_STATE_CANCELLED":
+            status = "cancelled"
+        if response["state"] == "JOB_STATE_RUNNING":
+            status = "running"
+
+        created_at = self.convert_response_created_at(response)
+
         return FineTuningJob(
             id=response["name"],
-            created_at=1722645989,
+            created_at=created_at,
             fine_tuned_model=response["tunedModelDisplayName"],
             finished_at=None,
             hyperparameters=Hyperparameters(
@@ -43,7 +72,7 @@ class VertexFineTuningAPI(VertexLLM):
             organization_id="",
             result_files=[],
             seed=0,
-            status="validating_files",
+            status=status,
             trained_tokens=None,
             training_file=response["supervisedTuningSpec"]["trainingDatasetUri"],
             validation_file=None,
