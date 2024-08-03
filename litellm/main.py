@@ -5151,8 +5151,8 @@ def stream_chunk_builder(
     function_call_chunks = [
         chunk
         for chunk in chunks
-        if "function_calls" in chunk["choices"][0]["delta"]
-        and chunk["choices"][0]["delta"]["function_calls"] is not None
+        if "function_call" in chunk["choices"][0]["delta"]
+        and chunk["choices"][0]["delta"]["function_call"] is not None
     ]
 
     if len(function_call_chunks) > 0:
