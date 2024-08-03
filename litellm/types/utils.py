@@ -304,7 +304,7 @@ class Message(OpenAIObject):
         content: Optional[str] = None,
         role: Literal["assistant"] = "assistant",
         function_call=None,
-        tool_calls=None,
+        tool_calls: Optional[list] = None,
         **params,
     ):
         init_values = {
@@ -322,7 +322,7 @@ class Message(OpenAIObject):
                     )
                     for tool_call in tool_calls
                 ]
-                if tool_calls is not None
+                if tool_calls is not None and len(tool_calls) > 0
                 else None
             ),
         }
@@ -445,8 +445,6 @@ class Choices(OpenAIObject):
 
 
 class Usage(OpenAIObject):
-    prompt_cache_hit_tokens: Optional[int] = Field(default=None)
-    prompt_cache_miss_tokens: Optional[int] = Field(default=None)
     prompt_tokens: Optional[int] = Field(default=None)
     completion_tokens: Optional[int] = Field(default=None)
     total_tokens: Optional[int] = Field(default=None)
@@ -456,16 +454,15 @@ class Usage(OpenAIObject):
         prompt_tokens: Optional[int] = None,
         completion_tokens: Optional[int] = None,
         total_tokens: Optional[int] = None,
-        prompt_cache_hit_tokens: Optional[int] = None,
-        prompt_cache_miss_tokens: Optional[int] = None,
+        **params,
     ):
         data = {
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
             "total_tokens": total_tokens,
-            "prompt_cache_hit_tokens": prompt_cache_hit_tokens,
-            "prompt_cache_miss_tokens": prompt_cache_miss_tokens,
+            **params,
         }
+
         super().__init__(**data)
 
     def __contains__(self, key):

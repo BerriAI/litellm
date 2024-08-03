@@ -472,11 +472,10 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         try:
-            self.print_verbose(f"Inside Max Parallel Request Failure Hook")
-            global_max_parallel_requests = (
-                kwargs["litellm_params"]
-                .get("metadata", {})
-                .get("global_max_parallel_requests", None)
+            self.print_verbose("Inside Max Parallel Request Failure Hook")
+            _metadata = kwargs["litellm_params"].get("metadata", {}) or {}
+            global_max_parallel_requests = _metadata.get(
+                "global_max_parallel_requests", None
             )
             user_api_key = (
                 kwargs["litellm_params"].get("metadata", {}).get("user_api_key", None)
