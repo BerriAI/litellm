@@ -2496,17 +2496,18 @@ class Router:
                             raise e
             except Exception as new_exception:
                 verbose_router_logger.error(
-                    "litellm.router.py::async_function_with_fallbacks() - Error occurred while trying to do fallbacks - {}\n{}".format(
-                        str(new_exception), traceback.format_exc()
+                    "litellm.router.py::async_function_with_fallbacks() - Error occurred while trying to do fallbacks - {}\n{}\n\nDebug Information:\nCooldown Deployments={}".format(
+                        str(new_exception),
+                        traceback.format_exc(),
+                        await self._async_get_cooldown_deployments_with_debug_info(),
                     )
                 )
 
             if hasattr(original_exception, "message"):
                 # add the available fallbacks to the exception
-                original_exception.message += "\nReceived Model Group={}\nAvailable Model Group Fallbacks={}\nCooldown Deployments={}".format(
+                original_exception.message += "\nReceived Model Group={}\nAvailable Model Group Fallbacks={}".format(
                     model_group,
                     fallback_model_group,
-                    await self._async_get_cooldown_deployments_with_debug_info(),
                 )
             raise original_exception
 
