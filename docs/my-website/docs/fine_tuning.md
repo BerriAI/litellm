@@ -142,6 +142,96 @@ curl http://localhost:4000/v1/fine_tuning/jobs \
 </TabItem>
 </Tabs>
 
+### Request Body
+
+<Tabs>
+<TabItem value="params" label="Supported Params">
+
+* `model`
+
+    **Type:** string  
+    **Required:** Yes  
+    The name of the model to fine-tune
+
+* `custom_llm_provider`
+
+    **Type:** `Literal["azure", "openai", "vertex_ai"]`
+
+    **Required:** Yes
+    The name of the model to fine-tune. You can select one of the [**supported providers**](#supported-providers)
+
+* `training_file`
+
+    **Type:** string  
+    **Required:** Yes  
+    The ID of an uploaded file that contains training data.
+    - See **upload file** for how to upload a file.
+    - Your dataset must be formatted as a JSONL file.
+
+* `hyperparameters`
+
+    **Type:** object  
+    **Required:** No  
+    The hyperparameters used for the fine-tuning job.
+    > #### Supported `hyperparameters`
+    > #### batch_size
+    **Type:** string or integer  
+    **Required:** No  
+    Number of examples in each batch. A larger batch size means that model parameters are updated less frequently, but with lower variance.
+    > #### learning_rate_multiplier
+    **Type:** string or number  
+    **Required:** No  
+    Scaling factor for the learning rate. A smaller learning rate may be useful to avoid overfitting.
+
+    > #### n_epochs
+    **Type:** string or integer  
+    **Required:** No  
+    The number of epochs to train the model for. An epoch refers to one full cycle through the training dataset.
+
+* `suffix`
+    **Type:** string or null  
+    **Required:** No  
+    **Default:** null  
+    A string of up to 18 characters that will be added to your fine-tuned model name.
+    Example: A `suffix` of "custom-model-name" would produce a model name like `ft:gpt-4o-mini:openai:custom-model-name:7p4lURel`.
+
+* `validation_file`
+    **Type:** string or null  
+    **Required:** No  
+    The ID of an uploaded file that contains validation data.
+    - If provided, this data is used to generate validation metrics periodically during fine-tuning.
+
+
+* `integrations`
+    **Type:** array or null  
+    **Required:** No  
+    A list of integrations to enable for your fine-tuning job.
+
+* `seed`
+    **Type:** integer or null  
+    **Required:** No  
+    The seed controls the reproducibility of the job. Passing in the same seed and job parameters should produce the same results, but may differ in rare cases. If a seed is not specified, one will be generated for you.
+
+</TabItem>
+<TabItem value="example" label="Example Request Body">
+
+```json
+{
+  "model": "gpt-4o-mini",
+  "training_file": "file-abcde12345",
+  "hyperparameters": {
+    "batch_size": 4,
+    "learning_rate_multiplier": 0.1,
+    "n_epochs": 3
+  },
+  "suffix": "custom-model-v1",
+  "validation_file": "file-fghij67890",
+  "seed": 42
+}
+```
+</TabItem>
+</Tabs>
+
 ## Cancel fine-tuning job
 
 <Tabs>
