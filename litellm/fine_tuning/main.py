@@ -255,6 +255,7 @@ def create_fine_tuning_job(
                 vertex_location=vertex_ai_location,
                 timeout=timeout,
                 api_base=api_base,
+                kwargs=kwargs,
             )
         else:
             raise litellm.exceptions.BadRequestError(
