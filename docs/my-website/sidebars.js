@@ -50,6 +50,14 @@ const sidebars = {
           label: "🪢 Logging",
           items: ["proxy/logging", "proxy/bucket", "proxy/streaming_logging"],
         },
+        {
+          type: "category", 
+          label: "Secret Manager - storing LLM API Keys", 
+          items: [
+            "secret", 
+            "oidc"
+          ]
+        },
         "proxy/team_logging",
         "proxy/guardrails",
         "proxy/tag_routing",
@@ -183,14 +191,6 @@ const sidebars = {
         "fine_tuning",
         "anthropic_completion"
       ],
-    },
-    {
-      type: "category", 
-      label: "Secret Manager", 
-      items: [
-        "secret", 
-        "oidc"
-      ]
     },
     {
       type: "category",
