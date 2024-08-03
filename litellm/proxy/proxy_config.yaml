@@ -58,5 +58,3 @@ general_settings:
   # google cloud run maximum repsonses size is 32MB
   max_response_size_mb: 10
 
-litellm_settings:
-  callbacks: ["gcs_bucket"] # 👈 KEY CHANGE
