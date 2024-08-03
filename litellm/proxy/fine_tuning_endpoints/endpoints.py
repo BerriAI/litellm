@@ -429,3 +429,72 @@ async def retrieve_fine_tuning_job(
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", 500),
             )
+
+
+@router.post(
+    "/v1/projects/tuningJobs",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["fine-tuning"],
+    summary="✨ (Enterprise) Create Fine-Tuning Jobs",
+)
+async def vertex_create_fine_tuning_job(
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    this is a pass through endpoint for the Vertex AI API. /tuningJobs endpoint
+
+    it uses the vertex ai credentials on the proxy and forwards to vertex ai api
+    """
+    try:
+        from litellm.fine_tuning.main import vertex_fine_tuning_apis_instance
+        from litellm.proxy.proxy_server import (
+            add_litellm_data_to_request,
+            general_settings,
+            get_custom_headers,
+            premium_user,
+            proxy_config,
+            proxy_logging_obj,
+            version,
+        )
+
+        # get configs for custom_llm_provider
+        llm_provider_config = get_fine_tuning_provider_config(
+            custom_llm_provider="vertex_ai"
+        )
+
+        vertex_project = llm_provider_config.get("vertex_project", None)
+        vertex_location = llm_provider_config.get("vertex_location", None)
+        vertex_credentials = llm_provider_config.get("vertex_credentials", None)
+        request_data_json = await request.json()
+        response = await vertex_fine_tuning_apis_instance.pass_through_vertex_ai_fine_tuning_job(
+            request_data=request_data_json,
+            vertex_project=vertex_project,
+            vertex_location=vertex_location,
+            vertex_credentials=vertex_credentials,
+        )
+
+        return response
+    except Exception as e:
+        verbose_proxy_logger.error(
+            "litellm.proxy.proxy_server.v1/projects/tuningJobs(): Exception occurred - {}".format(
+                str(e)
+            )
+        )
+        verbose_proxy_logger.debug(traceback.format_exc())
+        if isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "message", str(e.detail)),
+                type=getattr(e, "type", "None"),
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+            )
+        else:
+            error_msg = f"{str(e)}"
+            raise ProxyException(
+                message=getattr(e, "message", error_msg),
+                type=getattr(e, "type", "None"),
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", 500),
+            )
