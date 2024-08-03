@@ -34,14 +34,13 @@ def set_default_vertex_config(config):
     if config is None:
         return
 
-    if not isinstance(config, list):
-        raise ValueError("invalid files config, expected a list is not a list")
+    if not isinstance(config, dict):
+        raise ValueError("invalid config, vertex default config must be a dictionary")
 
-    for element in config:
-        if isinstance(element, dict):
-            for key, value in element.items():
-                if isinstance(value, str) and value.startswith("os.environ/"):
-                    element[key] = litellm.get_secret(value)
+    if isinstance(config, dict):
+        for key, value in config.items():
+            if isinstance(value, str) and value.startswith("os.environ/"):
+                config[key] = litellm.get_secret(value)
 
     default_vertex_config = config
 
@@ -102,7 +101,6 @@ async def execute_post_vertex_ai_request(
 async def vertex_create_fine_tuning_job(
     request: Request,
     fastapi_response: Response,
-    endpoint_name: str,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
