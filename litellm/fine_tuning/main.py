@@ -224,7 +224,7 @@ def create_fine_tuning_job(
                 _is_async=_is_async,
             )
         elif custom_llm_provider == "vertex_ai":
-            api_base = optional_params.api_base
+            api_base = optional_params.api_base or ""
             vertex_ai_project = (
                 optional_params.vertex_project
                 or litellm.vertex_project
