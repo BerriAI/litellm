@@ -213,6 +213,8 @@ from litellm.proxy.utils import (
     send_email,
     update_spend,
 )
+from litellm.proxy.vertex_ai_endpoints.vertex_endpoints import router as vertex_router
+from litellm.proxy.vertex_ai_endpoints.vertex_endpoints import set_default_vertex_config
 from litellm.router import (
     AssistantsTypedDict,
     Deployment,
@@ -1817,6 +1819,10 @@ class ProxyConfig:
         ## /files endpoint config
         files_config = config.get("files_settings", None)
         set_files_config(config=files_config)
+
+        ## default config for vertex ai routes
+        default_vertex_config = config.get("default_vertex_config", None)
+        set_default_vertex_config(config=default_vertex_config)
 
         ## ROUTER SETTINGS (e.g. routing_strategy, ...)
         router_settings = config.get("router_settings", None)
@@ -9631,6 +9637,7 @@ def cleanup_router_config_variables():
 
 app.include_router(router)
 app.include_router(fine_tuning_router)
+app.include_router(vertex_router)
 app.include_router(health_router)
 app.include_router(key_management_router)
 app.include_router(internal_user_router)

@@ -240,3 +240,59 @@ class VertexFineTuningAPI(VertexLLM):
             vertex_response
         )
         return open_ai_response
+
+    async def pass_through_vertex_ai_POST_request(
+        self,
+        request_data: dict,
+        vertex_project: str,
+        vertex_location: str,
+        vertex_credentials: str,
+        request_route: str,
+    ):
+        auth_header, _ = self._get_token_and_url(
+            model="",
+            gemini_api_key=None,
+            vertex_credentials=vertex_credentials,
+            vertex_project=vertex_project,
+            vertex_location=vertex_location,
+            stream=False,
+            custom_llm_provider="vertex_ai_beta",
+            api_base="",
+        )
+
+        headers = {
+            "Authorization": f"Bearer {auth_header}",
+            "Content-Type": "application/json",
+        }
+
+        url = None
+        if request_route == "/tuningJobs":
+            url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/tuningJobs"
+        elif "/tuningJobs/" in request_route and "cancel" in request_route:
+            url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/tuningJobs{request_route}"
+        elif "generateContent" in request_route:
+            url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}{request_route}"
+        elif "predict" in request_route:
+            url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}{request_route}"
+        elif "/batchPredictionJobs" in request_route:
+            url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}{request_route}"
+        elif "countTokens" in request_route:
+            url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}{request_route}"
+        else:
+            raise ValueError(f"Unsupported Vertex AI request route: {request_route}")
+        if self.async_handler is None:
+            raise ValueError("VertexAI Fine Tuning - async_handler is not initialized")
+
+        response = await self.async_handler.post(
+            headers=headers,
+            url=url,
+            json=request_data,  # type: ignore
+        )
+
+        if response.status_code != 200:
+            raise Exception(
+                f"Error creating fine tuning job. Status code: {response.status_code}. Response: {response.text}"
+            )
+
+        response_json = response.json()
+        return response_json
