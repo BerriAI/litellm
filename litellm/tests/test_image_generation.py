@@ -194,6 +194,9 @@ async def test_aimage_generation_bedrock_with_optional_params():
             pytest.fail(f"An exception occurred - {str(e)}")
 
 
+from openai.types.image import Image
+
+
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_aimage_generation_vertex_ai(sync_mode):
@@ -218,7 +221,7 @@ async def test_aimage_generation_vertex_ai(sync_mode):
         assert len(response.data) > 0
 
         for d in response.data:
-            assert isinstance(d, litellm.ImageObject)
+            assert isinstance(d, Image)
             print("data in response.data", d)
             assert d.b64_json is not None
     except litellm.ServiceUnavailableError as e:
