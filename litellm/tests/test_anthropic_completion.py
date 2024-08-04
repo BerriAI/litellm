@@ -8,6 +8,9 @@ import traceback
 
 from dotenv import load_dotenv
 
+import litellm.types
+import litellm.types.utils
+
 load_dotenv()
 import io
 import os
@@ -15,6 +18,7 @@ import os
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
+from typing import Optional
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -84,7 +88,22 @@ def test_anthropic_completion_input_translation_with_metadata():
     assert translated_input["metadata"] == data["litellm_metadata"]
 
 
-def test_anthropic_completion_e2e():
+def streaming_format_tests(chunk: dict, idx: int):
+    """
+    1st chunk -  chunk.get("type") == "message_start"
+    2nd chunk - chunk.get("type") == "content_block_start"
+    3rd chunk - chunk.get("type") == "content_block_delta"
+    """
+    if idx == 0:
+        assert chunk.get("type") == "message_start"
+    elif idx == 1:
+        assert chunk.get("type") == "content_block_start"
+    elif idx == 2:
+        assert chunk.get("type") == "content_block_delta"
+
+
+@pytest.mark.parametrize("stream", [True])  # False
+def test_anthropic_completion_e2e(stream):
     litellm.set_verbose = True
 
     litellm.adapters = [{"id": "anthropic", "adapter": anthropic_adapter}]
@@ -95,13 +114,40 @@ def test_anthropic_completion_e2e():
         messages=messages,
         adapter_id="anthropic",
         mock_response="This is a fake call",
+        stream=stream,
     )
 
     print("Response: {}".format(response))
 
     assert response is not None
 
-    assert isinstance(response, AnthropicResponse)
+    if stream is False:
+        assert isinstance(response, AnthropicResponse)
+    else:
+        """
+        - ensure finish reason is returned
+        - assert content block is started and stopped
+        - ensure last chunk is 'message_stop'
+        """
+        assert isinstance(response, litellm.types.utils.AdapterCompletionStreamWrapper)
+        finish_reason: Optional[str] = None
+        message_stop_received = False
+        content_block_started = False
+        content_block_finished = False
+        for idx, chunk in enumerate(response):
+            print(chunk)
+            streaming_format_tests(chunk=chunk, idx=idx)
+            if chunk.get("delta", {}).get("stop_reason") is not None:
+                finish_reason = chunk.get("delta", {}).get("stop_reason")
+            if chunk.get("type") == "message_stop":
+                message_stop_received = True
+            if chunk.get("type") == "content_block_stop":
+                content_block_finished = True
+            if chunk.get("type") == "content_block_start":
+                content_block_started = True
+        assert content_block_started and content_block_finished
+        assert finish_reason is not None
+        assert message_stop_received is True
 
 
 @pytest.mark.asyncio

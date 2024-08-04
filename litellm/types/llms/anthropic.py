@@ -136,7 +136,7 @@ class ContentJsonBlockDelta(TypedDict):
 
 
 class ContentBlockDelta(TypedDict):
-    type: str
+    type: Literal["content_block_delta"]
     index: int
     delta: Union[ContentTextBlockDelta, ContentJsonBlockDelta]
 
