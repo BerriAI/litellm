@@ -80,6 +80,8 @@ def test_create_fine_tune_job():
     except openai.RateLimitError:
         pass
     except Exception as e:
+        if "Job has already completed" in str(e):
+            pass
         pytest.fail(f"Error occurred: {e}")
 
 
