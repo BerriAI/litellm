@@ -92,50 +92,6 @@ const sidebars = {
     },
     {
       type: "category",
-      label: "Completion()",
-      link: {
-        type: "generated-index",
-        title: "Completion()",
-        description: "Details on the completion() function",
-        slug: "/completion",
-      },
-      items: [
-        "completion/input",
-        "completion/provider_specific_params",
-        "completion/json_mode",
-        "completion/drop_params",
-        "completion/prompt_formatting",
-        "completion/output",
-        "exception_mapping",
-        "completion/stream",
-        "completion/message_trimming",
-        "completion/function_call",
-        "completion/vision",
-        "completion/model_alias",
-        "completion/batching",
-        "completion/mock_requests",
-        "completion/reliable_completions",
-      ],
-    },
-    {
-      type: "category",
-      label: "Supported Endpoints - /images, /audio/speech, /assistants etc",
-      items: [
-        "embedding/supported_embedding",
-        "embedding/async_embedding",
-        "embedding/moderation",
-        "image_generation",
-        "audio_transcription",
-        "text_to_speech",
-        "assistants",
-        "batches",
-        "fine_tuning",
-        "anthropic_completion",
-        "vertex_ai"
-      ],
-    },
-    {
-      type: "category",
       label: "💯 Supported Models & Providers",
       link: {
         type: "generated-index",
@@ -222,7 +178,7 @@ const sidebars = {
     },
     {
       type: "category",
-      label: "Embedding(), Image Generation(), Assistants(), Moderation(), Audio Transcriptions(), TTS(), Batches(), Fine-Tuning()",
+      label: "Supported Endpoints - /images, /audio/speech, /assistants etc",
       items: [
         "embedding/supported_embedding",
         "embedding/async_embedding",
@@ -233,7 +189,8 @@ const sidebars = {
         "assistants",
         "batches",
         "fine_tuning",
-        "anthropic_completion"
+        "anthropic_completion",
+        "vertex_ai"
       ],
     },
     {
