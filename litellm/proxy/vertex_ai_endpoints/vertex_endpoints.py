@@ -183,6 +183,69 @@ async def vertex_predict_endpoint(
 
 
 @router.post(
+    "/vertex-ai/publishers/google/models/{model_id:path}:countTokens",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["Vertex AI endpoints"],
+)
+async def vertex_countTokens_endpoint(
+    request: Request,
+    fastapi_response: Response,
+    model_id: str,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    this is a pass through endpoint for the Vertex AI API. /countTokens endpoint
+    https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/count-tokens#curl
+
+
+    Example Curl:
+    ```
+    curl http://localhost:4000/vertex-ai/publishers/google/models/gemini-1.5-flash-001:countTokens \
+      -H "Content-Type: application/json" \
+      -H "Authorization: Bearer sk-1234" \
+      -d '{"contents":[{"role": "user", "parts":[{"text": "hi"}]}]}'
+    ```
+
+    it uses the vertex ai credentials on the proxy and forwards to vertex ai api
+    """
+    try:
+        response = await execute_post_vertex_ai_request(
+            request=request,
+            route=f"/publishers/google/models/{model_id}:countTokens",
+        )
+        return response
+    except Exception as e:
+        raise exception_handler(e) from e
+
+
+@router.post(
+    "/vertex-ai/batchPredictionJobs",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["Vertex AI endpoints"],
+)
+async def vertex_create_batch_prediction_job(
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    this is a pass through endpoint for the Vertex AI API. /batchPredictionJobs endpoint
+
+    Vertex API Reference: https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/batch-prediction-api#syntax
+
+    it uses the vertex ai credentials on the proxy and forwards to vertex ai api
+    """
+    try:
+        response = await execute_post_vertex_ai_request(
+            request=request,
+            route="/batchPredictionJobs",
+        )
+        return response
+    except Exception as e:
+        raise exception_handler(e) from e
+
+
+@router.post(
     "/vertex-ai/tuningJobs",
     dependencies=[Depends(user_api_key_auth)],
     tags=["Vertex AI endpoints"],
