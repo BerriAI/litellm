@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from litellm.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.llms.openai import ChatCompletionRequest
-from litellm.types.utils import ModelResponse
+from litellm.types.utils import AdapterCompletionStreamWrapper, ModelResponse
 
 
 class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callback#callback-class
@@ -76,7 +76,9 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         """
         pass
 
-    def translate_completion_output_params_streaming(self) -> Optional[BaseModel]:
+    def translate_completion_output_params_streaming(
+        self, completion_stream: Any
+    ) -> Optional[AdapterCompletionStreamWrapper]:
         """
         Translates the streaming chunk, from the OpenAI format to the custom format.
         """

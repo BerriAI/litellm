@@ -6,7 +6,7 @@ from typing import Dict, List, Literal, Optional, Tuple, Union
 
 from openai._models import BaseModel as OpenAIObject
 from pydantic import ConfigDict, Field, PrivateAttr
-from typing_extensions import Dict, Required, TypedDict, override
+from typing_extensions import Callable, Dict, Required, TypedDict, override
 
 from ..litellm_core_utils.core_helpers import map_finish_reason
 from .llms.openai import ChatCompletionToolCallChunk, ChatCompletionUsageBlock
@@ -1069,3 +1069,36 @@ class LoggedLiteLLMParams(TypedDict, total=False):
     output_cost_per_token: Optional[float]
     output_cost_per_second: Optional[float]
     cooldown_time: Optional[float]
+
+
+class AdapterCompletionStreamWrapper:
+    def __init__(self, completion_stream):
+        self.completion_stream = completion_stream
+
+    def __iter__(self):
+        return self
+
+    def __aiter__(self):
+        return self
+
+    def __next__(self):
+        try:
+            for chunk in self.completion_stream:
+                if chunk == "None" or chunk is None:
+                    raise Exception
+                return chunk
+            raise StopIteration
+        except StopIteration:
+            raise StopIteration
+        except Exception as e:
+            print(f"AdapterCompletionStreamWrapper - {e}")  # noqa
+
+    async def __anext__(self):
+        try:
+            async for chunk in self.completion_stream:
+                if chunk == "None" or chunk is None:
+                    raise Exception
+                return chunk
+            raise StopIteration
+        except StopIteration:
+            raise StopAsyncIteration
