@@ -1,6 +1,6 @@
 # [BETA] Vertex AI Endpoints
 
-## Supported APIs
+## Supported API Endpoints
 
 - Gemini API
 - Embeddings API
