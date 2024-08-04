@@ -38,7 +38,7 @@ curl http://localhost:4000/vertex-ai/publishers/google/models/textembedding-geck
 -H "Authorization: Bearer sk-1234" \
 -d '{"instances":[{"content": "gm"}]}'
 ```
-
+## Usage Examples
 
 ### Gemini API (Generate Content)
 
@@ -74,4 +74,20 @@ curl http://localhost:4000/vertex-ai/publishers/google/models/gemini-1.5-flash-0
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-1234" \
   -d '{"contents":[{"role": "user", "parts":[{"text": "hi"}]}]}'
+```
+
+### Tuning API 
+
+Create Fine Tuning Job
+
+```shell
+curl http://localhost:4000/vertex-ai/tuningJobs \
+      -H "Content-Type: application/json" \
+      -H "Authorization: Bearer sk-1234" \
+      -d '{
+  "baseModel": "gemini-1.0-pro-002",
+  "supervisedTuningSpec" : {
+      "training_dataset_uri": "gs://cloud-samples-data/ai-platform/generative_ai/sft_train_data.jsonl"
+  }
+}'
 ```
