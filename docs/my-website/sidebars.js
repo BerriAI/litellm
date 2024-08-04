@@ -178,7 +178,7 @@ const sidebars = {
     },
     {
       type: "category",
-      label: "Embedding(), Image Generation(), Assistants(), Moderation(), Audio Transcriptions(), TTS(), Batches(), Fine-Tuning()",
+      label: "Supported Endpoints - /images, /audio/speech, /assistants etc",
       items: [
         "embedding/supported_embedding",
         "embedding/async_embedding",
@@ -189,7 +189,8 @@ const sidebars = {
         "assistants",
         "batches",
         "fine_tuning",
-        "anthropic_completion"
+        "anthropic_completion",
+        "vertex_ai"
       ],
     },
     {

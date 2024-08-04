@@ -7,6 +7,7 @@ import sys
 import traceback
 
 from dotenv import load_dotenv
+from openai.types.image import Image
 
 logging.basicConfig(level=logging.DEBUG)
 load_dotenv()
@@ -218,7 +219,7 @@ async def test_aimage_generation_vertex_ai(sync_mode):
         assert len(response.data) > 0
 
         for d in response.data:
-            assert isinstance(d, litellm.ImageObject)
+            assert isinstance(d, Image)
             print("data in response.data", d)
             assert d.b64_json is not None
     except litellm.ServiceUnavailableError as e:
