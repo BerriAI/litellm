@@ -76,6 +76,10 @@ async def execute_post_vertex_ai_request(
 ):
     from litellm.fine_tuning.main import vertex_fine_tuning_apis_instance
 
+    if default_vertex_config is None:
+        raise ValueError(
+            "Vertex credentials not added on litellm proxy, please add `default_vertex_config` on your config.yaml"
+        )
     vertex_project = default_vertex_config.get("vertex_project", None)
     vertex_location = default_vertex_config.get("vertex_location", None)
     vertex_credentials = default_vertex_config.get("vertex_credentials", None)
