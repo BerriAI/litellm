@@ -272,7 +272,8 @@ class VertexFineTuningAPI(VertexLLM):
             url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/tuningJobs{request_route}"
         elif "generateContent" in request_route:
             url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}{request_route}"
-
+        elif "predict" in request_route:
+            url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}{request_route}"
         if self.async_handler is None:
             raise ValueError("VertexAI Fine Tuning - async_handler is not initialized")
 
