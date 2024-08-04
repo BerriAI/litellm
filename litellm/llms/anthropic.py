@@ -5,13 +5,16 @@ import time
 import types
 from enum import Enum
 from functools import partial
-from typing import Callable, List, Optional, Union
+from typing import Callable, List, Literal, Optional, Tuple, Union
 
 import httpx  # type: ignore
 import requests  # type: ignore
+from openai.types.chat.chat_completion_chunk import Choice as OpenAIStreamingChoice
 
 import litellm
 import litellm.litellm_core_utils
+import litellm.types
+import litellm.types.utils
 from litellm import verbose_logger
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.custom_httpx.http_handler import (
@@ -33,8 +36,12 @@ from litellm.types.llms.anthropic import (
     AnthropicResponseUsageBlock,
     ContentBlockDelta,
     ContentBlockStart,
+    ContentJsonBlockDelta,
+    ContentTextBlockDelta,
     MessageBlockDelta,
+    MessageDelta,
     MessageStartBlock,
+    UsageDelta,
 )
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -479,6 +486,74 @@ class AnthropicConfig:
         )
 
         return translated_obj
+
+    def _translate_streaming_openai_chunk_to_anthropic(
+        self, choices: List[OpenAIStreamingChoice]
+    ) -> Tuple[
+        Literal["text_delta", "input_json_delta"],
+        Union[ContentTextBlockDelta, ContentJsonBlockDelta],
+    ]:
+        text: str = ""
+        partial_json: Optional[str] = None
+        for choice in choices:
+            if choice.delta.content is not None:
+                text += choice.delta.content
+            elif choice.delta.tool_calls is not None:
+                partial_json = ""
+                for tool in choice.delta.tool_calls:
+                    if (
+                        tool.function is not None
+                        and tool.function.arguments is not None
+                    ):
+                        partial_json += tool.function.arguments
+
+        if partial_json is not None:
+            return "input_json_delta", ContentJsonBlockDelta(
+                type="input_json_delta", partial_json=partial_json
+            )
+        else:
+            return "text_delta", ContentTextBlockDelta(type="text_delta", text=text)
+
+    def translate_streaming_openai_response_to_anthropic(
+        self, response: litellm.ModelResponse
+    ) -> Union[ContentBlockDelta, MessageBlockDelta]:
+        ## base case - final chunk w/ finish reason
+        if response.choices[0].finish_reason is not None:
+            delta = MessageDelta(
+                stop_reason=self._translate_openai_finish_reason_to_anthropic(
+                    response.choices[0].finish_reason
+                ),
+            )
+            if getattr(response, "usage", None) is not None:
+                litellm_usage_chunk: Optional[litellm.Usage] = response.usage  # type: ignore
+            elif (
+                hasattr(response, "_hidden_params")
+                and "usage" in response._hidden_params
+            ):
+                litellm_usage_chunk = response._hidden_params["usage"]
+            else:
+                litellm_usage_chunk = None
+            if litellm_usage_chunk is not None:
+                usage_delta = UsageDelta(
+                    input_tokens=litellm_usage_chunk.prompt_tokens or 0,
+                    output_tokens=litellm_usage_chunk.completion_tokens or 0,
+                )
+            else:
+                usage_delta = UsageDelta(input_tokens=0, output_tokens=0)
+            return MessageBlockDelta(
+                type="message_delta", delta=delta, usage=usage_delta
+            )
+        (
+            type_of_content,
+            content_block_delta,
+        ) = self._translate_streaming_openai_chunk_to_anthropic(
+            choices=response.choices  # type: ignore
+        )
+        return ContentBlockDelta(
+            type="content_block_delta",
+            index=response.choices[0].index,
+            delta=content_block_delta,
+        )
 
 
 # makes headers for API call
