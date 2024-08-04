@@ -38,3 +38,40 @@ curl http://localhost:4000/vertex-ai/publishers/google/models/textembedding-geck
 -H "Authorization: Bearer sk-1234" \
 -d '{"instances":[{"content": "gm"}]}'
 ```
+
+
+### Gemini API (Generate Content)
+
+```shell
+curl http://localhost:4000/vertex-ai/publishers/google/models/gemini-1.5-flash-001:generateContent \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{"contents":[{"role": "user", "parts":[{"text": "hi"}]}]}'
+```
+
+### Embeddings API
+
+```shell
+curl http://localhost:4000/vertex-ai/publishers/google/models/textembedding-gecko@001:predict \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{"instances":[{"content": "gm"}]}'
+```
+
+### Imagen API
+
+```shell
+curl http://localhost:4000/vertex-ai/publishers/google/models/imagen-3.0-generate-001:predict \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{"instances":[{"prompt": "make an otter"}], "parameters": {"sampleCount": 1}}'
+```
+
+### Count Tokens API
+
+```shell
+curl http://localhost:4000/vertex-ai/publishers/google/models/gemini-1.5-flash-001:countTokens \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{"contents":[{"role": "user", "parts":[{"text": "hi"}]}]}'
+```
