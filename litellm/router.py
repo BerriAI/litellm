@@ -2468,6 +2468,8 @@ class Router:
                         verbose_router_logger.info(
                             f"No fallback model group found for original model_group={model_group}. Fallbacks={fallbacks}"
                         )
+                        if hasattr(original_exception, "message"):
+                            original_exception.message += f"No fallback model group found for original model_group={model_group}. Fallbacks={fallbacks}"
                         raise original_exception
                     for mg in fallback_model_group:
                         """
@@ -2492,14 +2494,20 @@ class Router:
                             return response
                         except Exception as e:
                             raise e
-            except Exception as e:
-                verbose_router_logger.error(f"An exception occurred - {str(e)}")
-                verbose_router_logger.debug(traceback.format_exc())
+            except Exception as new_exception:
+                verbose_router_logger.error(
+                    "litellm.router.py::async_function_with_fallbacks() - Error occurred while trying to do fallbacks - {}\n{}\n\nDebug Information:\nCooldown Deployments={}".format(
+                        str(new_exception),
+                        traceback.format_exc(),
+                        await self._async_get_cooldown_deployments_with_debug_info(),
+                    )
+                )
 
             if hasattr(original_exception, "message"):
                 # add the available fallbacks to the exception
                 original_exception.message += "\nReceived Model Group={}\nAvailable Model Group Fallbacks={}".format(
-                    model_group, fallback_model_group
+                    model_group,
+                    fallback_model_group,
                 )
             raise original_exception
 
@@ -2508,6 +2516,9 @@ class Router:
             f"Inside async function with retries: args - {args}; kwargs - {kwargs}"
         )
         original_function = kwargs.pop("original_function")
+        mock_testing_rate_limit_error = kwargs.pop(
+            "mock_testing_rate_limit_error", None
+        )
         fallbacks = kwargs.pop("fallbacks", self.fallbacks)
         context_window_fallbacks = kwargs.pop(
             "context_window_fallbacks", self.context_window_fallbacks
@@ -2515,13 +2526,25 @@ class Router:
         content_policy_fallbacks = kwargs.pop(
             "content_policy_fallbacks", self.content_policy_fallbacks
         )
-
+        model_group = kwargs.get("model")
         num_retries = kwargs.pop("num_retries")
 
         verbose_router_logger.debug(
             f"async function w/ retries: original_function - {original_function}, num_retries - {num_retries}"
         )
         try:
+            if (
+                mock_testing_rate_limit_error is not None
+                and mock_testing_rate_limit_error is True
+            ):
+                verbose_router_logger.info(
+                    "litellm.router.py::async_function_with_retries() - mock_testing_rate_limit_error=True. Raising litellm.RateLimitError."
+                )
+                raise litellm.RateLimitError(
+                    model=model_group,
+                    llm_provider="",
+                    message=f"This is a mock exception for model={model_group}, to trigger a rate limit error.",
+                )
             # if the function call is successful, no exception will be raised and we'll break out of the loop
             response = await original_function(*args, **kwargs)
             return response
