@@ -7,6 +7,7 @@ import sys
 import traceback
 
 from dotenv import load_dotenv
+from openai.types.image import Image
 
 logging.basicConfig(level=logging.DEBUG)
 load_dotenv()

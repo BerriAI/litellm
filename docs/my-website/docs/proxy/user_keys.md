@@ -23,6 +23,9 @@ LiteLLM Proxy is **Azure OpenAI-compatible**:
 LiteLLM Proxy is **Anthropic-compatible**: 
 * /messages 
 
+LiteLLM Proxy is **Vertex AI compatible**:
+- [Supports ALL Vertex Endpoints](../vertex_ai)
+
 This doc covers:
 
 *   /chat/completion
