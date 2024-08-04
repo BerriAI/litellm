@@ -144,6 +144,45 @@ async def vertex_generate_content(
 
 
 @router.post(
+    "/vertex-ai/publishers/google/models/{model_id:path}:predict",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["Vertex AI endpoints"],
+)
+async def vertex_predict_endpoint(
+    request: Request,
+    fastapi_response: Response,
+    model_id: str,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    this is a pass through endpoint for the Vertex AI API. /predict endpoint
+    Use this for:
+    - Embeddings API - Text Embedding, Multi Modal Embedding
+    - Imagen API
+    - Code Completion API
+
+    Example Curl:
+    ```
+    curl http://localhost:4000/vertex-ai/publishers/google/models/textembedding-gecko@001:predict \
+      -H "Content-Type: application/json" \
+      -H "Authorization: Bearer sk-1234" \
+      -d '{"instances":[{"content": "gm"}]}'
+    ```
+
+    Vertex API Reference: https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/text-embeddings-api#generative-ai-get-text-embedding-drest
+    it uses the vertex ai credentials on the proxy and forwards to vertex ai api
+    """
+    try:
+        response = await execute_post_vertex_ai_request(
+            request=request,
+            route=f"/publishers/google/models/{model_id}:predict",
+        )
+        return response
+    except Exception as e:
+        raise exception_handler(e) from e
+
+
+@router.post(
     "/vertex-ai/tuningJobs",
     dependencies=[Depends(user_api_key_auth)],
     tags=["Vertex AI endpoints"],
