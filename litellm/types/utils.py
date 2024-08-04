@@ -950,16 +950,18 @@ class ImageObject(OpenAIObject):
             return self.dict()
 
 
-class ImageResponse(OpenAIObject):
-    created: Optional[int] = None
+from openai.types.images_response import ImagesResponse as OpenAIImageResponse
 
-    data: Optional[List[ImageObject]] = None
 
-    usage: Optional[dict] = None
-
+class ImageResponse(OpenAIImageResponse):
     _hidden_params: dict = {}
 
-    def __init__(self, created=None, data=None, response_ms=None):
+    def __init__(
+        self,
+        created: Optional[int] = None,
+        data: Optional[list] = None,
+        response_ms=None,
+    ):
         if response_ms:
             _response_ms = response_ms
         else:
@@ -967,14 +969,14 @@ class ImageResponse(OpenAIObject):
         if data:
             data = data
         else:
-            data = None
+            data = []
 
         if created:
             created = created
         else:
-            created = None
+            created = int(time.time())
 
-        super().__init__(data=data, created=created)
+        super().__init__(created=created, data=data)
         self.usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
     def __contains__(self, key):

@@ -13,6 +13,7 @@ from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
 import httpx  # type: ignore
 import requests  # type: ignore
+from openai.types.image import Image
 
 import litellm
 import litellm.litellm_core_utils
@@ -1341,10 +1342,10 @@ class VertexLLM(BaseLLM):
         _json_response = response.json()
         _predictions = _json_response["predictions"]
 
-        _response_data: List[litellm.ImageObject] = []
+        _response_data: List[Image] = []
         for _prediction in _predictions:
             _bytes_base64_encoded = _prediction["bytesBase64Encoded"]
-            image_object = litellm.ImageObject(b64_json=_bytes_base64_encoded)
+            image_object = Image(b64_json=_bytes_base64_encoded)
             _response_data.append(image_object)
 
         model_response.data = _response_data
@@ -1453,10 +1454,10 @@ class VertexLLM(BaseLLM):
         _json_response = response.json()
         _predictions = _json_response["predictions"]
 
-        _response_data: List[litellm.ImageObject] = []
+        _response_data: List[Image] = []
         for _prediction in _predictions:
             _bytes_base64_encoded = _prediction["bytesBase64Encoded"]
-            image_object = litellm.ImageObject(b64_json=_bytes_base64_encoded)
+            image_object = Image(b64_json=_bytes_base64_encoded)
             _response_data.append(image_object)
 
         model_response.data = _response_data
