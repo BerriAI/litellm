@@ -118,7 +118,10 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     return return_chunk
                 else:
                     return processed_chunk
-
+            if self.holding_chunk is not None:
+                return_chunk = self.holding_chunk
+                self.holding_chunk = None
+                return return_chunk
             if self.sent_last_message is False:
                 self.sent_last_message = True
                 return {"type": "message_stop"}
