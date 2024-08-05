@@ -68,7 +68,7 @@ response = litellm.completion(
 
 :::tip
 
-**We support ALL Azure models, just set `model=azure/<any-model-on-gemini>` as a prefix when sending litellm requests**
+**We support ALL Azure models, just set `model=azure/<your deployment name>` as a prefix when sending litellm requests**
 
 :::
 
