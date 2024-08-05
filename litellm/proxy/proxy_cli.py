@@ -19,9 +19,15 @@ litellm_mode = os.getenv("LITELLM_MODE", "DEV")  # "PRODUCTION", "DEV"
 if litellm_mode == "DEV":
     load_dotenv()
 import shutil
+from enum import Enum
 from importlib import resources
 
 telemetry = None
+
+
+class LiteLLMDatabaseConnectionPool(Enum):
+    database_connection_pool_limit = 10
+    database_connection_pool_timeout = 60
 
 
 def append_query_params(url, params) -> str:
@@ -526,10 +532,12 @@ def run_server(
                 )
             database_url = general_settings.get("database_url", None)
             db_connection_pool_limit = general_settings.get(
-                "database_connection_pool_limit", 100
+                "database_connection_pool_limit",
+                LiteLLMDatabaseConnectionPool.database_connection_pool_limit.value,
             )
             db_connection_timeout = general_settings.get(
-                "database_connection_timeout", 60
+                "database_connection_timeout",
+                LiteLLMDatabaseConnectionPool.database_connection_pool_timeout.value,
             )
             if database_url and database_url.startswith("os.environ/"):
                 original_dir = os.getcwd()
