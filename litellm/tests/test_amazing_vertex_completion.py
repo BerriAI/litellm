@@ -903,10 +903,10 @@ from litellm.tests.test_completion import response_format_tests
 @pytest.mark.parametrize(
     "model",
     [
-        # "vertex_ai/mistral-large@2407",
-        # "vertex_ai/mistral-nemo@2407",
+        "vertex_ai/mistral-large@2407",
+        "vertex_ai/mistral-nemo@2407",
         "vertex_ai/codestral@2405",
-        # "vertex_ai/meta/llama3-405b-instruct-maas",
+        "vertex_ai/meta/llama3-405b-instruct-maas",
     ],  #
 )  # "vertex_ai",
 @pytest.mark.parametrize(
@@ -1347,6 +1347,7 @@ def vertex_httpx_mock_post_invalid_schema_response_anthropic(*args, **kwargs):
     "model, vertex_location, supports_response_schema",
     [
         ("vertex_ai_beta/gemini-1.5-pro-001", "us-central1", True),
+        ("gemini/gemini-1.5-pro", None, True),
         ("vertex_ai_beta/gemini-1.5-flash", "us-central1", False),
         ("vertex_ai/claude-3-5-sonnet@20240620", "us-east5", False),
     ],

@@ -182,7 +182,12 @@ class GoogleAIStudioGeminiConfig:  # key diff from VertexAI - 'frequency_penalty
             if param == "max_tokens":
                 optional_params["max_output_tokens"] = value
             if param == "response_format" and value["type"] == "json_object":  # type: ignore
-                optional_params["response_mime_type"] = "application/json"
+                if value["type"] == "json_object":  # type: ignore
+                    optional_params["response_mime_type"] = "application/json"
+                elif value["type"] == "text":  # type: ignore
+                    optional_params["response_mime_type"] = "text/plain"
+                if "response_schema" in value:  # type: ignore
+                    optional_params["response_schema"] = value["response_schema"]  # type: ignore
             if param == "tools" and isinstance(value, list):
                 gtool_func_declarations = []
                 for tool in value:
