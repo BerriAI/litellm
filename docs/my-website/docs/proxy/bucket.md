@@ -76,31 +76,47 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 Example payload of a `/chat/completion` request logged on GCS
 ```json
 {
-    "request_id": "chatcmpl-3946ddc2-bcfe-43f6-9b8e-2427951de85c",
-    "call_type": "acompletion",
-    "api_key": "",
-    "cache_hit": "None",
-    "startTime": "2024-08-01T14:27:12.563246",
-    "endTime": "2024-08-01T14:27:12.572709",
-    "completionStartTime": "2024-08-01T14:27:12.572709",
+  "request_kwargs": {
     "model": "gpt-3.5-turbo",
-    "user": "",
-    "team_id": "",
-    "metadata": "{}",
-    "cache_key": "Cache OFF",
-    "spend": 0.000054999999999999995,
-    "total_tokens": 30,
-    "prompt_tokens": 10,
-    "completion_tokens": 20,
-    "request_tags": "[]",
-    "end_user": "ishaan-2",
-    "api_base": "",
-    "model_group": "",
-    "model_id": "",
-    "requester_ip_address": null,
-    "output": [
-        "{\"finish_reason\":\"stop\",\"index\":0,\"message\":{\"content\":\"Hi!\",\"role\":\"assistant\",\"tool_calls\":null,\"function_call\":null}}"
-    ]
+    "messages": [
+      {
+        "role": "user",
+        "content": "This is a test"
+      }
+    ],
+    "optional_params": {
+      "temperature": 0.7,
+      "max_tokens": 10,
+      "user": "ishaan-2",
+      "extra_body": {}
+    }
+  },
+  "response_obj": {
+    "id": "chatcmpl-bd836a8c-89bc-4abd-bee5-e3f1ebfdb541",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "message": {
+          "content": "Hi!",
+          "role": "assistant",
+          "tool_calls": null,
+          "function_call": null
+        }
+      }
+    ],
+    "created": 1722868456,
+    "model": "gpt-3.5-turbo",
+    "object": "chat.completion",
+    "system_fingerprint": null,
+    "usage": {
+      "prompt_tokens": 10,
+      "completion_tokens": 20,
+      "total_tokens": 30
+    }
+  },
+  "start_time": "2024-08-05 07:34:16",
+  "end_time": "2024-08-05 07:34:16"
 }
 ```
 
