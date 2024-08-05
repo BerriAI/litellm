@@ -16,10 +16,12 @@ import asyncio
 import logging
 
 import pytest
+from fastapi import Request
+from starlette.datastructures import URL, Headers, QueryParams
 
 import litellm
 from litellm.proxy._types import LiteLLMRoutes
-from litellm.proxy.auth.auth_utils import is_llm_api_route
+from litellm.proxy.auth.auth_utils import get_request_route, is_llm_api_route
 from litellm.proxy.proxy_server import app
 
 # Configure logging
@@ -98,3 +100,52 @@ def test_is_llm_api_route_similar_but_false(route: str):
 def test_anthropic_api_routes():
     # allow non proxy admins to call anthropic api routes
     assert is_llm_api_route(route="/v1/messages") is True
+
+
+def create_request(path: str, base_url: str = "http://testserver") -> Request:
+    return Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "scheme": "http",
+            "server": ("testserver", 80),
+            "path": path,
+            "query_string": b"",
+            "headers": Headers().raw,
+            "client": ("testclient", 50000),
+            "root_path": URL(base_url).path,
+        }
+    )
+
+
+def test_get_request_route_with_base_url():
+    request = create_request(
+        path="/genai/chat/completions", base_url="http://testserver/genai"
+    )
+    result = get_request_route(request)
+    assert result == "/chat/completions"
+
+
+def test_get_request_route_without_base_url():
+    request = create_request("/chat/completions")
+    result = get_request_route(request)
+    assert result == "/chat/completions"
+
+
+def test_get_request_route_with_nested_path():
+    request = create_request(path="/embeddings", base_url="http://testserver/ishaan")
+    result = get_request_route(request)
+    assert result == "/embeddings"
+
+
+def test_get_request_route_with_query_params():
+    request = create_request(path="/genai/test", base_url="http://testserver/genai")
+    request.scope["query_string"] = b"param=value"
+    result = get_request_route(request)
+    assert result == "/test"
+
+
+def test_get_request_route_with_base_url_not_at_start():
+    request = create_request("/api/genai/test")
+    result = get_request_route(request)
+    assert result == "/api/genai/test"
