@@ -58,6 +58,9 @@ class LitellmUserRoles(str, enum.Enum):
     def __str__(self):
         return str(self.value)
 
+    def values(self) -> List[str]:
+        return list(self.__annotations__.keys())
+
     @property
     def description(self):
         """
