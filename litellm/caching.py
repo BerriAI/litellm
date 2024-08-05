@@ -1903,7 +1903,7 @@ class Cache:
                 param not in litellm_param_kwargs
             ):  # check if user passed in optional param - e.g. top_k
                 if (
-                    litellm.enable_caching_on_optional_params is True
+                    litellm.enable_caching_on_provider_specific_optional_params is True
                 ):  # feature flagged for now
                     if kwargs[param] is None:
                         continue  # ignore None params
