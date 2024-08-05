@@ -1084,7 +1084,7 @@ def client(original_function):
                     and str(original_function.__name__)
                     in litellm.cache.supported_call_types
                 ):
-                    print_verbose(f"Checking Cache")
+                    print_verbose("Checking Cache")
                     if call_type == CallTypes.aembedding.value and isinstance(
                         kwargs["input"], list
                     ):

@@ -146,6 +146,9 @@ return_response_headers: bool = (
 )
 ##################
 logging: bool = True
+enable_caching_on_optional_params: bool = (
+    False  # feature-flag for caching on optional params - e.g. 'top_k'
+)
 caching: bool = (
     False  # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
 )
