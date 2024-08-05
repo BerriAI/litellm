@@ -461,23 +461,27 @@ async def ollama_acompletion(
             model_response.choices[0].finish_reason = "stop"
             if data.get("format", "") == "json":
                 function_call = json.loads(response_json["response"])
-                message = litellm.Message(
-                    content=None,
-                    tool_calls=[
-                        {
-                            "id": f"call_{str(uuid.uuid4())}",
-                            "function": {
-                                "name": function_call.get(
-                                    "name", function_call.get("function", None)
-                                ),
-                                "arguments": json.dumps(function_call["arguments"]),
-                            },
-                            "type": "function",
-                        }
-                    ],
-                )
-                model_response.choices[0].message = message  # type: ignore
-                model_response.choices[0].finish_reason = "tool_calls"
+                function_call = function_call.get("function", function_call)
+
+                function_name = function_call.get("name", function_call.get("function", None))
+                if function_name is None:
+                    model_response.choices[0].message.content = response_json["response"]  # type: ignore
+                else:
+                    message = litellm.Message(
+                        content=None,
+                        tool_calls=[
+                            {
+                                "id": f"call_{str(uuid.uuid4())}",
+                                "function": {
+                                    "name": function_name,
+                                    "arguments": json.dumps(function_call["arguments"]),
+                                },
+                                "type": "function",
+                            }
+                        ],
+                    )
+                    model_response["choices"][0]["message"] = message
+                    model_response["choices"][0]["finish_reason"] = "tool_calls"  # type: ignore
             else:
                 model_response.choices[0].message.content = response_json["response"]  # type: ignore
             model_response.created = int(time.time())
