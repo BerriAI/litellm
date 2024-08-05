@@ -9,7 +9,7 @@ docker run -it --platform=linux/arm64 \
 -p 4000:4000 litellm-raga:latest
 
 
-# test the API
+# test the openAI API
 curl --location 'http://localhost:4000/chat/completions' \
 --header 'Content-Type: application/json' \
 --data ' {

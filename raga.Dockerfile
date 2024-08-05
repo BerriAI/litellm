@@ -68,6 +68,11 @@ RUN chmod +x entrypoint.sh
 EXPOSE 4000/tcp
 
 ENV OPENAI_API_KEY="abcd"
+ENV AZURE_API_KEY="abcd"
+ENV AZURE_API_BASE="abcd"
+ENV AZURE_API_VERSION="abcd"
+ENV GROQ_API_KEY="abcd"
+ENV GEMINI_API_KEY="abcd"
 
 ENTRYPOINT ["litellm"]
 CMD ["--config", "./litellm/proxy/raga_litellm_config.yaml", "--port", "4000"]

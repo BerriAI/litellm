@@ -1,5 +1,19 @@
 model_list:
-  - model_name: "*"
+  - model_name: "gpt-*"
     litellm_params:
       model: openai/*
       api_key: os.environ/OPENAI_API_KEY
+  - model_name: "azure*"
+    litellm_params:
+      model: azure/*
+      api_key: os.environ/AZURE_API_KEY
+      api_base: os.environ/AZURE_API_BASE
+      api_version: os.environ/AZURE_API_VERSION
+  - model_name: "groq*"
+    litellm_params:
+      model: groq/*
+      api_key: os.environ/GROQ_API_KEY
+  - model_name: "gemini*"
+    litellm_params:
+      model: gemini/*
+      api_key: os.environ/GEMINI_API_KEY
