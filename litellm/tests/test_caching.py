@@ -301,7 +301,7 @@ def test_caching_with_models_v2():
 # test_caching_with_models_v2()
 
 
-def test_caching_with_optional_params():
+def c():
     litellm.enable_caching_on_provider_specific_optional_params = True
     messages = [
         {"role": "user", "content": "who is ishaan CTO of litellm from litellm 2023"}
