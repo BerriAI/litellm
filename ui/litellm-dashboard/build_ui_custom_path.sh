@@ -1,14 +1,14 @@
 #!/bin/bash
 
-# Check if BASE_UI_PATH argument is provided
+# Check if UI_BASE_PATH argument is provided
 if [ -z "$1" ]; then
-    echo "Error: BASE_UI_PATH argument is required."
-    echo "Usage: $0 <BASE_UI_PATH>"
+    echo "Error: UI_BASE_PATH argument is required."
+    echo "Usage: $0 <UI_BASE_PATH>"
     exit 1
 fi
 
-# Set BASE_UI_PATH from the first argument
-BASE_UI_PATH="$1"
+# Set UI_BASE_PATH from the first argument
+UI_BASE_PATH="$1"
 
 # Check if nvm is not installed
 if ! command -v nvm &> /dev/null; then
@@ -34,7 +34,7 @@ echo "Contents of ui_colors.json:"
 cat ui_colors.json
 
 # Run npm build with the environment variable
-BASE_UI_PATH=$BASE_UI_PATH npm run build
+UI_BASE_PATH=$UI_BASE_PATH npm run build
 
 # Check if the build was successful
 if [ $? -eq 0 ]; then
