@@ -335,7 +335,6 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
 class DeploymentTypedDict(TypedDict):
     model_name: str
     litellm_params: LiteLLMParamsTypedDict
-    model_info: ModelInfo
 
 
 SPECIAL_MODEL_INFO_PARAMS = [
