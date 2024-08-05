@@ -138,6 +138,7 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.caching_routes import router as caching_router
 from litellm.proxy.common_utils.admin_ui_utils import (
     html_form,
+    setup_admin_ui_on_server_root_path,
     show_missing_vars_in_env,
 )
 from litellm.proxy.common_utils.debug_utils import router as debugging_endpoints_router
@@ -281,9 +282,12 @@ except Exception as e:
     except Exception as e:
         pass
 
+server_root_path = os.getenv("SERVER_ROOT_PATH", "")
+if server_root_path != "":
+    setup_admin_ui_on_server_root_path()
 _license_check = LicenseCheck()
 premium_user: bool = _license_check.is_premium()
-ui_link = f"/ui/"
+ui_link = f"{server_root_path}/ui/"
 ui_message = (
     f"👉 [```LiteLLM Admin Panel on /ui```]({ui_link}). Create, Edit Keys with SSO"
 )
@@ -303,14 +307,13 @@ _description = (
     else f"Proxy Server to call 100+ LLMs in the OpenAI format. {custom_swagger_message}\n\n{ui_message}"
 )
 
+
 app = FastAPI(
     docs_url=_docs_url,
     title=_title,
     description=_description,
     version=version,
-    root_path=os.environ.get(
-        "SERVER_ROOT_PATH", ""
-    ),  # check if user passed root path, FastAPI defaults this value to ""
+    root_path=server_root_path,  # check if user passed root path, FastAPI defaults this value to ""
 )
 
 
