@@ -58,6 +58,7 @@ from litellm.proxy.auth.auth_checks import (
 )
 from litellm.proxy.auth.auth_utils import (
     check_if_request_size_is_safe,
+    get_request_route,
     is_llm_api_route,
     route_in_additonal_public_routes,
 )
@@ -115,7 +116,7 @@ async def user_api_key_auth(
     )
 
     try:
-        route: str = request.url.path
+        route: str = get_request_route(request=request)
 
         ### LiteLLM Enterprise Security Checks
         # Check 1. Check if request size is under max_request_size_mb
