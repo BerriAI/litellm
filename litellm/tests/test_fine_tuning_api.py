@@ -158,8 +158,7 @@ async def test_azure_create_fine_tune_jobs_async():
             model="gpt-35-turbo-1106",
             training_file=file_id,
             custom_llm_provider="azure",
-            api_key=os.getenv("AZURE_SWEDEN_API_KEY"),
-            api_base="https://my-endpoint-sweden-berri992.openai.azure.com/",
+            api_base="https://exampleopenaiendpoint-production.up.railway.app",
         )
 
         print(
@@ -167,15 +166,16 @@ async def test_azure_create_fine_tune_jobs_async():
         )
 
         assert create_fine_tuning_response.id is not None
-        assert create_fine_tuning_response.model == "gpt-35-turbo-1106"
+
+        # response from Example/mocked endpoint
+        assert create_fine_tuning_response.model == "davinci-002"
 
         # list fine tuning jobs
         print("listing ft jobs")
         ft_jobs = await litellm.alist_fine_tuning_jobs(
             limit=2,
             custom_llm_provider="azure",
-            api_key=os.getenv("AZURE_SWEDEN_API_KEY"),
-            api_base="https://my-endpoint-sweden-berri992.openai.azure.com/",
+            api_base="https://exampleopenaiendpoint-production.up.railway.app",
         )
         print("response from litellm.list_fine_tuning_jobs=", ft_jobs)
 
@@ -184,7 +184,7 @@ async def test_azure_create_fine_tune_jobs_async():
             fine_tuning_job_id=create_fine_tuning_response.id,
             custom_llm_provider="azure",
             api_key=os.getenv("AZURE_SWEDEN_API_KEY"),
-            api_base="https://my-endpoint-sweden-berri992.openai.azure.com/",
+            api_base="https://exampleopenaiendpoint-production.up.railway.app",
         )
 
         print("response from litellm.cancel_fine_tuning_job=", response)
