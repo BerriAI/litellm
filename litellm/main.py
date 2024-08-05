@@ -125,7 +125,11 @@ from .llms.vertex_ai_partner import VertexAIPartnerModels
 from .llms.vertex_httpx import VertexLLM
 from .llms.watsonx import IBMWatsonXAI
 from .types.llms.openai import HttpxBinaryResponseContent
-from .types.utils import AdapterCompletionStreamWrapper, ChatCompletionMessageToolCall
+from .types.utils import (
+    AdapterCompletionStreamWrapper,
+    ChatCompletionMessageToolCall,
+    all_litellm_params,
+)
 
 encoding = tiktoken.get_encoding("cl100k_base")
 from litellm.utils import (
@@ -744,64 +748,9 @@ def completion(
         "top_logprobs",
         "extra_headers",
     ]
-    litellm_params = [
-        "metadata",
-        "tags",
-        "acompletion",
-        "atext_completion",
-        "text_completion",
-        "caching",
-        "mock_response",
-        "api_key",
-        "api_version",
-        "api_base",
-        "force_timeout",
-        "logger_fn",
-        "verbose",
-        "custom_llm_provider",
-        "litellm_logging_obj",
-        "litellm_call_id",
-        "use_client",
-        "id",
-        "fallbacks",
-        "azure",
-        "headers",
-        "model_list",
-        "num_retries",
-        "context_window_fallback_dict",
-        "retry_policy",
-        "roles",
-        "final_prompt_value",
-        "bos_token",
-        "eos_token",
-        "request_timeout",
-        "complete_response",
-        "self",
-        "client",
-        "rpm",
-        "tpm",
-        "max_parallel_requests",
-        "input_cost_per_token",
-        "output_cost_per_token",
-        "input_cost_per_second",
-        "output_cost_per_second",
-        "hf_model_name",
-        "model_info",
-        "proxy_server_request",
-        "preset_cache_key",
-        "caching_groups",
-        "ttl",
-        "cache",
-        "no-log",
-        "base_model",
-        "stream_timeout",
-        "supports_system_message",
-        "region_name",
-        "allowed_model_region",
-        "model_config",
-        "fastest_response",
-        "cooldown_time",
-    ]
+    litellm_params = (
+        all_litellm_params  # use the external var., used in creating cache key as well.
+    )
 
     default_params = openai_params + litellm_params
     non_default_params = {
@@ -5205,7 +5154,7 @@ def stream_chunk_builder(
         response["choices"][0]["message"]["function_call"][
             "arguments"
         ] = combined_arguments
-    
+
     content_chunks = [
         chunk
         for chunk in chunks
