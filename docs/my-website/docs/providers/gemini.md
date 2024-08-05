@@ -540,8 +540,13 @@ print(content)
 ```
 
 ## Chat Models
+:::tip
+
+**We support ALL Gemini models, just set `model=gemini/<any-model-on-gemini>` as a prefix when sending litellm requests**
+
+:::
 | Model Name            | Function Call                                          | Required OS Variables          |
 |-----------------------|--------------------------------------------------------|--------------------------------|
-| gemini-pro            | `completion('gemini/gemini-pro', messages)`            | `os.environ['GEMINI_API_KEY']` |
-| gemini-1.5-pro-latest | `completion('gemini/gemini-1.5-pro-latest', messages)` | `os.environ['GEMINI_API_KEY']` |
-| gemini-pro-vision     | `completion('gemini/gemini-pro-vision', messages)`     | `os.environ['GEMINI_API_KEY']` |
+| gemini-pro            | `completion(model='gemini/gemini-pro', messages)`            | `os.environ['GEMINI_API_KEY']` |
+| gemini-1.5-pro-latest | `completion(model='gemini/gemini-1.5-pro-latest', messages)` | `os.environ['GEMINI_API_KEY']` |
+| gemini-pro-vision     | `completion(model='gemini/gemini-pro-vision', messages)`     | `os.environ['GEMINI_API_KEY']` |
