@@ -80,6 +80,25 @@ def is_llm_api_route(route: str) -> bool:
     return False
 
 
+def get_request_route(request: Request) -> str:
+    """
+    Helper to get the route from the request
+
+    remove base url from path if set e.g. `/genai/chat/completions` -> `/chat/completions
+    """
+    try:
+        if request.url.path.startswith(request.base_url.path):
+            # remove base_url from path
+            return request.url.path[len(request.base_url.path) - 1 :]
+        else:
+            return request.url.path
+    except Exception as e:
+        verbose_proxy_logger.warning(
+            f"error on get_request_route: {str(e)}, defaulting to request.url.path"
+        )
+        return request.url.path
+
+
 async def check_if_request_size_is_safe(request: Request) -> bool:
     """
     Enterprise Only:
