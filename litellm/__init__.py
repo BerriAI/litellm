@@ -817,8 +817,18 @@ from .utils import (
     ModelResponse,
     EmbeddingResponse,
     ImageResponse,
+    TranscriptionResponse,
+    TextCompletionResponse,
     get_provider_fields,
 )
+
+ALL_LITELLM_RESPONSE_TYPES = [
+    ModelResponse,
+    EmbeddingResponse,
+    ImageResponse,
+    TranscriptionResponse,
+    TextCompletionResponse,
+]
 
 from .types.utils import ImageObject
 from .llms.custom_llm import CustomLLM
