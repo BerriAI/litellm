@@ -293,7 +293,7 @@ def get_ollama_response(
         "json": data,
     }
     if api_key is not None:
-        _request["headers"] = "Bearer {}".format(api_key)
+        _request["headers"] = {"Authorization": "Bearer {}".format(api_key)}
     response = requests.post(**_request)  # type: ignore
     if response.status_code != 200:
         raise OllamaError(status_code=response.status_code, message=response.text)
@@ -358,7 +358,7 @@ def ollama_completion_stream(url, api_key, data, logging_obj):
         "timeout": litellm.request_timeout,
     }
     if api_key is not None:
-        _request["headers"] = "Bearer {}".format(api_key)
+        _request["headers"] = {"Authorization": "Bearer {}".format(api_key)}
     with httpx.stream(**_request) as response:
         try:
             if response.status_code != 200:
@@ -420,7 +420,7 @@ async def ollama_async_streaming(
             "timeout": litellm.request_timeout,
         }
         if api_key is not None:
-            _request["headers"] = "Bearer {}".format(api_key)
+            _request["headers"] = {"Authorization": "Bearer {}".format(api_key)}
         async with client.stream(**_request) as response:
             if response.status_code != 200:
                 raise OllamaError(
@@ -492,7 +492,7 @@ async def ollama_acompletion(
                 "json": data,
             }
             if api_key is not None:
-                _request["headers"] = "Bearer {}".format(api_key)
+                _request["headers"] = {"Authorization": "Bearer {}".format(api_key)}
             resp = await session.post(**_request)
 
             if resp.status != 200:
