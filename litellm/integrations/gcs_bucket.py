@@ -1,7 +1,7 @@
 import json
 import os
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, TypedDict, Union
 
 import httpx
 from pydantic import BaseModel, Field
@@ -9,13 +9,24 @@ from pydantic import BaseModel, Field
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.logging_utils import (
+    convert_litellm_response_object_to_dict,
+)
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import CommonProxyErrors, SpendLogsPayload
 
 
-class GCSBucketPayload(SpendLogsPayload):
+class RequestKwargs(TypedDict):
+    model: Optional[str]
     messages: Optional[List]
-    output: Optional[Union[Dict, str, List]]
+    optional_params: Optional[Dict[str, Any]]
+
+
+class GCSBucketPayload(TypedDict):
+    request_kwargs: Optional[RequestKwargs]
+    response_obj: Optional[Dict]
+    start_time: str
+    end_time: str
 
 
 class GCSBucketLogger(CustomLogger):
@@ -58,12 +69,16 @@ class GCSBucketLogger(CustomLogger):
                 kwargs,
                 response_obj,
             )
+
+            start_time_str = start_time.strftime("%Y-%m-%d %H:%M:%S")
+            end_time_str = end_time.strftime("%Y-%m-%d %H:%M:%S")
             headers = await self.construct_request_headers()
+
             logging_payload: GCSBucketPayload = await self.get_gcs_payload(
-                kwargs, response_obj, start_time, end_time
+                kwargs, response_obj, start_time_str, end_time_str
             )
 
-            object_name = logging_payload["request_id"]
+            object_name = response_obj["id"]
             response = await self.async_httpx_client.post(
                 headers=headers,
                 url=f"https://storage.googleapis.com/upload/storage/v1/b/{self.BUCKET_NAME}/o?uploadType=media&name={object_name}",
@@ -106,60 +121,23 @@ class GCSBucketLogger(CustomLogger):
     async def get_gcs_payload(
         self, kwargs, response_obj, start_time, end_time
     ) -> GCSBucketPayload:
-        from litellm.proxy.spend_tracking.spend_tracking_utils import (
-            get_logging_payload,
+        request_kwargs = RequestKwargs(
+            model=kwargs.get("model", None),
+            messages=kwargs.get("messages", None),
+            optional_params=kwargs.get("optional_params", None),
         )
-
-        spend_logs_payload: SpendLogsPayload = get_logging_payload(
-            kwargs=kwargs,
-            response_obj=response_obj,
-            start_time=start_time,
-            end_time=end_time,
-            end_user_id=kwargs.get("user"),
+        response_dict = {}
+        response_dict = convert_litellm_response_object_to_dict(
+            response_obj=response_obj
         )
 
         gcs_payload: GCSBucketPayload = GCSBucketPayload(
-            **spend_logs_payload, messages=None, output=None
+            request_kwargs=request_kwargs,
+            response_obj=response_dict,
+            start_time=start_time,
+            end_time=end_time,
         )
-        gcs_payload["messages"] = kwargs.get("messages", None)
-        gcs_payload["startTime"] = start_time.isoformat()
-        gcs_payload["endTime"] = end_time.isoformat()
 
-        if gcs_payload["completionStartTime"] is not None:
-            gcs_payload["completionStartTime"] = gcs_payload[  # type: ignore
-                "completionStartTime"  # type: ignore
-            ].isoformat()
-
-        output = None
-        if response_obj is not None and (
-            kwargs.get("call_type", None) == "embedding"
-            or isinstance(response_obj, litellm.EmbeddingResponse)
-        ):
-            output = None
-        elif response_obj is not None and isinstance(
-            response_obj, litellm.ModelResponse
-        ):
-            output_list = []
-            for choice in response_obj.choices:
-                output_list.append(choice.json())
-            output = output_list
-        elif response_obj is not None and isinstance(
-            response_obj, litellm.TextCompletionResponse
-        ):
-            output_list = []
-            for choice in response_obj.choices:
-                output_list.append(choice.json())
-            output = output_list
-        elif response_obj is not None and isinstance(
-            response_obj, litellm.ImageResponse
-        ):
-            output = response_obj["data"]
-        elif response_obj is not None and isinstance(
-            response_obj, litellm.TranscriptionResponse
-        ):
-            output = response_obj["text"]
-
-        gcs_payload["output"] = output
         return gcs_payload
 
     async def download_gcs_object(self, object_name):

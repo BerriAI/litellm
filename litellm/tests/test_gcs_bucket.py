@@ -15,7 +15,7 @@ import pytest
 import litellm
 from litellm import completion
 from litellm._logging import verbose_logger
-from litellm.integrations.gcs_bucket import GCSBucketLogger
+from litellm.integrations.gcs_bucket import GCSBucketLogger, GCSBucketPayload
 
 verbose_logger.setLevel(logging.DEBUG)
 
@@ -87,9 +87,15 @@ async def test_basic_gcs_logger():
     object_from_gcs = json.loads(object_from_gcs)
     print("object_from_gcs", object_from_gcs)
 
-    assert object_from_gcs["request_id"] == response.id
-    assert object_from_gcs["call_type"] == "acompletion"
-    assert object_from_gcs["model"] == "gpt-3.5-turbo"
+    gcs_payload = GCSBucketPayload(**object_from_gcs)
+
+    print("gcs_payload", gcs_payload)
+
+    assert gcs_payload["request_kwargs"]["model"] == "gpt-3.5-turbo"
+    assert gcs_payload["request_kwargs"]["messages"] == [
+        {"role": "user", "content": "This is a test"}
+    ]
+    assert gcs_payload["response_obj"]["choices"][0]["message"]["content"] == "Hi!"
 
     # Delete Object from GCS
     print("deleting object from GCS")
