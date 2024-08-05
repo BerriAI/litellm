@@ -817,9 +817,19 @@ from .utils import (
     ModelResponse,
     EmbeddingResponse,
     ImageResponse,
+    TranscriptionResponse,
+    TextCompletionResponse,
     get_provider_fields,
 )
-from .litellm_core_utils.logging_utils import ALL_LITELLM_RESPONSE_TYPES
+
+ALL_LITELLM_RESPONSE_TYPES = [
+    ModelResponse,
+    EmbeddingResponse,
+    ImageResponse,
+    TranscriptionResponse,
+    TextCompletionResponse,
+]
+
 from .types.utils import ImageObject
 from .llms.custom_llm import CustomLLM
 from .llms.huggingface_restapi import HuggingfaceConfig
