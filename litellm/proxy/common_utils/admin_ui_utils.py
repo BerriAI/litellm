@@ -1,4 +1,5 @@
 import os
+import subprocess
 
 
 def show_missing_vars_in_env():
@@ -165,3 +166,67 @@ def missing_keys_form(missing_key_names: str):
         </html>
     """
     return missing_keys_html_form.format(missing_keys=missing_key_names)
+
+
+def setup_admin_ui_on_server_root_path():
+    """
+    Helper util to setup Admin UI on Server root path
+    """
+    from litellm._logging import verbose_proxy_logger
+
+    server_root_path = os.getenv("SERVER_ROOT_PATH", "")
+    if server_root_path != "":
+        if os.getenv("PROXY_BASE_URL") is None:
+            os.environ["PROXY_BASE_URL"] = server_root_path
+
+        # re-build admin UI on server root path
+        # Save the original directory
+        original_dir = os.getcwd()
+
+        current_dir = (
+            os.path.dirname(os.path.abspath(__file__))
+            + "/../../../ui/litellm-dashboard/"
+        )
+        build_ui_path = os.path.join(current_dir, "build_ui_custom_path.sh")
+        package_path = os.path.join(current_dir, "package.json")
+
+        verbose_proxy_logger.debug(
+            f"Setting up Admin UI on {server_root_path}/ui ......."
+        )  # noqa
+
+        try:
+            # Change the current working directory
+            os.chdir(current_dir)
+
+            # Make the script executable
+            subprocess.run(["chmod", "+x", "build_ui_custom_path.sh"], check=True)
+
+            # Run npm install
+            subprocess.run(["npm", "install"], check=True)
+
+            # Run npm run build
+            subprocess.run(["npm", "run", "build"], check=True)
+
+            # Run the custom build script with the argument
+            subprocess.run(
+                ["./build_ui_custom_path.sh", f"{server_root_path}/ui"], check=True
+            )
+
+            verbose_proxy_logger.debug("Admin UI setup completed successfully.")  # noqa
+
+        except subprocess.CalledProcessError as e:
+            verbose_proxy_logger.debug(
+                f"An error occurred during the Admin UI setup: {e}"
+            )  # noqa
+
+        except Exception as e:
+            verbose_proxy_logger.debug(f"An unexpected error occurred: {e}")
+
+        finally:
+            # Always return to the original directory, even if an error occurred
+            os.chdir(original_dir)
+            verbose_proxy_logger.debug(
+                f"Returned to original directory: {original_dir}"
+            )  # noqa
+
+    pass

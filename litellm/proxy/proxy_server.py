@@ -138,6 +138,7 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.caching_routes import router as caching_router
 from litellm.proxy.common_utils.admin_ui_utils import (
     html_form,
+    setup_admin_ui_on_server_root_path,
     show_missing_vars_in_env,
 )
 from litellm.proxy.common_utils.debug_utils import router as debugging_endpoints_router
@@ -282,8 +283,8 @@ except Exception as e:
         pass
 
 server_root_path = os.getenv("SERVER_ROOT_PATH", "")
-if server_root_path != "" and os.getenv("PROXY_BASE_URL") is None:
-    os.environ["PROXY_BASE_URL"] = server_root_path
+if server_root_path != "":
+    setup_admin_ui_on_server_root_path()
 _license_check = LicenseCheck()
 premium_user: bool = _license_check.is_premium()
 ui_link = f"{server_root_path}/ui/"
