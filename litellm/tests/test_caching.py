@@ -302,7 +302,7 @@ def test_caching_with_models_v2():
 
 
 def test_caching_with_optional_params():
-    litellm.enable_caching_on_optional_params = True
+    litellm.enable_caching_on_provider_specific_optional_params = True
     messages = [
         {"role": "user", "content": "who is ishaan CTO of litellm from litellm 2023"}
     ]
@@ -352,7 +352,7 @@ def test_caching_with_optional_params():
         print(f"response1: {response1}")
         print(f"response2: {response2}")
         pytest.fail(f"Error occurred:")
-    litellm.enable_caching_on_optional_params = False
+    litellm.enable_caching_on_provider_specific_optional_params = False
 
 
 embedding_large_text = (

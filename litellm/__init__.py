@@ -146,7 +146,7 @@ return_response_headers: bool = (
 )
 ##################
 logging: bool = True
-enable_caching_on_optional_params: bool = (
+enable_caching_on_provider_specific_optional_params: bool = (
     False  # feature-flag for caching on optional params - e.g. 'top_k'
 )
 caching: bool = (
