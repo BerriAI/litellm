@@ -183,3 +183,20 @@ async def test_anthropic_router_completion_e2e():
     assert isinstance(response, AnthropicResponse)
 
     assert response.model == "gpt-3.5-turbo"
+
+
+def test_anthropic_nullary_tool_call():
+    from litellm.llms.prompt_templates.factory import convert_to_anthropic_tool_invoke
+
+    convert_to_anthropic_tool_invoke(
+        [
+            {
+                "id": "call_abc123",
+                "type": "function",
+                "function": {
+                    "name": "perform",
+                    "arguments": "",
+                },
+            }
+        ]
+    )

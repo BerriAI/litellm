@@ -1165,6 +1165,24 @@ def convert_function_to_anthropic_tool_invoke(
         raise e
 
 
+def convert_to_anthropic_tool_input(args: str) -> dict:
+    """
+    OpenAI tool input:
+    "{\n\"location\": \"Boston, MA\"\n}"
+
+    Anthropic tool input:
+    {
+        "location": "Boston, MA"
+    }
+    """
+
+    # With stream=True, Anthropic tool calls sometimes have "" as input instead
+    # of "{}", which causes a JSON parse error
+    if args == "":
+        args = "{}"
+    return json.loads(args)
+
+
 def convert_to_anthropic_tool_invoke(
     tool_calls: list,
 ) -> List[AnthropicMessagesToolUseParam]:
@@ -1209,7 +1227,7 @@ def convert_to_anthropic_tool_invoke(
             type="tool_use",
             id=get_attribute_or_key(tool, "id"),
             name=get_attribute_or_key(get_attribute_or_key(tool, "function"), "name"),
-            input=json.loads(
+            input=convert_to_anthropic_tool_input(
                 get_attribute_or_key(
                     get_attribute_or_key(tool, "function"), "arguments"
                 )
