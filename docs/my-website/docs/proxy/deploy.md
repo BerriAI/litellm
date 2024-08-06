@@ -827,3 +827,31 @@ Run the command `docker-compose up` or `docker compose up` as per your docker in
 
 
 Your LiteLLM container should be running now on the defined port e.g. `4000`.
+
+### IAM-based Auth for RDS DB 
+
+1. Set AWS env var 
+
+```bash
+export AWS_WEB_IDENTITY_TOKEN='/path/to/token'
+export AWS_ROLE_NAME='arn:aws:iam::123456789012:role/MyRole'
+export AWS_SESSION_NAME='MySession'
+```
+
+[**See all Auth options**](https://github.com/BerriAI/litellm/blob/089a4f279ad61b7b3e213d8039fb9b75204a7abc/litellm/proxy/auth/rds_iam_token.py#L165)
+
+2. Add RDS credentials to env
+
+```bash
+export DATABASE_USER="db-user"
+export DATABASE_PORT="5432"
+export DATABASE_HOST="database-1-instance-1.cs1ksmwz2xt3.us-west-2.rds.amazonaws.com"
+export DATABASE_NAME="database-1-instance-1"
+```
+
+3. Run proxy with iam+rds
+
+
+```bash
+litellm --config /path/to/config.yaml --iam_token_db_auth
+```
