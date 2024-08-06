@@ -3,7 +3,7 @@ import asyncio
 import json
 import traceback
 from base64 import b64encode
-from typing import Optional
+from typing import List, Optional
 
 import httpx
 from fastapi import (
@@ -388,6 +388,7 @@ def create_pass_through_route(
     target: str,
     custom_headers: Optional[dict] = None,
     _forward_headers: Optional[bool] = False,
+    dependencies: Optional[List] = None,
 ):
     # check if target is an adapter.py or a url
     import uuid
@@ -416,19 +417,36 @@ def create_pass_through_route(
 
     except Exception:
         verbose_proxy_logger.warning("Defaulting to target being a url.")
+        if dependencies is None:
 
-        async def endpoint_func(
-            request: Request,
-            fastapi_response: Response,
-            user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-        ):
-            return await pass_through_request(
-                request=request,
-                target=target,
-                custom_headers=custom_headers or {},
-                user_api_key_dict=user_api_key_dict,
-                forward_headers=_forward_headers,
-            )
+            async def endpoint_func_no_auth(
+                request: Request,
+                fastapi_response: Response,
+            ):
+                return await pass_through_request(
+                    request=request,
+                    target=target,
+                    custom_headers=custom_headers or {},
+                    user_api_key_dict=UserAPIKeyAuth(),
+                    forward_headers=_forward_headers,
+                )
+
+            return endpoint_func_no_auth
+
+        else:
+
+            async def endpoint_func(
+                request: Request,
+                fastapi_response: Response,
+                user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+            ):
+                return await pass_through_request(
+                    request=request,
+                    target=target,
+                    custom_headers=custom_headers or {},
+                    user_api_key_dict=user_api_key_dict,
+                    forward_headers=_forward_headers,
+                )
 
     return endpoint_func
 
@@ -468,7 +486,7 @@ async def initialize_pass_through_endpoints(pass_through_endpoints: list):
         app.add_api_route(
             path=_path,
             endpoint=create_pass_through_route(
-                _path, _target, _custom_headers, _forward_headers
+                _path, _target, _custom_headers, _forward_headers, _dependencies
             ),
             methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
             dependencies=_dependencies,
