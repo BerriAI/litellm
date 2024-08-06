@@ -136,66 +136,81 @@ async def get_otel_spans():
 
 # Helper functions for debugging
 def init_verbose_loggers():
-    worker_config = litellm.get_secret("WORKER_CONFIG")
-    if os.path.isfile(worker_config):
-        return
-    # if not, assume it's a json string
-    _settings = json.loads(os.getenv("WORKER_CONFIG"))
-    if not isinstance(_settings, dict):
-        return
+    try:
+        worker_config = litellm.get_secret("WORKER_CONFIG")
+        if os.path.isfile(worker_config):
+            return
+        # if not, assume it's a json string
+        _settings = json.loads(os.getenv("WORKER_CONFIG"))
+        if not isinstance(_settings, dict):
+            return
 
-    debug = _settings.get("debug", None)
-    detailed_debug = _settings.get("detailed_debug", None)
-    if debug is True:  # this needs to be first, so users can see Router init debugg
-        import logging
+        debug = _settings.get("debug", None)
+        detailed_debug = _settings.get("detailed_debug", None)
+        if debug is True:  # this needs to be first, so users can see Router init debugg
+            import logging
 
-        from litellm._logging import (
-            verbose_logger,
-            verbose_proxy_logger,
-            verbose_router_logger,
-        )
+            from litellm._logging import (
+                verbose_logger,
+                verbose_proxy_logger,
+                verbose_router_logger,
+            )
 
-        # this must ALWAYS remain logging.INFO, DO NOT MODIFY THIS
-        verbose_logger.setLevel(level=logging.INFO)  # sets package logs to info
-        verbose_router_logger.setLevel(level=logging.INFO)  # set router logs to info
-        verbose_proxy_logger.setLevel(level=logging.INFO)  # set proxy logs to info
-    if detailed_debug == True:
-        import logging
+            # this must ALWAYS remain logging.INFO, DO NOT MODIFY THIS
+            verbose_logger.setLevel(level=logging.INFO)  # sets package logs to info
+            verbose_router_logger.setLevel(
+                level=logging.INFO
+            )  # set router logs to info
+            verbose_proxy_logger.setLevel(level=logging.INFO)  # set proxy logs to info
+        if detailed_debug == True:
+            import logging
 
-        from litellm._logging import (
-            verbose_logger,
-            verbose_proxy_logger,
-            verbose_router_logger,
-        )
+            from litellm._logging import (
+                verbose_logger,
+                verbose_proxy_logger,
+                verbose_router_logger,
+            )
 
-        verbose_logger.setLevel(level=logging.DEBUG)  # set package log to debug
-        verbose_router_logger.setLevel(level=logging.DEBUG)  # set router logs to debug
-        verbose_proxy_logger.setLevel(level=logging.DEBUG)  # set proxy logs to debug
-    elif debug == False and detailed_debug == False:
-        # users can control proxy debugging using env variable = 'LITELLM_LOG'
-        litellm_log_setting = os.environ.get("LITELLM_LOG", "")
-        if litellm_log_setting != None:
-            if litellm_log_setting.upper() == "INFO":
-                import logging
+            verbose_logger.setLevel(level=logging.DEBUG)  # set package log to debug
+            verbose_router_logger.setLevel(
+                level=logging.DEBUG
+            )  # set router logs to debug
+            verbose_proxy_logger.setLevel(
+                level=logging.DEBUG
+            )  # set proxy logs to debug
+        elif debug == False and detailed_debug == False:
+            # users can control proxy debugging using env variable = 'LITELLM_LOG'
+            litellm_log_setting = os.environ.get("LITELLM_LOG", "")
+            if litellm_log_setting != None:
+                if litellm_log_setting.upper() == "INFO":
+                    import logging
 
-                from litellm._logging import verbose_proxy_logger, verbose_router_logger
+                    from litellm._logging import (
+                        verbose_proxy_logger,
+                        verbose_router_logger,
+                    )
 
-                # this must ALWAYS remain logging.INFO, DO NOT MODIFY THIS
+                    # this must ALWAYS remain logging.INFO, DO NOT MODIFY THIS
 
-                verbose_router_logger.setLevel(
-                    level=logging.INFO
-                )  # set router logs to info
-                verbose_proxy_logger.setLevel(
-                    level=logging.INFO
-                )  # set proxy logs to info
-            elif litellm_log_setting.upper() == "DEBUG":
-                import logging
+                    verbose_router_logger.setLevel(
+                        level=logging.INFO
+                    )  # set router logs to info
+                    verbose_proxy_logger.setLevel(
+                        level=logging.INFO
+                    )  # set proxy logs to info
+                elif litellm_log_setting.upper() == "DEBUG":
+                    import logging
 
-                from litellm._logging import verbose_proxy_logger, verbose_router_logger
+                    from litellm._logging import (
+                        verbose_proxy_logger,
+                        verbose_router_logger,
+                    )
 
-                verbose_router_logger.setLevel(
-                    level=logging.DEBUG
-                )  # set router logs to info
-                verbose_proxy_logger.setLevel(
-                    level=logging.DEBUG
-                )  # set proxy logs to debug
+                    verbose_router_logger.setLevel(
+                        level=logging.DEBUG
+                    )  # set router logs to info
+                    verbose_proxy_logger.setLevel(
+                        level=logging.DEBUG
+                    )  # set proxy logs to debug
+    except Exception as e:
+        verbose_logger.warning(f"Failed to init verbose loggers: {str(e)}")
