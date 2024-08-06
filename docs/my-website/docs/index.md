@@ -10,14 +10,40 @@ https://github.com/BerriAI/litellm
 - Translate inputs to provider's `completion`, `embedding`, and `image_generation` endpoints
 - [Consistent output](https://docs.litellm.ai/docs/completion/output), text responses will always be available at `['choices'][0]['message']['content']`
 - Retry/fallback logic across multiple deployments (e.g. Azure/OpenAI) - [Router](https://docs.litellm.ai/docs/routing)
-- Track spend & set budgets per project [OpenAI Proxy Server](https://docs.litellm.ai/docs/simple_proxy)
+- Track spend & set budgets per project [LiteLLM Proxy Server](https://docs.litellm.ai/docs/simple_proxy)
 
 ## How to use LiteLLM
 You can use litellm through either:
-1. [OpenAI proxy Server](#openai-proxy) - Server to call 100+ LLMs, load balance, cost tracking across projects
+1. [LiteLLM Proxy Server](#openai-proxy) - Server to call 100+ LLMs, load balance, cost tracking across projects
 2. [LiteLLM python SDK](#basic-usage) - Python Client to call 100+ LLMs, load balance, cost tracking
 
-## LiteLLM Python SDK
+### When to use LiteLLM Proxy Server
+
+:::tip
+
+Use LiteLLM Proxy Server if you want a **central service to access multiple LLMs**
+
+Typically used by Gen AI Enablement /  ML PLatform Teams
+
+:::
+
+  - LiteLLM Proxy gives you a unified interface to access multiple LLMs (100+ LLMs)
+  - Track LLM Usage and setup guardrails
+  - Customize Logging, Guardrails, Caching per project
+
+### When to use LiteLLM Python SDK
+
+:::tip
+
+  Use LiteLLM Python SDK if you want to use LiteLLM in your **python code**
+
+Typically used by developers building llm projects
+
+:::
+
+  - LiteLLM SDK gives you a unified interface to access multiple LLMs (100+ LLMs) 
+  - Retry/fallback logic across multiple deployments (e.g. Azure/OpenAI) - [Router](https://docs.litellm.ai/docs/routing)
+
 
 ### Basic usage 
 

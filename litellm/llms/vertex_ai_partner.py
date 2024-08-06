@@ -7,7 +7,7 @@ import time
 import types
 import uuid
 from enum import Enum
-from typing import Any, Callable, List, Optional, Tuple, Union
+from typing import Any, Callable, List, Literal, Optional, Tuple, Union
 
 import httpx  # type: ignore
 import requests  # type: ignore
@@ -103,18 +103,30 @@ class VertexAILlama3Config:
         for param, value in non_default_params.items():
             if param == "max_tokens":
                 optional_params["max_tokens"] = value
-
+            if param == "stream":
+                optional_params["stream"] = value
         return optional_params
 
 
-class VertexAILlama3(BaseLLM):
+class VertexAIPartnerModels(BaseLLM):
     def __init__(self) -> None:
         pass
 
-    def create_vertex_llama3_url(
-        self, vertex_location: str, vertex_project: str
+    def create_vertex_url(
+        self,
+        vertex_location: str,
+        vertex_project: str,
+        partner: Literal["llama", "mistralai"],
+        stream: Optional[bool],
+        model: str,
     ) -> str:
-        return f"https://{vertex_location}-aiplatform.googleapis.com/v1beta1/projects/{vertex_project}/locations/{vertex_location}/endpoints/openapi"
+        if partner == "llama":
+            return f"https://{vertex_location}-aiplatform.googleapis.com/v1beta1/projects/{vertex_project}/locations/{vertex_location}/endpoints/openapi"
+        elif partner == "mistralai":
+            if stream:
+                return f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/mistralai/models/{model}:streamRawPredict"
+            else:
+                return f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/mistralai/models/{model}:rawPredict"
 
     def completion(
         self,
@@ -128,10 +140,10 @@ class VertexAILlama3(BaseLLM):
         custom_prompt_dict: dict,
         headers: Optional[dict],
         timeout: Union[float, httpx.Timeout],
+        litellm_params: dict,
         vertex_project=None,
         vertex_location=None,
         vertex_credentials=None,
-        litellm_params=None,
         logger_fn=None,
         acompletion: bool = False,
         client=None,
@@ -140,7 +152,9 @@ class VertexAILlama3(BaseLLM):
             import vertexai
             from google.cloud import aiplatform
 
+            from litellm.llms.databricks import DatabricksChatCompletion
             from litellm.llms.openai import OpenAIChatCompletion
+            from litellm.llms.text_completion_codestral import CodestralTextCompletion
             from litellm.llms.vertex_httpx import VertexLLM
         except Exception:
 
@@ -164,25 +178,53 @@ class VertexAILlama3(BaseLLM):
                 credentials=vertex_credentials, project_id=vertex_project
             )
 
-            openai_chat_completions = OpenAIChatCompletion()
-
-            ## Load Config
-            # config = litellm.VertexAILlama3.get_config()
-            # for k, v in config.items():
-            #     if k not in optional_params:
-            #         optional_params[k] = v
+            openai_like_chat_completions = DatabricksChatCompletion()
+            codestral_fim_completions = CodestralTextCompletion()
 
             ## CONSTRUCT API BASE
             stream: bool = optional_params.get("stream", False) or False
 
             optional_params["stream"] = stream
 
-            api_base = self.create_vertex_llama3_url(
+            if "llama" in model:
+                partner = "llama"
+            elif "mistral" in model or "codestral" in model:
+                partner = "mistralai"
+                optional_params["custom_endpoint"] = True
+
+            api_base = self.create_vertex_url(
                 vertex_location=vertex_location or "us-central1",
                 vertex_project=vertex_project or project_id,
+                partner=partner,  # type: ignore
+                stream=stream,
+                model=model,
             )
 
-            return openai_chat_completions.completion(
+            model = model.split("@")[0]
+
+            if "codestral" in model and litellm_params.get("text_completion") is True:
+                optional_params["model"] = model
+                text_completion_model_response = litellm.TextCompletionResponse(
+                    stream=stream
+                )
+                return codestral_fim_completions.completion(
+                    model=model,
+                    messages=messages,
+                    api_base=api_base,
+                    api_key=access_token,
+                    custom_prompt_dict=custom_prompt_dict,
+                    model_response=text_completion_model_response,
+                    print_verbose=print_verbose,
+                    logging_obj=logging_obj,
+                    optional_params=optional_params,
+                    acompletion=acompletion,
+                    litellm_params=litellm_params,
+                    logger_fn=logger_fn,
+                    timeout=timeout,
+                    encoding=encoding,
+                )
+
+            return openai_like_chat_completions.completion(
                 model=model,
                 messages=messages,
                 api_base=api_base,
@@ -197,6 +239,8 @@ class VertexAILlama3(BaseLLM):
                 logger_fn=logger_fn,
                 client=client,
                 timeout=timeout,
+                encoding=encoding,
+                custom_llm_provider="vertex_ai_beta",
             )
 
         except Exception as e:

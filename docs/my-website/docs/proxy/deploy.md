@@ -246,13 +246,22 @@ helm install lite-helm ./litellm-helm
 kubectl --namespace default port-forward $POD_NAME 8080:$CONTAINER_PORT
 ```
 
-Your OpenAI proxy server is now running on `http://127.0.0.1:4000`.
+Your LiteLLM Proxy Server is now running on `http://127.0.0.1:4000`.
 
 </TabItem>
 
 </Tabs>
 
 **That's it ! That's the quick start to deploy litellm**
+
+## Use with Langchain, OpenAI SDK, LlamaIndex, Instructor, Curl
+
+:::info
+💡 Go here 👉 [to make your first LLM API Request](user_keys)
+
+LiteLLM is compatible with several SDKs - including OpenAI SDK, Anthropic SDK, Mistral SDK, LLamaIndex, Langchain (Js, Python)
+
+:::
 
 ## Options to deploy LiteLLM 
 
@@ -292,7 +301,7 @@ docker run \
     --config /app/config.yaml --detailed_debug
 ```
 
-Your OpenAI proxy server is now running on `http://0.0.0.0:4000`.
+Your LiteLLM Proxy Server is now running on `http://0.0.0.0:4000`.
 
 </TabItem>
 <TabItem value="kubernetes-deploy" label="Kubernetes">
@@ -390,7 +399,7 @@ kubectl apply -f /path/to/service.yaml
 kubectl port-forward service/litellm-service 4000:4000
 ```
 
-Your OpenAI proxy server is now running on `http://0.0.0.0:4000`.
+Your LiteLLM Proxy Server is now running on `http://0.0.0.0:4000`.
 
 </TabItem>
 
@@ -432,7 +441,7 @@ kubectl \
   4000:4000
 ```
 
-Your OpenAI proxy server is now running on `http://127.0.0.1:4000`.
+Your LiteLLM Proxy Server is now running on `http://127.0.0.1:4000`.
 
 
 If you need to set your litellm proxy config.yaml, you can find this in [values.yaml](https://github.com/BerriAI/litellm/blob/main/deploy/charts/litellm-helm/values.yaml)
@@ -477,7 +486,7 @@ helm install lite-helm ./litellm-helm
 kubectl --namespace default port-forward $POD_NAME 8080:$CONTAINER_PORT
 ```
 
-Your OpenAI proxy server is now running on `http://127.0.0.1:4000`.
+Your LiteLLM Proxy Server is now running on `http://127.0.0.1:4000`.
 
 </TabItem>
 </Tabs>
@@ -547,6 +556,39 @@ docker run --name litellm-proxy \
 -e DATABASE_URL=postgresql://<user>:<password>@<host>:<port>/<dbname> \
 -p 4000:4000 \
 ghcr.io/berriai/litellm-database:main-latest --config your_config.yaml
+```
+
+## LiteLLM without Internet Connection
+
+By default `prisma generate` downloads [prisma's engine binaries](https://www.prisma.io/docs/orm/reference/environment-variables-reference#custom-engine-file-locations). This might cause errors when running without internet connection. 
+
+Use this dockerfile to build an image which pre-generates the prisma binaries.
+
+```Dockerfile
+# Use the provided base image
+FROM ghcr.io/berriai/litellm:main-latest
+
+# Set the working directory to /app
+WORKDIR /app
+
+### [👇 KEY STEP] ###
+# Install Prisma CLI and generate Prisma client
+RUN pip install prisma 
+RUN prisma generate
+### FIN #### 
+
+
+# Expose the necessary port
+EXPOSE 4000
+
+# Override the CMD instruction with your desired command and arguments
+# WARNING: FOR PROD DO NOT USE `--detailed_debug` it slows down response times, instead use the following CMD
+# CMD ["--port", "4000", "--config", "config.yaml"]
+
+# Define the command to run your app
+ENTRYPOINT ["litellm"]
+
+CMD ["--port", "4000"]
 ```
 
 ## Advanced Deployment Settings
@@ -785,3 +827,31 @@ Run the command `docker-compose up` or `docker compose up` as per your docker in
 
 
 Your LiteLLM container should be running now on the defined port e.g. `4000`.
+
+### IAM-based Auth for RDS DB 
+
+1. Set AWS env var 
+
+```bash
+export AWS_WEB_IDENTITY_TOKEN='/path/to/token'
+export AWS_ROLE_NAME='arn:aws:iam::123456789012:role/MyRole'
+export AWS_SESSION_NAME='MySession'
+```
+
+[**See all Auth options**](https://github.com/BerriAI/litellm/blob/089a4f279ad61b7b3e213d8039fb9b75204a7abc/litellm/proxy/auth/rds_iam_token.py#L165)
+
+2. Add RDS credentials to env
+
+```bash
+export DATABASE_USER="db-user"
+export DATABASE_PORT="5432"
+export DATABASE_HOST="database-1-instance-1.cs1ksmwz2xt3.us-west-2.rds.amazonaws.com"
+export DATABASE_NAME="database-1-instance-1"
+```
+
+3. Run proxy with iam+rds
+
+
+```bash
+litellm --config /path/to/config.yaml --iam_token_db_auth
+```

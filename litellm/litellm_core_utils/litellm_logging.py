@@ -10,7 +10,9 @@ import sys
 import time
 import traceback
 import uuid
-from typing import Any, Callable, Dict, List, Literal, Optional
+from typing import Any, Callable, Dict, List, Literal, Optional, Union
+
+from pydantic import BaseModel
 
 import litellm
 from litellm import (
@@ -59,6 +61,7 @@ from ..integrations.custom_logger import CustomLogger
 from ..integrations.datadog import DataDogLogger
 from ..integrations.dynamodb import DyanmoDBLogger
 from ..integrations.galileo import GalileoObserve
+from ..integrations.gcs_bucket import GCSBucketLogger
 from ..integrations.greenscale import GreenscaleLogger
 from ..integrations.helicone import HeliconeLogger
 from ..integrations.lago import LagoLogger
@@ -230,6 +233,9 @@ class Logging:
             or litellm_params.get("output_cost_per_second") is not None
         ):
             self.custom_pricing = True
+
+        if "custom_llm_provider" in self.model_call_details:
+            self.custom_llm_provider = self.model_call_details["custom_llm_provider"]
 
     def _pre_call(self, input, api_key, model=None, additional_args={}):
         """
@@ -500,6 +506,44 @@ class Logging:
                 )
             )
 
+    def _response_cost_calculator(
+        self,
+        result: Union[
+            ModelResponse,
+            EmbeddingResponse,
+            ImageResponse,
+            TranscriptionResponse,
+            TextCompletionResponse,
+            HttpxBinaryResponseContent,
+        ],
+    ):
+        """
+        Calculate response cost using result + logging object variables.
+
+        used for consistent cost calculation across response headers + logging integrations.
+        """
+        ## RESPONSE COST ##
+        custom_pricing = use_custom_pricing_for_model(
+            litellm_params=self.litellm_params
+        )
+
+        response_cost = litellm.response_cost_calculator(
+            response_object=result,
+            model=self.model,
+            cache_hit=self.model_call_details.get("cache_hit", False),
+            custom_llm_provider=self.model_call_details.get(
+                "custom_llm_provider", None
+            ),
+            base_model=_get_base_model_from_metadata(
+                model_call_details=self.model_call_details
+            ),
+            call_type=self.call_type,
+            optional_params=self.optional_params,
+            custom_pricing=custom_pricing,
+        )
+
+        return response_cost
+
     def _success_handler_helper_fn(
         self, result=None, start_time=None, end_time=None, cache_hit=None
     ):
@@ -529,25 +573,32 @@ class Logging:
                     or isinstance(result, TextCompletionResponse)
                     or isinstance(result, HttpxBinaryResponseContent)  # tts
                 ):
+                    ## RESPONSE COST ##
                     custom_pricing = use_custom_pricing_for_model(
                         litellm_params=self.litellm_params
                     )
                     self.model_call_details["response_cost"] = (
-                        litellm.response_cost_calculator(
-                            response_object=result,
-                            model=self.model,
-                            cache_hit=self.model_call_details.get("cache_hit", False),
-                            custom_llm_provider=self.model_call_details.get(
-                                "custom_llm_provider", None
-                            ),
-                            base_model=_get_base_model_from_metadata(
-                                model_call_details=self.model_call_details
-                            ),
-                            call_type=self.call_type,
-                            optional_params=self.optional_params,
-                            custom_pricing=custom_pricing,
-                        )
+                        self._response_cost_calculator(result=result)
                     )
+
+                    ## HIDDEN PARAMS ##
+                    if hasattr(result, "_hidden_params"):
+                        # add to metadata for logging
+                        if self.model_call_details.get("litellm_params") is not None:
+                            self.model_call_details["litellm_params"].setdefault(
+                                "metadata", {}
+                            )
+                            if (
+                                self.model_call_details["litellm_params"]["metadata"]
+                                is None
+                            ):
+                                self.model_call_details["litellm_params"][
+                                    "metadata"
+                                ] = {}
+
+                            self.model_call_details["litellm_params"]["metadata"][
+                                "hidden_params"
+                            ] = result._hidden_params
             else:  # streaming chunks + image gen.
                 self.model_call_details["response_cost"] = None
 
@@ -1220,7 +1271,9 @@ class Logging:
         """
         Implementing async callbacks, to handle asyncio event loop issues when custom integrations need to use async functions.
         """
-        print_verbose("Logging Details LiteLLM-Async Success Call")
+        print_verbose(
+            "Logging Details LiteLLM-Async Success Call, cache_hit={}".format(cache_hit)
+        )
         start_time, end_time, result = self._success_handler_helper_fn(
             start_time=start_time, end_time=end_time, result=result, cache_hit=cache_hit
         )
@@ -1490,6 +1543,13 @@ class Logging:
         self.model_call_details["end_time"] = end_time
         self.model_call_details.setdefault("original_response", None)
         self.model_call_details["response_cost"] = 0
+
+        if hasattr(exception, "headers") and isinstance(exception.headers, dict):
+            self.model_call_details.setdefault("litellm_params", {})
+            metadata = (
+                self.model_call_details["litellm_params"].get("metadata", {}) or {}
+            )
+            metadata.update(exception.headers)
         return start_time, end_time
 
     def failure_handler(
@@ -1962,6 +2022,14 @@ def _init_custom_logger_compatible_class(
         _langsmith_logger = LangsmithLogger()
         _in_memory_loggers.append(_langsmith_logger)
         return _langsmith_logger  # type: ignore
+    elif logging_integration == "gcs_bucket":
+        for callback in _in_memory_loggers:
+            if isinstance(callback, GCSBucketLogger):
+                return callback  # type: ignore
+
+        _gcs_bucket_logger = GCSBucketLogger()
+        _in_memory_loggers.append(_gcs_bucket_logger)
+        return _gcs_bucket_logger  # type: ignore
     elif logging_integration == "arize":
         if "ARIZE_SPACE_KEY" not in os.environ:
             raise ValueError("ARIZE_SPACE_KEY not found in environment variables")
@@ -2075,6 +2143,10 @@ def get_custom_logger_compatible_class(
     elif logging_integration == "langsmith":
         for callback in _in_memory_loggers:
             if isinstance(callback, LangsmithLogger):
+                return callback
+    elif logging_integration == "gcs_bucket":
+        for callback in _in_memory_loggers:
+            if isinstance(callback, GCSBucketLogger):
                 return callback
     elif logging_integration == "otel":
         from litellm.integrations.opentelemetry import OpenTelemetry

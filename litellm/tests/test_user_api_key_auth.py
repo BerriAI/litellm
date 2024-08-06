@@ -61,7 +61,11 @@ async def test_check_blocked_team():
     from fastapi import Request
     from starlette.datastructures import URL
 
-    from litellm.proxy._types import LiteLLM_TeamTable, UserAPIKeyAuth
+    from litellm.proxy._types import (
+        LiteLLM_TeamTable,
+        LiteLLM_TeamTableCachedObj,
+        UserAPIKeyAuth,
+    )
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
     from litellm.proxy.proxy_server import hash_token, user_api_key_cache
 
@@ -75,7 +79,7 @@ async def test_check_blocked_team():
         last_refreshed_at=time.time(),
     )
     await asyncio.sleep(1)
-    team_obj = LiteLLM_TeamTable(
+    team_obj = LiteLLM_TeamTableCachedObj(
         team_id=_team_id, blocked=False, last_refreshed_at=time.time()
     )
     user_api_key_cache.set_cache(key=hash_token(user_key), value=valid_token)
@@ -89,3 +93,26 @@ async def test_check_blocked_team():
     request._url = URL(url="/chat/completions")
 
     await user_api_key_auth(request=request, api_key="Bearer " + user_key)
+
+
+@pytest.mark.parametrize(
+    "user_role", ["app_user", "internal_user", "proxy_admin_viewer"]
+)
+def test_returned_user_api_key_auth(user_role):
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.auth.user_api_key_auth import _return_user_api_key_auth_obj
+
+    user_id_information = [{"user_role": user_role}]
+
+    new_obj = _return_user_api_key_auth_obj(
+        user_id_information,
+        api_key="hello-world",
+        parent_otel_span=None,
+        valid_token_dict={},
+        route="/chat/completion",
+    )
+
+    if user_role in list(LitellmUserRoles.__annotations__.keys()):
+        assert new_obj.user_role == user_role
+    else:
+        assert new_obj.user_role == "internal_user"

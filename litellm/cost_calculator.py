@@ -106,7 +106,6 @@ def cost_per_token(
     Returns:
         tuple: A tuple containing the cost in USD dollars for prompt tokens and completion tokens, respectively.
     """
-    args = locals()
     if model is None:
         raise Exception("Invalid arg. Model cannot be none.")
     ## CUSTOM PRICING ##
@@ -117,6 +116,7 @@ def cost_per_token(
         custom_cost_per_second=custom_cost_per_second,
         custom_cost_per_token=custom_cost_per_token,
     )
+
     if response_cost is not None:
         return response_cost[0], response_cost[1]
 
@@ -495,9 +495,9 @@ def completion_cost(
             completion_tokens = completion_response.get("usage", {}).get(
                 "completion_tokens", 0
             )
-            total_time = completion_response.get("_response_ms", 0)
+            total_time = getattr(completion_response, "_response_ms", 0)
             verbose_logger.debug(
-                f"completion_response response ms: {completion_response.get('_response_ms')} "
+                f"completion_response response ms: {getattr(completion_response, '_response_ms', None)} "
             )
             model = model or completion_response.get(
                 "model", None
@@ -509,7 +509,7 @@ def completion_cost(
                 ):
                     model = completion_response._hidden_params.get("model", model)
                 custom_llm_provider = completion_response._hidden_params.get(
-                    "custom_llm_provider", ""
+                    "custom_llm_provider", custom_llm_provider or ""
                 )
                 region_name = completion_response._hidden_params.get(
                     "region_name", region_name
@@ -659,9 +659,7 @@ def completion_cost(
             call_type=call_type,
         )
         _final_cost = prompt_tokens_cost_usd_dollar + completion_tokens_cost_usd_dollar
-        print_verbose(
-            f"final cost: {_final_cost}; prompt_tokens_cost_usd_dollar: {prompt_tokens_cost_usd_dollar}; completion_tokens_cost_usd_dollar: {completion_tokens_cost_usd_dollar}"
-        )
+
         return _final_cost
     except Exception as e:
         raise e
@@ -732,14 +730,21 @@ def response_cost_calculator(
                 )
         return response_cost
     except litellm.NotFoundError as e:
-        print_verbose(
+        verbose_logger.debug(  # debug since it can be spammy in logs, for calls
             f"Model={model} for LLM Provider={custom_llm_provider} not found in completion cost map."
         )
         return None
     except Exception as e:
-        verbose_logger.warning(
-            "litellm.cost_calculator.py::response_cost_calculator - Returning None. Exception occurred - {}/n{}".format(
-                str(e), traceback.format_exc()
+        if litellm.suppress_debug_info:  # allow cli tools to suppress this information.
+            verbose_logger.debug(
+                "litellm.cost_calculator.py::response_cost_calculator - Returning None. Exception occurred - {}/n{}".format(
+                    str(e), traceback.format_exc()
+                )
             )
-        )
+        else:
+            verbose_logger.warning(
+                "litellm.cost_calculator.py::response_cost_calculator - Returning None. Exception occurred - {}/n{}".format(
+                    str(e), traceback.format_exc()
+                )
+            )
         return None

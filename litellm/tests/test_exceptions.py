@@ -770,7 +770,9 @@ def test_litellm_predibase_exception():
 # print(f"accuracy_score: {accuracy_score}")
 
 
-@pytest.mark.parametrize("provider", ["predibase", "vertex_ai_beta", "anthropic"])
+@pytest.mark.parametrize(
+    "provider", ["predibase", "vertex_ai_beta", "anthropic", "databricks"]
+)
 def test_exception_mapping(provider):
     """
     For predibase, run through a set of mock exceptions

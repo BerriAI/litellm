@@ -66,8 +66,15 @@ response = litellm.completion(
 
 ## Azure OpenAI Chat Completion Models
 
+:::tip
+
+**We support ALL Azure models, just set `model=azure/<your deployment name>` as a prefix when sending litellm requests**
+
+:::
+
 | Model Name       | Function Call                          |
 |------------------|----------------------------------------|
+| gpt-4o-mini            | `completion('azure/<your deployment name>', messages)`         |
 | gpt-4o            | `completion('azure/<your deployment name>', messages)`         |
 | gpt-4            | `completion('azure/<your deployment name>', messages)`         |
 | gpt-4-0314            | `completion('azure/<your deployment name>', messages)`         | 
