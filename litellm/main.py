@@ -128,6 +128,7 @@ from .types.llms.openai import HttpxBinaryResponseContent
 from .types.utils import (
     AdapterCompletionStreamWrapper,
     ChatCompletionMessageToolCall,
+    HiddenParams,
     all_litellm_params,
 )
 
@@ -3709,6 +3710,9 @@ async def atext_completion(
             text_choices["finish_reason"] = response["choices"][0]["finish_reason"]
             text_completion_response["choices"] = [text_choices]
             text_completion_response["usage"] = response.get("usage", None)
+            text_completion_response._hidden_params = HiddenParams(
+                **response._hidden_params
+            )
             return text_completion_response
     except Exception as e:
         custom_llm_provider = custom_llm_provider or "openai"
@@ -3980,6 +3984,7 @@ def text_completion(
     text_choices["finish_reason"] = response["choices"][0]["finish_reason"]
     text_completion_response["choices"] = [text_choices]
     text_completion_response["usage"] = response.get("usage", None)
+    text_completion_response._hidden_params = HiddenParams(**response._hidden_params)
 
     return text_completion_response
 
