@@ -321,7 +321,10 @@ class Router:
                 []
             )  # initialize an empty list - to allow _add_deployment and delete_deployment to work
 
-        self.allowed_fails = allowed_fails or litellm.allowed_fails
+        if allowed_fails is not None:
+            self.allowed_fails = allowed_fails
+        else:
+            self.allowed_fails = litellm.allowed_fails
         self.cooldown_time = cooldown_time or 60
         self.disable_cooldowns = disable_cooldowns
         self.failed_calls = (
