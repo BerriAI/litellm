@@ -13,6 +13,7 @@ import base64
 import binascii
 import copy
 import datetime
+import hashlib
 import inspect
 import itertools
 import json
@@ -554,6 +555,12 @@ def function_setup(
         ):
             _file_name: BinaryIO = args[1] if len(args) > 1 else kwargs["file"]
             file_name = getattr(_file_name, "name", "audio_file")
+            # Add file checksum to metadata
+            file_checksum = hashlib.sha256(_file_name.read()).hexdigest()
+            if "metadata" in kwargs:
+                kwargs["metadata"]["file_checksum"] = file_checksum
+            else:
+                kwargs["metadata"] = {"file_checksum": file_checksum}
             messages = file_name
         elif (
             call_type == CallTypes.aspeech.value or call_type == CallTypes.speech.value
