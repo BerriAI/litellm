@@ -10,6 +10,7 @@
 import ast
 import asyncio
 import hashlib
+import io
 import json
 import logging
 import time
@@ -1889,8 +1890,10 @@ class Cache:
                     metadata = kwargs.get("metadata", {})
                     litellm_params = kwargs.get("litellm_params", {})
 
+                    # get checksum of file content
                     param_value = (
-                        getattr(file, "name", None)
+                        metadata.get("file_checksum")
+                        or getattr(file, "name", None)
                         or metadata.get("file_name")
                         or litellm_params.get("file_name")
                     )
