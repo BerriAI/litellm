@@ -59,9 +59,7 @@ def test_init_clients():
             assert router.cache.get_cache(f"{model_id}_stream_async_client") is not None
 
             # check if timeout for stream/non stream clients is set correctly
-            from openai import AsyncAzureOpenAI
-
-            async_client: AsyncAzureOpenAI = router.cache.get_cache(f"{model_id}_async_client")  # type: ignore
+            async_client = router.cache.get_cache(f"{model_id}_async_client")
             stream_async_client = router.cache.get_cache(
                 f"{model_id}_stream_async_client"
             )
@@ -72,12 +70,12 @@ def test_init_clients():
             print()
             print(async_client._base_url)
             assert (
-                str(async_client._base_url)
-                == "https://openai-gpt-4-test-v-1.openai.azure.com/openai/"
+                async_client._base_url
+                == "https://openai-gpt-4-test-v-1.openai.azure.com//openai/"
             )  # openai python adds the extra /
             assert (
-                str(stream_async_client._base_url)
-                == "https://openai-gpt-4-test-v-1.openai.azure.com/openai/"
+                stream_async_client._base_url
+                == "https://openai-gpt-4-test-v-1.openai.azure.com//openai/"
             )
 
         print("PASSED !")
