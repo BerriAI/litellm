@@ -185,7 +185,7 @@ def setup_admin_ui_on_server_root_path(server_root_path: str):
 
         current_dir = (
             os.path.dirname(os.path.abspath(__file__))
-            + "/../../../ui/litellm-dashboard/"
+            + "/../../../../ui/litellm-dashboard/"
         )
         build_ui_path = os.path.join(current_dir, "build_ui_custom_path.sh")
         package_path = os.path.join(current_dir, "package.json")
