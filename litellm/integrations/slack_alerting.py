@@ -1263,6 +1263,10 @@ Model Info:
 
             if self.alerting is None or "email" not in self.alerting:
                 # do nothing if user does not want email alerts
+                verbose_proxy_logger.error(
+                    "Error sending email alert - 'email' not in self.alerting %s",
+                    self.alerting,
+                )
                 return False
             from litellm.proxy.proxy_server import premium_user, prisma_client
 
