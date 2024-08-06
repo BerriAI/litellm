@@ -244,6 +244,7 @@ async def pass_through_request(
     target: str,
     custom_headers: dict,
     user_api_key_dict: UserAPIKeyAuth,
+    forward_headers: Optional[bool] = False,
 ):
     try:
         import time
@@ -261,6 +262,10 @@ async def pass_through_request(
             _parsed_body = ast.literal_eval(body_str)
         except:
             _parsed_body = json.loads(body_str)
+
+        if forward_headers is True:
+            request_headers = dict(request.headers)
+            headers = {**headers, **request_headers}
 
         verbose_proxy_logger.debug(
             "Pass through endpoint sending request to \nURL {}\nheaders: {}\nbody: {}\n".format(
@@ -360,7 +365,10 @@ async def pass_through_request(
 
 
 def create_pass_through_route(
-    endpoint, target: str, custom_headers: Optional[dict] = None
+    endpoint,
+    target: str,
+    custom_headers: Optional[dict] = None,
+    _forward_headers: Optional[bool] = False,
 ):
     # check if target is an adapter.py or a url
     import uuid
@@ -400,6 +408,7 @@ def create_pass_through_route(
                 target=target,
                 custom_headers=custom_headers or {},
                 user_api_key_dict=user_api_key_dict,
+                forward_headers=_forward_headers,
             )
 
     return endpoint_func
@@ -418,6 +427,7 @@ async def initialize_pass_through_endpoints(pass_through_endpoints: list):
         _custom_headers = await set_env_variables_in_header(
             custom_headers=_custom_headers
         )
+        _forward_headers = endpoint.get("forward_headers", None)
         _auth = endpoint.get("auth", None)
         _dependencies = None
         if _auth is not None and str(_auth).lower() == "true":
@@ -437,7 +447,9 @@ async def initialize_pass_through_endpoints(pass_through_endpoints: list):
 
         app.add_api_route(
             path=_path,
-            endpoint=create_pass_through_route(_path, _target, _custom_headers),
+            endpoint=create_pass_through_route(
+                _path, _target, _custom_headers, _forward_headers
+            ),
             methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
             dependencies=_dependencies,
         )
