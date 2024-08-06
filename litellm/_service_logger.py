@@ -97,6 +97,7 @@ class ServiceLogging(CustomLogger):
         parent_otel_span: Optional[Span] = None,
         start_time: Optional[Union[datetime, float]] = None,
         end_time: Optional[Union[float, datetime]] = None,
+        event_metadata: Optional[dict] = None,
     ):
         """
         - For counting if the redis, postgres call is unsuccessful
@@ -133,6 +134,7 @@ class ServiceLogging(CustomLogger):
                 parent_otel_span=parent_otel_span,
                 start_time=start_time,
                 end_time=end_time,
+                event_metadata=event_metadata,
             )
 
     async def async_post_call_failure_hook(
