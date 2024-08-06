@@ -40,6 +40,13 @@ files_settings:
 
 general_settings: 
   master_key: sk-1234
+  pass_through_endpoints:
+    - path: "/v1/rerank"                                  # route you want to add to LiteLLM Proxy Server
+      target: "https://api.cohere.com/v1/rerank"          # URL this route should forward requests to
+      headers:                                            # headers to forward to this URL
+        content-type: application/json                    # (Optional) Extra Headers to pass to this endpoint 
+        accept: application/json
+      forward_headers: True
 
 
 litellm_settings:
