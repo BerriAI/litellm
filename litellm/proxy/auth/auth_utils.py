@@ -1,5 +1,6 @@
 import re
 import sys
+import traceback
 
 from fastapi import Request
 
@@ -87,14 +88,16 @@ def get_request_route(request: Request) -> str:
     remove base url from path if set e.g. `/genai/chat/completions` -> `/chat/completions
     """
     try:
-        if request.url.path.startswith(request.base_url.path):
+        if hasattr(request, "base_url") and request.url.path.startswith(
+            request.base_url.path
+        ):
             # remove base_url from path
             return request.url.path[len(request.base_url.path) - 1 :]
         else:
             return request.url.path
     except Exception as e:
-        verbose_proxy_logger.warning(
-            f"error on get_request_route: {str(e)}, defaulting to request.url.path"
+        verbose_proxy_logger.debug(
+            f"error on get_request_route: {str(e)}, defaulting to request.url.path={request.url.path}"
         )
         return request.url.path
 
