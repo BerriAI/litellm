@@ -128,13 +128,16 @@ class ServiceLogging(CustomLogger):
 
         from litellm.proxy.proxy_server import open_telemetry_logger
 
-        if parent_otel_span is not None and open_telemetry_logger is not None:
+        if not isinstance(error, str):
+            error = str(error)
+        if open_telemetry_logger is not None:
             await open_telemetry_logger.async_service_failure_hook(
                 payload=payload,
                 parent_otel_span=parent_otel_span,
                 start_time=start_time,
                 end_time=end_time,
                 event_metadata=event_metadata,
+                error=error,
             )
 
     async def async_post_call_failure_hook(
