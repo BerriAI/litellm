@@ -56,3 +56,15 @@ def test_get_llm_provider_mistral_custom_api_base():
         api_base
         == "https://mistral-large-fr-ishaan.francecentral.inference.ai.azure.com/v1"
     )
+
+
+def test_get_llm_provider_deepseek_custom_api_base():
+    os.environ["DEEPSEEK_API_BASE"] = "MY-FAKE-BASE"
+    model, custom_llm_provider, dynamic_api_key, api_base = litellm.get_llm_provider(
+        model="deepseek/deep-chat",
+    )
+    assert custom_llm_provider == "deepseek"
+    assert model == "deep-chat"
+    assert api_base == "MY-FAKE-BASE"
+
+    os.environ.pop("DEEPSEEK_API_BASE")
