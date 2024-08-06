@@ -11,6 +11,7 @@ from typing import Literal, Optional
 
 import dotenv
 import httpx
+from pydantic import BaseModel
 
 import litellm
 from litellm import verbose_logger
@@ -280,22 +281,20 @@ class BraintrustLogger(CustomLogger):
             )  # if litellm_params['metadata'] == None
             metadata = self.add_metadata_from_header(litellm_params, metadata)
             clean_metadata = {}
-            try:
-                metadata = copy.deepcopy(
-                    metadata
-                )  # Avoid modifying the original metadata
-            except:
-                new_metadata = {}
-                for key, value in metadata.items():
-                    if (
-                        isinstance(value, list)
-                        or isinstance(value, dict)
-                        or isinstance(value, str)
-                        or isinstance(value, int)
-                        or isinstance(value, float)
-                    ):
-                        new_metadata[key] = copy.deepcopy(value)
-                metadata = new_metadata
+            new_metadata = {}
+            for key, value in metadata.items():
+                if (
+                    isinstance(value, list)
+                    or isinstance(value, dict)
+                    or isinstance(value, str)
+                    or isinstance(value, int)
+                    or isinstance(value, float)
+                ):
+                    new_metadata[key] = value
+                elif isinstance(value, BaseModel):
+                    new_metadata[key] = value.model_dump_json()
+
+            metadata = new_metadata
 
             tags = []
             if isinstance(metadata, dict):
