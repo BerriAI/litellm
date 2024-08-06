@@ -154,6 +154,14 @@ general_settings:
   database_connection_pool_limit: 10
   # database_url: "postgresql://<user>:<password>@<host>:<port>/<dbname>" # [OPTIONAL] use for token-based auth to proxy
 
+  pass_through_endpoints:
+    - path: "/v1/rerank"                                  # route you want to add to LiteLLM Proxy Server
+      target: "https://api.cohere.com/v1/rerank"          # URL this route should forward requests to
+      headers:                                            # headers to forward to this URL
+        content-type: application/json                    # (Optional) Extra Headers to pass to this endpoint 
+        accept: application/json
+      forward_headers: True
+
 # environment_variables:
   # settings for using redis caching
   # REDIS_HOST: redis-16337.c322.us-east-1-2.ec2.cloud.redislabs.com
