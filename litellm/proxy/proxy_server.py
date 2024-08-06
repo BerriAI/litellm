@@ -141,6 +141,7 @@ from litellm.proxy.common_utils.admin_ui_utils import (
     setup_admin_ui_on_server_root_path,
     show_missing_vars_in_env,
 )
+from litellm.proxy.common_utils.debug_utils import init_verbose_loggers
 from litellm.proxy.common_utils.debug_utils import router as debugging_endpoints_router
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
@@ -2546,6 +2547,8 @@ def giveup(e):
 async def startup_event():
     global prisma_client, master_key, use_background_health_checks, llm_router, llm_model_list, general_settings, proxy_budget_rescheduler_min_time, proxy_budget_rescheduler_max_time, litellm_proxy_admin_name, db_writer_client, store_model_in_db, premium_user, _license_check
     import json
+
+    init_verbose_loggers()
 
     ### LOAD MASTER KEY ###
     # check if master key set in environment - load from there
