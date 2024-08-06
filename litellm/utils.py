@@ -555,8 +555,11 @@ def function_setup(
         ):
             _file_name: BinaryIO = args[1] if len(args) > 1 else kwargs["file"]
             file_name = getattr(_file_name, "name", "audio_file")
-            # Add file checksum to metadata
-            file_checksum = hashlib.sha256(_file_name.read()).hexdigest()
+            file_descriptor = _file_name.fileno()
+            file_stat = os.fstat(file_descriptor)
+            file_size = str(file_stat.st_size)
+
+            file_checksum = _file_name.name + file_size
             if "metadata" in kwargs:
                 kwargs["metadata"]["file_checksum"] = file_checksum
             else:
