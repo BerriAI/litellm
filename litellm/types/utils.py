@@ -2,7 +2,7 @@ import json
 import time
 import uuid
 from enum import Enum
-from typing import Dict, List, Literal, Optional, Tuple, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 from openai._models import BaseModel as OpenAIObject
 from pydantic import ConfigDict, Field, PrivateAttr
@@ -219,7 +219,7 @@ class ChatCompletionDeltaToolCall(OpenAIObject):
 
 
 class HiddenParams(OpenAIObject):
-    original_response: Optional[str] = None
+    original_response: Optional[Union[str, Any]] = None
     model_id: Optional[str] = None  # used in Router for individual deployments
     api_base: Optional[str] = None  # returns api base used for making completion call
 
