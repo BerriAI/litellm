@@ -168,14 +168,14 @@ def missing_keys_form(missing_key_names: str):
     return missing_keys_html_form.format(missing_keys=missing_key_names)
 
 
-def setup_admin_ui_on_server_root_path():
+def setup_admin_ui_on_server_root_path(server_root_path: str):
     """
     Helper util to setup Admin UI on Server root path
     """
     from litellm._logging import verbose_proxy_logger
 
-    server_root_path = os.getenv("SERVER_ROOT_PATH", "")
     if server_root_path != "":
+        print("setting proxy base url to server root path")  # noqa
         if os.getenv("PROXY_BASE_URL") is None:
             os.environ["PROXY_BASE_URL"] = server_root_path
 
