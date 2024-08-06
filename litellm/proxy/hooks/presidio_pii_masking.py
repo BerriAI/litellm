@@ -118,54 +118,25 @@ class _OPTIONAL_PresidioPIIMasking(CustomLogger):
         try:
             async with aiohttp.ClientSession() as session:
                 if self.mock_redacted_text is not None:
-                    redacted_text = self.mock_redacted_text
+                    anonymize_results = self.mock_redacted_text
                 else:
+                    anonymize_results = None
+
                     # Make the first request to /analyze
-                    analyze_url = f"{self.presidio_analyzer_api_base}analyze"
-                    verbose_proxy_logger.debug("Making request to: %s", analyze_url)
-                    analyze_payload = {"text": text, "language": "en"}
-                    if self.ad_hoc_recognizers is not None:
-                        analyze_payload["ad_hoc_recognizers"] = self.ad_hoc_recognizers
-                    redacted_text = None
-                    async with session.post(
-                        analyze_url, json=analyze_payload
-                    ) as response:
-                        analyze_results = await response.json()
-
+                    analyze_results = await self.presidio_analyze_text(text, session)
                     # Make the second request to /anonymize
-                    anonymize_url = f"{self.presidio_anonymizer_api_base}anonymize"
-                    verbose_proxy_logger.debug("Making request to: %s", anonymize_url)
-                    anonymize_payload = {
-                        "text": text,
-                        "analyzer_results": analyze_results,
-                    }
+                    anonymize_results = await self.presidio_anonymize_text(analyze_results, text, session)
 
-                    async with session.post(
-                        anonymize_url, json=anonymize_payload
-                    ) as response:
-                        redacted_text = await response.json()
+                if anonymize_results is not None:
+                    verbose_proxy_logger.debug("redacted_text: %s", anonymize_results)
 
-                new_text = text
-                if redacted_text is not None:
-                    verbose_proxy_logger.debug("redacted_text: %s", redacted_text)
-                    for item in redacted_text["items"]:
-                        start = item["start"]
-                        end = item["end"]
-                        replacement = item["text"]  # replacement token
-                        if item["operator"] == "replace" and output_parse_pii == True:
-                            # check if token in dict
-                            # if exists, add a uuid to the replacement token for swapping back to the original text in llm response output parsing
-                            if replacement in self.pii_tokens:
-                                replacement = replacement + str(uuid.uuid4())
+                    if output_parse_pii is False:
+                        return anonymize_results["text"]
 
-                            self.pii_tokens[replacement] = new_text[
-                                start:end
-                            ]  # get text it'll replace
+                    return self.create_reversible_mask(text, analyze_results, anonymize_results)
 
-                        new_text = new_text[:start] + replacement + new_text[end:]
-                    return redacted_text["text"]
                 else:
-                    raise Exception(f"Invalid anonymizer response: {redacted_text}")
+                    raise Exception(f"Invalid anonymizer response: {anonymize_results}")
         except Exception as e:
             verbose_proxy_logger.error(
                 "litellm.proxy.hooks.presidio_pii_masking.py::async_pre_call_hook(): Exception occured - {}".format(
@@ -174,6 +145,89 @@ class _OPTIONAL_PresidioPIIMasking(CustomLogger):
             )
             verbose_proxy_logger.debug(traceback.format_exc())
             raise e
+
+    async def presidio_analyze_text(self, text, session):
+        analyze_url = f"{self.presidio_analyzer_api_base}analyze"
+        verbose_proxy_logger.debug("Making request to: %s", analyze_url)
+        analyze_payload = {"text": text, "language": "en"}
+        if self.ad_hoc_recognizers is not None:
+            analyze_payload["ad_hoc_recognizers"] = self.ad_hoc_recognizers
+        async with session.post(analyze_url, json=analyze_payload) as response:
+            return await response.json()
+
+    async def presidio_anonymize_text(self, analyze_results, text, session):
+        anonymize_url = f"{self.presidio_anonymizer_api_base}anonymize"
+        verbose_proxy_logger.debug("Making request to: %s", anonymize_url)
+        anonymize_payload = {
+            "text": text,
+            "analyzer_results": analyze_results,
+        }
+
+        async with session.post(anonymize_url, json=anonymize_payload) as response:
+            return await response.json()
+
+    def create_reversible_mask(self, text, analyze_results, anonymize_results):
+        sorted_analyze_results = self.sort_items_by_start(analyze_results)
+        sorted_anonymize_results = {
+            "masked_text": anonymize_results["text"],
+            "items": self.ensure_mask_text_uniqueness(self.sort_items_by_start(anonymize_results["items"])),
+        }
+
+        all_items = self.merge_items(sorted_analyze_results, sorted_anonymize_results)
+
+        return self.set_pii_tokens_and_update_mask_text(text, all_items)
+
+    def sort_items_by_start(self, items):
+        return sorted(items, key=lambda x: x["start"])
+
+    def ensure_mask_text_uniqueness(self, items):
+        mask_texts = {}
+        results = []
+        for item in items:
+            entity_type = item["entity_type"]
+            if entity_type not in mask_texts:
+                mask_texts[entity_type] = 0
+            else:
+                mask_texts[entity_type] += 1
+
+            results.append({**item, "text": f"<{entity_type}-{mask_texts[entity_type]}>"})
+
+        return results
+
+    def merge_items(self, analyze_results, anonymize_results):
+        return {
+            "masked_text": anonymize_results["masked_text"],
+            "items": [
+                {
+                    "mask_start": item["start"],
+                    "mask_end": item["end"],
+                    "mask_text": item["text"],
+                    "operator": item["operator"],
+                    "original_start": analyze_results[idx]["start"],
+                    "original_end": analyze_results[idx]["end"],
+                    "entity_type": analyze_results[idx]["entity_type"],
+                }
+                for idx, item in enumerate(anonymize_results["items"])
+            ],
+        }
+
+    def set_pii_tokens_and_update_mask_text(self, full_original_text, all_items):
+        final_text = full_original_text
+        current_diff = 0
+        for item in all_items["items"]:
+            if item["operator"] == "replace":
+                start = item["original_start"] + current_diff
+                end = item["original_end"] + current_diff
+                mask_text = item["mask_text"]
+
+                final_text = final_text[:start] + mask_text + final_text[end:]
+
+                current_diff = current_diff + len(mask_text) - (end - start)
+
+                original_unmasked_text = full_original_text[item["original_start"] : item["original_end"]]
+                self.pii_tokens[item["mask_text"]] = original_unmasked_text
+
+        return final_text
 
     async def async_pre_call_hook(
         self,
