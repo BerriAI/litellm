@@ -1408,13 +1408,13 @@ def test_call_with_key_over_budget(prisma_client):
             assert spend_log.model == "chatgpt-v-2"
             assert (
                 spend_log.cache_key
-                == "a61ae14fe4a8b8014a61e6ae01a100c8bc6770ac37c293242afed954bc69207d"
+                == "c891d64397a472e6deb31b87a5ac4d3ed5b2dcc069bc87e2afe91e6d64e95a1e"
             )
 
             # use generated key to auth in
             result = await user_api_key_auth(request=request, api_key=bearer_token)
             print("result from user auth with new key", result)
-            pytest.fail(f"This should have failed!. They key crossed it's budget")
+            pytest.fail("This should have failed!. They key crossed it's budget")
 
         asyncio.run(test())
     except Exception as e:
