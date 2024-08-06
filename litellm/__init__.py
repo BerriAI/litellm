@@ -271,7 +271,7 @@ default_fallbacks: Optional[List] = None
 fallbacks: Optional[List] = None
 context_window_fallbacks: Optional[List] = None
 content_policy_fallbacks: Optional[List] = None
-allowed_fails: int = 0
+allowed_fails: int = 3
 num_retries_per_request: Optional[int] = (
     None  # for the request overall (incl. fallbacks + model retries)
 )
