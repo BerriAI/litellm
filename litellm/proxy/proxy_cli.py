@@ -178,6 +178,12 @@ def is_port_in_use(port):
     help="Calls async endpoints /queue/requests and /queue/response",
 )
 @click.option(
+    "--iam_token_db_auth",
+    default=False,
+    is_flag=True,
+    help="Connects to RDS DB with IAM token",
+)
+@click.option(
     "--num_requests",
     default=10,
     type=int,
@@ -228,6 +234,7 @@ def run_server(
     local,
     num_workers,
     test_async,
+    iam_token_db_auth,
     num_requests,
     use_queue,
     health,
@@ -448,6 +455,24 @@ def run_server(
 
         db_connection_pool_limit = 100
         db_connection_timeout = 60
+        ### GET DB TOKEN FOR IAM AUTH ###
+
+        if iam_token_db_auth:
+            from litellm.proxy.auth.rds_iam_token import generate_iam_auth_token
+
+            db_host = os.getenv("DATABASE_HOST")
+            db_port = os.getenv("DATABASE_PORT")
+            db_user = os.getenv("DATABASE_USER")
+            db_name = os.getenv("DATABASE_NAME")
+
+            token = generate_iam_auth_token(
+                db_host=db_host, db_port=db_port, db_user=db_user
+            )
+
+            # print(f"token: {token}")
+            _db_url = f"postgresql://{db_user}:{token}@{db_host}:{db_port}/{db_name}"
+            os.environ["DATABASE_URL"] = _db_url
+
         ### DECRYPT ENV VAR ###
 
         from litellm.proxy.secret_managers.aws_secret_manager import decrypt_env_var
