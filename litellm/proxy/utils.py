@@ -1389,6 +1389,7 @@ class PrismaClient:
                     WHERE v.token = '{token}'
                     """
 
+                    print_verbose("sql_query being made={}".format(sql_query))
                     response = await self.db.query_first(query=sql_query)
 
                     if response is not None:

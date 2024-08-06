@@ -303,6 +303,7 @@ def test_call_with_invalid_key(prisma_client):
 
 
 def test_call_with_invalid_model(prisma_client):
+    litellm.set_verbose = True
     # 3. Make a call to a key with an invalid model - expect to fail
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
@@ -326,6 +327,11 @@ def test_call_with_invalid_model(prisma_client):
             request.body = return_body
 
             # use generated key to auth in
+            print(
+                "Bearer token being sent to user_api_key_auth() - {}".format(
+                    bearer_token
+                )
+            )
             result = await user_api_key_auth(request=request, api_key=bearer_token)
             pytest.fail(f"This should have failed!. IT's an invalid model")
 
