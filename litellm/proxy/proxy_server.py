@@ -8557,6 +8557,19 @@ async def auth_callback(request: Request):
     user_email = getattr(result, "email", None)
     user_id = getattr(result, "id", None)
 
+    if user_email is not None and os.getenv("ALLOWED_EMAIL_DOMAINS") is not None:
+        email_domain = user_email.split("@")[1]
+        allowed_domains = os.getenv("ALLOWED_EMAIL_DOMAINS").split(",")  # type: ignore
+        if email_domain not in allowed_domains:
+            raise HTTPException(
+                status_code=401,
+                detail={
+                    "message": "The email domain={}, is not an allowed email domain={}. Contact your admin to change this.".format(
+                        email_domain, allowed_domains
+                    )
+                },
+            )
+
     # generic client id
     if generic_client_id is not None:
         user_id = getattr(result, "id", None)
