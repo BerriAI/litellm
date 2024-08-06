@@ -165,6 +165,7 @@ class OpenTelemetry(CustomLogger):
     async def async_service_failure_hook(
         self,
         payload: ServiceLoggerPayload,
+        error: Optional[str] = "",
         parent_otel_span: Optional[Span] = None,
         start_time: Optional[Union[datetime, float]] = None,
         end_time: Optional[Union[float, datetime]] = None,
@@ -199,6 +200,8 @@ class OpenTelemetry(CustomLogger):
             service_logging_span.set_attribute(
                 key="service", value=payload.service.value
             )
+            if error:
+                service_logging_span.set_attribute(key="error", value=error)
             if event_metadata:
                 for key, value in event_metadata.items():
                     if isinstance(value, dict):
