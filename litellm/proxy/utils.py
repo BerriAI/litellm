@@ -815,7 +815,7 @@ class PrismaClient:
     spend_log_transactions: List = []
 
     def __init__(self, database_url: str, proxy_logging_obj: ProxyLogging):
-        print_verbose(
+        verbose_proxy_logger.debug(
             "LiteLLM: DATABASE_URL Set in config, trying to 'pip install prisma'"
         )
         ## init logging object
@@ -844,8 +844,9 @@ class PrismaClient:
                 os.chdir(original_dir)
             # Now you can import the Prisma Client
             from prisma import Prisma  # type: ignore
-
+        verbose_proxy_logger.debug("Connecting Prisma Client to DB..")
         self.db = Prisma()  # Client to connect to Prisma db
+        verbose_proxy_logger.debug("Success - Connected Prisma Client to DB")
 
     def hash_token(self, token: str):
         # Hash the string using SHA-256
