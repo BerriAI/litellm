@@ -284,8 +284,9 @@ except Exception as e:
         pass
 
 server_root_path = os.getenv("SERVER_ROOT_PATH", "")
+print("server root path: ", server_root_path)  # noqa
 if server_root_path != "":
-    setup_admin_ui_on_server_root_path()
+    setup_admin_ui_on_server_root_path(server_root_path)
 _license_check = LicenseCheck()
 premium_user: bool = _license_check.is_premium()
 ui_link = f"{server_root_path}/ui/"
@@ -2103,13 +2104,18 @@ class ProxyConfig:
                 for alert in _general_settings["alerting"]:
                     if alert not in general_settings["alerting"]:
                         general_settings["alerting"].append(alert)
-
                 proxy_logging_obj.alerting = general_settings["alerting"]
                 proxy_logging_obj.slack_alerting_instance.alerting = general_settings[
                     "alerting"
                 ]
             elif general_settings is None:
                 general_settings = {}
+                general_settings["alerting"] = _general_settings["alerting"]
+                proxy_logging_obj.alerting = general_settings["alerting"]
+                proxy_logging_obj.slack_alerting_instance.alerting = general_settings[
+                    "alerting"
+                ]
+            elif isinstance(general_settings, dict):
                 general_settings["alerting"] = _general_settings["alerting"]
                 proxy_logging_obj.alerting = general_settings["alerting"]
                 proxy_logging_obj.slack_alerting_instance.alerting = general_settings[
