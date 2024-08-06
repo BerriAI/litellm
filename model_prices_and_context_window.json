@@ -73,7 +73,7 @@
         "max_tokens": 4096,
         "max_input_tokens": 128000,
         "max_output_tokens": 4096,
-        "input_cost_per_token": 0.00000025,
+        "input_cost_per_token": 0.0000025,
         "output_cost_per_token": 0.000010,
         "litellm_provider": "openai",
         "mode": "chat",
