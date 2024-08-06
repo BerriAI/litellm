@@ -2104,13 +2104,18 @@ class ProxyConfig:
                 for alert in _general_settings["alerting"]:
                     if alert not in general_settings["alerting"]:
                         general_settings["alerting"].append(alert)
-
                 proxy_logging_obj.alerting = general_settings["alerting"]
                 proxy_logging_obj.slack_alerting_instance.alerting = general_settings[
                     "alerting"
                 ]
             elif general_settings is None:
                 general_settings = {}
+                general_settings["alerting"] = _general_settings["alerting"]
+                proxy_logging_obj.alerting = general_settings["alerting"]
+                proxy_logging_obj.slack_alerting_instance.alerting = general_settings[
+                    "alerting"
+                ]
+            elif isinstance(general_settings, dict):
                 general_settings["alerting"] = _general_settings["alerting"]
                 proxy_logging_obj.alerting = general_settings["alerting"]
                 proxy_logging_obj.slack_alerting_instance.alerting = general_settings[
