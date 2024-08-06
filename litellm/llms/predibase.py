@@ -371,6 +371,7 @@ class PredibaseChatCompletion(BaseLLM):
                 response_headers["llm_provider-{}".format(k)] = v
 
         model_response._hidden_params["additional_headers"] = response_headers
+
         return model_response
 
     def completion(
