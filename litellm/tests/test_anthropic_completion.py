@@ -26,6 +26,7 @@ import pytest
 import litellm
 from litellm import AnthropicConfig, Router, adapter_completion
 from litellm.adapters.anthropic_adapter import anthropic_adapter
+from litellm.llms.prompt_templates.factory import convert_to_anthropic_tool_invoke
 from litellm.types.llms.anthropic import AnthropicResponse
 
 
@@ -186,8 +187,6 @@ async def test_anthropic_router_completion_e2e():
 
 
 def test_anthropic_nullary_tool_call():
-    from litellm.llms.prompt_templates.factory import convert_to_anthropic_tool_invoke
-
     convert_to_anthropic_tool_invoke(
         [
             {
