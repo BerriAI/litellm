@@ -239,6 +239,26 @@ async def chat_completion_pass_through_endpoint(
         )
 
 
+def forward_headers_from_request(
+    request: Request,
+    headers: dict,
+    forward_headers: Optional[bool] = False,
+):
+    """
+    Helper to forward headers from original request
+    """
+    if forward_headers is True:
+        request_headers = dict(request.headers)
+
+        # Header We Should NOT forward
+        request_headers.pop("content-length", None)
+        request_headers.pop("host", None)
+
+        # Combine request headers with custom headers
+        headers = {**request_headers, **headers}
+    return headers
+
+
 async def pass_through_request(
     request: Request,
     target: str,
@@ -255,6 +275,9 @@ async def pass_through_request(
 
         url = httpx.URL(target)
         headers = custom_headers
+        headers = forward_headers_from_request(
+            request=request, headers=headers, forward_headers=forward_headers
+        )
 
         request_body = await request.body()
         body_str = request_body.decode()
@@ -262,10 +285,6 @@ async def pass_through_request(
             _parsed_body = ast.literal_eval(body_str)
         except:
             _parsed_body = json.loads(body_str)
-
-        if forward_headers is True:
-            request_headers = dict(request.headers)
-            headers = {**headers, **request_headers}
 
         verbose_proxy_logger.debug(
             "Pass through endpoint sending request to \nURL {}\nheaders: {}\nbody: {}\n".format(
@@ -443,8 +462,9 @@ async def initialize_pass_through_endpoints(pass_through_endpoints: list):
         if _target is None:
             continue
 
-        verbose_proxy_logger.debug("adding pass through endpoint: %s", _path)
-
+        verbose_proxy_logger.debug(
+            "adding pass through endpoint: %s, dependencies: %s", _path, _dependencies
+        )
         app.add_api_route(
             path=_path,
             endpoint=create_pass_through_route(
