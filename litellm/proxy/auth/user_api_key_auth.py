@@ -1171,32 +1171,13 @@ async def user_api_key_auth(
             # No token was found when looking up in the DB
             raise Exception("Invalid proxy server token passed")
         if valid_token_dict is not None:
-            retrieved_user_role = _get_user_role(
-                user_id_information=user_id_information
+            return _return_user_api_key_auth_obj(
+                user_id_information=user_id_information,
+                api_key=api_key,
+                parent_otel_span=parent_otel_span,
+                valid_token_dict=valid_token_dict,
+                route=route,
             )
-            if user_id_information is not None and _is_user_proxy_admin(
-                user_id_information
-            ):
-                return UserAPIKeyAuth(
-                    api_key=api_key,
-                    user_role=LitellmUserRoles.PROXY_ADMIN,
-                    parent_otel_span=parent_otel_span,
-                    **valid_token_dict,
-                )
-            elif _has_user_setup_sso() and route in LiteLLMRoutes.sso_only_routes.value:
-                return UserAPIKeyAuth(
-                    api_key=api_key,
-                    user_role=retrieved_user_role,
-                    parent_otel_span=parent_otel_span,
-                    **valid_token_dict,
-                )
-            else:
-                return UserAPIKeyAuth(
-                    api_key=api_key,
-                    user_role=retrieved_user_role,
-                    parent_otel_span=parent_otel_span,
-                    **valid_token_dict,
-                )
         else:
             raise Exception()
     except Exception as e:
@@ -1244,7 +1225,10 @@ def _return_user_api_key_auth_obj(
     valid_token_dict: dict,
     route: str,
 ) -> UserAPIKeyAuth:
-    retrieved_user_role = _get_user_role(user_id_information=user_id_information)
+    retrieved_user_role = (
+        _get_user_role(user_id_information=user_id_information)
+        or LitellmUserRoles.INTERNAL_USER
+    )
     if user_id_information is not None and _is_user_proxy_admin(user_id_information):
         return UserAPIKeyAuth(
             api_key=api_key,
@@ -1318,19 +1302,21 @@ def _is_user_proxy_admin(user_id_information: Optional[list]):
 
 def _get_user_role(
     user_id_information: Optional[list],
-) -> Literal[
-    LitellmUserRoles.PROXY_ADMIN,
-    LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
-    LitellmUserRoles.INTERNAL_USER,
-    LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
-    LitellmUserRoles.TEAM,
-    LitellmUserRoles.CUSTOMER,
+) -> Optional[
+    Literal[
+        LitellmUserRoles.PROXY_ADMIN,
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+        LitellmUserRoles.INTERNAL_USER,
+        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+        LitellmUserRoles.TEAM,
+        LitellmUserRoles.CUSTOMER,
+    ]
 ]:
     if user_id_information is None:
-        return LitellmUserRoles.INTERNAL_USER
+        return None
 
     if len(user_id_information) == 0 or user_id_information[0] is None:
-        return LitellmUserRoles.INTERNAL_USER
+        return None
 
     _user = user_id_information[0]
 
