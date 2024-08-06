@@ -26,18 +26,6 @@ model_list:
     model_info:
       mode: audio_speech
 
-# For /fine_tuning/jobs endpoints
-finetune_settings:
-  - custom_llm_provider: azure
-    api_base: https://exampleopenaiendpoint-production.up.railway.app
-    api_key: fake-key
-    api_version: "2023-03-15-preview"
-  - custom_llm_provider: openai
-    api_key: os.environ/OPENAI_API_KEY
-  - custom_llm_provider: "vertex_ai"
-    vertex_project: "adroit-crow-413218"
-    vertex_location: "us-central1"
-    vertex_credentials: "/Users/ishaanjaffer/Downloads/adroit-crow-413218-a956eef1a2a8.json"
 
 # for /files endpoints
 files_settings:
@@ -48,18 +36,11 @@ files_settings:
   - custom_llm_provider: openai
     api_key: os.environ/OPENAI_API_KEY
 
-default_vertex_config:
-  vertex_project: "adroit-crow-413218"
-  vertex_location: "us-central1"
-  vertex_credentials: "/Users/ishaanjaffer/Downloads/adroit-crow-413218-a956eef1a2a8.json"
-
 
 
 general_settings: 
   master_key: sk-1234
 
-  # Security controls
-  max_request_size_mb: 100
-  # google cloud run maximum repsonses size is 32MB
-  max_response_size_mb: 10
 
+litellm_settings:
+  callbacks: ["otel"] # 👈 KEY CHANGE
