@@ -3536,22 +3536,11 @@ def get_optional_params(
         )
         _check_valid_arg(supported_params=supported_params)
 
-        if frequency_penalty is not None:
-            optional_params["frequency_penalty"] = frequency_penalty
-        if max_tokens is not None:
-            optional_params["max_tokens"] = max_tokens
-        if presence_penalty is not None:
-            optional_params["presence_penalty"] = presence_penalty
-        if stop is not None:
-            optional_params["stop"] = stop
-        if stream is not None:
-            optional_params["stream"] = stream
-        if temperature is not None:
-            optional_params["temperature"] = temperature
-        if logprobs is not None:
-            optional_params["logprobs"] = logprobs
-        if top_logprobs is not None:
-            optional_params["top_logprobs"] = top_logprobs
+        optional_params = litellm.OpenAIConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+        )
     elif custom_llm_provider == "openrouter":
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider
@@ -4141,12 +4130,15 @@ def get_supported_openai_params(
             "frequency_penalty",
             "max_tokens",
             "presence_penalty",
+            "response_format",
             "stop",
             "stream",
             "temperature",
             "top_p",
             "logprobs",
             "top_logprobs",
+            "tools",
+            "tool_choice",
         ]
     elif custom_llm_provider == "cohere":
         return [

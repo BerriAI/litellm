@@ -30,7 +30,8 @@ Features:
     - ✅ [Tracking Spend for Custom Tags](#tracking-spend-for-custom-tags)
     - ✅ [Exporting LLM Logs to GCS Bucket](./proxy/bucket#🪣-logging-gcs-s3-buckets)
     - ✅ [`/spend/report` API endpoint](cost_tracking.md#✨-enterprise-api-endpoints-to-get-spend)
-- **Advanced Metrics**
+- **Prometheus Metrics**
+    - ✅ [Prometheus Metrics - Num Requests, failures, LLM Provider Outages](prometheus)
     - ✅ [`x-ratelimit-remaining-requests`, `x-ratelimit-remaining-tokens` for LLM APIs on Prometheus](prometheus#✨-enterprise-llm-remaining-requests-and-remaining-tokens)
 - **Guardrails, PII Masking, Content Moderation**
     - ✅ [Content Moderation with LLM Guard, LlamaGuard, Secret Detection, Google Text Moderations](#content-moderation)
