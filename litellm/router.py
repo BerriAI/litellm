@@ -2317,8 +2317,10 @@ class Router:
         )
         try:
             if mock_testing_fallbacks is not None and mock_testing_fallbacks is True:
-                raise Exception(
-                    f"This is a mock exception for model={model_group}, to trigger a fallback. Fallbacks={fallbacks}"
+                raise litellm.InternalServerError(
+                    model=model_group,
+                    llm_provider="",
+                    message=f"This is a mock exception for model={model_group}, to trigger a fallback. Fallbacks={fallbacks}",
                 )
             elif (
                 mock_testing_context_fallbacks is not None
@@ -2348,6 +2350,7 @@ class Router:
             verbose_router_logger.debug(f"Traceback{traceback.format_exc()}")
             original_exception = e
             fallback_model_group = None
+            fallback_failure_exception_str = ""
             try:
                 verbose_router_logger.debug("Trying to fallback b/w models")
                 if (
@@ -2506,6 +2509,7 @@ class Router:
                         await self._async_get_cooldown_deployments_with_debug_info(),
                     )
                 )
+                fallback_failure_exception_str = str(new_exception)
 
             if hasattr(original_exception, "message"):
                 # add the available fallbacks to the exception
@@ -2513,6 +2517,13 @@ class Router:
                     model_group,
                     fallback_model_group,
                 )
+                if len(fallback_failure_exception_str) > 0:
+                    original_exception.message += (
+                        "\nError doing the fallback: {}".format(
+                            fallback_failure_exception_str
+                        )
+                    )
+
             raise original_exception
 
     async def async_function_with_retries(self, *args, **kwargs):
