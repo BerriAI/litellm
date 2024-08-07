@@ -138,7 +138,6 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.caching_routes import router as caching_router
 from litellm.proxy.common_utils.admin_ui_utils import (
     html_form,
-    setup_admin_ui_on_server_root_path,
     show_missing_vars_in_env,
 )
 from litellm.proxy.common_utils.debug_utils import init_verbose_loggers
@@ -285,8 +284,6 @@ except Exception as e:
 
 server_root_path = os.getenv("SERVER_ROOT_PATH", "")
 print("server root path: ", server_root_path)  # noqa
-if server_root_path != "":
-    setup_admin_ui_on_server_root_path(server_root_path)
 _license_check = LicenseCheck()
 premium_user: bool = _license_check.is_premium()
 ui_link = f"{server_root_path}/ui/"
@@ -388,6 +385,21 @@ try:
             src = os.path.join(ui_path, filename)
             dst = os.path.join(folder_path, "index.html")
             os.rename(src, dst)
+
+    if server_root_path != "":
+        print(  # noqa
+            f"server_root_path is set, forwarding any /ui requests to {server_root_path}/ui"
+        )  # noqa
+        if os.getenv("PROXY_BASE_URL") is None:
+            os.environ["PROXY_BASE_URL"] = server_root_path
+
+        @app.middleware("http")
+        async def redirect_ui_middleware(request: Request, call_next):
+            if request.url.path.startswith("/ui"):
+                new_path = request.url.path.replace("/ui", f"{server_root_path}/ui", 1)
+                return RedirectResponse(new_path)
+            return await call_next(request)
+
 except:
     pass
 app.add_middleware(

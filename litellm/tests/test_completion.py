@@ -4122,9 +4122,28 @@ async def test_acompletion_gemini():
 def test_completion_deepseek():
     litellm.set_verbose = True
     model_name = "deepseek/deepseek-chat"
-    messages = [{"role": "user", "content": "Hey, how's it going?"}]
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get weather of an location, the user shoud supply a location first",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        }
+                    },
+                    "required": ["location"],
+                },
+            },
+        },
+    ]
+    messages = [{"role": "user", "content": "How's the weather in Hangzhou?"}]
     try:
-        response = completion(model=model_name, messages=messages)
+        response = completion(model=model_name, messages=messages, tools=tools)
         # Add any assertions here to check the response
         print(response)
     except litellm.APIError as e:

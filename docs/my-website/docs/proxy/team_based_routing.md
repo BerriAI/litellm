@@ -1,4 +1,4 @@
-# 👥 Team-based Routing + Logging
+# 👥 Team-based Routing
 
 ## Routing
 Route calls to different model groups based on the team-id
