@@ -89,8 +89,11 @@ proxy_config:
         model: openai/fake
         api_key: fake-key
         api_base: https://exampleopenaiendpoint-production.up.railway.app/
-  general_settings:
-    master_key: os.environ/PROXY_MASTER_KEY
+#  general_settings:
+#  litellm_settings:
+#    cache: true
+#  litellm_settings:
+#    cache: true
 
 resources: {}
   # We usually recommend not to specify default resources and to leave this as a conscious
