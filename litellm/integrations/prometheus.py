@@ -266,7 +266,7 @@ class PrometheusLogger:
 
             # set x-ratelimit headers
             if premium_user is True:
-                self.set_remaining_tokens_requests_metric(kwargs)
+                self.set_llm_deployment_success_metrics(kwargs)
 
             ### FAILURE INCREMENT ###
             if "exception" in kwargs:
@@ -286,7 +286,7 @@ class PrometheusLogger:
             verbose_logger.debug(traceback.format_exc())
             pass
 
-    def set_remaining_tokens_requests_metric(self, request_kwargs: dict):
+    def set_llm_deployment_success_metrics(self, request_kwargs: dict):
         try:
             verbose_logger.debug("setting remaining tokens requests metric")
             _response_headers = request_kwargs.get("response_headers")
@@ -340,7 +340,7 @@ class PrometheusLogger:
             ).set(1)
         except Exception as e:
             verbose_logger.error(
-                "Prometheus Error: set_remaining_tokens_requests_metric. Exception occured - {}".format(
+                "Prometheus Error: set_llm_deployment_success_metrics. Exception occured - {}".format(
                     str(e)
                 )
             )
