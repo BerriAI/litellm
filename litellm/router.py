@@ -4475,6 +4475,29 @@ class Router:
             )  # self.default_deployment
             updated_deployment["litellm_params"]["model"] = model
             return model, updated_deployment
+        elif model not in self.model_names:
+            # check if provider/ specific wildcard routing
+            try:
+                (
+                    _,
+                    custom_llm_provider,
+                    _,
+                    _,
+                ) = litellm.get_llm_provider(model=model)
+                # check if custom_llm_provider
+                if custom_llm_provider in self.provider_default_deployments:
+                    _provider_deployments = self.provider_default_deployments[
+                        custom_llm_provider
+                    ]
+                    provider_deployments = []
+                    for deployment in _provider_deployments:
+                        dep = copy.deepcopy(deployment)
+                        dep["litellm_params"]["model"] = model
+                        provider_deployments.append(dep)
+                    return model, provider_deployments
+            except:
+                # get_llm_provider raises exception when provider is unknown
+                pass
 
         ## get healthy deployments
         ### get all deployments
