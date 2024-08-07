@@ -160,6 +160,7 @@ from typing import (
     Literal,
     Optional,
     Tuple,
+    Type,
     Union,
     cast,
     get_args,
@@ -6155,7 +6156,7 @@ def _should_retry(status_code: int):
 
 
 def type_to_response_format_param(
-    response_format: Optional[Union[type[BaseModel], dict]],
+    response_format: Optional[Union[Type[BaseModel], dict]],
 ) -> Optional[dict]:
     """
     Re-implementation of openai's 'type_to_response_format_param' function
