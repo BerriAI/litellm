@@ -730,10 +730,15 @@ LITELLM_EXCEPTION_TYPES = [
 
 
 class BudgetExceededError(Exception):
-    def __init__(self, current_cost, max_budget):
+    def __init__(
+        self, current_cost: float, max_budget: float, message: Optional[str] = None
+    ):
         self.current_cost = current_cost
         self.max_budget = max_budget
-        message = f"Budget has been exceeded! Current cost: {current_cost}, Max budget: {max_budget}"
+        message = (
+            message
+            or f"Budget has been exceeded! Current cost: {current_cost}, Max budget: {max_budget}"
+        )
         self.message = message
         super().__init__(message)
 
