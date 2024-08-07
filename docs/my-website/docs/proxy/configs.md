@@ -284,52 +284,58 @@ curl --location 'http://0.0.0.0:4000/v1/model/info' \
 --data ''
 ```
 
-## Wildcard Model Name (Add ALL MODELS from env)
+ 
+## Provider specific wildcard routing 
+**Proxy all models from a provider**
 
-Dynamically call any model from any given provider without the need to predefine it in the config YAML file. As long as the relevant keys are in the environment (see [providers list](../providers/)), LiteLLM will make the call correctly.
+Use this if you want to **proxy all models from a specific provider without defining them on the config.yaml**
 
-
-
-1. Setup config.yaml
-```
+**Step 1** - define provider specific routing on config.yaml
+```yaml
 model_list:
-  - model_name: "*"             # all requests where model not in your config go to this deployment
+  # provider specific wildcard routing
+  - model_name: "anthropic/*"
     litellm_params:
-      model: "*"           # passes our validation check that a real provider is given
+      model: "anthropic/*"
+      api_key: os.environ/ANTHROPIC_API_KEY
+  - model_name: "groq/*"
+    litellm_params:
+      model: "groq/*"
+      api_key: os.environ/GROQ_API_KEY
 ```
 
-2. Start LiteLLM proxy 
+Step 2 - Run litellm proxy 
 
+```shell
+$ litellm --config /path/to/config.yaml
 ```
-litellm --config /path/to/config.yaml
-```
 
-3. Try claude 3-5 sonnet from anthropic 
+Step 3 Test it 
 
-```bash
-curl -X POST 'http://0.0.0.0:4000/chat/completions' \
--H 'Content-Type: application/json' \
--H 'Authorization: Bearer sk-1234' \
--D '{
-  "model": "claude-3-5-sonnet-20240620",
-  "messages": [
-        {"role": "user", "content": "Hey, how'\''s it going?"},
-        {
-            "role": "assistant",
-            "content": "I'\''m doing well. Would like to hear the rest of the story?"
-        },
-        {"role": "user", "content": "Na"},
-        {
-            "role": "assistant",
-            "content": "No problem, is there anything else i can help you with today?"
-        },
-        {
-            "role": "user",
-            "content": "I think you'\''re getting cut off sometimes"
-        }
+Test with `anthropic/` - all models with `anthropic/` prefix will get routed to `anthropic/*`
+```shell
+curl http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "anthropic/claude-3-sonnet-20240229",
+    "messages": [
+      {"role": "user", "content": "Hello, Claude!"}
     ]
-}
-'
+  }'
+```
+
+Test with `groq/` - all models with `groq/` prefix will get routed to `groq/*`
+```shell
+curl http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "groq/llama3-8b-8192",
+    "messages": [
+      {"role": "user", "content": "Hello, Claude!"}
+    ]
+  }'
 ```
 
 ## Load Balancing 
