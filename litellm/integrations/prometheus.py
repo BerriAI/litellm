@@ -8,7 +8,7 @@ import subprocess
 import sys
 import traceback
 import uuid
-from typing import Optional, Union
+from typing import Optional, TypedDict, Union
 
 import dotenv
 import requests  # type: ignore
@@ -123,6 +123,29 @@ class PrometheusLogger:
                         "api_base",
                         "litellm_model_name",
                     ],
+                )
+                # Get all keys
+                _logged_llm_labels = [
+                    "litellm_model_name",
+                    "model_id",
+                    "api_base",
+                    "api_provider",
+                ]
+
+                self.deployment_unhealthy = Gauge(
+                    "deployment_unhealthy",
+                    'Value is "1" when deployment is in an unhealthy state',
+                    labelnames=_logged_llm_labels,
+                )
+                self.deployment_partial_outage = Gauge(
+                    "deployment_partial_outage",
+                    'Value is "1" when deployment is experiencing a partial outage',
+                    labelnames=_logged_llm_labels,
+                )
+                self.deployment_healthy = Gauge(
+                    "deployment_healthy",
+                    'Value is "1" when deployment is in an healthy state',
+                    labelnames=_logged_llm_labels,
                 )
 
         except Exception as e:
@@ -273,6 +296,7 @@ class PrometheusLogger:
             model_group = _metadata.get("model_group", None)
             api_base = _metadata.get("api_base", None)
             llm_provider = _litellm_params.get("custom_llm_provider", None)
+            model_id = _metadata.get("model_id")
 
             remaining_requests = None
             remaining_tokens = None
@@ -307,6 +331,13 @@ class PrometheusLogger:
                     model_group, llm_provider, api_base, litellm_model_name
                 ).set(remaining_tokens)
 
+            """
+            log these labels
+            ["litellm_model_name", "model_id", "api_base", "api_provider"]
+            """
+            self.deployment_healthy.labels(
+                litellm_model_name, model_id, api_base, llm_provider
+            ).set(1)
         except Exception as e:
             verbose_logger.error(
                 "Prometheus Error: set_remaining_tokens_requests_metric. Exception occured - {}".format(
