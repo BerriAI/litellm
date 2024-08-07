@@ -2555,6 +2555,7 @@ async def test_update_user_role(prisma_client):
     await asyncio.sleep(2)
 
     # use generated key to auth in
+    print("\n\nMAKING NEW REQUEST WITH UPDATED USER ROLE\n\n")
     result = await user_api_key_auth(request=request, api_key=api_key)
     print("result from user auth with new key", result)
 

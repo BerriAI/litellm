@@ -1338,6 +1338,7 @@ class LiteLLM_UserTable(LiteLLMBase):
     models: list = []
     tpm_limit: Optional[int] = None
     rpm_limit: Optional[int] = None
+    user_role: Optional[str] = None
 
     @model_validator(mode="before")
     @classmethod
