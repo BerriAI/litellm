@@ -45,6 +45,8 @@ import requests
 import tiktoken
 from httpx import Proxy
 from httpx._utils import get_environment_proxies
+from openai.lib import _parsing, _pydantic
+from openai.types.chat.completion_create_params import ResponseFormat
 from pydantic import BaseModel
 from tokenizers import Tokenizer
 
@@ -2805,6 +2807,11 @@ def get_optional_params(
                     status_code=500,
                     message=f"Function calling is not supported by {custom_llm_provider}.",
                 )
+
+    if "response_format" in non_default_params:
+        non_default_params["response_format"] = type_to_response_format_param(
+            response_format=non_default_params["response_format"]
+        )
 
     if "tools" in non_default_params and isinstance(
         non_default_params, list
@@ -6110,6 +6117,36 @@ def _should_retry(status_code: int):
         return True
 
     return False
+
+
+def type_to_response_format_param(
+    response_format: Optional[Union[type[BaseModel], dict]],
+) -> Optional[dict]:
+    """
+    Re-implementation of openai's 'type_to_response_format_param' function
+
+    Used for converting pydantic object to api schema.
+    """
+    if response_format is None:
+        return None
+
+    if isinstance(response_format, dict):
+        return response_format
+
+    # type checkers don't narrow the negation of a `TypeGuard` as it isn't
+    # a safe default behaviour but we know that at this point the `response_format`
+    # can only be a `type`
+    if not _parsing._completions.is_basemodel_type(response_format):
+        raise TypeError(f"Unsupported response_format type - {response_format}")
+
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "schema": _pydantic.to_strict_json_schema(response_format),
+            "name": response_format.__name__,
+            "strict": True,
+        },
+    }
 
 
 def _get_retry_after_from_exception_header(
