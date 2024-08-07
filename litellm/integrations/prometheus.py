@@ -279,11 +279,40 @@ class PrometheusLogger:
                     user_api_team_alias,
                     user_id,
                 ).inc()
+
+                self.set_llm_deployment_failure_metrics(kwargs)
         except Exception as e:
             verbose_logger.error(
                 "prometheus Layer Error(): Exception occured - {}".format(str(e))
             )
             verbose_logger.debug(traceback.format_exc())
+            pass
+
+    def set_llm_deployment_failure_metrics(self, request_kwargs: dict):
+        try:
+            verbose_logger.debug("setting remaining tokens requests metric")
+            _response_headers = request_kwargs.get("response_headers")
+            _litellm_params = request_kwargs.get("litellm_params", {}) or {}
+            _metadata = _litellm_params.get("metadata", {})
+            litellm_model_name = request_kwargs.get("model", None)
+            api_base = _metadata.get("api_base", None)
+            llm_provider = _litellm_params.get("custom_llm_provider", None)
+            model_id = _metadata.get("model_id")
+
+            """
+            log these labels
+            ["litellm_model_name", "model_id", "api_base", "api_provider"]
+            """
+            self.deployment_partial_outage.labels(
+                litellm_model_name, model_id, api_base, llm_provider
+            ).set(1)
+
+            self.deployment_healthy.labels(
+                litellm_model_name, model_id, api_base, llm_provider
+            ).set(0)
+
+            pass
+        except:
             pass
 
     def set_llm_deployment_success_metrics(self, request_kwargs: dict):
