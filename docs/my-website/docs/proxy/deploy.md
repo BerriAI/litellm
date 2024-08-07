@@ -605,24 +605,87 @@ In a Kubernetes deployment, it's possible to utilize a shared DNS to host multip
 
 Customize the root path to eliminate the need for employing multiple DNS configurations during deployment.
 
+Step 1.
 👉 Set `SERVER_ROOT_PATH` in your .env and this will be set as your server root path
 ```
 export SERVER_ROOT_PATH="/api/v1"
 ```
 
-**Step 1. Run Proxy with `SERVER_ROOT_PATH` set in your env **
+**Step 2** (If you want the Proxy Admin UI to work with your root path you need to use this dockerfile)
+- Use the dockerfile below (it uses litellm as a base image)
+- 👉 Set `UI_BASE_PATH=$SERVER_ROOT_PATH/ui` in the Dockerfile, example `UI_BASE_PATH=/api/v1/ui`
+
+Dockerfile
 
 ```shell
-docker run --name litellm-proxy \
--e DATABASE_URL=postgresql://<user>:<password>@<host>:<port>/<dbname> \
--e SERVER_ROOT_PATH="/api/v1" \
--p 4000:4000 \
-ghcr.io/berriai/litellm-database:main-latest --config your_config.yaml
+# Use the provided base image
+FROM ghcr.io/berriai/litellm:main-latest
+
+# Set the working directory to /app
+WORKDIR /app
+
+# Install Node.js and npm (adjust version as needed)
+RUN apt-get update && apt-get install -y nodejs npm
+
+# Copy the UI source into the container
+COPY ./ui/litellm-dashboard /app/ui/litellm-dashboard
+
+# Set an environment variable for UI_BASE_PATH
+# This can be overridden at build time
+# set UI_BASE_PATH to "<your server root path>/ui"
+# 👇👇 Enter your UI_BASE_PATH here
+ENV UI_BASE_PATH="/api/v1/ui" 
+
+# Build the UI with the specified UI_BASE_PATH
+WORKDIR /app/ui/litellm-dashboard
+RUN npm install
+RUN UI_BASE_PATH=$UI_BASE_PATH npm run build
+
+# Create the destination directory
+RUN mkdir -p /app/litellm/proxy/_experimental/out
+
+# Move the built files to the appropriate location
+# Assuming the build output is in ./out directory
+RUN rm -rf /app/litellm/proxy/_experimental/out/* && \
+    mv ./out/* /app/litellm/proxy/_experimental/out/
+
+# Switch back to the main app directory
+WORKDIR /app
+
+# Make sure your entrypoint.sh is executable
+RUN chmod +x entrypoint.sh
+
+# Expose the necessary port
+EXPOSE 4000/tcp
+
+# Override the CMD instruction with your desired command and arguments
+# only use --detailed_debug for debugging
+CMD ["--port", "4000", "--config", "config.yaml"]
+```
+
+**Step 3** build this Dockerfile
+
+```shell
+docker build -f Dockerfile -t litellm-prod-build . --progress=plain
+```
+
+**Step 4. Run Proxy with `SERVER_ROOT_PATH` set in your env **
+
+```shell
+docker run \
+    -v $(pwd)/proxy_config.yaml:/app/config.yaml \
+    -p 4000:4000 \
+    -e LITELLM_LOG="DEBUG"\
+    -e SERVER_ROOT_PATH="/api/v1"\
+    -e DATABASE_URL=postgresql://<user>:<password>@<host>:<port>/<dbname> \
+    -e LITELLM_MASTER_KEY="sk-1234"\
+    litellm-prod-build \
+    --config /app/config.yaml
 ```
 
 After running the proxy you can access it on `http://0.0.0.0:4000/api/v1/` (since we set `SERVER_ROOT_PATH="/api/v1"`)
 
-**Step 2. Verify Running on correct path**
+**Step 5. Verify Running on correct path**
 
 <Image img={require('../../img/custom_root_path.png')} />
 
