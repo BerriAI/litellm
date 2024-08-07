@@ -345,7 +345,7 @@ def test_drop_params_parallel_tool_calls(model, provider, should_drop):
     response = litellm.utils.get_optional_params(
         model=model,
         custom_llm_provider=provider,
-        response_format="json",
+        response_format={"type": "json"},
         parallel_tool_calls=True,
         drop_params=True,
     )
