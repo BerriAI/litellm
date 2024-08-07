@@ -3134,15 +3134,6 @@
         "mode": "chat",
         "supports_function_calling": true
     },
-    "mistral.mistral-large-2407-v1:0": {
-        "max_tokens": 8191,
-        "max_input_tokens": 128000,
-        "max_output_tokens": 8191,
-        "input_cost_per_token": 0.000003,
-        "output_cost_per_token": 0.000009,
-        "litellm_provider": "bedrock",
-        "mode": "chat"
-    },
     "bedrock/us-west-2/mistral.mixtral-8x7b-instruct-v0:1": {
         "max_tokens": 8191,
         "max_input_tokens": 32000,
@@ -3894,15 +3885,6 @@
         "mode": "chat",
         "supports_function_calling": true, 
         "supports_tool_choice": false
-    },
-    "meta.llama3-1-405b-instruct-v1:0": {
-        "max_tokens": 128000,
-        "max_input_tokens": 128000,
-        "max_output_tokens": 4096,
-        "input_cost_per_token": 0.00000532,
-        "output_cost_per_token": 0.000016,
-        "litellm_provider": "bedrock",
-        "mode": "chat"
     },
     "512-x-512/50-steps/stability.stable-diffusion-xl-v0": {
         "max_tokens": 77, 
