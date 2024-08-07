@@ -96,26 +96,28 @@ async def test_check_blocked_team():
 
 
 @pytest.mark.parametrize(
-    "user_role", ["app_user", "internal_user", "proxy_admin_viewer"]
+    "user_role, expected_role",
+    [
+        ("app_user", "internal_user"),
+        ("internal_user", "internal_user"),
+        ("proxy_admin_viewer", "proxy_admin_viewer"),
+    ],
 )
-def test_returned_user_api_key_auth(user_role):
-    from litellm.proxy._types import LitellmUserRoles
+def test_returned_user_api_key_auth(user_role, expected_role):
+    from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles
     from litellm.proxy.auth.user_api_key_auth import _return_user_api_key_auth_obj
 
-    user_id_information = [{"user_role": user_role}]
-
     new_obj = _return_user_api_key_auth_obj(
-        user_id_information,
+        user_obj=LiteLLM_UserTable(
+            user_role=user_role, user_id="", max_budget=None, user_email=""
+        ),
         api_key="hello-world",
         parent_otel_span=None,
         valid_token_dict={},
         route="/chat/completion",
     )
 
-    if user_role in list(LitellmUserRoles.__annotations__.keys()):
-        assert new_obj.user_role == user_role
-    else:
-        assert new_obj.user_role == "internal_user"
+    assert new_obj.user_role == expected_role
 
 
 @pytest.mark.parametrize("key_ownership", ["user_key", "team_key"])
