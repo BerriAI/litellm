@@ -645,6 +645,30 @@ def client(original_function):
                                     input=model_response, model=model
                                 )
                                 ### JSON SCHEMA VALIDATION ###
+                                try:
+                                    if (
+                                        optional_params is not None
+                                        and "response_format" in optional_params
+                                        and _parsing._completions.is_basemodel_type(
+                                            optional_params["response_format"]
+                                        )
+                                    ):
+                                        json_response_format = (
+                                            type_to_response_format_param(
+                                                response_format=optional_params[
+                                                    "response_format"
+                                                ]
+                                            )
+                                        )
+                                        if json_response_format is not None:
+                                            litellm.litellm_core_utils.json_validation_rule.validate_schema(
+                                                schema=json_response_format[
+                                                    "json_schema"
+                                                ]["schema"],
+                                                response=model_response,
+                                            )
+                                except TypeError:
+                                    pass
                                 if (
                                     optional_params is not None
                                     and "response_format" in optional_params
