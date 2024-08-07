@@ -27,6 +27,7 @@ import httpx  # type: ignore
 import requests  # type: ignore
 
 import litellm
+from litellm import verbose_logger
 from litellm.caching import DualCache
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.litellm_logging import Logging
@@ -1969,6 +1970,7 @@ class BedrockConverseLLM(BaseLLM):
         # Tool Config
         if bedrock_tool_config is not None:
             _data["toolConfig"] = bedrock_tool_config
+
         data = json.dumps(_data)
         ## COMPLETION CALL
 
@@ -2109,9 +2111,31 @@ class AWSEventStreamDecoder:
 
         self.model = model
         self.parser = EventStreamJSONParser()
+        self.content_blocks: List[ContentBlockDeltaEvent] = []
+
+    def check_empty_tool_call_args(self) -> bool:
+        """
+        Check if the tool call block so far has been an empty string
+        """
+        args = ""
+        # if text content block -> skip
+        if len(self.content_blocks) == 0:
+            return False
+
+        if "text" in self.content_blocks[0]:
+            return False
+
+        for block in self.content_blocks:
+            if "toolUse" in block:
+                args += block["toolUse"]["input"]
+
+        if len(args) == 0:
+            return True
+        return False
 
     def converse_chunk_parser(self, chunk_data: dict) -> GChunk:
         try:
+            verbose_logger.debug("\n\nRaw Chunk: {}\n\n".format(chunk_data))
             text = ""
             tool_use: Optional[ChatCompletionToolCallChunk] = None
             is_finished = False
@@ -2121,6 +2145,7 @@ class AWSEventStreamDecoder:
             index = int(chunk_data.get("contentBlockIndex", 0))
             if "start" in chunk_data:
                 start_obj = ContentBlockStartEvent(**chunk_data["start"])
+                self.content_blocks = []  # reset
                 if (
                     start_obj is not None
                     and "toolUse" in start_obj
@@ -2137,6 +2162,7 @@ class AWSEventStreamDecoder:
                     }
             elif "delta" in chunk_data:
                 delta_obj = ContentBlockDeltaEvent(**chunk_data["delta"])
+                self.content_blocks.append(delta_obj)
                 if "text" in delta_obj:
                     text = delta_obj["text"]
                 elif "toolUse" in delta_obj:
@@ -2148,6 +2174,20 @@ class AWSEventStreamDecoder:
                             "arguments": delta_obj["toolUse"]["input"],
                         },
                         "index": index,
+                    }
+            elif (
+                "contentBlockIndex" in chunk_data
+            ):  # stop block, no 'start' or 'delta' object
+                is_empty = self.check_empty_tool_call_args()
+                if is_empty:
+                    tool_use = {
+                        "id": None,
+                        "type": "function",
+                        "function": {
+                            "name": None,
+                            "arguments": "{}",
+                        },
+                        "index": chunk_data["contentBlockIndex"],
                     }
             elif "stopReason" in chunk_data:
                 finish_reason = map_finish_reason(chunk_data.get("stopReason", "stop"))
@@ -2255,6 +2295,7 @@ class AWSEventStreamDecoder:
     def _parse_message_from_event(self, event) -> Optional[str]:
         response_dict = event.to_response_dict()
         parsed_response = self.parser.parse(response_dict, get_response_stream_shape())
+
         if response_dict["status_code"] != 200:
             raise ValueError(f"Bad response code, expected 200: {response_dict}")
         if "chunk" in parsed_response:
