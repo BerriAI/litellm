@@ -60,6 +60,64 @@ def test_router_multi_org_list():
     assert len(router.get_model_list()) == 3
 
 
+@pytest.mark.asyncio()
+async def test_router_provider_wildcard_routing():
+    """
+    Pass list of orgs in 1 model definition,
+    expect a unique deployment for each to be created
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {
+                    "model": "openai/*",
+                    "api_key": "my-key",
+                    "api_base": "https://api.openai.com/v1",
+                    "organization": ["org-1", "org-2", "org-3"],
+                },
+            },
+            {
+                "model_name": "anthropic/*",
+                "litellm_params": {
+                    "model": "anthropic/*",
+                    "api_key": "my-key",
+                },
+            },
+            {
+                "model_name": "databricks/*",
+                "litellm_params": {
+                    "model": "databricks/*",
+                    "api_key": "my-key",
+                },
+            },
+        ]
+    )
+
+    print("router model list = ", router.get_model_list())
+
+    response1 = await router.acompletion(
+        model="anthropic/claude-3-sonnet-20240229",
+        messages=[{"role": "user", "content": "hello"}],
+    )
+
+    print("response 1 = ", response1)
+
+    response2 = await router.acompletion(
+        model="openai/gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hello"}],
+    )
+
+    print("response 2 = ", response2)
+
+    response3 = await router.acompletion(
+        model="databricks/databricks-meta-llama-3-1-70b-instruct",
+        messages=[{"role": "user", "content": "hello"}],
+    )
+
+    print("response 3 = ", response3)
+
+
 def test_router_specific_model_via_id():
     """
     Call a specific deployment by it's id
