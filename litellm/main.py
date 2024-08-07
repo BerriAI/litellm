@@ -5114,7 +5114,9 @@ def stream_chunk_builder(
                 prev_index = curr_index
                 prev_id = curr_id
 
-        combined_arguments = "".join(argument_list)
+        combined_arguments = (
+            "".join(argument_list) or "{}"
+        )  # base case, return empty dict
         tool_calls_list.append(
             {
                 "id": id,
