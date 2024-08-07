@@ -1,7 +1,7 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# 📈 Prometheus metrics
+# 📈 [BETA] Prometheus metrics
 
 :::info
 🚨 Prometheus Metrics will be moving to LiteLLM Enterprise on September 15th, 2024
