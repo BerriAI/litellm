@@ -18,6 +18,7 @@ from litellm.proxy._types import (
     LiteLLM_AuditLogs,
     LiteLLM_ModelTable,
     LiteLLM_TeamTable,
+    LiteLLM_TeamTableCachedObj,
     LitellmTableNames,
     LitellmUserRoles,
     Member,
@@ -379,7 +380,7 @@ async def update_team(
 
     await _cache_team_object(
         team_id=team_row.team_id,
-        team_table=team_row,
+        team_table=LiteLLM_TeamTableCachedObj(**team_row.model_dump()),
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
     )
@@ -765,7 +766,11 @@ async def team_info(
                 detail={"message": "Malformed request. No team id passed in."},
             )
 
-        if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        if (
+            user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
+            or user_api_key_dict.user_role
+            == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value
+        ):
             pass
         elif user_api_key_dict.team_id is None or (
             team_id != user_api_key_dict.team_id
@@ -915,7 +920,10 @@ async def list_team(
         prisma_client,
     )
 
-    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+    if (
+        user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
+        and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
+    ):
         raise HTTPException(
             status_code=401,
             detail={

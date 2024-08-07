@@ -57,6 +57,8 @@ from litellm.proxy.auth.auth_checks import (
     log_to_opentelemetry,
 )
 from litellm.proxy.auth.auth_utils import (
+    check_if_request_size_is_safe,
+    get_request_route,
     is_llm_api_route,
     route_in_additonal_public_routes,
 )
@@ -114,7 +116,22 @@ async def user_api_key_auth(
     )
 
     try:
-        route: str = request.url.path
+        route: str = get_request_route(request=request)
+
+        ### LiteLLM Enterprise Security Checks
+        # Check 1. Check if request size is under max_request_size_mb
+        # Check 2. FILTER IP ADDRESS
+        await check_if_request_size_is_safe(request=request)
+
+        is_valid_ip = _check_valid_ip(
+            allowed_ips=general_settings.get("allowed_ips", None), request=request
+        )
+
+        if not is_valid_ip:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access forbidden: IP address not allowed.",
+            )
 
         pass_through_endpoints: Optional[List[dict]] = general_settings.get(
             "pass_through_endpoints", None
@@ -169,18 +186,6 @@ async def user_api_key_auth(
             enable_jwt_auth: true
         ```
         """
-
-        ### FILTER IP ADDRESS ###
-
-        is_valid_ip = _check_valid_ip(
-            allowed_ips=general_settings.get("allowed_ips", None), request=request
-        )
-
-        if not is_valid_ip:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Access forbidden: IP address not allowed.",
-            )
 
         if (
             route in LiteLLMRoutes.public_routes.value
@@ -457,27 +462,31 @@ async def user_api_key_auth(
             valid_token is not None
             and isinstance(valid_token, UserAPIKeyAuth)
             and valid_token.team_id is not None
-            and user_api_key_cache.get_cache(
-                key="team_id:{}".format(valid_token.team_id)
-            )
-            is not None
         ):
             ## UPDATE TEAM VALUES BASED ON CACHED TEAM OBJECT - allows `/team/update` values to work for cached token
-            team_obj: LiteLLM_TeamTable = user_api_key_cache.get_cache(
-                key="team_id:{}".format(valid_token.team_id)
-            )
+            try:
+                team_obj: LiteLLM_TeamTableCachedObj = await get_team_object(
+                    team_id=valid_token.team_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    parent_otel_span=parent_otel_span,
+                    proxy_logging_obj=proxy_logging_obj,
+                    check_cache_only=True,
+                )
 
-            if (
-                team_obj.last_refreshed_at is not None
-                and valid_token.last_refreshed_at is not None
-                and team_obj.last_refreshed_at > valid_token.last_refreshed_at
-            ):
-                team_obj_dict = team_obj.__dict__
+                if (
+                    team_obj.last_refreshed_at is not None
+                    and valid_token.last_refreshed_at is not None
+                    and team_obj.last_refreshed_at > valid_token.last_refreshed_at
+                ):
+                    team_obj_dict = team_obj.__dict__
 
-                for k, v in team_obj_dict.items():
-                    field_name = f"team_{k}"
-                    if field_name in valid_token.__fields__:
-                        setattr(valid_token, field_name, v)
+                    for k, v in team_obj_dict.items():
+                        field_name = f"team_{k}"
+                        if field_name in valid_token.__fields__:
+                            setattr(valid_token, field_name, v)
+            except Exception as e:
+                verbose_logger.warning(e)
 
         try:
             is_master_key_valid = secrets.compare_digest(api_key, master_key)  # type: ignore
@@ -523,6 +532,12 @@ async def user_api_key_auth(
             api_key, str
         ):  # if generated token, make sure it starts with sk-.
             assert api_key.startswith("sk-")  # prevent token hashes from being used
+        else:
+            verbose_logger.warning(
+                "litellm.proxy.proxy_server.user_api_key_auth(): Warning - Key={} is not a string.".format(
+                    api_key
+                )
+            )
 
         if (
             prisma_client is None and custom_db_client is None
@@ -1029,14 +1044,7 @@ async def user_api_key_auth(
                         # /model/info just shows models user has access to
                         pass
                     elif route == "/team/info":
-                        # check if key can access this team's info
-                        query_params = request.query_params
-                        team_id = query_params.get("team_id")
-                        if team_id != valid_token.team_id:
-                            raise HTTPException(
-                                status_code=status.HTTP_403_FORBIDDEN,
-                                detail="key not allowed to access this team's info",
-                            )
+                        pass  # handled by function itself
                 elif (
                     _has_user_setup_sso()
                     and route in LiteLLMRoutes.sso_only_routes.value
@@ -1151,7 +1159,7 @@ async def user_api_key_auth(
                 ):
                     return UserAPIKeyAuth(
                         api_key=api_key,
-                        user_role=_user_role,
+                        user_role=_user_role,  # type: ignore
                         parent_otel_span=parent_otel_span,
                         **valid_token_dict,
                     )
@@ -1163,29 +1171,13 @@ async def user_api_key_auth(
             # No token was found when looking up in the DB
             raise Exception("Invalid proxy server token passed")
         if valid_token_dict is not None:
-            if user_id_information is not None and _is_user_proxy_admin(
-                user_id_information
-            ):
-                return UserAPIKeyAuth(
-                    api_key=api_key,
-                    user_role=LitellmUserRoles.PROXY_ADMIN,
-                    parent_otel_span=parent_otel_span,
-                    **valid_token_dict,
-                )
-            elif _has_user_setup_sso() and route in LiteLLMRoutes.sso_only_routes.value:
-                return UserAPIKeyAuth(
-                    api_key=api_key,
-                    user_role=LitellmUserRoles.INTERNAL_USER,
-                    parent_otel_span=parent_otel_span,
-                    **valid_token_dict,
-                )
-            else:
-                return UserAPIKeyAuth(
-                    api_key=api_key,
-                    user_role=LitellmUserRoles.INTERNAL_USER,
-                    parent_otel_span=parent_otel_span,
-                    **valid_token_dict,
-                )
+            return _return_user_api_key_auth_obj(
+                user_id_information=user_id_information,
+                api_key=api_key,
+                parent_otel_span=parent_otel_span,
+                valid_token_dict=valid_token_dict,
+                route=route,
+            )
         else:
             raise Exception()
     except Exception as e:
@@ -1223,6 +1215,40 @@ async def user_api_key_auth(
             type=ProxyErrorTypes.auth_error,
             param=getattr(e, "param", "None"),
             code=status.HTTP_401_UNAUTHORIZED,
+        )
+
+
+def _return_user_api_key_auth_obj(
+    user_id_information: Optional[list],
+    api_key: str,
+    parent_otel_span: Optional[Span],
+    valid_token_dict: dict,
+    route: str,
+) -> UserAPIKeyAuth:
+    retrieved_user_role = (
+        _get_user_role(user_id_information=user_id_information)
+        or LitellmUserRoles.INTERNAL_USER
+    )
+    if user_id_information is not None and _is_user_proxy_admin(user_id_information):
+        return UserAPIKeyAuth(
+            api_key=api_key,
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            parent_otel_span=parent_otel_span,
+            **valid_token_dict,
+        )
+    elif _has_user_setup_sso() and route in LiteLLMRoutes.sso_only_routes.value:
+        return UserAPIKeyAuth(
+            api_key=api_key,
+            user_role=retrieved_user_role,
+            parent_otel_span=parent_otel_span,
+            **valid_token_dict,
+        )
+    else:
+        return UserAPIKeyAuth(
+            api_key=api_key,
+            user_role=retrieved_user_role,
+            parent_otel_span=parent_otel_span,
+            **valid_token_dict,
         )
 
 
@@ -1274,7 +1300,18 @@ def _is_user_proxy_admin(user_id_information: Optional[list]):
     return False
 
 
-def _get_user_role(user_id_information: Optional[list]):
+def _get_user_role(
+    user_id_information: Optional[list],
+) -> Optional[
+    Literal[
+        LitellmUserRoles.PROXY_ADMIN,
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+        LitellmUserRoles.INTERNAL_USER,
+        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+        LitellmUserRoles.TEAM,
+        LitellmUserRoles.CUSTOMER,
+    ]
+]:
     if user_id_information is None:
         return None
 
@@ -1282,7 +1319,11 @@ def _get_user_role(user_id_information: Optional[list]):
         return None
 
     _user = user_id_information[0]
-    return _user.get("user_role")
+
+    _user_role = _user.get("user_role")
+    if _user_role in list(LitellmUserRoles.__annotations__.keys()):
+        return _user_role
+    return LitellmUserRoles.INTERNAL_USER
 
 
 def _check_valid_ip(allowed_ips: Optional[List[str]], request: Request) -> bool:
@@ -1310,8 +1351,9 @@ def get_api_key_from_custom_header(
     # use this as the virtual key passed to litellm proxy
     custom_litellm_key_header_name = custom_litellm_key_header_name.lower()
     verbose_proxy_logger.debug(
-        "searching for custom_litellm_key_header_name= %s",
+        "searching for custom_litellm_key_header_name= %s, in headers=%s",
         custom_litellm_key_header_name,
+        request.headers,
     )
     custom_api_key = request.headers.get(custom_litellm_key_header_name)
     if custom_api_key:

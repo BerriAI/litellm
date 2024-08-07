@@ -141,6 +141,21 @@ def test_vertex_ai_llama_3_optional_params():
     assert "user" not in optional_params
 
 
+def test_vertex_ai_mistral_optional_params():
+    litellm.vertex_mistral_models = ["mistral-large@2407"]
+    litellm.drop_params = True
+    optional_params = get_optional_params(
+        model="mistral-large@2407",
+        user="John",
+        custom_llm_provider="vertex_ai",
+        max_tokens=10,
+        temperature=0.2,
+    )
+    assert "user" not in optional_params
+    assert "max_tokens" in optional_params
+    assert "temperature" in optional_params
+
+
 def test_azure_gpt_optional_params_gpt_vision():
     # for OpenAI, Azure all extra params need to get passed as extra_body to OpenAI python. We assert we actually set extra_body here
     optional_params = litellm.utils.get_optional_params(
@@ -405,3 +420,21 @@ def test_dynamic_drop_additional_params_e2e():
         print(mock_response.call_args.kwargs["data"])
         assert "response_format" not in mock_response.call_args.kwargs["data"]
         assert "additional_drop_params" not in mock_response.call_args.kwargs["data"]
+
+
+def test_get_optional_params_image_gen():
+    response = litellm.utils.get_optional_params_image_gen(
+        aws_region_name="us-east-1", custom_llm_provider="openai"
+    )
+
+    print(response)
+
+    assert "aws_region_name" not in response
+
+    response = litellm.utils.get_optional_params_image_gen(
+        aws_region_name="us-east-1", custom_llm_provider="bedrock"
+    )
+
+    print(response)
+
+    assert "aws_region_name" in response

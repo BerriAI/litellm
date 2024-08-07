@@ -58,6 +58,9 @@ class LitellmUserRoles(str, enum.Enum):
     def __str__(self):
         return str(self.value)
 
+    def values(self) -> List[str]:
+        return list(self.__annotations__.keys())
+
     @property
     def description(self):
         """
@@ -199,8 +202,8 @@ class LiteLLMRoutes(enum.Enum):
         # batches
         "/v1/batches",
         "/batches",
-        "/v1/batches{batch_id}",
-        "/batches{batch_id}",
+        "/v1/batches/{batch_id}",
+        "/batches/{batch_id}",
         # files
         "/v1/files",
         "/files",
@@ -208,6 +211,11 @@ class LiteLLMRoutes(enum.Enum):
         "/files/{file_id}",
         "/v1/files/{file_id}/content",
         "/files/{file_id}/content",
+        # fine_tuning
+        "/fine_tuning/jobs",
+        "/v1/fine_tuning/jobs",
+        "/fine_tuning/jobs/{fine_tuning_job_id}/cancel",
+        "/v1/fine_tuning/jobs/{fine_tuning_job_id}/cancel",
         # assistants-related routes
         "/assistants",
         "/v1/assistants",
@@ -910,7 +918,6 @@ class LiteLLM_TeamTable(TeamBase):
     budget_duration: Optional[str] = None
     budget_reset_at: Optional[datetime] = None
     model_id: Optional[int] = None
-    last_refreshed_at: Optional[float] = None
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -934,6 +941,10 @@ class LiteLLM_TeamTable(TeamBase):
                     raise ValueError(f"Field {field} should be a valid dictionary")
 
         return values
+
+
+class LiteLLM_TeamTableCachedObj(LiteLLM_TeamTable):
+    last_refreshed_at: Optional[float] = None
 
 
 class TeamRequest(LiteLLMBase):
@@ -1143,6 +1154,14 @@ class ConfigGeneralSettings(LiteLLMBase):
     )
     global_max_parallel_requests: Optional[int] = Field(
         None, description="global max parallel requests to allow for a proxy instance."
+    )
+    max_request_size_mb: Optional[int] = Field(
+        None,
+        description="max request size in MB, if a request is larger than this size it will be rejected",
+    )
+    max_response_size_mb: Optional[int] = Field(
+        None,
+        description="max response size in MB, if a response is larger than this size it will be rejected",
     )
     infer_model_from_keys: Optional[bool] = Field(
         None,
@@ -1546,6 +1565,22 @@ class AllCallbacks(LiteLLMBase):
         ui_callback_name="Datadog",
     )
 
+    braintrust: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="braintrust",
+        litellm_callback_params=["BRAINTRUST_API_KEY"],
+        ui_callback_name="Braintrust",
+    )
+
+    langsmith: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="langsmith",
+        litellm_callback_params=[
+            "LANGSMITH_API_KEY",
+            "LANGSMITH_PROJECT",
+            "LANGSMITH_DEFAULT_RUN_NAME",
+        ],
+        ui_callback_name="Langsmith",
+    )
+
 
 class SpendLogsMetadata(TypedDict):
     """
@@ -1653,13 +1688,17 @@ class ProxyException(Exception):
         message: str,
         type: str,
         param: Optional[str],
-        code: Optional[int],
+        code: Optional[Union[int, str]] = None,
         headers: Optional[Dict[str, str]] = None,
     ):
         self.message = message
         self.type = type
         self.param = param
-        self.code = code
+
+        # If we look on official python OpenAI lib, the code should be a string:
+        # https://github.com/openai/openai-python/blob/195c05a64d39c87b2dfdf1eca2d339597f1fce03/src/openai/types/shared/error_object.py#L11
+        # Related LiteLLM issue: https://github.com/BerriAI/litellm/discussions/4834
+        self.code = str(code)
         if headers is not None:
             for k, v in headers.items():
                 if not isinstance(v, str):
@@ -1673,7 +1712,7 @@ class ProxyException(Exception):
             "No healthy deployment available" in self.message
             or "No deployments available" in self.message
         ):
-            self.code = 429
+            self.code = "429"
 
     def to_dict(self) -> dict:
         """Converts the ProxyException instance to a dictionary."""

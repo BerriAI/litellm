@@ -81,6 +81,39 @@ def test_completion_bedrock_claude_completion_auth():
 # test_completion_bedrock_claude_completion_auth()
 
 
+def test_completion_bedrock_guardrails():
+    import os
+
+    litellm.set_verbose = True
+
+    try:
+        response = completion(
+            model="anthropic.claude-v2",
+            messages=[
+                {
+                    "content": "where do i buy coffee from? ",
+                    "role": "user",
+                }
+            ],
+            max_tokens=10,
+            guardrailConfig={
+                "guardrailIdentifier": "ff6ujrregl1q",
+                "guardrailVersion": "DRAFT",
+                "trace": "disabled",
+            },
+        )
+        # Add any assertions here to check the response
+        print(response)
+        assert (
+            "Sorry, the model cannot answer this question. coffee guardrail applied"
+            in response.choices[0].message.content
+        )
+    except RateLimitError:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
 def test_completion_bedrock_claude_2_1_completion_auth():
     print("calling bedrock claude 2.1 completion params auth")
     import os
@@ -525,7 +558,7 @@ def test_completion_bedrock_httpx_command_r_sts_oidc_auth():
     import os
 
     aws_web_identity_token = "oidc/circleci_v2/"
-    aws_region_name = os.environ["AWS_REGION_NAME"]
+    aws_region_name = "us-west-2"
     # aws_role_name = os.environ["AWS_TEMP_ROLE_NAME"]
     # TODO: This is using ai.moda's IAM role, we should use LiteLLM's IAM role eventually
     aws_role_name = "arn:aws:iam::335785316107:role/litellm-github-unit-tests-circleci"
@@ -542,6 +575,8 @@ def test_completion_bedrock_httpx_command_r_sts_oidc_auth():
             aws_web_identity_token=aws_web_identity_token,
             aws_role_name=aws_role_name,
             aws_session_name="my-test-session",
+            aws_sts_endpoint="https://sts-fips.us-west-2.amazonaws.com",
+            aws_bedrock_runtime_endpoint="https://bedrock-runtime-fips.us-west-2.amazonaws.com",
         )
         # Add any assertions here to check the response
         print(response)

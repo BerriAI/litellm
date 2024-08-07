@@ -260,6 +260,21 @@ curl --location 'http://0.0.0.0:4000/cache/ping'  -H "Authorization: Bearer sk-1
 ```
 
 ## Advanced
+
+### Control Call Types Caching is on for - (`/chat/completion`, `/embeddings`, etc.)
+
+By default, caching is on for all call types. You can control which call types caching is on for by setting `supported_call_types` in `cache_params`
+
+**Cache will only be on for the call types specified in `supported_call_types`**
+
+```yaml
+litellm_settings:
+  cache: True
+  cache_params:
+    type: redis
+    supported_call_types: ["acompletion", "atext_completion", "aembedding", "atranscription"]
+                          # /chat/completions, /completions, /embeddings, /audio/transcriptions
+```
 ### Set Cache Params on config.yaml
 ```yaml
 model_list:
@@ -280,7 +295,8 @@ litellm_settings:
     password: "your_password"  # The password for the Redis cache. Required if type is "redis".
     
     # Optional configurations
-    supported_call_types: ["acompletion", "completion", "embedding", "aembedding"] # defaults to all litellm call types
+    supported_call_types: ["acompletion", "atext_completion", "aembedding", "atranscription"]
+                      # /chat/completions, /completions, /embeddings, /audio/transcriptions
 ```
 
 ### Turn on / off caching per request.  
@@ -625,11 +641,8 @@ cache_params:
 
   # List of litellm call types to cache for
   # Options: "completion", "acompletion", "embedding", "aembedding"
-  supported_call_types:
-    - completion
-    - acompletion
-    - embedding
-    - aembedding
+  supported_call_types: ["acompletion", "atext_completion", "aembedding", "atranscription"]
+                      # /chat/completions, /completions, /embeddings, /audio/transcriptions
 
   # Redis cache parameters
   host: localhost  # Redis server hostname or IP address

@@ -35,6 +35,7 @@ general_settings:
         Authorization: "bearer os.environ/COHERE_API_KEY" # (Optional) Auth Header to forward to your Endpoint
         content-type: application/json                    # (Optional) Extra Headers to pass to this endpoint 
         accept: application/json
+      forward_headers: True                      # (Optional) Forward all headers from the incoming request to the target endpoint
 ```
 
 **Step 2** Start Proxy Server in detailed_debug mode
@@ -220,6 +221,7 @@ general_settings:
     * `LANGFUSE_PUBLIC_KEY` *string*: Your Langfuse account public key - only set this when forwarding to Langfuse.
     * `LANGFUSE_SECRET_KEY` *string*: Your Langfuse account secret key - only set this when forwarding to Langfuse.
     * `<your-custom-header>` *string*: Pass any custom header key/value pair 
+  * `forward_headers` *Optional(boolean)*: If true, all headers from the incoming request will be forwarded to the target endpoint. Default is `False`.
 
 
 ## Custom Chat Endpoints (Anthropic/Bedrock/Vertex)

@@ -138,11 +138,24 @@ class _ENTERPRISE_lakeraAI_Moderation(CustomLogger):
             return
         text = ""
         if "messages" in data and isinstance(data["messages"], list):
-            enabled_roles = litellm.guardrail_name_config_map[
-                "prompt_injection"
-            ].enabled_roles
+            prompt_injection_obj: Optional[GuardrailItem] = (
+                litellm.guardrail_name_config_map.get("prompt_injection")
+            )
+            if prompt_injection_obj is not None:
+                enabled_roles = prompt_injection_obj.enabled_roles
+            else:
+                enabled_roles = None
+
             if enabled_roles is None:
                 enabled_roles = default_roles
+
+            stringified_roles: List[str] = []
+            if enabled_roles is not None:  # convert to list of str
+                for role in enabled_roles:
+                    if isinstance(role, Role):
+                        stringified_roles.append(role.value)
+                    elif isinstance(role, str):
+                        stringified_roles.append(role)
             lakera_input_dict: Dict = {
                 role: None for role in INPUT_POSITIONING_MAP.keys()
             }
@@ -150,7 +163,7 @@ class _ENTERPRISE_lakeraAI_Moderation(CustomLogger):
             tool_call_messages: List = []
             for message in data["messages"]:
                 role = message.get("role")
-                if role in enabled_roles:
+                if role in stringified_roles:
                     if "tool_calls" in message:
                         tool_call_messages = [
                             *tool_call_messages,

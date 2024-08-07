@@ -260,3 +260,48 @@ class GenerateContentResponseBody(TypedDict, total=False):
     candidates: Required[List[Candidates]]
     promptFeedback: PromptFeedback
     usageMetadata: Required[UsageMetadata]
+
+
+class FineTunesupervisedTuningSpec(TypedDict, total=False):
+    training_dataset_uri: str
+    validation_dataset: Optional[str]
+    epoch_count: Optional[int]
+    learning_rate_multiplier: Optional[float]
+    tuned_model_display_name: Optional[str]
+    adapter_size: Optional[
+        Literal[
+            "ADAPTER_SIZE_UNSPECIFIED",
+            "ADAPTER_SIZE_ONE",
+            "ADAPTER_SIZE_FOUR",
+            "ADAPTER_SIZE_EIGHT",
+            "ADAPTER_SIZE_SIXTEEN",
+        ]
+    ]
+
+
+class FineTuneJobCreate(TypedDict, total=False):
+    baseModel: str
+    supervisedTuningSpec: FineTunesupervisedTuningSpec
+    tunedModelDisplayName: Optional[str]
+
+
+class ResponseSupervisedTuningSpec(TypedDict):
+    trainingDatasetUri: Optional[str]
+
+
+class ResponseTuningJob(TypedDict):
+    name: Optional[str]
+    tunedModelDisplayName: Optional[str]
+    baseModel: Optional[str]
+    supervisedTuningSpec: Optional[ResponseSupervisedTuningSpec]
+    state: Optional[
+        Literal[
+            "JOB_STATE_PENDING",
+            "JOB_STATE_RUNNING",
+            "JOB_STATE_SUCCEEDED",
+            "JOB_STATE_FAILED",
+            "JOB_STATE_CANCELLED",
+        ]
+    ]
+    createTime: Optional[str]
+    updateTime: Optional[str]

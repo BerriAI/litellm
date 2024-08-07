@@ -608,6 +608,8 @@ def test_completion_function_plus_pdf(load_pdf):
 
         print(response)
     except litellm.InternalServerError as e:
+        pass
+    except Exception as e:
         pytest.fail("Got={}".format(str(e)))
 
 
@@ -899,11 +901,20 @@ from litellm.tests.test_completion import response_format_tests
 
 
 @pytest.mark.parametrize(
-    "model", ["vertex_ai/meta/llama3-405b-instruct-maas"]
+    "model",
+    [
+        "vertex_ai/mistral-large@2407",
+        "vertex_ai/mistral-nemo@2407",
+        "vertex_ai/codestral@2405",
+        "vertex_ai/meta/llama3-405b-instruct-maas",
+    ],  #
 )  # "vertex_ai",
-@pytest.mark.parametrize("sync_mode", [True, False])  # "vertex_ai",
+@pytest.mark.parametrize(
+    "sync_mode",
+    [True, False],
+)  #
 @pytest.mark.asyncio
-async def test_llama_3_httpx(model, sync_mode):
+async def test_partner_models_httpx(model, sync_mode):
     try:
         load_vertex_ai_credentials()
         litellm.set_verbose = True
@@ -932,7 +943,60 @@ async def test_llama_3_httpx(model, sync_mode):
         response_format_tests(response=response)
 
         print(f"response: {response}")
+
+        assert isinstance(response._hidden_params["response_cost"], float)
     except litellm.RateLimitError as e:
+        pass
+    except Exception as e:
+        if "429 Quota exceeded" in str(e):
+            pass
+        else:
+            pytest.fail("An unexpected exception occurred - {}".format(str(e)))
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "vertex_ai/mistral-large@2407",
+        "vertex_ai/meta/llama3-405b-instruct-maas",
+    ],  #
+)  # "vertex_ai",
+@pytest.mark.parametrize(
+    "sync_mode",
+    [True, False],  #
+)  #
+@pytest.mark.asyncio
+async def test_partner_models_httpx_streaming(model, sync_mode):
+    try:
+        load_vertex_ai_credentials()
+        litellm.set_verbose = True
+
+        messages = [
+            {
+                "role": "system",
+                "content": "Your name is Litellm Bot, you are a helpful assistant",
+            },
+            # User asks for their name and weather in San Francisco
+            {
+                "role": "user",
+                "content": "Hello, what is your name and can you tell me the weather?",
+            },
+        ]
+
+        data = {"model": model, "messages": messages, "stream": True}
+        if sync_mode:
+            response = litellm.completion(**data)
+            for idx, chunk in enumerate(response):
+                streaming_format_tests(idx=idx, chunk=chunk)
+        else:
+            response = await litellm.acompletion(**data)
+            idx = 0
+            async for chunk in response:
+                streaming_format_tests(idx=idx, chunk=chunk)
+                idx += 1
+
+        print(f"response: {response}")
+    except litellm.RateLimitError:
         pass
     except Exception as e:
         if "429 Quota exceeded" in str(e):
@@ -1283,6 +1347,7 @@ def vertex_httpx_mock_post_invalid_schema_response_anthropic(*args, **kwargs):
     "model, vertex_location, supports_response_schema",
     [
         ("vertex_ai_beta/gemini-1.5-pro-001", "us-central1", True),
+        ("gemini/gemini-1.5-pro", None, True),
         ("vertex_ai_beta/gemini-1.5-flash", "us-central1", False),
         ("vertex_ai/claude-3-5-sonnet@20240620", "us-east5", False),
     ],

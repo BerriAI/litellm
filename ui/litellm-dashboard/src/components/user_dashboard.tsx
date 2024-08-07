@@ -17,6 +17,9 @@ import { useSearchParams, useRouter } from "next/navigation";
 import { jwtDecode } from "jwt-decode";
 import { Typography } from "antd";
 const isLocal = process.env.NODE_ENV === "development";
+if (isLocal != true) {
+  console.log = function() {};
+}
 console.log("isLocal:", isLocal);
 const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
 

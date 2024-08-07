@@ -13,6 +13,7 @@ from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
 import httpx  # type: ignore
 import requests  # type: ignore
+from openai.types.image import Image
 
 import litellm
 import litellm.litellm_core_utils
@@ -181,7 +182,12 @@ class GoogleAIStudioGeminiConfig:  # key diff from VertexAI - 'frequency_penalty
             if param == "max_tokens":
                 optional_params["max_output_tokens"] = value
             if param == "response_format" and value["type"] == "json_object":  # type: ignore
-                optional_params["response_mime_type"] = "application/json"
+                if value["type"] == "json_object":  # type: ignore
+                    optional_params["response_mime_type"] = "application/json"
+                elif value["type"] == "text":  # type: ignore
+                    optional_params["response_mime_type"] = "text/plain"
+                if "response_schema" in value:  # type: ignore
+                    optional_params["response_schema"] = value["response_schema"]  # type: ignore
             if param == "tools" and isinstance(value, list):
                 gtool_func_declarations = []
                 for tool in value:
@@ -688,6 +694,8 @@ class VertexLLM(BaseLLM):
         try:
             ## CHECK IF GROUNDING METADATA IN REQUEST
             grounding_metadata: List[dict] = []
+            safety_ratings: List = []
+            citation_metadata: List = []
             ## GET TEXT ##
             chat_completion_message = {"role": "assistant"}
             content_str = ""
@@ -699,6 +707,11 @@ class VertexLLM(BaseLLM):
                 if "groundingMetadata" in candidate:
                     grounding_metadata.append(candidate["groundingMetadata"])
 
+                if "safetyRatings" in candidate:
+                    safety_ratings.append(candidate["safetyRatings"])
+
+                if "citationMetadata" in candidate:
+                    citation_metadata.append(candidate["citationMetadata"])
                 if "text" in candidate["content"]["parts"][0]:
                     content_str = candidate["content"]["parts"][0]["text"]
 
@@ -749,6 +762,15 @@ class VertexLLM(BaseLLM):
             model_response._hidden_params["vertex_ai_grounding_metadata"] = (
                 grounding_metadata
             )
+
+            ## ADD SAFETY RATINGS ##
+            model_response._hidden_params["vertex_ai_safety_results"] = safety_ratings
+
+            ## ADD CITATION METADATA ##
+            model_response._hidden_params["vertex_ai_citation_metadata"] = (
+                citation_metadata
+            )
+
         except Exception as e:
             raise VertexAIError(
                 message="Received={}, Error converting to valid response block={}. File an issue if litellm error - https://github.com/BerriAI/litellm/issues".format(
@@ -774,7 +796,20 @@ class VertexLLM(BaseLLM):
         if credentials is not None and isinstance(credentials, str):
             import google.oauth2.service_account
 
-            json_obj = json.loads(credentials)
+            verbose_logger.debug(
+                "Vertex: Loading vertex credentials from %s", credentials
+            )
+            verbose_logger.debug(
+                "Vertex: checking if credentials is a valid path, os.path.exists(%s)=%s, current dir %s",
+                credentials,
+                os.path.exists(credentials),
+                os.getcwd(),
+            )
+
+            if os.path.exists(credentials):
+                json_obj = json.load(open(credentials))
+            else:
+                json_obj = json.loads(credentials)
 
             creds = google.oauth2.service_account.Credentials.from_service_account_info(
                 json_obj,
@@ -1312,10 +1347,10 @@ class VertexLLM(BaseLLM):
         _json_response = response.json()
         _predictions = _json_response["predictions"]
 
-        _response_data: List[litellm.ImageObject] = []
+        _response_data: List[Image] = []
         for _prediction in _predictions:
             _bytes_base64_encoded = _prediction["bytesBase64Encoded"]
-            image_object = litellm.ImageObject(b64_json=_bytes_base64_encoded)
+            image_object = Image(b64_json=_bytes_base64_encoded)
             _response_data.append(image_object)
 
         model_response.data = _response_data
@@ -1424,10 +1459,10 @@ class VertexLLM(BaseLLM):
         _json_response = response.json()
         _predictions = _json_response["predictions"]
 
-        _response_data: List[litellm.ImageObject] = []
+        _response_data: List[Image] = []
         for _prediction in _predictions:
             _bytes_base64_encoded = _prediction["bytesBase64Encoded"]
-            image_object = litellm.ImageObject(b64_json=_bytes_base64_encoded)
+            image_object = Image(b64_json=_bytes_base64_encoded)
             _response_data.append(image_object)
 
         model_response.data = _response_data

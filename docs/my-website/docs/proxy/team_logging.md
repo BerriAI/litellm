@@ -2,7 +2,7 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# 👥📊 Team Based Logging
+# 👥📊 [BETA] Team Based Logging
 
 Allow each team to use their own Langfuse Project / custom callbacks
 
@@ -11,7 +11,14 @@ Allow each team to use their own Langfuse Project / custom callbacks
 Team 1 -> Logs to Langfuse Project 1 
 Team 2 -> Logs to Langfuse Project 2
 Team 3 -> Disabled Logging (for GDPR compliance)
+
 ```
+:::info
+
+✨ This is an Enterprise only feature [Get Started with Enterprise here](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+
+:::
+
 
 ## Set Callbacks Per Team
 
