@@ -4092,7 +4092,7 @@ def test_completion_gemini(model):
         if "InternalServerError" in str(e):
             pass
         else:
-            pytest.fail(f"Error occurred: {e}")
+            pytest.fail(f"Error occurred:{e}")
 
 
 # test_completion_gemini()
