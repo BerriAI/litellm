@@ -4469,13 +4469,7 @@ class Router:
             )
             model = self.model_group_alias[model]
 
-        if model not in self.model_names and self.default_deployment is not None:
-            updated_deployment = copy.deepcopy(
-                self.default_deployment
-            )  # self.default_deployment
-            updated_deployment["litellm_params"]["model"] = model
-            return model, updated_deployment
-        elif model not in self.model_names:
+        if model not in self.model_names:
             # check if provider/ specific wildcard routing
             try:
                 (
@@ -4498,6 +4492,14 @@ class Router:
             except:
                 # get_llm_provider raises exception when provider is unknown
                 pass
+
+            # check if default deployment is set
+            if self.default_deployment is not None:
+                updated_deployment = copy.deepcopy(
+                    self.default_deployment
+                )  # self.default_deployment
+                updated_deployment["litellm_params"]["model"] = model
+                return model, updated_deployment
 
         ## get healthy deployments
         ### get all deployments
