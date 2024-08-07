@@ -88,8 +88,10 @@ def common_checks(
         and team_object.spend is not None
         and team_object.spend > team_object.max_budget
     ):
-        raise Exception(
-            f"Team={team_object.team_id} over budget. Spend={team_object.spend}, Budget={team_object.max_budget}"
+        raise litellm.BudgetExceededError(
+            current_cost=team_object.spend,
+            max_budget=team_object.max_budget,
+            message=f"Team={team_object.team_id} over budget. Spend={team_object.spend}, Budget={team_object.max_budget}",
         )
     # 4. If user is in budget
     ## 4.1 check personal budget, if personal key
@@ -100,16 +102,20 @@ def common_checks(
     ):
         user_budget = user_object.max_budget
         if user_budget < user_object.spend:
-            raise Exception(
-                f"ExceededBudget: User={user_object.user_id} over budget. Spend={user_object.spend}, Budget={user_budget}"
+            raise litellm.BudgetExceededError(
+                current_cost=user_object.spend,
+                max_budget=user_budget,
+                message=f"ExceededBudget: User={user_object.user_id} over budget. Spend={user_object.spend}, Budget={user_budget}",
             )
     ## 4.2 check team member budget, if team key
     # 5. If end_user ('user' passed to /chat/completions, /embeddings endpoint) is in budget
     if end_user_object is not None and end_user_object.litellm_budget_table is not None:
         end_user_budget = end_user_object.litellm_budget_table.max_budget
         if end_user_budget is not None and end_user_object.spend > end_user_budget:
-            raise Exception(
-                f"ExceededBudget: End User={end_user_object.user_id} over budget. Spend={end_user_object.spend}, Budget={end_user_budget}"
+            raise litellm.BudgetExceededError(
+                current_cost=end_user_object.spend,
+                max_budget=end_user_budget,
+                message=f"ExceededBudget: End User={end_user_object.user_id} over budget. Spend={end_user_object.spend}, Budget={end_user_budget}",
             )
     # 6. [OPTIONAL] If 'enforce_user_param' enabled - did developer pass in 'user' param for openai endpoints
     if (
