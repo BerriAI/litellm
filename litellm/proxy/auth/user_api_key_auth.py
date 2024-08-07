@@ -552,7 +552,6 @@ async def user_api_key_auth(
             key=api_key
         )
         if valid_token is None:
-            user_obj: Optional[LiteLLM_UserTable] = None
             ## check db
             verbose_proxy_logger.debug("api key: %s", api_key)
             if prisma_client is not None:
@@ -584,6 +583,7 @@ async def user_api_key_auth(
 
         user_id_information: Optional[List] = None
         if valid_token is not None:
+            user_obj: Optional[LiteLLM_UserTable] = None
             # Got Valid Token from Cache, DB
             # Run checks for
             # 1. If token can call model
