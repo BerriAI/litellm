@@ -417,36 +417,19 @@ def create_pass_through_route(
 
     except Exception:
         verbose_proxy_logger.warning("Defaulting to target being a url.")
-        if dependencies is None:
 
-            async def endpoint_func_no_auth(
-                request: Request,
-                fastapi_response: Response,
-            ):
-                return await pass_through_request(
-                    request=request,
-                    target=target,
-                    custom_headers=custom_headers or {},
-                    user_api_key_dict=UserAPIKeyAuth(),
-                    forward_headers=_forward_headers,
-                )
-
-            return endpoint_func_no_auth
-
-        else:
-
-            async def endpoint_func(
-                request: Request,
-                fastapi_response: Response,
-                user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-            ):
-                return await pass_through_request(
-                    request=request,
-                    target=target,
-                    custom_headers=custom_headers or {},
-                    user_api_key_dict=user_api_key_dict,
-                    forward_headers=_forward_headers,
-                )
+        async def endpoint_func(
+            request: Request,
+            fastapi_response: Response,
+            user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+        ):
+            return await pass_through_request(
+                request=request,
+                target=target,
+                custom_headers=custom_headers or {},
+                user_api_key_dict=user_api_key_dict,
+                forward_headers=_forward_headers,
+            )
 
     return endpoint_func
 
