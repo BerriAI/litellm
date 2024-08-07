@@ -631,8 +631,8 @@ def client(original_function):
                     call_type == CallTypes.completion.value
                     or call_type == CallTypes.acompletion.value
                 ):
-                    is_coroutine = check_coroutine(original_function)
-                    if is_coroutine == True:
+                    is_coroutine = check_coroutine(original_response)
+                    if is_coroutine is True:
                         pass
                     else:
                         if isinstance(original_response, ModelResponse):
@@ -645,30 +645,49 @@ def client(original_function):
                                     input=model_response, model=model
                                 )
                                 ### JSON SCHEMA VALIDATION ###
-                                try:
-                                    if (
-                                        optional_params is not None
-                                        and "response_format" in optional_params
-                                        and _parsing._completions.is_basemodel_type(
-                                            optional_params["response_format"]
-                                        )
-                                    ):
-                                        json_response_format = (
-                                            type_to_response_format_param(
-                                                response_format=optional_params[
+                                if litellm.enable_json_schema_validation is True:
+                                    try:
+                                        if (
+                                            optional_params is not None
+                                            and "response_format" in optional_params
+                                            and optional_params["response_format"]
+                                            is not None
+                                        ):
+                                            json_response_format: Optional[dict] = None
+                                            if (
+                                                isinstance(
+                                                    optional_params["response_format"],
+                                                    dict,
+                                                )
+                                                and optional_params[
+                                                    "response_format"
+                                                ].get("json_schema")
+                                                is not None
+                                            ):
+                                                json_response_format = optional_params[
                                                     "response_format"
                                                 ]
-                                            )
-                                        )
-                                        if json_response_format is not None:
-                                            litellm.litellm_core_utils.json_validation_rule.validate_schema(
-                                                schema=json_response_format[
-                                                    "json_schema"
-                                                ]["schema"],
-                                                response=model_response,
-                                            )
-                                except TypeError:
-                                    pass
+                                            elif (
+                                                _parsing._completions.is_basemodel_type(
+                                                    optional_params["response_format"]
+                                                )
+                                            ):
+                                                json_response_format = (
+                                                    type_to_response_format_param(
+                                                        response_format=optional_params[
+                                                            "response_format"
+                                                        ]
+                                                    )
+                                                )
+                                            if json_response_format is not None:
+                                                litellm.litellm_core_utils.json_validation_rule.validate_schema(
+                                                    schema=json_response_format[
+                                                        "json_schema"
+                                                    ]["schema"],
+                                                    response=model_response,
+                                                )
+                                    except TypeError:
+                                        pass
                                 if (
                                     optional_params is not None
                                     and "response_format" in optional_params
