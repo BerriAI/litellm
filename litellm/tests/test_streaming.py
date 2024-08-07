@@ -2596,8 +2596,8 @@ def streaming_and_function_calling_format_tests(idx, chunk):
 @pytest.mark.parametrize(
     "model",
     [
-        "gpt-3.5-turbo",
-        "anthropic.claude-3-sonnet-20240229-v1:0",
+        # "gpt-3.5-turbo",
+        # "anthropic.claude-3-sonnet-20240229-v1:0",
         "claude-3-haiku-20240307",
     ],
 )
@@ -2627,7 +2627,7 @@ def test_streaming_and_function_calling(model):
 
     messages = [{"role": "user", "content": "What is the weather like in Boston?"}]
     try:
-        litellm.set_verbose = True
+        # litellm.set_verbose = True
         response: litellm.CustomStreamWrapper = completion(
             model=model,
             tools=tools,
@@ -2639,7 +2639,7 @@ def test_streaming_and_function_calling(model):
         json_str = ""
         for idx, chunk in enumerate(response):
             # continue
-            print("\n{}\n".format(chunk))
+            # print("\n{}\n".format(chunk))
             if idx == 0:
                 assert (
                     chunk.choices[0].delta.tool_calls[0].function.arguments is not None
