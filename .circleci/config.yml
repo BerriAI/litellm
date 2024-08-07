@@ -47,7 +47,7 @@ jobs:
             pip install opentelemetry-api==1.25.0
             pip install opentelemetry-sdk==1.25.0
             pip install opentelemetry-exporter-otlp==1.25.0
-            pip install openai==1.34.0
+            pip install openai==1.40.0
             pip install prisma==0.11.0   
             pip install "detect_secrets==1.5.0"         
             pip install "httpx==0.24.1"
@@ -165,7 +165,7 @@ jobs:
             pip install "pytest==7.3.1"
             pip install "pytest-asyncio==0.21.1"
             pip install aiohttp
-            pip install openai
+            pip install "openai==1.40.0"
             python -m pip install --upgrade pip
             python -m pip install -r .circleci/requirements.txt
             pip install "pytest==7.3.1"
