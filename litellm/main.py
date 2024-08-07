@@ -31,6 +31,7 @@ from typing import (
     Literal,
     Mapping,
     Optional,
+    Type,
     Union,
 )
 
@@ -608,7 +609,7 @@ def completion(
     logit_bias: Optional[dict] = None,
     user: Optional[str] = None,
     # openai v1.0+ new params
-    response_format: Optional[dict] = None,
+    response_format: Optional[Union[dict, Type[BaseModel]]] = None,
     seed: Optional[int] = None,
     tools: Optional[List] = None,
     tool_choice: Optional[Union[str, dict]] = None,

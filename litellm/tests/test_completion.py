@@ -2130,6 +2130,43 @@ def test_completion_openai():
         pytest.fail(f"Error occurred: {e}")
 
 
+def test_completion_openai_pydantic():
+    try:
+        litellm.set_verbose = True
+        from pydantic import BaseModel
+
+        class CalendarEvent(BaseModel):
+            name: str
+            date: str
+            participants: list[str]
+
+        print(f"api key: {os.environ['OPENAI_API_KEY']}")
+        litellm.api_key = os.environ["OPENAI_API_KEY"]
+        response = completion(
+            model="gpt-4o-2024-08-06",
+            messages=[{"role": "user", "content": "Hey"}],
+            max_tokens=10,
+            metadata={"hi": "bye"},
+            response_format=CalendarEvent,
+        )
+        print("This is the response object\n", response)
+
+        response_str = response["choices"][0]["message"]["content"]
+        response_str_2 = response.choices[0].message.content
+
+        cost = completion_cost(completion_response=response)
+        print("Cost for completion call with gpt-3.5-turbo: ", f"${float(cost):.10f}")
+        assert response_str == response_str_2
+        assert type(response_str) == str
+        assert len(response_str) > 1
+
+        litellm.api_key = None
+    except Timeout as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
 def test_completion_openai_organization():
     try:
         litellm.set_verbose = True
@@ -4062,7 +4099,7 @@ def test_completion_gemini(model):
         if "InternalServerError" in str(e):
             pass
         else:
-            pytest.fail(f"Error occurred: {e}")
+            pytest.fail(f"Error occurred:{e}")
 
 
 # test_completion_gemini()
