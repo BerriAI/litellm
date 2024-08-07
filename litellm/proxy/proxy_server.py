@@ -285,8 +285,6 @@ except Exception as e:
 
 server_root_path = os.getenv("SERVER_ROOT_PATH", "")
 print("server root path: ", server_root_path)  # noqa
-if server_root_path != "":
-    setup_admin_ui_on_server_root_path(server_root_path)
 _license_check = LicenseCheck()
 premium_user: bool = _license_check.is_premium()
 ui_link = f"{server_root_path}/ui/"
@@ -388,6 +386,16 @@ try:
             src = os.path.join(ui_path, filename)
             dst = os.path.join(folder_path, "index.html")
             os.rename(src, dst)
+
+    if server_root_path != "":
+
+        @app.middleware("http")
+        async def redirect_ui_middleware(request: Request, call_next):
+            if request.url.path.startswith("/ui"):
+                new_path = request.url.path.replace("/ui", f"{server_root_path}/ui", 1)
+                return RedirectResponse(new_path)
+            return await call_next(request)
+
 except:
     pass
 app.add_middleware(
