@@ -3697,9 +3697,20 @@ def test_unit_test_custom_stream_wrapper_function_call():
         "gpt-3.5-turbo",
         "claude-3-5-sonnet-20240620",
         "anthropic.claude-3-sonnet-20240229-v1:0",
+        "vertex_ai/claude-3-5-sonnet@20240620",
     ],
 )
 def test_streaming_tool_calls_valid_json_str(model):
+    if "vertex_ai" in model:
+        from litellm.tests.test_amazing_vertex_completion import (
+            load_vertex_ai_credentials,
+        )
+
+        load_vertex_ai_credentials()
+        vertex_location = "us-east5"
+    else:
+        vertex_location = None
+    litellm.set_verbose = False
     messages = [
         {"role": "user", "content": "Hit the snooze button."},
     ]
@@ -3718,8 +3729,11 @@ def test_streaming_tool_calls_valid_json_str(model):
         }
     ]
 
-    stream = litellm.completion(model, messages, tools=tools, stream=True)
+    stream = litellm.completion(
+        model, messages, tools=tools, stream=True, vertex_location=vertex_location
+    )
     chunks = [*stream]
+    print(f"chunks: {chunks}")
     tool_call_id_arg_map = {}
     curr_tool_call_id = None
     curr_tool_call_str = ""
