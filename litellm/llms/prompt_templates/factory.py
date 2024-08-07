@@ -2345,7 +2345,9 @@ def _bedrock_tools_pt(tools: List) -> List[BedrockToolBlock]:
     for tool in tools:
         parameters = tool.get("function", {}).get("parameters", None)
         name = tool.get("function", {}).get("name", "")
-        description = tool.get("function", {}).get("description", "")
+        description = tool.get("function", {}).get(
+            "description", name
+        )  # converse api requires a description
         tool_input_schema = BedrockToolInputSchemaBlock(json=parameters)
         tool_spec = BedrockToolSpecBlock(
             inputSchema=tool_input_schema, name=name, description=description
