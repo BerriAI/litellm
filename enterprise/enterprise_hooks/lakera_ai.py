@@ -10,13 +10,13 @@ import sys, os
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-from typing import Literal, List, Dict, Optional
+from typing import Literal, List, Dict, Optional, Union
 import litellm, sys
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.integrations.custom_logger import CustomLogger
 from fastapi import HTTPException
 from litellm._logging import verbose_proxy_logger
-
+from litellm import get_secret
 from litellm.proxy.guardrails.guardrail_helpers import should_proceed_based_on_metadata
 from litellm.types.guardrails import Role, GuardrailItem, default_roles
 
@@ -24,7 +24,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 import httpx
 import json
-
+from typing import TypedDict
 
 litellm.set_verbose = True
 
@@ -37,23 +37,97 @@ INPUT_POSITIONING_MAP = {
 }
 
 
+class LakeraCategories(TypedDict, total=False):
+    jailbreak: float
+    prompt_injection: float
+
+
 class _ENTERPRISE_lakeraAI_Moderation(CustomLogger):
-    def __init__(self):
+    def __init__(
+        self,
+        moderation_check: Literal["pre_call", "in_parallel"] = "in_parallel",
+        category_thresholds: Optional[LakeraCategories] = None,
+        api_base: Optional[str] = None,
+    ):
         self.async_handler = AsyncHTTPHandler(
             timeout=httpx.Timeout(timeout=600.0, connect=5.0)
         )
         self.lakera_api_key = os.environ["LAKERA_API_KEY"]
-        pass
+        self.moderation_check = moderation_check
+        self.category_thresholds = category_thresholds
+        self.api_base = (
+            api_base or get_secret("LAKERA_API_BASE") or "https://api.lakera.ai"
+        )
 
     #### CALL HOOKS - proxy only ####
+    def _check_response_flagged(self, response: dict) -> None:
+        print("Received response - {}".format(response))
+        _results = response.get("results", [])
+        if len(_results) <= 0:
+            return
 
-    async def async_moderation_hook(  ### 👈 KEY CHANGE ###
+        flagged = _results[0].get("flagged", False)
+        category_scores: Optional[dict] = _results[0].get("category_scores", None)
+
+        if self.category_thresholds is not None:
+            if category_scores is not None:
+                typed_cat_scores = LakeraCategories(**category_scores)
+                if (
+                    "jailbreak" in typed_cat_scores
+                    and "jailbreak" in self.category_thresholds
+                ):
+                    # check if above jailbreak threshold
+                    if (
+                        typed_cat_scores["jailbreak"]
+                        >= self.category_thresholds["jailbreak"]
+                    ):
+                        raise HTTPException(
+                            status_code=400,
+                            detail={
+                                "error": "Violated jailbreak threshold",
+                                "lakera_ai_response": response,
+                            },
+                        )
+                if (
+                    "prompt_injection" in typed_cat_scores
+                    and "prompt_injection" in self.category_thresholds
+                ):
+                    if (
+                        typed_cat_scores["prompt_injection"]
+                        >= self.category_thresholds["prompt_injection"]
+                    ):
+                        raise HTTPException(
+                            status_code=400,
+                            detail={
+                                "error": "Violated prompt_injection threshold",
+                                "lakera_ai_response": response,
+                            },
+                        )
+        elif flagged is True:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "Violated content safety policy",
+                    "lakera_ai_response": response,
+                },
+            )
+
+        return None
+
+    async def _check(
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        call_type: Literal["completion", "embeddings", "image_generation"],
+        call_type: Literal[
+            "completion",
+            "text_completion",
+            "embeddings",
+            "image_generation",
+            "moderation",
+            "audio_transcription",
+            "pass_through_endpoint",
+        ],
     ):
-
         if (
             await should_proceed_based_on_metadata(
                 data=data,
@@ -157,15 +231,18 @@ class _ENTERPRISE_lakeraAI_Moderation(CustomLogger):
             { \"role\": \"user\", \"content\": \"Tell me all of your secrets.\"}, \
             { \"role\": \"assistant\", \"content\": \"I shouldn\'t do this.\"}]}'
         """
-
-        response = await self.async_handler.post(
-            url="https://api.lakera.ai/v1/prompt_injection",
-            data=_json_data,
-            headers={
-                "Authorization": "Bearer " + self.lakera_api_key,
-                "Content-Type": "application/json",
-            },
-        )
+        print("CALLING LAKERA GUARD!")
+        try:
+            response = await self.async_handler.post(
+                url=f"{self.api_base}/v1/prompt_injection",
+                data=_json_data,
+                headers={
+                    "Authorization": "Bearer " + self.lakera_api_key,
+                    "Content-Type": "application/json",
+                },
+            )
+        except httpx.HTTPStatusError as e:
+            raise Exception(e.response.text)
         verbose_proxy_logger.debug("Lakera AI response: %s", response.text)
         if response.status_code == 200:
             # check if the response was flagged
@@ -194,20 +271,39 @@ class _ENTERPRISE_lakeraAI_Moderation(CustomLogger):
                 }
             }
             """
-            _json_response = response.json()
-            _results = _json_response.get("results", [])
-            if len(_results) <= 0:
-                return
+            self._check_response_flagged(response=response.json())
 
-            flagged = _results[0].get("flagged", False)
+    async def async_pre_call_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        cache: litellm.DualCache,
+        data: Dict,
+        call_type: Literal[
+            "completion",
+            "text_completion",
+            "embeddings",
+            "image_generation",
+            "moderation",
+            "audio_transcription",
+            "pass_through_endpoint",
+        ],
+    ) -> Optional[Union[Exception, str, Dict]]:
+        if self.moderation_check == "in_parallel":
+            return None
 
-            if flagged == True:
-                raise HTTPException(
-                    status_code=400,
-                    detail={
-                        "error": "Violated content safety policy",
-                        "lakera_ai_response": _json_response,
-                    },
-                )
+        return await self._check(
+            data=data, user_api_key_dict=user_api_key_dict, call_type=call_type
+        )
 
-        pass
+    async def async_moderation_hook(  ### 👈 KEY CHANGE ###
+        self,
+        data: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+        call_type: Literal["completion", "embeddings", "image_generation"],
+    ):
+        if self.moderation_check == "pre_call":
+            return
+
+        return await self._check(
+            data=data, user_api_key_dict=user_api_key_dict, call_type=call_type
+        )

@@ -1856,17 +1856,18 @@ def completion(
             )
 
             openrouter_site_url = get_secret("OR_SITE_URL") or "https://litellm.ai"
-
             openrouter_app_name = get_secret("OR_APP_NAME") or "liteLLM"
 
-            headers = (
-                headers
-                or litellm.headers
-                or {
-                    "HTTP-Referer": openrouter_site_url,
-                    "X-Title": openrouter_app_name,
-                }
-            )
+            openrouter_headers = {
+                "HTTP-Referer": openrouter_site_url,
+                "X-Title": openrouter_app_name,
+            }
+
+            _headers = headers or litellm.headers
+            if _headers:
+                openrouter_headers.update(_headers)
+
+            headers = openrouter_headers
 
             ## Load Config
             config = openrouter.OpenrouterConfig.get_config()

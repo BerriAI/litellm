@@ -186,6 +186,16 @@ PROXY_BASE_URL=https://litellm-api.up.railway.app/
 #### Step 4. Test flow
 <Image img={require('../../img/litellm_ui_3.gif')} />
 
+### Restrict Email Subdomains w/ SSO
+
+If you're using SSO and want to only allow users with a specific subdomain - e.g. (@berri.ai email accounts) to access the UI, do this:
+
+```bash
+export ALLOWED_EMAIL_DOMAINS="berri.ai"
+```
+
+This will check if the user email we receive from SSO contains this domain, before allowing access.
+
 ### Set Admin view w/ SSO 
 
 You just need to set Proxy Admin ID
