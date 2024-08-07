@@ -5,6 +5,9 @@ import { message } from "antd";
 
 const isLocal = process.env.NODE_ENV === "development";
 const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
+if (isLocal != true) {
+  console.log = function() {};
+}
 
 export interface Model {
   model_name: string;
@@ -36,6 +39,17 @@ const handleError = async (errorData: string) => {
   }
 };
 
+
+// Global variable for the header name
+let globalLitellmHeaderName: string  = "Authorization";
+
+// Function to set the global header name
+export function setGlobalLitellmHeaderName(headerName: string = "Authorization") {
+  console.log(`setGlobalLitellmHeaderName: ${headerName}`);
+  globalLitellmHeaderName = headerName;
+}
+
+
 export const modelCostMap = async (
   accessToken: string,
 ) => {
@@ -45,7 +59,7 @@ export const modelCostMap = async (
       url, {
         method: "GET",
         headers: {
-          Authorization: `Bearer ${accessToken}`,
+          [globalLitellmHeaderName]: `Bearer ${accessToken}`,
           "Content-Type": "application/json",
         },
       }
@@ -68,7 +82,7 @@ export const modelCreateCall = async (
     const response = await fetch(url, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -107,7 +121,7 @@ export const modelSettingsCall = async (accessToken: String) => {
     const response = await fetch(url, {
       method: "GET",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
     });
@@ -138,7 +152,7 @@ export const modelDeleteCall = async (
     const response = await fetch(url, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -180,7 +194,7 @@ export const budgetDeleteCall = async (
     const response = await fetch(url, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -215,7 +229,7 @@ export const budgetCreateCall = async (
     const response = await fetch(url, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -251,7 +265,7 @@ export const invitationCreateCall = async (
     const response = await fetch(url, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -290,7 +304,7 @@ export const invitationClaimCall = async (
     const response = await fetch(url, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -328,7 +342,7 @@ export const alertingSettingsCall = async (accessToken: String) => {
     const response = await fetch(url, {
       method: "GET",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
     });
@@ -385,7 +399,7 @@ export const keyCreateCall = async (
     const response = await fetch(url, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -447,7 +461,7 @@ export const userCreateCall = async (
     const response = await fetch(url, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -481,7 +495,7 @@ export const keyDeleteCall = async (accessToken: String, user_key: String) => {
     const response = await fetch(url, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -513,7 +527,7 @@ export const teamDeleteCall = async (accessToken: String, teamID: String) => {
     const response = await fetch(url, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -566,7 +580,7 @@ export const userInfoCall = async (
     const response = await fetch(url, {
       method: "GET",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
     });
@@ -601,7 +615,40 @@ export const teamInfoCall = async (
     const response = await fetch(url, {
       method: "GET",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log("API Response:", data);
+    return data;
+    // Handle success - you might want to update some state or UI based on the created key
+  } catch (error) {
+    console.error("Failed to create key:", error);
+    throw error;
+  }
+};
+
+export const teamListCall = async (
+  accessToken: String,
+) => {
+  /**
+   * Get all available teams on proxy
+   */
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/team/list` : `/team/list`;
+    console.log("in teamInfoCall");
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
     });
@@ -633,7 +680,7 @@ export const getTotalSpendCall = async (accessToken: String) => {
     const response = await fetch(url, {
       method: "GET",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
     });
@@ -698,7 +745,7 @@ export const claimOnboardingToken = async (
     const response = await fetch(url, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -740,7 +787,7 @@ export const modelInfoCall = async (
     const response = await fetch(url, {
       method: "GET",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
     });
@@ -788,7 +835,7 @@ export const modelHubCall = async (accessToken: String) => {
     const response = await fetch(url, {
       method: "GET",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
     });
@@ -819,7 +866,7 @@ export const getAllowedIPs = async (accessToken: String) => {
     const response = await fetch(url, {
       method: "GET",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
     });
@@ -848,7 +895,7 @@ export const addAllowedIP = async (accessToken: String, ip: String) => {
     const response = await fetch(url, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ ip: ip }),
@@ -878,7 +925,7 @@ export const deleteAllowedIP = async (accessToken: String, ip: String) => {
     const response = await fetch(url, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ ip: ip }),
@@ -920,7 +967,7 @@ export const modelMetricsCall = async (
     const response = await fetch(url, {
       method: "GET",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
     });
@@ -959,7 +1006,7 @@ export const streamingModelMetricsCall = async (
     const response = await fetch(url, {
       method: "GET",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
     });
@@ -1004,7 +1051,7 @@ export const modelMetricsSlowResponsesCall = async (
     const response = await fetch(url, {
       method: "GET",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
     });
@@ -1048,7 +1095,7 @@ export const modelExceptionsCall = async (
     const response = await fetch(url, {
       method: "GET",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
     });
@@ -1076,6 +1123,7 @@ export const modelAvailableCall = async (
   /**
    * Get all the models user has access to
    */
+  console.log("in /models calls, globalLitellmHeaderName", globalLitellmHeaderName)
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/models` : `/models`;
 
@@ -1083,7 +1131,7 @@ export const modelAvailableCall = async (
     const response = await fetch(url, {
       method: "GET",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
     });
@@ -1113,7 +1161,7 @@ export const keySpendLogsCall = async (accessToken: String, token: String) => {
     const response = await fetch(`${url}?api_key=${token}`, {
       method: "GET",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
     });
@@ -1141,7 +1189,7 @@ export const teamSpendLogsCall = async (accessToken: String) => {
     const response = await fetch(`${url}`, {
       method: "GET",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
     });
@@ -1184,7 +1232,7 @@ export const tagsSpendLogsCall = async (
     const response = await fetch(`${url}`, {
       method: "GET",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
     });
@@ -1212,7 +1260,7 @@ export const allTagNamesCall = async (accessToken: String) => {
     const response = await fetch(`${url}`, {
       method: "GET",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
     });
@@ -1240,7 +1288,7 @@ export const allEndUsersCall = async (accessToken: String) => {
     const response = await fetch(`${url}`, {
       method: "GET",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
     });
@@ -1278,7 +1326,7 @@ export const userSpendLogsCall = async (
     const response = await fetch(url, {
       method: "GET",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
     });
@@ -1308,7 +1356,7 @@ export const adminSpendLogsCall = async (accessToken: String) => {
     const response = await fetch(url, {
       method: "GET",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
     });
@@ -1338,7 +1386,7 @@ export const adminTopKeysCall = async (accessToken: String) => {
     const response = await fetch(url, {
       method: "GET",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
     });
@@ -1383,22 +1431,15 @@ export const adminTopEndUsersCall = async (
     //message.info("Making top end users request");
 
     // Define requestOptions with body as an optional property
-    const requestOptions: {
-      method: string;
-      headers: {
-        Authorization: string;
-        "Content-Type": string;
-      };
-      body?: string; // The body is optional and might not be present
-    } = {
+    const requestOptions = {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
+      body: body,
     };
 
-    requestOptions.body = body;
 
     const response = await fetch(url, requestOptions);
     if (!response.ok) {
@@ -1436,15 +1477,10 @@ export const adminspendByProvider = async (
       url += `&api_key=${keyToken}`;
     }
 
-    const requestOptions: {
-      method: string;
-      headers: {
-        Authorization: string;
-      };
-    } = {
+    const requestOptions = {
       method: "GET",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
       },
     };
 
@@ -1479,15 +1515,10 @@ export const adminGlobalActivity = async (
       url += `?start_date=${startTime}&end_date=${endTime}`;
     }
 
-    const requestOptions: {
-      method: string;
-      headers: {
-        Authorization: string;
-      };
-    } = {
+    const requestOptions = {
       method: "GET",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
       },
     };
 
@@ -1520,15 +1551,10 @@ export const adminGlobalCacheActivity = async (
       url += `?start_date=${startTime}&end_date=${endTime}`;
     }
 
-    const requestOptions: {
-      method: string;
-      headers: {
-        Authorization: string;
-      };
-    } = {
+    const requestOptions = {
       method: "GET",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
       },
     };
 
@@ -1561,15 +1587,10 @@ export const adminGlobalActivityPerModel = async (
       url += `?start_date=${startTime}&end_date=${endTime}`;
     }
 
-    const requestOptions: {
-      method: string;
-      headers: {
-        Authorization: string;
-      };
-    } = {
+    const requestOptions = {
       method: "GET",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
       },
     };
 
@@ -1607,15 +1628,10 @@ export const adminGlobalActivityExceptions = async (
       url += `&model_group=${modelGroup}`;
     }
 
-    const requestOptions: {
-      method: string;
-      headers: {
-        Authorization: string;
-      };
-    } = {
+    const requestOptions = {
       method: "GET",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
       },
     };
 
@@ -1653,15 +1669,10 @@ export const adminGlobalActivityExceptionsPerDeployment = async (
       url += `&model_group=${modelGroup}`;
     }
 
-    const requestOptions: {
-      method: string;
-      headers: {
-        Authorization: string;
-      };
-    } = {
+    const requestOptions = {
       method: "GET",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
       },
     };
 
@@ -1690,7 +1701,7 @@ export const adminTopModelsCall = async (accessToken: String) => {
     const response = await fetch(url, {
       method: "GET",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
     });
@@ -1717,7 +1728,7 @@ export const keyInfoCall = async (accessToken: String, keys: String[]) => {
     const response = await fetch(url, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -1747,7 +1758,7 @@ export const spendUsersCall = async (accessToken: String, userID: String) => {
     const response = await fetch(`${url}?user_id=${userID}`, {
       method: "GET",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
     });
@@ -1779,7 +1790,7 @@ export const userRequestModelCall = async (
     const response = await fetch(url, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -1814,7 +1825,7 @@ export const userGetRequesedtModelsCall = async (accessToken: String) => {
     const response = await fetch(url, {
       method: "GET",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
     });
@@ -1854,7 +1865,7 @@ export const userGetAllUsersCall = async (
     const response = await fetch(url, {
       method: "GET",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
     });
@@ -1883,7 +1894,7 @@ export const getPossibleUserRoles = async (accessToken: String) => {
     const response = await fetch(url, {
       method: "GET",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
     });
@@ -1912,7 +1923,7 @@ export const teamCreateCall = async (
     const response = await fetch(url, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -1948,7 +1959,7 @@ export const keyUpdateCall = async (
     const response = await fetch(url, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -1983,7 +1994,7 @@ export const teamUpdateCall = async (
     const response = await fetch(url, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -2018,7 +2029,7 @@ export const modelUpdateCall = async (
     const response = await fetch(url, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -2062,7 +2073,7 @@ export const teamMemberAddCall = async (
     const response = await fetch(url, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -2105,7 +2116,7 @@ export const userUpdateUserCall = async (
     const response = await fetch(url, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
       body: response_body,
@@ -2143,7 +2154,7 @@ export const PredictedSpendLogsCall = async (
     const response = await fetch(url, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -2179,7 +2190,7 @@ export const slackBudgetAlertsHealthCheck = async (accessToken: String) => {
     const response = await fetch(url, {
       method: "GET",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
     });
@@ -2218,7 +2229,7 @@ export const serviceHealthCheck = async (
     const response = await fetch(url, {
       method: "GET",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
     });
@@ -2253,7 +2264,7 @@ export const getBudgetList = async (accessToken: String) => {
     const response = await fetch(url, {
       method: "GET",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
     });
@@ -2286,7 +2297,7 @@ export const getBudgetSettings = async (accessToken: String) => {
     const response = await fetch(url, {
       method: "GET",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
     });
@@ -2324,7 +2335,7 @@ export const getCallbacksCall = async (
     const response = await fetch(url, {
       method: "GET",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
     });
@@ -2355,7 +2366,7 @@ export const getGeneralSettingsCall = async (accessToken: String) => {
     const response = await fetch(url, {
       method: "GET",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
     });
@@ -2389,7 +2400,7 @@ export const getConfigFieldSetting = async (
     const response = await fetch(url, {
       method: "GET",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
     });
@@ -2427,7 +2438,7 @@ export const updateConfigFieldSetting = async (
     const response = await fetch(url, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify(formData),
@@ -2467,7 +2478,7 @@ export const deleteConfigFieldSetting = async (
     const response = await fetch(url, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify(formData),
@@ -2502,7 +2513,7 @@ export const setCallbacksCall = async (
     const response = await fetch(url, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -2537,7 +2548,7 @@ export const healthCheckCall = async (accessToken: String) => {
     const response = await fetch(url, {
       method: "GET",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
     });
@@ -2573,7 +2584,7 @@ export const getProxyBaseUrlAndLogoutUrl = async (
     const response = await fetch(url, {
       method: "GET",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
     });

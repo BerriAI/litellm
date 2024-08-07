@@ -207,11 +207,17 @@ async def test_caching_with_cache_controls(sync_flag):
         else:
             ## TTL = 0
             response1 = await litellm.acompletion(
-                model="gpt-3.5-turbo", messages=messages, cache={"ttl": 0}
+                model="gpt-3.5-turbo",
+                messages=messages,
+                cache={"ttl": 0},
+                mock_response="Hello world",
             )
             await asyncio.sleep(10)
             response2 = await litellm.acompletion(
-                model="gpt-3.5-turbo", messages=messages, cache={"s-maxage": 10}
+                model="gpt-3.5-turbo",
+                messages=messages,
+                cache={"s-maxage": 10},
+                mock_response="Hello world",
             )
 
             assert response2["id"] != response1["id"]
@@ -220,21 +226,33 @@ async def test_caching_with_cache_controls(sync_flag):
         ## TTL = 5
         if sync_flag:
             response1 = completion(
-                model="gpt-3.5-turbo", messages=messages, cache={"ttl": 5}
+                model="gpt-3.5-turbo",
+                messages=messages,
+                cache={"ttl": 5},
+                mock_response="Hello world",
             )
             response2 = completion(
-                model="gpt-3.5-turbo", messages=messages, cache={"s-maxage": 5}
+                model="gpt-3.5-turbo",
+                messages=messages,
+                cache={"s-maxage": 5},
+                mock_response="Hello world",
             )
             print(f"response1: {response1}")
             print(f"response2: {response2}")
             assert response2["id"] == response1["id"]
         else:
             response1 = await litellm.acompletion(
-                model="gpt-3.5-turbo", messages=messages, cache={"ttl": 25}
+                model="gpt-3.5-turbo",
+                messages=messages,
+                cache={"ttl": 25},
+                mock_response="Hello world",
             )
             await asyncio.sleep(10)
             response2 = await litellm.acompletion(
-                model="gpt-3.5-turbo", messages=messages, cache={"s-maxage": 25}
+                model="gpt-3.5-turbo",
+                messages=messages,
+                cache={"s-maxage": 25},
+                mock_response="Hello world",
             )
             print(f"response1: {response1}")
             print(f"response2: {response2}")
@@ -281,6 +299,61 @@ def test_caching_with_models_v2():
 
 
 # test_caching_with_models_v2()
+
+
+def c():
+    litellm.enable_caching_on_provider_specific_optional_params = True
+    messages = [
+        {"role": "user", "content": "who is ishaan CTO of litellm from litellm 2023"}
+    ]
+    litellm.cache = Cache()
+    print("test2 for caching")
+    litellm.set_verbose = True
+
+    response1 = completion(
+        model="gpt-3.5-turbo",
+        messages=messages,
+        top_k=10,
+        caching=True,
+        mock_response="Hello: {}".format(uuid.uuid4()),
+    )
+    response2 = completion(
+        model="gpt-3.5-turbo",
+        messages=messages,
+        top_k=10,
+        caching=True,
+        mock_response="Hello: {}".format(uuid.uuid4()),
+    )
+    response3 = completion(
+        model="gpt-3.5-turbo",
+        messages=messages,
+        top_k=9,
+        caching=True,
+        mock_response="Hello: {}".format(uuid.uuid4()),
+    )
+    print(f"response1: {response1}")
+    print(f"response2: {response2}")
+    print(f"response3: {response3}")
+    litellm.cache = None
+    litellm.success_callback = []
+    litellm._async_success_callback = []
+    if (
+        response3["choices"][0]["message"]["content"]
+        == response2["choices"][0]["message"]["content"]
+    ):
+        # if models are different, it should not return cached response
+        print(f"response2: {response2}")
+        print(f"response3: {response3}")
+        pytest.fail(f"Error occurred:")
+    if (
+        response1["choices"][0]["message"]["content"]
+        != response2["choices"][0]["message"]["content"]
+    ):
+        print(f"response1: {response1}")
+        print(f"response2: {response2}")
+        pytest.fail(f"Error occurred:")
+    litellm.enable_caching_on_provider_specific_optional_params = False
+
 
 embedding_large_text = (
     """
@@ -1347,7 +1420,7 @@ def test_get_cache_key():
                 "litellm_logging_obj": {},
             }
         )
-        cache_key_str = "model: gpt-3.5-turbomessages: [{'role': 'user', 'content': 'write a one sentence poem about: 7510'}]temperature: 0.2max_tokens: 40"
+        cache_key_str = "model: gpt-3.5-turbomessages: [{'role': 'user', 'content': 'write a one sentence poem about: 7510'}]max_tokens: 40temperature: 0.2stream: True"
         hash_object = hashlib.sha256(cache_key_str.encode())
         # Hexadecimal representation of the hash
         hash_hex = hash_object.hexdigest()

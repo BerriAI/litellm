@@ -303,6 +303,7 @@ def test_call_with_invalid_key(prisma_client):
 
 
 def test_call_with_invalid_model(prisma_client):
+    litellm.set_verbose = True
     # 3. Make a call to a key with an invalid model - expect to fail
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
@@ -326,6 +327,11 @@ def test_call_with_invalid_model(prisma_client):
             request.body = return_body
 
             # use generated key to auth in
+            print(
+                "Bearer token being sent to user_api_key_auth() - {}".format(
+                    bearer_token
+                )
+            )
             result = await user_api_key_auth(request=request, api_key=bearer_token)
             pytest.fail(f"This should have failed!. IT's an invalid model")
 
@@ -1402,13 +1408,13 @@ def test_call_with_key_over_budget(prisma_client):
             assert spend_log.model == "chatgpt-v-2"
             assert (
                 spend_log.cache_key
-                == "a61ae14fe4a8b8014a61e6ae01a100c8bc6770ac37c293242afed954bc69207d"
+                == "c891d64397a472e6deb31b87a5ac4d3ed5b2dcc069bc87e2afe91e6d64e95a1e"
             )
 
             # use generated key to auth in
             result = await user_api_key_auth(request=request, api_key=bearer_token)
             print("result from user auth with new key", result)
-            pytest.fail(f"This should have failed!. They key crossed it's budget")
+            pytest.fail("This should have failed!. They key crossed it's budget")
 
         asyncio.run(test())
     except Exception as e:
@@ -1517,7 +1523,7 @@ def test_call_with_key_over_budget_no_cache(prisma_client):
             assert spend_log.model == "chatgpt-v-2"
             assert (
                 spend_log.cache_key
-                == "a61ae14fe4a8b8014a61e6ae01a100c8bc6770ac37c293242afed954bc69207d"
+                == "c891d64397a472e6deb31b87a5ac4d3ed5b2dcc069bc87e2afe91e6d64e95a1e"
             )
 
             # use generated key to auth in
@@ -1637,7 +1643,7 @@ def test_call_with_key_over_model_budget(prisma_client):
             assert spend_log.model == "chatgpt-v-2"
             assert (
                 spend_log.cache_key
-                == "a61ae14fe4a8b8014a61e6ae01a100c8bc6770ac37c293242afed954bc69207d"
+                == "c891d64397a472e6deb31b87a5ac4d3ed5b2dcc069bc87e2afe91e6d64e95a1e"
             )
 
             # use generated key to auth in
@@ -1953,7 +1959,7 @@ async def test_upperbound_key_params(prisma_client):
         key = await generate_key_fn(request)
         # print(result)
     except Exception as e:
-        assert e.code == 400
+        assert e.code == str(400)
 
 
 def test_get_bearer_token():

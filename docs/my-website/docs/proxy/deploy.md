@@ -246,13 +246,22 @@ helm install lite-helm ./litellm-helm
 kubectl --namespace default port-forward $POD_NAME 8080:$CONTAINER_PORT
 ```
 
-Your OpenAI proxy server is now running on `http://127.0.0.1:4000`.
+Your LiteLLM Proxy Server is now running on `http://127.0.0.1:4000`.
 
 </TabItem>
 
 </Tabs>
 
 **That's it ! That's the quick start to deploy litellm**
+
+## Use with Langchain, OpenAI SDK, LlamaIndex, Instructor, Curl
+
+:::info
+💡 Go here 👉 [to make your first LLM API Request](user_keys)
+
+LiteLLM is compatible with several SDKs - including OpenAI SDK, Anthropic SDK, Mistral SDK, LLamaIndex, Langchain (Js, Python)
+
+:::
 
 ## Options to deploy LiteLLM 
 
@@ -292,7 +301,7 @@ docker run \
     --config /app/config.yaml --detailed_debug
 ```
 
-Your OpenAI proxy server is now running on `http://0.0.0.0:4000`.
+Your LiteLLM Proxy Server is now running on `http://0.0.0.0:4000`.
 
 </TabItem>
 <TabItem value="kubernetes-deploy" label="Kubernetes">
@@ -390,7 +399,7 @@ kubectl apply -f /path/to/service.yaml
 kubectl port-forward service/litellm-service 4000:4000
 ```
 
-Your OpenAI proxy server is now running on `http://0.0.0.0:4000`.
+Your LiteLLM Proxy Server is now running on `http://0.0.0.0:4000`.
 
 </TabItem>
 
@@ -432,7 +441,7 @@ kubectl \
   4000:4000
 ```
 
-Your OpenAI proxy server is now running on `http://127.0.0.1:4000`.
+Your LiteLLM Proxy Server is now running on `http://127.0.0.1:4000`.
 
 
 If you need to set your litellm proxy config.yaml, you can find this in [values.yaml](https://github.com/BerriAI/litellm/blob/main/deploy/charts/litellm-helm/values.yaml)
@@ -477,7 +486,7 @@ helm install lite-helm ./litellm-helm
 kubectl --namespace default port-forward $POD_NAME 8080:$CONTAINER_PORT
 ```
 
-Your OpenAI proxy server is now running on `http://127.0.0.1:4000`.
+Your LiteLLM Proxy Server is now running on `http://127.0.0.1:4000`.
 
 </TabItem>
 </Tabs>
@@ -549,6 +558,39 @@ docker run --name litellm-proxy \
 ghcr.io/berriai/litellm-database:main-latest --config your_config.yaml
 ```
 
+## LiteLLM without Internet Connection
+
+By default `prisma generate` downloads [prisma's engine binaries](https://www.prisma.io/docs/orm/reference/environment-variables-reference#custom-engine-file-locations). This might cause errors when running without internet connection. 
+
+Use this dockerfile to build an image which pre-generates the prisma binaries.
+
+```Dockerfile
+# Use the provided base image
+FROM ghcr.io/berriai/litellm:main-latest
+
+# Set the working directory to /app
+WORKDIR /app
+
+### [👇 KEY STEP] ###
+# Install Prisma CLI and generate Prisma client
+RUN pip install prisma 
+RUN prisma generate
+### FIN #### 
+
+
+# Expose the necessary port
+EXPOSE 4000
+
+# Override the CMD instruction with your desired command and arguments
+# WARNING: FOR PROD DO NOT USE `--detailed_debug` it slows down response times, instead use the following CMD
+# CMD ["--port", "4000", "--config", "config.yaml"]
+
+# Define the command to run your app
+ENTRYPOINT ["litellm"]
+
+CMD ["--port", "4000"]
+```
+
 ## Advanced Deployment Settings
 
 ### 1. Customization of the server root path (custom Proxy base url)
@@ -563,24 +605,87 @@ In a Kubernetes deployment, it's possible to utilize a shared DNS to host multip
 
 Customize the root path to eliminate the need for employing multiple DNS configurations during deployment.
 
+Step 1.
 👉 Set `SERVER_ROOT_PATH` in your .env and this will be set as your server root path
 ```
 export SERVER_ROOT_PATH="/api/v1"
 ```
 
-**Step 1. Run Proxy with `SERVER_ROOT_PATH` set in your env **
+**Step 2** (If you want the Proxy Admin UI to work with your root path you need to use this dockerfile)
+- Use the dockerfile below (it uses litellm as a base image)
+- 👉 Set `UI_BASE_PATH=$SERVER_ROOT_PATH/ui` in the Dockerfile, example `UI_BASE_PATH=/api/v1/ui`
+
+Dockerfile
 
 ```shell
-docker run --name litellm-proxy \
--e DATABASE_URL=postgresql://<user>:<password>@<host>:<port>/<dbname> \
--e SERVER_ROOT_PATH="/api/v1" \
--p 4000:4000 \
-ghcr.io/berriai/litellm-database:main-latest --config your_config.yaml
+# Use the provided base image
+FROM ghcr.io/berriai/litellm:main-latest
+
+# Set the working directory to /app
+WORKDIR /app
+
+# Install Node.js and npm (adjust version as needed)
+RUN apt-get update && apt-get install -y nodejs npm
+
+# Copy the UI source into the container
+COPY ./ui/litellm-dashboard /app/ui/litellm-dashboard
+
+# Set an environment variable for UI_BASE_PATH
+# This can be overridden at build time
+# set UI_BASE_PATH to "<your server root path>/ui"
+# 👇👇 Enter your UI_BASE_PATH here
+ENV UI_BASE_PATH="/api/v1/ui" 
+
+# Build the UI with the specified UI_BASE_PATH
+WORKDIR /app/ui/litellm-dashboard
+RUN npm install
+RUN UI_BASE_PATH=$UI_BASE_PATH npm run build
+
+# Create the destination directory
+RUN mkdir -p /app/litellm/proxy/_experimental/out
+
+# Move the built files to the appropriate location
+# Assuming the build output is in ./out directory
+RUN rm -rf /app/litellm/proxy/_experimental/out/* && \
+    mv ./out/* /app/litellm/proxy/_experimental/out/
+
+# Switch back to the main app directory
+WORKDIR /app
+
+# Make sure your entrypoint.sh is executable
+RUN chmod +x entrypoint.sh
+
+# Expose the necessary port
+EXPOSE 4000/tcp
+
+# Override the CMD instruction with your desired command and arguments
+# only use --detailed_debug for debugging
+CMD ["--port", "4000", "--config", "config.yaml"]
+```
+
+**Step 3** build this Dockerfile
+
+```shell
+docker build -f Dockerfile -t litellm-prod-build . --progress=plain
+```
+
+**Step 4. Run Proxy with `SERVER_ROOT_PATH` set in your env **
+
+```shell
+docker run \
+    -v $(pwd)/proxy_config.yaml:/app/config.yaml \
+    -p 4000:4000 \
+    -e LITELLM_LOG="DEBUG"\
+    -e SERVER_ROOT_PATH="/api/v1"\
+    -e DATABASE_URL=postgresql://<user>:<password>@<host>:<port>/<dbname> \
+    -e LITELLM_MASTER_KEY="sk-1234"\
+    litellm-prod-build \
+    --config /app/config.yaml
 ```
 
 After running the proxy you can access it on `http://0.0.0.0:4000/api/v1/` (since we set `SERVER_ROOT_PATH="/api/v1"`)
 
-**Step 2. Verify Running on correct path**
+**Step 5. Verify Running on correct path**
 
 <Image img={require('../../img/custom_root_path.png')} />
 
@@ -785,3 +890,31 @@ Run the command `docker-compose up` or `docker compose up` as per your docker in
 
 
 Your LiteLLM container should be running now on the defined port e.g. `4000`.
+
+### IAM-based Auth for RDS DB 
+
+1. Set AWS env var 
+
+```bash
+export AWS_WEB_IDENTITY_TOKEN='/path/to/token'
+export AWS_ROLE_NAME='arn:aws:iam::123456789012:role/MyRole'
+export AWS_SESSION_NAME='MySession'
+```
+
+[**See all Auth options**](https://github.com/BerriAI/litellm/blob/089a4f279ad61b7b3e213d8039fb9b75204a7abc/litellm/proxy/auth/rds_iam_token.py#L165)
+
+2. Add RDS credentials to env
+
+```bash
+export DATABASE_USER="db-user"
+export DATABASE_PORT="5432"
+export DATABASE_HOST="database-1-instance-1.cs1ksmwz2xt3.us-west-2.rds.amazonaws.com"
+export DATABASE_NAME="database-1-instance-1"
+```
+
+3. Run proxy with iam+rds
+
+
+```bash
+litellm --config /path/to/config.yaml --iam_token_db_auth
+```

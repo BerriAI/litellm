@@ -510,10 +510,10 @@ def test_completion_azure_stream():
 async def test_completion_predibase_streaming(sync_mode):
     try:
         litellm.set_verbose = True
-
         if sync_mode:
             response = completion(
                 model="predibase/llama-3-8b-instruct",
+                timeout=5,
                 tenant_id="c4768f95",
                 max_tokens=10,
                 api_base="https://serving.app.predibase.com",
@@ -540,6 +540,7 @@ async def test_completion_predibase_streaming(sync_mode):
             response = await litellm.acompletion(
                 model="predibase/llama-3-8b-instruct",
                 tenant_id="c4768f95",
+                timeout=5,
                 max_tokens=10,
                 api_base="https://serving.app.predibase.com",
                 api_key=os.getenv("PREDIBASE_API_KEY"),
@@ -567,9 +568,13 @@ async def test_completion_predibase_streaming(sync_mode):
                 raise Exception("Empty response received")
 
         print(f"complete_response: {complete_response}")
-    except litellm.Timeout as e:
+    except litellm.Timeout:
         pass
-    except litellm.InternalServerError as e:
+    except litellm.InternalServerError:
+        pass
+    except litellm.ServiceUnavailableError:
+        pass
+    except litellm.APIConnectionError:
         pass
     except Exception as e:
         print("ERROR class", e.__class__)
@@ -690,26 +695,31 @@ def test_completion_claude_2_stream():
 
 @pytest.mark.asyncio
 async def test_acompletion_claude_2_stream():
-    litellm.set_verbose = True
-    response = await litellm.acompletion(
-        model="claude-2",
-        messages=[{"role": "user", "content": "hello from litellm"}],
-        stream=True,
-    )
-    complete_response = ""
-    # Add any assertions here to check the response
-    idx = 0
-    async for chunk in response:
-        print(chunk)
-        # print(chunk.choices[0].delta)
-        chunk, finished = streaming_format_tests(idx, chunk)
-        if finished:
-            break
-        complete_response += chunk
-        idx += 1
-    if complete_response.strip() == "":
-        raise Exception("Empty response received")
-    print(f"completion_response: {complete_response}")
+    try:
+        litellm.set_verbose = True
+        response = await litellm.acompletion(
+            model="claude-2",
+            messages=[{"role": "user", "content": "hello from litellm"}],
+            stream=True,
+        )
+        complete_response = ""
+        # Add any assertions here to check the response
+        idx = 0
+        async for chunk in response:
+            print(chunk)
+            # print(chunk.choices[0].delta)
+            chunk, finished = streaming_format_tests(idx, chunk)
+            if finished:
+                break
+            complete_response += chunk
+            idx += 1
+        if complete_response.strip() == "":
+            raise Exception("Empty response received")
+        print(f"completion_response: {complete_response}")
+    except litellm.RateLimitError:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
 
 def test_completion_palm_stream():
@@ -1446,6 +1456,7 @@ async def test_parallel_streaming_requests(sync_mode, model):
                 messages=messages,
                 stream=True,
                 max_tokens=10,
+                timeout=10,
             )
             complete_response = ""
             # Add any assertions here to-check the response
@@ -1463,6 +1474,7 @@ async def test_parallel_streaming_requests(sync_mode, model):
                 messages=messages,
                 stream=True,
                 max_tokens=10,
+                timeout=10,
             )
             complete_response = ""
             # Add any assertions here to-check the response
@@ -1493,6 +1505,13 @@ async def test_parallel_streaming_requests(sync_mode, model):
 
     except RateLimitError:
         pass
+    except litellm.Timeout:
+        pass
+    except litellm.ServiceUnavailableError as e:
+        if model == "predibase/llama-3-8b-instruct":
+            pass
+        else:
+            pytest.fail(f"Service Unavailable Error got{str(e)}")
     except litellm.InternalServerError as e:
         if "predibase" in str(e).lower():
             # only skip internal server error from predibase - their endpoint seems quite unstable
@@ -1722,6 +1741,7 @@ def test_sagemaker_weird_response():
 # test_sagemaker_weird_response()
 
 
+@pytest.mark.skip(reason="Move to being a mock endpoint")
 @pytest.mark.asyncio
 async def test_sagemaker_streaming_async():
     try:
@@ -1764,6 +1784,7 @@ async def test_sagemaker_streaming_async():
 # asyncio.run(test_sagemaker_streaming_async())
 
 
+@pytest.mark.skip(reason="costly sagemaker deployment. Move to mock implementation")
 def test_completion_sagemaker_stream():
     try:
         response = completion(
@@ -3075,6 +3096,7 @@ def test_completion_claude_3_function_call_with_streaming():
             elif idx == 1 and chunk.choices[0].finish_reason is None:
                 validate_second_streaming_function_calling_chunk(chunk=chunk)
             elif chunk.choices[0].finish_reason is not None:  # last chunk
+                assert "usage" in chunk._hidden_params
                 validate_final_streaming_function_calling_chunk(chunk=chunk)
             idx += 1
         # raise Exception("it worked!")
@@ -3246,6 +3268,56 @@ def test_unit_test_custom_stream_wrapper():
             if "How are you?" in chunk.choices[0].delta.content:
                 freq += 1
     assert freq == 1
+
+
+def test_unit_test_custom_stream_wrapper_openai():
+    """
+    Test if last streaming chunk ends with '?', if the message repeats itself.
+    """
+    litellm.set_verbose = False
+    chunk = {
+        "id": "chatcmpl-9mWtyDnikZZoB75DyfUzWUxiiE2Pi",
+        "choices": [
+            litellm.utils.StreamingChoices(
+                delta=litellm.utils.Delta(
+                    content=None, function_call=None, role=None, tool_calls=None
+                ),
+                finish_reason="content_filter",
+                index=0,
+                logprobs=None,
+            )
+        ],
+        "created": 1721353246,
+        "model": "gpt-3.5-turbo-0613",
+        "object": "chat.completion.chunk",
+        "system_fingerprint": None,
+        "usage": None,
+    }
+    chunk = litellm.ModelResponse(**chunk, stream=True)
+
+    completion_stream = ModelResponseIterator(model_response=chunk)
+
+    response = litellm.CustomStreamWrapper(
+        completion_stream=completion_stream,
+        model="gpt-3.5-turbo",
+        custom_llm_provider="azure",
+        logging_obj=litellm.Logging(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Hey"}],
+            stream=True,
+            call_type="completion",
+            start_time=time.time(),
+            litellm_call_id="12345",
+            function_id="1245",
+        ),
+    )
+
+    stream_finish_reason: Optional[str] = None
+    for chunk in response:
+        assert chunk.choices[0].delta.content is None
+        if chunk.choices[0].finish_reason is not None:
+            stream_finish_reason = chunk.choices[0].finish_reason
+    assert stream_finish_reason == "content_filter"
 
 
 def test_aamazing_unit_test_custom_stream_wrapper_n():

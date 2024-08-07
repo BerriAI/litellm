@@ -3,7 +3,7 @@ import asyncio
 import json
 import traceback
 from base64 import b64encode
-from typing import Optional
+from typing import List, Optional
 
 import httpx
 from fastapi import (
@@ -239,11 +239,32 @@ async def chat_completion_pass_through_endpoint(
         )
 
 
+def forward_headers_from_request(
+    request: Request,
+    headers: dict,
+    forward_headers: Optional[bool] = False,
+):
+    """
+    Helper to forward headers from original request
+    """
+    if forward_headers is True:
+        request_headers = dict(request.headers)
+
+        # Header We Should NOT forward
+        request_headers.pop("content-length", None)
+        request_headers.pop("host", None)
+
+        # Combine request headers with custom headers
+        headers = {**request_headers, **headers}
+    return headers
+
+
 async def pass_through_request(
     request: Request,
     target: str,
     custom_headers: dict,
     user_api_key_dict: UserAPIKeyAuth,
+    forward_headers: Optional[bool] = False,
 ):
     try:
         import time
@@ -254,6 +275,9 @@ async def pass_through_request(
 
         url = httpx.URL(target)
         headers = custom_headers
+        headers = forward_headers_from_request(
+            request=request, headers=headers, forward_headers=forward_headers
+        )
 
         request_body = await request.body()
         body_str = request_body.decode()
@@ -360,7 +384,11 @@ async def pass_through_request(
 
 
 def create_pass_through_route(
-    endpoint, target: str, custom_headers: Optional[dict] = None
+    endpoint,
+    target: str,
+    custom_headers: Optional[dict] = None,
+    _forward_headers: Optional[bool] = False,
+    dependencies: Optional[List] = None,
 ):
     # check if target is an adapter.py or a url
     import uuid
@@ -400,6 +428,7 @@ def create_pass_through_route(
                 target=target,
                 custom_headers=custom_headers or {},
                 user_api_key_dict=user_api_key_dict,
+                forward_headers=_forward_headers,
             )
 
     return endpoint_func
@@ -418,6 +447,7 @@ async def initialize_pass_through_endpoints(pass_through_endpoints: list):
         _custom_headers = await set_env_variables_in_header(
             custom_headers=_custom_headers
         )
+        _forward_headers = endpoint.get("forward_headers", None)
         _auth = endpoint.get("auth", None)
         _dependencies = None
         if _auth is not None and str(_auth).lower() == "true":
@@ -433,11 +463,14 @@ async def initialize_pass_through_endpoints(pass_through_endpoints: list):
         if _target is None:
             continue
 
-        verbose_proxy_logger.debug("adding pass through endpoint: %s", _path)
-
+        verbose_proxy_logger.debug(
+            "adding pass through endpoint: %s, dependencies: %s", _path, _dependencies
+        )
         app.add_api_route(
             path=_path,
-            endpoint=create_pass_through_route(_path, _target, _custom_headers),
+            endpoint=create_pass_through_route(
+                _path, _target, _custom_headers, _forward_headers, _dependencies
+            ),
             methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
             dependencies=_dependencies,
         )

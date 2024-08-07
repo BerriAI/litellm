@@ -7,6 +7,7 @@ import sys
 import traceback
 
 from dotenv import load_dotenv
+from openai.types.image import Image
 
 logging.basicConfig(level=logging.DEBUG)
 load_dotenv()
@@ -158,7 +159,11 @@ def test_image_generation_bedrock():
             model="bedrock/stability.stable-diffusion-xl-v1",
             aws_region_name="us-west-2",
         )
+
         print(f"response: {response}")
+        from openai.types.images_response import ImagesResponse
+
+        ImagesResponse.model_validate(response.model_dump())
     except litellm.RateLimitError as e:
         pass
     except litellm.ContentPolicyViolationError:
@@ -190,6 +195,9 @@ async def test_aimage_generation_bedrock_with_optional_params():
             pytest.fail(f"An exception occurred - {str(e)}")
 
 
+from openai.types.image import Image
+
+
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_aimage_generation_vertex_ai(sync_mode):
@@ -214,7 +222,7 @@ async def test_aimage_generation_vertex_ai(sync_mode):
         assert len(response.data) > 0
 
         for d in response.data:
-            assert isinstance(d, litellm.ImageObject)
+            assert isinstance(d, Image)
             print("data in response.data", d)
             assert d.b64_json is not None
     except litellm.ServiceUnavailableError as e:

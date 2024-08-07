@@ -907,6 +907,53 @@ def test_vertex_ai_gemini_predict_cost():
     assert predictive_cost > 0
 
 
+def test_vertex_ai_llama_predict_cost():
+    model = "meta/llama3-405b-instruct-maas"
+    messages = [{"role": "user", "content": "Hey, hows it going???"}]
+    custom_llm_provider = "vertex_ai"
+    predictive_cost = completion_cost(
+        model=model, messages=messages, custom_llm_provider=custom_llm_provider
+    )
+
+    assert predictive_cost == 0
+
+
+def test_vertex_ai_mistral_predict_cost():
+    from litellm.types.utils import Choices, Message, ModelResponse, Usage
+
+    response_object = ModelResponse(
+        id="26c0ef045020429d9c5c9b078c01e564",
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(
+                    content="Hello! I'm Litellm Bot, your helpful assistant. While I can't provide real-time weather updates, I can help you find a reliable weather service or guide you on how to check the weather on your device. Would you like assistance with that?",
+                    role="assistant",
+                    tool_calls=None,
+                    function_call=None,
+                ),
+            )
+        ],
+        created=1722124652,
+        model="vertex_ai/mistral-large",
+        object="chat.completion",
+        system_fingerprint=None,
+        usage=Usage(prompt_tokens=32, completion_tokens=55, total_tokens=87),
+    )
+    model = "mistral-large@2407"
+    messages = [{"role": "user", "content": "Hey, hows it going???"}]
+    custom_llm_provider = "vertex_ai"
+    predictive_cost = completion_cost(
+        completion_response=response_object,
+        model=model,
+        messages=messages,
+        custom_llm_provider=custom_llm_provider,
+    )
+
+    assert predictive_cost > 0
+
+
 @pytest.mark.parametrize("model", ["openai/tts-1", "azure/tts-1"])
 def test_completion_cost_tts(model):
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
@@ -919,3 +966,61 @@ def test_completion_cost_tts(model):
     )
 
     assert cost > 0
+
+
+def test_completion_cost_anthropic():
+    """
+    model_name: claude-3-haiku-20240307
+    litellm_params:
+      model: anthropic/claude-3-haiku-20240307
+      max_tokens: 4096
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "claude-3-haiku-20240307",
+                "litellm_params": {
+                    "model": "anthropic/claude-3-haiku-20240307",
+                    "max_tokens": 4096,
+                },
+            }
+        ]
+    )
+    data = {
+        "model": "claude-3-haiku-20240307",
+        "prompt_tokens": 21,
+        "completion_tokens": 20,
+        "response_time_ms": 871.7040000000001,
+        "custom_llm_provider": "anthropic",
+        "region_name": None,
+        "prompt_characters": 0,
+        "completion_characters": 0,
+        "custom_cost_per_token": None,
+        "custom_cost_per_second": None,
+        "call_type": "acompletion",
+    }
+
+    input_cost, output_cost = cost_per_token(**data)
+
+    assert input_cost > 0
+    assert output_cost > 0
+
+    print(input_cost)
+    print(output_cost)
+
+
+def test_completion_cost_deepseek():
+    litellm.set_verbose = True
+    model_name = "deepseek/deepseek-chat"
+    messages = [{"role": "user", "content": "Hey, how's it going?"}]
+    try:
+        response_1 = litellm.completion(model=model_name, messages=messages)
+        response_2 = litellm.completion(model=model_name, messages=messages)
+        # Add any assertions here to check the response
+        print(response_2)
+        assert response_2.usage.prompt_cache_hit_tokens is not None
+        assert response_2.usage.prompt_cache_miss_tokens is not None
+    except litellm.APIError as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")

@@ -42,8 +42,11 @@ from litellm.types.llms.openai import (
     ChatCompletionResponseMessage,
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
+    ChatCompletionUsageBlock,
 )
-from litellm.types.utils import Choices, Message
+from litellm.types.utils import Choices
+from litellm.types.utils import GenericStreamingChunk as GChunk
+from litellm.types.utils import Message
 from litellm.utils import (
     CustomStreamWrapper,
     ModelResponse,
@@ -78,6 +81,7 @@ BEDROCK_CONVERSE_MODELS = [
     "ai21.jamba-instruct-v1:0",
     "meta.llama3-1-8b-instruct-v1:0",
     "meta.llama3-1-70b-instruct-v1:0",
+    "meta.llama3-1-405b-instruct-v1:0",
     "mistral.mistral-large-2407-v1:0",
 ]
 
@@ -244,7 +248,7 @@ async def make_call(
         return completion_stream
     except httpx.HTTPStatusError as err:
         error_code = err.response.status_code
-        raise BedrockError(status_code=error_code, message=str(err))
+        raise BedrockError(status_code=error_code, message=err.response.text)
     except httpx.TimeoutException as e:
         raise BedrockError(status_code=408, message="Timeout error occurred.")
     except Exception as e:
@@ -382,6 +386,7 @@ class BedrockLLM(BaseLLM):
         aws_profile_name: Optional[str] = None,
         aws_role_name: Optional[str] = None,
         aws_web_identity_token: Optional[str] = None,
+        aws_sts_endpoint: Optional[str] = None,
     ):
         """
         Return a boto3.Credentials object
@@ -402,6 +407,7 @@ class BedrockLLM(BaseLLM):
             aws_profile_name,
             aws_role_name,
             aws_web_identity_token,
+            aws_sts_endpoint,
         ]
 
         # Iterate over parameters and update if needed
@@ -420,6 +426,7 @@ class BedrockLLM(BaseLLM):
             aws_profile_name,
             aws_role_name,
             aws_web_identity_token,
+            aws_sts_endpoint,
         ) = params_to_check
 
         ### CHECK STS ###
@@ -431,12 +438,19 @@ class BedrockLLM(BaseLLM):
             print_verbose(
                 f"IN Web Identity Token: {aws_web_identity_token} | Role Name: {aws_role_name} | Session Name: {aws_session_name}"
             )
+
+            if aws_sts_endpoint is None:
+                sts_endpoint = f"https://sts.{aws_region_name}.amazonaws.com"
+            else:
+                sts_endpoint = aws_sts_endpoint
+
             iam_creds_cache_key = json.dumps(
                 {
                     "aws_web_identity_token": aws_web_identity_token,
                     "aws_role_name": aws_role_name,
                     "aws_session_name": aws_session_name,
                     "aws_region_name": aws_region_name,
+                    "aws_sts_endpoint": sts_endpoint,
                 }
             )
 
@@ -453,7 +467,7 @@ class BedrockLLM(BaseLLM):
                 sts_client = boto3.client(
                     "sts",
                     region_name=aws_region_name,
-                    endpoint_url=f"https://sts.{aws_region_name}.amazonaws.com",
+                    endpoint_url=sts_endpoint,
                 )
 
                 # https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRoleWithWebIdentity.html
@@ -848,6 +862,7 @@ class BedrockLLM(BaseLLM):
             "aws_bedrock_runtime_endpoint", None
         )  # https://bedrock-runtime.{region_name}.amazonaws.com
         aws_web_identity_token = optional_params.pop("aws_web_identity_token", None)
+        aws_sts_endpoint = optional_params.pop("aws_sts_endpoint", None)
 
         ### SET REGION NAME ###
         if aws_region_name is None:
@@ -877,6 +892,7 @@ class BedrockLLM(BaseLLM):
             aws_profile_name=aws_profile_name,
             aws_role_name=aws_role_name,
             aws_web_identity_token=aws_web_identity_token,
+            aws_sts_endpoint=aws_sts_endpoint,
         )
 
         ### SET RUNTIME ENDPOINT ###
@@ -1535,6 +1551,7 @@ class BedrockConverseLLM(BaseLLM):
         aws_profile_name: Optional[str] = None,
         aws_role_name: Optional[str] = None,
         aws_web_identity_token: Optional[str] = None,
+        aws_sts_endpoint: Optional[str] = None,
     ):
         """
         Return a boto3.Credentials object
@@ -1551,6 +1568,7 @@ class BedrockConverseLLM(BaseLLM):
             aws_profile_name,
             aws_role_name,
             aws_web_identity_token,
+            aws_sts_endpoint,
         ]
 
         # Iterate over parameters and update if needed
@@ -1569,6 +1587,7 @@ class BedrockConverseLLM(BaseLLM):
             aws_profile_name,
             aws_role_name,
             aws_web_identity_token,
+            aws_sts_endpoint,
         ) = params_to_check
 
         ### CHECK STS ###
@@ -1577,12 +1596,22 @@ class BedrockConverseLLM(BaseLLM):
             and aws_role_name is not None
             and aws_session_name is not None
         ):
+            print_verbose(
+                f"IN Web Identity Token: {aws_web_identity_token} | Role Name: {aws_role_name} | Session Name: {aws_session_name}"
+            )
+
+            if aws_sts_endpoint is None:
+                sts_endpoint = f"https://sts.{aws_region_name}.amazonaws.com"
+            else:
+                sts_endpoint = aws_sts_endpoint
+
             iam_creds_cache_key = json.dumps(
                 {
                     "aws_web_identity_token": aws_web_identity_token,
                     "aws_role_name": aws_role_name,
                     "aws_session_name": aws_session_name,
                     "aws_region_name": aws_region_name,
+                    "aws_sts_endpoint": sts_endpoint,
                 }
             )
 
@@ -1599,7 +1628,7 @@ class BedrockConverseLLM(BaseLLM):
                 sts_client = boto3.client(
                     "sts",
                     region_name=aws_region_name,
-                    endpoint_url=f"https://sts.{aws_region_name}.amazonaws.com",
+                    endpoint_url=sts_endpoint,
                 )
 
                 # https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRoleWithWebIdentity.html
@@ -1814,6 +1843,7 @@ class BedrockConverseLLM(BaseLLM):
             "aws_bedrock_runtime_endpoint", None
         )  # https://bedrock-runtime.{region_name}.amazonaws.com
         aws_web_identity_token = optional_params.pop("aws_web_identity_token", None)
+        aws_sts_endpoint = optional_params.pop("aws_sts_endpoint", None)
 
         ### SET REGION NAME ###
         if aws_region_name is None:
@@ -1843,6 +1873,7 @@ class BedrockConverseLLM(BaseLLM):
             aws_profile_name=aws_profile_name,
             aws_role_name=aws_role_name,
             aws_web_identity_token=aws_web_identity_token,
+            aws_sts_endpoint=aws_sts_endpoint,
         )
 
         ### SET RUNTIME ENDPOINT ###
@@ -1888,12 +1919,14 @@ class BedrockConverseLLM(BaseLLM):
         additional_request_params = {}
         supported_converse_params = AmazonConverseConfig.__annotations__.keys()
         supported_tool_call_params = ["tools", "tool_choice"]
+        supported_guardrail_params = ["guardrailConfig"]
         ## TRANSFORMATION ##
         # send all model-specific params in 'additional_request_params'
         for k, v in inference_params.items():
             if (
                 k not in supported_converse_params
                 and k not in supported_tool_call_params
+                and k not in supported_guardrail_params
             ):
                 additional_request_params[k] = v
                 additional_request_keys.append(k)
@@ -1925,6 +1958,15 @@ class BedrockConverseLLM(BaseLLM):
             "system": system_content_blocks,
             "inferenceConfig": InferenceConfig(**inference_params),
         }
+
+        # Guardrail Config
+        guardrail_config: Optional[GuardrailConfigBlock] = None
+        request_guardrails_config = inference_params.pop("guardrailConfig", None)
+        if request_guardrails_config is not None:
+            guardrail_config = GuardrailConfigBlock(**request_guardrails_config)
+            _data["guardrailConfig"] = guardrail_config
+
+        # Tool Config
         if bedrock_tool_config is not None:
             _data["toolConfig"] = bedrock_tool_config
         data = json.dumps(_data)
@@ -2068,13 +2110,13 @@ class AWSEventStreamDecoder:
         self.model = model
         self.parser = EventStreamJSONParser()
 
-    def converse_chunk_parser(self, chunk_data: dict) -> GenericStreamingChunk:
+    def converse_chunk_parser(self, chunk_data: dict) -> GChunk:
         try:
             text = ""
             tool_use: Optional[ChatCompletionToolCallChunk] = None
             is_finished = False
             finish_reason = ""
-            usage: Optional[ConverseTokenUsageBlock] = None
+            usage: Optional[ChatCompletionUsageBlock] = None
 
             index = int(chunk_data.get("contentBlockIndex", 0))
             if "start" in chunk_data:
@@ -2111,9 +2153,13 @@ class AWSEventStreamDecoder:
                 finish_reason = map_finish_reason(chunk_data.get("stopReason", "stop"))
                 is_finished = True
             elif "usage" in chunk_data:
-                usage = ConverseTokenUsageBlock(**chunk_data["usage"])  # type: ignore
+                usage = ChatCompletionUsageBlock(
+                    prompt_tokens=chunk_data.get("inputTokens", 0),
+                    completion_tokens=chunk_data.get("outputTokens", 0),
+                    total_tokens=chunk_data.get("totalTokens", 0),
+                )
 
-            response = GenericStreamingChunk(
+            response = GChunk(
                 text=text,
                 tool_use=tool_use,
                 is_finished=is_finished,
@@ -2125,7 +2171,7 @@ class AWSEventStreamDecoder:
         except Exception as e:
             raise Exception("Received streaming error - {}".format(str(e)))
 
-    def _chunk_parser(self, chunk_data: dict) -> GenericStreamingChunk:
+    def _chunk_parser(self, chunk_data: dict) -> GChunk:
         text = ""
         is_finished = False
         finish_reason = ""
@@ -2168,7 +2214,7 @@ class AWSEventStreamDecoder:
         elif chunk_data.get("completionReason", None):
             is_finished = True
             finish_reason = chunk_data["completionReason"]
-        return GenericStreamingChunk(
+        return GChunk(
             text=text,
             is_finished=is_finished,
             finish_reason=finish_reason,
@@ -2177,7 +2223,7 @@ class AWSEventStreamDecoder:
             tool_use=None,
         )
 
-    def iter_bytes(self, iterator: Iterator[bytes]) -> Iterator[GenericStreamingChunk]:
+    def iter_bytes(self, iterator: Iterator[bytes]) -> Iterator[GChunk]:
         """Given an iterator that yields lines, iterate over it & yield every event encountered"""
         from botocore.eventstream import EventStreamBuffer
 
@@ -2193,7 +2239,7 @@ class AWSEventStreamDecoder:
 
     async def aiter_bytes(
         self, iterator: AsyncIterator[bytes]
-    ) -> AsyncIterator[GenericStreamingChunk]:
+    ) -> AsyncIterator[GChunk]:
         """Given an async iterator that yields lines, iterate over it & yield every event encountered"""
         from botocore.eventstream import EventStreamBuffer
 
@@ -2233,20 +2279,16 @@ class MockResponseIterator:  # for returning ai21 streaming responses
     def __iter__(self):
         return self
 
-    def _chunk_parser(self, chunk_data: ModelResponse) -> GenericStreamingChunk:
+    def _chunk_parser(self, chunk_data: ModelResponse) -> GChunk:
 
         try:
             chunk_usage: litellm.Usage = getattr(chunk_data, "usage")
-            processed_chunk = GenericStreamingChunk(
+            processed_chunk = GChunk(
                 text=chunk_data.choices[0].message.content or "",  # type: ignore
                 tool_use=None,
                 is_finished=True,
                 finish_reason=chunk_data.choices[0].finish_reason,  # type: ignore
-                usage=ConverseTokenUsageBlock(
-                    inputTokens=chunk_usage.prompt_tokens,
-                    outputTokens=chunk_usage.completion_tokens,
-                    totalTokens=chunk_usage.total_tokens,
-                ),
+                usage=chunk_usage,  # type: ignore
                 index=0,
             )
             return processed_chunk
