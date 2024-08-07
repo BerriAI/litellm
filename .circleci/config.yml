@@ -165,7 +165,6 @@ jobs:
             pip install "pytest==7.3.1"
             pip install "pytest-asyncio==0.21.1"
             pip install aiohttp
-            pip install "openai==1.40.0"
             python -m pip install --upgrade pip
             python -m pip install -r .circleci/requirements.txt
             pip install "pytest==7.3.1"
@@ -190,6 +189,7 @@ jobs:
             pip install "aiodynamo==23.10.1"
             pip install "asyncio==3.4.3"
             pip install "PyGithub==1.59.1"
+            pip install "openai==1.40.0"
             # Run pytest and generate JUnit XML report
       - run:
           name: Build Docker image
