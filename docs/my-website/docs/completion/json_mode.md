@@ -71,12 +71,6 @@ response_format: { "type": "json_schema", "json_schema": … , "strict": true }
 
 Works for OpenAI models 
 
-:::info
-
-Support for passing in a pydantic object to litellm sdk will be [coming soon](https://github.com/BerriAI/litellm/issues/5074#issuecomment-2272355842)
-
-:::
-
 <Tabs>
 <TabItem value="sdk" label="SDK">
 
@@ -89,36 +83,15 @@ os.environ["OPENAI_API_KEY"] = ""
 
 messages = [{"role": "user", "content": "List 5 cookie recipes"}]
 
+class CalendarEvent(BaseModel):
+  name: str
+  date: str
+  participants: list[str]
+
 resp = completion(
     model="gpt-4o-2024-08-06",
     messages=messages,
-    response_format={
-        "type": "json_schema",
-        "json_schema": {
-          "name": "math_reasoning",
-          "schema": {
-            "type": "object",
-            "properties": {
-              "steps": {
-                "type": "array",
-                "items": {
-                  "type": "object",
-                  "properties": {
-                    "explanation": { "type": "string" },
-                    "output": { "type": "string" }
-                  },
-                  "required": ["explanation", "output"],
-                  "additionalProperties": False
-                }
-              },
-              "final_answer": { "type": "string" }
-            },
-            "required": ["steps", "final_answer"],
-            "additionalProperties": False
-          },
-          "strict": True
-        },
-    }
+    response_format=CalendarEvent
 )
 
 print("Received={}".format(resp))
