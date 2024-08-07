@@ -6,6 +6,7 @@ import TabItem from '@theme/TabItem';
 :::info
 🚨 Prometheus Metrics will be moving to LiteLLM Enterprise by September 15th, 2024
 
+[Enterprise Pricing](https://www.litellm.ai/#pricing)
 [Contact us here to get a license](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
 
 :::
