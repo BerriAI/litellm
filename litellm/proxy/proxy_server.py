@@ -388,6 +388,7 @@ try:
             os.rename(src, dst)
 
     if server_root_path != "":
+        os.environ["PROXY_BASE_URL"] = server_root_path
 
         @app.middleware("http")
         async def redirect_ui_middleware(request: Request, call_next):
