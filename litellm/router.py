@@ -654,7 +654,12 @@ class Router:
             timeout = kwargs.get("request_timeout", self.timeout)
             kwargs.setdefault("metadata", {}).update({"model_group": model})
 
-            response = await self.async_function_with_fallbacks(**kwargs)
+            if kwargs.get("priority", None) is not None and isinstance(
+                kwargs.get("priority"), int
+            ):
+                response = await self.schedule_acompletion(**kwargs)
+            else:
+                response = await self.async_function_with_fallbacks(**kwargs)
 
             return response
         except Exception as e:
@@ -1096,6 +1101,10 @@ class Router:
             try:
                 _response = await self.acompletion(
                     model=model, messages=messages, stream=stream, **kwargs
+                )
+                _response._hidden_params.setdefault("additional_headers", {})
+                _response._hidden_params["additional_headers"].update(
+                    {"x-litellm-request-prioritization-used": True}
                 )
                 return _response
             except Exception as e:
