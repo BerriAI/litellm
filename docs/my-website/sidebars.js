@@ -151,10 +151,10 @@ const sidebars = {
     },
     {
       type: "category",
-      label: "litellm.completion()",
+      label: "Chat Completions (litellm.completion)",
       link: {
         type: "generated-index",
-        title: "Completion()",
+        title: "Chat Completions",
         description: "Details on the completion() function",
         slug: "/completion",
       },
