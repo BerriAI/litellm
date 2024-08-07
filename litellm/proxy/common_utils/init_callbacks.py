@@ -56,7 +56,7 @@ def initialize_callbacks_on_proxy(
 
                 params = {
                     "logging_only": presidio_logging_only,
-                    **callback_specific_params,
+                    **callback_specific_params.get("presidio", {}),
                 }
                 pii_masking_object = _OPTIONAL_PresidioPIIMasking(**params)
                 imported_list.append(pii_masking_object)
@@ -110,7 +110,12 @@ def initialize_callbacks_on_proxy(
                         + CommonProxyErrors.not_premium_user.value
                     )
 
-                lakera_moderations_object = _ENTERPRISE_lakeraAI_Moderation()
+                init_params = {}
+                if "lakera_prompt_injection" in callback_specific_params:
+                    init_params = callback_specific_params["lakera_prompt_injection"]
+                lakera_moderations_object = _ENTERPRISE_lakeraAI_Moderation(
+                    **init_params
+                )
                 imported_list.append(lakera_moderations_object)
             elif isinstance(callback, str) and callback == "aporio_prompt_injection":
                 from enterprise.enterprise_hooks.aporio_ai import _ENTERPRISE_Aporio
