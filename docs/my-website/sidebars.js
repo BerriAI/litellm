@@ -20,11 +20,11 @@ const sidebars = {
     { type: "doc", id: "index" }, // NEW
     {
       type: "category",
-      label: "💥 OpenAI Proxy Server",
+      label: "💥 LiteLLM Proxy Server",
       link: {
         type: "generated-index",
-        title: "💥 OpenAI Proxy Server",
-        description: `Proxy Server to call 100+ LLMs in a unified interface & track spend, set budgets per virtual key/user`,
+        title: "💥 LiteLLM Proxy Server",
+        description: `OpenAI Proxy Server to call 100+ LLMs in a unified interface & track spend, set budgets per virtual key/user`,
         slug: "/simple_proxy",
       },
       items: [
@@ -42,12 +42,21 @@ const sidebars = {
         "proxy/configs",
         "proxy/reliability",
         "proxy/cost_tracking",
+        "proxy/custom_pricing",
         "proxy/self_serve",
         "proxy/virtual_keys",
         {
           type: "category",
           label: "🪢 Logging",
-          items: ["proxy/logging", "proxy/streaming_logging"],
+          items: ["proxy/logging", "proxy/bucket", "proxy/streaming_logging"],
+        },
+        {
+          type: "category", 
+          label: "Secret Manager - storing LLM API Keys", 
+          items: [
+            "secret", 
+            "oidc"
+          ]
         },
         "proxy/team_logging",
         "proxy/guardrails",
@@ -83,49 +92,7 @@ const sidebars = {
     },
     {
       type: "category",
-      label: "Completion()",
-      link: {
-        type: "generated-index",
-        title: "Completion()",
-        description: "Details on the completion() function",
-        slug: "/completion",
-      },
-      items: [
-        "completion/input",
-        "completion/provider_specific_params",
-        "completion/json_mode",
-        "completion/drop_params",
-        "completion/prompt_formatting",
-        "completion/output",
-        "exception_mapping",
-        "completion/stream",
-        "completion/message_trimming",
-        "completion/function_call",
-        "completion/vision",
-        "completion/model_alias",
-        "completion/batching",
-        "completion/mock_requests",
-        "completion/reliable_completions",
-      ],
-    },
-    {
-      type: "category",
-      label: "Embedding(), Image Generation(), Assistants(), Moderation(), Audio Transcriptions(), TTS(), Batches()",
-      items: [
-        "embedding/supported_embedding",
-        "embedding/async_embedding",
-        "embedding/moderation",
-        "image_generation",
-        "audio_transcription",
-        "text_to_speech",
-        "assistants",
-        "batches",
-        "anthropic_completion"
-      ],
-    },
-    {
-      type: "category",
-      label: "Supported Models & Providers",
+      label: "💯 Supported Models & Providers",
       link: {
         type: "generated-index",
         title: "Providers",
@@ -160,6 +127,7 @@ const sidebars = {
         "providers/perplexity", 
         "providers/friendliai",
         "providers/groq", 
+        "providers/github", 
         "providers/deepseek", 
         "providers/fireworks_ai",
         "providers/clarifai", 
@@ -181,20 +149,68 @@ const sidebars = {
         
       ],
     },
-    "proxy/custom_pricing",
-    "routing",
-    "scheduler",
-    "set_keys",
-    "budget_manager",
     {
-      type: "category", 
-      label: "Secret Manager", 
+      type: "category",
+      label: "Chat Completions (litellm.completion)",
+      link: {
+        type: "generated-index",
+        title: "Chat Completions",
+        description: "Details on the completion() function",
+        slug: "/completion",
+      },
       items: [
-        "secret", 
-        "oidc"
-      ]
+        "completion/input",
+        "completion/provider_specific_params",
+        "completion/json_mode",
+        "completion/drop_params",
+        "completion/prompt_formatting",
+        "completion/output",
+        "exception_mapping",
+        "completion/stream",
+        "completion/message_trimming",
+        "completion/function_call",
+        "completion/vision",
+        "completion/model_alias",
+        "completion/batching",
+        "completion/mock_requests",
+        "completion/reliable_completions",
+      ],
     },
-    "completion/token_usage",
+    {
+      type: "category",
+      label: "Supported Endpoints - /images, /audio/speech, /assistants etc",
+      items: [
+        "embedding/supported_embedding",
+        "embedding/async_embedding",
+        "embedding/moderation",
+        "image_generation",
+        "audio_transcription",
+        "text_to_speech",
+        "assistants",
+        "batches",
+        "fine_tuning",
+        "anthropic_completion",
+        "vertex_ai"
+      ],
+    },
+    {
+      type: "category",
+      label: "🚅 LiteLLM Python SDK",
+      items: [
+        "routing",
+        "scheduler",
+        "set_keys",
+        "completion/token_usage",
+        "sdk_custom_pricing",
+        "budget_manager",
+        "caching/all_caches",
+        {
+          type: "category",
+          label: "LangChain, LlamaIndex, Instructor Integration",
+          items: ["langchain/langchain", "tutorials/instructor"],
+        },
+      ],
+    },
     "load_test",
     {
       type: "category",
@@ -202,6 +218,7 @@ const sidebars = {
       items: [
         "observability/langfuse_integration",
         "observability/logfire_integration",
+        "observability/gcs_bucket_integration",
         "observability/langsmith_integration",
         "observability/arize_integration",
         "debugging/local_debugging",
@@ -224,14 +241,12 @@ const sidebars = {
         `observability/telemetry`,
       ],
     },
-    "caching/all_caches",
     {
       type: "category",
       label: "Tutorials",
       items: [
         'tutorials/azure_openai',
         'tutorials/instructor',
-        'tutorials/oobabooga',
         "tutorials/gradio_integration",
         "tutorials/huggingface_codellama",
         "tutorials/huggingface_tutorial",
@@ -242,11 +257,6 @@ const sidebars = {
         "tutorials/first_playground",
         "tutorials/model_fallbacks",
       ],
-    },
-    {
-      type: "category",
-      label: "LangChain, LlamaIndex, Instructor Integration",
-      items: ["langchain/langchain", "tutorials/instructor"],
     },
     {
       type: "category",

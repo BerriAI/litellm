@@ -233,8 +233,14 @@ def completion(
         optional_params["tool_results"] = [most_recent_message]
     elif isinstance(most_recent_message, str):
         optional_params["message"] = most_recent_message
+
+    ## check if chat history message is 'user' and 'tool_results' is given -> force_single_step=True, else cohere api fails
+    if len(chat_history) > 0 and chat_history[-1]["role"] == "USER":
+        optional_params["force_single_step"] = True
+
     data = {
         "model": model,
+        "chat_history": chat_history,
         **optional_params,
     }
 

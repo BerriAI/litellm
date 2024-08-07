@@ -8,20 +8,46 @@ model_list:
     litellm_params:
       model: fireworks_ai/accounts/fireworks/models/llama-v3-70b-instruct
       api_key: "os.environ/FIREWORKS"
+  - model_name: "*"
+    litellm_params:
+      model: "*"
+  - model_name: "*"
+    litellm_params:
+      model: openai/*
+      api_key: os.environ/OPENAI_API_KEY
+  - model_name: mistral-small-latest
+    litellm_params:
+      model: mistral/mistral-small-latest
+      api_key: "os.environ/MISTRAL_API_KEY"
   - model_name: tts
     litellm_params:
       model: openai/tts-1
       api_key: "os.environ/OPENAI_API_KEY"
     model_info:
       mode: audio_speech
+
+
+# for /files endpoints
+files_settings:
+  - custom_llm_provider: azure
+    api_base: https://exampleopenaiendpoint-production.up.railway.app
+    api_key: fake-key
+    api_version: "2023-03-15-preview"
+  - custom_llm_provider: openai
+    api_key: os.environ/OPENAI_API_KEY
+
+
+
 general_settings: 
   master_key: sk-1234
-  alerting: ["slack"]
-  alerting_threshold: 0.0001
-  alert_to_webhook_url: {
-    "llm_too_slow": "https://hooks.slack.com/services/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",
-    "llm_requests_hanging": "https://hooks.slack.com/services/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",
-  }
+  pass_through_endpoints:
+    - path: "/v1/rerank"                                  # route you want to add to LiteLLM Proxy Server
+      target: "https://api.cohere.com/v1/rerank"          # URL this route should forward requests to
+      headers:                                            # headers to forward to this URL
+        content-type: application/json                    # (Optional) Extra Headers to pass to this endpoint 
+        accept: application/json
+      forward_headers: True
+
 
 litellm_settings:
-  success_callback: ["langfuse"]
+  callbacks: ["otel"] # 👈 KEY CHANGE

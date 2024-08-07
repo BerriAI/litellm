@@ -121,11 +121,16 @@ from .llms.prompt_templates.factory import (
 )
 from .llms.text_completion_codestral import CodestralTextCompletion
 from .llms.triton import TritonChatCompletion
-from .llms.vertex_ai_llama import VertexAILlama3
+from .llms.vertex_ai_partner import VertexAIPartnerModels
 from .llms.vertex_httpx import VertexLLM
 from .llms.watsonx import IBMWatsonXAI
 from .types.llms.openai import HttpxBinaryResponseContent
-from .types.utils import ChatCompletionMessageToolCall
+from .types.utils import (
+    AdapterCompletionStreamWrapper,
+    ChatCompletionMessageToolCall,
+    HiddenParams,
+    all_litellm_params,
+)
 
 encoding = tiktoken.get_encoding("cl100k_base")
 from litellm.utils import (
@@ -158,7 +163,7 @@ triton_chat_completions = TritonChatCompletion()
 bedrock_chat_completion = BedrockLLM()
 bedrock_converse_chat_completion = BedrockConverseLLM()
 vertex_chat_completion = VertexLLM()
-vertex_llama_chat_completion = VertexAILlama3()
+vertex_partner_models_chat_completion = VertexAIPartnerModels()
 watsonxai = IBMWatsonXAI()
 ####### COMPLETION ENDPOINTS ################
 
@@ -413,11 +418,6 @@ async def acompletion(
             )  # sets the logging event loop if the user does sync streaming (e.g. on proxy for sagemaker calls)
         return response
     except Exception as e:
-        verbose_logger.error(
-            "litellm.acompletion(): Exception occured - {}\n{}".format(
-                str(e), traceback.format_exc()
-            )
-        )
         verbose_logger.debug(traceback.format_exc())
         custom_llm_provider = custom_llm_provider or "openai"
         raise exception_type(
@@ -500,6 +500,16 @@ def mock_completion(
                 llm_provider=getattr(mock_response, "llm_provider", custom_llm_provider or "openai"),  # type: ignore
                 model=model,
             )
+        elif isinstance(mock_response, str) and mock_response.startswith(
+            "Exception: content_filter_policy"
+        ):
+            raise litellm.MockException(
+                status_code=400,
+                message=mock_response,
+                llm_provider="azure",
+                model=model,  # type: ignore
+                request=httpx.Request(method="POST", url="https://api.openai.com/v1/"),
+            )
         time_delay = kwargs.get("mock_delay", None)
         if time_delay is not None:
             time.sleep(time_delay)
@@ -510,7 +520,7 @@ def mock_completion(
         model_response = ModelResponse(stream=stream)
         if stream is True:
             # don't try to access stream object,
-            if kwargs.get("acompletion", False) == True:
+            if kwargs.get("acompletion", False) is True:
                 return CustomStreamWrapper(
                     completion_stream=async_mock_completion_streaming_obj(
                         model_response, mock_response=mock_response, model=model, n=n
@@ -519,13 +529,14 @@ def mock_completion(
                     custom_llm_provider="openai",
                     logging_obj=logging,
                 )
-            response = mock_completion_streaming_obj(
-                model_response,
-                mock_response=mock_response,
+            return CustomStreamWrapper(
+                completion_stream=mock_completion_streaming_obj(
+                    model_response, mock_response=mock_response, model=model, n=n
+                ),
                 model=model,
-                n=n,
+                custom_llm_provider="openai",
+                logging_obj=logging,
             )
-            return response
         if n is None:
             model_response.choices[0].message.content = mock_response  # type: ignore
         else:
@@ -738,64 +749,9 @@ def completion(
         "top_logprobs",
         "extra_headers",
     ]
-    litellm_params = [
-        "metadata",
-        "tags",
-        "acompletion",
-        "atext_completion",
-        "text_completion",
-        "caching",
-        "mock_response",
-        "api_key",
-        "api_version",
-        "api_base",
-        "force_timeout",
-        "logger_fn",
-        "verbose",
-        "custom_llm_provider",
-        "litellm_logging_obj",
-        "litellm_call_id",
-        "use_client",
-        "id",
-        "fallbacks",
-        "azure",
-        "headers",
-        "model_list",
-        "num_retries",
-        "context_window_fallback_dict",
-        "retry_policy",
-        "roles",
-        "final_prompt_value",
-        "bos_token",
-        "eos_token",
-        "request_timeout",
-        "complete_response",
-        "self",
-        "client",
-        "rpm",
-        "tpm",
-        "max_parallel_requests",
-        "input_cost_per_token",
-        "output_cost_per_token",
-        "input_cost_per_second",
-        "output_cost_per_second",
-        "hf_model_name",
-        "model_info",
-        "proxy_server_request",
-        "preset_cache_key",
-        "caching_groups",
-        "ttl",
-        "cache",
-        "no-log",
-        "base_model",
-        "stream_timeout",
-        "supports_system_message",
-        "region_name",
-        "allowed_model_region",
-        "model_config",
-        "fastest_response",
-        "cooldown_time",
-    ]
+    litellm_params = (
+        all_litellm_params  # use the external var., used in creating cache key as well.
+    )
 
     default_params = openai_params + litellm_params
     non_default_params = {
@@ -981,6 +937,7 @@ def completion(
             output_cost_per_second=output_cost_per_second,
             output_cost_per_token=output_cost_per_token,
             cooldown_time=cooldown_time,
+            text_completion=kwargs.get("text_completion"),
         )
         logging.update_environment_variables(
             model=model,
@@ -1867,6 +1824,7 @@ def completion(
                     custom_prompt_dict=custom_prompt_dict,
                     client=client,  # pass AsyncOpenAI, OpenAI client
                     encoding=encoding,
+                    custom_llm_provider="databricks",
                 )
             except Exception as e:
                 ## LOGGING - log the original exception returned
@@ -2068,14 +2026,18 @@ def completion(
                     timeout=timeout,
                     client=client,
                 )
-            elif model.startswith("meta/"):
-                model_response = vertex_llama_chat_completion.completion(
+            elif (
+                model.startswith("meta/")
+                or model.startswith("mistral")
+                or model.startswith("codestral")
+            ):
+                model_response = vertex_partner_models_chat_completion.completion(
                     model=model,
                     messages=messages,
                     model_response=model_response,
                     print_verbose=print_verbose,
                     optional_params=new_params,
-                    litellm_params=litellm_params,
+                    litellm_params=litellm_params,  # type: ignore
                     logger_fn=logger_fn,
                     encoding=encoding,
                     vertex_location=vertex_ai_location,
@@ -2785,6 +2747,7 @@ def completion_with_retries(*args, **kwargs):
 
 async def acompletion_with_retries(*args, **kwargs):
     """
+    [DEPRECATED]. Use 'acompletion' or router.acompletion instead!
     Executes a litellm.completion() with 3 retries
     """
     try:
@@ -3107,6 +3070,8 @@ async def aembedding(*args, **kwargs) -> EmbeddingResponse:
             or custom_llm_provider == "vertex_ai"
             or custom_llm_provider == "databricks"
             or custom_llm_provider == "watsonx"
+            or custom_llm_provider == "cohere"
+            or custom_llm_provider == "huggingface"
         ):  # currently implemented aiohttp calls for just azure and openai, soon all.
             # Await normally
             init_response = await loop.run_in_executor(None, func_with_context)
@@ -3433,9 +3398,12 @@ def embedding(
                 input=input,
                 optional_params=optional_params,
                 encoding=encoding,
-                api_key=cohere_key,
+                api_key=cohere_key,  # type: ignore
                 logging_obj=logging,
                 model_response=EmbeddingResponse(),
+                aembedding=aembedding,
+                timeout=float(timeout),
+                client=client,
             )
         elif custom_llm_provider == "huggingface":
             api_key = (
@@ -3443,15 +3411,18 @@ def embedding(
                 or litellm.huggingface_key
                 or get_secret("HUGGINGFACE_API_KEY")
                 or litellm.api_key
-            )
+            )  # type: ignore
             response = huggingface.embedding(
                 model=model,
                 input=input,
-                encoding=encoding,
+                encoding=encoding,  # type: ignore
                 api_key=api_key,
                 api_base=api_base,
                 logging_obj=logging,
                 model_response=EmbeddingResponse(),
+                optional_params=optional_params,
+                client=client,
+                aembedding=aembedding,
             )
         elif custom_llm_provider == "bedrock":
             response = bedrock.embedding(
@@ -3739,6 +3710,9 @@ async def atext_completion(
             text_choices["finish_reason"] = response["choices"][0]["finish_reason"]
             text_completion_response["choices"] = [text_choices]
             text_completion_response["usage"] = response.get("usage", None)
+            text_completion_response._hidden_params = HiddenParams(
+                **response._hidden_params
+            )
             return text_completion_response
     except Exception as e:
         custom_llm_provider = custom_llm_provider or "openai"
@@ -4010,6 +3984,7 @@ def text_completion(
     text_choices["finish_reason"] = response["choices"][0]["finish_reason"]
     text_completion_response["choices"] = [text_choices]
     text_completion_response["usage"] = response.get("usage", None)
+    text_completion_response._hidden_params = HiddenParams(**response._hidden_params)
 
     return text_completion_response
 
@@ -4017,7 +3992,9 @@ def text_completion(
 ###### Adapter Completion ################
 
 
-async def aadapter_completion(*, adapter_id: str, **kwargs) -> Optional[BaseModel]:
+async def aadapter_completion(
+    *, adapter_id: str, **kwargs
+) -> Optional[Union[BaseModel, AdapterCompletionStreamWrapper]]:
     """
     Implemented to handle async calls for adapter_completion()
     """
@@ -4036,18 +4013,29 @@ async def aadapter_completion(*, adapter_id: str, **kwargs) -> Optional[BaseMode
 
         new_kwargs = translation_obj.translate_completion_input_params(kwargs=kwargs)
 
-        response: ModelResponse = await acompletion(**new_kwargs)  # type: ignore
-
-        translated_response = translation_obj.translate_completion_output_params(
-            response=response
-        )
+        response: Union[ModelResponse, CustomStreamWrapper] = await acompletion(**new_kwargs)  # type: ignore
+        translated_response: Optional[
+            Union[BaseModel, AdapterCompletionStreamWrapper]
+        ] = None
+        if isinstance(response, ModelResponse):
+            translated_response = translation_obj.translate_completion_output_params(
+                response=response
+            )
+        if isinstance(response, CustomStreamWrapper):
+            translated_response = (
+                translation_obj.translate_completion_output_params_streaming(
+                    completion_stream=response
+                )
+            )
 
         return translated_response
     except Exception as e:
         raise e
 
 
-def adapter_completion(*, adapter_id: str, **kwargs) -> Optional[BaseModel]:
+def adapter_completion(
+    *, adapter_id: str, **kwargs
+) -> Optional[Union[BaseModel, AdapterCompletionStreamWrapper]]:
     translation_obj: Optional[CustomLogger] = None
     for item in litellm.adapters:
         if item["id"] == adapter_id:
@@ -4062,11 +4050,20 @@ def adapter_completion(*, adapter_id: str, **kwargs) -> Optional[BaseModel]:
 
     new_kwargs = translation_obj.translate_completion_input_params(kwargs=kwargs)
 
-    response: ModelResponse = completion(**new_kwargs)  # type: ignore
-
-    translated_response = translation_obj.translate_completion_output_params(
-        response=response
+    response: Union[ModelResponse, CustomStreamWrapper] = completion(**new_kwargs)  # type: ignore
+    translated_response: Optional[Union[BaseModel, AdapterCompletionStreamWrapper]] = (
+        None
     )
+    if isinstance(response, ModelResponse):
+        translated_response = translation_obj.translate_completion_output_params(
+            response=response
+        )
+    elif isinstance(response, CustomStreamWrapper) or inspect.isgenerator(response):
+        translated_response = (
+            translation_obj.translate_completion_output_params_streaming(
+                completion_stream=response
+            )
+        )
 
     return translated_response
 
@@ -4797,12 +4794,12 @@ async def ahealth_check(
             raise Exception("model not set")
 
         if model in litellm.model_cost and mode is None:
-            mode = litellm.model_cost[model]["mode"]
+            mode = litellm.model_cost[model].get("mode")
 
         model, custom_llm_provider, _, _ = get_llm_provider(model=model)
 
         if model in litellm.model_cost and mode is None:
-            mode = litellm.model_cost[model]["mode"]
+            mode = litellm.model_cost[model].get("mode")
 
         mode = mode or "chat"  # default to chat completion calls
 
@@ -5058,23 +5055,27 @@ def stream_chunk_builder(
     combined_content = ""
     combined_arguments = ""
 
-    if (
-        "tool_calls" in chunks[0]["choices"][0]["delta"]
-        and chunks[0]["choices"][0]["delta"]["tool_calls"] is not None
-    ):
+    tool_call_chunks = [
+        chunk
+        for chunk in chunks
+        if "tool_calls" in chunk["choices"][0]["delta"]
+        and chunk["choices"][0]["delta"]["tool_calls"] is not None
+    ]
+
+    if len(tool_call_chunks) > 0:
         argument_list = []
-        delta = chunks[0]["choices"][0]["delta"]
+        delta = tool_call_chunks[0]["choices"][0]["delta"]
         message = response["choices"][0]["message"]
         message["tool_calls"] = []
         id = None
         name = None
         type = None
         tool_calls_list = []
-        prev_index = 0
+        prev_index = None
         prev_id = None
         curr_id = None
         curr_index = 0
-        for chunk in chunks:
+        for chunk in tool_call_chunks:
             choices = chunk["choices"]
             for choice in choices:
                 delta = choice.get("delta", {})
@@ -5096,6 +5097,8 @@ def stream_chunk_builder(
                         name = tool_calls[0].function.name
                     if tool_calls[0].type:
                         type = tool_calls[0].type
+            if prev_index is None:
+                prev_index = curr_index
             if curr_index != prev_index:  # new tool call
                 combined_arguments = "".join(argument_list)
                 tool_calls_list.append(
@@ -5114,18 +5117,24 @@ def stream_chunk_builder(
         tool_calls_list.append(
             {
                 "id": id,
+                "index": curr_index,
                 "function": {"arguments": combined_arguments, "name": name},
                 "type": type,
             }
         )
         response["choices"][0]["message"]["content"] = None
         response["choices"][0]["message"]["tool_calls"] = tool_calls_list
-    elif (
-        "function_call" in chunks[0]["choices"][0]["delta"]
-        and chunks[0]["choices"][0]["delta"]["function_call"] is not None
-    ):
+
+    function_call_chunks = [
+        chunk
+        for chunk in chunks
+        if "function_call" in chunk["choices"][0]["delta"]
+        and chunk["choices"][0]["delta"]["function_call"] is not None
+    ]
+
+    if len(function_call_chunks) > 0:
         argument_list = []
-        delta = chunks[0]["choices"][0]["delta"]
+        delta = function_call_chunks[0]["choices"][0]["delta"]
         function_call = delta.get("function_call", "")
         function_call_name = function_call.name
 
@@ -5133,7 +5142,7 @@ def stream_chunk_builder(
         message["function_call"] = {}
         message["function_call"]["name"] = function_call_name
 
-        for chunk in chunks:
+        for chunk in function_call_chunks:
             choices = chunk["choices"]
             for choice in choices:
                 delta = choice.get("delta", {})
@@ -5150,7 +5159,15 @@ def stream_chunk_builder(
         response["choices"][0]["message"]["function_call"][
             "arguments"
         ] = combined_arguments
-    else:
+
+    content_chunks = [
+        chunk
+        for chunk in chunks
+        if "content" in chunk["choices"][0]["delta"]
+        and chunk["choices"][0]["delta"]["content"] is not None
+    ]
+
+    if len(content_chunks) > 0:
         for chunk in chunks:
             choices = chunk["choices"]
             for choice in choices:
@@ -5166,27 +5183,34 @@ def stream_chunk_builder(
         # Update the "content" field within the response dictionary
         response["choices"][0]["message"]["content"] = combined_content
 
+    completion_output = ""
     if len(combined_content) > 0:
-        completion_output = combined_content
-    elif len(combined_arguments) > 0:
-        completion_output = combined_arguments
-    else:
-        completion_output = ""
+        completion_output += combined_content
+    if len(combined_arguments) > 0:
+        completion_output += combined_arguments
+
     # # Update usage information if needed
     prompt_tokens = 0
     completion_tokens = 0
     for chunk in chunks:
+        usage_chunk: Optional[Usage] = None
         if "usage" in chunk:
-            if "prompt_tokens" in chunk["usage"]:
-                prompt_tokens = chunk["usage"].get("prompt_tokens", 0) or 0
-            if "completion_tokens" in chunk["usage"]:
-                completion_tokens = chunk["usage"].get("completion_tokens", 0) or 0
+            usage_chunk = chunk.usage
+        elif hasattr(chunk, "_hidden_params") and "usage" in chunk._hidden_params:
+            usage_chunk = chunk._hidden_params["usage"]
+        if usage_chunk is not None:
+            if "prompt_tokens" in usage_chunk:
+                prompt_tokens = usage_chunk.get("prompt_tokens", 0) or 0
+            if "completion_tokens" in usage_chunk:
+                completion_tokens = usage_chunk.get("completion_tokens", 0) or 0
     try:
         response["usage"]["prompt_tokens"] = prompt_tokens or token_counter(
             model=model, messages=messages
         )
-    except:  # don't allow this failing to block a complete streaming response from being returned
-        print_verbose(f"token_counter failed, assuming prompt tokens is 0")
+    except (
+        Exception
+    ):  # don't allow this failing to block a complete streaming response from being returned
+        print_verbose("token_counter failed, assuming prompt tokens is 0")
         response["usage"]["prompt_tokens"] = 0
     response["usage"]["completion_tokens"] = completion_tokens or token_counter(
         model=model,

@@ -1,18 +1,22 @@
-import sys, os
+import os
+import sys
 import traceback
+
 from dotenv import load_dotenv
 
 load_dotenv()
-import os, io
+import io
+import os
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-import pytest
-import litellm
-from litellm import embedding, completion, completion_cost, Timeout
-from litellm import RateLimitError
 import json
+
+import pytest
+
+import litellm
+from litellm import RateLimitError, Timeout, completion, completion_cost, embedding
 
 litellm.num_retries = 3
 
@@ -33,28 +37,6 @@ def test_chat_completion_cohere():
             max_tokens=10,
         )
         print(response)
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-def test_chat_completion_cohere_stream():
-    try:
-        litellm.set_verbose = False
-        messages = [
-            {
-                "role": "user",
-                "content": "Hey",
-            },
-        ]
-        response = completion(
-            model="cohere_chat/command-r",
-            messages=messages,
-            max_tokens=10,
-            stream=True,
-        )
-        print(response)
-        for chunk in response:
-            print(chunk)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 

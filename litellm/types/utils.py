@@ -2,11 +2,11 @@ import json
 import time
 import uuid
 from enum import Enum
-from typing import Dict, List, Literal, Optional, Tuple, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 from openai._models import BaseModel as OpenAIObject
-from pydantic import ConfigDict
-from typing_extensions import Dict, Required, TypedDict, override
+from pydantic import ConfigDict, Field, PrivateAttr
+from typing_extensions import Callable, Dict, Required, TypedDict, override
 
 from ..litellm_core_utils.core_helpers import map_finish_reason
 from .llms.openai import ChatCompletionToolCallChunk, ChatCompletionUsageBlock
@@ -39,6 +39,8 @@ class ModelInfo(TypedDict, total=False):
     """
     Model info for a given model, this is information found in litellm.model_prices_and_context_window.json
     """
+
+    key: Required[str]  # the key in litellm.model_cost which is returned
 
     max_tokens: Required[Optional[int]]
     max_input_tokens: Required[Optional[int]]
@@ -74,6 +76,7 @@ class ModelInfo(TypedDict, total=False):
     supports_system_messages: Optional[bool]
     supports_response_schema: Optional[bool]
     supports_vision: Optional[bool]
+    supports_function_calling: Optional[bool]
 
 
 class GenericStreamingChunk(TypedDict):
@@ -216,7 +219,7 @@ class ChatCompletionDeltaToolCall(OpenAIObject):
 
 
 class HiddenParams(OpenAIObject):
-    original_response: Optional[str] = None
+    original_response: Optional[Union[str, Any]] = None
     model_id: Optional[str] = None  # used in Router for individual deployments
     api_base: Optional[str] = None  # returns api base used for making completion call
 
@@ -301,7 +304,7 @@ class Message(OpenAIObject):
         content: Optional[str] = None,
         role: Literal["assistant"] = "assistant",
         function_call=None,
-        tool_calls=None,
+        tool_calls: Optional[list] = None,
         **params,
     ):
         init_values = {
@@ -311,8 +314,15 @@ class Message(OpenAIObject):
                 FunctionCall(**function_call) if function_call is not None else None
             ),
             "tool_calls": (
-                [ChatCompletionMessageToolCall(**tool_call) for tool_call in tool_calls]
-                if tool_calls is not None
+                [
+                    (
+                        ChatCompletionMessageToolCall(**tool_call)
+                        if isinstance(tool_call, dict)
+                        else tool_call
+                    )
+                    for tool_call in tool_calls
+                ]
+                if tool_calls is not None and len(tool_calls) > 0
                 else None
             ),
         }
@@ -435,16 +445,25 @@ class Choices(OpenAIObject):
 
 
 class Usage(OpenAIObject):
+    prompt_tokens: Optional[int] = Field(default=None)
+    completion_tokens: Optional[int] = Field(default=None)
+    total_tokens: Optional[int] = Field(default=None)
+
     def __init__(
-        self, prompt_tokens=None, completion_tokens=None, total_tokens=None, **params
+        self,
+        prompt_tokens: Optional[int] = None,
+        completion_tokens: Optional[int] = None,
+        total_tokens: Optional[int] = None,
+        **params,
     ):
-        super(Usage, self).__init__(**params)
-        if prompt_tokens:
-            self.prompt_tokens = prompt_tokens
-        if completion_tokens:
-            self.completion_tokens = completion_tokens
-        if total_tokens:
-            self.total_tokens = total_tokens
+        data = {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
+            **params,
+        }
+
+        super().__init__(**data)
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -931,16 +950,18 @@ class ImageObject(OpenAIObject):
             return self.dict()
 
 
-class ImageResponse(OpenAIObject):
-    created: Optional[int] = None
+from openai.types.images_response import ImagesResponse as OpenAIImageResponse
 
-    data: Optional[List[ImageObject]] = None
 
-    usage: Optional[dict] = None
-
+class ImageResponse(OpenAIImageResponse):
     _hidden_params: dict = {}
 
-    def __init__(self, created=None, data=None, response_ms=None):
+    def __init__(
+        self,
+        created: Optional[int] = None,
+        data: Optional[list] = None,
+        response_ms=None,
+    ):
         if response_ms:
             _response_ms = response_ms
         else:
@@ -948,14 +969,14 @@ class ImageResponse(OpenAIObject):
         if data:
             data = data
         else:
-            data = None
+            data = []
 
         if created:
             created = created
         else:
-            created = None
+            created = int(time.time())
 
-        super().__init__(data=data, created=created)
+        super().__init__(created=created, data=data)
         self.usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
     def __contains__(self, key):
@@ -1031,6 +1052,68 @@ class ResponseFormatChunk(TypedDict, total=False):
     response_schema: dict
 
 
+all_litellm_params = [
+    "metadata",
+    "tags",
+    "acompletion",
+    "atext_completion",
+    "text_completion",
+    "caching",
+    "mock_response",
+    "api_key",
+    "api_version",
+    "api_base",
+    "force_timeout",
+    "logger_fn",
+    "verbose",
+    "custom_llm_provider",
+    "litellm_logging_obj",
+    "litellm_call_id",
+    "use_client",
+    "id",
+    "fallbacks",
+    "azure",
+    "headers",
+    "model_list",
+    "num_retries",
+    "context_window_fallback_dict",
+    "retry_policy",
+    "roles",
+    "final_prompt_value",
+    "bos_token",
+    "eos_token",
+    "request_timeout",
+    "complete_response",
+    "self",
+    "client",
+    "rpm",
+    "tpm",
+    "max_parallel_requests",
+    "input_cost_per_token",
+    "output_cost_per_token",
+    "input_cost_per_second",
+    "output_cost_per_second",
+    "hf_model_name",
+    "model_info",
+    "proxy_server_request",
+    "preset_cache_key",
+    "caching_groups",
+    "ttl",
+    "cache",
+    "no-log",
+    "base_model",
+    "stream_timeout",
+    "supports_system_message",
+    "region_name",
+    "allowed_model_region",
+    "model_config",
+    "fastest_response",
+    "cooldown_time",
+    "cache_key",
+    "max_retries",
+]
+
+
 class LoggedLiteLLMParams(TypedDict, total=False):
     force_timeout: Optional[float]
     custom_llm_provider: Optional[str]
@@ -1048,3 +1131,36 @@ class LoggedLiteLLMParams(TypedDict, total=False):
     output_cost_per_token: Optional[float]
     output_cost_per_second: Optional[float]
     cooldown_time: Optional[float]
+
+
+class AdapterCompletionStreamWrapper:
+    def __init__(self, completion_stream):
+        self.completion_stream = completion_stream
+
+    def __iter__(self):
+        return self
+
+    def __aiter__(self):
+        return self
+
+    def __next__(self):
+        try:
+            for chunk in self.completion_stream:
+                if chunk == "None" or chunk is None:
+                    raise Exception
+                return chunk
+            raise StopIteration
+        except StopIteration:
+            raise StopIteration
+        except Exception as e:
+            print(f"AdapterCompletionStreamWrapper - {e}")  # noqa
+
+    async def __anext__(self):
+        try:
+            async for chunk in self.completion_stream:
+                if chunk == "None" or chunk is None:
+                    raise Exception
+                return chunk
+            raise StopIteration
+        except StopIteration:
+            raise StopAsyncIteration

@@ -5,6 +5,7 @@ import os
 import traceback
 
 from packaging.version import Version
+from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_logger
@@ -144,6 +145,10 @@ class LangFuseLogger:
                 f"Langfuse Logging - Enters logging function for model {kwargs}"
             )
 
+            # set default values for input/output for langfuse logging
+            input = None
+            output = None
+
             litellm_params = kwargs.get("litellm_params", {})
             litellm_call_id = kwargs.get("litellm_call_id", None)
             metadata = (
@@ -198,6 +203,11 @@ class LangFuseLogger:
             ):
                 input = prompt
                 output = response_obj["data"]
+            elif response_obj is not None and isinstance(
+                response_obj, litellm.TranscriptionResponse
+            ):
+                input = prompt
+                output = response_obj["text"]
             print_verbose(f"OUTPUT IN LANGFUSE: {output}; original: {response_obj}")
             trace_id = None
             generation_id = None
@@ -322,7 +332,7 @@ class LangFuseLogger:
                 metadata = copy.deepcopy(
                     metadata
                 )  # Avoid modifying the original metadata
-            except:
+            except Exception:
                 new_metadata = {}
                 for key, value in metadata.items():
                     if (
@@ -333,6 +343,8 @@ class LangFuseLogger:
                         or isinstance(value, float)
                     ):
                         new_metadata[key] = copy.deepcopy(value)
+                    elif isinstance(value, BaseModel):
+                        new_metadata[key] = value.model_dump()
                 metadata = new_metadata
 
             supports_tags = Version(langfuse.version.__version__) >= Version("2.6.3")

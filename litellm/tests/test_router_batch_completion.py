@@ -1,20 +1,28 @@
 #### What this tests ####
 # This tests litellm router with batch completion
 
-import sys, os, time, openai
-import traceback, asyncio
+import asyncio
+import os
+import sys
+import time
+import traceback
+
+import openai
 import pytest
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
+import os
+from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
+
+import httpx
+from dotenv import load_dotenv
+
 import litellm
 from litellm import Router
 from litellm.router import Deployment, LiteLLM_Params, ModelInfo
-from concurrent.futures import ThreadPoolExecutor
-from collections import defaultdict
-from dotenv import load_dotenv
-import os, httpx
 
 load_dotenv()
 
@@ -54,6 +62,7 @@ async def test_batch_completion_multiple_models(mode):
         assert len(response) == 2
 
         models_in_responses = []
+        print(f"response: {response}")
         for individual_response in response:
             _model = individual_response["model"]
             models_in_responses.append(_model)

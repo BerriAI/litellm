@@ -474,21 +474,13 @@ class AzureChatCompletion(BaseLLM):
         - call chat.completions.create by default
         """
         try:
-            if litellm.return_response_headers is True:
-                raw_response = (
-                    await azure_client.chat.completions.with_raw_response.create(
-                        **data, timeout=timeout
-                    )
-                )
+            raw_response = await azure_client.chat.completions.with_raw_response.create(
+                **data, timeout=timeout
+            )
 
-                headers = dict(raw_response.headers)
-                response = raw_response.parse()
-                return headers, response
-            else:
-                response = await azure_client.chat.completions.create(
-                    **data, timeout=timeout
-                )
-                return None, response
+            headers = dict(raw_response.headers)
+            response = raw_response.parse()
+            return headers, response
         except Exception as e:
             raise e
 

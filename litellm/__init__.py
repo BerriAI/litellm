@@ -46,6 +46,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "galileo",
     "braintrust",
     "arize",
+    "gcs_bucket",
 ]
 _known_custom_logger_compatible_callbacks: List = list(
     get_args(_custom_logger_compatible_callbacks_literal)
@@ -145,6 +146,9 @@ return_response_headers: bool = (
 )
 ##################
 logging: bool = True
+enable_caching_on_provider_specific_optional_params: bool = (
+    False  # feature-flag for caching on optional params - e.g. 'top_k'
+)
 caching: bool = (
     False  # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
 )
@@ -165,6 +169,7 @@ budget_duration: Optional[str] = (
 default_soft_budget: float = (
     50.0  # by default all litellm proxy keys have a soft budget of 50.0
 )
+forward_traceparent_to_llm_provider: bool = False
 _openai_finish_reasons = ["stop", "length", "function_call", "content_filter", "null"]
 _openai_completion_params = [
     "functions",
@@ -266,7 +271,7 @@ default_fallbacks: Optional[List] = None
 fallbacks: Optional[List] = None
 context_window_fallbacks: Optional[List] = None
 content_policy_fallbacks: Optional[List] = None
-allowed_fails: int = 0
+allowed_fails: int = 3
 num_retries_per_request: Optional[int] = (
     None  # for the request overall (incl. fallbacks + model retries)
 )
@@ -358,6 +363,7 @@ vertex_code_text_models: List = []
 vertex_embedding_models: List = []
 vertex_anthropic_models: List = []
 vertex_llama3_models: List = []
+vertex_mistral_models: List = []
 ai21_models: List = []
 nlp_cloud_models: List = []
 aleph_alpha_models: List = []
@@ -403,6 +409,9 @@ for key, value in model_cost.items():
     elif value.get("litellm_provider") == "vertex_ai-llama_models":
         key = key.replace("vertex_ai/", "")
         vertex_llama3_models.append(key)
+    elif value.get("litellm_provider") == "vertex_ai-mistral_models":
+        key = key.replace("vertex_ai/", "")
+        vertex_mistral_models.append(key)
     elif value.get("litellm_provider") == "ai21":
         ai21_models.append(key)
     elif value.get("litellm_provider") == "nlp_cloud":
@@ -452,6 +461,7 @@ openai_compatible_providers: List = [
     "empower",
     "friendliai",
     "azure_ai",
+    "github",
 ]
 
 
@@ -692,6 +702,7 @@ provider_list: List = [
     "predibase",
     "databricks",
     "empower",
+    "github",
     "custom",  # custom apis
 ]
 
@@ -809,8 +820,18 @@ from .utils import (
     ModelResponse,
     EmbeddingResponse,
     ImageResponse,
+    TranscriptionResponse,
+    TextCompletionResponse,
     get_provider_fields,
 )
+
+ALL_LITELLM_RESPONSE_TYPES = [
+    ModelResponse,
+    EmbeddingResponse,
+    ImageResponse,
+    TranscriptionResponse,
+    TextCompletionResponse,
+]
 
 from .types.utils import ImageObject
 from .llms.custom_llm import CustomLLM
@@ -833,7 +854,7 @@ from .llms.petals import PetalsConfig
 from .llms.vertex_httpx import VertexGeminiConfig, GoogleAIStudioGeminiConfig
 from .llms.vertex_ai import VertexAIConfig, VertexAITextEmbeddingConfig
 from .llms.vertex_ai_anthropic import VertexAIAnthropicConfig
-from .llms.vertex_ai_llama import VertexAILlama3Config
+from .llms.vertex_ai_partner import VertexAILlama3Config
 from .llms.sagemaker import SagemakerConfig
 from .llms.ollama import OllamaConfig
 from .llms.ollama_chat import OllamaChatConfig
@@ -902,6 +923,7 @@ from .proxy.proxy_cli import run_server
 from .router import Router
 from .assistants.main import *
 from .batches.main import *
+from .fine_tuning.main import *
 from .files.main import *
 from .scheduler import *
 from .cost_calculator import response_cost_calculator, cost_per_token

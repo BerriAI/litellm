@@ -1,17 +1,23 @@
 #### What this tests ####
 #    This tests calling batch_completions by running 100 messages together
 
-import sys, os, time
-import traceback, asyncio
+import asyncio
+import os
+import sys
+import time
+import traceback
+
 import pytest
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
+import concurrent
+
+from dotenv import load_dotenv
+
 import litellm
 from litellm import Router
-import concurrent
-from dotenv import load_dotenv
 
 load_dotenv()
 
@@ -45,7 +51,8 @@ kwargs = {
 
 
 def test_multiple_deployments_sync():
-    import concurrent, time
+    import concurrent
+    import time
 
     litellm.set_verbose = False
     results = []
@@ -161,6 +168,7 @@ async def test_cooldown_same_model_name(sync_mode):
             routing_strategy="simple-shuffle",
             set_verbose=True,
             num_retries=3,
+            allowed_fails=0,
         )  # type: ignore
 
         if sync_mode:
