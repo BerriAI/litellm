@@ -42,10 +42,10 @@ async def router_cooldown_handler(
     from litellm.litellm_core_utils.litellm_logging import prometheusLogger
 
     if prometheusLogger is not None:
-        prometheusLogger.set_llm_outage_metric(
+        prometheusLogger.set_deployment_complete_outage(
             litellm_model_name=_model_name,
             model_id=model_id,
             api_base="",
-            api_provider="",
+            llm_provider="",
         )
     pass
