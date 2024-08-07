@@ -138,7 +138,6 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.caching_routes import router as caching_router
 from litellm.proxy.common_utils.admin_ui_utils import (
     html_form,
-    setup_admin_ui_on_server_root_path,
     show_missing_vars_in_env,
 )
 from litellm.proxy.common_utils.debug_utils import init_verbose_loggers
@@ -388,7 +387,11 @@ try:
             os.rename(src, dst)
 
     if server_root_path != "":
-        os.environ["PROXY_BASE_URL"] = server_root_path
+        print(  # noqa
+            f"server_root_path is set, forwarding any /ui requests to {server_root_path}/ui"
+        )  # noqa
+        if os.getenv("PROXY_BASE_URL") is None:
+            os.environ["PROXY_BASE_URL"] = server_root_path
 
         @app.middleware("http")
         async def redirect_ui_middleware(request: Request, call_next):
