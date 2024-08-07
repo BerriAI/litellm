@@ -2,6 +2,7 @@
 #    This tests streaming for the completion endpoint
 
 import asyncio
+import json
 import os
 import sys
 import time
@@ -3688,3 +3689,57 @@ def test_unit_test_custom_stream_wrapper_function_call():
     print("\n\n{}\n\n".format(new_model))
 
     assert len(new_model.choices[0].delta.tool_calls) > 0
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "gpt-3.5-turbo",
+        "claude-3-5-sonnet-20240620",
+        "anthropic.claude-3-sonnet-20240229-v1:0",
+    ],
+)
+def test_streaming_tool_calls_valid_json_str(model):
+    messages = [
+        {"role": "user", "content": "Hit the snooze button."},
+    ]
+
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "snooze",
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "required": [],
+                },
+            },
+        }
+    ]
+
+    stream = litellm.completion(model, messages, tools=tools, stream=True)
+    chunks = [*stream]
+    tool_call_id_arg_map = {}
+    curr_tool_call_id = None
+    curr_tool_call_str = ""
+    for chunk in chunks:
+        if chunk.choices[0].delta.tool_calls is not None:
+            if chunk.choices[0].delta.tool_calls[0].id is not None:
+                # flush prev tool call
+                if curr_tool_call_id is not None:
+                    tool_call_id_arg_map[curr_tool_call_id] = curr_tool_call_str
+                    curr_tool_call_str = ""
+                curr_tool_call_id = chunk.choices[0].delta.tool_calls[0].id
+                tool_call_id_arg_map[curr_tool_call_id] = ""
+            if chunk.choices[0].delta.tool_calls[0].function.arguments is not None:
+                curr_tool_call_str += (
+                    chunk.choices[0].delta.tool_calls[0].function.arguments
+                )
+    # flush prev tool call
+    if curr_tool_call_id is not None:
+        tool_call_id_arg_map[curr_tool_call_id] = curr_tool_call_str
+
+    for k, v in tool_call_id_arg_map.items():
+        print("k={}, v={}".format(k, v))
+        json.loads(v)  # valid json str
