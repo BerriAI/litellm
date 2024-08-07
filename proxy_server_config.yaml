@@ -86,12 +86,16 @@ model_list:
       model: openai/*
       api_key: os.environ/OPENAI_API_KEY
   
-  # Pass through all llm requests to litellm.completion/litellm.embedding
-  # if user passes model="anthropic/claude-3-opus-20240229" proxy will make requests to anthropic claude-3-opus-20240229 using ANTHROPIC_API_KEY
-  - model_name: "*"
+
+  # provider specific wildcard routing
+  - model_name: "anthropic/*"
     litellm_params:
-      model: "*"
-  
+      model: "anthropic/*"
+      api_key: os.environ/ANTHROPIC_API_KEY
+  - model_name: "groq/*"
+    litellm_params:
+      model: "groq/*"
+      api_key: os.environ/GROQ_API_KEY
   - model_name: mistral-embed
     litellm_params:
       model: mistral/mistral-embed
