@@ -72,23 +72,22 @@ async def test_router_provider_wildcard_routing():
                 "model_name": "openai/*",
                 "litellm_params": {
                     "model": "openai/*",
-                    "api_key": "my-key",
+                    "api_key": os.environ["OPENAI_API_KEY"],
                     "api_base": "https://api.openai.com/v1",
-                    "organization": ["org-1", "org-2", "org-3"],
                 },
             },
             {
                 "model_name": "anthropic/*",
                 "litellm_params": {
                     "model": "anthropic/*",
-                    "api_key": "my-key",
+                    "api_key": os.environ["ANTHROPIC_API_KEY"],
                 },
             },
             {
-                "model_name": "databricks/*",
+                "model_name": "groq/*",
                 "litellm_params": {
-                    "model": "databricks/*",
-                    "api_key": "my-key",
+                    "model": "groq/*",
+                    "api_key": os.environ["GROQ_API_KEY"],
                 },
             },
         ]
@@ -111,7 +110,7 @@ async def test_router_provider_wildcard_routing():
     print("response 2 = ", response2)
 
     response3 = await router.acompletion(
-        model="databricks/databricks-meta-llama-3-1-70b-instruct",
+        model="groq/llama3-8b-8192",
         messages=[{"role": "user", "content": "hello"}],
     )
 
