@@ -3610,7 +3610,7 @@ class Router:
         )
 
         provider_specific_deployment = re.match(
-            f"{custom_llm_provider}/*", deployment.model_name
+            rf"{custom_llm_provider}/\*$", deployment.model_name
         )
 
         # Check if user is trying to use model_name == "*"
