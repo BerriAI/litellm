@@ -315,6 +315,22 @@ class PrometheusLogger:
         except:
             pass
 
+    def set_llm_outage_metric(
+        self,
+        litellm_model_name: str,
+        model_id: str,
+        api_base: str,
+        llm_provider: str,
+    ):
+        """
+        log these labels
+        ["litellm_model_name", "model_id", "api_base", "api_provider"]
+        """
+        self.deployment_unhealthy.labels(
+            litellm_model_name, model_id, api_base, llm_provider
+        ).set(1)
+        pass
+
     def set_llm_deployment_success_metrics(self, request_kwargs: dict):
         try:
             verbose_logger.debug("setting remaining tokens requests metric")
