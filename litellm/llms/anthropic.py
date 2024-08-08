@@ -287,6 +287,9 @@ class AnthropicConfig:
             if user_message is not None:
                 new_messages.append(user_message)
 
+            if len(new_user_content_list) > 0:
+                new_messages.append({"role": "user", "content": new_user_content_list})
+
             if len(tool_message_list) > 0:
                 new_messages.extend(tool_message_list)
 
