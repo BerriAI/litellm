@@ -232,6 +232,7 @@ class CompletionCustomHandler(
             assert isinstance(kwargs["messages"], list) and isinstance(
                 kwargs["messages"][0], dict
             )
+
             assert isinstance(kwargs["optional_params"], dict)
             assert isinstance(kwargs["litellm_params"], dict)
             assert isinstance(kwargs["litellm_params"]["metadata"], Optional[dict])

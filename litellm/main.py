@@ -31,6 +31,7 @@ from typing import (
     Literal,
     Mapping,
     Optional,
+    Type,
     Union,
 )
 
@@ -608,7 +609,7 @@ def completion(
     logit_bias: Optional[dict] = None,
     user: Optional[str] = None,
     # openai v1.0+ new params
-    response_format: Optional[dict] = None,
+    response_format: Optional[Union[dict, Type[BaseModel]]] = None,
     seed: Optional[int] = None,
     tools: Optional[List] = None,
     tool_choice: Optional[Union[str, dict]] = None,
@@ -1856,17 +1857,18 @@ def completion(
             )
 
             openrouter_site_url = get_secret("OR_SITE_URL") or "https://litellm.ai"
-
             openrouter_app_name = get_secret("OR_APP_NAME") or "liteLLM"
 
-            headers = (
-                headers
-                or litellm.headers
-                or {
-                    "HTTP-Referer": openrouter_site_url,
-                    "X-Title": openrouter_app_name,
-                }
-            )
+            openrouter_headers = {
+                "HTTP-Referer": openrouter_site_url,
+                "X-Title": openrouter_app_name,
+            }
+
+            _headers = headers or litellm.headers
+            if _headers:
+                openrouter_headers.update(_headers)
+
+            headers = openrouter_headers
 
             ## Load Config
             config = openrouter.OpenrouterConfig.get_config()
@@ -5113,7 +5115,9 @@ def stream_chunk_builder(
                 prev_index = curr_index
                 prev_id = curr_id
 
-        combined_arguments = "".join(argument_list)
+        combined_arguments = (
+            "".join(argument_list) or "{}"
+        )  # base case, return empty dict
         tool_calls_list.append(
             {
                 "id": id,
