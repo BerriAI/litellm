@@ -816,7 +816,7 @@ async def test_create_user_default_budget(prisma_client):
 
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
-    setattr(litellm, "max_user_budget", 10)
+    setattr(litellm, "max_internal_user_budget", 10)
     await litellm.proxy.proxy_server.prisma_client.connect()
     user = f"ishaan {uuid.uuid4().hex}"
     request = NewUserRequest(user_id=user)  # create a key with no budget
@@ -834,5 +834,5 @@ async def test_create_user_default_budget(prisma_client):
 
         assert (
             mock_client.call_args.kwargs["data"]["max_budget"]
-            == litellm.max_user_budget
+            == litellm.max_internal_user_budget
         )
