@@ -301,7 +301,7 @@ def test_dynamic_drop_params(drop_params):
         optional_params = litellm.utils.get_optional_params(
             model="command-r",
             custom_llm_provider="cohere",
-            response_format="json",
+            response_format={"type": "json"},
             drop_params=drop_params,
         )
     else:
@@ -309,7 +309,7 @@ def test_dynamic_drop_params(drop_params):
             optional_params = litellm.utils.get_optional_params(
                 model="command-r",
                 custom_llm_provider="cohere",
-                response_format="json",
+                response_format={"type": "json"},
                 drop_params=drop_params,
             )
             pytest.fail("Expected to fail")
@@ -389,7 +389,7 @@ def test_dynamic_drop_additional_params(drop_params):
         optional_params = litellm.utils.get_optional_params(
             model="command-r",
             custom_llm_provider="cohere",
-            response_format="json",
+            response_format={"type": "json"},
             additional_drop_params=["response_format"],
         )
     else:
@@ -397,7 +397,7 @@ def test_dynamic_drop_additional_params(drop_params):
             optional_params = litellm.utils.get_optional_params(
                 model="command-r",
                 custom_llm_provider="cohere",
-                response_format="json",
+                response_format={"type": "json"},
             )
             pytest.fail("Expected to fail")
         except Exception as e:
