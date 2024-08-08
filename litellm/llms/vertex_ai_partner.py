@@ -96,11 +96,13 @@ class VertexAILlama3Config:
     def get_supported_openai_params(self):
         return litellm.OpenAIConfig().get_supported_openai_params(model="gpt-3.5-turbo")
 
-    def map_openai_params(self, non_default_params: dict, optional_params: dict):
+    def map_openai_params(
+        self, non_default_params: dict, optional_params: dict, model: str
+    ):
         return litellm.OpenAIConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
-            model="gpt-3.5-turbo",
+            model=model,
         )
 
 

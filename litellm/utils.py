@@ -3190,6 +3190,7 @@ def get_optional_params(
         optional_params = litellm.VertexAILlama3Config().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
+            model=model,
         )
     elif custom_llm_provider == "vertex_ai" and model in litellm.vertex_mistral_models:
         supported_params = get_supported_openai_params(
