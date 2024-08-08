@@ -303,3 +303,30 @@ async def vertex_cancel_fine_tuning_job(
         return response
     except Exception as e:
         raise exception_handler(e) from e
+
+
+@router.post(
+    "/vertex-ai/cachedContents",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["Vertex AI endpoints"],
+)
+async def vertex_create_add_cached_content(
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    this is a pass through endpoint for the Vertex AI API. /cachedContents endpoint
+
+    Vertex API Reference: https://cloud.google.com/vertex-ai/generative-ai/docs/context-cache/context-cache-create#create-context-cache-sample-drest
+
+    it uses the vertex ai credentials on the proxy and forwards to vertex ai api
+    """
+    try:
+        response = await execute_post_vertex_ai_request(
+            request=request,
+            route="/cachedContents",
+        )
+        return response
+    except Exception as e:
+        raise exception_handler(e) from e
