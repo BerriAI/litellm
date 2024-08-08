@@ -1488,6 +1488,9 @@ async def test_gemini_pro_json_schema_args_sent_httpx_openai_schema(
 ):
     from typing import List
 
+    if enforce_validation:
+        litellm.enable_json_schema_validation = True
+
     from pydantic import BaseModel
 
     load_vertex_ai_credentials()
