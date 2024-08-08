@@ -427,6 +427,79 @@ print(resp)
 ```
 
 
+### **Context Caching**
+
+Use Vertex AI Context Caching
+
+[**Relevant VertexAI Docs**](https://cloud.google.com/vertex-ai/generative-ai/docs/context-cache/context-cache-overview)
+
+<Tabs>
+
+<TabItem value="proxy" label="LiteLLM PROXY">
+
+1. Add model to config.yaml
+```yaml
+model_list:
+  - model_name: gemini-1.5-pro-001
+    litellm_params:
+      model: vertex_ai_beta/gemini-1.5-pro-001
+      vertex_project: "project-id"
+      vertex_location: "us-central1"
+      vertex_credentials: "/path/to/service_account.json" # [OPTIONAL] Do this OR `!gcloud auth application-default login` - run this to add vertex credentials to your env
+```
+
+2. Start Proxy 
+
+```
+$ litellm --config /path/to/config.yaml
+```
+
+3. Make Request!
+
+```python
+import datetime
+import openai
+import vertexai
+from vertexai.generative_models import Content, Part
+from vertexai.preview import caching
+from vertexai.preview.generative_models import GenerativeModel
+
+# use Vertex AI SDK to create CachedContent
+vertexai.init(project="adroit-crow-413218", location="us-central1")
+print("creating cached content")
+contents_here: list[Content] = [
+    Content(role="user", parts=[Part.from_text("huge string of text here" * 10000)])
+]
+cached_content = caching.CachedContent.create(
+    model_name="gemini-1.5-pro-001",
+    contents=contents_here,
+    expire_time=datetime.datetime(2024, 8, 10),
+)
+
+
+# use OpenAI SDK to send a request to LiteLLM Proxy
+# base_url is litellm proxy server and api_key is api key to litellm proxy
+client = openai.OpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+response = client.chat.completions.create(
+    model="gemini-1.5-pro-001",
+    messages=[
+        {
+            "role": "user",
+            "content": "hello!",
+        },
+    ],
+    temperature="0.7",
+    extra_body={"cached_content": cached_content.resource_name},
+)
+
+print("response from proxy", response)
+
+```
+
+</TabItem>
+</Tabs>
+
+
 ## Pre-requisites
 * `pip install google-cloud-aiplatform` (pre-installed on proxy docker image)
 * Authentication: 
