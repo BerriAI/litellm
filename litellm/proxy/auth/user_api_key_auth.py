@@ -581,8 +581,8 @@ async def user_api_key_auth(
                 "allowed_model_region"
             )
 
-        user_id_information: Optional[List] = None
         if valid_token is not None:
+            user_obj: Optional[LiteLLM_UserTable] = None
             # Got Valid Token from Cache, DB
             # Run checks for
             # 1. If token can call model
@@ -650,113 +650,16 @@ async def user_api_key_auth(
                             valid_token=valid_token,
                         )
 
-            # Check 2. If user_id for this token is in budget
+            # Check 2. If user_id for this token is in budget - done in common_checks()
             if valid_token.user_id is not None:
-                user_id_list = [valid_token.user_id]
-                for id in user_id_list:
-                    value = user_api_key_cache.get_cache(key=id)
-                    if value is not None:
-                        if user_id_information is None:
-                            user_id_information = []
-                        user_id_information.append(value)
-                if user_id_information is None or (
-                    isinstance(user_id_information, list)
-                    and len(user_id_information) < 1
-                ):
-                    if prisma_client is not None:
-                        user_id_information = await prisma_client.get_data(
-                            user_id_list=[
-                                valid_token.user_id,
-                            ],
-                            table_name="user",
-                            query_type="find_all",
-                        )
-                        if user_id_information is not None:
-                            for _id in user_id_information:
-                                await user_api_key_cache.async_set_cache(
-                                    key=_id["user_id"],
-                                    value=_id,
-                                )
-
-                verbose_proxy_logger.debug(
-                    f"user_id_information: {user_id_information}"
+                user_obj = await get_user_object(
+                    user_id=valid_token.user_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    user_id_upsert=False,
+                    parent_otel_span=parent_otel_span,
+                    proxy_logging_obj=proxy_logging_obj,
                 )
-
-                if user_id_information is not None:
-                    if isinstance(user_id_information, list):
-                        ## Check if user in budget
-                        for _user in user_id_information:
-                            if _user is None:
-                                continue
-                            assert isinstance(_user, dict)
-                            # check if user is admin #
-
-                            # Token exists, not expired now check if its in budget for the user
-                            user_max_budget = _user.get("max_budget", None)
-                            user_current_spend = _user.get("spend", None)
-
-                            verbose_proxy_logger.debug(
-                                f"user_id: {_user.get('user_id', None)}; user_max_budget: {user_max_budget}; user_current_spend: {user_current_spend}"
-                            )
-
-                            if (
-                                user_max_budget is not None
-                                and user_current_spend is not None
-                            ):
-                                call_info = CallInfo(
-                                    token=valid_token.token,
-                                    spend=user_current_spend,
-                                    max_budget=user_max_budget,
-                                    user_id=_user.get("user_id", None),
-                                    user_email=_user.get("user_email", None),
-                                    key_alias=valid_token.key_alias,
-                                )
-                                asyncio.create_task(
-                                    proxy_logging_obj.budget_alerts(
-                                        type="user_budget",
-                                        user_info=call_info,
-                                    )
-                                )
-
-                                _user_id = _user.get("user_id", None)
-                                if user_current_spend > user_max_budget:
-                                    raise litellm.BudgetExceededError(
-                                        current_cost=user_current_spend,
-                                        max_budget=user_max_budget,
-                                    )
-                    else:
-                        # Token exists, not expired now check if its in budget for the user
-                        user_max_budget = getattr(
-                            user_id_information, "max_budget", None
-                        )
-                        user_current_spend = getattr(user_id_information, "spend", None)
-
-                        if (
-                            user_max_budget is not None
-                            and user_current_spend is not None
-                        ):
-                            call_info = CallInfo(
-                                token=valid_token.token,
-                                spend=user_current_spend,
-                                max_budget=user_max_budget,
-                                user_id=getattr(user_id_information, "user_id", None),
-                                user_email=getattr(
-                                    user_id_information, "user_email", None
-                                ),
-                                key_alias=valid_token.key_alias,
-                            )
-                            asyncio.create_task(
-                                proxy_logging_obj.budget_alerts(
-                                    type="user_budget",
-                                    user_info=call_info,
-                                )
-                            )
-
-                            if user_current_spend > user_max_budget:
-                                raise litellm.BudgetExceededError(
-                                    current_cost=user_current_spend,
-                                    max_budget=user_max_budget,
-                                )
 
             # Check 3. Check if user is in their team budget
             if valid_token.team_member_spend is not None:
@@ -829,11 +732,8 @@ async def user_api_key_auth(
 
                 user_email: Optional[str] = None
                 # Check if the token has any user id information
-                if user_id_information is not None and len(user_id_information) > 0:
-                    specific_user_id_information = user_id_information[0]
-                    _user_email = specific_user_id_information.get("user_email", None)
-                    if _user_email is not None:
-                        user_email = str(_user_email)
+                if user_obj is not None:
+                    user_email = user_obj.user_email
 
                 call_info = CallInfo(
                     token=valid_token.token,
@@ -983,7 +883,7 @@ async def user_api_key_auth(
             _ = common_checks(
                 request_body=request_data,
                 team_object=_team_obj,
-                user_object=None,
+                user_object=user_obj,
                 end_user_object=_end_user_object,
                 general_settings=general_settings,
                 global_proxy_spend=global_proxy_spend,
@@ -1007,9 +907,9 @@ async def user_api_key_auth(
             if _end_user_object is not None:
                 valid_token_dict.update(end_user_params)
 
-            _user_role = _get_user_role(user_id_information=user_id_information)
+            _user_role = _get_user_role(user_obj=user_obj)
 
-            if not _is_user_proxy_admin(user_id_information):  # if non-admin
+            if not _is_user_proxy_admin(user_obj=user_obj):  # if non-admin
                 if is_llm_api_route(route=route):
                     pass
                 elif is_llm_api_route(route=request["route"].name):
@@ -1091,14 +991,9 @@ async def user_api_key_auth(
                 else:
                     user_role = "unknown"
                     user_id = "unknown"
-                    if (
-                        user_id_information is not None
-                        and isinstance(user_id_information, list)
-                        and len(user_id_information) > 0
-                    ):
-                        _user = user_id_information[0]
-                        user_role = _user.get("user_role", "unknown")
-                        user_id = _user.get("user_id", "unknown")
+                    if user_obj is not None:
+                        user_role = user_obj.user_role or "unknown"
+                        user_id = user_obj.user_id or "unknown"
                     raise Exception(
                         f"Only proxy admin can be used to generate, delete, update info for new keys/users/teams. Route={route}. Your role={user_role}. Your user_id={user_id}"
                     )
@@ -1144,9 +1039,7 @@ async def user_api_key_auth(
                 # Do something if the current route starts with any of the allowed routes
                 pass
             else:
-                if user_id_information is not None and _is_user_proxy_admin(
-                    user_id_information
-                ):
+                if user_obj is not None and _is_user_proxy_admin(user_obj=user_obj):
                     return UserAPIKeyAuth(
                         api_key=api_key,
                         user_role=LitellmUserRoles.PROXY_ADMIN,
@@ -1172,7 +1065,7 @@ async def user_api_key_auth(
             raise Exception("Invalid proxy server token passed")
         if valid_token_dict is not None:
             return _return_user_api_key_auth_obj(
-                user_id_information=user_id_information,
+                user_obj=user_obj,
                 api_key=api_key,
                 parent_otel_span=parent_otel_span,
                 valid_token_dict=valid_token_dict,
@@ -1219,17 +1112,16 @@ async def user_api_key_auth(
 
 
 def _return_user_api_key_auth_obj(
-    user_id_information: Optional[list],
+    user_obj: Optional[LiteLLM_UserTable],
     api_key: str,
     parent_otel_span: Optional[Span],
     valid_token_dict: dict,
     route: str,
 ) -> UserAPIKeyAuth:
     retrieved_user_role = (
-        _get_user_role(user_id_information=user_id_information)
-        or LitellmUserRoles.INTERNAL_USER
+        _get_user_role(user_obj=user_obj) or LitellmUserRoles.INTERNAL_USER
     )
-    if user_id_information is not None and _is_user_proxy_admin(user_id_information):
+    if user_obj is not None and _is_user_proxy_admin(user_obj=user_obj):
         return UserAPIKeyAuth(
             api_key=api_key,
             user_role=LitellmUserRoles.PROXY_ADMIN,
@@ -1270,30 +1162,19 @@ def _has_user_setup_sso():
     return sso_setup
 
 
-def _is_user_proxy_admin(user_id_information: Optional[list]):
-    if user_id_information is None:
+def _is_user_proxy_admin(user_obj: Optional[LiteLLM_UserTable]):
+    if user_obj is None:
         return False
 
-    if len(user_id_information) == 0 or user_id_information[0] is None:
-        return False
-
-    _user = user_id_information[0]
     if (
-        _user.get("user_role", None) is not None
-        and _user.get("user_role") == LitellmUserRoles.PROXY_ADMIN.value
+        user_obj.user_role is not None
+        and user_obj.user_role == LitellmUserRoles.PROXY_ADMIN.value
     ):
         return True
 
-    # if user_id_information contains litellm-proxy-budget
-    # get first user_id that is not litellm-proxy-budget
-    for user in user_id_information:
-        if user.get("user_id") != "litellm-proxy-budget":
-            _user = user
-            break
-
     if (
-        _user.get("user_role", None) is not None
-        and _user.get("user_role") == LitellmUserRoles.PROXY_ADMIN.value
+        user_obj.user_role is not None
+        and user_obj.user_role == LitellmUserRoles.PROXY_ADMIN.value
     ):
         return True
 
@@ -1301,29 +1182,20 @@ def _is_user_proxy_admin(user_id_information: Optional[list]):
 
 
 def _get_user_role(
-    user_id_information: Optional[list],
-) -> Optional[
-    Literal[
-        LitellmUserRoles.PROXY_ADMIN,
-        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
-        LitellmUserRoles.INTERNAL_USER,
-        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
-        LitellmUserRoles.TEAM,
-        LitellmUserRoles.CUSTOMER,
-    ]
-]:
-    if user_id_information is None:
+    user_obj: Optional[LiteLLM_UserTable],
+) -> Optional[LitellmUserRoles]:
+    if user_obj is None:
         return None
 
-    if len(user_id_information) == 0 or user_id_information[0] is None:
-        return None
+    _user = user_obj
 
-    _user = user_id_information[0]
+    _user_role = _user.user_role
+    try:
+        role = LitellmUserRoles(_user_role)
+    except ValueError:
+        return LitellmUserRoles.INTERNAL_USER
 
-    _user_role = _user.get("user_role")
-    if _user_role in list(LitellmUserRoles.__annotations__.keys()):
-        return _user_role
-    return LitellmUserRoles.INTERNAL_USER
+    return role
 
 
 def _check_valid_ip(allowed_ips: Optional[List[str]], request: Request) -> bool:

@@ -45,32 +45,33 @@ interface ViewUserSpendProps {
 const ViewUserSpend: React.FC<ViewUserSpendProps> = ({ userID, userRole, accessToken, userSpend, selectedTeam }) => {
     console.log(`userSpend: ${userSpend}`)
     let [spend, setSpend] = useState(userSpend !== null ? userSpend : 0.0);
-    const [maxBudget, setMaxBudget] = useState(0.0);
+    const [maxBudget, setMaxBudget] = useState(selectedTeam ? selectedTeam.max_budget : null);
+    console.log(`maxBudget: ${maxBudget}, selectedTeam.max_budget: ${selectedTeam.max_budget}, selectedTeam: ${JSON.stringify(selectedTeam)}`)
     const [userModels, setUserModels] = useState([]);
     useEffect(() => {
       const fetchData = async () => {
         if (!accessToken || !userID || !userRole) {
           return;
         }
-        if (userRole === "Admin" && userSpend == null) {
-          try {
-            const globalSpend = await getTotalSpendCall(accessToken);
-            if (globalSpend) {
-              if (globalSpend.spend) {
-                setSpend(globalSpend.spend);
-              } else {
-                setSpend(0.0);
-              }
-              if (globalSpend.max_budget) {
-                setMaxBudget(globalSpend.max_budget);
-              } else {
-                setMaxBudget(0.0);
-              }
-            }
-          } catch (error) {
-            console.error("Error fetching global spend data:", error);
-          }
-        }
+        // if (userRole === "Admin" && userSpend == null) {
+        //   try {
+        //     const globalSpend = await getTotalSpendCall(accessToken);
+        //     if (globalSpend) {
+        //       if (globalSpend.spend) {
+        //         setSpend(globalSpend.spend);
+        //       } else {
+        //         setSpend(0.0);
+        //       }
+        //       if (globalSpend.max_budget) {
+        //         setMaxBudget(globalSpend.max_budget);
+        //       } else {
+        //         setMaxBudget(null);
+        //       }
+        //     }
+        //   } catch (error) {
+        //     console.error("Error fetching global spend data:", error);
+        //   }
+        // }
       };
       const fetchUserModels = async () => {
         try {
@@ -102,6 +103,11 @@ const ViewUserSpend: React.FC<ViewUserSpendProps> = ({ userID, userRole, accessT
         setSpend(userSpend)
       }
     }, [userSpend])
+    useEffect(() => {
+      if (selectedTeam && selectedTeam.max_budget !== maxBudget) {
+        setMaxBudget(selectedTeam.max_budget);
+      }
+    }, [selectedTeam, maxBudget]);
 
     // logic to decide what models to display
     let modelsToDisplay = [];
@@ -127,14 +133,24 @@ const ViewUserSpend: React.FC<ViewUserSpendProps> = ({ userID, userRole, accessT
     console.log(`spend in view user spend: ${spend}`)
     return (
       <div className="flex items-center">
+       <div className="flex justify-between gap-x-6">
         <div>
           <p className="text-tremor-default text-tremor-content dark:text-dark-tremor-content">
-            Total Spend{" "}
+            Total Spend
           </p>
           <p className="text-2xl text-tremor-content-strong dark:text-dark-tremor-content-strong font-semibold">
             ${roundedSpend}
           </p>
         </div>
+        <div>
+          <p className="text-tremor-default text-tremor-content dark:text-dark-tremor-content">
+            Max Budget
+          </p>
+          <p className="text-2xl text-tremor-content-strong dark:text-dark-tremor-content-strong font-semibold">
+            {displayMaxBudget}
+          </p>
+        </div>
+      </div>
         {/* <div className="ml-auto">
           <Accordion>
             <AccordionHeader><Text>Team Models</Text></AccordionHeader>

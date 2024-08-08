@@ -800,3 +800,39 @@ async def test_get_team_redis(client_no_auth):
             pass
 
         mock_client.assert_called_once()
+
+
+import random
+import uuid
+from unittest.mock import AsyncMock, MagicMock, patch
+
+from litellm.proxy._types import LitellmUserRoles, NewUserRequest, UserAPIKeyAuth
+from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
+from litellm.tests.test_key_generate_prisma import prisma_client
+
+
+@pytest.mark.asyncio
+async def test_create_user_default_budget(prisma_client):
+
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm, "max_internal_user_budget", 10)
+    await litellm.proxy.proxy_server.prisma_client.connect()
+    user = f"ishaan {uuid.uuid4().hex}"
+    request = NewUserRequest(user_id=user)  # create a key with no budget
+    with patch.object(
+        litellm.proxy.proxy_server.prisma_client, "insert_data", new=AsyncMock()
+    ) as mock_client:
+        await new_user(
+            request,
+        )
+
+        mock_client.assert_called()
+
+        print(f"mock_client.call_args: {mock_client.call_args}")
+        print("mock_client.call_args.kwargs: {}".format(mock_client.call_args.kwargs))
+
+        assert (
+            mock_client.call_args.kwargs["data"]["max_budget"]
+            == litellm.max_internal_user_budget
+        )

@@ -96,23 +96,87 @@ async def test_check_blocked_team():
 
 
 @pytest.mark.parametrize(
-    "user_role", ["app_user", "internal_user", "proxy_admin_viewer"]
+    "user_role, expected_role",
+    [
+        ("app_user", "internal_user"),
+        ("internal_user", "internal_user"),
+        ("proxy_admin_viewer", "proxy_admin_viewer"),
+    ],
 )
-def test_returned_user_api_key_auth(user_role):
-    from litellm.proxy._types import LitellmUserRoles
+def test_returned_user_api_key_auth(user_role, expected_role):
+    from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles
     from litellm.proxy.auth.user_api_key_auth import _return_user_api_key_auth_obj
 
-    user_id_information = [{"user_role": user_role}]
-
     new_obj = _return_user_api_key_auth_obj(
-        user_id_information,
+        user_obj=LiteLLM_UserTable(
+            user_role=user_role, user_id="", max_budget=None, user_email=""
+        ),
         api_key="hello-world",
         parent_otel_span=None,
         valid_token_dict={},
         route="/chat/completion",
     )
 
-    if user_role in list(LitellmUserRoles.__annotations__.keys()):
-        assert new_obj.user_role == user_role
-    else:
-        assert new_obj.user_role == "internal_user"
+    assert new_obj.user_role == expected_role
+
+
+@pytest.mark.parametrize("key_ownership", ["user_key", "team_key"])
+@pytest.mark.asyncio
+async def test_user_personal_budgets(key_ownership):
+    """
+    Set a personal budget on a user
+
+    - have it only apply when key belongs to user -> raises BudgetExceededError
+    - if key belongs to team, have key respect team budget -> allows call to go through
+    """
+    import asyncio
+    import time
+
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    from litellm.proxy._types import LiteLLM_UserTable, UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.proxy_server import hash_token, user_api_key_cache
+
+    _user_id = "1234"
+    user_key = "sk-12345678"
+
+    if key_ownership == "user_key":
+        valid_token = UserAPIKeyAuth(
+            token=hash_token(user_key),
+            last_refreshed_at=time.time(),
+            user_id=_user_id,
+            spend=20,
+        )
+    elif key_ownership == "team_key":
+        valid_token = UserAPIKeyAuth(
+            token=hash_token(user_key),
+            last_refreshed_at=time.time(),
+            user_id=_user_id,
+            team_id="my-special-team",
+            team_max_budget=100,
+            spend=20,
+        )
+    await asyncio.sleep(1)
+    user_obj = LiteLLM_UserTable(
+        user_id=_user_id, spend=11, max_budget=10, user_email=""
+    )
+    user_api_key_cache.set_cache(key=hash_token(user_key), value=valid_token)
+    user_api_key_cache.set_cache(key="{}".format(_user_id), value=user_obj)
+
+    setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "prisma_client", "hello-world")
+
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+
+    try:
+        await user_api_key_auth(request=request, api_key="Bearer " + user_key)
+
+        if key_ownership == "user_key":
+            pytest.fail("Expected this call to fail. User is over limit.")
+    except Exception:
+        if key_ownership == "team_key":
+            pytest.fail("Expected this call to work. Key is below team budget.")
