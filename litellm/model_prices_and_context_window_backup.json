@@ -293,18 +293,17 @@
         "supports_function_calling": true,
         "source": "OpenAI needs to add pricing for this ft model, will be updated when added by OpenAI. Defaulting to base model pricing"
     },
-    "ft:gpt-4o-2024-05-13": {
-        "max_tokens": 4096,
+    "ft:gpt-4o-mini-2024-07-18": {
+        "max_tokens": 16384,
         "max_input_tokens": 128000,
-        "max_output_tokens": 4096,
-        "input_cost_per_token": 0.000005,
-        "output_cost_per_token": 0.000015,
+        "max_output_tokens": 16384,
+        "input_cost_per_token": 0.0000003,
+        "output_cost_per_token": 0.0000012,
         "litellm_provider": "openai",
         "mode": "chat",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
-        "supports_vision": true,
-        "source": "OpenAI needs to add pricing for this ft model, will be updated when added by OpenAI. Defaulting to base model pricing"
+        "supports_vision": true
     },
     "ft:davinci-002": {
         "max_tokens": 16384,
@@ -4039,6 +4038,66 @@
         "litellm_provider": "ollama",
         "mode": "completion"
     },
+    "ollama/codegeex4": {
+        "max_tokens": 32768,
+        "max_input_tokens": 32768,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "ollama",
+        "mode": "chat", 
+        "supports_function_calling": false
+    },
+    "ollama/deepseek-coder-v2-instruct": {
+        "max_tokens": 32768,
+        "max_input_tokens": 32768,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "ollama",
+        "mode": "chat", 
+        "supports_function_calling": true
+    },
+    "ollama/deepseek-coder-v2-base": {
+        "max_tokens": 8192,
+        "max_input_tokens": 8192,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "ollama",
+        "mode": "completion", 
+        "supports_function_calling": true
+    },
+    "ollama/deepseek-coder-v2-lite-instruct": {
+        "max_tokens": 32768,
+        "max_input_tokens": 32768,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "ollama",
+        "mode": "chat", 
+        "supports_function_calling": true
+    },
+    "ollama/deepseek-coder-v2-lite-base": {
+        "max_tokens": 8192,
+        "max_input_tokens": 8192,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "ollama",
+        "mode": "completion", 
+        "supports_function_calling": true
+    },
+    "ollama/internlm2_5-20b-chat": {
+        "max_tokens": 32768,
+        "max_input_tokens": 32768,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "ollama",
+        "mode": "chat", 
+        "supports_function_calling": true
+    },
     "ollama/llama2": {
         "max_tokens": 4096, 
         "max_input_tokens": 4096, 
@@ -4094,7 +4153,7 @@
         "mode": "chat"
     },
     "ollama/llama3.1": {
-        "max_tokens": 8192,
+        "max_tokens": 32768,
         "max_input_tokens": 8192,
         "max_output_tokens": 8192,
         "input_cost_per_token": 0.0,
@@ -4102,6 +4161,15 @@
         "litellm_provider": "ollama",
         "mode": "chat", 
         "supports_function_calling": true
+    },
+    "ollama/mistral-large-instruct-2407": {
+        "max_tokens": 65536,
+        "max_input_tokens": 65536,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "ollama",
+        "mode": "chat"
     },
     "ollama/mistral": {
         "max_tokens": 8192,

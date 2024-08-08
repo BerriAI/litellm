@@ -73,6 +73,7 @@ class ServiceLogging(CustomLogger):
         )
         for callback in litellm.service_callback:
             if callback == "prometheus_system":
+                await self.init_prometheus_services_logger_if_none()
                 await self.prometheusServicesLogger.async_service_success_hook(
                     payload=payload
                 )
@@ -87,6 +88,11 @@ class ServiceLogging(CustomLogger):
                         end_time=end_time,
                         event_metadata=event_metadata,
                     )
+
+    async def init_prometheus_services_logger_if_none(self):
+        if self.prometheusServicesLogger is None:
+            self.prometheusServicesLogger = self.prometheusServicesLogger()
+        return
 
     async def async_service_failure_hook(
         self,
@@ -120,8 +126,7 @@ class ServiceLogging(CustomLogger):
         )
         for callback in litellm.service_callback:
             if callback == "prometheus_system":
-                if self.prometheusServicesLogger is None:
-                    self.prometheusServicesLogger = self.prometheusServicesLogger()
+                await self.init_prometheus_services_logger_if_none()
                 await self.prometheusServicesLogger.async_service_failure_hook(
                     payload=payload
                 )

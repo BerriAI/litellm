@@ -69,13 +69,10 @@ To use Structured Outputs, simply specify
 response_format: { "type": "json_schema", "json_schema": … , "strict": true }
 ```
 
-Works for OpenAI models 
-
-:::info
-
-Support for passing in a pydantic object to litellm sdk will be [coming soon](https://github.com/BerriAI/litellm/issues/5074#issuecomment-2272355842)
-
-:::
+Works for:
+- OpenAI models 
+- Google AI Studio - Gemini models
+- Vertex AI models (Gemini + Anthropic)
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
@@ -89,36 +86,15 @@ os.environ["OPENAI_API_KEY"] = ""
 
 messages = [{"role": "user", "content": "List 5 cookie recipes"}]
 
+class CalendarEvent(BaseModel):
+  name: str
+  date: str
+  participants: list[str]
+
 resp = completion(
     model="gpt-4o-2024-08-06",
     messages=messages,
-    response_format={
-        "type": "json_schema",
-        "json_schema": {
-          "name": "math_reasoning",
-          "schema": {
-            "type": "object",
-            "properties": {
-              "steps": {
-                "type": "array",
-                "items": {
-                  "type": "object",
-                  "properties": {
-                    "explanation": { "type": "string" },
-                    "output": { "type": "string" }
-                  },
-                  "required": ["explanation", "output"],
-                  "additionalProperties": False
-                }
-              },
-              "final_answer": { "type": "string" }
-            },
-            "required": ["steps", "final_answer"],
-            "additionalProperties": False
-          },
-          "strict": True
-        },
-    }
+    response_format=CalendarEvent
 )
 
 print("Received={}".format(resp))
@@ -229,15 +205,15 @@ curl -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
 
 ## Validate JSON Schema 
 
-:::info
 
-Support for doing this in the openai 'json_schema' format will be [coming soon](https://github.com/BerriAI/litellm/issues/5074#issuecomment-2272355842)
+Not all vertex models support passing the json_schema to them (e.g. `gemini-1.5-flash`). To solve this, LiteLLM supports client-side validation of the json schema. 
 
-:::
+```
+litellm.enable_json_schema_validation=True
+```
+If `litellm.enable_json_schema_validation=True` is set, LiteLLM will validate the json response using `jsonvalidator`. 
 
-For VertexAI models, LiteLLM supports passing the `response_schema` and validating the JSON output.
-
-This works across Gemini (`vertex_ai_beta/`) + Anthropic (`vertex_ai/`) models. 
+[**See Code**](https://github.com/BerriAI/litellm/blob/671d8ac496b6229970c7f2a3bdedd6cb84f0746b/litellm/litellm_core_utils/json_validation_rule.py#L4)
 
 
 <Tabs>
@@ -245,33 +221,28 @@ This works across Gemini (`vertex_ai_beta/`) + Anthropic (`vertex_ai/`) models.
 
 ```python
 # !gcloud auth application-default login - run this to add vertex credentials to your env
-
+import litellm, os
 from litellm import completion 
+from pydantic import BaseModel 
 
-messages = [{"role": "user", "content": "List 5 cookie recipes"}]
 
-response_schema = {
-    "type": "array",
-    "items": {
-        "type": "object",
-        "properties": {
-            "recipe_name": {
-                "type": "string",
-            },
-        },
-        "required": ["recipe_name"],
-    },
-}
+messages=[
+        {"role": "system", "content": "Extract the event information."},
+        {"role": "user", "content": "Alice and Bob are going to a science fair on Friday."},
+    ]
+
+litellm.enable_json_schema_validation = True
+litellm.set_verbose = True # see the raw request made by litellm
+
+class CalendarEvent(BaseModel):
+  name: str
+  date: str
+  participants: list[str]
 
 resp = completion(
-    model="vertex_ai_beta/gemini-1.5-pro",
+    model="gemini/gemini-1.5-pro",
     messages=messages,
-    response_format={
-        "type": "json_object",
-        "response_schema": response_schema,
-        "enforce_validation": True, # client-side json schema validation
-    },
-    vertex_location="us-east5",
+    response_format=CalendarEvent,
 )
 
 print("Received={}".format(resp))
@@ -279,26 +250,63 @@ print("Received={}".format(resp))
 </TabItem>
 <TabItem value="proxy" label="PROXY">
 
+1. Create config.yaml
+```yaml
+model_list:
+  - model_name: "gemini-1.5-flash"
+    litellm_params:
+      model: "gemini/gemini-1.5-flash"
+      api_key: os.environ/GEMINI_API_KEY
+
+litellm_settings:
+  enable_json_schema_validation: True
+```
+
+2. Start proxy 
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
 ```bash
 curl http://0.0.0.0:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $LITELLM_API_KEY" \
   -d '{
-    "model": "vertex_ai_beta/gemini-1.5-pro",
-    "messages": [{"role": "user", "content": "List 5 cookie recipes"}]
+    "model": "gemini-1.5-flash",
+    "messages": [
+        {"role": "system", "content": "Extract the event information."},
+        {"role": "user", "content": "Alice and Bob are going to a science fair on Friday."},
+    ],
     "response_format": { 
         "type": "json_object",
-        "enforce_validation: true, 
         "response_schema": { 
-            "type": "array",
-            "items": {
+            "type": "json_schema",
+            "json_schema": {
+              "name": "math_reasoning",
+              "schema": {
                 "type": "object",
                 "properties": {
-                    "recipe_name": {
-                        "type": "string",
-                    },
+                  "steps": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "explanation": { "type": "string" },
+                        "output": { "type": "string" }
+                      },
+                      "required": ["explanation", "output"],
+                      "additionalProperties": false
+                    }
+                  },
+                  "final_answer": { "type": "string" }
                 },
-                "required": ["recipe_name"],
+                "required": ["steps", "final_answer"],
+                "additionalProperties": false
+              },
+              "strict": true
             },
         }
     },

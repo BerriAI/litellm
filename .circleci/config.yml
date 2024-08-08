@@ -47,7 +47,7 @@ jobs:
             pip install opentelemetry-api==1.25.0
             pip install opentelemetry-sdk==1.25.0
             pip install opentelemetry-exporter-otlp==1.25.0
-            pip install openai==1.34.0
+            pip install openai==1.40.0
             pip install prisma==0.11.0   
             pip install "detect_secrets==1.5.0"         
             pip install "httpx==0.24.1"
@@ -165,7 +165,6 @@ jobs:
             pip install "pytest==7.3.1"
             pip install "pytest-asyncio==0.21.1"
             pip install aiohttp
-            pip install openai
             python -m pip install --upgrade pip
             python -m pip install -r .circleci/requirements.txt
             pip install "pytest==7.3.1"
@@ -190,6 +189,7 @@ jobs:
             pip install "aiodynamo==23.10.1"
             pip install "asyncio==3.4.3"
             pip install "PyGithub==1.59.1"
+            pip install "openai==1.40.0"
             # Run pytest and generate JUnit XML report
       - run:
           name: Build Docker image
@@ -209,6 +209,7 @@ jobs:
               -e MISTRAL_API_KEY=$MISTRAL_API_KEY \
               -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
               -e GROQ_API_KEY=$GROQ_API_KEY \
+              -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
               -e COHERE_API_KEY=$COHERE_API_KEY \
               -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
               -e AWS_REGION_NAME=$AWS_REGION_NAME \

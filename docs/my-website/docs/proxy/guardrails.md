@@ -338,6 +338,7 @@ litellm_settings:
         - Full List: presidio, lakera_prompt_injection, hide_secrets, llmguard_moderations, llamaguard_moderations, google_text_moderation
     - `default_on`: bool,  will run on all llm requests when true
     - `logging_only`: Optional[bool], if true, run guardrail only on logged output, not on the actual LLM API call. Currently only supported for presidio pii masking. Requires `default_on` to be True as well.
+    - `callback_args`: Optional[Dict[str, Dict]]: If set, pass in init args for that specific guardrail
 
 Example: 
 
@@ -347,6 +348,7 @@ litellm_settings:
     - prompt_injection:  # your custom name for guardrail
         callbacks: [lakera_prompt_injection, hide_secrets, llmguard_moderations, llamaguard_moderations, google_text_moderation] # litellm callbacks to use
         default_on: true # will run on all llm requests when true
+        callback_args: {"lakera_prompt_injection": {"moderation_check": "pre_call"}}
     - hide_secrets:
         callbacks: [hide_secrets]
         default_on: true

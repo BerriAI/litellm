@@ -17,6 +17,7 @@ import inspect
 import json
 import logging
 import random
+import re
 import threading
 import time
 import traceback
@@ -57,6 +58,7 @@ from litellm.router_utils.client_initalization_utils import (
     set_client,
     should_initialize_sync_client,
 )
+from litellm.router_utils.cooldown_callbacks import router_cooldown_handler
 from litellm.router_utils.handle_error import send_llm_exception_alert
 from litellm.scheduler import FlowItem, Scheduler
 from litellm.types.llms.openai import (
@@ -309,6 +311,7 @@ class Router:
         )
         self.default_deployment = None  # use this to track the users default deployment, when they want to use model = *
         self.default_max_parallel_requests = default_max_parallel_requests
+        self.provider_default_deployments: Dict[str, List] = {}
 
         if model_list is not None:
             model_list = copy.deepcopy(model_list)
@@ -2316,8 +2319,10 @@ class Router:
         )
         try:
             if mock_testing_fallbacks is not None and mock_testing_fallbacks is True:
-                raise Exception(
-                    f"This is a mock exception for model={model_group}, to trigger a fallback. Fallbacks={fallbacks}"
+                raise litellm.InternalServerError(
+                    model=model_group,
+                    llm_provider="",
+                    message=f"This is a mock exception for model={model_group}, to trigger a fallback. Fallbacks={fallbacks}",
                 )
             elif (
                 mock_testing_context_fallbacks is not None
@@ -2347,6 +2352,7 @@ class Router:
             verbose_router_logger.debug(f"Traceback{traceback.format_exc()}")
             original_exception = e
             fallback_model_group = None
+            fallback_failure_exception_str = ""
             try:
                 verbose_router_logger.debug("Trying to fallback b/w models")
                 if (
@@ -2505,6 +2511,7 @@ class Router:
                         await self._async_get_cooldown_deployments_with_debug_info(),
                     )
                 )
+                fallback_failure_exception_str = str(new_exception)
 
             if hasattr(original_exception, "message"):
                 # add the available fallbacks to the exception
@@ -2512,6 +2519,13 @@ class Router:
                     model_group,
                     fallback_model_group,
                 )
+                if len(fallback_failure_exception_str) > 0:
+                    original_exception.message += (
+                        "\nError doing the fallback: {}".format(
+                            fallback_failure_exception_str
+                        )
+                    )
+
             raise original_exception
 
     async def async_function_with_retries(self, *args, **kwargs):
@@ -3294,10 +3308,14 @@ class Router:
                     value=cached_value, key=cooldown_key, ttl=cooldown_time
                 )
 
-            self.send_deployment_cooldown_alert(
-                deployment_id=deployment,
-                exception_status=exception_status,
-                cooldown_time=cooldown_time,
+            # Trigger cooldown handler
+            asyncio.create_task(
+                router_cooldown_handler(
+                    litellm_router_instance=self,
+                    deployment_id=deployment,
+                    exception_status=exception_status,
+                    cooldown_time=cooldown_time,
+                )
             )
         else:
             self.failed_calls.set_cache(
@@ -3591,6 +3609,10 @@ class Router:
             ),
         )
 
+        provider_specific_deployment = re.match(
+            rf"{custom_llm_provider}/\*$", deployment.model_name
+        )
+
         # Check if user is trying to use model_name == "*"
         # this is a catch all model for their specific api key
         if deployment.model_name == "*":
@@ -3599,6 +3621,17 @@ class Router:
                 self.router_general_settings.pass_through_all_models = True
             else:
                 self.default_deployment = deployment.to_json(exclude_none=True)
+        # Check if user is using provider specific wildcard routing
+        # example model_name = "databricks/*" or model_name = "anthropic/*"
+        elif provider_specific_deployment:
+            if custom_llm_provider in self.provider_default_deployments:
+                self.provider_default_deployments[custom_llm_provider].append(
+                    deployment.to_json(exclude_none=True)
+                )
+            else:
+                self.provider_default_deployments[custom_llm_provider] = [
+                    deployment.to_json(exclude_none=True)
+                ]
 
         # Azure GPT-Vision Enhancements, users can pass os.environ/
         data_sources = deployment.litellm_params.get("dataSources", []) or []
@@ -4436,12 +4469,37 @@ class Router:
             )
             model = self.model_group_alias[model]
 
-        if model not in self.model_names and self.default_deployment is not None:
-            updated_deployment = copy.deepcopy(
-                self.default_deployment
-            )  # self.default_deployment
-            updated_deployment["litellm_params"]["model"] = model
-            return model, updated_deployment
+        if model not in self.model_names:
+            # check if provider/ specific wildcard routing
+            try:
+                (
+                    _,
+                    custom_llm_provider,
+                    _,
+                    _,
+                ) = litellm.get_llm_provider(model=model)
+                # check if custom_llm_provider
+                if custom_llm_provider in self.provider_default_deployments:
+                    _provider_deployments = self.provider_default_deployments[
+                        custom_llm_provider
+                    ]
+                    provider_deployments = []
+                    for deployment in _provider_deployments:
+                        dep = copy.deepcopy(deployment)
+                        dep["litellm_params"]["model"] = model
+                        provider_deployments.append(dep)
+                    return model, provider_deployments
+            except:
+                # get_llm_provider raises exception when provider is unknown
+                pass
+
+            # check if default deployment is set
+            if self.default_deployment is not None:
+                updated_deployment = copy.deepcopy(
+                    self.default_deployment
+                )  # self.default_deployment
+                updated_deployment["litellm_params"]["model"] = model
+                return model, updated_deployment
 
         ## get healthy deployments
         ### get all deployments
@@ -4947,42 +5005,6 @@ class Router:
             _slack_alerting_logger.response_taking_too_long_callback
         )
         print("\033[94m\nInitialized Alerting for litellm.Router\033[0m\n")  # noqa
-
-    def send_deployment_cooldown_alert(
-        self,
-        deployment_id: str,
-        exception_status: Union[str, int],
-        cooldown_time: float,
-    ):
-        try:
-            from litellm.proxy.proxy_server import proxy_logging_obj
-
-            # trigger slack alert saying deployment is in cooldown
-            if (
-                proxy_logging_obj is not None
-                and proxy_logging_obj.alerting is not None
-                and "slack" in proxy_logging_obj.alerting
-            ):
-                _deployment = self.get_deployment(model_id=deployment_id)
-                if _deployment is None:
-                    return
-
-                _litellm_params = _deployment["litellm_params"]
-                temp_litellm_params = copy.deepcopy(_litellm_params)
-                temp_litellm_params = dict(temp_litellm_params)
-                _model_name = _deployment.get("model_name", None)
-                _api_base = litellm.get_api_base(
-                    model=_model_name, optional_params=temp_litellm_params
-                )
-                # asyncio.create_task(
-                #     proxy_logging_obj.slack_alerting_instance.send_alert(
-                #         message=f"Router: Cooling down Deployment:\nModel Name: `{_model_name}`\nAPI Base: `{_api_base}`\nCooldown Time: `{cooldown_time} seconds`\nException Status Code: `{str(exception_status)}`\n\nChange 'cooldown_time' + 'allowed_fails' under 'Router Settings' on proxy UI, or via config - https://docs.litellm.ai/docs/proxy/reliability#fallbacks--retries--timeouts--cooldowns",
-                #         alert_type="cooldown_deployment",
-                #         level="Low",
-                #     )
-                # )
-        except Exception as e:
-            pass
 
     def set_custom_routing_strategy(
         self, CustomRoutingStrategy: CustomRoutingStrategyBase
