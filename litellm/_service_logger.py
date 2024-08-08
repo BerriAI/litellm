@@ -90,7 +90,13 @@ class ServiceLogging(CustomLogger):
                     )
 
     async def init_prometheus_services_logger_if_none(self):
-        if self.prometheusServicesLogger is None:
+        """
+        initializes prometheusServicesLogger if it is None or no attribute exists on ServiceLogging Object
+
+        """
+        if not hasattr(self, "prometheusServicesLogger"):
+            self.prometheusServicesLogger = PrometheusServicesLogger()
+        elif self.prometheusServicesLogger is None:
             self.prometheusServicesLogger = self.prometheusServicesLogger()
         return
 
