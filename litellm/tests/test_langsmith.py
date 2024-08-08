@@ -60,9 +60,8 @@ async def test_async_langsmith_logging():
         print("fields in logged_run_on_langsmith", logged_run_on_langsmith.keys())
 
         input_fields_on_langsmith = logged_run_on_langsmith.get("inputs")
-        extra_fields_on_langsmith = logged_run_on_langsmith.get("extra").get(
-            "invocation_params"
-        )
+        _extra = logged_run_on_langsmith.get("extra", {}) or {}
+        extra_fields_on_langsmith = _extra.get("invocation_params")
 
         print("\nLogged INPUT ON LANGSMITH", input_fields_on_langsmith)
 
@@ -165,9 +164,8 @@ async def test_async_langsmith_logging_with_streaming_and_metadata(sync_mode):
 
         input_fields_on_langsmith = logged_run_on_langsmith.get("inputs")
 
-        extra_fields_on_langsmith = logged_run_on_langsmith.get("extra").get(
-            "invocation_params"
-        )
+        _extra = logged_run_on_langsmith.get("extra", {}) or {}
+        extra_fields_on_langsmith = _extra.get("invocation_params")
 
         assert logged_run_on_langsmith.get("run_type") == "llm"
         print("\nLogged INPUT ON LANGSMITH", input_fields_on_langsmith)
