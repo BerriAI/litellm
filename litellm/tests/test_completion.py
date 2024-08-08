@@ -892,51 +892,50 @@ def test_completion_claude_3_base64():
     "model", ["gemini/gemini-1.5-flash"]  # "claude-3-sonnet-20240229",
 )
 def test_completion_function_plus_image(model):
-    try:
-        litellm.set_verbose = True
+    litellm.set_verbose = True
 
-        image_content = [
-            {"type": "text", "text": "What’s in this image?"},
-            {
-                "type": "image_url",
-                "image_url": {
-                    "url": "https://litellm-listing.s3.amazonaws.com/litellm_logo.png"
+    image_content = [
+        {"type": "text", "text": "What’s in this image?"},
+        {
+            "type": "image_url",
+            "image_url": {
+                "url": "https://litellm-listing.s3.amazonaws.com/litellm_logo.png"
+            },
+        },
+    ]
+    image_message = {"role": "user", "content": image_content}
+
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {
+                            "type": "string",
+                            "enum": ["celsius", "fahrenheit"],
+                        },
+                    },
+                    "required": ["location"],
                 },
             },
-        ]
-        image_message = {"role": "user", "content": image_content}
+        }
+    ]
 
-        tools = [
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_current_weather",
-                    "description": "Get the current weather in a given location",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "location": {
-                                "type": "string",
-                                "description": "The city and state, e.g. San Francisco, CA",
-                            },
-                            "unit": {
-                                "type": "string",
-                                "enum": ["celsius", "fahrenheit"],
-                            },
-                        },
-                        "required": ["location"],
-                    },
-                },
-            }
-        ]
-
-        tool_choice = {"type": "function", "function": {"name": "get_current_weather"}}
-        messages = [
-            {
-                "role": "user",
-                "content": "What's the weather like in Boston today in Fahrenheit?",
-            }
-        ]
+    tool_choice = {"type": "function", "function": {"name": "get_current_weather"}}
+    messages = [
+        {
+            "role": "user",
+            "content": "What's the weather like in Boston today in Fahrenheit?",
+        }
+    ]
 
     try:
         response = completion(
