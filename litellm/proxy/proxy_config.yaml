@@ -27,6 +27,10 @@ model_list:
       vertex_credentials: "adroit-crow-413218-a956eef1a2a8.json"
  # Add path to service account.json
 
+default_vertex_config:
+  vertex_project: "adroit-crow-413218"
+  vertex_location: "us-central1"
+  vertex_credentials: "adroit-crow-413218-a956eef1a2a8.json" # Add path to service account.json
 
 
 general_settings: 
