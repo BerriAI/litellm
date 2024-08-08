@@ -375,7 +375,7 @@ async def get_user_object(
         await user_api_key_cache.async_set_cache(key=user_id, value=_response)
 
         return _response
-    except Exception as e:  # if user not in db
+    except Exception:  # if user not in db
         raise ValueError(
             f"User doesn't exist in db. 'user_id'={user_id}. Create user via `/user/new` call."
         )
