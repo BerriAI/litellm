@@ -278,6 +278,8 @@ class VertexFineTuningAPI(VertexLLM):
             url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}{request_route}"
         elif "countTokens" in request_route:
             url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}{request_route}"
+        elif "cachedContents" in request_route:
+            url = f"https://{vertex_location}-aiplatform.googleapis.com/v1beta1/projects/{vertex_project}/locations/{vertex_location}{request_route}"
         else:
             raise ValueError(f"Unsupported Vertex AI request route: {request_route}")
         if self.async_handler is None:
