@@ -798,3 +798,23 @@ async def test_key_model_list(model_access, model_access_level, model_endpoint):
             elif model_endpoint == "/model/info":
                 assert isinstance(model_list["data"], list)
                 assert len(model_list["data"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_key_user_not_in_db():
+    """
+    - Create a key with unique user-id (not in db)
+    - Check if key can make `/chat/completion` call
+    """
+    my_unique_user = str(uuid.uuid4())
+    async with aiohttp.ClientSession() as session:
+        key_gen = await generate_key(
+            session=session,
+            i=0,
+            user_id=my_unique_user,
+        )
+        key = key_gen["key"]
+        try:
+            await chat_completion(session=session, key=key)
+        except Exception as e:
+            pytest.fail(f"Expected this call to work - {str(e)}")
