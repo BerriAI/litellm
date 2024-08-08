@@ -1827,6 +1827,7 @@ class Cache:
         completion_kwargs = [
             "model",
             "messages",
+            "prompt",
             "temperature",
             "top_p",
             "n",
