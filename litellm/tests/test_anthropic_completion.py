@@ -183,3 +183,96 @@ async def test_anthropic_router_completion_e2e():
     assert isinstance(response, AnthropicResponse)
 
     assert response.model == "gpt-3.5-turbo"
+
+
+def test_anthropic_tool_calling_translation():
+    kwargs = {
+        "model": "claude-3-5-sonnet-20240620",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Would development of a software platform be under ASC 350-40 or ASC 985?",
+                    }
+                ],
+            },
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "37d6f703-cbcc-497d-95a1-2aa24a114adc",
+                        "name": "TaskPlanningTool",
+                        "input": {
+                            "completed_steps": [],
+                            "next_steps": [
+                                {
+                                    "tool_name": "AccountingResearchTool",
+                                    "description": "Research ASC 350-40 to understand its scope and applicability to software development.",
+                                },
+                                {
+                                    "tool_name": "AccountingResearchTool",
+                                    "description": "Research ASC 985 to understand its scope and applicability to software development.",
+                                },
+                                {
+                                    "tool_name": "AccountingResearchTool",
+                                    "description": "Compare the scopes of ASC 350-40 and ASC 985 to determine which is more applicable to software platform development.",
+                                },
+                            ],
+                            "learnings": [],
+                            "potential_issues": [
+                                "The distinction between the two standards might not be clear-cut for all types of software development.",
+                                "There might be specific circumstances or details about the software platform that could affect which standard applies.",
+                            ],
+                            "missing_info": [
+                                "Specific details about the type of software platform being developed (e.g., for internal use or for sale).",
+                                "Whether the entity developing the software is also the end-user or if it's being developed for external customers.",
+                            ],
+                            "done": False,
+                            "required_formatting": None,
+                        },
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "eb7023b1-5ee8-43b8-b90f-ac5a23d37c31",
+                        "content": {
+                            "completed_steps": [],
+                            "next_steps": [
+                                {
+                                    "tool_name": "AccountingResearchTool",
+                                    "description": "Research ASC 350-40 to understand its scope and applicability to software development.",
+                                },
+                                {
+                                    "tool_name": "AccountingResearchTool",
+                                    "description": "Research ASC 985 to understand its scope and applicability to software development.",
+                                },
+                                {
+                                    "tool_name": "AccountingResearchTool",
+                                    "description": "Compare the scopes of ASC 350-40 and ASC 985 to determine which is more applicable to software platform development.",
+                                },
+                            ],
+                            "formatting_step": None,
+                        },
+                    }
+                ],
+            },
+        ],
+    }
+
+    from litellm.adapters.anthropic_adapter import anthropic_adapter
+
+    translated_params = anthropic_adapter.translate_completion_input_params(
+        kwargs=kwargs
+    )
+
+    print(translated_params["messages"])
+
+    assert len(translated_params["messages"]) > 0
+    assert translated_params["messages"][1]["role"] == "user"
