@@ -881,6 +881,21 @@ class VertexLLM(BaseLLM):
 
         return self._credentials.token, self.project_id
 
+    def is_using_v1beta1_features(self, optional_params: dict) -> bool:
+        """
+        VertexAI only supports ContextCaching on v1beta1
+
+        use this helper to decide if request should be sent to v1 or v1beta1
+
+        Returns v1beta1 if context caching is enabled
+        Returns v1 in all other cases
+        """
+        if "cached_content" in optional_params:
+            return True
+        if "CachedContent" in optional_params:
+            return True
+        return False
+
     def _get_token_and_url(
         self,
         model: str,
@@ -891,6 +906,7 @@ class VertexLLM(BaseLLM):
         stream: Optional[bool],
         custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
         api_base: Optional[str],
+        should_use_v1beta1_features: Optional[bool] = False,
     ) -> Tuple[Optional[str], str]:
         """
         Internal function. Returns the token and url for the call.
@@ -920,12 +936,13 @@ class VertexLLM(BaseLLM):
             vertex_location = self.get_vertex_region(vertex_region=vertex_location)
 
             ### SET RUNTIME ENDPOINT ###
+            version = "v1beta1" if should_use_v1beta1_features is True else "v1"
             endpoint = "generateContent"
             if stream is True:
                 endpoint = "streamGenerateContent"
-                url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}?alt=sse"
+                url = f"https://{vertex_location}-aiplatform.googleapis.com/{version}/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}?alt=sse"
             else:
-                url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}"
+                url = f"https://{vertex_location}-aiplatform.googleapis.com/{version}/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}"
 
         if (
             api_base is not None
@@ -1055,6 +1072,9 @@ class VertexLLM(BaseLLM):
     ) -> Union[ModelResponse, CustomStreamWrapper]:
         stream: Optional[bool] = optional_params.pop("stream", None)  # type: ignore
 
+        should_use_v1beta1_features = self.is_using_v1beta1_features(
+            optional_params=optional_params
+        )
         auth_header, url = self._get_token_and_url(
             model=model,
             gemini_api_key=gemini_api_key,
@@ -1064,6 +1084,7 @@ class VertexLLM(BaseLLM):
             stream=stream,
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
+            should_use_v1beta1_features=should_use_v1beta1_features,
         )
 
         ## TRANSFORMATION ##
