@@ -22,6 +22,7 @@ litellm.set_verbose = True
 import time
 
 
+@pytest.mark.skip(reason="Flaky test. covered by unit tests on custom logger.")
 @pytest.mark.asyncio()
 async def test_async_langsmith_logging():
     try:
@@ -59,8 +60,9 @@ async def test_async_langsmith_logging():
         print("fields in logged_run_on_langsmith", logged_run_on_langsmith.keys())
 
         input_fields_on_langsmith = logged_run_on_langsmith.get("inputs")
-        _extra = logged_run_on_langsmith.get("extra", {}) or {}
-        extra_fields_on_langsmith = _extra.get("invocation_params")
+        extra_fields_on_langsmith = logged_run_on_langsmith.get("extra").get(
+            "invocation_params"
+        )
 
         print("\nLogged INPUT ON LANGSMITH", input_fields_on_langsmith)
 
@@ -88,6 +90,7 @@ async def test_async_langsmith_logging():
 # test_langsmith_logging()
 
 
+@pytest.mark.skip(reason="Flaky test. covered by unit tests on custom logger.")
 def test_async_langsmith_logging_with_metadata():
     try:
         litellm.success_callback = ["langsmith"]
@@ -110,6 +113,7 @@ def test_async_langsmith_logging_with_metadata():
         print(e)
 
 
+@pytest.mark.skip(reason="Flaky test. covered by unit tests on custom logger.")
 @pytest.mark.parametrize("sync_mode", [False, True])
 @pytest.mark.asyncio
 async def test_async_langsmith_logging_with_streaming_and_metadata(sync_mode):
@@ -161,8 +165,9 @@ async def test_async_langsmith_logging_with_streaming_and_metadata(sync_mode):
 
         input_fields_on_langsmith = logged_run_on_langsmith.get("inputs")
 
-        _extra = logged_run_on_langsmith.get("extra", {}) or {}
-        extra_fields_on_langsmith = _extra.get("invocation_params")
+        extra_fields_on_langsmith = logged_run_on_langsmith.get("extra").get(
+            "invocation_params"
+        )
 
         assert logged_run_on_langsmith.get("run_type") == "llm"
         print("\nLogged INPUT ON LANGSMITH", input_fields_on_langsmith)
