@@ -55,11 +55,11 @@ def common_checks(
     1. If team is blocked
     2. If team can call model
     3. If team is in budget
-    5. If user passed in (JWT or key.user_id) - is in budget
-    4. If end_user (either via JWT or 'user' passed to /chat/completions, /embeddings endpoint) is in budget
-    5. [OPTIONAL] If 'enforce_end_user' enabled - did developer pass in 'user' param for openai endpoints
-    6. [OPTIONAL] If 'litellm.max_budget' is set (>0), is proxy under budget
-    7. [OPTIONAL] If guardrails modified - is request allowed to change this
+    4. If user passed in (JWT or key.user_id) - is in budget
+    5. If end_user (either via JWT or 'user' passed to /chat/completions, /embeddings endpoint) is in budget
+    6. [OPTIONAL] If 'enforce_end_user' enabled - did developer pass in 'user' param for openai endpoints
+    7. [OPTIONAL] If 'litellm.max_budget' is set (>0), is proxy under budget
+    8. [OPTIONAL] If guardrails modified - is request allowed to change this
     """
     _model = request_body.get("model", None)
     if team_object is not None and team_object.blocked is True:
@@ -88,21 +88,34 @@ def common_checks(
         and team_object.spend is not None
         and team_object.spend > team_object.max_budget
     ):
-        raise Exception(
-            f"Team={team_object.team_id} over budget. Spend={team_object.spend}, Budget={team_object.max_budget}"
+        raise litellm.BudgetExceededError(
+            current_cost=team_object.spend,
+            max_budget=team_object.max_budget,
+            message=f"Team={team_object.team_id} over budget. Spend={team_object.spend}, Budget={team_object.max_budget}",
         )
-    if user_object is not None and user_object.max_budget is not None:
+    # 4. If user is in budget
+    ## 4.1 check personal budget, if personal key
+    if (
+        (team_object is None or team_object.team_id is None)
+        and user_object is not None
+        and user_object.max_budget is not None
+    ):
         user_budget = user_object.max_budget
-        if user_budget > user_object.spend:
-            raise Exception(
-                f"ExceededBudget: User={user_object.user_id} over budget. Spend={user_object.spend}, Budget={user_budget}"
+        if user_budget < user_object.spend:
+            raise litellm.BudgetExceededError(
+                current_cost=user_object.spend,
+                max_budget=user_budget,
+                message=f"ExceededBudget: User={user_object.user_id} over budget. Spend={user_object.spend}, Budget={user_budget}",
             )
+    ## 4.2 check team member budget, if team key
     # 5. If end_user ('user' passed to /chat/completions, /embeddings endpoint) is in budget
     if end_user_object is not None and end_user_object.litellm_budget_table is not None:
         end_user_budget = end_user_object.litellm_budget_table.max_budget
         if end_user_budget is not None and end_user_object.spend > end_user_budget:
-            raise Exception(
-                f"ExceededBudget: End User={end_user_object.user_id} over budget. Spend={end_user_object.spend}, Budget={end_user_budget}"
+            raise litellm.BudgetExceededError(
+                current_cost=end_user_object.spend,
+                max_budget=end_user_budget,
+                message=f"ExceededBudget: End User={end_user_object.user_id} over budget. Spend={end_user_object.spend}, Budget={end_user_budget}",
             )
     # 6. [OPTIONAL] If 'enforce_user_param' enabled - did developer pass in 'user' param for openai endpoints
     if (

@@ -53,6 +53,12 @@ UI_PASSWORD=langchain        # password to sign in on UI
 
 On accessing the LiteLLM UI, you will be prompted to enter your username, password
 
+## Invite-other users 
+
+Allow others to create/delete their own keys. 
+
+[**Go Here**](./self_serve.md)
+
 ## ✨ Enterprise Features
 
 Features here are behind a commercial license in our `/enterprise` folder. [**See Code**](https://github.com/BerriAI/litellm/tree/main/enterprise)
