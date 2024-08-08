@@ -193,12 +193,12 @@ const sidebars = {
         "vertex_ai"
       ],
     },
+    "scheduler",
     {
       type: "category",
       label: "🚅 LiteLLM Python SDK",
       items: [
         "routing",
-        "scheduler",
         "set_keys",
         "completion/token_usage",
         "sdk_custom_pricing",
