@@ -504,7 +504,7 @@ def test_call_with_user_over_budget(prisma_client):
         asyncio.run(test())
     except Exception as e:
         error_detail = e.message
-        assert "Budget has been exceeded" in error_detail
+        assert "ExceededBudget:" in error_detail
         assert isinstance(e, ProxyException)
         assert e.type == ProxyErrorTypes.budget_exceeded
         print(vars(e))
@@ -607,7 +607,7 @@ def test_call_with_end_user_over_budget(prisma_client):
             # use generated key to auth in
             result = await user_api_key_auth(request=request, api_key=bearer_token)
             print("result from user auth with new key", result)
-            pytest.fail(f"This should have failed!. They key crossed it's budget")
+            pytest.fail("This should have failed!. They key crossed it's budget")
 
         asyncio.run(test())
     except Exception as e:
@@ -779,12 +779,12 @@ def test_call_with_user_over_budget_stream(prisma_client):
             # use generated key to auth in
             result = await user_api_key_auth(request=request, api_key=bearer_token)
             print("result from user auth with new key", result)
-            pytest.fail(f"This should have failed!. They key crossed it's budget")
+            pytest.fail("This should have failed!. They key crossed it's budget")
 
         asyncio.run(test())
     except Exception as e:
         error_detail = e.message
-        assert "Budget has been exceeded" in error_detail
+        assert "ExceededBudget:" in error_detail
         assert isinstance(e, ProxyException)
         assert e.type == ProxyErrorTypes.budget_exceeded
         print(vars(e))
@@ -2511,7 +2511,6 @@ async def test_update_user_role(prisma_client):
     Tests if we update user role, incorrect values are not stored in cache
     -> create a user with role == INTERNAL_USER
     -> access an Admin only route -> expect to fail
-
     -> update user role to == PROXY_ADMIN
     -> access an Admin only route -> expect to succeed
     """
@@ -2556,6 +2555,7 @@ async def test_update_user_role(prisma_client):
     await asyncio.sleep(2)
 
     # use generated key to auth in
+    print("\n\nMAKING NEW REQUEST WITH UPDATED USER ROLE\n\n")
     result = await user_api_key_auth(request=request, api_key=api_key)
     print("result from user auth with new key", result)
 

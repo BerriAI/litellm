@@ -938,6 +938,7 @@ def test_completion_function_plus_image(model):
             }
         ]
 
+    try:
         response = completion(
             model=model,
             messages=[image_message],
@@ -949,8 +950,6 @@ def test_completion_function_plus_image(model):
         print(response)
     except litellm.InternalServerError:
         pass
-    except Exception as e:
-        pytest.fail(f"error occurred: {str(e)}")
 
 
 @pytest.mark.parametrize(
