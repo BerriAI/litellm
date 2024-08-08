@@ -236,6 +236,7 @@ def get_ollama_response(
     format = optional_params.pop("format", None)
     function_name = optional_params.pop("function_name", None)
     tools = optional_params.pop("tools", None)
+    keep_alive = optional_params.pop("keep_alive", None)
 
     for m in messages:
         if "role" in m and m["role"] == "tool":
@@ -251,6 +252,8 @@ def get_ollama_response(
         data["format"] = format
     if tools is not None:
         data["tools"] = tools
+    if keep_alive is not None:
+        data["keep_alive"] = keep_alive
     ## LOGGING
     logging_obj.pre_call(
         input=None,

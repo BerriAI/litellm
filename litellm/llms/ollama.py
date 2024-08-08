@@ -218,6 +218,12 @@ def get_ollama_response(
     stream = optional_params.pop("stream", False)
     format = optional_params.pop("format", None)
     images = optional_params.pop("images", None)
+    system = optional_params.pop("system", None)
+    template = optional_params.pop("template", None)
+    context = optional_params.pop("context", None)
+    raw = optional_params.pop("raw", None)
+    keep_alive = optional_params.pop("keep_alive", None)
+    suffix = optional_params.pop("suffix", None)
     data = {
         "model": model,
         "prompt": prompt,
@@ -228,6 +234,18 @@ def get_ollama_response(
         data["format"] = format
     if images is not None:
         data["images"] = [_convert_image(image) for image in images]
+    if system is not None:
+        data["system"] = system
+    if template is not None:
+        data["template"] = template
+    if context is not None:
+        data["context"] = context
+    if raw is not None:
+        data["raw"] = raw
+    if keep_alive is not None:
+        data["keep_alive"] = keep_alive
+    if suffix is not None:
+        data["suffix"] = suffix
 
     ## LOGGING
     logging_obj.pre_call(
