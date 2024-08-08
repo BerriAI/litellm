@@ -88,8 +88,8 @@ async def new_user(
         )
 
     if "max_budget" in data_json and data_json["max_budget"] is None:
-        if litellm.max_user_budget is not None:
-            data_json["max_budget"] = litellm.max_user_budget
+        if litellm.max_internal_user_budget is not None:
+            data_json["max_budget"] = litellm.max_internal_user_budget
 
     response = await generate_key_helper_fn(request_type="user", **data_json)
 
