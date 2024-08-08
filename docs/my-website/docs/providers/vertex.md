@@ -446,7 +446,7 @@ model_list:
       model: vertex_ai_beta/gemini-1.5-pro-001
       vertex_project: "project-id"
       vertex_location: "us-central1"
-      vertex_credentials: "/path/to/service_account.json" # [OPTIONAL] Do this OR `!gcloud auth application-default login` - run this to add vertex credentials to your env
+      vertex_credentials: "adroit-crow-413218-a956eef1a2a8.json" # Add path to service account.json
 
 # used for the /cachedContent and vertexAI native endpoints
 default_vertex_config:
