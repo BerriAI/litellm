@@ -1,7 +1,16 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# 📈 Prometheus metrics [BETA]
+# 📈 [BETA] Prometheus metrics
+
+:::info
+🚨 Prometheus Metrics will be moving to LiteLLM Enterprise on September 15th, 2024
+
+[Enterprise Pricing](https://www.litellm.ai/#pricing)
+
+[Contact us here to get a free trial](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+
+:::
 
 LiteLLM Exposes a `/metrics` endpoint for Prometheus to Poll
 
@@ -47,8 +56,10 @@ http://localhost:4000/metrics
 # <proxy_base_url>/metrics
 ```
 
-## Metrics Tracked 
+## 📈 Metrics Tracked 
 
+
+### Proxy Requests / Spend Metrics
 
 | Metric Name          | Description                          |
 |----------------------|--------------------------------------|
@@ -57,6 +68,19 @@ http://localhost:4000/metrics
 | `litellm_total_tokens`         | input + output tokens per `"user", "key", "model", "team", "end-user"`     |
 | `litellm_llm_api_failed_requests_metric`   | Number of failed LLM API requests per `"user", "key", "model", "team", "end-user"`    |
 
+### LLM API / Provider Metrics
+
+| Metric Name          | Description                          |
+|----------------------|--------------------------------------|
+| `deployment_complete_outage`             | Value is "1" when deployment is in cooldown and has had a complete outage. This metric tracks the state of the LLM API Deployment when it's completely unavailable. |
+| `deployment_partial_outage`                | Value is "1" when deployment is experiencing a partial outage. This metric indicates when the LLM API Deployment is facing issues but is not completely down. |
+| `deployment_healthy`                | Value is "1" when deployment is in a healthy state. This metric shows when the LLM API Deployment is functioning normally without any outages. |
+| `litellm_remaining_requests_metric`             | Track `x-ratelimit-remaining-requests` returned from LLM API Deployment |
+| `litellm_remaining_tokens`                | Track `x-ratelimit-remaining-tokens` return from LLM API Deployment |
+
+
+
+
 ### Budget Metrics
 | Metric Name          | Description                          |
 |----------------------|--------------------------------------|
@@ -64,55 +88,6 @@ http://localhost:4000/metrics
 | `litellm_remaining_api_key_budget_metric`                | Remaining Budget for API Key (A key Created on LiteLLM)|
 
 
-### ✨ (Enterprise) LLM Remaining Requests and Remaining Tokens
-Set this on your config.yaml to allow you to track how close you are to hitting your TPM / RPM limits on each model group 
-
-```yaml
-litellm_settings:
-  success_callback: ["prometheus"]
-  failure_callback: ["prometheus"]
-  return_response_headers: true # ensures the LLM API calls track the response headers
-```
-
-| Metric Name          | Description                          |
-|----------------------|--------------------------------------|
-| `litellm_remaining_requests_metric`             | Track `x-ratelimit-remaining-requests` returned from LLM API Deployment |
-| `litellm_remaining_tokens`                | Track `x-ratelimit-remaining-tokens` return from LLM API Deployment |
-
-Example Metric
-<Tabs>
-
-<TabItem value="Remaining Requests" label="Remaining Requests">
-
-```shell
-litellm_remaining_requests
-{
-  api_base="https://api.openai.com/v1",
-  api_provider="openai",
-  litellm_model_name="gpt-3.5-turbo",
-  model_group="gpt-3.5-turbo"
-} 
-8998.0
-```
-
-</TabItem>
-
-<TabItem value="Requests" label="Remaining Tokens">
-
-```shell
-litellm_remaining_tokens
-{
-  api_base="https://api.openai.com/v1",
-  api_provider="openai",
-  litellm_model_name="gpt-3.5-turbo",
-  model_group="gpt-3.5-turbo"
-} 
-999981.0
-```
-
-</TabItem>
-
-</Tabs>
 
 ## Monitor System Health
 

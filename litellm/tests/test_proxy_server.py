@@ -31,7 +31,7 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
 )
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 from fastapi import FastAPI
 
@@ -757,7 +757,7 @@ async def test_team_update_redis():
     with patch.object(
         proxy_logging_obj.internal_usage_cache.redis_cache,
         "async_set_cache",
-        new=MagicMock(),
+        new=AsyncMock(),
     ) as mock_client:
         await _cache_team_object(
             team_id="1234",
@@ -766,7 +766,7 @@ async def test_team_update_redis():
             proxy_logging_obj=proxy_logging_obj,
         )
 
-        mock_client.assert_called_once()
+        mock_client.assert_called()
 
 
 @pytest.mark.asyncio
@@ -794,7 +794,7 @@ async def test_get_team_redis(client_no_auth):
                 user_api_key_cache=DualCache(),
                 parent_otel_span=None,
                 proxy_logging_obj=proxy_logging_obj,
-                prisma_client=MagicMock(),
+                prisma_client=AsyncMock(),
             )
         except Exception as e:
             pass

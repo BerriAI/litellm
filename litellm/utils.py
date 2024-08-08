@@ -45,6 +45,8 @@ import requests
 import tiktoken
 from httpx import Proxy
 from httpx._utils import get_environment_proxies
+from openai.lib import _parsing, _pydantic
+from openai.types.chat.completion_create_params import ResponseFormat
 from pydantic import BaseModel
 from tokenizers import Tokenizer
 
@@ -158,6 +160,7 @@ from typing import (
     Literal,
     Optional,
     Tuple,
+    Type,
     Union,
     cast,
     get_args,
@@ -629,8 +632,8 @@ def client(original_function):
                     call_type == CallTypes.completion.value
                     or call_type == CallTypes.acompletion.value
                 ):
-                    is_coroutine = check_coroutine(original_function)
-                    if is_coroutine == True:
+                    is_coroutine = check_coroutine(original_response)
+                    if is_coroutine is True:
                         pass
                     else:
                         if isinstance(original_response, ModelResponse):
@@ -643,6 +646,49 @@ def client(original_function):
                                     input=model_response, model=model
                                 )
                                 ### JSON SCHEMA VALIDATION ###
+                                if litellm.enable_json_schema_validation is True:
+                                    try:
+                                        if (
+                                            optional_params is not None
+                                            and "response_format" in optional_params
+                                            and optional_params["response_format"]
+                                            is not None
+                                        ):
+                                            json_response_format: Optional[dict] = None
+                                            if (
+                                                isinstance(
+                                                    optional_params["response_format"],
+                                                    dict,
+                                                )
+                                                and optional_params[
+                                                    "response_format"
+                                                ].get("json_schema")
+                                                is not None
+                                            ):
+                                                json_response_format = optional_params[
+                                                    "response_format"
+                                                ]
+                                            elif (
+                                                _parsing._completions.is_basemodel_type(
+                                                    optional_params["response_format"]
+                                                )
+                                            ):
+                                                json_response_format = (
+                                                    type_to_response_format_param(
+                                                        response_format=optional_params[
+                                                            "response_format"
+                                                        ]
+                                                    )
+                                                )
+                                            if json_response_format is not None:
+                                                litellm.litellm_core_utils.json_validation_rule.validate_schema(
+                                                    schema=json_response_format[
+                                                        "json_schema"
+                                                    ]["schema"],
+                                                    response=model_response,
+                                                )
+                                    except TypeError:
+                                        pass
                                 if (
                                     optional_params is not None
                                     and "response_format" in optional_params
@@ -2806,6 +2852,11 @@ def get_optional_params(
                     message=f"Function calling is not supported by {custom_llm_provider}.",
                 )
 
+    if "response_format" in non_default_params:
+        non_default_params["response_format"] = type_to_response_format_param(
+            response_format=non_default_params["response_format"]
+        )
+
     if "tools" in non_default_params and isinstance(
         non_default_params, list
     ):  # fixes https://github.com/BerriAI/litellm/issues/4933
@@ -3139,6 +3190,7 @@ def get_optional_params(
         optional_params = litellm.VertexAILlama3Config().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
+            model=model,
         )
     elif custom_llm_provider == "vertex_ai" and model in litellm.vertex_mistral_models:
         supported_params = get_supported_openai_params(
@@ -3536,22 +3588,11 @@ def get_optional_params(
         )
         _check_valid_arg(supported_params=supported_params)
 
-        if frequency_penalty is not None:
-            optional_params["frequency_penalty"] = frequency_penalty
-        if max_tokens is not None:
-            optional_params["max_tokens"] = max_tokens
-        if presence_penalty is not None:
-            optional_params["presence_penalty"] = presence_penalty
-        if stop is not None:
-            optional_params["stop"] = stop
-        if stream is not None:
-            optional_params["stream"] = stream
-        if temperature is not None:
-            optional_params["temperature"] = temperature
-        if logprobs is not None:
-            optional_params["logprobs"] = logprobs
-        if top_logprobs is not None:
-            optional_params["top_logprobs"] = top_logprobs
+        optional_params = litellm.OpenAIConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+        )
     elif custom_llm_provider == "openrouter":
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider
@@ -4141,12 +4182,15 @@ def get_supported_openai_params(
             "frequency_penalty",
             "max_tokens",
             "presence_penalty",
+            "response_format",
             "stop",
             "stream",
             "temperature",
             "top_p",
             "logprobs",
             "top_logprobs",
+            "tools",
+            "tool_choice",
         ]
     elif custom_llm_provider == "cohere":
         return [
@@ -6110,6 +6154,36 @@ def _should_retry(status_code: int):
         return True
 
     return False
+
+
+def type_to_response_format_param(
+    response_format: Optional[Union[Type[BaseModel], dict]],
+) -> Optional[dict]:
+    """
+    Re-implementation of openai's 'type_to_response_format_param' function
+
+    Used for converting pydantic object to api schema.
+    """
+    if response_format is None:
+        return None
+
+    if isinstance(response_format, dict):
+        return response_format
+
+    # type checkers don't narrow the negation of a `TypeGuard` as it isn't
+    # a safe default behaviour but we know that at this point the `response_format`
+    # can only be a `type`
+    if not _parsing._completions.is_basemodel_type(response_format):
+        raise TypeError(f"Unsupported response_format type - {response_format}")
+
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "schema": _pydantic.to_strict_json_schema(response_format),
+            "name": response_format.__name__,
+            "strict": True,
+        },
+    }
 
 
 def _get_retry_after_from_exception_header(

@@ -1192,7 +1192,15 @@ def vertex_httpx_mock_post_valid_response(*args, **kwargs):
                     "role": "model",
                     "parts": [
                         {
-                            "text": '[{"recipe_name": "Chocolate Chip Cookies"}, {"recipe_name": "Oatmeal Raisin Cookies"}, {"recipe_name": "Peanut Butter Cookies"}, {"recipe_name": "Sugar Cookies"}, {"recipe_name": "Snickerdoodles"}]\n'
+                            "text": """{
+                            "recipes": [
+                                {"recipe_name": "Chocolate Chip Cookies"},
+                                {"recipe_name": "Oatmeal Raisin Cookies"},
+                                {"recipe_name": "Peanut Butter Cookies"},
+                                {"recipe_name": "Sugar Cookies"},
+                                {"recipe_name": "Snickerdoodles"}
+                            ]
+                            }"""
                         }
                     ],
                 },
@@ -1253,13 +1261,15 @@ def vertex_httpx_mock_post_valid_response_anthropic(*args, **kwargs):
                 "id": "toolu_vrtx_01YMnYZrToPPfcmY2myP2gEB",
                 "name": "json_tool_call",
                 "input": {
-                    "values": [
-                        {"recipe_name": "Chocolate Chip Cookies"},
-                        {"recipe_name": "Oatmeal Raisin Cookies"},
-                        {"recipe_name": "Peanut Butter Cookies"},
-                        {"recipe_name": "Snickerdoodle Cookies"},
-                        {"recipe_name": "Sugar Cookies"},
-                    ]
+                    "values": {
+                        "recipes": [
+                            {"recipe_name": "Chocolate Chip Cookies"},
+                            {"recipe_name": "Oatmeal Raisin Cookies"},
+                            {"recipe_name": "Peanut Butter Cookies"},
+                            {"recipe_name": "Snickerdoodle Cookies"},
+                            {"recipe_name": "Sugar Cookies"},
+                        ]
+                    }
                 },
             }
         ],
@@ -1377,16 +1387,19 @@ async def test_gemini_pro_json_schema_args_sent_httpx(
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
     response_schema = {
-        "type": "array",
-        "items": {
-            "type": "object",
-            "properties": {
-                "recipe_name": {
-                    "type": "string",
+        "type": "object",
+        "properties": {
+            "recipes": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {"recipe_name": {"type": "string"}},
+                    "required": ["recipe_name"],
                 },
-            },
-            "required": ["recipe_name"],
+            }
         },
+        "required": ["recipes"],
+        "additionalProperties": False,
     }
 
     client = HTTPHandler()
@@ -1415,6 +1428,108 @@ async def test_gemini_pro_json_schema_args_sent_httpx(
                     "response_schema": response_schema,
                     "enforce_validation": enforce_validation,
                 },
+                vertex_location=vertex_location,
+                client=client,
+            )
+            print("Received={}".format(resp))
+            if invalid_response is True and enforce_validation is True:
+                pytest.fail("Expected this to fail")
+        except litellm.JSONSchemaValidationError as e:
+            if invalid_response is False:
+                pytest.fail("Expected this to pass. Got={}".format(e))
+
+        mock_call.assert_called_once()
+        if "claude" not in model:
+            print(mock_call.call_args.kwargs)
+            print(mock_call.call_args.kwargs["json"]["generationConfig"])
+
+            if supports_response_schema:
+                assert (
+                    "response_schema"
+                    in mock_call.call_args.kwargs["json"]["generationConfig"]
+                )
+            else:
+                assert (
+                    "response_schema"
+                    not in mock_call.call_args.kwargs["json"]["generationConfig"]
+                )
+                assert (
+                    "Use this JSON schema:"
+                    in mock_call.call_args.kwargs["json"]["contents"][0]["parts"][1][
+                        "text"
+                    ]
+                )
+
+
+@pytest.mark.parametrize(
+    "model, vertex_location, supports_response_schema",
+    [
+        ("vertex_ai_beta/gemini-1.5-pro-001", "us-central1", True),
+        ("gemini/gemini-1.5-pro", None, True),
+        ("vertex_ai_beta/gemini-1.5-flash", "us-central1", False),
+        ("vertex_ai/claude-3-5-sonnet@20240620", "us-east5", False),
+    ],
+)
+@pytest.mark.parametrize(
+    "invalid_response",
+    [True, False],
+)
+@pytest.mark.parametrize(
+    "enforce_validation",
+    [True, False],
+)
+@pytest.mark.asyncio
+async def test_gemini_pro_json_schema_args_sent_httpx_openai_schema(
+    model,
+    supports_response_schema,
+    vertex_location,
+    invalid_response,
+    enforce_validation,
+):
+    from typing import List
+
+    if enforce_validation:
+        litellm.enable_json_schema_validation = True
+
+    from pydantic import BaseModel
+
+    load_vertex_ai_credentials()
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    litellm.set_verbose = True
+
+    messages = [{"role": "user", "content": "List 5 cookie recipes"}]
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    class Recipe(BaseModel):
+        recipe_name: str
+
+    class ResponseSchema(BaseModel):
+        recipes: List[Recipe]
+
+    client = HTTPHandler()
+
+    httpx_response = MagicMock()
+    if invalid_response is True:
+        if "claude" in model:
+            httpx_response.side_effect = (
+                vertex_httpx_mock_post_invalid_schema_response_anthropic
+            )
+        else:
+            httpx_response.side_effect = vertex_httpx_mock_post_invalid_schema_response
+    else:
+        if "claude" in model:
+            httpx_response.side_effect = vertex_httpx_mock_post_valid_response_anthropic
+        else:
+            httpx_response.side_effect = vertex_httpx_mock_post_valid_response
+    with patch.object(client, "post", new=httpx_response) as mock_call:
+        print("SENDING CLIENT POST={}".format(client.post))
+        try:
+            resp = completion(
+                model=model,
+                messages=messages,
+                response_format=ResponseSchema,
                 vertex_location=vertex_location,
                 client=client,
             )

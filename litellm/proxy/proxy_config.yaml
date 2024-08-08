@@ -3,14 +3,20 @@ model_list:
     litellm_params:
       model: openai/fake
       api_key: fake-key
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+      api_base: https://exampleopenaiendpoint-production.up.railwaz.app/
   - model_name: fireworks-llama-v3-70b-instruct
     litellm_params:
       model: fireworks_ai/accounts/fireworks/models/llama-v3-70b-instruct
       api_key: "os.environ/FIREWORKS"
-  - model_name: "*"
+  # provider specific wildcard routing
+  - model_name: "anthropic/*"
     litellm_params:
-      model: "*"
+      model: "anthropic/*"
+      api_key: os.environ/ANTHROPIC_API_KEY
+  - model_name: "groq/*"
+    litellm_params:
+      model: "groq/*"
+      api_key: os.environ/GROQ_API_KEY
   - model_name: "*"
     litellm_params:
       model: openai/*
@@ -51,3 +57,5 @@ general_settings:
 
 litellm_settings:
   callbacks: ["otel"] # 👈 KEY CHANGE
+  success_callback: ["prometheus"]
+  failure_callback: ["prometheus"]

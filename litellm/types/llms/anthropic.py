@@ -141,6 +141,11 @@ class ContentBlockDelta(TypedDict):
     delta: Union[ContentTextBlockDelta, ContentJsonBlockDelta]
 
 
+class ContentBlockStop(TypedDict):
+    type: Literal["content_block_stop"]
+    index: int
+
+
 class ToolUseBlock(TypedDict):
     """
     "content_block":{"type":"tool_use","id":"toolu_01T1x1fJ34qAmk2tNTrN7Up6","name":"get_weather","input":{}}

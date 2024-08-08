@@ -2,6 +2,7 @@ import copy
 import json
 import os
 import time
+import traceback
 import types
 from enum import Enum
 from functools import partial
@@ -36,6 +37,7 @@ from litellm.types.llms.anthropic import (
     AnthropicResponseUsageBlock,
     ContentBlockDelta,
     ContentBlockStart,
+    ContentBlockStop,
     ContentJsonBlockDelta,
     ContentTextBlockDelta,
     MessageBlockDelta,
@@ -920,7 +922,12 @@ class AnthropicChatCompletion(BaseLLM):
                     model=model, messages=messages, custom_llm_provider="anthropic"
                 )
             except Exception as e:
-                raise AnthropicError(status_code=400, message=str(e))
+                raise AnthropicError(
+                    status_code=400,
+                    message="{}\n{}\nReceived Messages={}".format(
+                        str(e), traceback.format_exc(), messages
+                    ),
+                )
 
         ## Load Config
         config = litellm.AnthropicConfig.get_config()
@@ -1079,10 +1086,30 @@ class ModelResponseIterator:
     def __init__(self, streaming_response, sync_stream: bool):
         self.streaming_response = streaming_response
         self.response_iterator = self.streaming_response
+        self.content_blocks: List[ContentBlockDelta] = []
+
+    def check_empty_tool_call_args(self) -> bool:
+        """
+        Check if the tool call block so far has been an empty string
+        """
+        args = ""
+        # if text content block -> skip
+        if len(self.content_blocks) == 0:
+            return False
+
+        if self.content_blocks[0]["delta"]["type"] == "text_delta":
+            return False
+
+        for block in self.content_blocks:
+            if block["delta"]["type"] == "input_json_delta":
+                args += block["delta"].get("partial_json", "")  # type: ignore
+
+        if len(args) == 0:
+            return True
+        return False
 
     def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
         try:
-            verbose_logger.debug(f"\n\nRaw chunk:\n{chunk}\n")
             type_chunk = chunk.get("type", "") or ""
 
             text = ""
@@ -1098,6 +1125,7 @@ class ModelResponseIterator:
                 chunk = {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': 'Hello'}}
                 """
                 content_block = ContentBlockDelta(**chunk)  # type: ignore
+                self.content_blocks.append(content_block)
                 if "text" in content_block["delta"]:
                     text = content_block["delta"]["text"]
                 elif "partial_json" in content_block["delta"]:
@@ -1116,6 +1144,7 @@ class ModelResponseIterator:
                 data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_01T1x1fJ34qAmk2tNTrN7Up6","name":"get_weather","input":{}}}
                 """
                 content_block_start = ContentBlockStart(**chunk)  # type: ignore
+                self.content_blocks = []  # reset content blocks when new block starts
                 if content_block_start["content_block"]["type"] == "text":
                     text = content_block_start["content_block"]["text"]
                 elif content_block_start["content_block"]["type"] == "tool_use":
@@ -1127,6 +1156,20 @@ class ModelResponseIterator:
                             "arguments": "",
                         },
                         "index": content_block_start["index"],
+                    }
+            elif type_chunk == "content_block_stop":
+                content_block_stop = ContentBlockStop(**chunk)  # type: ignore
+                # check if tool call content block
+                is_empty = self.check_empty_tool_call_args()
+                if is_empty:
+                    tool_use = {
+                        "id": None,
+                        "type": "function",
+                        "function": {
+                            "name": None,
+                            "arguments": "{}",
+                        },
+                        "index": content_block_stop["index"],
                     }
             elif type_chunk == "message_delta":
                 """

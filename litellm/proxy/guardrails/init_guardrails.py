@@ -38,6 +38,8 @@ def initialize_guardrails(
             verbose_proxy_logger.debug(guardrail.guardrail_name)
             verbose_proxy_logger.debug(guardrail.default_on)
 
+            callback_specific_params.update(guardrail.callback_args)
+
             if guardrail.default_on is True:
                 # add these to litellm callbacks if they don't exist
                 for callback in guardrail.callbacks:
@@ -46,7 +48,7 @@ def initialize_guardrails(
 
                     if guardrail.logging_only is True:
                         if callback == "presidio":
-                            callback_specific_params["logging_only"] = True
+                            callback_specific_params["presidio"] = {"logging_only": True}  # type: ignore
 
         default_on_callbacks_list = list(default_on_callbacks)
         if len(default_on_callbacks_list) > 0:

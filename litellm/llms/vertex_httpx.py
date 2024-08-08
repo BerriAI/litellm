@@ -181,13 +181,17 @@ class GoogleAIStudioGeminiConfig:  # key diff from VertexAI - 'frequency_penalty
                     optional_params["stop_sequences"] = value
             if param == "max_tokens":
                 optional_params["max_output_tokens"] = value
-            if param == "response_format" and value["type"] == "json_object":  # type: ignore
+            if param == "response_format":  # type: ignore
                 if value["type"] == "json_object":  # type: ignore
-                    optional_params["response_mime_type"] = "application/json"
-                elif value["type"] == "text":  # type: ignore
-                    optional_params["response_mime_type"] = "text/plain"
-                if "response_schema" in value:  # type: ignore
-                    optional_params["response_schema"] = value["response_schema"]  # type: ignore
+                    if value["type"] == "json_object":  # type: ignore
+                        optional_params["response_mime_type"] = "application/json"
+                    elif value["type"] == "text":  # type: ignore
+                        optional_params["response_mime_type"] = "text/plain"
+                    if "response_schema" in value:  # type: ignore
+                        optional_params["response_schema"] = value["response_schema"]  # type: ignore
+                elif value["type"] == "json_schema":  # type: ignore
+                    if "json_schema" in value and "schema" in value["json_schema"]:  # type: ignore
+                        optional_params["response_schema"] = value["json_schema"]["schema"]  # type: ignore
             if param == "tools" and isinstance(value, list):
                 gtool_func_declarations = []
                 for tool in value:
@@ -396,6 +400,9 @@ class VertexGeminiConfig:
                     optional_params["response_mime_type"] = "text/plain"
                 if "response_schema" in value:
                     optional_params["response_schema"] = value["response_schema"]
+                elif value["type"] == "json_schema":  # type: ignore
+                    if "json_schema" in value and "schema" in value["json_schema"]:  # type: ignore
+                        optional_params["response_schema"] = value["json_schema"]["schema"]  # type: ignore
             if param == "frequency_penalty":
                 optional_params["frequency_penalty"] = value
             if param == "presence_penalty":
@@ -1345,6 +1352,12 @@ class VertexLLM(BaseLLM):
         """
 
         _json_response = response.json()
+        if "predictions" not in _json_response:
+            raise litellm.InternalServerError(
+                message=f"image generation response does not contain 'predictions', got {_json_response}",
+                llm_provider="vertex_ai",
+                model=model,
+            )
         _predictions = _json_response["predictions"]
 
         _response_data: List[Image] = []
