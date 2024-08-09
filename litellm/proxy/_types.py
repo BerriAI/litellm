@@ -1752,3 +1752,4 @@ class SSOUserDefinedValues(TypedDict):
     user_email: Optional[str]
     user_role: Optional[str]
     max_budget: Optional[float]
+    budget_duration: Optional[str]
