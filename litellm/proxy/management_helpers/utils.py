@@ -30,7 +30,7 @@ from litellm.proxy.utils import PrismaClient
 
 def get_new_internal_user_defaults(
     user_id: str, user_email: Optional[str] = None
-) -> SSOUserDefinedValues:
+) -> dict:
     user_info = litellm.default_user_params or {}
 
     returned_dict: SSOUserDefinedValues = {
@@ -44,7 +44,11 @@ def get_new_internal_user_defaults(
         "user_role": "internal_user",
     }
 
-    return returned_dict
+    non_null_dict = {}
+    for k, v in returned_dict.items():
+        if v is not None:
+            non_null_dict[k] = v
+    return non_null_dict
 
 
 async def add_new_member(
