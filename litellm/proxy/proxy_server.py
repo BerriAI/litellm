@@ -283,7 +283,6 @@ except Exception as e:
         pass
 
 server_root_path = os.getenv("SERVER_ROOT_PATH", "")
-print("server root path: ", server_root_path)  # noqa
 _license_check = LicenseCheck()
 premium_user: bool = _license_check.is_premium()
 ui_link = f"{server_root_path}/ui/"
@@ -8629,8 +8628,13 @@ async def auth_callback(request: Request):
         _last_name = getattr(result, "last_name", "") or ""
         user_id = _first_name + _last_name
 
+    if user_email is not None and (user_id is None or len(user_id) == 0):
+        user_id = user_email
+
     user_info = None
     user_id_models: List = []
+    max_internal_user_budget = litellm.max_internal_user_budget
+    internal_user_budget_duration = litellm.internal_user_budget_duration
 
     # User might not be already created on first generation of key
     # But if it is, we want their models preferences
@@ -8642,10 +8646,13 @@ async def auth_callback(request: Request):
         "spend": 0,
         "team_id": "litellm-dashboard",
     }
-    user_defined_values = {
+    user_defined_values: SSOUserDefinedValues = {
         "models": user_id_models,
         "user_id": user_id,
         "user_email": user_email,
+        "max_budget": max_internal_user_budget,
+        "user_role": None,
+        "budget_duration": internal_user_budget_duration,
     }
     _user_id_from_sso = user_id
     try:
@@ -8657,10 +8664,16 @@ async def auth_callback(request: Request):
             )
             if user_info is not None:
                 user_defined_values = {
-                    "models": getattr(user_info, "models", []),
+                    "models": getattr(user_info, "models", user_id_models),
                     "user_id": getattr(user_info, "user_id", user_id),
                     "user_email": getattr(user_info, "user_id", user_email),
                     "user_role": getattr(user_info, "user_role", None),
+                    "max_budget": getattr(
+                        user_info, "max_budget", max_internal_user_budget
+                    ),
+                    "budget_duration": getattr(
+                        user_info, "budget_duration", internal_user_budget_duration
+                    ),
                 }
                 user_role = getattr(user_info, "user_role", None)
 
@@ -8674,6 +8687,12 @@ async def auth_callback(request: Request):
                     "user_id": user_id,
                     "user_email": getattr(user_info, "user_id", user_email),
                     "user_role": getattr(user_info, "user_role", None),
+                    "max_budget": getattr(
+                        user_info, "max_budget", max_internal_user_budget
+                    ),
+                    "budget_duration": getattr(
+                        user_info, "budget_duration", internal_user_budget_duration
+                    ),
                 }
                 user_role = getattr(user_info, "user_role", None)
 
@@ -8690,9 +8709,37 @@ async def auth_callback(request: Request):
                     "user_email": litellm.default_user_params.get(
                         "user_email", user_email
                     ),
+                    "user_role": litellm.default_user_params.get("user_role", None),
+                    "max_budget": litellm.default_user_params.get(
+                        "max_budget", max_internal_user_budget
+                    ),
+                    "budget_duration": litellm.default_user_params.get(
+                        "budget_duration", internal_user_budget_duration
+                    ),
                 }
+
     except Exception as e:
         pass
+
+    is_internal_user = False
+    if (
+        user_defined_values["user_role"] is not None
+        and user_defined_values["user_role"] == LitellmUserRoles.INTERNAL_USER.value
+    ):
+        is_internal_user = True
+    if (
+        is_internal_user is True
+        and user_defined_values["max_budget"] is None
+        and litellm.max_internal_user_budget is not None
+    ):
+        user_defined_values["max_budget"] = litellm.max_internal_user_budget
+
+    if (
+        is_internal_user is True
+        and user_defined_values["budget_duration"] is None
+        and litellm.internal_user_budget_duration is not None
+    ):
+        user_defined_values["budget_duration"] = litellm.internal_user_budget_duration
 
     verbose_proxy_logger.info(
         f"user_defined_values for creating ui key: {user_defined_values}"

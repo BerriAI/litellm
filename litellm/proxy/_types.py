@@ -1744,3 +1744,12 @@ class ProxyErrorTypes(str, enum.Enum):
     auth_error = "auth_error"
     internal_server_error = "internal_server_error"
     bad_request_error = "bad_request_error"
+
+
+class SSOUserDefinedValues(TypedDict):
+    models: List[str]
+    user_id: str
+    user_email: Optional[str]
+    user_role: Optional[str]
+    max_budget: Optional[float]
+    budget_duration: Optional[str]

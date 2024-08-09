@@ -811,15 +811,22 @@ from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
 from litellm.tests.test_key_generate_prisma import prisma_client
 
 
+@pytest.mark.parametrize(
+    "user_role",
+    [LitellmUserRoles.INTERNAL_USER.value, LitellmUserRoles.PROXY_ADMIN.value],
+)
 @pytest.mark.asyncio
-async def test_create_user_default_budget(prisma_client):
+async def test_create_user_default_budget(prisma_client, user_role):
 
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
     setattr(litellm, "max_internal_user_budget", 10)
+    setattr(litellm, "internal_user_budget_duration", "5m")
     await litellm.proxy.proxy_server.prisma_client.connect()
     user = f"ishaan {uuid.uuid4().hex}"
-    request = NewUserRequest(user_id=user)  # create a key with no budget
+    request = NewUserRequest(
+        user_id=user, user_role=user_role
+    )  # create a key with no budget
     with patch.object(
         litellm.proxy.proxy_server.prisma_client, "insert_data", new=AsyncMock()
     ) as mock_client:
@@ -832,7 +839,16 @@ async def test_create_user_default_budget(prisma_client):
         print(f"mock_client.call_args: {mock_client.call_args}")
         print("mock_client.call_args.kwargs: {}".format(mock_client.call_args.kwargs))
 
-        assert (
-            mock_client.call_args.kwargs["data"]["max_budget"]
-            == litellm.max_internal_user_budget
-        )
+        if user_role == LitellmUserRoles.INTERNAL_USER.value:
+            assert (
+                mock_client.call_args.kwargs["data"]["max_budget"]
+                == litellm.max_internal_user_budget
+            )
+            assert (
+                mock_client.call_args.kwargs["data"]["budget_duration"]
+                == litellm.internal_user_budget_duration
+            )
+
+        else:
+            assert mock_client.call_args.kwargs["data"]["max_budget"] is None
+            assert mock_client.call_args.kwargs["data"]["budget_duration"] is None
