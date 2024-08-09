@@ -1819,6 +1819,7 @@ def tgi_mock_post(url, data=None, json=None, headers=None):
 def test_hf_test_completion_tgi():
     litellm.set_verbose = True
     try:
+
         with patch("requests.post", side_effect=tgi_mock_post) as mock_client:
             response = completion(
                 model="huggingface/HuggingFaceH4/zephyr-7b-beta",
