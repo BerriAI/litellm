@@ -844,6 +844,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     modelData.data[i].provider = provider;
     modelData.data[i].input_cost = input_cost;
     modelData.data[i].output_cost = output_cost;
+    modelData.data[i].litellm_model_name = litellm_model_name;
 
     // Convert Cost in terms of Cost per 1M tokens
     if (modelData.data[i].input_cost) {
@@ -1381,6 +1382,16 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                       >
                         Provider
                       </TableHeaderCell>
+                      <TableHeaderCell
+                        style={{
+                          maxWidth: "150px",
+                          whiteSpace: "normal",
+                          wordBreak: "break-word",
+                          fontSize: "11px",
+                        }}
+                      >
+                        LiteLLM Model
+                      </TableHeaderCell>
                       {userRole === "Admin" && (
                         <TableHeaderCell
                           style={{
@@ -1507,6 +1518,34 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                             }}
                           >
                             <p className="text-xs">{model.provider || "-"}</p>
+                          </TableCell>
+                          <TableCell
+                            style={{
+                              maxWidth: "100px",
+                              whiteSpace: "normal",
+                              wordBreak: "break-word",
+                            }}
+                          >
+                            <Tooltip title={model && model.litellm_model_name}>
+                                <pre
+                                  style={{
+                                    maxWidth: "150px",
+                                    whiteSpace: "normal",
+                                    wordBreak: "break-word",
+                                  }}
+                                  className="text-xs"
+                                  title={
+                                    model && model.litellm_model_name
+                                      ? model.litellm_model_name
+                                      : ""
+                                  }
+                                >
+                                  {model && model.litellm_model_name
+                                    ? model.litellm_model_name.slice(0, 20) + (model.litellm_model_name.length > 20 ? "..." : "")
+                                    : "-"}
+                                </pre>
+                              </Tooltip>
+                            
                           </TableCell>
                           {userRole === "Admin" && (
                             <TableCell
