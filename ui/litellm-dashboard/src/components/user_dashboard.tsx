@@ -315,6 +315,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
           <ViewUserSpend
             userID={userID}
             userRole={userRole}
+            userMaxBudget={userSpendData?.max_budget || null}
             accessToken={accessToken}
             userSpend={teamSpend}
             selectedTeam={selectedTeam ? selectedTeam : null}
