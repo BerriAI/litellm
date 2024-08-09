@@ -91,6 +91,10 @@ async def new_user(
         if litellm.max_internal_user_budget is not None:
             data_json["max_budget"] = litellm.max_internal_user_budget
 
+    if "budget_duration" in data_json and data_json["budget_duration"] is None:
+        if litellm.internal_user_budget_duration is not None:
+            data_json["budget_duration"] = litellm.internal_user_budget_duration
+
     response = await generate_key_helper_fn(request_type="user", **data_json)
 
     # Admin UI Logic
