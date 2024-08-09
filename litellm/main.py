@@ -3387,7 +3387,7 @@ def embedding(
                 client=client,
                 aembedding=aembedding,
             )
-        elif custom_llm_provider == "cohere":
+        elif custom_llm_provider == "cohere" or custom_llm_provider == "cohere_chat":
             cohere_key = (
                 api_key
                 or litellm.cohere_key
@@ -3404,7 +3404,7 @@ def embedding(
                 logging_obj=logging,
                 model_response=EmbeddingResponse(),
                 aembedding=aembedding,
-                timeout=float(timeout),
+                timeout=timeout,
                 client=client,
             )
         elif custom_llm_provider == "huggingface":
