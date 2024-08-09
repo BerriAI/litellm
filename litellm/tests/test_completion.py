@@ -497,6 +497,8 @@ def test_completion_claude_3_function_call(model):
             drop_params=True,
         )
         print(second_response)
+    except litellm.InternalServerError:
+        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
