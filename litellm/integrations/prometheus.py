@@ -136,19 +136,10 @@ class PrometheusLogger:
                     "api_provider",
                 ]
 
-                self.deployment_complete_outage = Gauge(
-                    "deployment_complete_outage",
-                    'Value is "1" when deployment is in cooldown and has had a complete outage',
-                    labelnames=_logged_llm_labels,
-                )
-                self.deployment_partial_outage = Gauge(
-                    "deployment_partial_outage",
-                    'Value is "1" when deployment is experiencing a partial outage',
-                    labelnames=_logged_llm_labels,
-                )
-                self.deployment_healthy = Gauge(
-                    "deployment_healthy",
-                    'Value is "1" when deployment is in an healthy state',
+                # Metric for deployment state
+                self.deployment_state = Gauge(
+                    "deployment_state",
+                    "The state of the deployment: 0 = healthy, 1 = partial outage, 2 = complete outage",
                     labelnames=_logged_llm_labels,
                 )
 
@@ -311,7 +302,7 @@ class PrometheusLogger:
                 litellm_model_name=litellm_model_name,
                 model_id=model_id,
                 api_base=api_base,
-                llm_provider=llm_provider,
+                api_provider=llm_provider,
             )
 
             pass
@@ -371,7 +362,7 @@ class PrometheusLogger:
                 litellm_model_name=litellm_model_name,
                 model_id=model_id,
                 api_base=api_base,
-                llm_provider=llm_provider,
+                api_provider=llm_provider,
             )
         except Exception as e:
             verbose_logger.error(
@@ -381,63 +372,50 @@ class PrometheusLogger:
             )
             return
 
+    def set_deployment_state(
+        self,
+        state: int,
+        litellm_model_name: str,
+        model_id: str,
+        api_base: str,
+        api_provider: str,
+    ):
+        self.deployment_state.labels(
+            litellm_model_name, model_id, api_base, api_provider
+        ).set(state)
+
     def set_deployment_healthy(
         self,
         litellm_model_name: str,
         model_id: str,
         api_base: str,
-        llm_provider: str,
+        api_provider: str,
     ):
-        self.deployment_complete_outage.labels(
-            litellm_model_name, model_id, api_base, llm_provider
-        ).set(0)
-
-        self.deployment_partial_outage.labels(
-            litellm_model_name, model_id, api_base, llm_provider
-        ).set(0)
-
-        self.deployment_healthy.labels(
-            litellm_model_name, model_id, api_base, llm_provider
-        ).set(1)
-
-    def set_deployment_complete_outage(
-        self,
-        litellm_model_name: str,
-        model_id: str,
-        api_base: str,
-        llm_provider: str,
-    ):
-        verbose_logger.debug("setting llm outage metric")
-        self.deployment_complete_outage.labels(
-            litellm_model_name, model_id, api_base, llm_provider
-        ).set(1)
-
-        self.deployment_partial_outage.labels(
-            litellm_model_name, model_id, api_base, llm_provider
-        ).set(0)
-
-        self.deployment_healthy.labels(
-            litellm_model_name, model_id, api_base, llm_provider
-        ).set(0)
+        self.set_deployment_state(
+            0, litellm_model_name, model_id, api_base, api_provider
+        )
 
     def set_deployment_partial_outage(
         self,
         litellm_model_name: str,
         model_id: str,
         api_base: str,
-        llm_provider: str,
+        api_provider: str,
     ):
-        self.deployment_complete_outage.labels(
-            litellm_model_name, model_id, api_base, llm_provider
-        ).set(0)
+        self.set_deployment_state(
+            1, litellm_model_name, model_id, api_base, api_provider
+        )
 
-        self.deployment_partial_outage.labels(
-            litellm_model_name, model_id, api_base, llm_provider
-        ).set(1)
-
-        self.deployment_healthy.labels(
-            litellm_model_name, model_id, api_base, llm_provider
-        ).set(0)
+    def set_deployment_complete_outage(
+        self,
+        litellm_model_name: str,
+        model_id: str,
+        api_base: str,
+        api_provider: str,
+    ):
+        self.set_deployment_state(
+            2, litellm_model_name, model_id, api_base, api_provider
+        )
 
 
 def safe_get_remaining_budget(

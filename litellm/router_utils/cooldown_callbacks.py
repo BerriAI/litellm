@@ -38,6 +38,17 @@ async def router_cooldown_handler(
     model_info = _deployment["model_info"]
     model_id = model_info.id
 
+    litellm_model_name = temp_litellm_params.get("model")
+    llm_provider = ""
+    try:
+
+        _, llm_provider, _, _ = litellm.get_llm_provider(
+            model=litellm_model_name,
+            custom_llm_provider=temp_litellm_params.get("custom_llm_provider"),
+        )
+    except:
+        pass
+
     # Trigger cooldown on Prometheus
     from litellm.litellm_core_utils.litellm_logging import prometheusLogger
 
@@ -45,7 +56,7 @@ async def router_cooldown_handler(
         prometheusLogger.set_deployment_complete_outage(
             litellm_model_name=_model_name,
             model_id=model_id,
-            api_base="",
-            llm_provider="",
+            api_base=_api_base,
+            api_provider=llm_provider,
         )
-    pass
+    return
