@@ -219,3 +219,44 @@ def test_base64_image_input(url, expected_media_type):
     response = convert_to_anthropic_image_obj(openai_image_url=url)
 
     assert response["media_type"] == expected_media_type
+
+
+def test_anthropic_messages_tool_call():
+    messages = [
+        {
+            "role": "user",
+            "content": "Would development of a software platform be under ASC 350-40 or ASC 985?",
+        },
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_call_id": "bc8cb4b6-88c4-4138-8993-3a9d9cd51656",
+            "tool_calls": [
+                {
+                    "id": "bc8cb4b6-88c4-4138-8993-3a9d9cd51656",
+                    "function": {
+                        "arguments": '{"completed_steps": [], "next_steps": [{"tool_name": "AccountingResearchTool", "description": "Research ASC 350-40 to understand its scope and applicability to software development."}, {"tool_name": "AccountingResearchTool", "description": "Research ASC 985 to understand its scope and applicability to software development."}, {"tool_name": "AccountingResearchTool", "description": "Compare the scopes of ASC 350-40 and ASC 985 to determine which is more applicable to software platform development."}], "learnings": [], "potential_issues": ["The distinction between the two standards might not be clear-cut for all types of software development.", "There might be specific circumstances or details about the software platform that could affect which standard applies."], "missing_info": ["Specific details about the type of software platform being developed (e.g., for internal use or for sale).", "Whether the entity developing the software is also the end-user or if it\'s being developed for external customers."], "done": false, "required_formatting": null}',
+                        "name": "TaskPlanningTool",
+                    },
+                    "type": "function",
+                }
+            ],
+        },
+        {
+            "role": "function",
+            "content": '{"completed_steps":[],"next_steps":[{"tool_name":"AccountingResearchTool","description":"Research ASC 350-40 to understand its scope and applicability to software development."},{"tool_name":"AccountingResearchTool","description":"Research ASC 985 to understand its scope and applicability to software development."},{"tool_name":"AccountingResearchTool","description":"Compare the scopes of ASC 350-40 and ASC 985 to determine which is more applicable to software platform development."}],"formatting_step":null}',
+            "name": "TaskPlanningTool",
+            "tool_call_id": "bc8cb4b6-88c4-4138-8993-3a9d9cd51656",
+        },
+    ]
+
+    translated_messages = anthropic_messages_pt(
+        messages, model="claude-3-sonnet-20240229", llm_provider="anthropic"
+    )
+
+    print(translated_messages)
+
+    assert (
+        translated_messages[-1]["content"][0]["tool_use_id"]
+        == "bc8cb4b6-88c4-4138-8993-3a9d9cd51656"
+    )
