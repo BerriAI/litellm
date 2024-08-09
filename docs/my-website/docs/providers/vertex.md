@@ -363,9 +363,9 @@ print(resp)
 ```bash
 curl http://0.0.0.0:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Authorization: Bearer sk-1234" \
   -d '{
-    "model": "gpt-4o",
+    "model": "gemini-pro",
     "messages": [{"role": "user", "content": "Who won the world cup?"}],
     "tools": [
         {
