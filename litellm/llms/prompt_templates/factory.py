@@ -1135,8 +1135,9 @@ def convert_to_anthropic_tool_result(message: dict) -> AnthropicMessagesToolResu
         return anthropic_tool_result
     if message["role"] == "function":
         content = message.get("content")  # type: ignore
+        tool_call_id = message.get("tool_call_id") or str(uuid.uuid4())
         anthropic_tool_result = AnthropicMessagesToolResultParam(
-            type="tool_result", tool_use_id=str(uuid.uuid4()), content=content
+            type="tool_result", tool_use_id=tool_call_id, content=content
         )
 
         return anthropic_tool_result
