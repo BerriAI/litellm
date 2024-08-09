@@ -762,8 +762,8 @@ def completion(
     try:
         if base_url is not None:
             api_base = base_url
-        if max_retries is not None:  # openai allows openai.OpenAI(max_retries=3)
-            num_retries = max_retries
+        if num_retries is not None:
+            max_retries = num_retries
         logging = litellm_logging_obj
         fallbacks = fallbacks or litellm.model_fallbacks
         if fallbacks is not None:
