@@ -275,4 +275,4 @@ def test_anthropic_tool_calling_translation():
     print(translated_params["messages"])
 
     assert len(translated_params["messages"]) > 0
-    assert translated_params["messages"][1]["role"] == "user"
+    assert translated_params["messages"][0]["role"] == "user"
