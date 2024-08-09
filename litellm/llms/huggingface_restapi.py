@@ -578,6 +578,12 @@ class Huggingface(BaseLLM):
                         else False
                     )
                 input_text = prompt
+
+            if "options" in optional_params:
+                data["options"] = optional_params["options"]
+            if "parameters" in optional_params:
+                data["parameters"] = optional_params["parameters"]
+
             ## LOGGING
             logging_obj.pre_call(
                 input=input_text,
@@ -881,6 +887,11 @@ class Huggingface(BaseLLM):
             data = self._transform_input_on_pipeline_tag(
                 input=input, pipeline_tag=hf_task
             )
+
+        if "options" in optional_params:
+            data["options"] = optional_params["options"]
+        if "parameters" in optional_params:
+            data["parameters"] = optional_params["parameters"]
 
         return data
 
