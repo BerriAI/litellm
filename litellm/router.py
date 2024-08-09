@@ -2364,18 +2364,6 @@ class Router:
             fallback_failure_exception_str = ""
             try:
                 verbose_router_logger.debug("Trying to fallback b/w models")
-                if (
-                    hasattr(e, "status_code")
-                    and e.status_code == 400  # type: ignore
-                    and not (
-                        isinstance(e, litellm.ContextWindowExceededError)
-                        or isinstance(e, litellm.ContentPolicyViolationError)
-                    )
-                ):  # don't retry a malformed request
-                    verbose_router_logger.debug(
-                        "Not retrying request as it's malformed. Status code=400."
-                    )
-                    raise e
                 if isinstance(e, litellm.ContextWindowExceededError):
                     if context_window_fallbacks is not None:
                         fallback_model_group = None
@@ -2730,16 +2718,6 @@ class Router:
             original_exception = e
             verbose_router_logger.debug(f"An exception occurs {original_exception}")
             try:
-                if (
-                    hasattr(e, "status_code")
-                    and e.status_code == 400  # type: ignore
-                    and not (
-                        isinstance(e, litellm.ContextWindowExceededError)
-                        or isinstance(e, litellm.ContentPolicyViolationError)
-                    )
-                ):  # don't retry a malformed request
-                    raise e
-
                 verbose_router_logger.debug(
                     f"Trying to fallback b/w models. Initial model group: {model_group}"
                 )

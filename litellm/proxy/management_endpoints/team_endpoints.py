@@ -420,6 +420,7 @@ async def update_team(
 @management_endpoint_wrapper
 async def team_member_add(
     data: TeamMemberAddRequest,
+    http_request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
