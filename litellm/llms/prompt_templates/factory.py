@@ -2293,6 +2293,34 @@ def _bedrock_converse_messages_pt(
     return contents
 
 
+def make_valid_bedrock_tool_name(input_tool_name: str) -> str:
+    """
+    Replaces any invalid characters in the input tool name with underscores
+    and ensures the resulting string is a valid identifier for Bedrock tools
+    """
+
+    def replace_invalid(char):
+        """
+        Bedrock tool names only supports alpha-numeric characters and underscores
+        """
+        if char.isalnum() or char == "_":
+            return char
+        return "_"
+
+    # If the string is empty, return a default valid identifier
+    if input_tool_name is None or len(input_tool_name) == 0:
+        return input_tool_name
+
+    # If it doesn't start with a letter, prepend 'a'
+    if not input_tool_name[0].isalpha():
+        input_tool_name = "a" + input_tool_name
+
+    # Replace any invalid characters with underscores
+    valid_string = "".join(replace_invalid(char) for char in input_tool_name)
+
+    return valid_string
+
+
 def _bedrock_tools_pt(tools: List) -> List[BedrockToolBlock]:
     """
     OpenAI tools looks like:
@@ -2346,6 +2374,10 @@ def _bedrock_tools_pt(tools: List) -> List[BedrockToolBlock]:
     for tool in tools:
         parameters = tool.get("function", {}).get("parameters", None)
         name = tool.get("function", {}).get("name", "")
+
+        # related issue: https://github.com/BerriAI/litellm/issues/5007
+        # Bedrock tool names must satisfy regular expression pattern: [a-zA-Z][a-zA-Z0-9_]* ensure this is true
+        name = make_valid_bedrock_tool_name(input_tool_name=name)
         description = tool.get("function", {}).get(
             "description", name
         )  # converse api requires a description
