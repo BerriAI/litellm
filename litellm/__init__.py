@@ -261,6 +261,7 @@ default_user_params: Optional[Dict] = None
 default_team_settings: Optional[List] = None
 max_user_budget: Optional[float] = None
 max_internal_user_budget: Optional[float] = None
+internal_user_budget_duration: Optional[str] = None
 max_end_user_budget: Optional[float] = None
 #### REQUEST PRIORITIZATION ####
 priority_reservation: Optional[Dict[str, float]] = None

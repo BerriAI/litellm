@@ -3,20 +3,14 @@ model_list:
     litellm_params:
       model: openai/fake
       api_key: fake-key
-      api_base: https://exampleopenaiendpoint-production.up.railwaz.app/
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
   - model_name: fireworks-llama-v3-70b-instruct
     litellm_params:
       model: fireworks_ai/accounts/fireworks/models/llama-v3-70b-instruct
       api_key: "os.environ/FIREWORKS"
-  # provider specific wildcard routing
-  - model_name: "anthropic/*"
+  - model_name: "*"
     litellm_params:
-      model: "anthropic/*"
-      api_key: os.environ/ANTHROPIC_API_KEY
-  - model_name: "groq/*"
-    litellm_params:
-      model: "groq/*"
-      api_key: os.environ/GROQ_API_KEY
+      model: "*"
   - model_name: "*"
     litellm_params:
       model: openai/*
@@ -25,37 +19,22 @@ model_list:
     litellm_params:
       model: mistral/mistral-small-latest
       api_key: "os.environ/MISTRAL_API_KEY"
-  - model_name: tts
+  - model_name: gemini-1.5-pro-001
     litellm_params:
-      model: openai/tts-1
-      api_key: "os.environ/OPENAI_API_KEY"
-    model_info:
-      mode: audio_speech
+      model: vertex_ai_beta/gemini-1.5-pro-001
+      vertex_project: "adroit-crow-413218"
+      vertex_location: "us-central1"
+      vertex_credentials: "adroit-crow-413218-a956eef1a2a8.json"
+ # Add path to service account.json
 
-
-# for /files endpoints
-files_settings:
-  - custom_llm_provider: azure
-    api_base: https://exampleopenaiendpoint-production.up.railway.app
-    api_key: fake-key
-    api_version: "2023-03-15-preview"
-  - custom_llm_provider: openai
-    api_key: os.environ/OPENAI_API_KEY
-
+default_vertex_config:
+  vertex_project: "adroit-crow-413218"
+  vertex_location: "us-central1"
+  vertex_credentials: "adroit-crow-413218-a956eef1a2a8.json" # Add path to service account.json
 
 
 general_settings: 
   master_key: sk-1234
-  pass_through_endpoints:
-    - path: "/v1/rerank"                                  # route you want to add to LiteLLM Proxy Server
-      target: "https://api.cohere.com/v1/rerank"          # URL this route should forward requests to
-      headers:                                            # headers to forward to this URL
-        content-type: application/json                    # (Optional) Extra Headers to pass to this endpoint 
-        accept: application/json
-      forward_headers: True
-
 
 litellm_settings:
   callbacks: ["otel"] # 👈 KEY CHANGE
-  success_callback: ["prometheus"]
-  failure_callback: ["prometheus"]
