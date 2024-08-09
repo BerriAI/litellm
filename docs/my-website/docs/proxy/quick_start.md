@@ -5,7 +5,7 @@ import TabItem from '@theme/TabItem';
 # Quick Start
 Quick start CLI, Config, Docker
 
-LiteLLM Server manages:
+LiteLLM Server (LLM Gateway) manages:
 
 * **Unified Interface**: Calling 100+ LLMs [Huggingface/Bedrock/TogetherAI/etc.](#other-supported-models) in the OpenAI `ChatCompletions` & `Completions` format
 * **Cost tracking**: Authentication, Spend Tracking & Budgets [Virtual Keys](https://docs.litellm.ai/docs/proxy/virtual_keys)

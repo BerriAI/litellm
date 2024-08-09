@@ -24,7 +24,7 @@ const sidebars = {
       link: {
         type: "generated-index",
         title: "💥 LiteLLM Proxy Server",
-        description: `OpenAI Proxy Server to call 100+ LLMs in a unified interface & track spend, set budgets per virtual key/user`,
+        description: `OpenAI Proxy Server (LLM Gateway) to call 100+ LLMs in a unified interface & track spend, set budgets per virtual key/user`,
         slug: "/simple_proxy",
       },
       items: [
