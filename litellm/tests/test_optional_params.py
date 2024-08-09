@@ -438,3 +438,11 @@ def test_get_optional_params_image_gen():
     print(response)
 
     assert "aws_region_name" in response
+
+
+def test_bedrock_optional_params_embeddings_provider_specific_params():
+    optional_params = get_optional_params_embeddings(
+        custom_llm_provider="huggingface",
+        wait_for_model=True,
+    )
+    assert len(optional_params) == 1
