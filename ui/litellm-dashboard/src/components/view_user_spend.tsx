@@ -48,7 +48,6 @@ const ViewUserSpend: React.FC<ViewUserSpendProps> = ({ userID, userRole, accessT
     let [spend, setSpend] = useState(userSpend !== null ? userSpend : 0.0);
     const [maxBudget, setMaxBudget] = useState(selectedTeam ? selectedTeam.max_budget : null);
     useEffect(() => {
-      console.log(`Updating team max budget for default team - userMaxBudget - ${userMaxBudget}, selectedTeam.team_alias - ${selectedTeam.team_alias}`)
       if (selectedTeam) {
           if (selectedTeam.team_alias === "Default Team") {
               setMaxBudget(userMaxBudget);
@@ -57,7 +56,6 @@ const ViewUserSpend: React.FC<ViewUserSpendProps> = ({ userID, userRole, accessT
           }
       }
   }, [selectedTeam, userMaxBudget]);
-    console.log(`maxBudget: ${maxBudget}, selectedTeam.max_budget: ${selectedTeam.max_budget}, selectedTeam: ${JSON.stringify(selectedTeam)}`)
     const [userModels, setUserModels] = useState([]);
     useEffect(() => {
       const fetchData = async () => {
