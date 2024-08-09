@@ -856,6 +856,30 @@ class Huggingface(BaseLLM):
 
         return data
 
+    def _process_optional_params(self, data: dict, optional_params: dict) -> dict:
+        special_options_keys = ["use_cache", "wait_for_model"]
+        special_parameters_keys = [
+            "min_length",
+            "max_length",
+            "top_k",
+            "top_p",
+            "temperature",
+            "repetition_penalty",
+            "max_time",
+        ]
+
+        for k, v in optional_params.items():
+            if k in special_options_keys:
+                data.setdefault("options", {})
+                data["options"][k] = v
+            elif k in special_parameters_keys:
+                data.setdefault("parameters", {})
+                data["parameters"][k] = v
+            else:
+                data[k] = v
+
+        return data
+
     def _transform_input(
         self,
         input: List,
@@ -892,7 +916,9 @@ class Huggingface(BaseLLM):
             )
 
         if len(optional_params.keys()) > 0:
-            data["options"] = optional_params
+            data = self._process_optional_params(
+                data=data, optional_params=optional_params
+            )
 
         return data
 
