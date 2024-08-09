@@ -420,7 +420,6 @@ async def update_team(
 @management_endpoint_wrapper
 async def team_member_add(
     data: TeamMemberAddRequest,
-    http_request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -442,8 +441,11 @@ async def team_member_add(
     from litellm.proxy.proxy_server import (
         _duration_in_seconds,
         create_audit_log_for_update,
+        get_team_object,
         litellm_proxy_admin_name,
         prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
     )
 
     if prisma_client is None:
@@ -457,8 +459,13 @@ async def team_member_add(
             status_code=400, detail={"error": "No member/members passed in"}
         )
 
-    existing_team_row = await prisma_client.db.litellm_teamtable.find_unique(
-        where={"team_id": data.team_id}
+    existing_team_row = await get_team_object(
+        team_id=data.team_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        parent_otel_span=None,
+        proxy_logging_obj=proxy_logging_obj,
+        check_cache_only=False,
     )
     if existing_team_row is None:
         raise HTTPException(
