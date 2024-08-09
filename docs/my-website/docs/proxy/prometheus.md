@@ -4,7 +4,7 @@ import TabItem from '@theme/TabItem';
 # 📈 [BETA] Prometheus metrics
 
 :::info
-🚨 Prometheus Metrics will be moving to LiteLLM Enterprise on September 15th, 2024
+🚨 Prometheus metrics will be out of Beta on September 15, 2024 - as part of this release it will be on LiteLLM Enterprise starting at $250/mo
 
 [Enterprise Pricing](https://www.litellm.ai/#pricing)
 
@@ -72,9 +72,7 @@ http://localhost:4000/metrics
 
 | Metric Name          | Description                          |
 |----------------------|--------------------------------------|
-| `deployment_complete_outage`             | Value is "1" when deployment is in cooldown and has had a complete outage. This metric tracks the state of the LLM API Deployment when it's completely unavailable. |
-| `deployment_partial_outage`                | Value is "1" when deployment is experiencing a partial outage. This metric indicates when the LLM API Deployment is facing issues but is not completely down. |
-| `deployment_healthy`                | Value is "1" when deployment is in a healthy state. This metric shows when the LLM API Deployment is functioning normally without any outages. |
+| `deployment_state`             | The state of the deployment: 0 = healthy, 1 = partial outage, 2 = complete outage. |
 | `litellm_remaining_requests_metric`             | Track `x-ratelimit-remaining-requests` returned from LLM API Deployment |
 | `litellm_remaining_tokens`                | Track `x-ratelimit-remaining-tokens` return from LLM API Deployment |
 
