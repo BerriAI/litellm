@@ -761,6 +761,8 @@ async def test_hf_embedddings_with_optional_params(sync_mode):
                 response = embedding(
                     model="huggingface/jinaai/jina-embeddings-v2-small-en",
                     input=["good morning from litellm"],
+                    top_p=10,
+                    top_k=10,
                     wait_for_model=True,
                     client=client,
                 )
@@ -768,6 +770,8 @@ async def test_hf_embedddings_with_optional_params(sync_mode):
                 response = await litellm.aembedding(
                     model="huggingface/jinaai/jina-embeddings-v2-small-en",
                     input=["good morning from litellm"],
+                    top_p=10,
+                    top_k=10,
                     wait_for_model=True,
                     client=client,
                 )
@@ -781,3 +785,5 @@ async def test_hf_embedddings_with_optional_params(sync_mode):
         json_data = json.loads(mock_client.call_args.kwargs["data"])
         assert "wait_for_model" in json_data["options"]
         assert json_data["options"]["wait_for_model"] is True
+        assert json_data["parameters"]["top_p"] == 10
+        assert json_data["parameters"]["top_k"] == 10
