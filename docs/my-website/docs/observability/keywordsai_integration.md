@@ -1,4 +1,4 @@
-# 🧊 Keywords AI - LLM monitoring platform
+# 🗝️ Keywords AI - LLM monitoring platform
 
 :::tip
 
