@@ -37,4 +37,5 @@ general_settings:
   master_key: sk-1234
 
 litellm_settings:
-  callbacks: ["otel"] # 👈 KEY CHANGE
+  success_callback: ["prometheus"]
+  failure_callback: ["prometheus"]
