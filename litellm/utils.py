@@ -6787,7 +6787,10 @@ def exception_type(
                             llm_provider="anthropic",
                             model=model,
                         )
-                    elif original_exception.status_code == 500:
+                    elif (
+                        original_exception.status_code == 500
+                        or original_exception.status_code == 529
+                    ):
                         exception_mapping_worked = True
                         raise litellm.InternalServerError(
                             message=f"AnthropicException - {error_str}. Handle with `litellm.InternalServerError`.",
