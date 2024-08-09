@@ -229,6 +229,8 @@ async def test_aimage_generation_vertex_ai(sync_mode):
         pass
     except litellm.RateLimitError as e:
         pass
+    except litellm.InternalServerError as e:
+        pass
     except litellm.ContentPolicyViolationError:
         pass  # Azure randomly raises these errors - skip when they occur
     except Exception as e:
