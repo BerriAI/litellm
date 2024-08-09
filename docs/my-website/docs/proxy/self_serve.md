@@ -180,6 +180,7 @@ Automatically apply budget per internal user when they sign up
 ```yaml
 litellm_settings:
   max_internal_user_budget: 10
+  internal_user_budget_duration: "1mo" # reset every month
 ```
 
 This sets a max budget of $10 USD for internal users when they sign up. 
