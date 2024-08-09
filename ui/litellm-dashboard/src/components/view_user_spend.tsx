@@ -40,39 +40,30 @@ interface ViewUserSpendProps {
     userRole: string | null;
     accessToken: string | null;
     userSpend: number | null;  
+    userMaxBudget: number | null;  
     selectedTeam: any | null;
 }
-const ViewUserSpend: React.FC<ViewUserSpendProps> = ({ userID, userRole, accessToken, userSpend, selectedTeam }) => {
+const ViewUserSpend: React.FC<ViewUserSpendProps> = ({ userID, userRole, accessToken, userSpend, userMaxBudget, selectedTeam }) => {
     console.log(`userSpend: ${userSpend}`)
     let [spend, setSpend] = useState(userSpend !== null ? userSpend : 0.0);
     const [maxBudget, setMaxBudget] = useState(selectedTeam ? selectedTeam.max_budget : null);
-    const team_budget = selectedTeam ? selectedTeam.max_budget : "unlimited";
-    console.log(`maxBudget: ${maxBudget}, selectedTeam.max_budget: ${team_budget}, selectedTeam: ${JSON.stringify(selectedTeam)}`)
+    useEffect(() => {
+      console.log(`Updating team max budget for default team - userMaxBudget - ${userMaxBudget}, selectedTeam.team_alias - ${selectedTeam.team_alias}`)
+      if (selectedTeam) {
+          if (selectedTeam.team_alias === "Default Team") {
+              setMaxBudget(userMaxBudget);
+          } else {
+              setMaxBudget(selectedTeam.max_budget);
+          }
+      }
+  }, [selectedTeam, userMaxBudget]);
+    console.log(`maxBudget: ${maxBudget}, selectedTeam.max_budget: ${selectedTeam.max_budget}, selectedTeam: ${JSON.stringify(selectedTeam)}`)
     const [userModels, setUserModels] = useState([]);
     useEffect(() => {
       const fetchData = async () => {
         if (!accessToken || !userID || !userRole) {
           return;
         }
-        // if (userRole === "Admin" && userSpend == null) {
-        //   try {
-        //     const globalSpend = await getTotalSpendCall(accessToken);
-        //     if (globalSpend) {
-        //       if (globalSpend.spend) {
-        //         setSpend(globalSpend.spend);
-        //       } else {
-        //         setSpend(0.0);
-        //       }
-        //       if (globalSpend.max_budget) {
-        //         setMaxBudget(globalSpend.max_budget);
-        //       } else {
-        //         setMaxBudget(null);
-        //       }
-        //     }
-        //   } catch (error) {
-        //     console.error("Error fetching global spend data:", error);
-        //   }
-        // }
       };
       const fetchUserModels = async () => {
         try {
@@ -104,11 +95,6 @@ const ViewUserSpend: React.FC<ViewUserSpendProps> = ({ userID, userRole, accessT
         setSpend(userSpend)
       }
     }, [userSpend])
-    useEffect(() => {
-      if (selectedTeam && selectedTeam.max_budget !== maxBudget) {
-        setMaxBudget(selectedTeam.max_budget);
-      }
-    }, [selectedTeam, maxBudget]);
 
     // logic to decide what models to display
     let modelsToDisplay = [];
