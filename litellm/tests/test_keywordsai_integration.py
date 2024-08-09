@@ -22,7 +22,7 @@ print(response)
 import litellm
 from litellm import completion, acompletion
 from litellm.integrations.keywordsai import KeywordsAILogger
-litellm.set_verbose = True
+# litellm.set_verbose = True
 litellm.api_base = None
 litellm.callbacks = [KeywordsAILogger()]
 extra_body = {
