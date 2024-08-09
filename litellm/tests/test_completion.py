@@ -1819,14 +1819,19 @@ def tgi_mock_post(url, data=None, json=None, headers=None):
 def test_hf_test_completion_tgi():
     litellm.set_verbose = True
     try:
-        with patch("requests.post", side_effect=tgi_mock_post):
+        with patch("requests.post", side_effect=tgi_mock_post) as mock_client:
             response = completion(
                 model="huggingface/HuggingFaceH4/zephyr-7b-beta",
                 messages=[{"content": "Hello, how are you?", "role": "user"}],
                 max_tokens=10,
+                wait_for_model=True,
             )
             # Add any assertions-here to check the response
             print(response)
+            assert "options" in mock_client.call_args.kwargs["data"]
+            json_data = json.loads(mock_client.call_args.kwargs["data"])
+            assert "wait_for_model" in json_data["options"]
+            assert json_data["options"]["wait_for_model"] is True
     except litellm.ServiceUnavailableError as e:
         pass
     except Exception as e:
