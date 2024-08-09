@@ -852,6 +852,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     modelData.data[i].input_cost = input_cost;
     modelData.data[i].output_cost = output_cost;
     modelData.data[i].litellm_model_name = litellm_model_name;
+    all_providers.push(provider);
 
     // Convert Cost in terms of Cost per 1M tokens
     if (modelData.data[i].input_cost) {
