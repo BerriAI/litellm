@@ -147,6 +147,7 @@ enum Providers {
   MistralAI = "Mistral AI",
   OpenAI_Compatible = "OpenAI-Compatible Endpoints (Together AI, etc.)",
   Vertex_AI = "Vertex AI (Anthropic, Gemini, etc.)",
+  Cohere = "Cohere",
   Databricks = "Databricks",
   Ollama = "Ollama",
 }
@@ -160,6 +161,7 @@ const provider_map: Record<string, string> = {
   Bedrock: "bedrock",
   Groq: "groq",
   MistralAI: "mistral",
+  Cohere: "cohere_chat",
   OpenAI_Compatible: "openai",
   Vertex_AI: "vertex_ai",
   Databricks: "databricks",
