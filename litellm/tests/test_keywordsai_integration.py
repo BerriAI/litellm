@@ -2,16 +2,16 @@ import os
 import litellm
 
 # METHOD 1: Using keywordsai as the LLM proxy
-# litellm.api_base = "https://api.keywordsai.co/api/"
-# KEYWORDS_AI_API_KEY = os.getenv("KEYWORDS_AI_API_KEY")
+litellm.api_base = "https://api.keywordsai.co/api/"
+KEYWORDS_AI_API_KEY = os.getenv("KEYWORDS_AI_API_KEY")
 
-# response = litellm.completion(
-#     api_key=KEYWORDS_AI_API_KEY, # !!!!!!! Use the keyowrdsai api key in your completion call !!!!!!!
-#     model="gpt-3.5-turbo",
-#     messages=[{"role": "user", "content": "How does a court case get to the Supreme Court?"}]
-# )
+response = litellm.completion(
+    api_key=KEYWORDS_AI_API_KEY, # !!!!!!! Use the keyowrdsai api key in your completion call !!!!!!!
+    model="gpt-3.5-turbo",
+    messages=[{"role": "user", "content": "How does a court case get to the Supreme Court?"}]
+)
 
-# print(response)
+print(response)
 # Go to https://platform.keywordsai.co/ to see the log
 
 # ================================================================================================================
