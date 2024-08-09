@@ -1909,9 +1909,9 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                   )}
                   {selectedProvider == Providers.Azure && (
                     <Form.Item
-                      rules={[{ required: true, message: "Required" }]}
                       label="API Version"
                       name="api_version"
+                      tooltip="By default litellm will use the latest version. If you want to use a different version, you can specify it here"
                     >
                       <TextInput placeholder="2023-07-01-preview" />
                     </Form.Item>
