@@ -8721,14 +8721,22 @@ async def auth_callback(request: Request):
     except Exception as e:
         pass
 
+    is_internal_user = False
     if (
-        user_defined_values["max_budget"] is None
+        user_defined_values["user_role"] is not None
+        and user_defined_values["user_role"] == LitellmUserRoles.INTERNAL_USER.value
+    ):
+        is_internal_user = True
+    if (
+        is_internal_user is True
+        and user_defined_values["max_budget"] is None
         and litellm.max_internal_user_budget is not None
     ):
         user_defined_values["max_budget"] = litellm.max_internal_user_budget
 
     if (
-        user_defined_values["budget_duration"] is None
+        is_internal_user is True
+        and user_defined_values["budget_duration"] is None
         and litellm.internal_user_budget_duration is not None
     ):
         user_defined_values["budget_duration"] = litellm.internal_user_budget_duration
