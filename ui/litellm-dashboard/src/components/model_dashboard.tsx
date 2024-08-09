@@ -930,7 +930,26 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
             _providerModels.push(key);
           }
         });
+
+        // Special case for cohere_chat
+        // we need both cohere_chat and cohere models to show on dropdown
+        if (providerKey == Providers.Cohere) {
+          console.log("adding cohere chat model")
+          Object.entries(modelMap).forEach(([key, value]) => {
+            if (
+              value !== null &&
+              typeof value === "object" &&
+              "litellm_provider" in (value as object) &&
+              ((value as any)["litellm_provider"] === "cohere")
+            ) {
+              _providerModels.push(key);
+            }
+          });
+        }
       }
+
+      
+
       setProviderModels(_providerModels);
       console.log(`providerModels: ${providerModels}`);
     }
@@ -1787,7 +1806,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                   </Row>
                   <Form.Item
                   label="LiteLLM Model Name(s)"
-                  tooltip="Actual model name used for making litellm.completion() call."
+                  tooltip="Actual model name used for making litellm.completion() / litellm.embedding() call."
                   className="mb-0"
                 >
                   <Form.Item
