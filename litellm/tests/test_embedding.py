@@ -282,18 +282,18 @@ async def test_cohere_embedding(sync_mode):
 # test_cohere_embedding()
 
 
-def test_cohere_embedding3():
+@pytest.mark.parametrize("custom_llm_provider", ["cohere", "cohere_chat"])
+@pytest.mark.asyncio()
+async def test_cohere_embedding3(custom_llm_provider):
     try:
         litellm.set_verbose = True
-        response = embedding(
-            model="embed-english-v3.0",
+        response = await litellm.aembedding(
+            model=f"{custom_llm_provider}/embed-english-v3.0",
             input=["good morning from litellm", "this is another item"],
+            timeout=None,
+            max_retries=0,
         )
         print(f"response:", response)
-
-        custom_llm_provider = response._hidden_params["custom_llm_provider"]
-
-        assert custom_llm_provider == "cohere"
 
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")

@@ -147,6 +147,7 @@ enum Providers {
   MistralAI = "Mistral AI",
   OpenAI_Compatible = "OpenAI-Compatible Endpoints (Together AI, etc.)",
   Vertex_AI = "Vertex AI (Anthropic, Gemini, etc.)",
+  Cohere = "Cohere",
   Databricks = "Databricks",
   Ollama = "Ollama",
 }
@@ -160,6 +161,7 @@ const provider_map: Record<string, string> = {
   Bedrock: "bedrock",
   Groq: "groq",
   MistralAI: "mistral",
+  Cohere: "cohere_chat",
   OpenAI_Compatible: "openai",
   Vertex_AI: "vertex_ai",
   Databricks: "databricks",
@@ -928,7 +930,26 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
             _providerModels.push(key);
           }
         });
+
+        // Special case for cohere_chat
+        // we need both cohere_chat and cohere models to show on dropdown
+        if (providerKey == Providers.Cohere) {
+          console.log("adding cohere chat model")
+          Object.entries(modelMap).forEach(([key, value]) => {
+            if (
+              value !== null &&
+              typeof value === "object" &&
+              "litellm_provider" in (value as object) &&
+              ((value as any)["litellm_provider"] === "cohere")
+            ) {
+              _providerModels.push(key);
+            }
+          });
+        }
       }
+
+      
+
       setProviderModels(_providerModels);
       console.log(`providerModels: ${providerModels}`);
     }
@@ -1785,7 +1806,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                   </Row>
                   <Form.Item
                   label="LiteLLM Model Name(s)"
-                  tooltip="Actual model name used for making litellm.completion() call."
+                  tooltip="Actual model name used for making litellm.completion() / litellm.embedding() call."
                   className="mb-0"
                 >
                   <Form.Item
