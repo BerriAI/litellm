@@ -17,12 +17,14 @@ class BgColors:
     BOLD = '\033[1m'
     UNDERLINE = '\033[4m'
 
-def pre_api_call(model, messages, kwargs):
+KEYWORDS_AI_API_KEY = os.getenv("KEYWORDS_AI_API_KEY")
+def setup_keywordsai_params(model, messages, kwargs):
     url = "https://api.keywordsai.co/api/request-logs/create/"
-    if not os.getenv("KEYWORDS_AI_API_KEY"):
+
+    if not KEYWORDS_AI_API_KEY:
         print(f"{BgColors.WARNING}!!!!WARNING: KEYWORDS_AI_API_KEY not found in environment!!!!{BgColors.ENDC}")
     headers = {
-        "Authorization": f"Bearer {os.getenv('KEYWORDS_AI_API_KEY')}",
+        "Authorization": f"Bearer {KEYWORDS_AI_API_KEY}",
         "Content-Type": "application/json",
     }
 
@@ -102,10 +104,12 @@ def commit_to_keywordsai(kwargs, start_time, end_time, success=True):
 class KeywordsAILogger(CustomLogger):
     def log_pre_api_call(self, model, messages, kwargs):
         print_verbose(f"Keywords AI Callback: Pre-API Call")
-        pre_api_call(model, messages, kwargs)
+        setup_keywordsai_params(model, messages, kwargs)
 
     def log_post_api_call(self, kwargs, response_obj, start_time, end_time):
         print_verbose(f"Keywords AI Callback: Post-API Call")
+        if kwargs.get("stream", False): # Due to async nature, pre_api_call is not guaranteed to be called before post_api_call
+            setup_keywordsai_params(kwargs.get("model"), kwargs.get("messages"), kwargs)
         modify_params(kwargs, response_obj, start_time, end_time)
 
     def log_stream_event(self, kwargs, response_obj, start_time, end_time):
