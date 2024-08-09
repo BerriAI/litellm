@@ -143,7 +143,7 @@ class GenericLiteLLMParams(BaseModel):
     ## VERTEX AI ##
     vertex_project: Optional[str] = None
     vertex_location: Optional[str] = None
-    vertex_credentials: Optional[Union[str, dict]] = None
+    vertex_credentials: Optional[str] = None
     ## AWS BEDROCK / SAGEMAKER ##
     aws_access_key_id: Optional[str] = None
     aws_secret_access_key: Optional[str] = None
