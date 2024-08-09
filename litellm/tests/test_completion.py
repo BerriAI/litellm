@@ -4405,6 +4405,3 @@ def test_moderation():
     output = response.results[0]
     print(output)
     return output
-
-
-# test_moderation()

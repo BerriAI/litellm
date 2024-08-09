@@ -5374,7 +5374,13 @@ async def anthropic_response(
     litellm.adapters = [{"id": "anthropic", "adapter": anthropic_adapter}]
 
     global user_temperature, user_request_timeout, user_max_tokens, user_api_base
-    data: dict = {**anthropic_data, "adapter_id": "anthropic"}
+    body = await request.body()
+    body_str = body.decode()
+    try:
+        request_data: dict = ast.literal_eval(body_str)
+    except Exception:
+        request_data = json.loads(body_str)
+    data: dict = {**request_data, "adapter_id": "anthropic"}
     try:
         data["model"] = (
             general_settings.get("completion_model", None)  # server default

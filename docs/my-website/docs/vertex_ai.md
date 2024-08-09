@@ -1,5 +1,11 @@
 # [BETA] Vertex AI Endpoints
 
+:::tip
+
+Looking for the Unified API (OpenAI format) for VertexAI ? [Go here - using vertexAI with LiteLLM SDK or LiteLLM Proxy Server](../docs/providers/vertex.md)
+
+:::
+
 ## Supported API Endpoints
 
 - Gemini API
