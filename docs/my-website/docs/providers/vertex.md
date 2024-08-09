@@ -463,63 +463,71 @@ $ litellm --config /path/to/config.yaml
 ```
 
 3. Make Request!
+We make the request in two steps:
+- Create a cachedContents object
+- Use the cachedContents object in your /chat/completions 
 
-- First create a cachedContents object by calling the Vertex `cachedContents` endpoint. [VertexAI API Ref for cachedContents endpoint](https://cloud.google.com/vertex-ai/generative-ai/docs/context-cache/context-cache-create#create-context-cache-sample-drest). (LiteLLM proxy forwards the `/cachedContents` request to the VertexAI API)
-- Use the `cachedContents` object in your /chat/completions request to vertexAI
+**Create a cachedContents object**
+
+First, create a cachedContents object by calling the Vertex `cachedContents` endpoint. The LiteLLM proxy forwards the `/cachedContents` request to the VertexAI API.
 
 ```python
-import datetime
-import openai
 import httpx
 
-# Set Litellm proxy variables here
+# Set Litellm proxy variables
 LITELLM_BASE_URL = "http://0.0.0.0:4000"
 LITELLM_PROXY_API_KEY = "sk-1234"
 
-client = openai.OpenAI(api_key=LITELLM_PROXY_API_KEY, base_url=LITELLM_BASE_URL)
 httpx_client = httpx.Client(timeout=30)
 
-################################
-# First create a cachedContents object
-# this request gets forwarded as is to: https://cloud.google.com/vertex-ai/generative-ai/docs/context-cache/context-cache-create#create-context-cache-sample-drest
-print("creating cached content")
+print("Creating cached content")
 create_cache = httpx_client.post(
     url=f"{LITELLM_BASE_URL}/vertex-ai/cachedContents",
-    headers = {"Authorization": f"Bearer {LITELLM_PROXY_API_KEY}"},
-    json = {
+    headers={"Authorization": f"Bearer {LITELLM_PROXY_API_KEY}"},
+    json={
         "model": "gemini-1.5-pro-001",
         "contents": [
             {
                 "role": "user",
                 "parts": [{
-                    "text": "This is sample text to demonstrate explicit caching."*4000
+                    "text": "This is sample text to demonstrate explicit caching." * 4000
                 }]
             }
         ],
     }
 )
-print("response from create_cache", create_cache)
-create_cache_response = create_cache.json()
-print("json from create_cache", create_cache_response)
-cached_content_name = create_cache_response["name"]
 
-#################################
-# Use the `cachedContents` object in your /chat/completions
-response = client.chat.completions.create(  # type: ignore
+print("Response from create_cache:", create_cache)
+create_cache_response = create_cache.json()
+print("JSON from create_cache:", create_cache_response)
+cached_content_name = create_cache_response["name"]
+```
+
+**Use the cachedContents object in your /chat/completions request to VertexAI**
+
+```python
+import openai
+
+# Set Litellm proxy variables
+LITELLM_BASE_URL = "http://0.0.0.0:4000"
+LITELLM_PROXY_API_KEY = "sk-1234"
+
+client = openai.OpenAI(api_key=LITELLM_PROXY_API_KEY, base_url=LITELLM_BASE_URL)
+
+response = client.chat.completions.create(
     model="gemini-1.5-pro-001",
     max_tokens=8192,
     messages=[
         {
             "role": "user",
-            "content": "what is the sample text about?",
+            "content": "What is the sample text about?",
         },
     ],
-    temperature="0.7",
-    extra_body={"cached_content": cached_content_name}, # 👈 key change
+    temperature=0.7,
+    extra_body={"cached_content": cached_content_name},  # Use the cached content
 )
 
-print("response from proxy", response)
-
+print("Response from proxy:", response)
 ```
 
 </TabItem>
