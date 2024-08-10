@@ -126,6 +126,7 @@ AlertType = Literal[
     "db_exceptions",
     "daily_reports",
     "spend_reports",
+    "fallback_reports",
     "cooldown_deployment",
     "new_model_added",
     "outage_alerts",
