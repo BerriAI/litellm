@@ -654,6 +654,9 @@ def log_provider_specific_information_as_span(
     from litellm.proxy.proxy_server import premium_user
 
     _hidden_params = clean_metadata.get("hidden_params", None)
+    if _hidden_params is None:
+        return
+
     vertex_ai_grounding_metadata = _hidden_params.get(
         "vertex_ai_grounding_metadata", None
     )
