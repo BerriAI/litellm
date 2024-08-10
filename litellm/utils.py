@@ -10307,7 +10307,8 @@ class CustomStreamWrapper:
                         chunks=self.chunks, messages=self.messages
                     )
                     response = self.model_response_creator()
-                    response.usage = complete_streaming_response.usage  # type: ignore
+                    if complete_streaming_response is not None:
+                        response.usage = complete_streaming_response.usage
                     response._hidden_params["usage"] = complete_streaming_response.usage  # type: ignore
                     ## LOGGING
                     threading.Thread(
@@ -10504,7 +10505,8 @@ class CustomStreamWrapper:
                         chunks=self.chunks, messages=self.messages
                     )
                     response = self.model_response_creator()
-                    response.usage = complete_streaming_response.usage
+                    if complete_streaming_response is not None:
+                        setattr(response, "usage", complete_streaming_response.usage)
                     ## LOGGING
                     threading.Thread(
                         target=self.logging_obj.success_handler,
@@ -10544,7 +10546,8 @@ class CustomStreamWrapper:
                         chunks=self.chunks, messages=self.messages
                     )
                     response = self.model_response_creator()
-                    response.usage = complete_streaming_response.usage
+                    if complete_streaming_response is not None:
+                        response.usage = complete_streaming_response.usage
                     ## LOGGING
                     threading.Thread(
                         target=self.logging_obj.success_handler,
