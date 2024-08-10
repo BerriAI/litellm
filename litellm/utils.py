@@ -4585,7 +4585,7 @@ def get_llm_provider(
                 api_base = (
                     api_base
                     or get_secret("DEEPSEEK_API_BASE")
-                    or "https://api.deepseek.com/v1"
+                    or "https://api.deepseek.com/beta"
                 )  # type: ignore
                 dynamic_api_key = api_key or get_secret("DEEPSEEK_API_KEY")
             elif custom_llm_provider == "fireworks_ai":

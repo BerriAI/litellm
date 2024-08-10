@@ -162,6 +162,7 @@ const sidebars = {
         "completion/input",
         "completion/provider_specific_params",
         "completion/json_mode",
+        "completion/prefix",
         "completion/drop_params",
         "completion/prompt_formatting",
         "completion/output",
