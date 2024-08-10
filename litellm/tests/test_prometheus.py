@@ -74,6 +74,7 @@ async def test_async_prometheus_success_logging():
             metrics[sample.name] = sample.value
 
     print("metrics from prometheus", metrics)
-
     assert metrics["litellm_requests_metric_total"] == 1.0
     assert metrics["litellm_total_tokens_total"] == 30.0
+    assert metrics["llm_deployment_success_responses_total"] == 1.0
+    assert metrics["llm_deployment_total_requests_total"] == 1.0
