@@ -16,9 +16,8 @@ import pytest
 from openai import OpenAI
 
 import litellm
-from litellm import completion, stream_chunk_builder
-
 import litellm.tests.stream_chunk_testdata
+from litellm import completion, stream_chunk_builder
 
 dotenv.load_dotenv()
 
@@ -219,3 +218,11 @@ def test_stream_chunk_builder_litellm_mixed_calls():
         "id": "toolu_01H3AjkLpRtGQrof13CBnWfK",
         "type": "function",
     }
+
+
+def test_stream_chunk_builder_litellm_empty_chunks():
+    with pytest.raises(litellm.APIError):
+        response = stream_chunk_builder(chunks=None)
+
+    response = stream_chunk_builder(chunks=[])
+    assert response is None
