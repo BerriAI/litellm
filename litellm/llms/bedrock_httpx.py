@@ -28,7 +28,7 @@ import requests  # type: ignore
 
 import litellm
 from litellm import verbose_logger
-from litellm.caching import DualCache
+from litellm.caching import DualCache, InMemoryCache
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.custom_httpx.http_handler import (
@@ -89,6 +89,9 @@ BEDROCK_CONVERSE_MODELS = [
 
 iam_cache = DualCache()
 _response_stream_shape_cache = None
+bedrock_tool_name_mappings: InMemoryCache = InMemoryCache(
+    max_size_in_memory=50, default_ttl=600
+)
 
 
 class AmazonCohereChatConfig:
@@ -1495,8 +1498,14 @@ class BedrockConverseLLM(BaseLLM):
                 if "text" in content:
                     content_str += content["text"]
                 if "toolUse" in content:
+
+                    ## check tool name was formatted by litellm
+                    _response_tool_name = content["toolUse"]["name"]
+                    response_tool_name = get_bedrock_tool_name(
+                        response_tool_name=_response_tool_name
+                    )
                     _function_chunk = ChatCompletionToolCallFunctionChunk(
-                        name=content["toolUse"]["name"],
+                        name=response_tool_name,
                         arguments=json.dumps(content["toolUse"]["input"]),
                     )
                     _tool_response_chunk = ChatCompletionToolCallChunk(
@@ -2105,6 +2114,24 @@ def get_response_stream_shape():
     return _response_stream_shape_cache
 
 
+def get_bedrock_tool_name(response_tool_name: str) -> str:
+    """
+    If litellm formatted the input tool name, we need to convert it back to the original name.
+
+    Args:
+        response_tool_name (str): The name of the tool as received from the response.
+
+    Returns:
+        str: The original name of the tool.
+    """
+
+    if response_tool_name in litellm.bedrock_tool_name_mappings.cache_dict:
+        response_tool_name = litellm.bedrock_tool_name_mappings.cache_dict[
+            response_tool_name
+        ]
+    return response_tool_name
+
+
 class AWSEventStreamDecoder:
     def __init__(self, model: str) -> None:
         from botocore.parsers import EventStreamJSONParser
@@ -2151,11 +2178,16 @@ class AWSEventStreamDecoder:
                     and "toolUse" in start_obj
                     and start_obj["toolUse"] is not None
                 ):
+                    ## check tool name was formatted by litellm
+                    _response_tool_name = start_obj["toolUse"]["name"]
+                    response_tool_name = get_bedrock_tool_name(
+                        response_tool_name=_response_tool_name
+                    )
                     tool_use = {
                         "id": start_obj["toolUse"]["toolUseId"],
                         "type": "function",
                         "function": {
-                            "name": start_obj["toolUse"]["name"],
+                            "name": response_tool_name,
                             "arguments": "",
                         },
                         "index": index,
