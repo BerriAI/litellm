@@ -2795,6 +2795,19 @@ async def startup_event():
                 day=1,
             )
 
+            # Beta Feature - only used when prometheus api is in .env
+            if os.getenv("PROMETHEUS_URL"):
+                from zoneinfo import ZoneInfo
+
+                scheduler.add_job(
+                    proxy_logging_obj.slack_alerting_instance.send_fallback_stats_from_prometheus,
+                    "cron",
+                    hour=9,
+                    minute=0,
+                    timezone=ZoneInfo("America/Los_Angeles"),  # Pacific Time
+                )
+                await proxy_logging_obj.slack_alerting_instance.send_fallback_stats_from_prometheus()
+
         scheduler.start()
 
 
