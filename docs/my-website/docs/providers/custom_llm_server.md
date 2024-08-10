@@ -4,7 +4,8 @@ Call your custom torch-serve / internal LLM APIs via LiteLLM
 
 :::info
 
-For calling an openai-compatible endpoint, [go here](./openai_compatible.md)
+- For calling an openai-compatible endpoint, [go here](./openai_compatible.md)
+- For modifying incoming/outgoing calls on proxy, [go here](../proxy/call_hooks.md)
 :::
 
 ## Quick Start 
