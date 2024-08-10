@@ -660,7 +660,7 @@ export const teamListCall = async (
     }
 
     const data = await response.json();
-    console.log("API Response:", data);
+    console.log("/team/list API Response:", data);
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
