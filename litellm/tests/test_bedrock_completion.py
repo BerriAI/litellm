@@ -1006,7 +1006,7 @@ def test_bedrock_tool_calling():
                 "type": "function",
                 "function": {
                     "name": "-DoSomethingVeryCool-forLitellm_Testin999229291-0293993",
-                    "description": "do something very cool",
+                    "description": "use this to get the current weather",
                     "parameters": {"type": "object", "properties": {}},
                 },
             }
@@ -1015,6 +1015,18 @@ def test_bedrock_tool_calling():
 
     print("bedrock response")
     print(response)
+
+    # Assert that the tools in response have the same function name as the input
+    _choice_1 = response.choices[0]
+    if _choice_1.message.tool_calls is not None:
+        print(_choice_1.message.tool_calls)
+        for tool_call in _choice_1.message.tool_calls:
+            _tool_Call_name = tool_call.function.name
+            if _tool_Call_name is not None and "DoSomethingVeryCool" in _tool_Call_name:
+                assert (
+                    _tool_Call_name
+                    == "-DoSomethingVeryCool-forLitellm_Testin999229291-0293993"
+                )
 
 
 def test_bedrock_tools_pt_valid_names():
