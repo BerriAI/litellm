@@ -1,13 +1,12 @@
 # used for /metrics endpoint on LiteLLM Proxy
 #### What this does ####
 #    On success, log events to Prometheus
-
-import datetime
 import os
 import subprocess
 import sys
 import traceback
 import uuid
+from datetime import datetime, timedelta
 from typing import Optional, TypedDict, Union
 
 import dotenv
@@ -25,7 +24,7 @@ class PrometheusLogger(CustomLogger):
         **kwargs,
     ):
         try:
-            from prometheus_client import Counter, Gauge
+            from prometheus_client import Counter, Gauge, Histogram
 
             from litellm.proxy.proxy_server import premium_user
 
@@ -35,7 +34,7 @@ class PrometheusLogger(CustomLogger):
 
             self.litellm_llm_api_failed_requests_metric = Counter(
                 name="litellm_llm_api_failed_requests_metric",
-                documentation="Total number of failed LLM API calls via litellm",
+                documentation="Total number of failed LLM API calls via litellm - track fails per API Key, team, user",
                 labelnames=[
                     "end_user",
                     "hashed_api_key",
@@ -49,7 +48,7 @@ class PrometheusLogger(CustomLogger):
 
             self.litellm_requests_metric = Counter(
                 name="litellm_requests_metric",
-                documentation="Total number of LLM calls to litellm",
+                documentation="Total number of LLM calls to litellm - track total per API Key, team, user",
                 labelnames=[
                     "end_user",
                     "hashed_api_key",
@@ -105,12 +104,16 @@ class PrometheusLogger(CustomLogger):
                 labelnames=["hashed_api_key", "api_key_alias"],
             )
 
+            ########################################
+            # LLM API Deployment Metrics / analytics
+            ########################################
+
             # Litellm-Enterprise Metrics
             if premium_user is True:
                 # Remaining Rate Limit for model
                 self.litellm_remaining_requests_metric = Gauge(
                     "litellm_remaining_requests",
-                    "remaining requests for model, returned from LLM API Provider",
+                    "LLM Deployment Analytics - remaining requests for model, returned from LLM API Provider",
                     labelnames=[
                         "model_group",
                         "api_provider",
@@ -140,7 +143,30 @@ class PrometheusLogger(CustomLogger):
                 # Metric for deployment state
                 self.deployment_state = Gauge(
                     "deployment_state",
-                    "The state of the deployment: 0 = healthy, 1 = partial outage, 2 = complete outage",
+                    "LLM Deployment Analytics - The state of the deployment: 0 = healthy, 1 = partial outage, 2 = complete outage",
+                    labelnames=_logged_llm_labels,
+                )
+
+                self.llm_deployment_success_responses = Counter(
+                    name="llm_deployment_success_responses",
+                    documentation="LLM Deployment Analytics - Total number of successful LLM API calls via litellm",
+                    labelnames=_logged_llm_labels,
+                )
+                self.llm_deployment_failure_responses = Counter(
+                    name="llm_deployment_failure_responses",
+                    documentation="LLM Deployment Analytics - Total number of failed LLM API calls via litellm",
+                    labelnames=_logged_llm_labels,
+                )
+                self.llm_deployment_total_requests = Counter(
+                    name="llm_deployment_total_requests",
+                    documentation="LLM Deployment Analytics - Total number of LLM API calls via litellm - success + failure",
+                    labelnames=_logged_llm_labels,
+                )
+
+                # Deployment Latency tracking
+                self.llm_deployment_latency_per_output_token = Histogram(
+                    name="llm_deployment_latency_per_output_token",
+                    documentation="LLM Deployment Analytics - Latency per output token",
                     labelnames=_logged_llm_labels,
                 )
 
@@ -193,9 +219,10 @@ class PrometheusLogger(CustomLogger):
         _remaining_api_key_budget = safe_get_remaining_budget(
             max_budget=_api_key_max_budget, spend=_api_key_spend
         )
-
+        output_tokens = 1.0
         if response_obj is not None:
             tokens_used = response_obj.get("usage", {}).get("total_tokens", 0)
+            output_tokens = response_obj.get("usage", {}).get("completion_tokens", 0)
         else:
             tokens_used = 0
 
@@ -250,7 +277,9 @@ class PrometheusLogger(CustomLogger):
 
         # set x-ratelimit headers
         if premium_user is True:
-            self.set_llm_deployment_success_metrics(kwargs)
+            self.set_llm_deployment_success_metrics(
+                kwargs, start_time, end_time, output_tokens
+            )
         pass
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
@@ -287,7 +316,6 @@ class PrometheusLogger(CustomLogger):
                 user_api_team_alias,
                 user_id,
             ).inc()
-
             self.set_llm_deployment_failure_metrics(kwargs)
         except Exception as e:
             verbose_logger.error(
@@ -319,11 +347,31 @@ class PrometheusLogger(CustomLogger):
                 api_provider=llm_provider,
             )
 
+            self.llm_deployment_failure_responses.labels(
+                litellm_model_name=litellm_model_name,
+                model_id=model_id,
+                api_base=api_base,
+                api_provider=llm_provider,
+            ).inc()
+
+            self.llm_deployment_total_requests.labels(
+                litellm_model_name=litellm_model_name,
+                model_id=model_id,
+                api_base=api_base,
+                api_provider=llm_provider,
+            ).inc()
+
             pass
         except:
             pass
 
-    def set_llm_deployment_success_metrics(self, request_kwargs: dict):
+    def set_llm_deployment_success_metrics(
+        self,
+        request_kwargs: dict,
+        start_time,
+        end_time,
+        output_tokens: float = 1.0,
+    ):
         try:
             verbose_logger.debug("setting remaining tokens requests metric")
             _response_headers = request_kwargs.get("response_headers")
@@ -378,6 +426,51 @@ class PrometheusLogger(CustomLogger):
                 api_base=api_base,
                 api_provider=llm_provider,
             )
+
+            self.llm_deployment_success_responses.labels(
+                litellm_model_name=litellm_model_name,
+                model_id=model_id,
+                api_base=api_base,
+                api_provider=llm_provider,
+            ).inc()
+
+            self.llm_deployment_total_requests.labels(
+                litellm_model_name=litellm_model_name,
+                model_id=model_id,
+                api_base=api_base,
+                api_provider=llm_provider,
+            ).inc()
+
+            # Track deployment Latency
+            response_ms: timedelta = end_time - start_time
+            time_to_first_token_response_time: Optional[timedelta] = None
+
+            if (
+                request_kwargs.get("stream", None) is not None
+                and request_kwargs["stream"] == True
+            ):
+                # only log ttft for streaming request
+                time_to_first_token_response_time = (
+                    request_kwargs.get("completion_start_time", end_time) - start_time
+                )
+
+            # use the metric that is not None
+            # if streaming - use time_to_first_token_response
+            # if not streaming - use response_ms
+            _latency: timedelta = time_to_first_token_response_time or response_ms
+            _latency_seconds = _latency.total_seconds()
+
+            # latency per output token
+            latency_per_token = None
+            if output_tokens is not None and output_tokens > 0:
+                latency_per_token = _latency_seconds / output_tokens
+                self.llm_deployment_latency_per_output_token.labels(
+                    litellm_model_name=litellm_model_name,
+                    model_id=model_id,
+                    api_base=api_base,
+                    api_provider=llm_provider,
+                ).observe(latency_per_token)
+
         except Exception as e:
             verbose_logger.error(
                 "Prometheus Error: set_llm_deployment_success_metrics. Exception occured - {}".format(
