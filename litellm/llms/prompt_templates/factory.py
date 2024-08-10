@@ -243,13 +243,13 @@ def mistral_api_pt(messages):
                 if k not in special_keys:
                     extra_args[k] = v
         texts = ""
-        if isinstance(m["content"], list):
+        if m.get("content", None) is not None and isinstance(m["content"], list):
             for c in m["content"]:
                 if c["type"] == "image_url":
                     return messages
                 elif c["type"] == "text" and isinstance(c["text"], str):
                     texts += c["text"]
-        elif isinstance(m["content"], str):
+        elif m.get("content", None) is not None and isinstance(m["content"], str):
             texts = m["content"]
 
         new_m = {"role": m["role"], "content": texts, **extra_args}
