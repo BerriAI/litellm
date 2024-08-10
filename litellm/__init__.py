@@ -866,6 +866,7 @@ from .llms.bedrock_httpx import (
     AmazonCohereChatConfig,
     AmazonConverseConfig,
     BEDROCK_CONVERSE_MODELS,
+    bedrock_tool_name_mappings,
 )
 from .llms.bedrock import (
     AmazonTitanConfig,
