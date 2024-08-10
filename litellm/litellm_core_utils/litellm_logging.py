@@ -638,6 +638,8 @@ class Logging:
             verbose_logger.debug(f"success callbacks: {litellm.success_callback}")
             ## BUILD COMPLETE STREAMED RESPONSE
             complete_streaming_response = None
+            if "complete_streaming_response" in self.model_call_details:
+                return  # break out of this.
             if self.stream and isinstance(result, ModelResponse):
                 if (
                     result.choices[0].finish_reason is not None
@@ -1279,6 +1281,8 @@ class Logging:
         )
         ## BUILD COMPLETE STREAMED RESPONSE
         complete_streaming_response = None
+        if "async_complete_streaming_response" in self.model_call_details:
+            return  # break out of this.
         if self.stream:
             if result.choices[0].finish_reason is not None:  # if it's the last chunk
                 self.streaming_chunks.append(result)
@@ -1302,6 +1306,7 @@ class Logging:
                 self.streaming_chunks.append(result)
         if complete_streaming_response is not None:
             print_verbose("Async success callbacks: Got a complete streaming response")
+
             self.model_call_details["async_complete_streaming_response"] = (
                 complete_streaming_response
             )
@@ -1431,7 +1436,7 @@ class Logging:
                             end_time=end_time,
                         )
                 if isinstance(callback, CustomLogger):  # custom logger class
-                    if self.stream == True:
+                    if self.stream is True:
                         if (
                             "async_complete_streaming_response"
                             in self.model_call_details
