@@ -17,3 +17,4 @@ Beta Feature -  This feature might move to LiteLLM Enterprise
 If we decide to move a beta feature to the paid Enterprise version we will:
 - Provide **at least 30 days** notice to all users of the beta feature
 - Provide **a free 3 month License to prevent any disruptions to production**
+- Provide a **dedicated slack, discord, microsoft teams support channel** to help your team during this transition
