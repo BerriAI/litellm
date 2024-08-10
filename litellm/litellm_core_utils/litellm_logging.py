@@ -949,34 +949,6 @@ class Logging:
                             user_id=kwargs.get("user", None),
                             print_verbose=print_verbose,
                         )
-                    if callback == "prometheus":
-                        verbose_logger.debug("reaches prometheus for success logging!")
-                        kwargs = {}
-                        for k, v in self.model_call_details.items():
-                            if (
-                                k != "original_response"
-                            ):  # copy.deepcopy raises errors as this could be a coroutine
-                                kwargs[k] = v
-                        # this only logs streaming once, complete_streaming_response exists i.e when stream ends
-                        if self.stream:
-                            verbose_logger.debug(
-                                f"prometheus: is complete_streaming_response in kwargs: {kwargs.get('complete_streaming_response', None)}"
-                            )
-                            if complete_streaming_response is None:
-                                continue
-                            else:
-                                print_verbose(
-                                    "reaches prometheus for streaming logging!"
-                                )
-                                result = kwargs["complete_streaming_response"]
-                        prometheusLogger.log_event(
-                            kwargs=kwargs,
-                            response_obj=result,
-                            start_time=start_time,
-                            end_time=end_time,
-                            user_id=kwargs.get("user", None),
-                            print_verbose=print_verbose,
-                        )
                     if callback == "generic":
                         global genericAPILogger
                         verbose_logger.debug("reaches langfuse for success logging!")
@@ -1763,25 +1735,6 @@ class Logging:
                             level="ERROR",
                             kwargs=self.model_call_details,
                         )
-                    if callback == "prometheus":
-                        global prometheusLogger
-                        verbose_logger.debug("reaches prometheus for success logging!")
-                        kwargs = {}
-                        for k, v in self.model_call_details.items():
-                            if (
-                                k != "original_response"
-                            ):  # copy.deepcopy raises errors as this could be a coroutine
-                                kwargs[k] = v
-                        kwargs["exception"] = str(exception)
-                        prometheusLogger.log_event(
-                            kwargs=kwargs,
-                            response_obj=result,
-                            start_time=start_time,
-                            end_time=end_time,
-                            user_id=kwargs.get("user", None),
-                            print_verbose=print_verbose,
-                        )
-
                     if callback == "logfire":
                         verbose_logger.debug("reaches logfire for failure logging!")
                         kwargs = {}
@@ -1951,9 +1904,6 @@ def set_callbacks(callback_list, function_id=None):
                 openMeterLogger = OpenMeterLogger()
             elif callback == "datadog":
                 dataDogLogger = DataDogLogger()
-            elif callback == "prometheus":
-                if prometheusLogger is None:
-                    prometheusLogger = PrometheusLogger()
             elif callback == "dynamodb":
                 dynamoLogger = DyanmoDBLogger()
             elif callback == "s3":
@@ -2027,6 +1977,14 @@ def _init_custom_logger_compatible_class(
         _langsmith_logger = LangsmithLogger()
         _in_memory_loggers.append(_langsmith_logger)
         return _langsmith_logger  # type: ignore
+    elif logging_integration == "prometheus":
+        for callback in _in_memory_loggers:
+            if isinstance(callback, PrometheusLogger):
+                return callback  # type: ignore
+
+        _prometheus_logger = PrometheusLogger()
+        _in_memory_loggers.append(_prometheus_logger)
+        return _prometheus_logger  # type: ignore
     elif logging_integration == "gcs_bucket":
         for callback in _in_memory_loggers:
             if isinstance(callback, GCSBucketLogger):
@@ -2148,6 +2106,10 @@ def get_custom_logger_compatible_class(
     elif logging_integration == "langsmith":
         for callback in _in_memory_loggers:
             if isinstance(callback, LangsmithLogger):
+                return callback
+    elif logging_integration == "prometheus":
+        for callback in _in_memory_loggers:
+            if isinstance(callback, PrometheusLogger):
                 return callback
     elif logging_integration == "gcs_bucket":
         for callback in _in_memory_loggers:
