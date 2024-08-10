@@ -686,7 +686,9 @@ def completion(
     proxy_server_request = kwargs.get("proxy_server_request", None)
     fallbacks = kwargs.get("fallbacks", None)
     headers = kwargs.get("headers", None) or extra_headers
-    num_retries = kwargs.get("num_retries", None)  ## deprecated
+    num_retries = kwargs.get(
+        "num_retries", None
+    )  ## alt. param for 'max_retries'. Use this to pass retries w/ instructor.
     max_retries = kwargs.get("max_retries", None)
     cooldown_time = kwargs.get("cooldown_time", None)
     context_window_fallback_dict = kwargs.get("context_window_fallback_dict", None)
@@ -762,8 +764,8 @@ def completion(
     try:
         if base_url is not None:
             api_base = base_url
-        if max_retries is not None:  # openai allows openai.OpenAI(max_retries=3)
-            num_retries = max_retries
+        if num_retries is not None:
+            max_retries = num_retries
         logging = litellm_logging_obj
         fallbacks = fallbacks or litellm.model_fallbacks
         if fallbacks is not None:
