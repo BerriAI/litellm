@@ -115,6 +115,7 @@ AlertType = Literal[
     "new_model_added",
     "outage_alerts",
     "region_outage_alerts",
+    "fallback_reports",
 ]
 
 
