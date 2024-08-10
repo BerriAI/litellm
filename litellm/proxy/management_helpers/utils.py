@@ -72,7 +72,7 @@ async def add_new_member(
             where={"user_id": new_member.user_id},
             data={
                 "update": {"teams": {"push": [team_id]}},
-                "create": {"teams": [team_id], **new_user_defaults},
+                "create": {"teams": [team_id], **new_user_defaults},  # type: ignore
             },
         )
     elif new_member.user_email is not None:
