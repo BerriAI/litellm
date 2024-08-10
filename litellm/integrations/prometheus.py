@@ -35,7 +35,7 @@ class PrometheusLogger(CustomLogger):
 
             self.litellm_llm_api_failed_requests_metric = Counter(
                 name="litellm_llm_api_failed_requests_metric",
-                documentation="Total number of failed LLM API calls via litellm",
+                documentation="Total number of failed LLM API calls via litellm - track fails per API Key, team, user",
                 labelnames=[
                     "end_user",
                     "hashed_api_key",
@@ -49,7 +49,7 @@ class PrometheusLogger(CustomLogger):
 
             self.litellm_requests_metric = Counter(
                 name="litellm_requests_metric",
-                documentation="Total number of LLM calls to litellm",
+                documentation="Total number of LLM calls to litellm - track total per API Key, team, user",
                 labelnames=[
                     "end_user",
                     "hashed_api_key",
@@ -105,12 +105,16 @@ class PrometheusLogger(CustomLogger):
                 labelnames=["hashed_api_key", "api_key_alias"],
             )
 
+            ########################################
+            # LLM API Deployment Metrics / analytics
+            ########################################
+
             # Litellm-Enterprise Metrics
             if premium_user is True:
                 # Remaining Rate Limit for model
                 self.litellm_remaining_requests_metric = Gauge(
                     "litellm_remaining_requests",
-                    "remaining requests for model, returned from LLM API Provider",
+                    "LLM Deployment Analytics - remaining requests for model, returned from LLM API Provider",
                     labelnames=[
                         "model_group",
                         "api_provider",
@@ -140,7 +144,23 @@ class PrometheusLogger(CustomLogger):
                 # Metric for deployment state
                 self.deployment_state = Gauge(
                     "deployment_state",
-                    "The state of the deployment: 0 = healthy, 1 = partial outage, 2 = complete outage",
+                    "LLM Deployment Analytics - The state of the deployment: 0 = healthy, 1 = partial outage, 2 = complete outage",
+                    labelnames=_logged_llm_labels,
+                )
+
+                self.llm_deployment_success_responses = Counter(
+                    name="llm_deployment_success_responses",
+                    documentation="LLM Deployment Analytics - Total number of successful LLM API calls via litellm",
+                    labelnames=_logged_llm_labels,
+                )
+                self.llm_deployment_failure_responses = Counter(
+                    name="llm_deployment_failure_responses",
+                    documentation="LLM Deployment Analytics - Total number of failed LLM API calls via litellm",
+                    labelnames=_logged_llm_labels,
+                )
+                self.llm_deployment_total_requests = Counter(
+                    name="llm_deployment_total_requests",
+                    documentation="LLM Deployment Analytics - Total number of LLM API calls via litellm - success + failure",
                     labelnames=_logged_llm_labels,
                 )
 
@@ -287,7 +307,6 @@ class PrometheusLogger(CustomLogger):
                 user_api_team_alias,
                 user_id,
             ).inc()
-
             self.set_llm_deployment_failure_metrics(kwargs)
         except Exception as e:
             verbose_logger.error(
@@ -318,6 +337,20 @@ class PrometheusLogger(CustomLogger):
                 api_base=api_base,
                 api_provider=llm_provider,
             )
+
+            self.llm_deployment_failure_responses.labels(
+                litellm_model_name=litellm_model_name,
+                model_id=model_id,
+                api_base=api_base,
+                api_provider=llm_provider,
+            ).inc()
+
+            self.llm_deployment_total_requests.labels(
+                litellm_model_name=litellm_model_name,
+                model_id=model_id,
+                api_base=api_base,
+                api_provider=llm_provider,
+            ).inc()
 
             pass
         except:
@@ -378,6 +411,20 @@ class PrometheusLogger(CustomLogger):
                 api_base=api_base,
                 api_provider=llm_provider,
             )
+
+            self.llm_deployment_success_responses.labels(
+                litellm_model_name=litellm_model_name,
+                model_id=model_id,
+                api_base=api_base,
+                api_provider=llm_provider,
+            ).inc()
+
+            self.llm_deployment_total_requests.labels(
+                litellm_model_name=litellm_model_name,
+                model_id=model_id,
+                api_base=api_base,
+                api_provider=llm_provider,
+            ).inc()
         except Exception as e:
             verbose_logger.error(
                 "Prometheus Error: set_llm_deployment_success_metrics. Exception occured - {}".format(
