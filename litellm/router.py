@@ -59,6 +59,10 @@ from litellm.router_utils.client_initalization_utils import (
     should_initialize_sync_client,
 )
 from litellm.router_utils.cooldown_callbacks import router_cooldown_handler
+from litellm.router_utils.fallback_event_handlers import (
+    log_failure_fallback_event,
+    log_success_fallback_event,
+)
 from litellm.router_utils.handle_error import send_llm_exception_alert
 from litellm.scheduler import FlowItem, Scheduler
 from litellm.types.llms.openai import (
@@ -2361,6 +2365,7 @@ class Router:
             verbose_router_logger.debug(f"Traceback{traceback.format_exc()}")
             original_exception = e
             fallback_model_group = None
+            original_model_group = kwargs.get("model")
             fallback_failure_exception_str = ""
             try:
                 verbose_router_logger.debug("Trying to fallback b/w models")
@@ -2392,8 +2397,18 @@ class Router:
                                 verbose_router_logger.info(
                                     "Successful fallback b/w models."
                                 )
+                                # callback for successfull_fallback_event():
+                                await log_success_fallback_event(
+                                    original_model_group=original_model_group,
+                                    kwargs=kwargs,
+                                )
+
                                 return response
                             except Exception as e:
+                                await log_failure_fallback_event(
+                                    original_model_group=original_model_group,
+                                    kwargs=kwargs,
+                                )
                                 pass
                     else:
                         error_message = "model={}. context_window_fallbacks={}. fallbacks={}.\n\nSet 'context_window_fallback' - https://docs.litellm.ai/docs/routing#fallbacks".format(
@@ -2435,8 +2450,17 @@ class Router:
                                 verbose_router_logger.info(
                                     "Successful fallback b/w models."
                                 )
+                                # callback for successfull_fallback_event():
+                                await log_success_fallback_event(
+                                    original_model_group=original_model_group,
+                                    kwargs=kwargs,
+                                )
                                 return response
                             except Exception as e:
+                                await log_failure_fallback_event(
+                                    original_model_group=original_model_group,
+                                    kwargs=kwargs,
+                                )
                                 pass
                     else:
                         error_message = "model={}. content_policy_fallback={}. fallbacks={}.\n\nSet 'content_policy_fallback' - https://docs.litellm.ai/docs/routing#fallbacks".format(
@@ -2497,8 +2521,18 @@ class Router:
                             verbose_router_logger.info(
                                 "Successful fallback b/w models."
                             )
+                            # callback for successfull_fallback_event():
+                            await log_success_fallback_event(
+                                original_model_group=original_model_group,
+                                kwargs=kwargs,
+                            )
+
                             return response
                         except Exception as e:
+                            await log_failure_fallback_event(
+                                original_model_group=original_model_group,
+                                kwargs=kwargs,
+                            )
                             raise e
             except Exception as new_exception:
                 verbose_router_logger.error(
