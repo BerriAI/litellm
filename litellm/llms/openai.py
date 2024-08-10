@@ -964,9 +964,9 @@ class OpenAIChatCompletion(BaseLLM):
                 except openai.UnprocessableEntityError as e:
                     ## check if body contains unprocessable params - related issue https://github.com/BerriAI/litellm/issues/4800
                     if litellm.drop_params is True or drop_params is True:
+                        invalid_params: List[str] = []
                         if e.body is not None and isinstance(e.body, dict) and e.body.get("detail"):  # type: ignore
                             detail = e.body.get("detail")  # type: ignore
-                            invalid_params: List[str] = []
                             if (
                                 isinstance(detail, List)
                                 and len(detail) > 0
@@ -1096,9 +1096,9 @@ class OpenAIChatCompletion(BaseLLM):
             except openai.UnprocessableEntityError as e:
                 ## check if body contains unprocessable params - related issue https://github.com/BerriAI/litellm/issues/4800
                 if litellm.drop_params is True or drop_params is True:
+                    invalid_params: List[str] = []
                     if e.body is not None and isinstance(e.body, dict) and e.body.get("detail"):  # type: ignore
                         detail = e.body.get("detail")  # type: ignore
-                        invalid_params: List[str] = []
                         if (
                             isinstance(detail, List)
                             and len(detail) > 0
@@ -1227,9 +1227,9 @@ class OpenAIChatCompletion(BaseLLM):
             except openai.UnprocessableEntityError as e:
                 ## check if body contains unprocessable params - related issue https://github.com/BerriAI/litellm/issues/4800
                 if litellm.drop_params is True or drop_params is True:
+                    invalid_params: List[str] = []
                     if e.body is not None and isinstance(e.body, dict) and e.body.get("detail"):  # type: ignore
                         detail = e.body.get("detail")  # type: ignore
-                        invalid_params: List[str] = []
                         if (
                             isinstance(detail, List)
                             and len(detail) > 0
