@@ -37,5 +37,6 @@ general_settings:
   master_key: sk-1234
 
 litellm_settings:
+  fallbacks: [{"gemini-1.5-pro-001": ["gpt-4o"]}]
   success_callback: ["langfuse", "prometheus"]
   failure_callback: ["prometheus"]
