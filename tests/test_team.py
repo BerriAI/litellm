@@ -251,6 +251,21 @@ async def delete_team(
         return await response.json()
 
 
+async def list_teams(
+    session,
+    i,
+):
+    url = "http://0.0.0.0:4000/team/list"
+    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+
+    async with session.get(url, headers=headers) as response:
+        status = response.status
+        if status != 200:
+            raise Exception(f"Request {i} did not return a 200 status code: {status}")
+
+        return await response.json()
+
+
 @pytest.mark.asyncio
 async def test_team_new():
     """

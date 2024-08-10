@@ -5,6 +5,8 @@ import asyncio
 import aiohttp
 import time
 from openai import AsyncOpenAI
+from test_team import list_teams
+from typing import Optional
 
 
 async def new_user(session, i, user_id=None, budget=None, budget_duration=None):
@@ -45,11 +47,14 @@ async def test_user_new():
         await asyncio.gather(*tasks)
 
 
-async def get_user_info(session, get_user, call_user):
+async def get_user_info(session, get_user, call_user, view_all: Optional[bool] = None):
     """
     Make sure only models user has access to are returned
     """
-    url = f"http://0.0.0.0:4000/user/info?user_id={get_user}"
+    if view_all is True:
+        url = "http://0.0.0.0:4000/user/info"
+    else:
+        url = f"http://0.0.0.0:4000/user/info?user_id={get_user}"
     headers = {
         "Authorization": f"Bearer {call_user}",
         "Content-Type": "application/json",
@@ -93,6 +98,13 @@ async def test_user_info():
             session=session, get_user=get_user, call_user=random_key
         )
         assert status == 403
+
+        ## check if returned teams as admin == all teams ##
+        admin_info = await get_user_info(
+            session=session, get_user="", call_user="sk-1234", view_all=True
+        )
+        all_teams = await list_teams(session=session, i=0)
+        assert len(admin_info["teams"]) == len(all_teams)
 
 
 @pytest.mark.asyncio
