@@ -5103,6 +5103,7 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
                 supports_system_messages=None,
                 supports_response_schema=None,
                 supports_function_calling=None,
+                supports_assistant_prefill=None,
             )
         else:
             """
@@ -5199,6 +5200,9 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
                 supports_vision=_model_info.get("supports_vision", False),
                 supports_function_calling=_model_info.get(
                     "supports_function_calling", False
+                ),
+                supports_assistant_prefill=_model_info.get(
+                    "supports_assistant_prefill", False
                 ),
             )
     except Exception:

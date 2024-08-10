@@ -890,7 +890,8 @@
         "input_cost_per_token": 0.00000025,
         "output_cost_per_token": 0.00000025,
         "litellm_provider": "mistral",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_assistant_prefill": true
     },
     "mistral/mistral-small": {
         "max_tokens": 8191,
@@ -900,7 +901,8 @@
         "output_cost_per_token": 0.000003,
         "litellm_provider": "mistral",
         "supports_function_calling": true,
-        "mode": "chat"
+        "mode": "chat",
+        "supports_assistant_prefill": true
     },
     "mistral/mistral-small-latest": {
         "max_tokens": 8191,
@@ -910,7 +912,8 @@
         "output_cost_per_token": 0.000003,
         "litellm_provider": "mistral",
         "supports_function_calling": true,
-        "mode": "chat"
+        "mode": "chat",
+        "supports_assistant_prefill": true
     },
     "mistral/mistral-medium": {
         "max_tokens": 8191,
@@ -919,7 +922,8 @@
         "input_cost_per_token": 0.0000027,
         "output_cost_per_token": 0.0000081,
         "litellm_provider": "mistral",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_assistant_prefill": true
     },
     "mistral/mistral-medium-latest": {
         "max_tokens": 8191,
@@ -928,7 +932,8 @@
         "input_cost_per_token": 0.0000027,
         "output_cost_per_token": 0.0000081,
         "litellm_provider": "mistral",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_assistant_prefill": true
     },
     "mistral/mistral-medium-2312": {
         "max_tokens": 8191,
@@ -937,7 +942,8 @@
         "input_cost_per_token": 0.0000027,
         "output_cost_per_token": 0.0000081,
         "litellm_provider": "mistral",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_assistant_prefill": true
     },
     "mistral/mistral-large-latest": {
         "max_tokens": 128000,
@@ -947,7 +953,8 @@
         "output_cost_per_token": 0.000009,
         "litellm_provider": "mistral",
         "mode": "chat",
-        "supports_function_calling": true
+        "supports_function_calling": true,
+        "supports_assistant_prefill": true
     },
     "mistral/mistral-large-2402": {
         "max_tokens": 8191,
@@ -957,7 +964,8 @@
         "output_cost_per_token": 0.000012,
         "litellm_provider": "mistral",
         "mode": "chat",
-        "supports_function_calling": true
+        "supports_function_calling": true,
+        "supports_assistant_prefill": true
     },
     "mistral/mistral-large-2407": {
         "max_tokens": 128000,
@@ -967,7 +975,8 @@
         "output_cost_per_token": 0.000009,
         "litellm_provider": "mistral",
         "mode": "chat",
-        "supports_function_calling": true
+        "supports_function_calling": true,
+        "supports_assistant_prefill": true
     },
     "mistral/open-mistral-7b": {
         "max_tokens": 8191,
@@ -976,7 +985,8 @@
         "input_cost_per_token": 0.00000025,
         "output_cost_per_token": 0.00000025,
         "litellm_provider": "mistral",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_assistant_prefill": true
     },
     "mistral/open-mixtral-8x7b": {
         "max_tokens": 8191,
@@ -986,7 +996,8 @@
         "output_cost_per_token": 0.0000007,
         "litellm_provider": "mistral",
         "mode": "chat",
-        "supports_function_calling": true
+        "supports_function_calling": true,
+        "supports_assistant_prefill": true
     },
     "mistral/open-mixtral-8x22b": {
         "max_tokens": 8191,
@@ -996,7 +1007,8 @@
         "output_cost_per_token": 0.000006,
         "litellm_provider": "mistral",
         "mode": "chat",
-        "supports_function_calling": true
+        "supports_function_calling": true,
+        "supports_assistant_prefill": true
     },
     "mistral/codestral-latest": {
         "max_tokens": 8191,
@@ -1005,7 +1017,8 @@
         "input_cost_per_token": 0.000001,
         "output_cost_per_token": 0.000003,
         "litellm_provider": "mistral",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_assistant_prefill": true
     },
     "mistral/codestral-2405": {
         "max_tokens": 8191,
@@ -1014,7 +1027,8 @@
         "input_cost_per_token": 0.000001,
         "output_cost_per_token": 0.000003,
         "litellm_provider": "mistral",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_assistant_prefill": true
     },
     "mistral/open-mistral-nemo": {
         "max_tokens": 128000,
@@ -1024,7 +1038,8 @@
         "output_cost_per_token": 0.0000003,
         "litellm_provider": "mistral",
         "mode": "chat",
-        "source": "https://mistral.ai/technology/"
+        "source": "https://mistral.ai/technology/",
+        "supports_assistant_prefill": true
     },
     "mistral/open-mistral-nemo-2407": {
         "max_tokens": 128000,
@@ -1034,7 +1049,8 @@
         "output_cost_per_token": 0.0000003,
         "litellm_provider": "mistral",
         "mode": "chat",
-        "source": "https://mistral.ai/technology/"
+        "source": "https://mistral.ai/technology/",
+        "supports_assistant_prefill": true
     },
     "mistral/open-codestral-mamba": {
         "max_tokens": 256000,
@@ -1044,7 +1060,8 @@
         "output_cost_per_token": 0.00000025,
         "litellm_provider": "mistral",
         "mode": "chat",
-        "source": "https://mistral.ai/technology/"
+        "source": "https://mistral.ai/technology/",
+        "supports_assistant_prefill": true
     },
     "mistral/codestral-mamba-latest": {
         "max_tokens": 256000,
@@ -1054,7 +1071,8 @@
         "output_cost_per_token": 0.00000025,
         "litellm_provider": "mistral",
         "mode": "chat",
-        "source": "https://mistral.ai/technology/"
+        "source": "https://mistral.ai/technology/",
+        "supports_assistant_prefill": true
     },
     "mistral/mistral-embed": {
         "max_tokens": 8192,
@@ -1071,7 +1089,10 @@
         "input_cost_per_token_cache_hit": 0.000000014,
         "output_cost_per_token": 0.00000028,
         "litellm_provider": "deepseek",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_function_calling": true, 
+        "supports_assistant_prefill": true,
+        "supports_tool_choice": true
     },
     "codestral/codestral-latest": {
         "max_tokens": 8191,
@@ -1081,7 +1102,8 @@
         "output_cost_per_token": 0.000000,
         "litellm_provider": "codestral",
         "mode": "chat",
-        "source": "https://docs.mistral.ai/capabilities/code_generation/"
+        "source": "https://docs.mistral.ai/capabilities/code_generation/",
+        "supports_assistant_prefill": true
     },
     "codestral/codestral-2405": {
         "max_tokens": 8191,
@@ -1091,7 +1113,8 @@
         "output_cost_per_token": 0.000000,
         "litellm_provider": "codestral",
         "mode": "chat",
-        "source": "https://docs.mistral.ai/capabilities/code_generation/"
+        "source": "https://docs.mistral.ai/capabilities/code_generation/",
+        "supports_assistant_prefill": true
     },
     "text-completion-codestral/codestral-latest": {
         "max_tokens": 8191,
@@ -1121,7 +1144,10 @@
         "input_cost_per_token_cache_hit": 0.000000014,
         "output_cost_per_token": 0.00000028,
         "litellm_provider": "deepseek",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_function_calling": true, 
+        "supports_assistant_prefill": true,
+        "supports_tool_choice": true
     },
     "groq/llama2-70b-4096": {
         "max_tokens": 4096,
@@ -1290,7 +1316,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
-        "tool_use_system_prompt_tokens": 264
+        "tool_use_system_prompt_tokens": 264,
+        "supports_assistant_prefill": true
     },
     "claude-3-opus-20240229": {
         "max_tokens": 4096,
@@ -1302,7 +1329,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
-        "tool_use_system_prompt_tokens": 395
+        "tool_use_system_prompt_tokens": 395,
+        "supports_assistant_prefill": true
     },
     "claude-3-sonnet-20240229": {
         "max_tokens": 4096,
@@ -1314,7 +1342,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
-        "tool_use_system_prompt_tokens": 159
+        "tool_use_system_prompt_tokens": 159,
+        "supports_assistant_prefill": true
     },
     "claude-3-5-sonnet-20240620": {
         "max_tokens": 4096,
@@ -1326,7 +1355,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
-        "tool_use_system_prompt_tokens": 159
+        "tool_use_system_prompt_tokens": 159,
+        "supports_assistant_prefill": true
     },
     "text-bison": {
         "max_tokens": 2048,
