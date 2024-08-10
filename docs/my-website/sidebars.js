@@ -264,6 +264,7 @@ const sidebars = {
       items: [
         "extras/contributing",
         "data_security",
+        "migration_policy",
         "contributing",
         "rules",
         "proxy_server",
