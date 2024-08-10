@@ -43,6 +43,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "logfire",
     "dynamic_rate_limiter",
     "langsmith",
+    "prometheus",
     "galileo",
     "braintrust",
     "arize",
