@@ -170,6 +170,17 @@ class PrometheusLogger(CustomLogger):
                     labelnames=_logged_llm_labels,
                 )
 
+                self.llm_deployment_successful_fallbacks = Counter(
+                    "llm_deployment_successful_fallbacks",
+                    "LLM Deployment Analytics - Number of successful fallback workloads",
+                    ["primary_model", "fallback_model"],
+                )
+                self.llm_deployment_failed_fallbacks = Counter(
+                    "llm_deployment_failed_fallbacks",
+                    "LLM Deployment Analytics - Number of failed fallback workloads",
+                    ["primary_model", "fallback_model"],
+                )
+
         except Exception as e:
             print_verbose(f"Got exception on init prometheus client {str(e)}")
             raise e
@@ -478,6 +489,28 @@ class PrometheusLogger(CustomLogger):
                 )
             )
             return
+
+    async def log_success_fallback_event(self, original_model_group: str, kwargs: dict):
+        verbose_logger.debug(
+            "Prometheus: log_success_fallback_event, original_model_group: %s, kwargs: %s",
+            original_model_group,
+            kwargs,
+        )
+        _new_model = kwargs.get("model")
+        self.llm_deployment_successful_fallbacks.labels(
+            primary_model=original_model_group, fallback_model=_new_model
+        ).inc()
+
+    async def log_failure_fallback_event(self, original_model_group: str, kwargs: dict):
+        verbose_logger.debug(
+            "Prometheus: log_failure_fallback_event, original_model_group: %s, kwargs: %s",
+            original_model_group,
+            kwargs,
+        )
+        _new_model = kwargs.get("model")
+        self.llm_deployment_failed_fallbacks.labels(
+            primary_model=original_model_group, fallback_model=_new_model
+        ).inc()
 
     def set_deployment_state(
         self,
