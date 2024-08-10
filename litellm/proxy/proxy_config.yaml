@@ -35,6 +35,7 @@ default_vertex_config:
 
 general_settings: 
   master_key: sk-1234
+  alerting: ["slack"]
 
 litellm_settings:
   fallbacks: [{"gemini-1.5-pro-001": ["gpt-4o"]}]
