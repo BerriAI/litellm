@@ -57,6 +57,10 @@ async def get_fallback_metric_from_prometheus():
                 metric_values = result["values"]
                 most_recent_value = metric_values[0]
 
+                if PROMETHEUS_SELECTED_INSTANCE is not None:
+                    if metric.get("instance") != PROMETHEUS_SELECTED_INSTANCE:
+                        continue
+
                 value = int(float(most_recent_value[1]))  # Convert value to integer
                 primary_model = metric.get("primary_model", "Unknown")
                 fallback_model = metric.get("fallback_model", "Unknown")
