@@ -75,6 +75,12 @@ http://localhost:4000/metrics
 | `deployment_state`             | The state of the deployment: 0 = healthy, 1 = partial outage, 2 = complete outage. |
 | `litellm_remaining_requests_metric`             | Track `x-ratelimit-remaining-requests` returned from LLM API Deployment |
 | `litellm_remaining_tokens`                | Track `x-ratelimit-remaining-tokens` return from LLM API Deployment |
+ `llm_deployment_success_responses`              |  Total number of successful LLM API calls for deployment                               |
+| `llm_deployment_failure_responses`              | Total number of failed LLM API calls for deployment                                   |
+| `llm_deployment_total_requests`                 | Total number of LLM API calls for deployment - success + failure                      |
+| `llm_deployment_latency_per_output_token`       | Latency per output token for deployment                                                          |
+| `llm_deployment_successful_fallbacks`           |  Number of successful fallback requests from primary model -> fallback model        |
+| `llm_deployment_failed_fallbacks`               | Number of failed fallback requests from primary model -> fallback model            |
 
 
 

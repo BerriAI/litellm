@@ -172,12 +172,12 @@ class PrometheusLogger(CustomLogger):
 
                 self.llm_deployment_successful_fallbacks = Counter(
                     "llm_deployment_successful_fallbacks",
-                    "LLM Deployment Analytics - Number of successful fallback workloads",
+                    "LLM Deployment Analytics - Number of successful fallback requests from primary model -> fallback model",
                     ["primary_model", "fallback_model"],
                 )
                 self.llm_deployment_failed_fallbacks = Counter(
                     "llm_deployment_failed_fallbacks",
-                    "LLM Deployment Analytics - Number of failed fallback workloads",
+                    "LLM Deployment Analytics - Number of failed fallback requests from primary model -> fallback model",
                     ["primary_model", "fallback_model"],
                 )
 
