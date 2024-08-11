@@ -202,6 +202,139 @@ def get_assistants(
     return response
 
 
+async def aget_assistant(
+    custom_llm_provider: Literal["openai", "azure"],
+    client: Optional[AsyncOpenAI] = None,
+    **kwargs,
+) -> AssistantDeleted:
+    loop = asyncio.get_event_loop()
+    ### PASS ARGS TO GET ASSISTANTS ###
+    kwargs["async_get_assistants"] = True
+    try:
+        kwargs["client"] = client
+        # Use a partial function to pass your keyword arguments
+        func = partial(get_assistant, custom_llm_provider, **kwargs)
+
+        # Add the context to the function
+        ctx = contextvars.copy_context()
+        func_with_context = partial(ctx.run, func)
+
+        _, custom_llm_provider, _, _ = get_llm_provider(  # type: ignore
+            model="", custom_llm_provider=custom_llm_provider
+        )  # type: ignore
+
+        # Await normally
+        init_response = await loop.run_in_executor(None, func_with_context)
+        if asyncio.iscoroutine(init_response):
+            response = await init_response
+        else:
+            response = init_response
+        return response  # type: ignore
+    except Exception as e:
+        raise exception_type(
+            model="",
+            custom_llm_provider=custom_llm_provider,
+            original_exception=e,
+            completion_kwargs={},
+            extra_kwargs=kwargs,
+        )
+
+
+def get_assistant(
+    custom_llm_provider: Literal["openai", "azure"],
+    assistant_id: str,
+    client: Optional[Any] = None,
+    api_key: Optional[str] = None,
+    api_base: Optional[str] = None,
+    api_version: Optional[str] = None,
+    **kwargs,
+) -> AssistantDeleted:
+    optional_params = GenericLiteLLMParams(
+        api_key=api_key, api_base=api_base, api_version=api_version, **kwargs
+    )
+
+    async_get_assistants: Optional[bool] = kwargs.pop(
+        "async_get_assistants", None
+    )
+    if async_get_assistants is not None and not isinstance(
+        async_get_assistants, bool
+    ):
+        raise ValueError(
+            "Invalid value passed in for async_get_assistants. Only bool or None allowed"
+        )
+
+    ### TIMEOUT LOGIC ###
+    timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
+    # set timeout for 10 minutes by default
+
+    if (
+        timeout is not None
+        and isinstance(timeout, httpx.Timeout)
+        and supports_httpx_timeout(custom_llm_provider) == False
+    ):
+        read_timeout = timeout.read or 600
+        timeout = read_timeout  # default 10 min timeout
+    elif timeout is not None and not isinstance(timeout, httpx.Timeout):
+        timeout = float(timeout)  # type: ignore
+    elif timeout is None:
+        timeout = 600.0
+
+    response: Optional[AssistantDeleted] = None
+    if custom_llm_provider == "openai":
+        api_base = (
+            optional_params.api_base
+            or litellm.api_base
+            or os.getenv("OPENAI_API_BASE")
+            or "https://api.openai.com/v1"
+        )
+        organization = (
+            optional_params.organization
+            or litellm.organization
+            or os.getenv("OPENAI_ORGANIZATION", None)
+            or None
+        )
+        # set API KEY
+        api_key = (
+            optional_params.api_key
+            or litellm.api_key
+            or litellm.openai_key
+            or os.getenv("OPENAI_API_KEY")
+        )
+
+        response = openai_assistants_api.get_assistant(
+            api_base=api_base,
+            api_key=api_key,
+            timeout=timeout,
+            max_retries=optional_params.max_retries,
+            organization=organization,
+            assistant_id=assistant_id,
+            client=client,
+            async_get_assistants=async_get_assistants,
+        )
+    else:
+        raise litellm.exceptions.BadRequestError(
+            message="LiteLLM doesn't support {} for 'get_assistant'. Only 'openai' is supported.".format(
+                custom_llm_provider
+            ),
+            model="n/a",
+            llm_provider=custom_llm_provider,
+            response=httpx.Response(
+                status_code=400,
+                content="Unsupported provider",
+                request=httpx.Request(
+                    method="get_assistant", url="https://github.com/BerriAI/litellm"
+                ),
+            ),
+        )
+    if response is None:
+        raise litellm.exceptions.InternalServerError(
+            message="No response returned from 'get_assistant'",
+            model="n/a",
+            llm_provider=custom_llm_provider,
+        )
+    return response
+
+
 async def acreate_assistants(
     custom_llm_provider: Literal["openai", "azure"],
     client: Optional[AsyncOpenAI] = None,
