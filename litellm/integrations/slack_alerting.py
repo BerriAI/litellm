@@ -166,6 +166,7 @@ class SlackAlerting(CustomLogger):
             "db_exceptions",
             "daily_reports",
             "spend_reports",
+            "fallback_reports",
             "cooldown_deployment",
             "new_model_added",
             "outage_alerts",
@@ -1702,7 +1703,7 @@ Model Info:
                 alerting_metadata={},
             )
         except Exception as e:
-            verbose_proxy_logger.error("Error sending weekly spend report", e)
+            verbose_proxy_logger.error("Error sending weekly spend report %s", e)
 
     async def send_monthly_spend_report(self):
         """ """
@@ -1754,4 +1755,36 @@ Model Info:
                 alerting_metadata={},
             )
         except Exception as e:
-            verbose_proxy_logger.error("Error sending weekly spend report", e)
+            verbose_proxy_logger.error("Error sending weekly spend report %s", e)
+
+    async def send_fallback_stats_from_prometheus(self):
+        """
+        Helper to send fallback statistics from prometheus server -> to slack
+
+        This runs once per day and sends an overview of all the fallback statistics
+        """
+        try:
+            from litellm.integrations.prometheus_helpers.prometheus_api import (
+                get_fallback_metric_from_prometheus,
+            )
+
+            # call prometheuslogger.
+            falllback_success_info_prometheus = (
+                await get_fallback_metric_from_prometheus()
+            )
+
+            fallback_message = (
+                f"*Fallback Statistics:*\n{falllback_success_info_prometheus}"
+            )
+
+            await self.send_alert(
+                message=fallback_message,
+                level="Low",
+                alert_type="fallback_reports",
+                alerting_metadata={},
+            )
+
+        except Exception as e:
+            verbose_proxy_logger.error("Error sending weekly spend report %s", e)
+
+        pass
