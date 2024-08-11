@@ -5,7 +5,7 @@ from datetime import datetime
 from functools import wraps
 from typing import Optional
 
-from fastapi import Request
+from fastapi import HTTPException, Request
 
 import litellm
 from litellm._logging import verbose_logger
@@ -81,7 +81,7 @@ async def add_new_member(
         )
         ## user email is not unique acc. to prisma schema -> future improvement
         ### for now: check if it exists in db, if not - insert it
-        existing_user_row = await prisma_client.get_data(
+        existing_user_row: Optional[list] = await prisma_client.get_data(
             key_val={"user_email": new_member.user_email},
             table_name="user",
             query_type="find_all",
@@ -89,8 +89,21 @@ async def add_new_member(
         if existing_user_row is None or (
             isinstance(existing_user_row, list) and len(existing_user_row) == 0
         ):
-
+            new_user_defaults["teams"] = [team_id]
             await prisma_client.insert_data(data=new_user_defaults, table_name="user")  # type: ignore
+        elif len(existing_user_row) == 1:
+            user_info = existing_user_row[0]
+            await prisma_client.db.litellm_usertable.update(
+                where={"user_id": user_info.user_id},
+                data={"teams": {"push": [team_id]}},
+            )
+        elif len(existing_user_row) > 1:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "Multiple users with this email found in db. Please use 'user_id' instead."
+                },
+            )
 
     # Check if trying to set a budget for team member
     if max_budget_in_team is not None and new_member.user_id is not None:
