@@ -29,8 +29,8 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import (
     AlertType,
     CallInfo,
-    KeyCreatedEvent,
     UserAPIKeyAuth,
+    VirtualKeyEvent,
     WebhookEvent,
 )
 from litellm.types.router import LiteLLM_Params
@@ -1797,7 +1797,7 @@ Model Info:
 
     async def send_virtual_key_event_slack(
         self,
-        key_event: KeyCreatedEvent,
+        key_event: VirtualKeyEvent,
         event_name: str,
     ):
         """
@@ -1811,16 +1811,18 @@ Model Info:
             key_event_dict = key_event.model_dump()
 
             # Add Created by information first
-            message += "*Created by:*\n"
+            message += "*Action Done by:*\n"
             for key, value in key_event_dict.items():
                 if "created_by" in key:
                     message += f"{key}: `{value}`\n"
 
-            # Add all non created by information next
+            # Add args sent to function in the alert
             message += "\n*Arguments passed:*\n"
-            for key, value in key_event_dict.items():
-                if "created_by" not in key:
-                    message += f"{key}: `{value}`\n"
+            request_kwargs = key_event.request_kwargs
+            for key, value in request_kwargs.items():
+                if key == "user_api_key_dict":
+                    continue
+                message += f"{key}: `{value}`\n"
 
             await self.send_alert(
                 message=message,

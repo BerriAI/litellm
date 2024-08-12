@@ -13,7 +13,6 @@ from litellm.proxy._types import (  # key request types; user request types; tea
     DeleteCustomerRequest,
     DeleteTeamRequest,
     DeleteUserRequest,
-    KeyCreatedEvent,
     KeyRequest,
     LiteLLM_TeamTable,
     ManagementEndpointLoggingPayload,
@@ -24,6 +23,7 @@ from litellm.proxy._types import (  # key request types; user request types; tea
     UpdateTeamRequest,
     UpdateUserRequest,
     UserAPIKeyAuth,
+    VirtualKeyEvent,
 )
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.proxy.utils import PrismaClient
@@ -203,24 +203,29 @@ async def send_management_endpoint_alert(
     if premium_user is not True:
         return
 
+    key_function_to_event_name = {
+        "generate_key_fn": "Virtual Key Created",
+        "update_key_fn": "Virtual Key Updated",
+        "delete_key_fn": "Virtual Key Deleted",
+    }
+
     if (
         proxy_logging_obj is not None
         and proxy_logging_obj.slack_alerting_instance is not None
     ):
-        key_event = KeyCreatedEvent(
-            created_by_user_id=user_api_key_dict.user_id or "Unknown",
-            created_by_user_role=user_api_key_dict.user_role or "Unknown",
-            created_by_key_alias=user_api_key_dict.key_alias,
-            key_alias=request_kwargs.get("key_alias"),
-            team_id=request_kwargs.get("team_id"),
-            max_budget=request_kwargs.get("max_budget"),
-        )
 
-        if function_name == "generate_key_fn":
-            from litellm.proxy.proxy_server import proxy_logging_obj
+        # Virtual Key Events
+        if function_name in key_function_to_event_name:
+            key_event = VirtualKeyEvent(
+                created_by_user_id=user_api_key_dict.user_id or "Unknown",
+                created_by_user_role=user_api_key_dict.user_role or "Unknown",
+                created_by_key_alias=user_api_key_dict.key_alias,
+                request_kwargs=request_kwargs,
+            )
 
+            event_name = key_function_to_event_name[function_name]
             await proxy_logging_obj.slack_alerting_instance.send_virtual_key_event_slack(
-                key_event=key_event, event_name="Virtual Key Created"
+                key_event=key_event, event_name=event_name
             )
 
 

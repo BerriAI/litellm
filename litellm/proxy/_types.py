@@ -1756,10 +1756,8 @@ class SSOUserDefinedValues(TypedDict):
     budget_duration: Optional[str]
 
 
-class KeyCreatedEvent(LiteLLMBase):
+class VirtualKeyEvent(LiteLLMBase):
     created_by_user_id: str
     created_by_user_role: str
     created_by_key_alias: Optional[str]
-    key_alias: Optional[str]
-    team_id: Optional[str]
-    max_budget: Optional[float]
+    request_kwargs: dict
