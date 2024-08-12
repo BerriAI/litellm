@@ -63,7 +63,7 @@ def load_vertex_ai_credentials():
 
 @pytest.mark.asyncio
 async def test_basic_gcs_logger():
-    load_vertex_ai_credentials()
+    # load_vertex_ai_credentials()
     gcs_logger = GCSBucketLogger()
     print("GCSBucketLogger", gcs_logger)
 
@@ -75,6 +75,41 @@ async def test_basic_gcs_logger():
         max_tokens=10,
         user="ishaan-2",
         mock_response="Hi!",
+        metadata={
+            "tags": ["model-anthropic-claude-v2.1", "app-ishaan-prod"],
+            "user_api_key": "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",
+            "user_api_key_alias": None,
+            "user_api_end_user_max_budget": None,
+            "litellm_api_version": "0.0.0",
+            "global_max_parallel_requests": None,
+            "user_api_key_user_id": "116544810872468347480",
+            "user_api_key_org_id": None,
+            "user_api_key_team_id": None,
+            "user_api_key_team_alias": None,
+            "user_api_key_metadata": {},
+            "requester_ip_address": "127.0.0.1",
+            "spend_logs_metadata": {"hello": "world"},
+            "headers": {
+                "content-type": "application/json",
+                "user-agent": "PostmanRuntime/7.32.3",
+                "accept": "*/*",
+                "postman-token": "92300061-eeaa-423b-a420-0b44896ecdc4",
+                "host": "localhost:4000",
+                "accept-encoding": "gzip, deflate, br",
+                "connection": "keep-alive",
+                "content-length": "163",
+            },
+            "endpoint": "http://localhost:4000/chat/completions",
+            "model_group": "gpt-3.5-turbo",
+            "deployment": "azure/chatgpt-v-2",
+            "model_info": {
+                "id": "4bad40a1eb6bebd1682800f16f44b9f06c52a6703444c99c7f9f32e9de3693b4",
+                "db_model": False,
+            },
+            "api_base": "https://openai-gpt-4-test-v-1.openai.azure.com/",
+            "caching_groups": None,
+            "raw_request": "\n\nPOST Request Sent from LiteLLM:\ncurl -X POST \\\nhttps://openai-gpt-4-test-v-1.openai.azure.com//openai/ \\\n-H 'Authorization: *****' \\\n-d '{'model': 'chatgpt-v-2', 'messages': [{'role': 'system', 'content': 'you are a helpful assistant.\\n'}, {'role': 'user', 'content': 'bom dia'}], 'stream': False, 'max_tokens': 10, 'user': '116544810872468347480', 'extra_body': {}}'\n",
+        },
     )
 
     print("response", response)
@@ -83,11 +118,14 @@ async def test_basic_gcs_logger():
 
     # Check if object landed on GCS
     object_from_gcs = await gcs_logger.download_gcs_object(object_name=response.id)
+    print("object from gcs=", object_from_gcs)
     # convert object_from_gcs from bytes to DICT
-    object_from_gcs = json.loads(object_from_gcs)
-    print("object_from_gcs", object_from_gcs)
+    parsed_data = json.loads(object_from_gcs)
+    print("object_from_gcs as dict", parsed_data)
 
-    gcs_payload = GCSBucketPayload(**object_from_gcs)
+    print("type of object_from_gcs", type(parsed_data))
+
+    gcs_payload = GCSBucketPayload(**parsed_data)
 
     print("gcs_payload", gcs_payload)
 
@@ -96,6 +134,19 @@ async def test_basic_gcs_logger():
         {"role": "user", "content": "This is a test"}
     ]
     assert gcs_payload["response_obj"]["choices"][0]["message"]["content"] == "Hi!"
+
+    assert gcs_payload["response_cost"] > 0.0
+
+    gcs_payload["spend_log_metadata"] = json.loads(gcs_payload["spend_log_metadata"])
+
+    assert (
+        gcs_payload["spend_log_metadata"]["user_api_key"]
+        == "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b"
+    )
+    assert (
+        gcs_payload["spend_log_metadata"]["user_api_key_user_id"]
+        == "116544810872468347480"
+    )
 
     # Delete Object from GCS
     print("deleting object from GCS")
