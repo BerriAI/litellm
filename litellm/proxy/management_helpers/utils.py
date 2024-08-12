@@ -23,6 +23,7 @@ from litellm.proxy._types import (  # key request types; user request types; tea
     UpdateTeamRequest,
     UpdateUserRequest,
     UserAPIKeyAuth,
+    VirtualKeyEvent,
 )
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.proxy.utils import PrismaClient
@@ -186,6 +187,56 @@ def _delete_customer_id_from_cache(kwargs):
     pass
 
 
+async def send_management_endpoint_alert(
+    request_kwargs: dict,
+    user_api_key_dict: UserAPIKeyAuth,
+    function_name: str,
+):
+    """
+    Sends a slack alert when:
+    - A virtual key is created, updated, or deleted
+    - An internal user is created, updated, or deleted
+    - A team is created, updated, or deleted
+    """
+    from litellm.proxy.proxy_server import premium_user, proxy_logging_obj
+
+    if premium_user is not True:
+        return
+
+    management_function_to_event_name = {
+        "generate_key_fn": "New Virtual Key Created",
+        "update_key_fn": "Virtual Key Updated",
+        "delete_key_fn": "Virtual Key Deleted",
+        # Team events
+        "new_team": "New Team Created",
+        "update_team": "Team Updated",
+        "delete_team": "Team Deleted",
+        # Internal User events
+        "new_user": "New Internal User Created",
+        "user_update": "Internal User Updated",
+        "delete_user": "Internal User Deleted",
+    }
+
+    if (
+        proxy_logging_obj is not None
+        and proxy_logging_obj.slack_alerting_instance is not None
+    ):
+
+        # Virtual Key Events
+        if function_name in management_function_to_event_name:
+            key_event = VirtualKeyEvent(
+                created_by_user_id=user_api_key_dict.user_id or "Unknown",
+                created_by_user_role=user_api_key_dict.user_role or "Unknown",
+                created_by_key_alias=user_api_key_dict.key_alias,
+                request_kwargs=request_kwargs,
+            )
+
+            event_name = management_function_to_event_name[function_name]
+            await proxy_logging_obj.slack_alerting_instance.send_virtual_key_event_slack(
+                key_event=key_event, event_name=event_name
+            )
+
+
 def management_endpoint_wrapper(func):
     """
     This wrapper does the following:
@@ -207,6 +258,13 @@ def management_endpoint_wrapper(func):
                 user_api_key_dict: UserAPIKeyAuth = (
                     kwargs.get("user_api_key_dict") or UserAPIKeyAuth()
                 )
+
+                await send_management_endpoint_alert(
+                    request_kwargs=kwargs,
+                    user_api_key_dict=user_api_key_dict,
+                    function_name=func.__name__,
+                )
+
                 _http_request: Request = kwargs.get("http_request")
                 parent_otel_span = user_api_key_dict.parent_otel_span
                 if parent_otel_span is not None:

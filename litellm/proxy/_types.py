@@ -1754,3 +1754,10 @@ class SSOUserDefinedValues(TypedDict):
     user_role: Optional[str]
     max_budget: Optional[float]
     budget_duration: Optional[str]
+
+
+class VirtualKeyEvent(LiteLLMBase):
+    created_by_user_id: str
+    created_by_user_role: str
+    created_by_key_alias: Optional[str]
+    request_kwargs: dict
