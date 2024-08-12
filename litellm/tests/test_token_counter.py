@@ -11,7 +11,9 @@ import pytest
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import litellm
 from litellm import (
     create_pretrained_tokenizer,
     decode,
@@ -343,3 +345,14 @@ def test_empty_tools():
     )
 
     print(result)
+
+
+def test_gpt_4o_token_counter():
+    with patch.object(
+        litellm.utils, "openai_token_counter", new=MagicMock()
+    ) as mock_client:
+        token_counter(
+            model="gpt-4o-2024-05-13", messages=[{"role": "user", "content": "Hey!"}]
+        )
+
+        mock_client.assert_called()
