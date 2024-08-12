@@ -745,6 +745,8 @@ class AzureChatCompletion(BaseLLM):
             return convert_to_model_response_object(
                 response_object=stringified_response,
                 model_response_object=model_response,
+                hidden_params={"headers": headers},
+                _response_headers=headers,
             )
         except AzureOpenAIError as e:
             ## LOGGING
@@ -905,6 +907,7 @@ class AzureChatCompletion(BaseLLM):
                 model=model,
                 custom_llm_provider="azure",
                 logging_obj=logging_obj,
+                _response_headers=headers,
             )
             return streamwrapper  ## DO NOT make this into an async for ... loop, it will yield an async generator, which won't raise errors if the response fails
         except Exception as e:
