@@ -918,9 +918,18 @@ def test_vertex_ai_llama_predict_cost():
     assert predictive_cost == 0
 
 
-def test_vertex_ai_mistral_predict_cost():
+@pytest.mark.parametrize("usage", ["litellm_usage", "openai_usage"])
+def test_vertex_ai_mistral_predict_cost(usage):
     from litellm.types.utils import Choices, Message, ModelResponse, Usage
 
+    if usage == "litellm_usage":
+        response_usage = Usage(prompt_tokens=32, completion_tokens=55, total_tokens=87)
+    else:
+        from openai.types.completion_usage import CompletionUsage
+
+        response_usage = CompletionUsage(
+            prompt_tokens=32, completion_tokens=55, total_tokens=87
+        )
     response_object = ModelResponse(
         id="26c0ef045020429d9c5c9b078c01e564",
         choices=[
@@ -939,7 +948,7 @@ def test_vertex_ai_mistral_predict_cost():
         model="vertex_ai/mistral-large",
         object="chat.completion",
         system_fingerprint=None,
-        usage=Usage(prompt_tokens=32, completion_tokens=55, total_tokens=87),
+        usage=response_usage,
     )
     model = "mistral-large@2407"
     messages = [{"role": "user", "content": "Hey, hows it going???"}]
