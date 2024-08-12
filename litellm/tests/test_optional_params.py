@@ -438,3 +438,28 @@ def test_get_optional_params_image_gen():
     print(response)
 
     assert "aws_region_name" in response
+
+
+def test_bedrock_optional_params_embeddings_provider_specific_params():
+    optional_params = get_optional_params_embeddings(
+        custom_llm_provider="huggingface",
+        wait_for_model=True,
+    )
+    assert len(optional_params) == 1
+
+
+def test_get_optional_params_num_retries():
+    """
+    Relevant issue - https://github.com/BerriAI/litellm/issues/5124
+    """
+    with patch("litellm.main.get_optional_params", new=MagicMock()) as mock_client:
+        _ = litellm.completion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Hello world"}],
+            num_retries=10,
+        )
+
+        mock_client.assert_called()
+
+        print(f"mock_client.call_args: {mock_client.call_args}")
+        assert mock_client.call_args.kwargs["max_retries"] == 10

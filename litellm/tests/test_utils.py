@@ -761,3 +761,16 @@ def test_supports_response_schema(model, expected_bool):
     response = supports_response_schema(model=model, custom_llm_provider=None)
 
     assert expected_bool == response
+
+
+def test_usage_object_null_tokens():
+    """
+    Unit test.
+
+    Asserts Usage obj always returns int.
+
+    Fixes https://github.com/BerriAI/litellm/issues/5096
+    """
+    usage_obj = litellm.Usage(prompt_tokens=2, completion_tokens=None, total_tokens=2)
+
+    assert usage_obj.completion_tokens == 0

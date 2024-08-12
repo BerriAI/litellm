@@ -421,12 +421,13 @@ class VertexGeminiConfig:
                         )
                         gtool_func_declarations.append(gtool_func_declaration)
                     except KeyError:
-                        # assume it's a provider-specific param
-                        verbose_logger.warning(
-                            "Got KeyError parsing tool={}. Assuming it's a provider-specific param. Use `litellm.set_verbose` or `litellm --detailed_debug` to see raw request."
-                        )
                         if tool.get("googleSearchRetrieval", None) is not None:
                             googleSearchRetrieval = tool["googleSearchRetrieval"]
+                        else:
+                            # assume it's a provider-specific param
+                            verbose_logger.warning(
+                                "Got KeyError parsing tool={}. Assuming it's a provider-specific param. Use `litellm.set_verbose` or `litellm --detailed_debug` to see raw request."
+                            )
                 _tools = Tools(
                     function_declarations=gtool_func_declarations,
                 )
@@ -766,16 +767,23 @@ class VertexLLM(BaseLLM):
             setattr(model_response, "usage", usage)
 
             ## ADD GROUNDING METADATA ##
-            model_response._hidden_params["vertex_ai_grounding_metadata"] = (
+            setattr(model_response, "vertex_ai_grounding_metadata", grounding_metadata)
+            model_response._hidden_params[
+                "vertex_ai_grounding_metadata"
+            ] = (  # older approach - maintaining to prevent regressions
                 grounding_metadata
             )
 
             ## ADD SAFETY RATINGS ##
-            model_response._hidden_params["vertex_ai_safety_results"] = safety_ratings
+            setattr(model_response, "vertex_ai_safety_results", safety_ratings)
+            model_response._hidden_params["vertex_ai_safety_results"] = (
+                safety_ratings  # older approach - maintaining to prevent regressions
+            )
 
             ## ADD CITATION METADATA ##
+            setattr(model_response, "vertex_ai_citation_metadata", citation_metadata)
             model_response._hidden_params["vertex_ai_citation_metadata"] = (
-                citation_metadata
+                citation_metadata  # older approach - maintaining to prevent regressions
             )
 
         except Exception as e:

@@ -5,7 +5,7 @@ from datetime import datetime
 from functools import wraps
 from typing import Optional
 
-from fastapi import Request
+from fastapi import HTTPException, Request
 
 import litellm
 from litellm._logging import verbose_logger
@@ -23,6 +23,7 @@ from litellm.proxy._types import (  # key request types; user request types; tea
     UpdateTeamRequest,
     UpdateUserRequest,
     UserAPIKeyAuth,
+    VirtualKeyEvent,
 )
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.proxy.utils import PrismaClient
@@ -30,7 +31,7 @@ from litellm.proxy.utils import PrismaClient
 
 def get_new_internal_user_defaults(
     user_id: str, user_email: Optional[str] = None
-) -> SSOUserDefinedValues:
+) -> dict:
     user_info = litellm.default_user_params or {}
 
     returned_dict: SSOUserDefinedValues = {
@@ -44,7 +45,11 @@ def get_new_internal_user_defaults(
         "user_role": "internal_user",
     }
 
-    return returned_dict
+    non_null_dict = {}
+    for k, v in returned_dict.items():
+        if v is not None:
+            non_null_dict[k] = v
+    return non_null_dict
 
 
 async def add_new_member(
@@ -68,7 +73,7 @@ async def add_new_member(
             where={"user_id": new_member.user_id},
             data={
                 "update": {"teams": {"push": [team_id]}},
-                "create": {"teams": [team_id], **new_user_defaults},
+                "create": {"teams": [team_id], **new_user_defaults},  # type: ignore
             },
         )
     elif new_member.user_email is not None:
@@ -77,7 +82,7 @@ async def add_new_member(
         )
         ## user email is not unique acc. to prisma schema -> future improvement
         ### for now: check if it exists in db, if not - insert it
-        existing_user_row = await prisma_client.get_data(
+        existing_user_row: Optional[list] = await prisma_client.get_data(
             key_val={"user_email": new_member.user_email},
             table_name="user",
             query_type="find_all",
@@ -85,8 +90,21 @@ async def add_new_member(
         if existing_user_row is None or (
             isinstance(existing_user_row, list) and len(existing_user_row) == 0
         ):
-
+            new_user_defaults["teams"] = [team_id]
             await prisma_client.insert_data(data=new_user_defaults, table_name="user")  # type: ignore
+        elif len(existing_user_row) == 1:
+            user_info = existing_user_row[0]
+            await prisma_client.db.litellm_usertable.update(
+                where={"user_id": user_info.user_id},
+                data={"teams": {"push": [team_id]}},
+            )
+        elif len(existing_user_row) > 1:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "Multiple users with this email found in db. Please use 'user_id' instead."
+                },
+            )
 
     # Check if trying to set a budget for team member
     if max_budget_in_team is not None and new_member.user_id is not None:
@@ -169,6 +187,56 @@ def _delete_customer_id_from_cache(kwargs):
     pass
 
 
+async def send_management_endpoint_alert(
+    request_kwargs: dict,
+    user_api_key_dict: UserAPIKeyAuth,
+    function_name: str,
+):
+    """
+    Sends a slack alert when:
+    - A virtual key is created, updated, or deleted
+    - An internal user is created, updated, or deleted
+    - A team is created, updated, or deleted
+    """
+    from litellm.proxy.proxy_server import premium_user, proxy_logging_obj
+
+    if premium_user is not True:
+        return
+
+    management_function_to_event_name = {
+        "generate_key_fn": "New Virtual Key Created",
+        "update_key_fn": "Virtual Key Updated",
+        "delete_key_fn": "Virtual Key Deleted",
+        # Team events
+        "new_team": "New Team Created",
+        "update_team": "Team Updated",
+        "delete_team": "Team Deleted",
+        # Internal User events
+        "new_user": "New Internal User Created",
+        "user_update": "Internal User Updated",
+        "delete_user": "Internal User Deleted",
+    }
+
+    if (
+        proxy_logging_obj is not None
+        and proxy_logging_obj.slack_alerting_instance is not None
+    ):
+
+        # Virtual Key Events
+        if function_name in management_function_to_event_name:
+            key_event = VirtualKeyEvent(
+                created_by_user_id=user_api_key_dict.user_id or "Unknown",
+                created_by_user_role=user_api_key_dict.user_role or "Unknown",
+                created_by_key_alias=user_api_key_dict.key_alias,
+                request_kwargs=request_kwargs,
+            )
+
+            event_name = management_function_to_event_name[function_name]
+            await proxy_logging_obj.slack_alerting_instance.send_virtual_key_event_slack(
+                key_event=key_event, event_name=event_name
+            )
+
+
 def management_endpoint_wrapper(func):
     """
     This wrapper does the following:
@@ -190,6 +258,13 @@ def management_endpoint_wrapper(func):
                 user_api_key_dict: UserAPIKeyAuth = (
                     kwargs.get("user_api_key_dict") or UserAPIKeyAuth()
                 )
+
+                await send_management_endpoint_alert(
+                    request_kwargs=kwargs,
+                    user_api_key_dict=user_api_key_dict,
+                    function_name=func.__name__,
+                )
+
                 _http_request: Request = kwargs.get("http_request")
                 parent_otel_span = user_api_key_dict.parent_otel_span
                 if parent_otel_span is not None:

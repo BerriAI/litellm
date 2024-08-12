@@ -77,6 +77,7 @@ class ModelInfo(TypedDict, total=False):
     supports_response_schema: Optional[bool]
     supports_vision: Optional[bool]
     supports_function_calling: Optional[bool]
+    supports_assistant_prefill: Optional[bool]
 
 
 class GenericStreamingChunk(TypedDict):
@@ -444,11 +445,10 @@ class Choices(OpenAIObject):
         setattr(self, key, value)
 
 
-class Usage(OpenAIObject):
-    prompt_tokens: Optional[int] = Field(default=None)
-    completion_tokens: Optional[int] = Field(default=None)
-    total_tokens: Optional[int] = Field(default=None)
+from openai.types.completion_usage import CompletionUsage
 
+
+class Usage(CompletionUsage):
     def __init__(
         self,
         prompt_tokens: Optional[int] = None,
@@ -457,13 +457,15 @@ class Usage(OpenAIObject):
         **params,
     ):
         data = {
-            "prompt_tokens": prompt_tokens,
-            "completion_tokens": completion_tokens,
-            "total_tokens": total_tokens,
-            **params,
+            "prompt_tokens": prompt_tokens or 0,
+            "completion_tokens": completion_tokens or 0,
+            "total_tokens": total_tokens or 0,
         }
 
         super().__init__(**data)
+
+        for k, v in params.items():
+            setattr(self, k, v)
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator

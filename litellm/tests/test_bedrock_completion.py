@@ -25,8 +25,9 @@ from litellm import (
     completion_cost,
     embedding,
 )
-from litellm.llms.bedrock_httpx import BedrockLLM
+from litellm.llms.bedrock_httpx import BedrockLLM, ToolBlock
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.prompt_templates.factory import _bedrock_tools_pt
 
 # litellm.num_retries = 3
 litellm.cache = None
@@ -983,3 +984,137 @@ def test_completion_bedrock_external_client_region():
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
+def test_bedrock_tool_calling():
+    """
+    # related issue: https://github.com/BerriAI/litellm/issues/5007
+    # Bedrock tool names must satisfy regular expression pattern: [a-zA-Z][a-zA-Z0-9_]* ensure this is true
+    """
+    litellm.set_verbose = True
+    response = litellm.completion(
+        model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+        fallbacks=["bedrock/meta.llama3-1-8b-instruct-v1:0"],
+        messages=[
+            {
+                "role": "user",
+                "content": "What's the weather like in Boston today in Fahrenheit?",
+            }
+        ],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "-DoSomethingVeryCool-forLitellm_Testin999229291-0293993",
+                    "description": "use this to get the current weather",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+        ],
+    )
+
+    print("bedrock response")
+    print(response)
+
+    # Assert that the tools in response have the same function name as the input
+    _choice_1 = response.choices[0]
+    if _choice_1.message.tool_calls is not None:
+        print(_choice_1.message.tool_calls)
+        for tool_call in _choice_1.message.tool_calls:
+            _tool_Call_name = tool_call.function.name
+            if _tool_Call_name is not None and "DoSomethingVeryCool" in _tool_Call_name:
+                assert (
+                    _tool_Call_name
+                    == "-DoSomethingVeryCool-forLitellm_Testin999229291-0293993"
+                )
+
+
+def test_bedrock_tools_pt_valid_names():
+    """
+    # related issue: https://github.com/BerriAI/litellm/issues/5007
+    # Bedrock tool names must satisfy regular expression pattern: [a-zA-Z][a-zA-Z0-9_]* ensure this is true
+
+    """
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {"type": "string"},
+                    },
+                    "required": ["location"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "search_restaurants",
+                "description": "Search for restaurants",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "cuisine": {"type": "string"},
+                    },
+                    "required": ["cuisine"],
+                },
+            },
+        },
+    ]
+
+    result = _bedrock_tools_pt(tools)
+
+    assert len(result) == 2
+    assert result[0]["toolSpec"]["name"] == "get_current_weather"
+    assert result[1]["toolSpec"]["name"] == "search_restaurants"
+
+
+def test_bedrock_tools_pt_invalid_names():
+    """
+    # related issue: https://github.com/BerriAI/litellm/issues/5007
+    # Bedrock tool names must satisfy regular expression pattern: [a-zA-Z][a-zA-Z0-9_]* ensure this is true
+
+    """
+
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "123-invalid@name",
+                "description": "Invalid name test",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "test": {"type": "string"},
+                    },
+                    "required": ["test"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "another@invalid#name",
+                "description": "Another invalid name test",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "test": {"type": "string"},
+                    },
+                    "required": ["test"],
+                },
+            },
+        },
+    ]
+
+    result = _bedrock_tools_pt(tools)
+
+    print("bedrock tools after prompt formatting=", result)
+
+    assert len(result) == 2
+    assert result[0]["toolSpec"]["name"] == "a123_invalid_name"
+    assert result[1]["toolSpec"]["name"] == "another_invalid_name"

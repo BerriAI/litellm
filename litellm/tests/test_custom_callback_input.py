@@ -14,6 +14,7 @@ from pydantic import BaseModel
 
 sys.path.insert(0, os.path.abspath("../.."))
 from typing import List, Literal, Optional, Union
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import litellm
 from litellm import Cache, completion, embedding
@@ -516,6 +517,29 @@ async def test_async_chat_azure_stream():
 
 
 # asyncio.run(test_async_chat_azure_stream())
+
+
+@pytest.mark.asyncio
+async def test_async_chat_openai_stream_options():
+    try:
+        customHandler = CompletionCustomHandler()
+        litellm.callbacks = [customHandler]
+        with patch.object(
+            customHandler, "async_log_success_event", new=AsyncMock()
+        ) as mock_client:
+            response = await litellm.acompletion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "Hi 👋 - i'm async openai"}],
+                stream=True,
+                stream_options={"include_usage": True},
+            )
+
+            async for chunk in response:
+                continue
+
+            mock_client.assert_awaited_once()
+    except Exception as e:
+        pytest.fail(f"An exception occurred: {str(e)}")
 
 
 ## Test Bedrock + sync

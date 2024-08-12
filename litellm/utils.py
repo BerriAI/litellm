@@ -4585,7 +4585,7 @@ def get_llm_provider(
                 api_base = (
                     api_base
                     or get_secret("DEEPSEEK_API_BASE")
-                    or "https://api.deepseek.com/v1"
+                    or "https://api.deepseek.com/beta"
                 )  # type: ignore
                 dynamic_api_key = api_key or get_secret("DEEPSEEK_API_KEY")
             elif custom_llm_provider == "fireworks_ai":
@@ -5103,6 +5103,7 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
                 supports_system_messages=None,
                 supports_response_schema=None,
                 supports_function_calling=None,
+                supports_assistant_prefill=None,
             )
         else:
             """
@@ -5199,6 +5200,9 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
                 supports_vision=_model_info.get("supports_vision", False),
                 supports_function_calling=_model_info.get(
                     "supports_function_calling", False
+                ),
+                supports_assistant_prefill=_model_info.get(
+                    "supports_assistant_prefill", False
                 ),
             )
     except Exception:
@@ -10307,7 +10311,8 @@ class CustomStreamWrapper:
                         chunks=self.chunks, messages=self.messages
                     )
                     response = self.model_response_creator()
-                    response.usage = complete_streaming_response.usage  # type: ignore
+                    if complete_streaming_response is not None:
+                        response.usage = complete_streaming_response.usage
                     response._hidden_params["usage"] = complete_streaming_response.usage  # type: ignore
                     ## LOGGING
                     threading.Thread(
@@ -10504,7 +10509,8 @@ class CustomStreamWrapper:
                         chunks=self.chunks, messages=self.messages
                     )
                     response = self.model_response_creator()
-                    response.usage = complete_streaming_response.usage
+                    if complete_streaming_response is not None:
+                        setattr(response, "usage", complete_streaming_response.usage)
                     ## LOGGING
                     threading.Thread(
                         target=self.logging_obj.success_handler,
@@ -10544,7 +10550,8 @@ class CustomStreamWrapper:
                         chunks=self.chunks, messages=self.messages
                     )
                     response = self.model_response_creator()
-                    response.usage = complete_streaming_response.usage
+                    if complete_streaming_response is not None:
+                        response.usage = complete_streaming_response.usage
                     ## LOGGING
                     threading.Thread(
                         target=self.logging_obj.success_handler,

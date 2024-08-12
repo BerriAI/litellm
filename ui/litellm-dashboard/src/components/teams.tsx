@@ -74,12 +74,6 @@ const Team: React.FC<TeamProps> = ({
   userRole,
 }) => {
 
-  if (teams && teams.length > 0) {
-    console.log(`Received teams: ${JSON.stringify(teams, null, 2)}`);
-  } else {
-    console.log("No teams received or teams array is empty.");
-  }
-
   useEffect(() => {
     console.log(`inside useeffect - ${teams}`)
     if (teams === null && accessToken) {
@@ -331,15 +325,15 @@ const Team: React.FC<TeamProps> = ({
           return;
         }
 
-        console.log("fetching team info:");
-
         let _team_id_to_info: Record<string, any> = {};
-        for (let i = 0; i < teams?.length; i++) {
-          let _team_id = teams[i].team_id;
-          const teamInfo = await teamInfoCall(accessToken, _team_id);
-          console.log("teamInfo response:", teamInfo);
-          if (teamInfo !== null) {
-            _team_id_to_info = { ..._team_id_to_info, [_team_id]: teamInfo };
+        const teamList = await teamListCall(accessToken)
+        for (let i = 0; i < teamList.length; i++) {
+          let team = teamList[i];
+          let _team_id = team.team_id;
+      
+          // Use the team info directly from the teamList
+          if (team !== null) {
+              _team_id_to_info = { ..._team_id_to_info, [_team_id]: team };
           }
         }
         setPerTeamInfo(_team_id_to_info);
@@ -417,7 +411,6 @@ const Team: React.FC<TeamProps> = ({
       console.error("Error creating the team:", error);
     }
   };
-  console.log(`received teams ${JSON.stringify(teams)}`);
   return (
     <div className="w-full mx-4">
       <Grid numItems={1} className="gap-2 p-8 h-[75vh] w-full mt-2">

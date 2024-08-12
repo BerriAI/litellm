@@ -59,6 +59,10 @@ from litellm.router_utils.client_initalization_utils import (
     should_initialize_sync_client,
 )
 from litellm.router_utils.cooldown_callbacks import router_cooldown_handler
+from litellm.router_utils.fallback_event_handlers import (
+    log_failure_fallback_event,
+    log_success_fallback_event,
+)
 from litellm.router_utils.handle_error import send_llm_exception_alert
 from litellm.scheduler import FlowItem, Scheduler
 from litellm.types.llms.openai import (
@@ -2361,21 +2365,10 @@ class Router:
             verbose_router_logger.debug(f"Traceback{traceback.format_exc()}")
             original_exception = e
             fallback_model_group = None
+            original_model_group = kwargs.get("model")
             fallback_failure_exception_str = ""
             try:
                 verbose_router_logger.debug("Trying to fallback b/w models")
-                if (
-                    hasattr(e, "status_code")
-                    and e.status_code == 400  # type: ignore
-                    and not (
-                        isinstance(e, litellm.ContextWindowExceededError)
-                        or isinstance(e, litellm.ContentPolicyViolationError)
-                    )
-                ):  # don't retry a malformed request
-                    verbose_router_logger.debug(
-                        "Not retrying request as it's malformed. Status code=400."
-                    )
-                    raise e
                 if isinstance(e, litellm.ContextWindowExceededError):
                     if context_window_fallbacks is not None:
                         fallback_model_group = None
@@ -2404,8 +2397,18 @@ class Router:
                                 verbose_router_logger.info(
                                     "Successful fallback b/w models."
                                 )
+                                # callback for successfull_fallback_event():
+                                await log_success_fallback_event(
+                                    original_model_group=original_model_group,
+                                    kwargs=kwargs,
+                                )
+
                                 return response
                             except Exception as e:
+                                await log_failure_fallback_event(
+                                    original_model_group=original_model_group,
+                                    kwargs=kwargs,
+                                )
                                 pass
                     else:
                         error_message = "model={}. context_window_fallbacks={}. fallbacks={}.\n\nSet 'context_window_fallback' - https://docs.litellm.ai/docs/routing#fallbacks".format(
@@ -2447,8 +2450,17 @@ class Router:
                                 verbose_router_logger.info(
                                     "Successful fallback b/w models."
                                 )
+                                # callback for successfull_fallback_event():
+                                await log_success_fallback_event(
+                                    original_model_group=original_model_group,
+                                    kwargs=kwargs,
+                                )
                                 return response
                             except Exception as e:
+                                await log_failure_fallback_event(
+                                    original_model_group=original_model_group,
+                                    kwargs=kwargs,
+                                )
                                 pass
                     else:
                         error_message = "model={}. content_policy_fallback={}. fallbacks={}.\n\nSet 'content_policy_fallback' - https://docs.litellm.ai/docs/routing#fallbacks".format(
@@ -2509,8 +2521,18 @@ class Router:
                             verbose_router_logger.info(
                                 "Successful fallback b/w models."
                             )
+                            # callback for successfull_fallback_event():
+                            await log_success_fallback_event(
+                                original_model_group=original_model_group,
+                                kwargs=kwargs,
+                            )
+
                             return response
                         except Exception as e:
+                            await log_failure_fallback_event(
+                                original_model_group=original_model_group,
+                                kwargs=kwargs,
+                            )
                             raise e
             except Exception as new_exception:
                 verbose_router_logger.error(
@@ -2730,16 +2752,6 @@ class Router:
             original_exception = e
             verbose_router_logger.debug(f"An exception occurs {original_exception}")
             try:
-                if (
-                    hasattr(e, "status_code")
-                    and e.status_code == 400  # type: ignore
-                    and not (
-                        isinstance(e, litellm.ContextWindowExceededError)
-                        or isinstance(e, litellm.ContentPolicyViolationError)
-                    )
-                ):  # don't retry a malformed request
-                    raise e
-
                 verbose_router_logger.debug(
                     f"Trying to fallback b/w models. Initial model group: {model_group}"
                 )

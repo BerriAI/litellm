@@ -43,6 +43,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "logfire",
     "dynamic_rate_limiter",
     "langsmith",
+    "prometheus",
     "galileo",
     "braintrust",
     "arize",
@@ -866,6 +867,7 @@ from .llms.bedrock_httpx import (
     AmazonCohereChatConfig,
     AmazonConverseConfig,
     BEDROCK_CONVERSE_MODELS,
+    bedrock_tool_name_mappings,
 )
 from .llms.bedrock import (
     AmazonTitanConfig,

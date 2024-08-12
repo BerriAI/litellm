@@ -865,6 +865,8 @@ async def test_create_user_default_budget(prisma_client, user_role):
 async def test_create_team_member_add(prisma_client, new_member_method):
     import time
 
+    from fastapi import Request
+
     from litellm.proxy._types import LiteLLM_TeamTableCachedObj
     from litellm.proxy.proxy_server import hash_token, user_api_key_cache
 
@@ -906,7 +908,11 @@ async def test_create_team_member_add(prisma_client, new_member_method):
         mock_litellm_usertable.find_many = AsyncMock(return_value=None)
 
         await team_member_add(
-            data=team_member_add_request, user_api_key_dict=UserAPIKeyAuth()
+            data=team_member_add_request,
+            user_api_key_dict=UserAPIKeyAuth(),
+            http_request=Request(
+                scope={"type": "http", "path": "/user/new"},
+            ),
         )
 
         mock_client.assert_called()

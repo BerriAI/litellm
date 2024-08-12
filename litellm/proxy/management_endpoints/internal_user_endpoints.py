@@ -47,6 +47,7 @@ router = APIRouter()
 @management_endpoint_wrapper
 async def new_user(
     data: NewUserRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
     Use this to create a new INTERNAL user with a budget.
@@ -316,7 +317,7 @@ async def user_info(
         ## GET USER ROW ##
         if user_id is not None:
             user_info = await prisma_client.get_data(user_id=user_id)
-        elif view_all == True:
+        elif view_all is True:
             if page is None:
                 page = 0
             if page_size is None:
@@ -364,11 +365,7 @@ async def user_info(
                 getattr(caller_user_info, "user_role", None)
                 == LitellmUserRoles.PROXY_ADMIN
             ):
-                teams_2 = await prisma_client.get_data(
-                    table_name="team",
-                    query_type="find_all",
-                    team_id_list=None,
-                )
+                teams_2 = await prisma_client.db.litellm_teamtable.find_many()
             else:
                 teams_2 = await prisma_client.get_data(
                     team_id_list=caller_user_info.teams,
@@ -465,6 +462,7 @@ async def user_info(
 @management_endpoint_wrapper
 async def user_update(
     data: UpdateUserRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
     Example curl 
