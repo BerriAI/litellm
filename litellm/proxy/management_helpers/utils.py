@@ -203,10 +203,16 @@ async def send_management_endpoint_alert(
     if premium_user is not True:
         return
 
-    key_function_to_event_name = {
+    management_function_to_event_name = {
         "generate_key_fn": "Virtual Key Created",
         "update_key_fn": "Virtual Key Updated",
         "delete_key_fn": "Virtual Key Deleted",
+        # Team events
+        "new_team": "New Team Created",
+        "update_team": "Team Updated",
+        "delete_team": "Team Deleted",
+        # Internal User events
+        "user_update": "Internal User Updated",
     }
 
     if (
@@ -215,7 +221,7 @@ async def send_management_endpoint_alert(
     ):
 
         # Virtual Key Events
-        if function_name in key_function_to_event_name:
+        if function_name in management_function_to_event_name:
             key_event = VirtualKeyEvent(
                 created_by_user_id=user_api_key_dict.user_id or "Unknown",
                 created_by_user_role=user_api_key_dict.user_role or "Unknown",
@@ -223,7 +229,7 @@ async def send_management_endpoint_alert(
                 request_kwargs=request_kwargs,
             )
 
-            event_name = key_function_to_event_name[function_name]
+            event_name = management_function_to_event_name[function_name]
             await proxy_logging_obj.slack_alerting_instance.send_virtual_key_event_slack(
                 key_event=key_event, event_name=event_name
             )
