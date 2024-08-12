@@ -1610,10 +1610,17 @@ def _select_tokenizer(model: str):
     # default - tiktoken
     else:
         tokenizer = None
+        if (
+            model in litellm.open_ai_chat_completion_models
+            or model in litellm.open_ai_text_completion_models
+            or model in litellm.open_ai_embedding_models
+        ):
+            return {"type": "openai_tokenizer", "tokenizer": encoding}
+
         try:
             tokenizer = Tokenizer.from_pretrained(model)
             return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
-        except:
+        except Exception:
             return {"type": "openai_tokenizer", "tokenizer": encoding}
 
 
