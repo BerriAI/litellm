@@ -1,5 +1,11 @@
-# OpenID Connect (OIDC)
+# [BETA] OpenID Connect (OIDC)
 LiteLLM supports using OpenID Connect (OIDC) for authentication to upstream services . This allows you to avoid storing sensitive credentials in your configuration files.
+
+:::info
+
+This feature is in Beta
+
+:::
 
 
 ## OIDC Identity Provider (IdP)
