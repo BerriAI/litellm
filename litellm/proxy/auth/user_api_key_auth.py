@@ -662,7 +662,7 @@ async def user_api_key_auth(
                         proxy_logging_obj=proxy_logging_obj,
                     )
                 except Exception as e:
-                    verbose_logger.warning(
+                    verbose_logger.debug(
                         "litellm.proxy.auth.user_api_key_auth.py::user_api_key_auth() - Unable to get user from db/cache. Setting user_obj to None. Exception received - {}".format(
                             str(e)
                         )
