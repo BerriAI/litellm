@@ -84,7 +84,12 @@ class GCSBucketLogger(CustomLogger):
             )
 
             json_logged_payload = json.dumps(logging_payload)
-            object_name = response_obj["id"]
+
+            # Get the current date
+            current_date = datetime.now().strftime("%Y-%m-%d")
+
+            # Modify the object_name to include the date-based folder
+            object_name = f"{current_date}/{response_obj['id']}"
             response = await self.async_httpx_client.post(
                 headers=headers,
                 url=f"https://storage.googleapis.com/upload/storage/v1/b/{self.BUCKET_NAME}/o?uploadType=media&name={object_name}",
