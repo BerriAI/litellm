@@ -15,6 +15,7 @@ from pydantic import BaseModel
 
 import litellm.litellm_core_utils
 import litellm.litellm_core_utils.litellm_logging
+from litellm.utils import ModelResponseListIterator
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -3201,34 +3202,6 @@ class ModelResponseIterator:
         return self.model_response
 
 
-class ModelResponseListIterator:
-    def __init__(self, model_responses):
-        self.model_responses = model_responses
-        self.index = 0
-
-    # Sync iterator
-    def __iter__(self):
-        return self
-
-    def __next__(self):
-        if self.index >= len(self.model_responses):
-            raise StopIteration
-        model_response = self.model_responses[self.index]
-        self.index += 1
-        return model_response
-
-    # Async iterator
-    def __aiter__(self):
-        return self
-
-    async def __anext__(self):
-        if self.index >= len(self.model_responses):
-            raise StopAsyncIteration
-        model_response = self.model_responses[self.index]
-        self.index += 1
-        return model_response
-
-
 def test_unit_test_custom_stream_wrapper():
     """
     Test if last streaming chunk ends with '?', if the message repeats itself.
@@ -3269,6 +3242,65 @@ def test_unit_test_custom_stream_wrapper():
             if "How are you?" in chunk.choices[0].delta.content:
                 freq += 1
     assert freq == 1
+
+
+@pytest.mark.parametrize(
+    "loop_amount",
+    [
+        litellm.REPEATED_STREAMING_CHUNK_LIMIT + 1,
+        litellm.REPEATED_STREAMING_CHUNK_LIMIT - 1,
+    ],
+)
+def test_unit_test_custom_stream_wrapper_repeating_chunk(loop_amount):
+    """
+    Test if InternalServerError raised if model enters infinite loop
+
+    Test if request passes if model loop is below accepted limit
+    """
+    litellm.set_verbose = False
+    chunks = [
+        litellm.ModelResponse(
+            **{
+                "id": "chatcmpl-123",
+                "object": "chat.completion.chunk",
+                "created": 1694268190,
+                "model": "gpt-3.5-turbo-0125",
+                "system_fingerprint": "fp_44709d6fcb",
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"content": "How are you?"},
+                        "finish_reason": "stop",
+                    }
+                ],
+            },
+            stream=True,
+        )
+    ] * loop_amount
+    completion_stream = ModelResponseListIterator(model_responses=chunks)
+
+    response = litellm.CustomStreamWrapper(
+        completion_stream=completion_stream,
+        model="gpt-3.5-turbo",
+        custom_llm_provider="cached_response",
+        logging_obj=litellm.Logging(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Hey"}],
+            stream=True,
+            call_type="completion",
+            start_time=time.time(),
+            litellm_call_id="12345",
+            function_id="1245",
+        ),
+    )
+
+    if loop_amount > litellm.REPEATED_STREAMING_CHUNK_LIMIT:
+        with pytest.raises(litellm.InternalServerError):
+            for chunk in response:
+                continue
+    else:
+        for chunk in response:
+            continue
 
 
 def test_unit_test_custom_stream_wrapper_openai():
