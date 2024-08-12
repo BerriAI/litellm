@@ -84,11 +84,8 @@ async def new_team(
     Example Request:
     ```
     curl --location 'http://0.0.0.0:4000/team/new' \
-
     --header 'Authorization: Bearer sk-1234' \
-
     --header 'Content-Type: application/json' \
-
     --data '{
       "team_alias": "my-new-team_2",
       "members_with_roles": [{"role": "admin", "user_id": "user-1234"},
@@ -99,17 +96,13 @@ async def new_team(
 
      ```
     curl --location 'http://0.0.0.0:4000/team/new' \
-
     --header 'Authorization: Bearer sk-1234' \
-
     --header 'Content-Type: application/json' \
-
     --data '{
                 "team_alias": "QA Prod Bot", 
                 "max_budget": 0.000000001, 
                 "budget_duration": "1d"
             }'
-
     ```
     """
     from litellm.proxy.proxy_server import (
@@ -303,28 +296,22 @@ async def update_team(
     Example - update team TPM Limit
 
     ```
-    curl --location 'http://0.0.0.0:8000/team/update' \
-
+    curl --location 'http://0.0.0.0:4000/team/update' \
     --header 'Authorization: Bearer sk-1234' \
-
     --header 'Content-Type: application/json' \
-
     --data-raw '{
-        "team_id": "litellm-test-client-id-new",
+        "team_id": "8d916b1c-510d-4894-a334-1c16a93344f5",
         "tpm_limit": 100
     }'
     ```
 
     Example - Update Team `max_budget` budget
     ```
-    curl --location 'http://0.0.0.0:8000/team/update' \
-
+    curl --location 'http://0.0.0.0:4000/team/update' \
     --header 'Authorization: Bearer sk-1234' \
-
     --header 'Content-Type: application/json' \
-
     --data-raw '{
-        "team_id": "litellm-test-client-id-new",
+        "team_id": "8d916b1c-510d-4894-a334-1c16a93344f5",
         "max_budget": 10
     }'
     ```
@@ -655,14 +642,11 @@ async def delete_team(
     delete team and associated team keys
 
     ```
-    curl --location 'http://0.0.0.0:8000/team/delete' \
-
+    curl --location 'http://0.0.0.0:4000/team/delete' \
     --header 'Authorization: Bearer sk-1234' \
-
     --header 'Content-Type: application/json' \
-
     --data-raw '{
-        "team_ids": ["45e3e396-ee08-4a61-a88e-16b3ce7e0849"]
+        "team_ids": ["8d916b1c-510d-4894-a334-1c16a93344f5"]
     }'
     ```
     """
