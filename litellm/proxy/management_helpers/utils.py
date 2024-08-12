@@ -13,6 +13,7 @@ from litellm.proxy._types import (  # key request types; user request types; tea
     DeleteCustomerRequest,
     DeleteTeamRequest,
     DeleteUserRequest,
+    KeyCreatedEvent,
     KeyRequest,
     LiteLLM_TeamTable,
     ManagementEndpointLoggingPayload,
@@ -186,6 +187,40 @@ def _delete_customer_id_from_cache(kwargs):
     pass
 
 
+async def send_management_endpoint_alert(
+    request_kwargs: dict,
+    user_api_key_dict: UserAPIKeyAuth,
+    function_name: str,
+):
+    """
+    Sends a slack alert when:
+    - A virtual key is created, updated, or deleted
+    - An internal user is created, updated, or deleted
+    - A team is created, updated, or deleted
+    """
+    from litellm.proxy.proxy_server import proxy_logging_obj
+
+    if (
+        proxy_logging_obj is not None
+        and proxy_logging_obj.slack_alerting_instance is not None
+    ):
+        key_event = KeyCreatedEvent(
+            created_by_user_id=user_api_key_dict.user_id or "Unknown",
+            created_by_user_role=user_api_key_dict.user_role or "Unknown",
+            created_by_key_alias=user_api_key_dict.key_alias,
+            key_alias=request_kwargs.get("key_alias"),
+            team_id=request_kwargs.get("team_id"),
+            max_budget=request_kwargs.get("max_budget"),
+        )
+
+        if function_name == "generate_key_fn":
+            from litellm.proxy.proxy_server import proxy_logging_obj
+
+            await proxy_logging_obj.slack_alerting_instance.send_virtual_key_event_slack(
+                key_event=key_event, event_name="Virtual Key Created"
+            )
+
+
 def management_endpoint_wrapper(func):
     """
     This wrapper does the following:
@@ -207,6 +242,13 @@ def management_endpoint_wrapper(func):
                 user_api_key_dict: UserAPIKeyAuth = (
                     kwargs.get("user_api_key_dict") or UserAPIKeyAuth()
                 )
+
+                await send_management_endpoint_alert(
+                    request_kwargs=kwargs,
+                    user_api_key_dict=user_api_key_dict,
+                    function_name=func.__name__,
+                )
+
                 _http_request: Request = kwargs.get("http_request")
                 parent_otel_span = user_api_key_dict.parent_otel_span
                 if parent_otel_span is not None:
