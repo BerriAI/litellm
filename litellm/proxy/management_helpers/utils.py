@@ -204,7 +204,7 @@ async def send_management_endpoint_alert(
         return
 
     management_function_to_event_name = {
-        "generate_key_fn": "Virtual Key Created",
+        "generate_key_fn": "New Virtual Key Created",
         "update_key_fn": "Virtual Key Updated",
         "delete_key_fn": "Virtual Key Deleted",
         # Team events
@@ -212,7 +212,9 @@ async def send_management_endpoint_alert(
         "update_team": "Team Updated",
         "delete_team": "Team Deleted",
         # Internal User events
+        "new_user": "New Internal User Created",
         "user_update": "Internal User Updated",
+        "delete_user": "Internal User Deleted",
     }
 
     if (
