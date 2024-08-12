@@ -26,7 +26,13 @@ from litellm.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from litellm.proxy._types import AlertType, CallInfo, UserAPIKeyAuth, WebhookEvent
+from litellm.proxy._types import (
+    AlertType,
+    CallInfo,
+    UserAPIKeyAuth,
+    VirtualKeyEvent,
+    WebhookEvent,
+)
 from litellm.types.router import LiteLLM_Params
 
 from .email_templates.templates import *
@@ -1788,3 +1794,46 @@ Model Info:
             verbose_proxy_logger.error("Error sending weekly spend report %s", e)
 
         pass
+
+    async def send_virtual_key_event_slack(
+        self,
+        key_event: VirtualKeyEvent,
+        event_name: str,
+    ):
+        """
+        Helper to send fallback statistics from prometheus server -> to slack
+
+        This runs once per day and sends an overview of all the fallback statistics
+        """
+        try:
+            message = f"`{event_name}`\n"
+
+            key_event_dict = key_event.model_dump()
+
+            # Add Created by information first
+            message += "*Action Done by:*\n"
+            for key, value in key_event_dict.items():
+                if "created_by" in key:
+                    message += f"{key}: `{value}`\n"
+
+            # Add args sent to function in the alert
+            message += "\n*Arguments passed:*\n"
+            request_kwargs = key_event.request_kwargs
+            for key, value in request_kwargs.items():
+                if key == "user_api_key_dict":
+                    continue
+                message += f"{key}: `{value}`\n"
+
+            await self.send_alert(
+                message=message,
+                level="High",
+                alert_type="fallback_reports",
+                alerting_metadata={},
+            )
+
+        except Exception as e:
+            verbose_proxy_logger.error(
+                "Error sending send_virtual_key_event_slack %s", e
+            )
+
+        return

@@ -26,6 +26,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.proxy.utils import _duration_in_seconds
 
 router = APIRouter()
@@ -37,6 +38,7 @@ router = APIRouter()
     dependencies=[Depends(user_api_key_auth)],
     response_model=GenerateKeyResponse,
 )
+@management_endpoint_wrapper
 async def generate_key_fn(
     data: GenerateKeyRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -278,6 +280,7 @@ async def generate_key_fn(
 @router.post(
     "/key/update", tags=["key management"], dependencies=[Depends(user_api_key_auth)]
 )
+@management_endpoint_wrapper
 async def update_key_fn(
     request: Request,
     data: UpdateKeyRequest,
@@ -398,6 +401,7 @@ async def update_key_fn(
 @router.post(
     "/key/delete", tags=["key management"], dependencies=[Depends(user_api_key_auth)]
 )
+@management_endpoint_wrapper
 async def delete_key_fn(
     data: KeyRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
