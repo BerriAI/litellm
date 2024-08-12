@@ -160,4 +160,4 @@ async def test_basic_gcs_logger():
 
     # Delete Object from GCS
     print("deleting object from GCS")
-    # await gcs_logger.delete_gcs_object(object_name=response.id)
+    await gcs_logger.delete_gcs_object(object_name=object_name)
