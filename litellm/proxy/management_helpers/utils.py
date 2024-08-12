@@ -198,7 +198,10 @@ async def send_management_endpoint_alert(
     - An internal user is created, updated, or deleted
     - A team is created, updated, or deleted
     """
-    from litellm.proxy.proxy_server import proxy_logging_obj
+    from litellm.proxy.proxy_server import premium_user, proxy_logging_obj
+
+    if premium_user is not True:
+        return
 
     if (
         proxy_logging_obj is not None
