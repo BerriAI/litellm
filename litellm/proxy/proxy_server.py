@@ -963,8 +963,12 @@ async def update_database(
         asyncio.create_task(_update_team_db())
         asyncio.create_task(_update_org_db())
         # asyncio.create_task(_insert_spend_log_to_db())
-        if disable_spend_logs == False:
+        if disable_spend_logs is False:
             await _insert_spend_log_to_db()
+        else:
+            verbose_proxy_logger.info(
+                "disable_spend_logs=True. Skipping writing spend logs to db. Other spend updates - Key/User/Team table will still occur."
+            )
 
         verbose_proxy_logger.debug("Runs spend update on all tables")
     except Exception as e:
@@ -2192,7 +2196,15 @@ class ProxyConfig:
                 raise ValueError(
                     f"Master key is not initialized or formatted. master_key={master_key}"
                 )
-            new_models = await prisma_client.db.litellm_proxymodeltable.find_many()
+            try:
+                new_models = await prisma_client.db.litellm_proxymodeltable.find_many()
+            except Exception as e:
+                verbose_proxy_logger.error(
+                    "litellm.proxy_server.py::add_deployment() - Error getting new models from DB - {}".format(
+                        str(e)
+                    )
+                )
+                new_models = []
             # update llm router
             await self._update_llm_router(
                 new_models=new_models, proxy_logging_obj=proxy_logging_obj
