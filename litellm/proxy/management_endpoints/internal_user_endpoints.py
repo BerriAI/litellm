@@ -47,6 +47,7 @@ router = APIRouter()
 @management_endpoint_wrapper
 async def new_user(
     data: NewUserRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
     Use this to create a new INTERNAL user with a budget.
@@ -461,6 +462,7 @@ async def user_info(
 @management_endpoint_wrapper
 async def user_update(
     data: UpdateUserRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
     Example curl 
