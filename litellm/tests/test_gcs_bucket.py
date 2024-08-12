@@ -117,8 +117,17 @@ async def test_basic_gcs_logger():
 
     await asyncio.sleep(5)
 
+    # Get the current date
+    # Get the current date
+    current_date = datetime.now().strftime("%Y-%m-%d")
+
+    # Modify the object_name to include the date-based folder
+    object_name = f"{current_date}%2F{response.id}"
+
+    print("object_name", object_name)
+
     # Check if object landed on GCS
-    object_from_gcs = await gcs_logger.download_gcs_object(object_name=response.id)
+    object_from_gcs = await gcs_logger.download_gcs_object(object_name=object_name)
     print("object from gcs=", object_from_gcs)
     # convert object_from_gcs from bytes to DICT
     parsed_data = json.loads(object_from_gcs)
@@ -151,4 +160,4 @@ async def test_basic_gcs_logger():
 
     # Delete Object from GCS
     print("deleting object from GCS")
-    await gcs_logger.delete_gcs_object(object_name=object_name)
+    # await gcs_logger.delete_gcs_object(object_name=response.id)
