@@ -61,8 +61,16 @@ COPY --from=builder /wheels/ /wheels/
 # Install the built wheel using pip; again using a wildcard if it's the only file
 RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ && rm -f *.whl && rm -rf /wheels
 
-# Generate prisma client
+# Prisma Client - Allow prisma to be run as non-root
+ENV PRISMA_BINARY_CACHE_DIR=/app/prisma
+RUN mkdir -p /.cache
+RUN chmod -R 777 /.cache
+RUN pip install nodejs-bin
+RUN pip install prisma
+RUN chmod -R 777 /usr/local/lib/python3.11/site-packages/prisma/
 RUN prisma generate
+
+
 RUN chmod +x entrypoint.sh
 
 EXPOSE 4000/tcp
