@@ -928,3 +928,41 @@ async def test_create_team_member_add(prisma_client, new_member_method):
             mock_client.call_args.kwargs["data"]["create"]["budget_duration"]
             == litellm.internal_user_budget_duration
         )
+
+
+@pytest.mark.asyncio
+async def test_user_info_team_list(prisma_client):
+    """Assert user_info for admin calls team_list function"""
+    from litellm.proxy._types import LiteLLM_UserTable
+
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    await litellm.proxy.proxy_server.prisma_client.connect()
+
+    from litellm.proxy.management_endpoints.internal_user_endpoints import user_info
+
+    with patch(
+        "litellm.proxy.management_endpoints.team_endpoints.list_team",
+        new_callable=AsyncMock,
+    ) as mock_client:
+
+        prisma_client.get_data = AsyncMock(
+            return_value=LiteLLM_UserTable(
+                user_role="proxy_admin",
+                user_id="default_user_id",
+                max_budget=None,
+                user_email="",
+            )
+        )
+
+        try:
+            await user_info(
+                user_id=None,
+                user_api_key_dict=UserAPIKeyAuth(
+                    api_key="sk-1234", user_id="default_user_id"
+                ),
+            )
+        except Exception:
+            pass
+
+        mock_client.assert_called()
