@@ -64,7 +64,7 @@ def load_vertex_ai_credentials():
 
 @pytest.mark.asyncio
 async def test_basic_gcs_logger():
-    # load_vertex_ai_credentials()
+    load_vertex_ai_credentials()
     gcs_logger = GCSBucketLogger()
     print("GCSBucketLogger", gcs_logger)
 
