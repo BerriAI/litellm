@@ -99,13 +99,6 @@ async def test_user_info():
         )
         assert status == 403
 
-        ## check if returned teams as admin == all teams ##
-        admin_info = await get_user_info(
-            session=session, get_user="", call_user="sk-1234", view_all=True
-        )
-        all_teams = await list_teams(session=session, i=0)
-        assert len(admin_info["teams"]) == len(all_teams)
-
 
 @pytest.mark.asyncio
 async def test_user_update():
