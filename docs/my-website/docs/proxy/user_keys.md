@@ -330,6 +330,7 @@ my_proxy_base_url = "" # e.g. http://0.0.0.0:4000
 
 # This enables response_model keyword
 # from client.chat.completions.create
+## WORKS ACROSS OPENAI/ANTHROPIC/VERTEXAI/ETC. - all LITELLM SUPPORTED MODELS!
 client = instructor.from_openai(OpenAI(api_key=my_proxy_api_key, base_url=my_proxy_base_url))
 
 class UserDetail(BaseModel):
