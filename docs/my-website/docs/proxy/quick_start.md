@@ -243,7 +243,8 @@ model_list:
   - model_name: vllm-model
     litellm_params:
       model: openai/<your-model-name>
-      api_base: <your-api-base> # e.g. http://0.0.0.0:3000
+      api_base: <your-vllm-api-base> # e.g. http://0.0.0.0:3000/v1
+      api_key: <your-vllm-api-key|none>
 ```
 
 ### Run proxy with config
