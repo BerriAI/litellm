@@ -49,15 +49,23 @@ class TokenIterator:
             while True:
                 self.buffer.seek(self.read_pos)
                 line = self.buffer.readline()
+
                 if line and line[-1] == ord("\n"):
                     response_obj = {"text": "", "is_finished": False}
-                    self.read_pos += len(line) + 1
+                    self.read_pos += len(line)
                     full_line = line[:-1].decode("utf-8")
                     line_data = json.loads(full_line.lstrip("data:").rstrip("/n"))
-                    if line_data.get("generated_text", None) is not None:
-                        self.end_of_data = True
-                        response_obj["is_finished"] = True
-                    response_obj["text"] = line_data["token"]["text"]
+                    if "choices" in line_data:
+                        if line_data["choices"][0].get("finish_reason", None) is not None:
+                            self.end_of_data = True
+                            response_obj["is_finished"] = True
+                        response_obj["text"] = line_data["choices"][0]["delta"].get("content", "")
+                    else:
+                        if line_data.get("generated_text", None) is not None:
+                            self.end_of_data = True
+                            response_obj["is_finished"] = True
+                        
+                        response_obj["text"] = line_data["token"]["text"]
                     return response_obj
                 chunk = next(self.byte_iterator)
                 self.buffer.seek(0, io.SEEK_END)
@@ -79,13 +87,20 @@ class TokenIterator:
                 line = self.buffer.readline()
                 if line and line[-1] == ord("\n"):
                     response_obj = {"text": "", "is_finished": False}
-                    self.read_pos += len(line) + 1
+                    self.read_pos += len(line)
                     full_line = line[:-1].decode("utf-8")
                     line_data = json.loads(full_line.lstrip("data:").rstrip("/n"))
-                    if line_data.get("generated_text", None) is not None:
-                        self.end_of_data = True
-                        response_obj["is_finished"] = True
-                    response_obj["text"] = line_data["token"]["text"]
+                    if "choices" in line_data:
+                        if line_data["choices"][0].get("finish_reason", None) is not None:
+                            self.end_of_data = True
+                            response_obj["is_finished"] = True
+                        response_obj["text"] = line_data["choices"][0]["delta"].get("content", "")
+                    else:
+                        if line_data.get("generated_text", None) is not None:
+                            self.end_of_data = True
+                            response_obj["is_finished"] = True
+                        
+                        response_obj["text"] = line_data["token"]["text"]
                     return response_obj
                 chunk = await self.byte_iterator.__anext__()
                 self.buffer.seek(0, io.SEEK_END)
@@ -163,7 +178,6 @@ def completion(
     acompletion: bool = False,
 ):
     import boto3
-
     # pop aws_secret_access_key, aws_access_key_id, aws_region_name from kwargs, since completion calls fail with them
     aws_secret_access_key = optional_params.pop("aws_secret_access_key", None)
     aws_access_key_id = optional_params.pop("aws_access_key_id", None)
@@ -205,11 +219,10 @@ def completion(
             k not in inference_params
         ):  # completion(top_k=3) > sagemaker_config(top_k=3) <- allows for dynamic variables to be passed in
             inference_params[k] = v
-
-    model = model
+    
     if model in custom_prompt_dict:
-        # check if the model has a registered custom prompt
-        model_prompt_details = custom_prompt_dict[model]
+        # check if the model has a registered custom promp
+        model_prompt_details = custom_prompt_dict.get(model)
         prompt = custom_prompt(
             role_dict=model_prompt_details.get("roles", None),
             initial_prompt_value=model_prompt_details.get("initial_prompt_value", ""),
@@ -236,7 +249,9 @@ def completion(
             hf_model_name or model
         )  # pass in hf model name for pulling it's prompt template - (e.g. `hf_model_name="meta-llama/Llama-2-7b-chat-hf` applies the llama2 chat template to the prompt)
         prompt = prompt_factory(model=hf_model_name, messages=messages)
+
     stream = inference_params.pop("stream", None)
+    
     if stream == True:
         data = json.dumps(
             {"inputs": prompt, "parameters": inference_params, "stream": True}
@@ -265,12 +280,26 @@ def completion(
                 CustomAttributes="accept_eula=true",
             )
         else:
-            response = client.invoke_endpoint_with_response_stream(
-                EndpointName=model,
-                ContentType="application/json",
-                Body=data,
-                CustomAttributes="accept_eula=true",
-            )
+            if messages:
+                payload= {
+                    "messages": messages,
+                    "stream": True,
+                    **inference_params
+                }
+                response = client.invoke_endpoint_with_response_stream(
+                    EndpointName=model,
+                    ContentType="application/json",
+                    Body=json.dumps(payload),
+                    CustomAttributes="accept_eula=true",
+                )
+
+            else:
+                response = client.invoke_endpoint_with_response_stream(
+                    EndpointName=model,
+                    ContentType="application/json",
+                    Body=data,
+                    CustomAttributes="accept_eula=true",
+                )
         return response["Body"]
     elif acompletion == True:
         _data = {"inputs": prompt, "parameters": inference_params}
@@ -337,12 +366,24 @@ def completion(
                     "hf_model_name": hf_model_name,
                 },
             )
-            response = client.invoke_endpoint(
-                EndpointName=model,
-                ContentType="application/json",
-                Body=data,
-                CustomAttributes="accept_eula=true",
-            )
+            if messages:
+                payload= {
+                    "messages": messages,
+                    **inference_params
+                }
+                response = client.invoke_endpoint(
+                    EndpointName=model,
+                    ContentType="application/json",
+                    Body=json.dumps(payload),
+                    CustomAttributes="accept_eula=true",
+                )
+            else:
+                response = client.invoke_endpoint(
+                    EndpointName=model,
+                    ContentType="application/json",
+                    Body=data,
+                    CustomAttributes="accept_eula=true",
+                )
     except Exception as e:
         status_code = (
             getattr(e, "response", {})
@@ -377,6 +418,8 @@ def completion(
             completion_output += completion_response_choices["generation"]
         elif "generated_text" in completion_response_choices:
             completion_output += completion_response_choices["generated_text"]
+        elif "choices" in completion_response_choices:
+            completion_output = completion_response_choices["choices"][0]["message"]["content"]
 
         # check if the prompt template is part of output, if so - filter it out
         if completion_output.startswith(prompt) and "<s>" in prompt:
