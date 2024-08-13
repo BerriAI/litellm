@@ -1225,8 +1225,6 @@ def _check_valid_ip(
         client_ip = request.headers["x-forwarded-for"]
     elif request.client is not None:
         client_ip = request.client.host
-    else:
-        client_ip = None
 
     # Check if IP address is allowed
     if client_ip not in allowed_ips:
