@@ -638,7 +638,7 @@ def test_bedrock_claude_3(image_url):
 
 @pytest.mark.parametrize(
     "system",
-    ["You are an AI", [{"type": "text", "text": "You are an AI"}]],
+    ["You are an AI", [{"type": "text", "text": "You are an AI"}], ""],
 )
 @pytest.mark.parametrize(
     "model",
