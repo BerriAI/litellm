@@ -967,7 +967,6 @@ async def test_user_info_team_list(prisma_client):
 
         mock_client.assert_called()
 
-
 @pytest.mark.asyncio
 async def test_add_callback_via_key(prisma_client):
     """
