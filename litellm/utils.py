@@ -8662,14 +8662,19 @@ class CustomStreamWrapper:
 
             # Check if all extracted contents are identical
             if all(content == last_contents[0] for content in last_contents):
-                # All last n chunks are identical
-                raise litellm.InternalServerError(
-                    message="The model is repeating the same chunk = {}.".format(
-                        last_contents[0]
-                    ),
-                    model="",
-                    llm_provider="",
-                )
+                if (
+                    last_contents[0] is not None
+                    and isinstance(last_contents[0], str)
+                    and len(last_contents[0]) > 2
+                ):  # ignore empty content - https://github.com/BerriAI/litellm/issues/5158#issuecomment-2287156946
+                    # All last n chunks are identical
+                    raise litellm.InternalServerError(
+                        message="The model is repeating the same chunk = {}.".format(
+                            last_contents[0]
+                        ),
+                        model="",
+                        llm_provider="",
+                    )
 
     def check_special_tokens(self, chunk: str, finish_reason: Optional[str]):
         """
