@@ -3134,6 +3134,7 @@ def get_optional_params(
             if max_tokens == 0:
                 max_tokens = 1
             optional_params["max_new_tokens"] = max_tokens
+        passed_params.pop("aws_sagemaker_allow_zero_temp", None)
     elif custom_llm_provider == "bedrock":
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider
