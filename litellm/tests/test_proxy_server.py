@@ -1033,9 +1033,7 @@ async def test_add_callback_via_key(prisma_client):
             mock_client.assert_called()
             mock_client.return_value.log_event.assert_called()
             args, kwargs = mock_client.return_value.log_event.call_args
-            print("KWARGS - {}".format(kwargs))
             kwargs = kwargs["kwargs"]
-            print(kwargs)
             assert "user_api_key_metadata" in kwargs["litellm_params"]["metadata"]
             assert (
                 "logging"

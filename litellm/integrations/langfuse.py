@@ -48,7 +48,7 @@ class LangFuseLogger:
             "secret_key": self.secret_key,
             "host": self.langfuse_host,
             "release": self.langfuse_release,
-            "debug": True,
+            "debug": self.langfuse_debug,
             "flush_interval": flush_interval,  # flush interval in seconds
         }
 
