@@ -312,7 +312,7 @@ async def user_info(
     try:
         if prisma_client is None:
             raise Exception(
-                f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
+                "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
         ## GET USER ROW ##
         if user_id is not None:
@@ -365,7 +365,14 @@ async def user_info(
                 getattr(caller_user_info, "user_role", None)
                 == LitellmUserRoles.PROXY_ADMIN
             ):
-                teams_2 = await prisma_client.db.litellm_teamtable.find_many()
+                from litellm.proxy.management_endpoints.team_endpoints import list_team
+
+                teams_2 = await list_team(
+                    http_request=Request(
+                        scope={"type": "http", "path": "/user/info"},
+                    ),
+                    user_api_key_dict=user_api_key_dict,
+                )
             else:
                 teams_2 = await prisma_client.get_data(
                     team_id_list=caller_user_info.teams,
