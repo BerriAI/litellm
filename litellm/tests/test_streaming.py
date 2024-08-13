@@ -3251,7 +3251,13 @@ def test_unit_test_custom_stream_wrapper():
         litellm.REPEATED_STREAMING_CHUNK_LIMIT - 1,
     ],
 )
-def test_unit_test_custom_stream_wrapper_repeating_chunk(loop_amount):
+@pytest.mark.parametrize(
+    "chunk_value, expected_chunk_fail",
+    [("How are you?", True), ("{", False), ("", False), (None, False)],
+)
+def test_unit_test_custom_stream_wrapper_repeating_chunk(
+    loop_amount, chunk_value, expected_chunk_fail
+):
     """
     Test if InternalServerError raised if model enters infinite loop
 
@@ -3269,7 +3275,7 @@ def test_unit_test_custom_stream_wrapper_repeating_chunk(loop_amount):
                 "choices": [
                     {
                         "index": 0,
-                        "delta": {"content": "How are you?"},
+                        "delta": {"content": chunk_value},
                         "finish_reason": "stop",
                     }
                 ],
@@ -3294,7 +3300,9 @@ def test_unit_test_custom_stream_wrapper_repeating_chunk(loop_amount):
         ),
     )
 
-    if loop_amount > litellm.REPEATED_STREAMING_CHUNK_LIMIT:
+    print(f"expected_chunk_fail: {expected_chunk_fail}")
+
+    if (loop_amount > litellm.REPEATED_STREAMING_CHUNK_LIMIT) and expected_chunk_fail:
         with pytest.raises(litellm.InternalServerError):
             for chunk in response:
                 continue
