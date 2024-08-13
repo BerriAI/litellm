@@ -966,3 +966,92 @@ async def test_user_info_team_list(prisma_client):
             pass
 
         mock_client.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_add_callback_via_key(prisma_client):
+    """
+    Test if callback specified in key, is used.
+    """
+    global headers
+    import json
+
+    from fastapi import HTTPException, Request, Response
+    from starlette.datastructures import URL
+
+    from litellm.proxy.proxy_server import chat_completion
+
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    await litellm.proxy.proxy_server.prisma_client.connect()
+
+    litellm.set_verbose = True
+
+    try:
+        # Your test data
+        test_data = {
+            "model": "azure/chatgpt-v-2",
+            "messages": [
+                {"role": "user", "content": "write 1 sentence poem"},
+            ],
+            "max_tokens": 10,
+            "mock_response": "Hello world",
+            "api_key": "my-fake-key",
+        }
+
+        request = Request(scope={"type": "http", "method": "POST", "headers": {}})
+        request._url = URL(url="/chat/completions")
+
+        json_bytes = json.dumps(test_data).encode("utf-8")
+
+        request._body = json_bytes
+
+        with patch.object(
+            litellm.litellm_core_utils.litellm_logging,
+            "LangFuseLogger",
+            new=MagicMock(),
+        ) as mock_client:
+            resp = await chat_completion(
+                request=request,
+                fastapi_response=Response(),
+                user_api_key_dict=UserAPIKeyAuth(
+                    metadata={
+                        "logging": [
+                            {
+                                "callback_name": "langfuse",  # 'otel', 'langfuse', 'lunary'
+                                "callback_type": "success",  # set, if required by integration - future improvement, have logging tools work for success + failure by default
+                                "callback_vars": {
+                                    "langfuse_public_key": "os.environ/LANGFUSE_PUBLIC_KEY",
+                                    "langfuse_secret_key": "os.environ/LANGFUSE_SECRET_KEY",
+                                    "langfuse_host": "https://us.cloud.langfuse.com",
+                                },
+                            }
+                        ]
+                    }
+                ),
+            )
+            print(resp)
+            mock_client.assert_called()
+            mock_client.return_value.log_event.assert_called()
+            args, kwargs = mock_client.return_value.log_event.call_args
+            print("KWARGS - {}".format(kwargs))
+            kwargs = kwargs["kwargs"]
+            print(kwargs)
+            assert "user_api_key_metadata" in kwargs["litellm_params"]["metadata"]
+            assert (
+                "logging"
+                in kwargs["litellm_params"]["metadata"]["user_api_key_metadata"]
+            )
+            checked_keys = False
+            for item in kwargs["litellm_params"]["metadata"]["user_api_key_metadata"][
+                "logging"
+            ]:
+                for k, v in item["callback_vars"].items():
+                    print("k={}, v={}".format(k, v))
+                    if "key" in k:
+                        assert "os.environ" in v
+                        checked_keys = True
+
+            assert checked_keys
+    except Exception as e:
+        pytest.fail(f"LiteLLM Proxy test failed. Exception - {str(e)}")
