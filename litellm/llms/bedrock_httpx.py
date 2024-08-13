@@ -1394,6 +1394,8 @@ class AmazonConverseConfig:
                 optional_params["stream"] = value
             if param == "stop":
                 if isinstance(value, str):
+                    if len(value) == 0:  # converse raises error for empty strings
+                        continue
                     value = [value]
                 optional_params["stop_sequences"] = value
             if param == "temperature":
