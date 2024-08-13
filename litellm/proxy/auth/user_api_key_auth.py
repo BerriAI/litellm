@@ -124,7 +124,9 @@ async def user_api_key_auth(
         await check_if_request_size_is_safe(request=request)
 
         is_valid_ip = _check_valid_ip(
-            allowed_ips=general_settings.get("allowed_ips", None), request=request
+            allowed_ips=general_settings.get("allowed_ips", None),
+            use_x_forwarded_for=general_settings.get("use_x_forwarded_for", False),
+            request=request,
         )
 
         if not is_valid_ip:
@@ -1206,14 +1208,22 @@ def _get_user_role(
     return role
 
 
-def _check_valid_ip(allowed_ips: Optional[List[str]], request: Request) -> bool:
+def _check_valid_ip(
+    allowed_ips: Optional[List[str]],
+    request: Request,
+    use_x_forwarded_for: Optional[bool] = False,
+) -> bool:
     """
     Returns if ip is allowed or not
     """
     if allowed_ips is None:  # if not set, assume true
         return True
 
-    if request.client is not None:
+    # if general_settings.get("use_x_forwarded_for") is True then use x-forwarded-for
+    client_ip = None
+    if use_x_forwarded_for is True:
+        client_ip = request.headers["x-forwarded-for"]
+    elif request.client is not None:
         client_ip = request.client.host
     else:
         client_ip = None
