@@ -1221,7 +1221,7 @@ def _check_valid_ip(
 
     # if general_settings.get("use_x_forwarded_for") is True then use x-forwarded-for
     client_ip = None
-    if use_x_forwarded_for is True:
+    if use_x_forwarded_for is True and "x-forwarded-for" in request.headers:
         client_ip = request.headers["x-forwarded-for"]
     elif request.client is not None:
         client_ip = request.client.host
