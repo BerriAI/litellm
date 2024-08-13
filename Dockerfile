@@ -1,87 +1,31 @@
-# Base image for building
-ARG LITELLM_BUILD_IMAGE=python:3.11.8-slim
-
-# Runtime image
-ARG LITELLM_RUNTIME_IMAGE=python:3.11.8-slim
-# Builder stage
-FROM $LITELLM_BUILD_IMAGE as builder
+# Use the provided base image
+FROM ghcr.io/berriai/litellm-database:main-latest
 
 # Set the working directory to /app
 WORKDIR /app
 
-# Install build dependencies
-RUN apt-get clean && apt-get update && \
-    apt-get install -y gcc python3-dev curl && \
-    rm -rf /var/lib/apt/lists/*
+# use this to allow prisma to run as non-root user
+RUN mkdir -p /.cache
+RUN chmod -R 777 /.cache
 
-RUN pip install --upgrade pip && \
-    pip install build
+# Grant read access to all users for the site-packages directory
+RUN chmod -R 777 /usr/local/lib/python3.11/site-packages
+ENV PRISMA_BINARY_CACHE_DIR=/app/prisma
 
+# Install Prisma CLI and generate Prisma client
+# Use this to prevent installing prisma cli on the container startup
+RUN pip install nodejs-bin 
+RUN pip install prisma 
 
-# Install Node.js and npm using NodeSource repository
-RUN curl -fsSL https://deb.nodesource.com/setup_16.x | bash - && \
-
-    apt-get install -y nodejs
-
-# Install Prisma CLI globally
-RUN npm install -g prisma
-
-# Set environment variables for writable directories
-ENV PRISMA_HOME_DIR=/tmp
-ENV TMPDIR=/tmp
+# Grant read access to all users for the site-packages directory
+RUN chmod -R 777 /usr/local/lib/python3.11/site-packages
 
 
-# Copy the current directory contents into the container at /app
-COPY . .
-
-# Build Admin UI
-RUN chmod +x build_admin_ui.sh && ./build_admin_ui.sh
-
-# Build the package
-RUN rm -rf dist/* && python -m build
-
-# There should be only one wheel file now, assume the build only creates one
-RUN ls -1 dist/*.whl | head -1
-
-# Install the package
-RUN pip install dist/*.whl
-
-# install dependencies as wheels
-RUN pip wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.txt
-
-# install semantic-cache [Experimental]- we need this here and not in requirements.txt because redisvl pins to pydantic 1.0 
-RUN pip install redisvl==0.0.7 --no-deps
-
-# ensure pyjwt is used, not jwt
-RUN pip uninstall jwt -y
-RUN pip uninstall PyJWT -y
-RUN pip install PyJWT --no-cache-dir
-
-# Build Admin UI
-RUN chmod +x build_admin_ui.sh && ./build_admin_ui.sh
-
-# Runtime stage
-FROM $LITELLM_RUNTIME_IMAGE as runtime
-
-WORKDIR /app
-# Copy the current directory contents into the container at /app
-COPY . .
-RUN ls -la /app
-
-# Copy the built wheel from the builder stage to the runtime stage; assumes only one wheel file is present
-COPY --from=builder /app/dist/*.whl .
-COPY --from=builder /wheels/ /wheels/
-
-# Install the built wheel using pip; again using a wildcard if it's the only file
-RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ && rm -f *.whl && rm -rf /wheels
-
-# Generate prisma client
 RUN prisma generate
-RUN chmod +x entrypoint.sh
 
-EXPOSE 4000/tcp
+# Expose the necessary port
+EXPOSE 4000
 
+# Define the command to run your app
 ENTRYPOINT ["litellm"]
-
-# Append "--detailed_debug" to the end of CMD to view detailed debug logs 
 CMD ["--port", "4000"]
