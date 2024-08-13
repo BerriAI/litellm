@@ -53,18 +53,7 @@ _known_custom_logger_compatible_callbacks: List = list(
     get_args(_custom_logger_compatible_callbacks_literal)
 )
 callbacks: List[Union[Callable, _custom_logger_compatible_callbacks_literal]] = []
-_langfuse_default_tags: Optional[
-    List[
-        Literal[
-            "user_api_key_alias",
-            "user_api_key_user_id",
-            "user_api_key_user_email",
-            "user_api_key_team_alias",
-            "semantic-similarity",
-            "proxy_base_url",
-        ]
-    ]
-] = None
+langfuse_default_tags: Optional[List[str]] = None
 _async_input_callback: List[Callable] = (
     []
 )  # internal variable - async custom callbacks are routed here.
