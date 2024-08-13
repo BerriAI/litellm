@@ -11,11 +11,25 @@ WORKDIR /app
 
 # Install build dependencies
 RUN apt-get clean && apt-get update && \
-    apt-get install -y gcc python3-dev && \
+    apt-get install -y gcc python3-dev curl && \
     rm -rf /var/lib/apt/lists/*
 
 RUN pip install --upgrade pip && \
     pip install build
+
+
+# Install Node.js and npm using NodeSource repository
+RUN curl -fsSL https://deb.nodesource.com/setup_16.x | bash - && \
+
+    apt-get install -y nodejs
+
+# Install Prisma CLI globally
+RUN npm install -g prisma
+
+# Set environment variables for writable directories
+ENV PRISMA_HOME_DIR=/tmp
+ENV TMPDIR=/tmp
+
 
 # Copy the current directory contents into the container at /app
 COPY . .
