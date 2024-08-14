@@ -5,7 +5,12 @@ from fastapi import Request
 
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
-from litellm.proxy._types import CommonProxyErrors, TeamCallbackMetadata, UserAPIKeyAuth
+from litellm.proxy._types import (
+    AddTeamCallback,
+    CommonProxyErrors,
+    TeamCallbackMetadata,
+    UserAPIKeyAuth,
+)
 from litellm.types.utils import SupportedCacheControls
 
 if TYPE_CHECKING:
@@ -57,6 +62,42 @@ def safe_add_api_version_from_query_params(data: dict, request: Request):
                 data["api_version"] = query_params["api-version"]
     except Exception as e:
         verbose_logger.error("error checking api version in query params: %s", str(e))
+
+
+def convert_key_logging_metadata_to_callback(
+    data: AddTeamCallback, team_callback_settings_obj: Optional[TeamCallbackMetadata]
+) -> TeamCallbackMetadata:
+    if team_callback_settings_obj is None:
+        team_callback_settings_obj = TeamCallbackMetadata()
+    if data.callback_type == "success":
+        if team_callback_settings_obj.success_callback is None:
+            team_callback_settings_obj.success_callback = []
+
+        if data.callback_name not in team_callback_settings_obj.success_callback:
+            team_callback_settings_obj.success_callback.append(data.callback_name)
+    elif data.callback_type == "failure":
+        if team_callback_settings_obj.failure_callback is None:
+            team_callback_settings_obj.failure_callback = []
+
+        if data.callback_name not in team_callback_settings_obj.failure_callback:
+            team_callback_settings_obj.failure_callback.append(data.callback_name)
+    elif data.callback_type == "success_and_failure":
+        if team_callback_settings_obj.success_callback is None:
+            team_callback_settings_obj.success_callback = []
+        if team_callback_settings_obj.failure_callback is None:
+            team_callback_settings_obj.failure_callback = []
+        if data.callback_name not in team_callback_settings_obj.success_callback:
+            team_callback_settings_obj.success_callback.append(data.callback_name)
+
+        if data.callback_name in team_callback_settings_obj.failure_callback:
+            team_callback_settings_obj.failure_callback.append(data.callback_name)
+
+    for var, value in data.callback_vars.items():
+        if team_callback_settings_obj.callback_vars is None:
+            team_callback_settings_obj.callback_vars = {}
+        team_callback_settings_obj.callback_vars[var] = litellm.get_secret(value)
+
+    return team_callback_settings_obj
 
 
 async def add_litellm_data_to_request(
@@ -224,6 +265,7 @@ async def add_litellm_data_to_request(
             }  # add the team-specific configs to the completion call
 
     # Team Callbacks controls
+    callback_settings_obj: Optional[TeamCallbackMetadata] = None
     if user_api_key_dict.team_metadata is not None:
         team_metadata = user_api_key_dict.team_metadata
         if "callback_settings" in team_metadata:
@@ -241,13 +283,25 @@ async def add_litellm_data_to_request(
             }
             }
             """
-            data["success_callback"] = callback_settings_obj.success_callback
-            data["failure_callback"] = callback_settings_obj.failure_callback
+    elif (
+        user_api_key_dict.metadata is not None
+        and "logging" in user_api_key_dict.metadata
+    ):
+        for item in user_api_key_dict.metadata["logging"]:
 
-            if callback_settings_obj.callback_vars is not None:
-                # unpack callback_vars in data
-                for k, v in callback_settings_obj.callback_vars.items():
-                    data[k] = v
+            callback_settings_obj = convert_key_logging_metadata_to_callback(
+                data=AddTeamCallback(**item),
+                team_callback_settings_obj=callback_settings_obj,
+            )
+
+    if callback_settings_obj is not None:
+        data["success_callback"] = callback_settings_obj.success_callback
+        data["failure_callback"] = callback_settings_obj.failure_callback
+
+        if callback_settings_obj.callback_vars is not None:
+            # unpack callback_vars in data
+            for k, v in callback_settings_obj.callback_vars.items():
+                data[k] = v
 
     return data
 
