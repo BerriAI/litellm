@@ -1055,8 +1055,8 @@ class BedrockLLM(BaseLLM):
                 },
             )
             raise BedrockError(
-                status_code=400,
-                message="Bedrock HTTPX: Unsupported provider={}, model={}".format(
+                status_code=404,
+                message="Bedrock HTTPX: Unknown provider={}, model={}".format(
                     provider, model
                 ),
             )
