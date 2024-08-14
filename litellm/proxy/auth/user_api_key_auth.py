@@ -12,7 +12,7 @@ import json
 import secrets
 import traceback
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Optional, Tuple
 from uuid import uuid4
 
 import fastapi
@@ -123,7 +123,7 @@ async def user_api_key_auth(
         # Check 2. FILTER IP ADDRESS
         await check_if_request_size_is_safe(request=request)
 
-        is_valid_ip = _check_valid_ip(
+        is_valid_ip, passed_in_ip = _check_valid_ip(
             allowed_ips=general_settings.get("allowed_ips", None),
             use_x_forwarded_for=general_settings.get("use_x_forwarded_for", False),
             request=request,
@@ -132,7 +132,7 @@ async def user_api_key_auth(
         if not is_valid_ip:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Access forbidden: IP address not allowed.",
+                detail=f"Access forbidden: IP address {passed_in_ip} not allowed.",
             )
 
         pass_through_endpoints: Optional[List[dict]] = general_settings.get(
@@ -1212,12 +1212,12 @@ def _check_valid_ip(
     allowed_ips: Optional[List[str]],
     request: Request,
     use_x_forwarded_for: Optional[bool] = False,
-) -> bool:
+) -> Tuple[bool, Optional[str]]:
     """
     Returns if ip is allowed or not
     """
     if allowed_ips is None:  # if not set, assume true
-        return True
+        return True, None
 
     # if general_settings.get("use_x_forwarded_for") is True then use x-forwarded-for
     client_ip = None
@@ -1228,9 +1228,9 @@ def _check_valid_ip(
 
     # Check if IP address is allowed
     if client_ip not in allowed_ips:
-        return False
+        return False, client_ip
 
-    return True
+    return True, client_ip
 
 
 def get_api_key_from_custom_header(
