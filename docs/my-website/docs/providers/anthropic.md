@@ -208,52 +208,6 @@ print(response)
 </TabItem>
 </Tabs>
 
-## **Prompt Caching**
-
-Use Anthropic Prompt Caching
-
-
-[Relevant Anthropic API Docs](https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching)
-
-<Tabs>
-<TabItem value="sdk" label="LiteLLM SDK">
-
-```python 
-from litellm import completion 
-
-resp = litellm.completion(
-                    model="vertex_ai_beta/gemini-1.0-pro-001",
-                    messages=[{"role": "user", "content": "Who won the world cup?"}],
-                    tools=tools,
-                )
-
-print(resp)
-```
-</TabItem>
-<TabItem value="proxy" label="PROXY">
-
-```bash
-curl http://localhost:4000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-1234" \
-  -d '{
-    "model": "gemini-pro",
-    "messages": [
-      {"role": "user", "content": "Hello, Claude!"}
-    ],
-   "tools": [
-        {
-            "googleSearchRetrieval": {} 
-        }
-    ]
-  }'
-
-```
-
-</TabItem>
-</Tabs>
-
-
 ## Supported Models
 
 `Model Name` 👉 Human-friendly name.  
@@ -270,6 +224,80 @@ curl http://localhost:4000/v1/chat/completions \
 | claude-2  | `completion('claude-2', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
 | claude-instant-1.2  | `completion('claude-instant-1.2', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
 | claude-instant-1  | `completion('claude-instant-1', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
+
+## **Prompt Caching**
+
+Use Anthropic Prompt Caching
+
+
+[Relevant Anthropic API Docs](https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching)
+
+### Caching - Large Context Caching 
+
+### Caching - Tools definitions
+
+### Caching - Continuing Multi-Turn Convo
+
+
+<Tabs>
+<TabItem value="sdk" label="LiteLLM SDK">
+
+```python 
+import litellm
+
+response = await litellm.acompletion(
+    model="anthropic/claude-3-5-sonnet-20240620",
+    messages=[
+        # System Message
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Here is the full text of a complex legal agreement"
+                    * 400,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
+        # marked for caching with the cache_control parameter, so that this checkpoint can read from the previous cache.
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "What are the key terms and conditions in this agreement?",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
+        {
+            "role": "assistant",
+            "content": "Certainly! the key terms and conditions are the following: the contract is 1 year long for $10/mo",
+        },
+        # The final turn is marked with cache-control, for continuing in followups.
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "What are the key terms and conditions in this agreement?",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
+    ],
+    extra_headers={
+        "anthropic-version": "2023-06-01",
+        "anthropic-beta": "prompt-caching-2024-07-31",
+    },
+)
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+</TabItem>
+</Tabs>
 
 ## Passing Extra Headers to Anthropic API 
 
