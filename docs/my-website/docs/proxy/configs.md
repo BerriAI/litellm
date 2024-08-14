@@ -55,7 +55,8 @@ model_list:
   - model_name: vllm-models
     litellm_params:
       model: openai/facebook/opt-125m # the `openai/` prefix tells litellm it's openai compatible
-      api_base: http://0.0.0.0:4000
+      api_base: http://0.0.0.0:4000/v1
+      api_key: none
       rpm: 1440
     model_info: 
       version: 2
