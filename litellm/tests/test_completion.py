@@ -14,7 +14,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 import os
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -3511,6 +3511,121 @@ async def test_anthropic_api_prompt_caching_basic():
     assert (response.usage.cache_read_input_tokens > 0) or (
         response.usage.cache_creation_input_tokens > 0
     )
+
+
+@pytest.mark.asyncio
+async def test_litellm_acompletion_httpx_call():
+    # Arrange: Set up the MagicMock for the httpx.AsyncClient
+    mock_response = AsyncMock()
+
+    def return_val():
+        return {
+            "id": "msg_01XFDUDYJgAACzvnptvVoYEL",
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "text", "text": "Hello!"}],
+            "model": "claude-3-5-sonnet-20240620",
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "usage": {"input_tokens": 12, "output_tokens": 6},
+        }
+
+    mock_response.json = return_val
+
+    litellm.set_verbose = True
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=mock_response,
+    ) as mock_post:
+        # Act: Call the litellm.acompletion function
+        response = await litellm.acompletion(
+            api_key="mock_api_key",
+            model="anthropic/claude-3-5-sonnet-20240620",
+            messages=[
+                {"role": "user", "content": "What's the weather like in Boston today?"}
+            ],
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_current_weather",
+                        "description": "Get the current weather in a given location",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "location": {
+                                    "type": "string",
+                                    "description": "The city and state, e.g. San Francisco, CA",
+                                },
+                                "unit": {
+                                    "type": "string",
+                                    "enum": ["celsius", "fahrenheit"],
+                                },
+                            },
+                            "required": ["location"],
+                        },
+                        "cache_control": {"type": "ephemeral"},
+                    },
+                }
+            ],
+            extra_headers={
+                "anthropic-version": "2023-06-01",
+                "anthropic-beta": "prompt-caching-2024-07-31",
+            },
+        )
+
+        # Print what was called on the mock
+        print("call args=", mock_post.call_args)
+
+        expected_url = "https://api.anthropic.com/v1/messages"
+        expected_headers = {
+            "accept": "application/json",
+            "content-type": "application/json",
+            "anthropic-version": "2023-06-01",
+            "anthropic-beta": "prompt-caching-2024-07-31",
+            "x-api-key": "mock_api_key",
+        }
+
+        expected_json = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "What's the weather like in Boston today?",
+                        }
+                    ],
+                }
+            ],
+            "tools": [
+                {
+                    "name": "get_current_weather",
+                    "description": "Get the current weather in a given location",
+                    "cache_control": {"type": "ephemeral"},
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {
+                            "location": {
+                                "type": "string",
+                                "description": "The city and state, e.g. San Francisco, CA",
+                            },
+                            "unit": {
+                                "type": "string",
+                                "enum": ["celsius", "fahrenheit"],
+                            },
+                        },
+                        "required": ["location"],
+                    },
+                }
+            ],
+            "max_tokens": 4096,
+            "model": "claude-3-5-sonnet-20240620",
+        }
+
+        mock_post.assert_called_once_with(
+            expected_url, json=expected_json, headers=expected_headers, timeout=600.0
+        )
 
 
 @pytest.mark.parametrize(
