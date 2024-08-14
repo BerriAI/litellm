@@ -802,9 +802,47 @@ class SlackAlerting(CustomLogger):
             return
         return
 
-    async def customer_spend_alert(
+    async def send_token_soft_budget_alert(
         self,
         token: Optional[str],
+        token_spend: Optional[float],
+        key_alias: Optional[str],
+        end_user_id: Optional[str],
+        response_cost: Optional[float],
+        max_budget: Optional[float],
+    ):
+        from litellm.proxy.proxy_server import prisma_client
+
+        # get last 30 day spend logs for token
+
+        if prisma_client is None:
+            raise ValueError("No prisma client found")
+
+        # get total spend, num logs in last 30 days where api_key==token
+        sql_query = """
+            SELECT 
+                SUM(spend) AS total_spend,
+                COUNT(*) AS num_logs
+            FROM 
+                "LiteLLM_SpendLogs"
+            WHERE 
+                "startTime" >= CURRENT_DATE - INTERVAL '30 days'
+                AND api_key = '88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b';
+        """
+        response = await prisma_client.db.query_raw(query=sql_query)
+        # if response is not None:
+        #     if isinstance(response, list) and len(response) > 0:
+        #         total_spend = response[0].get("total_spend", 0.0)
+
+        # return {"spend": total_spend, "max_budget": litellm.max_budget}
+
+        # get num of logs in last 30 days
+        return
+
+    async def spend_tracked_alert(
+        self,
+        token: Optional[str],
+        token_spend: Optional[float],
         key_alias: Optional[str],
         end_user_id: Optional[str],
         response_cost: Optional[float],

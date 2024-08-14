@@ -700,6 +700,7 @@ async def _PROXY_track_cost_callback(
         team_id = metadata.get("user_api_key_team_id", None)
         org_id = metadata.get("user_api_key_org_id", None)
         key_alias = metadata.get("user_api_key_alias", None)
+        user_api_key_spend = metadata.get("user_api_key_spend", 0.0)
         end_user_max_budget = metadata.get("user_api_end_user_max_budget", None)
         if kwargs.get("response_cost", None) is not None:
             response_cost = kwargs["response_cost"]
@@ -737,8 +738,9 @@ async def _PROXY_track_cost_callback(
                     team_id=team_id,
                 )
 
-                await proxy_logging_obj.slack_alerting_instance.customer_spend_alert(
+                await proxy_logging_obj.slack_alerting_instance.spend_tracked_alert(
                     token=user_api_key,
+                    token_spend=user_api_key_spend,
                     key_alias=key_alias,
                     end_user_id=end_user_id,
                     response_cost=response_cost,
