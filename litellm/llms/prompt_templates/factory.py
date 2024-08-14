@@ -1224,6 +1224,19 @@ def convert_to_anthropic_tool_invoke(
     return anthropic_tool_invoke
 
 
+def add_cache_control_to_content(
+    anthropic_content_element: Union[
+        dict, AnthropicMessagesImageParam, AnthropicMessagesTextParam
+    ],
+    orignal_content_element: dict,
+):
+    if "cache_control" in orignal_content_element:
+        anthropic_content_element["cache_control"] = orignal_content_element[
+            "cache_control"
+        ]
+    return anthropic_content_element
+
+
 def anthropic_messages_pt(
     messages: list,
     model: str,
@@ -1264,18 +1277,31 @@ def anthropic_messages_pt(
                         image_chunk = convert_to_anthropic_image_obj(
                             m["image_url"]["url"]
                         )
-                        user_content.append(
-                            AnthropicMessagesImageParam(
-                                type="image",
-                                source=AnthropicImageParamSource(
-                                    type="base64",
-                                    media_type=image_chunk["media_type"],
-                                    data=image_chunk["data"],
-                                ),
-                            )
+
+                        _anthropic_content_element = AnthropicMessagesImageParam(
+                            type="image",
+                            source=AnthropicImageParamSource(
+                                type="base64",
+                                media_type=image_chunk["media_type"],
+                                data=image_chunk["data"],
+                            ),
                         )
+
+                        anthropic_content_element = add_cache_control_to_content(
+                            anthropic_content_element=_anthropic_content_element,
+                            orignal_content_element=m,
+                        )
+                        user_content.append(anthropic_content_element)
                     elif m.get("type", "") == "text":
-                        user_content.append({"type": "text", "text": m["text"]})
+                        _anthropic_text_content_element = {
+                            "type": "text",
+                            "text": m["text"],
+                        }
+                        anthropic_content_element = add_cache_control_to_content(
+                            anthropic_content_element=_anthropic_text_content_element,
+                            orignal_content_element=m,
+                        )
+                        user_content.append(anthropic_content_element)
             elif (
                 messages[msg_i]["role"] == "tool"
                 or messages[msg_i]["role"] == "function"
@@ -1306,6 +1332,10 @@ def anthropic_messages_pt(
                         anthropic_message = AnthropicMessagesTextParam(
                             type="text", text=m.get("text")
                         )
+                        anthropic_message = add_cache_control_to_content(
+                            anthropic_content_element=anthropic_message,
+                            orignal_content_element=m,
+                        )
                         assistant_content.append(anthropic_message)
             elif (
                 "content" in messages[msg_i]
@@ -1313,9 +1343,17 @@ def anthropic_messages_pt(
                 and len(messages[msg_i]["content"])
                 > 0  # don't pass empty text blocks. anthropic api raises errors.
             ):
-                assistant_content.append(
-                    {"type": "text", "text": messages[msg_i]["content"]}
+
+                _anthropic_text_content_element = {
+                    "type": "text",
+                    "text": messages[msg_i]["content"],
+                }
+
+                anthropic_content_element = add_cache_control_to_content(
+                    anthropic_content_element=_anthropic_text_content_element,
+                    orignal_content_element=messages[msg_i],
                 )
+                assistant_content.append(anthropic_content_element)
 
             if messages[msg_i].get(
                 "tool_calls", []
