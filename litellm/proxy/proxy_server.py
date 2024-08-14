@@ -151,6 +151,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     check_file_size_under_limit,
 )
 from litellm.proxy.common_utils.init_callbacks import initialize_callbacks_on_proxy
+from litellm.proxy.common_utils.load_config_utils import get_file_contents_from_s3
 from litellm.proxy.common_utils.openai_endpoint_utils import (
     remove_sensitive_info_from_deployment,
 )
@@ -1402,7 +1403,18 @@ class ProxyConfig:
         global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, use_background_health_checks, health_check_interval, use_queue, custom_db_client, proxy_budget_rescheduler_max_time, proxy_budget_rescheduler_min_time, ui_access_mode, litellm_master_key_hash, proxy_batch_write_at, disable_spend_logs, prompt_injection_detection_obj, redis_usage_cache, store_model_in_db, premium_user, open_telemetry_logger, health_check_details
 
         # Load existing config
-        config = await self.get_config(config_file_path=config_file_path)
+        if os.environ.get("LITELLM_CONFIG_BUCKET_NAME") is not None:
+            bucket_name = os.environ.get("LITELLM_CONFIG_BUCKET_NAME")
+            object_key = os.environ.get("LITELLM_CONFIG_BUCKET_OBJECT_KEY")
+            verbose_proxy_logger.debug(
+                "bucket_name: %s, object_key: %s", bucket_name, object_key
+            )
+            config = get_file_contents_from_s3(
+                bucket_name=bucket_name, object_key=object_key
+            )
+        else:
+            # default to file
+            config = await self.get_config(config_file_path=config_file_path)
         ## PRINT YAML FOR CONFIRMING IT WORKS
         printed_yaml = copy.deepcopy(config)
         printed_yaml.pop("environment_variables", None)
@@ -2601,6 +2613,15 @@ async def startup_event():
             )
         else:
             await initialize(**worker_config)
+    elif os.environ.get("LITELLM_CONFIG_BUCKET_NAME") is not None:
+        (
+            llm_router,
+            llm_model_list,
+            general_settings,
+        ) = await proxy_config.load_config(
+            router=llm_router, config_file_path=worker_config
+        )
+
     else:
         # if not, assume it's a json string
         worker_config = json.loads(os.getenv("WORKER_CONFIG"))
