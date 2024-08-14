@@ -169,7 +169,7 @@ async def test_pass_through_endpoint_rpm_limit(auth, expected_error_code, rpm_li
     [(True, 0, 429), (True, 1, 207), (False, 0, 207)],
 )
 @pytest.mark.asyncio
-async def test_pass_through_endpoint_pass_through_keys_langfuse(
+async def test_aaapass_through_endpoint_pass_through_keys_langfuse(
     auth, expected_error_code, rpm_limit
 ):
     client = TestClient(app)
@@ -196,7 +196,7 @@ async def test_pass_through_endpoint_pass_through_keys_langfuse(
     pass_through_endpoints = [
         {
             "path": "/api/public/ingestion",
-            "target": "https://us.cloud.langfuse.com/api/public/ingestion",
+            "target": "https://cloud.langfuse.com/api/public/ingestion",
             "auth": auth,
             "custom_auth_parser": "langfuse",
             "headers": {
