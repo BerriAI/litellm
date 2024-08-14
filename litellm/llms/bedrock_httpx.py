@@ -1054,10 +1054,11 @@ class BedrockLLM(BaseLLM):
                     "complete_input_dict": inference_params,
                 },
             )
-            raise Exception(
-                "Bedrock HTTPX: Unsupported provider={}, model={}".format(
+            raise BedrockError(
+                status_code=400,
+                message="Bedrock HTTPX: Unsupported provider={}, model={}".format(
                     provider, model
-                )
+                ),
             )
 
         ## COMPLETION CALL
