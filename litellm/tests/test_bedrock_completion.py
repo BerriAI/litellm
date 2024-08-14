@@ -1159,8 +1159,8 @@ def test_bedrock_tools_pt_invalid_names():
     assert result[1]["toolSpec"]["name"] == "another_invalid_name"
 
 
-def test_bad_request_error():
-    with pytest.raises(litellm.BadRequestError):
+def test_not_found_error():
+    with pytest.raises(litellm.NotFoundError):
         completion(
             model="bedrock/bad_model",
             messages=[
