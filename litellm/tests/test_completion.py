@@ -3450,7 +3450,7 @@ def response_format_tests(response: litellm.ModelResponse):
 
 
 @pytest.mark.asyncio()
-async def test_anthropic_api_prompt_caching_2():
+async def test_anthropic_api_prompt_caching_basic():
     litellm.set_verbose = True
     response = await litellm.acompletion(
         model="anthropic/claude-3-5-sonnet-20240620",
@@ -3503,6 +3503,14 @@ async def test_anthropic_api_prompt_caching_2():
     )
 
     print("response=", response)
+
+    assert "cache_read_input_tokens" in response.usage
+    assert "cache_creation_input_tokens" in response.usage
+
+    # Assert either a cache entry was created or cache was read - changes depending on the anthropic api ttl
+    assert (response.usage.cache_read_input_tokens > 0) or (
+        response.usage.cache_creation_input_tokens > 0
+    )
 
 
 @pytest.mark.parametrize(
