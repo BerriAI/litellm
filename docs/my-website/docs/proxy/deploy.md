@@ -705,6 +705,29 @@ docker run ghcr.io/berriai/litellm:main-latest \
 
 Provide an ssl certificate when starting litellm proxy server 
 
+### 3. Providing LiteLLM config.yaml file as a s3 Object/url
+
+Use this if you cannot mount a config file on your deployment service (example - AWS Fargate, Railway etc)
+
+LiteLLM Proxy will read your config.yaml from an s3 Bucket
+
+Set the following .env vars 
+```shell
+LITELLM_CONFIG_BUCKET_NAME = "litellm-proxy"                    # your bucket name on s3 
+LITELLM_CONFIG_BUCKET_OBJECT_KEY = "litellm_proxy_config.yaml"  # object key on s3
+```
+
+Start litellm proxy with these env vars - litellm will read your config from s3 
+
+```shell
+docker run --name litellm-proxy \
+   -e DATABASE_URL=<database_url> \
+   -e LITELLM_CONFIG_BUCKET_NAME=<bucket_name> \
+   -e LITELLM_CONFIG_BUCKET_OBJECT_KEY="<object_key>> \
+   -p 4000:4000 \
+   ghcr.io/berriai/litellm-database:main-latest
+```
+
 ## Platform-specific Guide
 
 <Tabs>
