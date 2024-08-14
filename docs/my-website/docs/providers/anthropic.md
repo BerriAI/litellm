@@ -208,6 +208,52 @@ print(response)
 </TabItem>
 </Tabs>
 
+## **Prompt Caching**
+
+Use Anthropic Prompt Caching
+
+
+[Relevant Anthropic API Docs](https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching)
+
+<Tabs>
+<TabItem value="sdk" label="LiteLLM SDK">
+
+```python 
+from litellm import completion 
+
+resp = litellm.completion(
+                    model="vertex_ai_beta/gemini-1.0-pro-001",
+                    messages=[{"role": "user", "content": "Who won the world cup?"}],
+                    tools=tools,
+                )
+
+print(resp)
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```bash
+curl http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "gemini-pro",
+    "messages": [
+      {"role": "user", "content": "Hello, Claude!"}
+    ],
+   "tools": [
+        {
+            "googleSearchRetrieval": {} 
+        }
+    ]
+  }'
+
+```
+
+</TabItem>
+</Tabs>
+
+
 ## Supported Models
 
 `Model Name` 👉 Human-friendly name.  
