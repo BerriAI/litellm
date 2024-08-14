@@ -147,6 +147,7 @@ async def test_basic_gcs_logger():
 
     assert gcs_payload["response_cost"] > 0.0
 
+    assert gcs_payload["log_event_type"] == "successful_api_call"
     gcs_payload["spend_log_metadata"] = json.loads(gcs_payload["spend_log_metadata"])
 
     assert (
