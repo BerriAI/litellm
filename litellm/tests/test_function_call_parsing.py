@@ -1,22 +1,26 @@
 # What is this?
 ## Test to make sure function call response always works with json.loads() -> no extra parsing required. Relevant issue - https://github.com/BerriAI/litellm/issues/2654
-import sys, os
+import os
+import sys
 import traceback
+
 from dotenv import load_dotenv
 
 load_dotenv()
-import os, io
+import io
+import os
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-import pytest
-import litellm
 import json
 import warnings
-
-from litellm import completion
 from typing import List
+
+import pytest
+
+import litellm
+from litellm import completion
 
 
 # Just a stub to keep the sample code simple
@@ -78,58 +82,60 @@ def trade(model_name: str) -> List[Trade]:
         },
     }
 
-    response = completion(
-        model_name,
-        [
-            {
-                "role": "system",
-                "content": """You are an expert asset manager, managing a portfolio.
+    try:
+        response = completion(
+            model_name,
+            [
+                {
+                    "role": "system",
+                    "content": """You are an expert asset manager, managing a portfolio.
 
-                Always use the `trade` function. Make sure that you call it correctly. For example, the following is a valid call:
+                    Always use the `trade` function. Make sure that you call it correctly. For example, the following is a valid call:
+                    ```
+                    trade({
+                        "orders": [
+                            {"action": "buy", "asset": "BTC", "amount": 0.1},
+                            {"action": "sell", "asset": "ETH", "amount": 0.2}
+                        ]
+                    })
+                    ```
+
+                    If there are no trades to make, call `trade` with an empty array:
+                    ```
+                    trade({ "orders": [] })
+                    ```
+                """,
+                },
+                {
+                    "role": "user",
+                    "content": """Manage the portfolio.
+
+                Don't jabber.
+
+                This is the current market data:
                 ```
-                trade({
-                    "orders": [
-                        {"action": "buy", "asset": "BTC", "amount": 0.1},
-                        {"action": "sell", "asset": "ETH", "amount": 0.2}
-                    ]
-                })
+                {market_data}
                 ```
 
-                If there are no trades to make, call `trade` with an empty array:
+                Your portfolio is as follows:
                 ```
-                trade({ "orders": [] })
+                {portfolio}
                 ```
-            """,
+                """.replace(
+                        "{market_data}", "BTC: 64,000 USD\nETH: 3,500 USD"
+                    ).replace(
+                        "{portfolio}", "USD: 1000, BTC: 0.1, ETH: 0.2"
+                    ),
+                },
+            ],
+            tools=[tool_spec],
+            tool_choice={
+                "type": "function",
+                "function": {"name": tool_spec["function"]["name"]},  # type: ignore
             },
-            {
-                "role": "user",
-                "content": """Manage the portfolio.
-
-            Don't jabber.
-
-            This is the current market data:
-            ```
-            {market_data}
-            ```
-
-            Your portfolio is as follows:
-            ```
-            {portfolio}
-            ```
-            """.replace(
-                    "{market_data}", "BTC: 64,000 USD\nETH: 3,500 USD"
-                ).replace(
-                    "{portfolio}", "USD: 1000, BTC: 0.1, ETH: 0.2"
-                ),
-            },
-        ],
-        tools=[tool_spec],
-        tool_choice={
-            "type": "function",
-            "function": {"name": tool_spec["function"]["name"]},  # type: ignore
-        },
-    )
-
+        )
+    except litellm.InternalServerError:
+        pass
     calls = response.choices[0].message.tool_calls
     trades = [trade for call in calls for trade in parse_call(call)]
     return trades
