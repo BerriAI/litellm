@@ -966,3 +966,203 @@ async def test_user_info_team_list(prisma_client):
             pass
 
         mock_client.assert_called()
+
+
+@pytest.mark.skip(reason="Local test")
+@pytest.mark.asyncio
+async def test_add_callback_via_key(prisma_client):
+    """
+    Test if callback specified in key, is used.
+    """
+    global headers
+    import json
+
+    from fastapi import HTTPException, Request, Response
+    from starlette.datastructures import URL
+
+    from litellm.proxy.proxy_server import chat_completion
+
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    await litellm.proxy.proxy_server.prisma_client.connect()
+
+    litellm.set_verbose = True
+
+    try:
+        # Your test data
+        test_data = {
+            "model": "azure/chatgpt-v-2",
+            "messages": [
+                {"role": "user", "content": "write 1 sentence poem"},
+            ],
+            "max_tokens": 10,
+            "mock_response": "Hello world",
+            "api_key": "my-fake-key",
+        }
+
+        request = Request(scope={"type": "http", "method": "POST", "headers": {}})
+        request._url = URL(url="/chat/completions")
+
+        json_bytes = json.dumps(test_data).encode("utf-8")
+
+        request._body = json_bytes
+
+        with patch.object(
+            litellm.litellm_core_utils.litellm_logging,
+            "LangFuseLogger",
+            new=MagicMock(),
+        ) as mock_client:
+            resp = await chat_completion(
+                request=request,
+                fastapi_response=Response(),
+                user_api_key_dict=UserAPIKeyAuth(
+                    metadata={
+                        "logging": [
+                            {
+                                "callback_name": "langfuse",  # 'otel', 'langfuse', 'lunary'
+                                "callback_type": "success",  # set, if required by integration - future improvement, have logging tools work for success + failure by default
+                                "callback_vars": {
+                                    "langfuse_public_key": "os.environ/LANGFUSE_PUBLIC_KEY",
+                                    "langfuse_secret_key": "os.environ/LANGFUSE_SECRET_KEY",
+                                    "langfuse_host": "https://us.cloud.langfuse.com",
+                                },
+                            }
+                        ]
+                    }
+                ),
+            )
+            print(resp)
+            mock_client.assert_called()
+            mock_client.return_value.log_event.assert_called()
+            args, kwargs = mock_client.return_value.log_event.call_args
+            kwargs = kwargs["kwargs"]
+            assert "user_api_key_metadata" in kwargs["litellm_params"]["metadata"]
+            assert (
+                "logging"
+                in kwargs["litellm_params"]["metadata"]["user_api_key_metadata"]
+            )
+            checked_keys = False
+            for item in kwargs["litellm_params"]["metadata"]["user_api_key_metadata"][
+                "logging"
+            ]:
+                for k, v in item["callback_vars"].items():
+                    print("k={}, v={}".format(k, v))
+                    if "key" in k:
+                        assert "os.environ" in v
+                        checked_keys = True
+
+            assert checked_keys
+    except Exception as e:
+        pytest.fail(f"LiteLLM Proxy test failed. Exception - {str(e)}")
+
+
+@pytest.mark.asyncio
+async def test_add_callback_via_key_litellm_pre_call_utils(prisma_client):
+    import json
+
+    from fastapi import HTTPException, Request, Response
+    from starlette.datastructures import URL
+
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    await litellm.proxy.proxy_server.prisma_client.connect()
+
+    proxy_config = getattr(litellm.proxy.proxy_server, "proxy_config")
+
+    request = Request(scope={"type": "http", "method": "POST", "headers": {}})
+    request._url = URL(url="/chat/completions")
+
+    test_data = {
+        "model": "azure/chatgpt-v-2",
+        "messages": [
+            {"role": "user", "content": "write 1 sentence poem"},
+        ],
+        "max_tokens": 10,
+        "mock_response": "Hello world",
+        "api_key": "my-fake-key",
+    }
+
+    json_bytes = json.dumps(test_data).encode("utf-8")
+
+    request._body = json_bytes
+
+    data = {
+        "data": {
+            "model": "azure/chatgpt-v-2",
+            "messages": [{"role": "user", "content": "write 1 sentence poem"}],
+            "max_tokens": 10,
+            "mock_response": "Hello world",
+            "api_key": "my-fake-key",
+        },
+        "request": request,
+        "user_api_key_dict": UserAPIKeyAuth(
+            token=None,
+            key_name=None,
+            key_alias=None,
+            spend=0.0,
+            max_budget=None,
+            expires=None,
+            models=[],
+            aliases={},
+            config={},
+            user_id=None,
+            team_id=None,
+            max_parallel_requests=None,
+            metadata={
+                "logging": [
+                    {
+                        "callback_name": "langfuse",
+                        "callback_type": "success",
+                        "callback_vars": {
+                            "langfuse_public_key": "os.environ/LANGFUSE_PUBLIC_KEY",
+                            "langfuse_secret_key": "os.environ/LANGFUSE_SECRET_KEY",
+                            "langfuse_host": "https://us.cloud.langfuse.com",
+                        },
+                    }
+                ]
+            },
+            tpm_limit=None,
+            rpm_limit=None,
+            budget_duration=None,
+            budget_reset_at=None,
+            allowed_cache_controls=[],
+            permissions={},
+            model_spend={},
+            model_max_budget={},
+            soft_budget_cooldown=False,
+            litellm_budget_table=None,
+            org_id=None,
+            team_spend=None,
+            team_alias=None,
+            team_tpm_limit=None,
+            team_rpm_limit=None,
+            team_max_budget=None,
+            team_models=[],
+            team_blocked=False,
+            soft_budget=None,
+            team_model_aliases=None,
+            team_member_spend=None,
+            team_metadata=None,
+            end_user_id=None,
+            end_user_tpm_limit=None,
+            end_user_rpm_limit=None,
+            end_user_max_budget=None,
+            last_refreshed_at=None,
+            api_key=None,
+            user_role=None,
+            allowed_model_region=None,
+            parent_otel_span=None,
+        ),
+        "proxy_config": proxy_config,
+        "general_settings": {},
+        "version": "0.0.0",
+    }
+
+    new_data = await add_litellm_data_to_request(**data)
+
+    assert "success_callback" in new_data
+    assert new_data["success_callback"] == ["langfuse"]
+    assert "langfuse_public_key" in new_data
+    assert "langfuse_secret_key" in new_data

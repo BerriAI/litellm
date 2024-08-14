@@ -356,6 +356,7 @@ def ollama_completion_stream(url, api_key, data, logging_obj):
         "json": data,
         "method": "POST",
         "timeout": litellm.request_timeout,
+        "follow_redirects": True
     }
     if api_key is not None:
         _request["headers"] = {"Authorization": "Bearer {}".format(api_key)}
