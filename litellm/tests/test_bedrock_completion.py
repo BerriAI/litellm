@@ -1157,3 +1157,16 @@ def test_bedrock_tools_pt_invalid_names():
     assert len(result) == 2
     assert result[0]["toolSpec"]["name"] == "a123_invalid_name"
     assert result[1]["toolSpec"]["name"] == "another_invalid_name"
+
+
+def test_bad_request_error():
+    with pytest.raises(litellm.BadRequestError):
+        completion(
+            model="bedrock/bad_model",
+            messages=[
+                {
+                    "role": "user",
+                    "content": "What is the meaning of life",
+                }
+            ],
+        )
