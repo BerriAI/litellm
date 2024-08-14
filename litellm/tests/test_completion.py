@@ -3526,6 +3526,7 @@ async def test_anthropic_api_prompt_caching_basic():
         "cohere.command-text-v14",
     ],
 )
+@pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_completion_bedrock_httpx_models(sync_mode, model):
     litellm.set_verbose = True
