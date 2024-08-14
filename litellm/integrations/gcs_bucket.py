@@ -129,13 +129,20 @@ class GCSBucketLogger(CustomLogger):
             )
             logging_payload["log_event_type"] = "failed_api_call"
 
+            _litellm_params = kwargs.get("litellm_params") or {}
+            metadata = _litellm_params.get("metadata") or {}
+
             json_logged_payload = json.dumps(logging_payload)
 
             # Get the current date
             current_date = datetime.now().strftime("%Y-%m-%d")
 
             # Modify the object_name to include the date-based folder
-            object_name = f"{current_date}/{uuid.uuid4().hex}"
+            object_name = f"{current_date}/failure-{uuid.uuid4().hex}"
+
+            if "gcs_log_id" in metadata:
+                object_name = metadata["gcs_log_id"]
+
             response = await self.async_httpx_client.post(
                 headers=headers,
                 url=f"https://storage.googleapis.com/upload/storage/v1/b/{self.BUCKET_NAME}/o?uploadType=media&name={object_name}",
