@@ -151,7 +151,7 @@ const sidebars = {
     },
     {
       type: "category",
-      label: "Chat Completions (litellm.completion)",
+      label: "Chat Completions (litellm.completion + PROXY)",
       link: {
         type: "generated-index",
         title: "Chat Completions",
