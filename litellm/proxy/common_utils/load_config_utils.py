@@ -7,6 +7,7 @@ from litellm._logging import verbose_proxy_logger
 
 
 def get_file_contents_from_s3(bucket_name, object_key):
+    # v0 rely on boto3 for authentication - allowing boto3 to handle IAM credentials etc
     s3_client = boto3.client("s3")
     try:
         verbose_proxy_logger.debug(
