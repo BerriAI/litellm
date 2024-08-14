@@ -8,7 +8,19 @@ from litellm._logging import verbose_proxy_logger
 
 def get_file_contents_from_s3(bucket_name, object_key):
     # v0 rely on boto3 for authentication - allowing boto3 to handle IAM credentials etc
-    s3_client = boto3.client("s3")
+    from botocore.config import Config
+    from botocore.credentials import Credentials
+
+    from litellm.main import bedrock_converse_chat_completion
+
+    credentials: Credentials = bedrock_converse_chat_completion.get_credentials()
+    s3_client = boto3.client(
+        "s3",
+        aws_access_key_id=credentials.access_key,
+        aws_secret_access_key=credentials.secret_key,
+        aws_session_token=credentials.token,  # Optional, if using temporary credentials
+    )
+
     try:
         verbose_proxy_logger.debug(
             f"Retrieving {object_key} from S3 bucket: {bucket_name}"
