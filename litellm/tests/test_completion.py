@@ -3705,19 +3705,21 @@ def test_completion_anyscale_api():
 # test_completion_anyscale_api()
 
 
-@pytest.mark.skip(reason="flaky test, times out frequently")
+# @pytest.mark.skip(reason="flaky test, times out frequently")
 def test_completion_cohere():
     try:
         # litellm.set_verbose=True
         messages = [
             {"role": "system", "content": "You're a good bot"},
+            {"role": "assistant", "content": [{"text": "2", "type": "text"}]},
+            {"role": "assistant", "content": [{"text": "3", "type": "text"}]},
             {
                 "role": "user",
                 "content": "Hey",
             },
         ]
         response = completion(
-            model="command-nightly",
+            model="command-r",
             messages=messages,
         )
         print(response)
