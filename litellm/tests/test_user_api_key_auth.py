@@ -44,7 +44,7 @@ def test_check_valid_ip(
 
     request = Request(client_ip)
 
-    assert _check_valid_ip(allowed_ips, request) == expected_result  # type: ignore
+    assert _check_valid_ip(allowed_ips, request)[0] == expected_result  # type: ignore
 
 
 # test x-forwarder for is used when user has opted in
@@ -72,7 +72,7 @@ def test_check_valid_ip_sent_with_x_forwarded_for(
 
     request = Request(client_ip, headers={"X-Forwarded-For": client_ip})
 
-    assert _check_valid_ip(allowed_ips, request, use_x_forwarded_for=True) == expected_result  # type: ignore
+    assert _check_valid_ip(allowed_ips, request, use_x_forwarded_for=True)[0] == expected_result  # type: ignore
 
 
 @pytest.mark.asyncio
