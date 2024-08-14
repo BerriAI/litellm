@@ -4491,7 +4491,7 @@ def _is_azure_openai_model(model: str) -> bool:
         if (
             model in litellm.open_ai_chat_completion_models
             or model in litellm.open_ai_text_completion_models
-            or litellm.open_ai_embedding_models
+            or model in litellm.open_ai_embedding_models
         ):
             return True
     except Exception:
@@ -4630,6 +4630,11 @@ def get_llm_provider(
                 dynamic_api_key = api_key or get_secret("AZURE_AI_API_KEY")
 
                 if _is_azure_openai_model(model=model):
+                    verbose_logger.debug(
+                        "Model={} is Azure OpenAI model. Setting custom_llm_provider='azure'.".format(
+                            model
+                        )
+                    )
                     custom_llm_provider = "azure"
             elif custom_llm_provider == "github":
                 api_base = api_base or get_secret("GITHUB_API_BASE") or "https://models.inference.ai.azure.com"  # type: ignore
