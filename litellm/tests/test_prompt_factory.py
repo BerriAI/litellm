@@ -263,6 +263,7 @@ def test_anthropic_messages_tool_call():
 
 
 def test_anthropic_cache_controls_pt():
+    "see anthropic docs for this: https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching#continuing-a-multi-turn-conversation"
     messages = [
         # marked for caching with the cache_control parameter, so that this checkpoint can read from the previous cache.
         {
@@ -290,6 +291,11 @@ def test_anthropic_cache_controls_pt():
                 }
             ],
         },
+        {
+            "role": "assistant",
+            "content": "Certainly! the key terms and conditions are the following: the contract is 1 year long for $10/mo",
+            "cache_control": {"type": "ephemeral"},
+        },
     ]
 
     translated_messages = anthropic_messages_pt(
@@ -302,6 +308,8 @@ def test_anthropic_cache_controls_pt():
         elif i == 1:
             assert "cache_controls" not in msg["content"][0]
         elif i == 2:
+            assert msg["content"][0]["cache_control"] == {"type": "ephemeral"}
+        elif i == 3:
             assert msg["content"][0]["cache_control"] == {"type": "ephemeral"}
 
     print("translated_messages: ", translated_messages)
