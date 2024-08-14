@@ -975,6 +975,8 @@ class AnthropicChatCompletion(BaseLLM):
                 else:  # assume openai tool call
                     new_tool = tool["function"]
                     new_tool["input_schema"] = new_tool.pop("parameters")  # rename key
+                    if "cache_control" in tool:
+                        new_tool["cache_control"] = tool["cache_control"]
                     anthropic_tools.append(new_tool)
 
             optional_params["tools"] = anthropic_tools
