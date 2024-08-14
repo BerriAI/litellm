@@ -1701,12 +1701,12 @@ def cohere_messages_pt_v2(
         assistant_tool_calls: List[ToolCallObject] = []
         ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
         while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
-            assistant_text = (
-                messages[msg_i].get("content") or ""
-            )  # either string or none
-            if assistant_text:
-                assistant_content += assistant_text
-
+            if isinstance(messages[msg_i]["content"], list):
+                for m in messages[msg_i]["content"]:
+                    if m.get("type", "") == "text":
+                        assistant_content += m["text"]
+            else:
+                assistant_content += messages[msg_i]["content"]
             if messages[msg_i].get(
                 "tool_calls", []
             ):  # support assistant tool invoke conversion
