@@ -759,6 +759,7 @@ class AnthropicChatCompletion(BaseLLM):
         ## CALCULATING USAGE
         prompt_tokens = completion_response["usage"]["input_tokens"]
         completion_tokens = completion_response["usage"]["output_tokens"]
+        _usage = completion_response["usage"]
         total_tokens = prompt_tokens + completion_tokens
 
         model_response.created = int(time.time())
@@ -768,6 +769,11 @@ class AnthropicChatCompletion(BaseLLM):
             completion_tokens=completion_tokens,
             total_tokens=total_tokens,
         )
+
+        if "cache_creation_input_tokens" in _usage:
+            usage["cache_creation_input_tokens"] = _usage["cache_creation_input_tokens"]
+        if "cache_read_input_tokens" in _usage:
+            usage["cache_read_input_tokens"] = _usage["cache_read_input_tokens"]
         setattr(model_response, "usage", usage)  # type: ignore
         return model_response
 
