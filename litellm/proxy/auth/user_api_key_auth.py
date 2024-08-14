@@ -85,8 +85,10 @@ def _get_bearer_token(
 ):
     if api_key.startswith("Bearer "):  # ensure Bearer token passed in
         api_key = api_key.replace("Bearer ", "")  # extract the token
+    elif api_key.startswith("Basic "):
+        api_key = api_key.replace("Basic ", "")  # handle langfuse input
     else:
-        api_key = api_key
+        api_key = ""
     return api_key
 
 
