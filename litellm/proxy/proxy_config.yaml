@@ -39,7 +39,4 @@ general_settings:
 
 litellm_settings:
   fallbacks: [{"gemini-1.5-pro-001": ["gpt-4o"]}]
-  success_callback: ["langfuse", "prometheus"]
-  langfuse_default_tags: ["cache_hit", "cache_key", "proxy_base_url", "user_api_key_alias", "user_api_key_user_id", "user_api_key_user_email", "user_api_key_team_alias", "semantic-similarity", "proxy_base_url"]
-  failure_callback: ["prometheus"]
-  cache: True
+  callbacks: ["gcs_bucket"]
