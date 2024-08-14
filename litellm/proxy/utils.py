@@ -14,7 +14,6 @@ from datetime import datetime, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from functools import wraps
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, List, Literal, Optional, Tuple, Union
 
 import backoff
@@ -816,17 +815,6 @@ class PrismaClient:
     org_list_transactons: dict = {}
     spend_log_transactions: List = []
 
-    def ensure_prisma_has_writable_dirs(self, path: str | Path) -> None:
-        import stat
-
-        for root, dirs, _ in os.walk(path):
-            for directory in dirs:
-                dir_path = os.path.join(root, directory)
-                os.makedirs(dir_path, exist_ok=True)
-                os.chmod(
-                    dir_path, os.stat(dir_path).st_mode | stat.S_IWRITE | stat.S_IEXEC
-                )
-
     def __init__(self, database_url: str, proxy_logging_obj: ProxyLogging):
         verbose_proxy_logger.debug(
             "LiteLLM: DATABASE_URL Set in config, trying to 'pip install prisma'"
@@ -858,22 +846,6 @@ class PrismaClient:
             # Now you can import the Prisma Client
             from prisma import Prisma  # type: ignore
         verbose_proxy_logger.debug("Connecting Prisma Client to DB..")
-        import importlib.util
-
-        # Get the location of the 'prisma' package
-        package_name = "prisma"
-        spec = importlib.util.find_spec(package_name)
-        print("spec = ", spec)  # noqa
-
-        if spec and spec.origin:
-            print("spec origin= ", spec.origin)  # noqa
-            _base_prisma_package_dir = os.path.dirname(spec.origin)
-            print("base prisma package dir = ", _base_prisma_package_dir)  # noqa
-        else:
-            raise ImportError(f"Package {package_name} not found.")
-
-        # Use the package directory in your method call
-        self.ensure_prisma_has_writable_dirs(path=_base_prisma_package_dir)
         self.db = Prisma()  # Client to connect to Prisma db
         verbose_proxy_logger.debug("Success - Connected Prisma Client to DB")
 
