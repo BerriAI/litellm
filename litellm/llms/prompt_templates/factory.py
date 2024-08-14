@@ -1705,7 +1705,9 @@ def cohere_messages_pt_v2(
                 for m in messages[msg_i]["content"]:
                     if m.get("type", "") == "text":
                         assistant_content += m["text"]
-            else:
+            elif messages[msg_i].get("content") is not None and isinstance(
+                messages[msg_i]["content"], str
+            ):
                 assistant_content += messages[msg_i]["content"]
             if messages[msg_i].get(
                 "tool_calls", []
