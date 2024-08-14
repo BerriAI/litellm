@@ -41,8 +41,8 @@ async def get_fallback_metric_from_prometheus():
     """
     response_message = ""
     relevant_metrics = [
-        "llm_deployment_successful_fallbacks_total",
-        "llm_deployment_failed_fallbacks_total",
+        "litellm_deployment_successful_fallbacks_total",
+        "litellm_deployment_failed_fallbacks_total",
     ]
     for metric in relevant_metrics:
         response_json = await get_metric_from_prometheus(
