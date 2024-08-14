@@ -844,17 +844,17 @@ class PrismaClient:
             dname = os.path.dirname(abspath)
             os.chdir(dname)
 
-            try:
-                subprocess.run(["prisma", "generate"])
-                subprocess.run(
-                    ["prisma", "db", "push", "--accept-data-loss"]
-                )  # this looks like a weird edge case when prisma just wont start on render. we need to have the --accept-data-loss
-            except Exception as e:
-                raise Exception(
-                    f"Unable to run prisma commands. Run `pip install prisma` Got Exception: {(str(e))}"
-                )
-            finally:
-                os.chdir(original_dir)
+            # try:
+            #     subprocess.run(["prisma", "generate"])
+            #     subprocess.run(
+            #         ["prisma", "db", "push", "--accept-data-loss"]
+            #     )  # this looks like a weird edge case when prisma just wont start on render. we need to have the --accept-data-loss
+            # except Exception as e:
+            #     raise Exception(
+            #         f"Unable to run prisma commands. Run `pip install prisma` Got Exception: {(str(e))}"
+            #     )
+            # finally:
+            #     os.chdir(original_dir)
             # Now you can import the Prisma Client
             from prisma import Prisma  # type: ignore
         verbose_proxy_logger.debug("Connecting Prisma Client to DB..")
