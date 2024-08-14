@@ -2074,7 +2074,8 @@
         "litellm_provider": "vertex_ai-anthropic_models",
         "mode": "chat",
         "supports_function_calling": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_assistant_prefill": true
     },
     "vertex_ai/claude-3-5-sonnet@20240620": {
         "max_tokens": 4096,
@@ -2097,7 +2098,8 @@
         "litellm_provider": "vertex_ai-anthropic_models",
         "mode": "chat",
         "supports_function_calling": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_assistant_prefill": true
     },
     "vertex_ai/claude-3-opus@20240229": {
         "max_tokens": 4096,
@@ -2108,7 +2110,8 @@
         "litellm_provider": "vertex_ai-anthropic_models",
         "mode": "chat",
         "supports_function_calling": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_assistant_prefill": true
     },
     "vertex_ai/meta/llama3-405b-instruct-maas": {
         "max_tokens": 32000,
