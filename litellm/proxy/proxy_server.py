@@ -187,6 +187,7 @@ from litellm.proxy.openai_files_endpoints.files_endpoints import set_files_confi
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     initialize_pass_through_endpoints,
 )
+from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.secret_managers.aws_secret_manager import (
     load_aws_kms,
     load_aws_secret_manager,
@@ -3006,68 +3007,13 @@ async def chat_completion(
 
         ### ROUTE THE REQUEST ###
         # Do not change this - it should be a constant time fetch - ALWAYS
-        router_model_names = llm_router.model_names if llm_router is not None else []
-        # skip router if user passed their key
-        if "api_key" in data:
-            tasks.append(litellm.acompletion(**data))
-        elif "," in data["model"] and llm_router is not None:
-            if (
-                data.get("fastest_response", None) is not None
-                and data["fastest_response"] == True
-            ):
-                tasks.append(llm_router.abatch_completion_fastest_response(**data))
-            else:
-                _models_csv_string = data.pop("model")
-                _models = [model.strip() for model in _models_csv_string.split(",")]
-                tasks.append(llm_router.abatch_completion(models=_models, **data))
-        elif "user_config" in data:
-            # initialize a new router instance. make request using this Router
-            router_config = data.pop("user_config")
-            user_router = litellm.Router(**router_config)
-            tasks.append(user_router.acompletion(**data))
-        elif (
-            llm_router is not None and data["model"] in router_model_names
-        ):  # model in router model list
-            tasks.append(llm_router.acompletion(**data))
-        elif (
-            llm_router is not None and data["model"] in llm_router.get_model_ids()
-        ):  # model in router model list
-            tasks.append(llm_router.acompletion(**data))
-        elif (
-            llm_router is not None
-            and llm_router.model_group_alias is not None
-            and data["model"] in llm_router.model_group_alias
-        ):  # model set in model_group_alias
-            tasks.append(llm_router.acompletion(**data))
-        elif (
-            llm_router is not None and data["model"] in llm_router.deployment_names
-        ):  # model in router deployments, calling a specific deployment on the router
-            tasks.append(llm_router.acompletion(**data, specific_deployment=True))
-        elif (
-            llm_router is not None
-            and data["model"] not in router_model_names
-            and llm_router.router_general_settings.pass_through_all_models is True
-        ):
-            tasks.append(litellm.acompletion(**data))
-        elif (
-            llm_router is not None
-            and data["model"] not in router_model_names
-            and (
-                llm_router.default_deployment is not None
-                or len(llm_router.provider_default_deployments) > 0
-            )
-        ):  # model in router deployments, calling a specific deployment on the router
-            tasks.append(llm_router.acompletion(**data))
-        elif user_model is not None:  # `litellm --model <your-model-name>`
-            tasks.append(litellm.acompletion(**data))
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={
-                    "error": "chat_completion: Invalid model name passed in model="
-                    + data.get("model", "")
-                },
-            )
+        llm_call = await route_request(
+            data=data,
+            route_type="acompletion",
+            llm_router=llm_router,
+            user_model=user_model,
+        )
+        tasks.append(llm_call)
 
         # wait for call to end
         llm_responses = asyncio.gather(
