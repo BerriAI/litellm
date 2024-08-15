@@ -44,6 +44,7 @@ def get_file_contents_from_s3(bucket_name, object_key):
         return config
     except ImportError:
         # this is most likely if a user is not using the litellm docker container
+        verbose_proxy_logger.error(f"ImportError: {str(e)}")
         pass
     except Exception as e:
         verbose_proxy_logger.error(f"Error retrieving file contents: {str(e)}")
