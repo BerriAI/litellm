@@ -25,6 +25,17 @@ else:
     LitellmRouter = Any
 
 
+ROUTE_ENDPOINT_MAPPING = {
+    "acompletion": "/chat/completions",
+    "atext_completion": "/completions",
+    "aembedding": "/embeddings",
+    "aimage_generation": "/image/generations",
+    "aspeech": "/audio/speech",
+    "atranscription": "/audio/transcriptions",
+    "amoderation": "/moderations",
+}
+
+
 async def route_request(
     data: dict,
     llm_router: Optional[LitellmRouter],
@@ -94,10 +105,12 @@ async def route_request(
     elif user_model is not None:
         return getattr(litellm, f"{route_type}")(**data)
 
+    # if no route found then it's a bad request
+    route_name = ROUTE_ENDPOINT_MAPPING.get(route_type, route_type)
     raise HTTPException(
         status_code=status.HTTP_400_BAD_REQUEST,
         detail={
-            "error": f"{route_type}: Invalid model name passed in model="
+            "error": f"{route_name}: Invalid model name passed in model="
             + data.get("model", "")
         },
     )
