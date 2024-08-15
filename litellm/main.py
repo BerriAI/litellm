@@ -4898,7 +4898,6 @@ async def ahealth_check(
         verbose_logger.error(
             "litellm.ahealth_check(): Exception occured - {}".format(str(e))
         )
-        verbose_logger.debug(traceback.format_exc())
         stack_trace = traceback.format_exc()
         if isinstance(stack_trace, str):
             stack_trace = stack_trace[:1000]
@@ -4907,7 +4906,12 @@ async def ahealth_check(
                 "error": "Missing `mode`. Set the `mode` for the model - https://docs.litellm.ai/docs/proxy/health#embedding-models"
             }
 
-        error_to_return = str(e) + " stack trace: " + stack_trace
+        error_to_return = (
+            str(e)
+            + "\nHave you set 'mode' - https://docs.litellm.ai/docs/proxy/health#embedding-models"
+            + "\nstack trace: "
+            + stack_trace
+        )
         return {"error": error_to_return}
 
 
