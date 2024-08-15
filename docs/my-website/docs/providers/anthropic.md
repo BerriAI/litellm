@@ -272,6 +272,16 @@ response = await litellm.acompletion(
 </TabItem>
 <TabItem value="proxy" label="LiteLLM Proxy">
 
+:::info
+
+LiteLLM Proxy is OpenAI compatible
+
+This is an example using the OpenAI Python SDK sending a request to LiteLLM Proxy
+
+Assuming you have a model=`anthropic/claude-3-5-sonnet-20240620` on the [litellm proxy config.yaml](#usage-with-litellm-proxy)
+
+:::
+
 ```python 
 import openai
 client = openai.AsyncOpenAI(
@@ -357,6 +367,16 @@ response = await litellm.acompletion(
 ```
 </TabItem>
 <TabItem value="proxy" label="LiteLLM Proxy">
+
+:::info
+
+LiteLLM Proxy is OpenAI compatible
+
+This is an example using the OpenAI Python SDK sending a request to LiteLLM Proxy
+
+Assuming you have a model=`anthropic/claude-3-5-sonnet-20240620` on the [litellm proxy config.yaml](#usage-with-litellm-proxy)
+
+:::
 
 ```python 
 import openai
@@ -465,6 +485,15 @@ response = await litellm.acompletion(
 </TabItem>
 <TabItem value="proxy" label="LiteLLM Proxy">
 
+:::info
+
+LiteLLM Proxy is OpenAI compatible
+
+This is an example using the OpenAI Python SDK sending a request to LiteLLM Proxy
+
+Assuming you have a model=`anthropic/claude-3-5-sonnet-20240620` on the [litellm proxy config.yaml](#usage-with-litellm-proxy)
+
+:::
 
 ```python 
 import openai
