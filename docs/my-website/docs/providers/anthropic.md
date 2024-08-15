@@ -234,8 +234,52 @@ Use Anthropic Prompt Caching
 
 ### Caching - Large Context Caching 
 
+This example demonstrates basic Prompt Caching usage, caching the full text of the legal agreement as a prefix while keeping the user instruction uncached.
+
+<Tabs>
+<TabItem value="sdk" label="LiteLLM SDK">
+
+```python 
+response = await litellm.acompletion(
+    model="anthropic/claude-3-5-sonnet-20240620",
+    messages=[
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "You are an AI assistant tasked with analyzing legal documents.",
+                },
+                {
+                    "type": "text",
+                    "text": "Here is the full text of a complex legal agreement",
+                    "cache_control": {"type": "ephemeral"},
+                },
+            ],
+        },
+        {
+            "role": "user",
+            "content": "what are the key terms and conditions in this agreement?",
+        },
+    ],
+    extra_headers={
+        "anthropic-version": "2023-06-01",
+        "anthropic-beta": "prompt-caching-2024-07-31",
+    },
+)
+
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+</TabItem>
+</Tabs>
+
 ### Caching - Tools definitions
 
+In this example, we demonstrate caching tool definitions.
+
+The cache_control parameter is placed on the final tool
 
 <Tabs>
 <TabItem value="sdk" label="LiteLLM SDK">
@@ -282,6 +326,11 @@ response = await litellm.acompletion(
 
 ### Caching - Continuing Multi-Turn Convo
 
+In this example, we demonstrate how to use Prompt Caching in a multi-turn conversation.
+
+The cache_control parameter is placed on the system message to designate it as part of the static prefix.
+
+The conversation history (previous messages) is included in the messages array. The final turn is marked with cache-control, for continuing in followups. The second-to-last user message is marked for caching with the cache_control parameter, so that this checkpoint can read from the previous cache.
 
 <Tabs>
 <TabItem value="sdk" label="LiteLLM SDK">
@@ -343,22 +392,7 @@ response = await litellm.acompletion(
 </TabItem>
 </Tabs>
 
-## Passing Extra Headers to Anthropic API 
-
-Pass `extra_headers: dict` to `litellm.completion`
-
-```python
-from litellm import completion
-messages = [{"role": "user", "content": "What is Anthropic?"}]
-response = completion(
-    model="claude-3-5-sonnet-20240620", 
-    messages=messages, 
-    extra_headers={"anthropic-beta": "max-tokens-3-5-sonnet-2024-07-15"}
-)
-```
-## Advanced
-
-## Usage - Function Calling 
+## **Function/Tool Calling**
 
 :::info 
 
@@ -545,6 +579,20 @@ resp = litellm.completion(
     ],
 )
 print(f"\nResponse: {resp}")
+```
+
+## **Passing Extra Headers to Anthropic API**
+
+Pass `extra_headers: dict` to `litellm.completion`
+
+```python
+from litellm import completion
+messages = [{"role": "user", "content": "What is Anthropic?"}]
+response = completion(
+    model="claude-3-5-sonnet-20240620", 
+    messages=messages, 
+    extra_headers={"anthropic-beta": "max-tokens-3-5-sonnet-2024-07-15"}
+)
 ```
 
 ## Usage - "Assistant Pre-fill"
