@@ -2074,7 +2074,8 @@
         "litellm_provider": "vertex_ai-anthropic_models",
         "mode": "chat",
         "supports_function_calling": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_assistant_prefill": true
     },
     "vertex_ai/claude-3-5-sonnet@20240620": {
         "max_tokens": 4096,
@@ -2085,7 +2086,8 @@
         "litellm_provider": "vertex_ai-anthropic_models",
         "mode": "chat",
         "supports_function_calling": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_assistant_prefill": true
     },
     "vertex_ai/claude-3-haiku@20240307": {
         "max_tokens": 4096, 
@@ -2096,7 +2098,8 @@
         "litellm_provider": "vertex_ai-anthropic_models",
         "mode": "chat",
         "supports_function_calling": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_assistant_prefill": true
     },
     "vertex_ai/claude-3-opus@20240229": {
         "max_tokens": 4096,
@@ -2107,7 +2110,8 @@
         "litellm_provider": "vertex_ai-anthropic_models",
         "mode": "chat",
         "supports_function_calling": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_assistant_prefill": true
     },
     "vertex_ai/meta/llama3-405b-instruct-maas": {
         "max_tokens": 32000,
@@ -4528,6 +4532,69 @@
         "max_output_tokens": 16384,
         "input_cost_per_token": 0.00000070, 
         "output_cost_per_token": 0.00000280,  
+        "litellm_provider": "perplexity", 
+        "mode": "chat" 
+    },
+    "perplexity/llama-3.1-70b-instruct": { 
+        "max_tokens": 131072,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 131072,
+        "input_cost_per_token": 0.000001, 
+        "output_cost_per_token": 0.000001,
+        "litellm_provider": "perplexity", 
+        "mode": "chat" 
+    },
+    "perplexity/llama-3.1-8b-instruct": { 
+        "max_tokens": 131072,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 131072,
+        "input_cost_per_token": 0.0000002, 
+        "output_cost_per_token": 0.0000002,  
+        "litellm_provider": "perplexity", 
+        "mode": "chat" 
+    },
+    "perplexity/llama-3.1-sonar-huge-128k-online": { 
+        "max_tokens": 127072,
+        "max_input_tokens": 127072,
+        "max_output_tokens": 127072,
+        "input_cost_per_token": 0.000005, 
+        "output_cost_per_token": 0.000005,
+        "litellm_provider": "perplexity", 
+        "mode": "chat" 
+    },
+    "perplexity/llama-3.1-sonar-large-128k-online": { 
+        "max_tokens": 127072,
+        "max_input_tokens": 127072,
+        "max_output_tokens": 127072,
+        "input_cost_per_token": 0.000001, 
+        "output_cost_per_token": 0.000001,
+        "litellm_provider": "perplexity", 
+        "mode": "chat" 
+    },
+    "perplexity/llama-3.1-sonar-large-128k-chat": { 
+        "max_tokens": 131072,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 131072,
+        "input_cost_per_token": 0.000001, 
+        "output_cost_per_token": 0.000001,
+        "litellm_provider": "perplexity", 
+        "mode": "chat" 
+    },
+    "perplexity/llama-3.1-sonar-small-128k-chat": { 
+        "max_tokens": 131072,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 131072,
+        "input_cost_per_token": 0.0000002, 
+        "output_cost_per_token": 0.0000002,  
+        "litellm_provider": "perplexity", 
+        "mode": "chat" 
+    },
+    "perplexity/llama-3.1-sonar-small-128k-online": { 
+        "max_tokens": 127072,
+        "max_input_tokens": 127072,
+        "max_output_tokens": 127072,
+        "input_cost_per_token": 0.0000002, 
+        "output_cost_per_token": 0.0000002,  
         "litellm_provider": "perplexity", 
         "mode": "chat" 
     },

@@ -361,7 +361,7 @@ class ChatCompletionToolMessage(TypedDict):
 
 class ChatCompletionSystemMessage(TypedDict, total=False):
     role: Required[Literal["system"]]
-    content: Required[str]
+    content: Required[Union[str, List]]
     name: str
 
 
