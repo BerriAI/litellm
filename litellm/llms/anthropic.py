@@ -35,6 +35,7 @@ from litellm.types.llms.anthropic import (
     AnthropicResponseContentBlockText,
     AnthropicResponseContentBlockToolUse,
     AnthropicResponseUsageBlock,
+    AnthropicSystemMessageContent,
     ContentBlockDelta,
     ContentBlockStart,
     ContentBlockStop,
@@ -907,7 +908,7 @@ class AnthropicChatCompletion(BaseLLM):
             # Separate system prompt from rest of message
             system_prompt_indices = []
             system_prompt = ""
-            system_prompt_dict = None
+            anthropic_system_message_list = None
             for idx, message in enumerate(messages):
                 if message["role"] == "system":
                     valid_content: bool = False
@@ -915,19 +916,24 @@ class AnthropicChatCompletion(BaseLLM):
                         system_prompt += message["content"]
                         valid_content = True
                     elif isinstance(message["content"], list):
-                        for content in message["content"]:
-                            system_prompt += content.get("text", "")
-                        valid_content = True
+                        for _content in message["content"]:
+                            anthropic_system_message_content = (
+                                AnthropicSystemMessageContent(
+                                    type=_content.get("type"),
+                                    text=_content.get("text"),
+                                )
+                            )
+                            if "cache_control" in _content:
+                                anthropic_system_message_content["cache_control"] = (
+                                    _content["cache_control"]
+                                )
 
-                    # Handle Anthropic API context caching
-                    if "cache_control" in message:
-                        system_prompt_dict = [
-                            {
-                                "cache_control": message["cache_control"],
-                                "text": system_prompt,
-                                "type": "text",
-                            }
-                        ]
+                            if anthropic_system_message_list is None:
+                                anthropic_system_message_list = []
+                            anthropic_system_message_list.append(
+                                anthropic_system_message_content
+                            )
+                        valid_content = True
 
                     if valid_content:
                         system_prompt_indices.append(idx)
@@ -938,8 +944,8 @@ class AnthropicChatCompletion(BaseLLM):
                 optional_params["system"] = system_prompt
 
             # Handling anthropic API Prompt Caching
-            if system_prompt_dict is not None:
-                optional_params["system"] = system_prompt_dict
+            if anthropic_system_message_list is not None:
+                optional_params["system"] = anthropic_system_message_list
             # Format rest of message according to anthropic guidelines
             try:
                 messages = prompt_factory(
