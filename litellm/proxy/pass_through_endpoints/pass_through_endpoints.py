@@ -23,6 +23,8 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
+router = APIRouter()
+
 
 async def set_env_variables_in_header(custom_headers: dict):
     """
@@ -476,3 +478,41 @@ async def initialize_pass_through_endpoints(pass_through_endpoints: list):
         )
 
         verbose_proxy_logger.debug("Added new pass through endpoint: %s", _path)
+
+
+@router.get(
+    "/config/pass_through_endpoint/{endpoint_id}",
+    tags=["Internal User management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def get_pass_through_endpoints(request: Request, endpoint_id: str):
+    """
+    GET configured pass through endpoint.
+
+    If no endpoint_id given, return all configured endpoints.
+    """
+    pass
+
+
+@router.post(
+    "/config/pass_through_endpoint",
+    tags=["Internal User management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def create_pass_through_endpoints(request: Request):
+    """
+    Create new pass-through endpoint
+    """
+    pass
+
+
+@router.delete(
+    "/config/pass_through_endpoint",
+    tags=["Internal User management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def delete_pass_through_endpoints(request: Request):
+    """
+    Create new pass-through endpoint
+    """
+    pass
