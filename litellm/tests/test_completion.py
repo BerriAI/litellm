@@ -14,7 +14,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 import os
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -3449,7 +3449,6 @@ def response_format_tests(response: litellm.ModelResponse):
     assert isinstance(response.usage.total_tokens, int)  # type: ignore
 
 
-@pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.parametrize(
     "model",
     [
@@ -3463,6 +3462,7 @@ def response_format_tests(response: litellm.ModelResponse):
         "cohere.command-text-v14",
     ],
 )
+@pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_completion_bedrock_httpx_models(sync_mode, model):
     litellm.set_verbose = True
