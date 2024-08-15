@@ -4479,7 +4479,22 @@ def _is_non_openai_azure_model(model: str) -> bool:
             or f"mistral/{model_name}" in litellm.mistral_chat_models
         ):
             return True
-    except:
+    except Exception:
+        return False
+    return False
+
+
+def _is_azure_openai_model(model: str) -> bool:
+    try:
+        if "/" in model:
+            model = model.split("/", 1)[1]
+        if (
+            model in litellm.open_ai_chat_completion_models
+            or model in litellm.open_ai_text_completion_models
+            or model in litellm.open_ai_embedding_models
+        ):
+            return True
+    except Exception:
         return False
     return False
 
@@ -4613,6 +4628,14 @@ def get_llm_provider(
             elif custom_llm_provider == "azure_ai":
                 api_base = api_base or get_secret("AZURE_AI_API_BASE")  # type: ignore
                 dynamic_api_key = api_key or get_secret("AZURE_AI_API_KEY")
+
+                if _is_azure_openai_model(model=model):
+                    verbose_logger.debug(
+                        "Model={} is Azure OpenAI model. Setting custom_llm_provider='azure'.".format(
+                            model
+                        )
+                    )
+                    custom_llm_provider = "azure"
             elif custom_llm_provider == "github":
                 api_base = api_base or get_secret("GITHUB_API_BASE") or "https://models.inference.ai.azure.com"  # type: ignore
                 dynamic_api_key = api_key or get_secret("GITHUB_API_KEY")
