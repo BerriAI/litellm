@@ -624,7 +624,7 @@ def completion_cost(
 
         if custom_llm_provider is not None and custom_llm_provider == "vertex_ai":
             # Calculate the prompt characters + response characters
-            if len("messages") > 0:
+            if len(messages) > 0:
                 prompt_string = litellm.utils.get_formatted_prompt(
                     data={"messages": messages}, call_type="completion"
                 )
