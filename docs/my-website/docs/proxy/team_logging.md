@@ -2,9 +2,9 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# 👥📊 Team Based Logging
+# 👥📊 Team/Key Based Logging
 
-Allow each team to use their own Langfuse Project / custom callbacks
+Allow each key/team to use their own Langfuse Project / custom callbacks
 
 **This allows you to do the following**
 ```
@@ -188,4 +188,40 @@ curl -X GET 'http://localhost:4000/team/dbe2f686-a686-4896-864a-4c3924458709/cal
 - [`GET /team/{team_id}/callback` - Get the success/failure callbacks and variables for a team](https://litellm-api.up.railway.app/#/team%20management/get_team_callbacks_team__team_id__callback_get)
 
 
+
+
+
+## [BETA] Key Based Logging 
+
+Use the `/key/generate` or `/key/update` endpoints to add logging callbacks to a specific key.
+
+:::info
+
+✨ This is an Enterprise only feature [Get Started with Enterprise here](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+
+:::
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/key/generate' \
+-H 'Authorization: Bearer sk-1234' \
+-H 'Content-Type: application/json' \
+-d '{
+    "metadata": {
+        "logging": {
+            "callback_name": "langfuse", # 'otel', 'langfuse', 'lunary'
+            "callback_type": "success" # set, if required by integration - future improvement, have logging tools work for success + failure by default 
+            "callback_vars": {
+                "langfuse_public_key": "os.environ/LANGFUSE_PUBLIC_KEY", # [RECOMMENDED] reference key in proxy environment
+                "langfuse_secret_key": "os.environ/LANGFUSE_SECRET_KEY", # [RECOMMENDED] reference key in proxy environment
+                "langfuse_host": "https://cloud.langfuse.com"
+            }
+        }
+    }
+}'
+
+```
+
+---
+
+Help us improve this feature, by filing a [ticket here](https://github.com/BerriAI/litellm/issues)
 
