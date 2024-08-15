@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 
 import litellm.types
 import litellm.types.utils
+from litellm.llms.anthropic import ModelResponseIterator
 
 load_dotenv()
 import io
@@ -148,6 +149,74 @@ def test_anthropic_completion_e2e(stream):
         assert content_block_started and content_block_finished
         assert finish_reason is not None
         assert message_stop_received is True
+
+
+anthropic_chunk_list = [
+    {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+    {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "To"}},
+    {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": " answer"}},
+    {"type": "content_block_delta", "index": 0,
+     "delta": {"type": "text_delta", "text": " your question about the weather"}},
+    {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": " in Boston and Los"}},
+    {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": " Angeles today, I'll"}},
+    {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": " need to"}},
+    {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": " use"}},
+    {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": " the"}},
+    {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": " get_current_weather"}},
+    {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": " function"}},
+    {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": " for"}},
+    {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": " both"}},
+    {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": " cities"}},
+    {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": ". Let"}},
+    {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": " me fetch"}},
+    {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": " that"}},
+    {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": " information"}},
+    {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": " for"}},
+    {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": " you."}},
+    {"type": "content_block_stop", "index": 0},
+    {"type": "content_block_start", "index": 1,
+     "content_block": {"type": "tool_use", "id": "toolu_12345", "name": "get_current_weather", "input": {}}},
+    {"type": "content_block_delta", "index": 1, "delta": {"type": "input_json_delta", "partial_json": ""}},
+    {"type": "content_block_delta", "index": 1, "delta": {"type": "input_json_delta", "partial_json": "{\"locat"}},
+    {"type": "content_block_delta", "index": 1, "delta": {"type": "input_json_delta", "partial_json": "ion\": \"Bos"}},
+    {"type": "content_block_delta", "index": 1, "delta": {"type": "input_json_delta", "partial_json": "ton, MA\"}"}},
+    {"type": "content_block_stop", "index": 1},
+    {"type": "content_block_start", "index": 2,
+     "content_block": {"type": "tool_use", "id": "toolu_023423423", "name": "get_current_weather", "input": {}}},
+    {"type": "content_block_delta", "index": 2, "delta": {"type": "input_json_delta", "partial_json": ""}},
+    {"type": "content_block_delta", "index": 2, "delta": {"type": "input_json_delta", "partial_json": "{\"l"}},
+    {"type": "content_block_delta", "index": 2, "delta": {"type": "input_json_delta", "partial_json": "oca"}},
+    {"type": "content_block_delta", "index": 2, "delta": {"type": "input_json_delta", "partial_json": "tio"}},
+    {"type": "content_block_delta", "index": 2, "delta": {"type": "input_json_delta", "partial_json": "n\": \"Lo"}},
+    {"type": "content_block_delta", "index": 2, "delta": {"type": "input_json_delta", "partial_json": "s Angel"}},
+    {"type": "content_block_delta", "index": 2, "delta": {"type": "input_json_delta", "partial_json": "es, CA\"}"}},
+    {"type": "content_block_stop", "index": 2},
+    {"type": "message_delta", "delta": {"stop_reason": "tool_use", "stop_sequence": None},
+     "usage": {"output_tokens": 137}},
+    {"type": "message_stop"}
+]
+
+
+def test_anthropic_tool_streaming():
+    """
+    OpenAI starts tool_use indexes at 0 for the first tool, regardless of preceding text.
+
+    Anthropic gives tool_use indexes starting at the first chunk, meaning they often start at 1
+    when they should start at 0
+    """
+    litellm.set_verbose = True
+    response_iter = ModelResponseIterator([], False)
+
+    # First index is 0, we'll start earlier because incrementing is easier
+    correct_tool_index = -1
+    for chunk in anthropic_chunk_list:
+        parsed_chunk = response_iter.chunk_parser(chunk)
+        if tool_use := parsed_chunk.get('tool_use'):
+
+            # We only increment when a new block starts
+            if tool_use.get('id') is not None:
+                correct_tool_index += 1
+            assert tool_use['index'] == correct_tool_index
 
 
 @pytest.mark.asyncio
