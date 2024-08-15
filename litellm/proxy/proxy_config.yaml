@@ -19,6 +19,9 @@ model_list:
     litellm_params:
       model: mistral/mistral-small-latest
       api_key: "os.environ/MISTRAL_API_KEY"
+  - model_name: bedrock-anthropic
+    litellm_params:
+      model: bedrock/anthropic.claude-3-sonnet-20240229-v1:0
   - model_name: gemini-1.5-pro-001
     litellm_params:
       model: vertex_ai_beta/gemini-1.5-pro-001
@@ -40,3 +43,6 @@ general_settings:
 litellm_settings:
   fallbacks: [{"gemini-1.5-pro-001": ["gpt-4o"]}]
   callbacks: ["gcs_bucket"]
+  success_callback: ["langfuse"]
+  langfuse_default_tags: ["cache_hit", "cache_key", "user_api_key_alias", "user_api_key_team_alias"]
+  cache: True
