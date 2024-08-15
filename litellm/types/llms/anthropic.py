@@ -94,6 +94,12 @@ class AnthropicMetadata(TypedDict, total=False):
     user_id: str
 
 
+class AnthropicSystemMessageContent(TypedDict, total=False):
+    type: str
+    text: str
+    cache_control: Optional[dict]
+
+
 class AnthropicMessagesRequest(TypedDict, total=False):
     model: Required[str]
     messages: Required[
@@ -108,7 +114,7 @@ class AnthropicMessagesRequest(TypedDict, total=False):
     metadata: AnthropicMetadata
     stop_sequences: List[str]
     stream: bool
-    system: str
+    system: Union[str, List]
     temperature: float
     tool_choice: AnthropicMessagesToolChoice
     tools: List[AnthropicMessagesTool]
