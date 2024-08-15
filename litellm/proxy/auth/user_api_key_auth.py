@@ -85,6 +85,8 @@ def _get_bearer_token(
 ):
     if api_key.startswith("Bearer "):  # ensure Bearer token passed in
         api_key = api_key.replace("Bearer ", "")  # extract the token
+    elif api_key.startswith("Basic "):
+        api_key = api_key.replace("Basic ", "")  # handle langfuse input
     else:
         api_key = ""
     return api_key
@@ -138,7 +140,6 @@ async def user_api_key_auth(
         pass_through_endpoints: Optional[List[dict]] = general_settings.get(
             "pass_through_endpoints", None
         )
-
         if isinstance(api_key, str):
             passed_in_key = api_key
             api_key = _get_bearer_token(api_key=api_key)
@@ -367,6 +368,40 @@ async def user_api_key_auth(
                     parent_otel_span=parent_otel_span,
                 )
         #### ELSE ####
+
+        ## CHECK PASS-THROUGH ENDPOINTS ##
+        if pass_through_endpoints is not None:
+            for endpoint in pass_through_endpoints:
+                if endpoint.get("path", "") == route:
+                    ## IF AUTH DISABLED
+                    if endpoint.get("auth") is not True:
+                        return UserAPIKeyAuth()
+                    ## IF AUTH ENABLED
+                    ### IF CUSTOM PARSER REQUIRED
+                    if (
+                        endpoint.get("custom_auth_parser") is not None
+                        and endpoint.get("custom_auth_parser") == "langfuse"
+                    ):
+                        """
+                        - langfuse returns {'Authorization': 'Basic YW55dGhpbmc6YW55dGhpbmc'}
+                        - check the langfuse public key if it contains the litellm api key
+                        """
+                        import base64
+
+                        api_key = api_key.replace("Basic ", "").strip()
+                        decoded_bytes = base64.b64decode(api_key)
+                        decoded_str = decoded_bytes.decode("utf-8")
+                        api_key = decoded_str.split(":")[0]
+                    else:
+                        headers = endpoint.get("headers", None)
+                        if headers is not None:
+                            header_key = headers.get("litellm_user_api_key", "")
+                            if (
+                                isinstance(request.headers, dict)
+                                and request.headers.get(key=header_key) is not None
+                            ):
+                                api_key = request.headers.get(key=header_key)
+
         if master_key is None:
             if isinstance(api_key, str):
                 return UserAPIKeyAuth(
@@ -533,7 +568,11 @@ async def user_api_key_auth(
         if isinstance(
             api_key, str
         ):  # if generated token, make sure it starts with sk-.
-            assert api_key.startswith("sk-")  # prevent token hashes from being used
+            assert api_key.startswith(
+                "sk-"
+            ), "LiteLLM Virtual Key expected. Received={}, expected to start with 'sk-'.".format(
+                api_key
+            )  # prevent token hashes from being used
         else:
             verbose_logger.warning(
                 "litellm.proxy.proxy_server.user_api_key_auth(): Warning - Key={} is not a string.".format(
