@@ -65,9 +65,10 @@ async def route_request(
         return getattr(user_router, f"{route_type}")(**data)
 
     elif (
-        "," in data.get("model", "")
+        route_type == "acompletion"
+        and data.get("model", "") is not None
+        and "," in data.get("model", "")
         and llm_router is not None
-        and route_type == "acompletion"
     ):
         if data.get("fastest_response", False):
             return llm_router.abatch_completion_fastest_response(**data)
