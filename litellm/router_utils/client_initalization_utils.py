@@ -190,7 +190,7 @@ def set_client(litellm_router_instance: LitellmRouter, model: dict):
                 if azure_ad_token.startswith("oidc/"):
                     azure_ad_token = get_azure_ad_token_from_oidc(azure_ad_token)
             if api_version is None:
-                api_version = litellm.AZURE_DEFAULT_API_VERSION
+                api_version = os.getenv("AZURE_API_VERSION", litellm.AZURE_DEFAULT_API_VERSION)
 
             if "gateway.ai.cloudflare.com" in api_base:
                 if not api_base.endswith("/"):
