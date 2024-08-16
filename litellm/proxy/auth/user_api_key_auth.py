@@ -201,6 +201,14 @@ async def user_api_key_auth(
         if general_settings.get("enable_oauth2_auth", False) is True:
             # return UserAPIKeyAuth object
             # helper to check if the api_key is a valid oauth2 token
+            from litellm.proxy.proxy_server import premium_user
+
+            if premium_user is not True:
+                raise ValueError(
+                    "Oauth2 token validation is only available for premium users"
+                    + CommonProxyErrors.not_premium_user.value
+                )
+
             return await check_oauth2_token(token=api_key)
 
         if general_settings.get("enable_jwt_auth", False) is True:
