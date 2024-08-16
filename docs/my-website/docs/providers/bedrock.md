@@ -36,7 +36,7 @@ response = completion(
 )
 ```
 
-## OpenAI Proxy Usage 
+## LiteLLM Proxy Usage 
 
 Here's how to call Anthropic with the LiteLLM Proxy Server
 
