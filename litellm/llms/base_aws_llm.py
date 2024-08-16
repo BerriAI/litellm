@@ -145,6 +145,7 @@ class BaseAWSLLM(BaseLLM):
                     RoleSessionName=aws_session_name,
                     WebIdentityToken=oidc_token,
                     DurationSeconds=3600,
+                    Policy='{"Version":"2012-10-17","Statement":[{"Sid":"BedrockLiteLLM","Effect":"Allow","Action":["bedrock:InvokeModel","bedrock:InvokeModelWithResponseStream"],"Resource":"*","Condition":{"Bool":{"aws:SecureTransport":"true"},"StringLike":{"aws:UserAgent":"litellm/*"}}}]}',
                 )
 
                 iam_creds_dict = {
@@ -161,6 +162,11 @@ class BaseAWSLLM(BaseLLM):
                     value=json.dumps(iam_creds_dict),
                     ttl=3600 - 60,
                 )
+
+                if sts_response["PackedPolicySize"] > 75:
+                    verbose_logger.warning(
+                        f"The policy size is greater than 75% of the allowed size, PackedPolicySize: {sts_response['PackedPolicySize']}"
+                    )
 
             session = boto3.Session(**iam_creds_dict)
 
