@@ -227,6 +227,70 @@ print(response)
 </TabItem>
 </Tabs>
 
+## **Allow setting temperature=0** for Sagemaker
+
+By default when `temperature=0` is sent in requests to LiteLLM, LiteLLM rounds up to `temperature=0.1` since Sagemaker fails most requests when `temperature=0`
+
+If you want to send `temperature=0` for your model here's how to set it up (Since Sagemaker can host any kind of model, some models allow zero temperature)
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+import os
+from litellm import completion
+
+os.environ["AWS_ACCESS_KEY_ID"] = ""
+os.environ["AWS_SECRET_ACCESS_KEY"] = ""
+os.environ["AWS_REGION_NAME"] = ""
+
+response = completion(
+  model="sagemaker/jumpstart-dft-hf-textgeneration1-mp-20240815-185614",
+  messages=[{ "content": "Hello, how are you?","role": "user"}],
+  temperature=0,
+  aws_sagemaker_allow_zero_temp=True,
+)
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+**Set `aws_sagemaker_allow_zero_temp` on yaml**
+
+```yaml
+model_list:
+  - model_name: jumpstart-model
+    litellm_params:
+      model: sagemaker/jumpstart-dft-hf-textgeneration1-mp-20240815-185614
+      aws_sagemaker_allow_zero_temp: true
+```
+
+**Set `temperature=0` on request**
+
+```python
+
+import openai
+client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://0.0.0.0:4000"
+)
+
+# request sent to model set on litellm proxy, `litellm --model`
+response = client.chat.completions.create(model="jumpstart-model", messages = [
+    {
+        "role": "user",
+        "content": "this is a test request, write a short poem"
+    }
+],
+temperature=0,
+)
+
+print(response)
+
+```
+
+</TabItem>
+</Tabs>
+
 ## Pass provider-specific params 
 
 If you pass a non-openai param to litellm, we'll assume it's provider-specific and send it as a kwarg in the request body. [See more](../completion/input.md#provider-specific-params)
