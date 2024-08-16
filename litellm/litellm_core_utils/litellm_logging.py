@@ -10,6 +10,7 @@ import sys
 import time
 import traceback
 import uuid
+from datetime import datetime as dt_object
 from typing import Any, Callable, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel
@@ -33,6 +34,8 @@ from litellm.types.utils import (
     EmbeddingResponse,
     ImageResponse,
     ModelResponse,
+    StandardLoggingMetadata,
+    StandardLoggingPayload,
     TextCompletionResponse,
     TranscriptionResponse,
 )
@@ -560,6 +563,14 @@ class Logging:
             self.model_call_details["log_event_type"] = "successful_api_call"
             self.model_call_details["end_time"] = end_time
             self.model_call_details["cache_hit"] = cache_hit
+            self.model_call_details["standard_logging_object"] = (
+                get_standard_logging_object_payload(
+                    kwargs=self.model_call_details,
+                    init_response_obj=result,
+                    start_time=start_time,
+                    end_time=end_time,
+                )
+            )
             ## if model in model cost map - log the response cost
             ## else set cost to None
             if (
@@ -2166,3 +2177,123 @@ def use_custom_pricing_for_model(litellm_params: Optional[dict]) -> bool:
             if k in SPECIAL_MODEL_INFO_PARAMS:
                 return True
     return False
+
+
+def get_standard_logging_object_payload(
+    kwargs: dict, init_response_obj: Any, start_time: dt_object, end_time: dt_object
+) -> Optional[StandardLoggingPayload]:
+    if kwargs is None:
+        kwargs = {}
+    if init_response_obj is None:
+        response_obj = {}
+    elif isinstance(init_response_obj, BaseModel):
+        response_obj = init_response_obj.model_dump()
+    elif isinstance(init_response_obj, dict):
+        response_obj = init_response_obj
+
+    # standardize this function to be used across, s3, dynamoDB, langfuse logging
+    litellm_params = kwargs.get("litellm_params", {})
+    proxy_server_request = litellm_params.get("proxy_server_request") or {}
+    end_user_id = proxy_server_request.get("body", {}).get("user", None)
+    metadata = (
+        litellm_params.get("metadata", {}) or {}
+    )  # if litellm_params['metadata'] == None
+    completion_start_time = kwargs.get("completion_start_time", end_time)
+    call_type = kwargs.get("call_type")
+    cache_hit = kwargs.get("cache_hit", False)
+    usage = response_obj.get("usage", None) or {}
+    if type(usage) == litellm.Usage:
+        usage = dict(usage)
+    id = response_obj.get("id", kwargs.get("litellm_call_id"))
+    api_key = metadata.get("user_api_key", "")
+    if api_key is not None and isinstance(api_key, str) and api_key.startswith("sk-"):
+        # redact the api key
+        api_key = "REDACTED-BY-LITELLM--contains-sk-keyword"
+
+    _model_id = metadata.get("model_info", {}).get("id", "")
+    _model_group = metadata.get("model_group", "")
+
+    request_tags = (
+        json.dumps(metadata.get("tags", []))
+        if isinstance(metadata.get("tags", []), list)
+        else "[]"
+    )
+
+    # cleanup timestamps
+    if isinstance(start_time, datetime.datetime):
+        start_time_float = start_time.timestamp()
+    if isinstance(end_time, datetime.datetime):
+        end_time_float = end_time.timestamp()
+    if isinstance(completion_start_time, datetime.datetime):
+        completion_start_time_float = completion_start_time.timestamp()
+
+    # clean up litellm metadata
+    clean_metadata = StandardLoggingMetadata(
+        user_api_key=None,
+        user_api_key_alias=None,
+        user_api_key_team_id=None,
+        user_api_key_user_id=None,
+        user_api_key_team_alias=None,
+        spend_logs_metadata=None,
+        requester_ip_address=None,
+    )
+    if isinstance(metadata, dict):
+        # Filter the metadata dictionary to include only the specified keys
+        clean_metadata = StandardLoggingMetadata(
+            **{  # type: ignore
+                key: metadata[key]
+                for key in StandardLoggingMetadata.__annotations__.keys()
+                if key in metadata
+            }
+        )
+
+    if litellm.cache is not None:
+        cache_key = litellm.cache.get_cache_key(**kwargs)
+    else:
+        cache_key = "Cache OFF"
+    if cache_hit is True:
+        import time
+
+        id = f"{id}_cache_hit{time.time()}"  # do not duplicate the request id
+
+    try:
+        payload: StandardLoggingPayload = StandardLoggingPayload(
+            id=str(id),
+            call_type=call_type or "",
+            api_key=str(api_key),
+            cache_hit=cache_hit,
+            startTime=start_time_float,
+            endTime=end_time_float,
+            completionStartTime=completion_start_time_float,
+            model=kwargs.get("model", "") or "",
+            user=metadata.get("user_api_key_user_id", "") or "",
+            team_id=metadata.get("user_api_key_team_id", "") or "",
+            metadata=clean_metadata,
+            cache_key=cache_key,
+            spend=kwargs.get("response_cost", 0),
+            total_tokens=usage.get("total_tokens", 0),
+            prompt_tokens=usage.get("prompt_tokens", 0),
+            completion_tokens=usage.get("completion_tokens", 0),
+            request_tags=request_tags,
+            end_user=end_user_id or "",
+            api_base=litellm_params.get("api_base", ""),
+            model_group=_model_group,
+            model_id=_model_id,
+            requester_ip_address=clean_metadata.get("requester_ip_address", None),
+            messages=kwargs.get("messages"),
+            response=response_obj,
+            model_parameters=kwargs.get("optional_params", None),
+        )
+
+        verbose_logger.debug(
+            "Standard Logging: created payload - payload: %s\n\n", payload
+        )
+
+        return payload
+    except Exception as e:
+        verbose_logger.warning(
+            "Error creating standard logging object - {}\n{}".format(
+                str(e), traceback.format_exc()
+            )
+        )
+        return None
