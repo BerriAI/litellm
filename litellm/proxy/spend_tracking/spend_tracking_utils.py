@@ -121,9 +121,7 @@ def get_logging_payload(
 
         return payload
     except Exception as e:
-        verbose_proxy_logger.error(
-            "Error creating spendlogs object - {}\n{}".format(
-                str(e), traceback.format_exc()
-            )
+        verbose_proxy_logger.exception(
+            "Error creating spendlogs object - {}".format(str(e))
         )
         raise e
