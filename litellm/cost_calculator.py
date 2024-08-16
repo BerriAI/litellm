@@ -422,14 +422,13 @@ def _select_model_name_for_cost_calc(
     3. If completion response has model set return that
     4. If model is passed in return that
     """
-    args = locals()
     if custom_pricing is True:
         return model
 
     if base_model is not None:
         return base_model
 
-    return_model = model
+    return_model = model or completion_response.get("model", "")  # type: ignore
     if hasattr(completion_response, "_hidden_params"):
         if (
             completion_response._hidden_params.get("model", None) is not None
