@@ -126,13 +126,18 @@ async def add_litellm_data_to_request(
 
     safe_add_api_version_from_query_params(data, request)
 
+    _headers = dict(request.headers)
+
     # Include original request and headers in the data
     data["proxy_server_request"] = {
         "url": str(request.url),
         "method": request.method,
-        "headers": dict(request.headers),
+        "headers": _headers,
         "body": copy.copy(data),  # use copy instead of deepcopy
     }
+
+    ## Forward any LLM API Provider specific headers in extra_headers
+    add_provider_specific_headers_to_request(data=data, headers=_headers)
 
     ## Cache Controls
     headers = request.headers
@@ -304,6 +309,31 @@ async def add_litellm_data_to_request(
                 data[k] = v
 
     return data
+
+
+def add_provider_specific_headers_to_request(
+    data: dict,
+    headers: dict,
+):
+    ANTHROPIC_API_HEADERS = [
+        "anthropic-version",
+        "anthropic-beta",
+    ]
+
+    extra_headers = data.get("extra_headers", {}) or {}
+
+    # boolean to indicate if a header was added
+    added_header = False
+    for header in ANTHROPIC_API_HEADERS:
+        if header in headers:
+            header_value = headers[header]
+            extra_headers.update({header: header_value})
+            added_header = True
+
+    if added_header is True:
+        data["extra_headers"] = extra_headers
+
+    return
 
 
 def _add_otel_traceparent_to_data(data: dict, request: Request):
