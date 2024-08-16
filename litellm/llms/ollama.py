@@ -601,12 +601,13 @@ def ollama_embeddings(
 ):
     return asyncio.run(
         ollama_aembeddings(
-            api_base,
-            model,
-            prompts,
-            optional_params,
-            logging_obj,
-            model_response,
-            encoding,
+            api_base=api_base,
+            model=model,
+            prompts=prompts,
+            model_response=model_response,
+            optional_params=optional_params,
+            logging_obj=logging_obj,
+            encoding=encoding,
         )
+
     )

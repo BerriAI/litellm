@@ -605,6 +605,12 @@ class LangFuseLogger:
             if "cache_key" in litellm.langfuse_default_tags:
                 _hidden_params = metadata.get("hidden_params", {}) or {}
                 _cache_key = _hidden_params.get("cache_key", None)
+                if _cache_key is None:
+                    # fallback to using "preset_cache_key"
+                    _preset_cache_key = kwargs.get("litellm_params", {}).get(
+                        "preset_cache_key", None
+                    )
+                    _cache_key = _preset_cache_key
                 tags.append(f"cache_key:{_cache_key}")
         return tags
 
@@ -676,7 +682,6 @@ def log_provider_specific_information_as_span(
     Returns:
         None
     """
-    from litellm.proxy.proxy_server import premium_user
 
     _hidden_params = clean_metadata.get("hidden_params", None)
     if _hidden_params is None:
