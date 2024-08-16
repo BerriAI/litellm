@@ -808,16 +808,11 @@ class AWSEventStreamDecoder:
         self.model = model
         self.parser = EventStreamJSONParser()
         self.content_blocks: List = []
-        self.index = 0
 
     def _chunk_parser(self, chunk_data: dict) -> GChunk:
         verbose_logger.debug("in sagemaker chunk parser, chunk_data %s", chunk_data)
         _token = chunk_data.get("token", {}) or {}
-        _index = chunk_data.get("index", None)
-        if _index is None:
-            _index = self.index
-            self.index += 1
-
+        _index = chunk_data.get("index", None) or 0
         is_finished = False
         finish_reason = ""
 
