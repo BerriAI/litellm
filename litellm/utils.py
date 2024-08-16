@@ -9579,7 +9579,8 @@ class CustomStreamWrapper:
             ):
 
                 if self.received_finish_reason is not None:
-                    raise StopIteration
+                    if "provider_specific_fields" not in chunk:
+                        raise StopIteration
                 anthropic_response_obj: GChunk = chunk
                 completion_obj["content"] = anthropic_response_obj["text"]
                 if anthropic_response_obj["is_finished"]:
@@ -9602,6 +9603,14 @@ class CustomStreamWrapper:
                 ):
                     completion_obj["tool_calls"] = [anthropic_response_obj["tool_use"]]
 
+                if (
+                    "provider_specific_fields" in anthropic_response_obj
+                    and anthropic_response_obj["provider_specific_fields"] is not None
+                ):
+                    for key, value in anthropic_response_obj[
+                        "provider_specific_fields"
+                    ].items():
+                        setattr(model_response, key, value)
                 response_obj = anthropic_response_obj
             elif (
                 self.custom_llm_provider
