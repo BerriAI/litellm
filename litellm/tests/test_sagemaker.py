@@ -51,6 +51,7 @@ def reset_callbacks():
 async def test_completion_sagemaker(sync_mode):
     try:
         litellm.set_verbose = True
+        verbose_logger.setLevel(logging.DEBUG)
         print("testing sagemaker")
         if sync_mode is True:
             response = litellm.completion(
