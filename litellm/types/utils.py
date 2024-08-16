@@ -1173,7 +1173,7 @@ class StandardLoggingMetadata(TypedDict):
     Specific metadata k,v pairs logged to integration for easier cost tracking
     """
 
-    user_api_key: Optional[str]
+    user_api_key_hash: Optional[str]  # hash of the litellm virtual key used
     user_api_key_alias: Optional[str]
     user_api_key_team_id: Optional[str]
     user_api_key_user_id: Optional[str]
@@ -1187,7 +1187,6 @@ class StandardLoggingMetadata(TypedDict):
 class StandardLoggingPayload(TypedDict):
     id: str
     call_type: str
-    api_key: str
     spend: float
     total_tokens: int
     prompt_tokens: int
@@ -1203,7 +1202,7 @@ class StandardLoggingPayload(TypedDict):
     metadata: StandardLoggingMetadata
     cache_hit: Optional[bool]
     cache_key: Optional[str]
-    request_tags: str  # json str
+    request_tags: list
     team_id: Optional[str]
     end_user: Optional[str]
     requester_ip_address: Optional[str]

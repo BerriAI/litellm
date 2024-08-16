@@ -5,6 +5,7 @@ import copy
 import datetime
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -2179,8 +2180,16 @@ def use_custom_pricing_for_model(litellm_params: Optional[dict]) -> bool:
     return False
 
 
+def is_valid_sha256_hash(value: str) -> bool:
+    # Check if the value is a valid SHA-256 hash (64 hexadecimal characters)
+    return bool(re.fullmatch(r"[a-fA-F0-9]{64}", value))
+
+
 def get_standard_logging_object_payload(
-    kwargs: dict, init_response_obj: Any, start_time: dt_object, end_time: dt_object
+    kwargs: Optional[dict],
+    init_response_obj: Any,
+    start_time: dt_object,
+    end_time: dt_object,
 ) -> Optional[StandardLoggingPayload]:
     if kwargs is None:
         kwargs = {}
@@ -2205,18 +2214,12 @@ def get_standard_logging_object_payload(
     if type(usage) == litellm.Usage:
         usage = dict(usage)
     id = response_obj.get("id", kwargs.get("litellm_call_id"))
-    api_key = metadata.get("user_api_key", "")
-    if api_key is not None and isinstance(api_key, str) and api_key.startswith("sk-"):
-        # redact the api key
-        api_key = "REDACTED-BY-LITELLM--contains-sk-keyword"
 
     _model_id = metadata.get("model_info", {}).get("id", "")
     _model_group = metadata.get("model_group", "")
 
     request_tags = (
-        json.dumps(metadata.get("tags", []))
-        if isinstance(metadata.get("tags", []), list)
-        else "[]"
+        metadata.get("tags", []) if isinstance(metadata.get("tags", []), list) else []
     )
 
     # cleanup timestamps
@@ -2229,7 +2232,7 @@ def get_standard_logging_object_payload(
 
     # clean up litellm metadata
     clean_metadata = StandardLoggingMetadata(
-        user_api_key=None,
+        user_api_key_hash=None,
         user_api_key_alias=None,
         user_api_key_team_id=None,
         user_api_key_user_id=None,
@@ -2247,6 +2250,12 @@ def get_standard_logging_object_payload(
             }
         )
 
+        if metadata.get("user_api_key") is not None:
+            if is_valid_sha256_hash(str(metadata.get("user_api_key"))):
+                clean_metadata["user_api_key_hash"] = metadata.get(
+                    "user_api_key"
+                )  # this is the hash
+
     if litellm.cache is not None:
         cache_key = litellm.cache.get_cache_key(**kwargs)
     else:
@@ -2260,7 +2269,6 @@ def get_standard_logging_object_payload(
         payload: StandardLoggingPayload = StandardLoggingPayload(
             id=str(id),
             call_type=call_type or "",
-            api_key=str(api_key),
             cache_hit=cache_hit,
             startTime=start_time_float,
             endTime=end_time_float,
