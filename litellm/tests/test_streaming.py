@@ -1683,6 +1683,7 @@ def test_completion_bedrock_mistral_stream():
         pytest.fail(f"Error occurred: {e}")
 
 
+@pytest.mark.skip(reason="stopped using TokenIterator")
 def test_sagemaker_weird_response():
     """
     When the stream ends, flush any remaining holding chunks.

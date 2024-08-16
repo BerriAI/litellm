@@ -597,7 +597,7 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {generalSettings.map((value, index) => (
+                  {generalSettings.filter((value) => value.field_type !== "TypedDictionary").map((value, index) => (
                     <TableRow key={index}>
                       <TableCell>
                         <Text>{value.field_name}</Text>
