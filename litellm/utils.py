@@ -9565,12 +9565,15 @@ class CustomStreamWrapper:
         try:
             # return this for all models
             completion_obj = {"content": ""}
+            from litellm.litellm_core_utils.streaming_utils import (
+                generic_chunk_has_all_required_fields,
+            )
             from litellm.types.utils import GenericStreamingChunk as GChunk
 
             if (
                 isinstance(chunk, dict)
-                and all(
-                    key in chunk for key in GChunk.__annotations__
+                and generic_chunk_has_all_required_fields(
+                    chunk=chunk
                 )  # check if chunk is a generic streaming chunk
             ) or (
                 self.custom_llm_provider
