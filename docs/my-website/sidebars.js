@@ -254,7 +254,6 @@ const sidebars = {
         "tutorials/huggingface_tutorial",
         "tutorials/TogetherAI_liteLLM",
         "tutorials/finetuned_chat_gpt",
-        "tutorials/sagemaker_llms",
         "tutorials/text_completion",
         "tutorials/first_playground",
         "tutorials/model_fallbacks",
