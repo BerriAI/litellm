@@ -85,7 +85,7 @@ litellm_settings:
 
 :::tip
 
-Looking for how to use Oauth 2.0 for /chat, /completions API requests to the proxy? [Follow this doc](.oauth2)
+Looking for how to use Oauth 2.0 for /chat, /completions API requests to the proxy? [Follow this doc](oauth2)
 
 :::
 
