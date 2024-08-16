@@ -119,8 +119,6 @@ class BaseAWSLLM(BaseLLM):
                     "aws_web_identity_token": aws_web_identity_token,
                     "aws_role_name": aws_role_name,
                     "aws_session_name": aws_session_name,
-                    "aws_region_name": aws_region_name,
-                    "aws_sts_endpoint": sts_endpoint,
                 }
             )
 
