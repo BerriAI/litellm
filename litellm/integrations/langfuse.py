@@ -366,12 +366,11 @@ class LangFuseLogger:
             clean_metadata = {}
             if isinstance(metadata, dict):
                 for key, value in metadata.items():
-
                     # generate langfuse tags - Default Tags sent to Langfuse from LiteLLM Proxy
                     if (
-                        litellm._langfuse_default_tags is not None
-                        and isinstance(litellm._langfuse_default_tags, list)
-                        and key in litellm._langfuse_default_tags
+                        litellm.langfuse_default_tags is not None
+                        and isinstance(litellm.langfuse_default_tags, list)
+                        and key in litellm.langfuse_default_tags
                     ):
                         tags.append(f"{key}:{value}")
 
@@ -385,6 +384,11 @@ class LangFuseLogger:
                         continue
                     else:
                         clean_metadata[key] = value
+
+            # Add default langfuse tags
+            tags = self.add_default_langfuse_tags(
+                tags=tags, kwargs=kwargs, metadata=metadata
+            )
 
             session_id = clean_metadata.pop("session_id", None)
             trace_name = clean_metadata.pop("trace_name", None)
@@ -468,9 +472,9 @@ class LangFuseLogger:
             clean_metadata["litellm_response_cost"] = cost
 
             if (
-                litellm._langfuse_default_tags is not None
-                and isinstance(litellm._langfuse_default_tags, list)
-                and "proxy_base_url" in litellm._langfuse_default_tags
+                litellm.langfuse_default_tags is not None
+                and isinstance(litellm.langfuse_default_tags, list)
+                and "proxy_base_url" in litellm.langfuse_default_tags
             ):
                 proxy_base_url = os.environ.get("PROXY_BASE_URL", None)
                 if proxy_base_url is not None:
@@ -583,6 +587,33 @@ class LangFuseLogger:
             verbose_logger.error(f"Langfuse Layer Error - {traceback.format_exc()}")
             return None, None
 
+    def add_default_langfuse_tags(self, tags, kwargs, metadata):
+        """
+        Helper function to add litellm default langfuse tags
+
+        - Special LiteLLM tags:
+            - cache_hit
+            - cache_key
+
+        """
+        if litellm.langfuse_default_tags is not None and isinstance(
+            litellm.langfuse_default_tags, list
+        ):
+            if "cache_hit" in litellm.langfuse_default_tags:
+                _cache_hit_value = kwargs.get("cache_hit", False)
+                tags.append(f"cache_hit:{_cache_hit_value}")
+            if "cache_key" in litellm.langfuse_default_tags:
+                _hidden_params = metadata.get("hidden_params", {}) or {}
+                _cache_key = _hidden_params.get("cache_key", None)
+                if _cache_key is None:
+                    # fallback to using "preset_cache_key"
+                    _preset_cache_key = kwargs.get("litellm_params", {}).get(
+                        "preset_cache_key", None
+                    )
+                    _cache_key = _preset_cache_key
+                tags.append(f"cache_key:{_cache_key}")
+        return tags
+
 
 def _add_prompt_to_generation_params(
     generation_params: dict, clean_metadata: dict
@@ -651,7 +682,6 @@ def log_provider_specific_information_as_span(
     Returns:
         None
     """
-    from litellm.proxy.proxy_server import premium_user
 
     _hidden_params = clean_metadata.get("hidden_params", None)
     if _hidden_params is None:

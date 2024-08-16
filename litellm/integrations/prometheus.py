@@ -141,42 +141,42 @@ class PrometheusLogger(CustomLogger):
                 ]
 
                 # Metric for deployment state
-                self.deployment_state = Gauge(
-                    "deployment_state",
+                self.litellm_deployment_state = Gauge(
+                    "litellm_deployment_state",
                     "LLM Deployment Analytics - The state of the deployment: 0 = healthy, 1 = partial outage, 2 = complete outage",
                     labelnames=_logged_llm_labels,
                 )
 
-                self.llm_deployment_success_responses = Counter(
-                    name="llm_deployment_success_responses",
+                self.litellm_deployment_success_responses = Counter(
+                    name="litellm_deployment_success_responses",
                     documentation="LLM Deployment Analytics - Total number of successful LLM API calls via litellm",
                     labelnames=_logged_llm_labels,
                 )
-                self.llm_deployment_failure_responses = Counter(
-                    name="llm_deployment_failure_responses",
+                self.litellm_deployment_failure_responses = Counter(
+                    name="litellm_deployment_failure_responses",
                     documentation="LLM Deployment Analytics - Total number of failed LLM API calls via litellm",
                     labelnames=_logged_llm_labels,
                 )
-                self.llm_deployment_total_requests = Counter(
-                    name="llm_deployment_total_requests",
+                self.litellm_deployment_total_requests = Counter(
+                    name="litellm_deployment_total_requests",
                     documentation="LLM Deployment Analytics - Total number of LLM API calls via litellm - success + failure",
                     labelnames=_logged_llm_labels,
                 )
 
                 # Deployment Latency tracking
-                self.llm_deployment_latency_per_output_token = Histogram(
-                    name="llm_deployment_latency_per_output_token",
+                self.litellm_deployment_latency_per_output_token = Histogram(
+                    name="litellm_deployment_latency_per_output_token",
                     documentation="LLM Deployment Analytics - Latency per output token",
                     labelnames=_logged_llm_labels,
                 )
 
-                self.llm_deployment_successful_fallbacks = Counter(
-                    "llm_deployment_successful_fallbacks",
+                self.litellm_deployment_successful_fallbacks = Counter(
+                    "litellm_deployment_successful_fallbacks",
                     "LLM Deployment Analytics - Number of successful fallback requests from primary model -> fallback model",
                     ["primary_model", "fallback_model"],
                 )
-                self.llm_deployment_failed_fallbacks = Counter(
-                    "llm_deployment_failed_fallbacks",
+                self.litellm_deployment_failed_fallbacks = Counter(
+                    "litellm_deployment_failed_fallbacks",
                     "LLM Deployment Analytics - Number of failed fallback requests from primary model -> fallback model",
                     ["primary_model", "fallback_model"],
                 )
@@ -358,14 +358,14 @@ class PrometheusLogger(CustomLogger):
                 api_provider=llm_provider,
             )
 
-            self.llm_deployment_failure_responses.labels(
+            self.litellm_deployment_failure_responses.labels(
                 litellm_model_name=litellm_model_name,
                 model_id=model_id,
                 api_base=api_base,
                 api_provider=llm_provider,
             ).inc()
 
-            self.llm_deployment_total_requests.labels(
+            self.litellm_deployment_total_requests.labels(
                 litellm_model_name=litellm_model_name,
                 model_id=model_id,
                 api_base=api_base,
@@ -438,14 +438,14 @@ class PrometheusLogger(CustomLogger):
                 api_provider=llm_provider,
             )
 
-            self.llm_deployment_success_responses.labels(
+            self.litellm_deployment_success_responses.labels(
                 litellm_model_name=litellm_model_name,
                 model_id=model_id,
                 api_base=api_base,
                 api_provider=llm_provider,
             ).inc()
 
-            self.llm_deployment_total_requests.labels(
+            self.litellm_deployment_total_requests.labels(
                 litellm_model_name=litellm_model_name,
                 model_id=model_id,
                 api_base=api_base,
@@ -475,7 +475,7 @@ class PrometheusLogger(CustomLogger):
             latency_per_token = None
             if output_tokens is not None and output_tokens > 0:
                 latency_per_token = _latency_seconds / output_tokens
-                self.llm_deployment_latency_per_output_token.labels(
+                self.litellm_deployment_latency_per_output_token.labels(
                     litellm_model_name=litellm_model_name,
                     model_id=model_id,
                     api_base=api_base,
@@ -497,7 +497,7 @@ class PrometheusLogger(CustomLogger):
             kwargs,
         )
         _new_model = kwargs.get("model")
-        self.llm_deployment_successful_fallbacks.labels(
+        self.litellm_deployment_successful_fallbacks.labels(
             primary_model=original_model_group, fallback_model=_new_model
         ).inc()
 
@@ -508,11 +508,11 @@ class PrometheusLogger(CustomLogger):
             kwargs,
         )
         _new_model = kwargs.get("model")
-        self.llm_deployment_failed_fallbacks.labels(
+        self.litellm_deployment_failed_fallbacks.labels(
             primary_model=original_model_group, fallback_model=_new_model
         ).inc()
 
-    def set_deployment_state(
+    def set_litellm_deployment_state(
         self,
         state: int,
         litellm_model_name: str,
@@ -520,7 +520,7 @@ class PrometheusLogger(CustomLogger):
         api_base: str,
         api_provider: str,
     ):
-        self.deployment_state.labels(
+        self.litellm_deployment_state.labels(
             litellm_model_name, model_id, api_base, api_provider
         ).set(state)
 
@@ -531,7 +531,7 @@ class PrometheusLogger(CustomLogger):
         api_base: str,
         api_provider: str,
     ):
-        self.set_deployment_state(
+        self.set_litellm_deployment_state(
             0, litellm_model_name, model_id, api_base, api_provider
         )
 
@@ -542,7 +542,7 @@ class PrometheusLogger(CustomLogger):
         api_base: str,
         api_provider: str,
     ):
-        self.set_deployment_state(
+        self.set_litellm_deployment_state(
             1, litellm_model_name, model_id, api_base, api_provider
         )
 
@@ -553,7 +553,7 @@ class PrometheusLogger(CustomLogger):
         api_base: str,
         api_provider: str,
     ):
-        self.set_deployment_state(
+        self.set_litellm_deployment_state(
             2, litellm_model_name, model_id, api_base, api_provider
         )
 

@@ -84,17 +84,20 @@ from litellm import completion
 # add to env var 
 os.environ["OPENAI_API_KEY"] = ""
 
-messages = [{"role": "user", "content": "List 5 cookie recipes"}]
+messages = [{"role": "user", "content": "List 5 important events in the XIX century"}]
 
 class CalendarEvent(BaseModel):
   name: str
   date: str
   participants: list[str]
 
+class EventsList(BaseModel):
+    events: list[CalendarEvent]
+
 resp = completion(
     model="gpt-4o-2024-08-06",
     messages=messages,
-    response_format=CalendarEvent
+    response_format=EventsList
 )
 
 print("Received={}".format(resp))

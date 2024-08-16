@@ -12,7 +12,7 @@ import json
 import secrets
 import traceback
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Optional, Tuple
 from uuid import uuid4
 
 import fastapi
@@ -85,6 +85,8 @@ def _get_bearer_token(
 ):
     if api_key.startswith("Bearer "):  # ensure Bearer token passed in
         api_key = api_key.replace("Bearer ", "")  # extract the token
+    elif api_key.startswith("Basic "):
+        api_key = api_key.replace("Basic ", "")  # handle langfuse input
     else:
         api_key = ""
     return api_key
@@ -123,20 +125,21 @@ async def user_api_key_auth(
         # Check 2. FILTER IP ADDRESS
         await check_if_request_size_is_safe(request=request)
 
-        is_valid_ip = _check_valid_ip(
-            allowed_ips=general_settings.get("allowed_ips", None), request=request
+        is_valid_ip, passed_in_ip = _check_valid_ip(
+            allowed_ips=general_settings.get("allowed_ips", None),
+            use_x_forwarded_for=general_settings.get("use_x_forwarded_for", False),
+            request=request,
         )
 
         if not is_valid_ip:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Access forbidden: IP address not allowed.",
+                detail=f"Access forbidden: IP address {passed_in_ip} not allowed.",
             )
 
         pass_through_endpoints: Optional[List[dict]] = general_settings.get(
             "pass_through_endpoints", None
         )
-
         if isinstance(api_key, str):
             passed_in_key = api_key
             api_key = _get_bearer_token(api_key=api_key)
@@ -365,6 +368,40 @@ async def user_api_key_auth(
                     parent_otel_span=parent_otel_span,
                 )
         #### ELSE ####
+
+        ## CHECK PASS-THROUGH ENDPOINTS ##
+        if pass_through_endpoints is not None:
+            for endpoint in pass_through_endpoints:
+                if endpoint.get("path", "") == route:
+                    ## IF AUTH DISABLED
+                    if endpoint.get("auth") is not True:
+                        return UserAPIKeyAuth()
+                    ## IF AUTH ENABLED
+                    ### IF CUSTOM PARSER REQUIRED
+                    if (
+                        endpoint.get("custom_auth_parser") is not None
+                        and endpoint.get("custom_auth_parser") == "langfuse"
+                    ):
+                        """
+                        - langfuse returns {'Authorization': 'Basic YW55dGhpbmc6YW55dGhpbmc'}
+                        - check the langfuse public key if it contains the litellm api key
+                        """
+                        import base64
+
+                        api_key = api_key.replace("Basic ", "").strip()
+                        decoded_bytes = base64.b64decode(api_key)
+                        decoded_str = decoded_bytes.decode("utf-8")
+                        api_key = decoded_str.split(":")[0]
+                    else:
+                        headers = endpoint.get("headers", None)
+                        if headers is not None:
+                            header_key = headers.get("litellm_user_api_key", "")
+                            if (
+                                isinstance(request.headers, dict)
+                                and request.headers.get(key=header_key) is not None
+                            ):
+                                api_key = request.headers.get(key=header_key)
+
         if master_key is None:
             if isinstance(api_key, str):
                 return UserAPIKeyAuth(
@@ -531,7 +568,11 @@ async def user_api_key_auth(
         if isinstance(
             api_key, str
         ):  # if generated token, make sure it starts with sk-.
-            assert api_key.startswith("sk-")  # prevent token hashes from being used
+            assert api_key.startswith(
+                "sk-"
+            ), "LiteLLM Virtual Key expected. Received={}, expected to start with 'sk-'.".format(
+                api_key
+            )  # prevent token hashes from being used
         else:
             verbose_logger.warning(
                 "litellm.proxy.proxy_server.user_api_key_auth(): Warning - Key={} is not a string.".format(
@@ -1206,23 +1247,29 @@ def _get_user_role(
     return role
 
 
-def _check_valid_ip(allowed_ips: Optional[List[str]], request: Request) -> bool:
+def _check_valid_ip(
+    allowed_ips: Optional[List[str]],
+    request: Request,
+    use_x_forwarded_for: Optional[bool] = False,
+) -> Tuple[bool, Optional[str]]:
     """
     Returns if ip is allowed or not
     """
     if allowed_ips is None:  # if not set, assume true
-        return True
+        return True, None
 
-    if request.client is not None:
+    # if general_settings.get("use_x_forwarded_for") is True then use x-forwarded-for
+    client_ip = None
+    if use_x_forwarded_for is True and "x-forwarded-for" in request.headers:
+        client_ip = request.headers["x-forwarded-for"]
+    elif request.client is not None:
         client_ip = request.client.host
-    else:
-        client_ip = None
 
     # Check if IP address is allowed
     if client_ip not in allowed_ips:
-        return False
+        return False, client_ip
 
-    return True
+    return True, client_ip
 
 
 def get_api_key_from_custom_header(

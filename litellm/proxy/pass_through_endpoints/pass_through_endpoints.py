@@ -309,7 +309,7 @@ async def pass_through_request(
             json=_parsed_body,
         )
 
-        if response.status_code != 200:
+        if response.status_code >= 300:
             raise HTTPException(status_code=response.status_code, detail=response.text)
 
         content = await response.aread()

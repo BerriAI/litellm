@@ -393,7 +393,7 @@ response = completion(
 )
 ```
 </TabItem>
-<TabItem value="proxy" label="LiteLLM Proxy Server">
+<TabItem value="proxy" label="Proxy on request">
 
 ```python
 
@@ -418,6 +418,55 @@ extra_body={
         "trace": "disabled",                   # The trace behavior for the guardrail. Can either be "disabled" or "enabled"
     },
 }
+)
+
+print(response)
+```
+</TabItem>
+<TabItem value="proxy-config" label="Proxy on config.yaml">
+
+1. Update config.yaml 
+
+```yaml
+model_list:
+  - model_name: bedrock-claude-v1
+    litellm_params:
+      model: bedrock/anthropic.claude-instant-v1
+      aws_access_key_id: os.environ/CUSTOM_AWS_ACCESS_KEY_ID
+      aws_secret_access_key: os.environ/CUSTOM_AWS_SECRET_ACCESS_KEY
+      aws_region_name: os.environ/CUSTOM_AWS_REGION_NAME
+      guardrailConfig: {
+        "guardrailIdentifier": "ff6ujrregl1q", # The identifier (ID) for the guardrail.
+        "guardrailVersion": "DRAFT",           # The version of the guardrail.
+        "trace": "disabled",                   # The trace behavior for the guardrail. Can either be "disabled" or "enabled"
+    }
+
+```
+
+2. Start proxy 
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+```python
+
+import openai
+client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://0.0.0.0:4000"
+)
+
+# request sent to model set on litellm proxy, `litellm --model`
+response = client.chat.completions.create(model="bedrock-claude-v1", messages = [
+    {
+        "role": "user",
+        "content": "this is a test request, write a short poem"
+    }
+],
+temperature=0.7
 )
 
 print(response)

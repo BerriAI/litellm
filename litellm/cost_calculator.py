@@ -490,6 +490,18 @@ def completion_cost(
             isinstance(completion_response, BaseModel)
             or isinstance(completion_response, dict)
         ):  # tts returns a custom class
+
+            usage_obj: Optional[Union[dict, litellm.Usage]] = completion_response.get(
+                "usage", {}
+            )
+            if isinstance(usage_obj, BaseModel) and not isinstance(
+                usage_obj, litellm.Usage
+            ):
+                setattr(
+                    completion_response,
+                    "usage",
+                    litellm.Usage(**usage_obj.model_dump()),
+                )
             # get input/output tokens from completion_response
             prompt_tokens = completion_response.get("usage", {}).get("prompt_tokens", 0)
             completion_tokens = completion_response.get("usage", {}).get(

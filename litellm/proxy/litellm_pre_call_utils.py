@@ -5,7 +5,12 @@ from fastapi import Request
 
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
-from litellm.proxy._types import CommonProxyErrors, TeamCallbackMetadata, UserAPIKeyAuth
+from litellm.proxy._types import (
+    AddTeamCallback,
+    CommonProxyErrors,
+    TeamCallbackMetadata,
+    UserAPIKeyAuth,
+)
 from litellm.types.utils import SupportedCacheControls
 
 if TYPE_CHECKING:
@@ -59,6 +64,42 @@ def safe_add_api_version_from_query_params(data: dict, request: Request):
         verbose_logger.error("error checking api version in query params: %s", str(e))
 
 
+def convert_key_logging_metadata_to_callback(
+    data: AddTeamCallback, team_callback_settings_obj: Optional[TeamCallbackMetadata]
+) -> TeamCallbackMetadata:
+    if team_callback_settings_obj is None:
+        team_callback_settings_obj = TeamCallbackMetadata()
+    if data.callback_type == "success":
+        if team_callback_settings_obj.success_callback is None:
+            team_callback_settings_obj.success_callback = []
+
+        if data.callback_name not in team_callback_settings_obj.success_callback:
+            team_callback_settings_obj.success_callback.append(data.callback_name)
+    elif data.callback_type == "failure":
+        if team_callback_settings_obj.failure_callback is None:
+            team_callback_settings_obj.failure_callback = []
+
+        if data.callback_name not in team_callback_settings_obj.failure_callback:
+            team_callback_settings_obj.failure_callback.append(data.callback_name)
+    elif data.callback_type == "success_and_failure":
+        if team_callback_settings_obj.success_callback is None:
+            team_callback_settings_obj.success_callback = []
+        if team_callback_settings_obj.failure_callback is None:
+            team_callback_settings_obj.failure_callback = []
+        if data.callback_name not in team_callback_settings_obj.success_callback:
+            team_callback_settings_obj.success_callback.append(data.callback_name)
+
+        if data.callback_name in team_callback_settings_obj.failure_callback:
+            team_callback_settings_obj.failure_callback.append(data.callback_name)
+
+    for var, value in data.callback_vars.items():
+        if team_callback_settings_obj.callback_vars is None:
+            team_callback_settings_obj.callback_vars = {}
+        team_callback_settings_obj.callback_vars[var] = litellm.get_secret(value)
+
+    return team_callback_settings_obj
+
+
 async def add_litellm_data_to_request(
     data: dict,
     request: Request,
@@ -85,13 +126,18 @@ async def add_litellm_data_to_request(
 
     safe_add_api_version_from_query_params(data, request)
 
+    _headers = dict(request.headers)
+
     # Include original request and headers in the data
     data["proxy_server_request"] = {
         "url": str(request.url),
         "method": request.method,
-        "headers": dict(request.headers),
+        "headers": _headers,
         "body": copy.copy(data),  # use copy instead of deepcopy
     }
+
+    ## Forward any LLM API Provider specific headers in extra_headers
+    add_provider_specific_headers_to_request(data=data, headers=_headers)
 
     ## Cache Controls
     headers = request.headers
@@ -177,7 +223,17 @@ async def add_litellm_data_to_request(
     requester_ip_address = ""
     if premium_user is True:
         # Only set the IP Address for Enterprise Users
+
+        # logic for tracking IP Address
         if (
+            general_settings is not None
+            and general_settings.get("use_x_forwarded_for") is True
+            and request is not None
+            and hasattr(request, "headers")
+            and "x-forwarded-for" in request.headers
+        ):
+            requester_ip_address = request.headers["x-forwarded-for"]
+        elif (
             request is not None
             and hasattr(request, "client")
             and hasattr(request.client, "host")
@@ -214,6 +270,7 @@ async def add_litellm_data_to_request(
             }  # add the team-specific configs to the completion call
 
     # Team Callbacks controls
+    callback_settings_obj: Optional[TeamCallbackMetadata] = None
     if user_api_key_dict.team_metadata is not None:
         team_metadata = user_api_key_dict.team_metadata
         if "callback_settings" in team_metadata:
@@ -231,15 +288,52 @@ async def add_litellm_data_to_request(
             }
             }
             """
-            data["success_callback"] = callback_settings_obj.success_callback
-            data["failure_callback"] = callback_settings_obj.failure_callback
+    elif (
+        user_api_key_dict.metadata is not None
+        and "logging" in user_api_key_dict.metadata
+    ):
+        for item in user_api_key_dict.metadata["logging"]:
 
-            if callback_settings_obj.callback_vars is not None:
-                # unpack callback_vars in data
-                for k, v in callback_settings_obj.callback_vars.items():
-                    data[k] = v
+            callback_settings_obj = convert_key_logging_metadata_to_callback(
+                data=AddTeamCallback(**item),
+                team_callback_settings_obj=callback_settings_obj,
+            )
+
+    if callback_settings_obj is not None:
+        data["success_callback"] = callback_settings_obj.success_callback
+        data["failure_callback"] = callback_settings_obj.failure_callback
+
+        if callback_settings_obj.callback_vars is not None:
+            # unpack callback_vars in data
+            for k, v in callback_settings_obj.callback_vars.items():
+                data[k] = v
 
     return data
+
+
+def add_provider_specific_headers_to_request(
+    data: dict,
+    headers: dict,
+):
+    ANTHROPIC_API_HEADERS = [
+        "anthropic-version",
+        "anthropic-beta",
+    ]
+
+    extra_headers = data.get("extra_headers", {}) or {}
+
+    # boolean to indicate if a header was added
+    added_header = False
+    for header in ANTHROPIC_API_HEADERS:
+        if header in headers:
+            header_value = headers[header]
+            extra_headers.update({header: header_value})
+            added_header = True
+
+    if added_header is True:
+        data["extra_headers"] = extra_headers
+
+    return
 
 
 def _add_otel_traceparent_to_data(data: dict, request: Request):

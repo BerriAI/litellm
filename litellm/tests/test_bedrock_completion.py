@@ -637,8 +637,47 @@ def test_bedrock_claude_3(image_url):
 
 
 @pytest.mark.parametrize(
+    "stop",
+    [""],
+)
+@pytest.mark.parametrize(
+    "model",
+    [
+        "anthropic.claude-3-sonnet-20240229-v1:0",
+        # "meta.llama3-70b-instruct-v1:0",
+        # "anthropic.claude-v2",
+        # "mistral.mixtral-8x7b-instruct-v0:1",
+    ],
+)
+def test_bedrock_stop_value(stop, model):
+    try:
+        litellm.set_verbose = True
+        data = {
+            "max_tokens": 100,
+            "stream": False,
+            "temperature": 0.3,
+            "messages": [
+                {"role": "user", "content": "hey, how's it going?"},
+            ],
+            "stop": stop,
+        }
+        response: ModelResponse = completion(
+            model="bedrock/{}".format(model),
+            **data,
+        )  # type: ignore
+        # Add any assertions here to check the response
+        assert len(response.choices) > 0
+        assert len(response.choices[0].message.content) > 0
+
+    except RateLimitError:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.parametrize(
     "system",
-    ["You are an AI", [{"type": "text", "text": "You are an AI"}]],
+    ["You are an AI", [{"type": "text", "text": "You are an AI"}], ""],
 )
 @pytest.mark.parametrize(
     "model",
@@ -1118,3 +1157,16 @@ def test_bedrock_tools_pt_invalid_names():
     assert len(result) == 2
     assert result[0]["toolSpec"]["name"] == "a123_invalid_name"
     assert result[1]["toolSpec"]["name"] == "another_invalid_name"
+
+
+def test_not_found_error():
+    with pytest.raises(litellm.NotFoundError):
+        completion(
+            model="bedrock/bad_model",
+            messages=[
+                {
+                    "role": "user",
+                    "content": "What is the meaning of life",
+                }
+            ],
+        )

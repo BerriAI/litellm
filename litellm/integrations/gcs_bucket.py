@@ -1,5 +1,6 @@
 import json
 import os
+import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional, TypedDict, Union
 
@@ -13,7 +14,7 @@ from litellm.litellm_core_utils.logging_utils import (
     convert_litellm_response_object_to_dict,
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from litellm.proxy._types import CommonProxyErrors, SpendLogsPayload
+from litellm.proxy._types import CommonProxyErrors, SpendLogsMetadata, SpendLogsPayload
 
 
 class RequestKwargs(TypedDict):
@@ -27,6 +28,10 @@ class GCSBucketPayload(TypedDict):
     response_obj: Optional[Dict]
     start_time: str
     end_time: str
+    response_cost: Optional[float]
+    spend_log_metadata: str
+    exception: Optional[str]
+    log_event_type: Optional[str]
 
 
 class GCSBucketLogger(CustomLogger):
@@ -77,12 +82,19 @@ class GCSBucketLogger(CustomLogger):
             logging_payload: GCSBucketPayload = await self.get_gcs_payload(
                 kwargs, response_obj, start_time_str, end_time_str
             )
+            logging_payload["log_event_type"] = "successful_api_call"
 
-            object_name = response_obj["id"]
+            json_logged_payload = json.dumps(logging_payload)
+
+            # Get the current date
+            current_date = datetime.now().strftime("%Y-%m-%d")
+
+            # Modify the object_name to include the date-based folder
+            object_name = f"{current_date}/{response_obj['id']}"
             response = await self.async_httpx_client.post(
                 headers=headers,
                 url=f"https://storage.googleapis.com/upload/storage/v1/b/{self.BUCKET_NAME}/o?uploadType=media&name={object_name}",
-                json=logging_payload,
+                data=json_logged_payload,
             )
 
             if response.status_code != 200:
@@ -95,7 +107,56 @@ class GCSBucketLogger(CustomLogger):
             verbose_logger.error("GCS Bucket logging error: %s", str(e))
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
-        pass
+        from litellm.proxy.proxy_server import premium_user
+
+        if premium_user is not True:
+            raise ValueError(
+                f"GCS Bucket logging is a premium feature. Please upgrade to use it. {CommonProxyErrors.not_premium_user.value}"
+            )
+        try:
+            verbose_logger.debug(
+                "GCS Logger: async_log_failure_event logging kwargs: %s, response_obj: %s",
+                kwargs,
+                response_obj,
+            )
+
+            start_time_str = start_time.strftime("%Y-%m-%d %H:%M:%S")
+            end_time_str = end_time.strftime("%Y-%m-%d %H:%M:%S")
+            headers = await self.construct_request_headers()
+
+            logging_payload: GCSBucketPayload = await self.get_gcs_payload(
+                kwargs, response_obj, start_time_str, end_time_str
+            )
+            logging_payload["log_event_type"] = "failed_api_call"
+
+            _litellm_params = kwargs.get("litellm_params") or {}
+            metadata = _litellm_params.get("metadata") or {}
+
+            json_logged_payload = json.dumps(logging_payload)
+
+            # Get the current date
+            current_date = datetime.now().strftime("%Y-%m-%d")
+
+            # Modify the object_name to include the date-based folder
+            object_name = f"{current_date}/failure-{uuid.uuid4().hex}"
+
+            if "gcs_log_id" in metadata:
+                object_name = metadata["gcs_log_id"]
+
+            response = await self.async_httpx_client.post(
+                headers=headers,
+                url=f"https://storage.googleapis.com/upload/storage/v1/b/{self.BUCKET_NAME}/o?uploadType=media&name={object_name}",
+                data=json_logged_payload,
+            )
+
+            if response.status_code != 200:
+                verbose_logger.error("GCS Bucket logging error: %s", str(response.text))
+
+            verbose_logger.debug("GCS Bucket response %s", response)
+            verbose_logger.debug("GCS Bucket status code %s", response.status_code)
+            verbose_logger.debug("GCS Bucket response.text %s", response.text)
+        except Exception as e:
+            verbose_logger.error("GCS Bucket logging error: %s", str(e))
 
     async def construct_request_headers(self) -> Dict[str, str]:
         from litellm import vertex_chat_completion
@@ -121,14 +182,35 @@ class GCSBucketLogger(CustomLogger):
     async def get_gcs_payload(
         self, kwargs, response_obj, start_time, end_time
     ) -> GCSBucketPayload:
+        from litellm.proxy.spend_tracking.spend_tracking_utils import (
+            get_logging_payload,
+        )
+
         request_kwargs = RequestKwargs(
             model=kwargs.get("model", None),
             messages=kwargs.get("messages", None),
             optional_params=kwargs.get("optional_params", None),
         )
         response_dict = {}
-        response_dict = convert_litellm_response_object_to_dict(
-            response_obj=response_obj
+        if response_obj:
+            response_dict = convert_litellm_response_object_to_dict(
+                response_obj=response_obj
+            )
+
+        exception_str = None
+
+        # Handle logging exception attributes
+        if "exception" in kwargs:
+            exception_str = kwargs.get("exception", "")
+            if not isinstance(exception_str, str):
+                exception_str = str(exception_str)
+
+        _spend_log_payload: SpendLogsPayload = get_logging_payload(
+            kwargs=kwargs,
+            response_obj=response_obj,
+            start_time=start_time,
+            end_time=end_time,
+            end_user_id=kwargs.get("end_user_id", None),
         )
 
         gcs_payload: GCSBucketPayload = GCSBucketPayload(
@@ -136,6 +218,10 @@ class GCSBucketLogger(CustomLogger):
             response_obj=response_dict,
             start_time=start_time,
             end_time=end_time,
+            spend_log_metadata=_spend_log_payload.get("metadata", ""),
+            response_cost=kwargs.get("response_cost", None),
+            exception=exception_str,
+            log_event_type=None,
         )
 
         return gcs_payload

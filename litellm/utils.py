@@ -1610,10 +1610,17 @@ def _select_tokenizer(model: str):
     # default - tiktoken
     else:
         tokenizer = None
+        if (
+            model in litellm.open_ai_chat_completion_models
+            or model in litellm.open_ai_text_completion_models
+            or model in litellm.open_ai_embedding_models
+        ):
+            return {"type": "openai_tokenizer", "tokenizer": encoding}
+
         try:
             tokenizer = Tokenizer.from_pretrained(model)
             return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
-        except:
+        except Exception:
             return {"type": "openai_tokenizer", "tokenizer": encoding}
 
 
@@ -4472,7 +4479,22 @@ def _is_non_openai_azure_model(model: str) -> bool:
             or f"mistral/{model_name}" in litellm.mistral_chat_models
         ):
             return True
-    except:
+    except Exception:
+        return False
+    return False
+
+
+def _is_azure_openai_model(model: str) -> bool:
+    try:
+        if "/" in model:
+            model = model.split("/", 1)[1]
+        if (
+            model in litellm.open_ai_chat_completion_models
+            or model in litellm.open_ai_text_completion_models
+            or model in litellm.open_ai_embedding_models
+        ):
+            return True
+    except Exception:
         return False
     return False
 
@@ -4606,6 +4628,14 @@ def get_llm_provider(
             elif custom_llm_provider == "azure_ai":
                 api_base = api_base or get_secret("AZURE_AI_API_BASE")  # type: ignore
                 dynamic_api_key = api_key or get_secret("AZURE_AI_API_KEY")
+
+                if _is_azure_openai_model(model=model):
+                    verbose_logger.debug(
+                        "Model={} is Azure OpenAI model. Setting custom_llm_provider='azure'.".format(
+                            model
+                        )
+                    )
+                    custom_llm_provider = "azure"
             elif custom_llm_provider == "github":
                 api_base = api_base or get_secret("GITHUB_API_BASE") or "https://models.inference.ai.azure.com"  # type: ignore
                 dynamic_api_key = api_key or get_secret("GITHUB_API_KEY")
@@ -8638,6 +8668,37 @@ class CustomStreamWrapper:
         except Exception as e:
             raise e
 
+    def safety_checker(self) -> None:
+        """
+        Fixes - https://github.com/BerriAI/litellm/issues/5158
+
+        if the model enters a loop and starts repeating the same chunk again, break out of loop and raise an internalservererror - allows for retries.
+
+        Raises - InternalServerError, if LLM enters infinite loop while streaming
+        """
+        if len(self.chunks) >= litellm.REPEATED_STREAMING_CHUNK_LIMIT:
+            # Get the last n chunks
+            last_chunks = self.chunks[-litellm.REPEATED_STREAMING_CHUNK_LIMIT :]
+
+            # Extract the relevant content from the chunks
+            last_contents = [chunk.choices[0].delta.content for chunk in last_chunks]
+
+            # Check if all extracted contents are identical
+            if all(content == last_contents[0] for content in last_contents):
+                if (
+                    last_contents[0] is not None
+                    and isinstance(last_contents[0], str)
+                    and len(last_contents[0]) > 2
+                ):  # ignore empty content - https://github.com/BerriAI/litellm/issues/5158#issuecomment-2287156946
+                    # All last n chunks are identical
+                    raise litellm.InternalServerError(
+                        message="The model is repeating the same chunk = {}.".format(
+                            last_contents[0]
+                        ),
+                        model="",
+                        llm_provider="",
+                    )
+
     def check_special_tokens(self, chunk: str, finish_reason: Optional[str]):
         """
         Output parse <s> / </s> special tokens for sagemaker + hf streaming.
@@ -9787,11 +9848,28 @@ class CustomStreamWrapper:
                     completion_obj["tool_calls"] = [response_obj["tool_use"]]
 
             elif self.custom_llm_provider == "sagemaker":
-                print_verbose(f"ENTERS SAGEMAKER STREAMING for chunk {chunk}")
-                response_obj = self.handle_sagemaker_stream(chunk)
+                from litellm.types.llms.bedrock import GenericStreamingChunk
+
+                if self.received_finish_reason is not None:
+                    raise StopIteration
+                response_obj: GenericStreamingChunk = chunk
                 completion_obj["content"] = response_obj["text"]
                 if response_obj["is_finished"]:
                     self.received_finish_reason = response_obj["finish_reason"]
+
+                if (
+                    self.stream_options
+                    and self.stream_options.get("include_usage", False) is True
+                    and response_obj["usage"] is not None
+                ):
+                    model_response.usage = litellm.Usage(
+                        prompt_tokens=response_obj["usage"]["inputTokens"],
+                        completion_tokens=response_obj["usage"]["outputTokens"],
+                        total_tokens=response_obj["usage"]["totalTokens"],
+                    )
+
+                if "tool_use" in response_obj and response_obj["tool_use"] is not None:
+                    completion_obj["tool_calls"] = [response_obj["tool_use"]]
             elif self.custom_llm_provider == "petals":
                 if len(self.completion_stream) == 0:
                     if self.received_finish_reason is not None:
@@ -10074,6 +10152,7 @@ class CustomStreamWrapper:
                     and len(completion_obj["tool_calls"]) > 0
                 )
             ):  # cannot set content of an OpenAI Object to be an empty string
+                self.safety_checker()
                 hold, model_response_str = self.check_special_tokens(
                     chunk=completion_obj["content"],
                     finish_reason=model_response.choices[0].finish_reason,
@@ -11255,6 +11334,34 @@ class ModelResponseIterator:
             raise StopAsyncIteration
         self.is_done = True
         return self.model_response
+
+
+class ModelResponseListIterator:
+    def __init__(self, model_responses):
+        self.model_responses = model_responses
+        self.index = 0
+
+    # Sync iterator
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self.index >= len(self.model_responses):
+            raise StopIteration
+        model_response = self.model_responses[self.index]
+        self.index += 1
+        return model_response
+
+    # Async iterator
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if self.index >= len(self.model_responses):
+            raise StopAsyncIteration
+        model_response = self.model_responses[self.index]
+        self.index += 1
+        return model_response
 
 
 class CustomModelResponseIterator(Iterable):

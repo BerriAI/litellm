@@ -181,9 +181,9 @@ class BraintrustLogger(CustomLogger):
 
                     # generate langfuse tags - Default Tags sent to Langfuse from LiteLLM Proxy
                     if (
-                        litellm._langfuse_default_tags is not None
-                        and isinstance(litellm._langfuse_default_tags, list)
-                        and key in litellm._langfuse_default_tags
+                        litellm.langfuse_default_tags is not None
+                        and isinstance(litellm.langfuse_default_tags, list)
+                        and key in litellm.langfuse_default_tags
                     ):
                         tags.append(f"{key}:{value}")
 
@@ -307,9 +307,9 @@ class BraintrustLogger(CustomLogger):
 
                     # generate langfuse tags - Default Tags sent to Langfuse from LiteLLM Proxy
                     if (
-                        litellm._langfuse_default_tags is not None
-                        and isinstance(litellm._langfuse_default_tags, list)
-                        and key in litellm._langfuse_default_tags
+                        litellm.langfuse_default_tags is not None
+                        and isinstance(litellm.langfuse_default_tags, list)
+                        and key in litellm.langfuse_default_tags
                     ):
                         tags.append(f"{key}:{value}")
 
