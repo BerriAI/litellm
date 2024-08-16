@@ -1,9 +1,3 @@
-import os
-from typing import Literal
-
-import httpx
-
-from litellm.llms.custom_httpx.http_handler import _get_async_httpx_client
 from litellm.proxy._types import UserAPIKeyAuth
 
 
@@ -20,6 +14,15 @@ async def check_oauth2_token(token: str) -> UserAPIKeyAuth:
     Raises:
     ValueError: If the token is invalid, the request fails, or the token info endpoint is not set.
     """
+    import os
+    from typing import Literal
+
+    import httpx
+
+    from litellm._logging import verbose_proxy_logger
+    from litellm.llms.custom_httpx.http_handler import _get_async_httpx_client
+
+    verbose_proxy_logger.debug("Oauth2 token validation for token=%s", token)
     # Get the token info endpoint from environment variable
     token_info_endpoint = os.getenv("OAUTH_TOKEN_INFO_ENDPOINT")
     user_id_field_name = os.environ.get("OAUTH_USER_ID_FIELD_NAME", "sub")
@@ -30,7 +33,6 @@ async def check_oauth2_token(token: str) -> UserAPIKeyAuth:
         raise ValueError("OAUTH_TOKEN_INFO_ENDPOINT environment variable is not set")
 
     client = _get_async_httpx_client()
-
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
     try:
@@ -41,6 +43,12 @@ async def check_oauth2_token(token: str) -> UserAPIKeyAuth:
 
         # If we get here, the request was successful
         data = response.json()
+
+        verbose_proxy_logger.debug(
+            "Oauth2 token validation for token=%s, response from /token/info=%s",
+            token,
+            data,
+        )
 
         # You might want to add additional checks here based on the response
         # For example, checking if the token is expired or has the correct scope
