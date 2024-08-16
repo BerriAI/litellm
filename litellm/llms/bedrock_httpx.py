@@ -1365,6 +1365,10 @@ class BedrockConverseLLM(BaseAWSLLM):
         )
         setattr(model_response, "usage", usage)
 
+        # Add "trace" from Bedrock guardrails - if user has opted in to returning it
+        if "trace" in completion_response:
+            setattr(model_response, "trace", completion_response["trace"])
+
         return model_response
 
     def encode_model_id(self, model_id: str) -> str:
@@ -1900,6 +1904,10 @@ class AWSEventStreamDecoder:
                 usage=usage,
                 index=index,
             )
+
+            if "trace" in chunk_data:
+                trace = chunk_data.get("trace")
+                response["provider_specific_fields"] = {"trace": trace}
             return response
         except Exception as e:
             raise Exception("Received streaming error - {}".format(str(e)))
@@ -1920,6 +1928,7 @@ class AWSEventStreamDecoder:
             "contentBlockIndex" in chunk_data
             or "stopReason" in chunk_data
             or "metrics" in chunk_data
+            or "trace" in chunk_data
         ):
             return self.converse_chunk_parser(chunk_data=chunk_data)
         ######## bedrock.mistral mappings ###############
