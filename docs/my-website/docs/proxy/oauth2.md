@@ -2,6 +2,12 @@
 
 Use this if you want to use an Oauth2.0 token to make `/chat`, `/embeddings` requests to the LiteLLM Proxy
 
+:::info
+
+This is an Enterprise Feature - [get in touch with us if you want a free trial to test if this feature meets your needs]((https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat))
+
+:::
+
 ## Usage 
 
 1. Set env vars:
