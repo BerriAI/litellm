@@ -3223,7 +3223,8 @@ def get_optional_params(
             if temperature == 0.0 or temperature == 0:
                 # hugging face exception raised when temp==0
                 # Failed: Error occurred: HuggingfaceException - Input validation error: `temperature` must be strictly positive
-                temperature = 0.01
+                if not passed_params.get("aws_sagemaker_allow_zero_temp", False):
+                    temperature = 0.01
             optional_params["temperature"] = temperature
         if top_p is not None:
             optional_params["top_p"] = top_p
@@ -3242,6 +3243,7 @@ def get_optional_params(
             if max_tokens == 0:
                 max_tokens = 1
             optional_params["max_new_tokens"] = max_tokens
+        passed_params.pop("aws_sagemaker_allow_zero_temp", None)
     elif custom_llm_provider == "bedrock":
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider
