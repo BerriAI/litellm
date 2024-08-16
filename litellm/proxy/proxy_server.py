@@ -9473,11 +9473,10 @@ async def get_config_list(
             typed_dict_type = allowed_args[field_name]["type"]
 
             if typed_dict_type == "PydanticModel":
-                pydantic_class_list: Optional[Any] = _resolve_pydantic_type(
-                    field_info.annotation
-                )
-                if pydantic_class_list is None:
-                    continue
+                if field_name == "pass_through_endpoints":
+                    pydantic_class_list = [PassThroughGenericEndpoint]
+                else:
+                    pydantic_class_list = []
 
                 for pydantic_class in pydantic_class_list:
                     # Get type hints from the TypedDict to create FieldDetail objects
