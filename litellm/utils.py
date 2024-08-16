@@ -9848,11 +9848,28 @@ class CustomStreamWrapper:
                     completion_obj["tool_calls"] = [response_obj["tool_use"]]
 
             elif self.custom_llm_provider == "sagemaker":
-                print_verbose(f"ENTERS SAGEMAKER STREAMING for chunk {chunk}")
-                response_obj = self.handle_sagemaker_stream(chunk)
+                from litellm.types.llms.bedrock import GenericStreamingChunk
+
+                if self.received_finish_reason is not None:
+                    raise StopIteration
+                response_obj: GenericStreamingChunk = chunk
                 completion_obj["content"] = response_obj["text"]
                 if response_obj["is_finished"]:
                     self.received_finish_reason = response_obj["finish_reason"]
+
+                if (
+                    self.stream_options
+                    and self.stream_options.get("include_usage", False) is True
+                    and response_obj["usage"] is not None
+                ):
+                    model_response.usage = litellm.Usage(
+                        prompt_tokens=response_obj["usage"]["inputTokens"],
+                        completion_tokens=response_obj["usage"]["outputTokens"],
+                        total_tokens=response_obj["usage"]["totalTokens"],
+                    )
+
+                if "tool_use" in response_obj and response_obj["tool_use"] is not None:
+                    completion_obj["tool_calls"] = [response_obj["tool_use"]]
             elif self.custom_llm_provider == "petals":
                 if len(self.completion_stream) == 0:
                     if self.received_finish_reason is not None:
