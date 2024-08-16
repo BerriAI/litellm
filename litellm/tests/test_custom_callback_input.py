@@ -1205,7 +1205,11 @@ def test_standard_logging_payload(model):
             is not None
         )
 
-        print(mock_client.call_args.kwargs["kwargs"]["standard_logging_object"])
+        print(
+            "Standard Logging Object - {}".format(
+                mock_client.call_args.kwargs["kwargs"]["standard_logging_object"]
+            )
+        )
 
         keys_list = list(StandardLoggingPayload.__annotations__.keys())
 
