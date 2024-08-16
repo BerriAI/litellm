@@ -1082,10 +1082,18 @@ class DynamoDBArgs(LiteLLMBase):
     assume_role_aws_session_name: Optional[str] = None
 
 
-class PassThroughEndpointTypedDict(TypedDict):
-    path: str
-    target: str
-    headers: dict
+class PassThroughGenericEndpoint(LiteLLMBase):
+    path: str = Field(description="The route to be added to the LiteLLM Proxy Server.")
+    target: str = Field(
+        description="The URL to which requests for this path should be forwarded."
+    )
+    headers: dict = Field(
+        description="Key-value pairs of headers to be forwarded with the request. You can set any key value pair here and it will be forwarded to your target endpoint"
+    )
+
+
+class PassThroughEndpointResponse(LiteLLMBase):
+    endpoints: List[PassThroughGenericEndpoint]
 
 
 class ConfigFieldUpdate(LiteLLMBase):
@@ -1104,6 +1112,7 @@ class FieldDetail(BaseModel):
     field_type: str
     field_description: str
     field_default_value: Any = None
+    stored_in_db: Optional[bool]
 
 
 class ConfigList(LiteLLMBase):
@@ -1219,7 +1228,7 @@ class ConfigGeneralSettings(LiteLLMBase):
         default=False,
         description="Public model hub for users to see what models they have access to, supported openai params, etc.",
     )
-    pass_through_endpoints: Optional[PassThroughEndpointTypedDict] = Field(
+    pass_through_endpoints: Optional[List[PassThroughGenericEndpoint]] = Field(
         default=None,
         description="Set-up pass-through endpoints for provider-specific endpoints. Docs - https://docs.litellm.ai/docs/proxy/pass_through",
     )
@@ -1781,3 +1790,9 @@ class VirtualKeyEvent(LiteLLMBase):
     created_by_user_role: str
     created_by_key_alias: Optional[str]
     request_kwargs: dict
+
+
+class CreatePassThroughEndpoint(LiteLLMBase):
+    path: str
+    target: str
+    headers: dict
