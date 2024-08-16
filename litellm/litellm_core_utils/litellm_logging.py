@@ -2300,7 +2300,7 @@ def get_standard_logging_object_payload(
         base_model = _get_base_model_from_metadata(model_call_details=kwargs)
         custom_pricing = use_custom_pricing_for_model(litellm_params=litellm_params)
         model_cost_name = _select_model_name_for_cost_calc(
-            model=kwargs.get("model"),
+            model=None,
             completion_response=init_response_obj,
             base_model=base_model,
             custom_pricing=custom_pricing,
