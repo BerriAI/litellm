@@ -2194,100 +2194,106 @@ def get_standard_logging_object_payload(
     start_time: dt_object,
     end_time: dt_object,
 ) -> Optional[StandardLoggingPayload]:
-    if kwargs is None:
-        kwargs = {}
-
-    hidden_params: Optional[dict] = None
-    if init_response_obj is None:
-        response_obj = {}
-    elif isinstance(init_response_obj, BaseModel):
-        response_obj = init_response_obj.model_dump()
-        hidden_params = getattr(init_response_obj, "_hidden_params", None)
-    elif isinstance(init_response_obj, dict):
-        response_obj = init_response_obj
-
-    # standardize this function to be used across, s3, dynamoDB, langfuse logging
-    litellm_params = kwargs.get("litellm_params", {})
-    proxy_server_request = litellm_params.get("proxy_server_request") or {}
-    end_user_id = proxy_server_request.get("body", {}).get("user", None)
-    metadata = (
-        litellm_params.get("metadata", {}) or {}
-    )  # if litellm_params['metadata'] == None
-    completion_start_time = kwargs.get("completion_start_time", end_time)
-    call_type = kwargs.get("call_type")
-    cache_hit = kwargs.get("cache_hit", False)
-    usage = response_obj.get("usage", None) or {}
-    if type(usage) == litellm.Usage:
-        usage = dict(usage)
-    id = response_obj.get("id", kwargs.get("litellm_call_id"))
-
-    _model_id = metadata.get("model_info", {}).get("id", "")
-    _model_group = metadata.get("model_group", "")
-
-    request_tags = (
-        metadata.get("tags", []) if isinstance(metadata.get("tags", []), list) else []
-    )
-
-    # cleanup timestamps
-    if isinstance(start_time, datetime.datetime):
-        start_time_float = start_time.timestamp()
-    if isinstance(end_time, datetime.datetime):
-        end_time_float = end_time.timestamp()
-    if isinstance(completion_start_time, datetime.datetime):
-        completion_start_time_float = completion_start_time.timestamp()
-
-    # clean up litellm hidden params
-    clean_hidden_params = StandardLoggingHiddenParams(
-        model_id=None,
-        cache_key=None,
-        api_base=None,
-        response_cost=None,
-        additional_headers=None,
-    )
-    if hidden_params is not None:
-        clean_hidden_params = StandardLoggingHiddenParams(
-            **{  # type: ignore
-                key: hidden_params[key]
-                for key in StandardLoggingHiddenParams.__annotations__.keys()
-                if key in hidden_params
-            }
-        )
-    # clean up litellm metadata
-    clean_metadata = StandardLoggingMetadata(
-        user_api_key_hash=None,
-        user_api_key_alias=None,
-        user_api_key_team_id=None,
-        user_api_key_user_id=None,
-        user_api_key_team_alias=None,
-        spend_logs_metadata=None,
-        requester_ip_address=None,
-    )
-    if isinstance(metadata, dict):
-        # Filter the metadata dictionary to include only the specified keys
-        clean_metadata = StandardLoggingMetadata(
-            **{  # type: ignore
-                key: metadata[key]
-                for key in StandardLoggingMetadata.__annotations__.keys()
-                if key in metadata
-            }
-        )
-
-        if metadata.get("user_api_key") is not None:
-            if is_valid_sha256_hash(str(metadata.get("user_api_key"))):
-                clean_metadata["user_api_key_hash"] = metadata.get(
-                    "user_api_key"
-                )  # this is the hash
-
-    if litellm.cache is not None:
-        cache_key = litellm.cache.get_cache_key(**kwargs)
-    else:
-        cache_key = None
-    if cache_hit is True:
-        import time
-
-        id = f"{id}_cache_hit{time.time()}"  # do not duplicate the request id
-
     try:
+        if kwargs is None:
+            kwargs = {}
+
+        hidden_params: Optional[dict] = None
+        if init_response_obj is None:
+            response_obj = {}
+        elif isinstance(init_response_obj, BaseModel):
+            response_obj = init_response_obj.model_dump()
+            hidden_params = getattr(init_response_obj, "_hidden_params", None)
+        else:
+            response_obj = {}
+        # standardize this function to be used across, s3, dynamoDB, langfuse logging
+        litellm_params = kwargs.get("litellm_params", {})
+        proxy_server_request = litellm_params.get("proxy_server_request") or {}
+        end_user_id = proxy_server_request.get("body", {}).get("user", None)
+        metadata = (
+            litellm_params.get("metadata", {}) or {}
+        )  # if litellm_params['metadata'] == None
+        completion_start_time = kwargs.get("completion_start_time", end_time)
+        call_type = kwargs.get("call_type")
+        cache_hit = kwargs.get("cache_hit", False)
+        usage = response_obj.get("usage", None) or {}
+        if type(usage) == litellm.Usage:
+            usage = dict(usage)
+        id = response_obj.get("id", kwargs.get("litellm_call_id"))
+
+        _model_id = metadata.get("model_info", {}).get("id", "")
+        _model_group = metadata.get("model_group", "")
+
+        request_tags = (
+            metadata.get("tags", [])
+            if isinstance(metadata.get("tags", []), list)
+            else []
+        )
+
+        # cleanup timestamps
+        if isinstance(start_time, datetime.datetime):
+            start_time_float = start_time.timestamp()
+        elif isinstance(start_time, float):
+            start_time_float = start_time
+        if isinstance(end_time, datetime.datetime):
+            end_time_float = end_time.timestamp()
+        elif isinstance(end_time, float):
+            end_time_float = end_time
+        if isinstance(completion_start_time, datetime.datetime):
+            completion_start_time_float = completion_start_time.timestamp()
+        elif isinstance(completion_start_time, float):
+            completion_start_time_float = completion_start_time
+        # clean up litellm hidden params
+        clean_hidden_params = StandardLoggingHiddenParams(
+            model_id=None,
+            cache_key=None,
+            api_base=None,
+            response_cost=None,
+            additional_headers=None,
+        )
+        if hidden_params is not None:
+            clean_hidden_params = StandardLoggingHiddenParams(
+                **{  # type: ignore
+                    key: hidden_params[key]
+                    for key in StandardLoggingHiddenParams.__annotations__.keys()
+                    if key in hidden_params
+                }
+            )
+        # clean up litellm metadata
+        clean_metadata = StandardLoggingMetadata(
+            user_api_key_hash=None,
+            user_api_key_alias=None,
+            user_api_key_team_id=None,
+            user_api_key_user_id=None,
+            user_api_key_team_alias=None,
+            spend_logs_metadata=None,
+            requester_ip_address=None,
+        )
+        if isinstance(metadata, dict):
+            # Filter the metadata dictionary to include only the specified keys
+            clean_metadata = StandardLoggingMetadata(
+                **{  # type: ignore
+                    key: metadata[key]
+                    for key in StandardLoggingMetadata.__annotations__.keys()
+                    if key in metadata
+                }
+            )
+
+            if metadata.get("user_api_key") is not None:
+                if is_valid_sha256_hash(str(metadata.get("user_api_key"))):
+                    clean_metadata["user_api_key_hash"] = metadata.get(
+                        "user_api_key"
+                    )  # this is the hash
+
+        if litellm.cache is not None:
+            cache_key = litellm.cache.get_cache_key(**kwargs)
+        else:
+            cache_key = None
+        if cache_hit is True:
+            import time
+
+            id = f"{id}_cache_hit{time.time()}"  # do not duplicate the request id
+
         payload: StandardLoggingPayload = StandardLoggingPayload(
             id=str(id),
             call_type=call_type or "",
@@ -2309,7 +2315,9 @@ def get_standard_logging_object_payload(
             model_id=_model_id,
             requester_ip_address=clean_metadata.get("requester_ip_address", None),
             messages=kwargs.get("messages"),
-            response=response_obj,
+            response=(
+                response_obj if len(response_obj.keys()) > 0 else init_response_obj
+            ),
             model_parameters=kwargs.get("optional_params", None),
             hidden_params=clean_hidden_params,
         )
