@@ -88,6 +88,9 @@ class GenericStreamingChunk(TypedDict, total=False):
     usage: Optional[ChatCompletionUsageBlock]
     index: int
 
+    # use this dict if you want to return any provider specific fields in the response
+    provider_specific_fields: Optional[Dict[str, Any]]
+
 
 from enum import Enum
 
