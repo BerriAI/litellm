@@ -84,7 +84,7 @@ async def test_completion_sagemaker(sync_mode):
 
 
 @pytest.mark.asyncio()
-@pytest.mark.parametrize("sync_mode", [True])
+@pytest.mark.parametrize("sync_mode", [False, True])
 async def test_completion_sagemaker_stream(sync_mode):
     try:
         litellm.set_verbose = False

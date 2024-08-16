@@ -387,7 +387,7 @@ class SagemakerLLM(BaseAWSLLM):
             original_response=completion_response,
             additional_args={"complete_input_dict": _data},
         )
-        print_verbose(f"raw model_response: {response}")
+        print_verbose(f"raw model_response: {completion_response}")
         ## RESPONSE OBJECT
         try:
             if isinstance(completion_response, list):
