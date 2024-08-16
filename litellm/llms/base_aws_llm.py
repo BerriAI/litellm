@@ -77,6 +77,28 @@ class BaseAWSLLM(BaseLLM):
             aws_sts_endpoint,
         ) = params_to_check
 
+        verbose_logger.debug(
+            "in get credentials\n"
+            "aws_access_key_id=%s\n"
+            "aws_secret_access_key=%s\n"
+            "aws_session_token=%s\n"
+            "aws_region_name=%s\n"
+            "aws_session_name=%s\n"
+            "aws_profile_name=%s\n"
+            "aws_role_name=%s\n"
+            "aws_web_identity_token=%s\n"
+            "aws_sts_endpoint=%s",
+            aws_access_key_id,
+            aws_secret_access_key,
+            aws_session_token,
+            aws_region_name,
+            aws_session_name,
+            aws_profile_name,
+            aws_role_name,
+            aws_web_identity_token,
+            aws_sts_endpoint,
+        )
+
         ### CHECK STS ###
         if (
             aws_web_identity_token is not None
