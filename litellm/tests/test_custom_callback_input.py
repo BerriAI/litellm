@@ -1218,3 +1218,11 @@ def test_standard_logging_payload():
             mock_client.call_args.kwargs["kwargs"]["standard_logging_object"]
         )
         json.loads(json_str_payload)
+
+        ## response cost
+        assert (
+            mock_client.call_args.kwargs["kwargs"]["standard_logging_object"][
+                "response_cost"
+            ]
+            > 0
+        )
