@@ -10226,6 +10226,14 @@ class CustomStreamWrapper:
                     return
             elif self.received_finish_reason is not None:
                 if self.sent_last_chunk is True:
+                    # Bedrock returns the guardrail trace in the last chunk - we want to return this here
+                    if (
+                        self.custom_llm_provider == "bedrock"
+                        and "trace" in model_response
+                    ):
+                        return model_response
+
+                    # Default - return StopIteration
                     raise StopIteration
                 # flush any remaining holding chunk
                 if len(self.holding_chunk) > 0:
