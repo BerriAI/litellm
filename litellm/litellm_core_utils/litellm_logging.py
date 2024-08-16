@@ -24,6 +24,7 @@ from litellm import (
     verbose_logger,
 )
 from litellm.caching import DualCache, InMemoryCache, S3Cache
+from litellm.cost_calculator import _select_model_name_for_cost_calc
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_logging,
@@ -37,6 +38,7 @@ from litellm.types.utils import (
     ModelResponse,
     StandardLoggingHiddenParams,
     StandardLoggingMetadata,
+    StandardLoggingModelInformation,
     StandardLoggingPayload,
     TextCompletionResponse,
     TranscriptionResponse,
@@ -2294,6 +2296,38 @@ def get_standard_logging_object_payload(
 
             id = f"{id}_cache_hit{time.time()}"  # do not duplicate the request id
 
+        ## Get model cost information ##
+        base_model = _get_base_model_from_metadata(model_call_details=kwargs)
+        custom_pricing = use_custom_pricing_for_model(litellm_params=litellm_params)
+        model_cost_name = _select_model_name_for_cost_calc(
+            model=kwargs.get("model"),
+            completion_response=init_response_obj,
+            base_model=base_model,
+            custom_pricing=custom_pricing,
+        )
+        if model_cost_name is None:
+            model_cost_information = StandardLoggingModelInformation(
+                model_map_key="", model_map_value=None
+            )
+        else:
+            custom_llm_provider = kwargs.get("custom_llm_provider", None)
+
+            try:
+                _model_cost_information = litellm.get_model_info(
+                    model=model_cost_name, custom_llm_provider=custom_llm_provider
+                )
+                model_cost_information = StandardLoggingModelInformation(
+                    model_map_key=model_cost_name,
+                    model_map_value=_model_cost_information,
+                )
+            except Exception:
+                verbose_logger.warning(
+                    "Model is not mapped in model cost map. Defaulting to None model_cost_information for standard_logging_payload"
+                )
+                model_cost_information = StandardLoggingModelInformation(
+                    model_map_key=model_cost_name, model_map_value=None
+                )
+
         payload: StandardLoggingPayload = StandardLoggingPayload(
             id=str(id),
             call_type=call_type or "",
@@ -2320,6 +2354,7 @@ def get_standard_logging_object_payload(
             ),
             model_parameters=kwargs.get("optional_params", None),
             hidden_params=clean_hidden_params,
+            model_map_information=model_cost_information,
         )
 
         verbose_logger.debug(

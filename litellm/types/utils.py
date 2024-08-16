@@ -1195,6 +1195,11 @@ class StandardLoggingHiddenParams(TypedDict):
     additional_headers: Optional[dict]
 
 
+class StandardLoggingModelInformation(TypedDict):
+    model_map_key: str
+    model_map_value: Optional[ModelInfo]
+
+
 class StandardLoggingPayload(TypedDict):
     id: str
     call_type: str
@@ -1205,6 +1210,7 @@ class StandardLoggingPayload(TypedDict):
     startTime: float
     endTime: float
     completionStartTime: float
+    model_map_information: StandardLoggingModelInformation
     model: str
     model_id: Optional[str]
     model_group: Optional[str]
