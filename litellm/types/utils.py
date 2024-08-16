@@ -1184,10 +1184,18 @@ class StandardLoggingMetadata(TypedDict):
     requester_ip_address: Optional[str]
 
 
+class StandardLoggingHiddenParams(TypedDict):
+    model_id: Optional[str]
+    cache_key: Optional[str]
+    api_base: Optional[str]
+    response_cost: Optional[str]
+    additional_headers: Optional[dict]
+
+
 class StandardLoggingPayload(TypedDict):
     id: str
     call_type: str
-    spend: float
+    response_cost: float
     total_tokens: int
     prompt_tokens: int
     completion_tokens: int
@@ -1198,14 +1206,13 @@ class StandardLoggingPayload(TypedDict):
     model_id: Optional[str]
     model_group: Optional[str]
     api_base: str
-    user: str
     metadata: StandardLoggingMetadata
     cache_hit: Optional[bool]
     cache_key: Optional[str]
     request_tags: list
-    team_id: Optional[str]
     end_user: Optional[str]
     requester_ip_address: Optional[str]
     messages: Optional[Union[str, list, dict]]
     response: Optional[Union[str, list, dict]]
     model_parameters: dict
+    hidden_params: StandardLoggingHiddenParams
