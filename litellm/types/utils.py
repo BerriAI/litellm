@@ -80,7 +80,7 @@ class ModelInfo(TypedDict, total=False):
     supports_assistant_prefill: Optional[bool]
 
 
-class GenericStreamingChunk(TypedDict):
+class GenericStreamingChunk(TypedDict, total=False):
     text: Required[str]
     tool_use: Optional[ChatCompletionToolCallChunk]
     is_finished: Required[bool]
