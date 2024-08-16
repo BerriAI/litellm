@@ -80,7 +80,7 @@ class ModelInfo(TypedDict, total=False):
     supports_assistant_prefill: Optional[bool]
 
 
-class GenericStreamingChunk(TypedDict):
+class GenericStreamingChunk(TypedDict, total=False):
     text: Required[str]
     tool_use: Optional[ChatCompletionToolCallChunk]
     is_finished: Required[bool]
@@ -1166,3 +1166,53 @@ class AdapterCompletionStreamWrapper:
             raise StopIteration
         except StopIteration:
             raise StopAsyncIteration
+
+
+class StandardLoggingMetadata(TypedDict):
+    """
+    Specific metadata k,v pairs logged to integration for easier cost tracking
+    """
+
+    user_api_key_hash: Optional[str]  # hash of the litellm virtual key used
+    user_api_key_alias: Optional[str]
+    user_api_key_team_id: Optional[str]
+    user_api_key_user_id: Optional[str]
+    user_api_key_team_alias: Optional[str]
+    spend_logs_metadata: Optional[
+        dict
+    ]  # special param to log k,v pairs to spendlogs for a call
+    requester_ip_address: Optional[str]
+
+
+class StandardLoggingHiddenParams(TypedDict):
+    model_id: Optional[str]
+    cache_key: Optional[str]
+    api_base: Optional[str]
+    response_cost: Optional[str]
+    additional_headers: Optional[dict]
+
+
+class StandardLoggingPayload(TypedDict):
+    id: str
+    call_type: str
+    response_cost: float
+    total_tokens: int
+    prompt_tokens: int
+    completion_tokens: int
+    startTime: float
+    endTime: float
+    completionStartTime: float
+    model: str
+    model_id: Optional[str]
+    model_group: Optional[str]
+    api_base: str
+    metadata: StandardLoggingMetadata
+    cache_hit: Optional[bool]
+    cache_key: Optional[str]
+    request_tags: list
+    end_user: Optional[str]
+    requester_ip_address: Optional[str]
+    messages: Optional[Union[str, list, dict]]
+    response: Optional[Union[str, list, dict]]
+    model_parameters: dict
+    hidden_params: StandardLoggingHiddenParams
