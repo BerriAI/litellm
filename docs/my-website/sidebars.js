@@ -66,6 +66,7 @@ const sidebars = {
         "proxy/customers",
         "proxy/billing",
         "proxy/token_auth",
+        "proxy/oauth2",
         "proxy/alerting",
         "proxy/ui",
         "proxy/prometheus",
