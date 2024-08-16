@@ -5,10 +5,10 @@ import sys
 import uuid
 from dataclasses import fields
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, TypedDict, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Extra, Field, Json, model_validator
-from typing_extensions import Annotated
+from typing_extensions import Annotated, TypedDict
 
 from litellm.types.router import UpdateRouterConfig
 from litellm.types.utils import ProviderField
@@ -1082,6 +1082,20 @@ class DynamoDBArgs(LiteLLMBase):
     assume_role_aws_session_name: Optional[str] = None
 
 
+class PassThroughGenericEndpoint(LiteLLMBase):
+    path: str = Field(description="The route to be added to the LiteLLM Proxy Server.")
+    target: str = Field(
+        description="The URL to which requests for this path should be forwarded."
+    )
+    headers: dict = Field(
+        description="Key-value pairs of headers to be forwarded with the request. You can set any key value pair here and it will be forwarded to your target endpoint"
+    )
+
+
+class PassThroughEndpointResponse(LiteLLMBase):
+    endpoints: List[PassThroughGenericEndpoint]
+
+
 class ConfigFieldUpdate(LiteLLMBase):
     field_name: str
     field_value: Any
@@ -1093,6 +1107,14 @@ class ConfigFieldDelete(LiteLLMBase):
     field_name: str
 
 
+class FieldDetail(BaseModel):
+    field_name: str
+    field_type: str
+    field_description: str
+    field_default_value: Any = None
+    stored_in_db: Optional[bool]
+
+
 class ConfigList(LiteLLMBase):
     field_name: str
     field_type: str
@@ -1101,6 +1123,9 @@ class ConfigList(LiteLLMBase):
     stored_in_db: Optional[bool]
     field_default_value: Any
     premium_field: bool = False
+    nested_fields: Optional[List[FieldDetail]] = (
+        None  # For nested dictionary or Pydantic fields
+    )
 
 
 class ConfigGeneralSettings(LiteLLMBase):
@@ -1202,6 +1227,10 @@ class ConfigGeneralSettings(LiteLLMBase):
     enable_public_model_hub: bool = Field(
         default=False,
         description="Public model hub for users to see what models they have access to, supported openai params, etc.",
+    )
+    pass_through_endpoints: Optional[List[PassThroughGenericEndpoint]] = Field(
+        default=None,
+        description="Set-up pass-through endpoints for provider-specific endpoints. Docs - https://docs.litellm.ai/docs/proxy/pass_through",
     )
 
 
@@ -1761,3 +1790,9 @@ class VirtualKeyEvent(LiteLLMBase):
     created_by_user_role: str
     created_by_key_alias: Optional[str]
     request_kwargs: dict
+
+
+class CreatePassThroughEndpoint(LiteLLMBase):
+    path: str
+    target: str
+    headers: dict

@@ -102,15 +102,21 @@ const Sidebar: React.FC<SidebarProps> = ({
               <Text>Router Settings</Text>
             </Menu.Item>
           ) : null}
+          
           {userRole == "Admin" ? (
-            <Menu.Item key="12" onClick={() => setPage("admin-panel")}>
+            <Menu.Item key="12" onClick={() => setPage("pass-through-settings")}>
+              <Text>Pass-Through</Text>
+            </Menu.Item>
+          ) : null}
+          {userRole == "Admin" ? (
+            <Menu.Item key="13" onClick={() => setPage("admin-panel")}>
               <Text>Admin Settings</Text>
             </Menu.Item>
           ) : null}
-          <Menu.Item key="13" onClick={() => setPage("api_ref")}>
+          <Menu.Item key="14" onClick={() => setPage("api_ref")}>
             <Text>API Reference</Text>
           </Menu.Item>
-          <Menu.Item key="15" onClick={() => setPage("model-hub")}>
+          <Menu.Item key="16" onClick={() => setPage("model-hub")}>
             <Text>Model Hub</Text>
           </Menu.Item>
         </Menu>
