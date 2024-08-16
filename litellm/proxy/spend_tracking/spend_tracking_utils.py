@@ -21,6 +21,8 @@ def get_logging_payload(
 
     if kwargs is None:
         kwargs = {}
+    if response_obj is None:
+        response_obj = {}
     # standardize this function to be used across, s3, dynamoDB, langfuse logging
     litellm_params = kwargs.get("litellm_params", {})
     metadata = (
