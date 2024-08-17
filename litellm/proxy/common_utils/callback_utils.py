@@ -1,4 +1,5 @@
-from typing import Any, List, Optional, get_args
+import sys
+from typing import Any, Dict, List, Optional, get_args
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -249,3 +250,46 @@ def initialize_callbacks_on_proxy(
     verbose_proxy_logger.debug(
         f"{blue_color_code} Initialized Callbacks - {litellm.callbacks} {reset_color_code}"
     )
+
+
+def get_model_group_from_litellm_kwargs(kwargs: dict) -> Optional[str]:
+    _litellm_params = kwargs.get("litellm_params", None) or {}
+    _metadata = _litellm_params.get("metadata", None) or {}
+    _model_group = _metadata.get("model_group", None)
+    if _model_group is not None:
+        return _model_group
+
+    return None
+
+
+def get_model_group_from_request_data(data: dict) -> Optional[str]:
+    _metadata = data.get("metadata", None) or {}
+    _model_group = _metadata.get("model_group", None)
+    if _model_group is not None:
+        return _model_group
+
+    return None
+
+
+def get_remaining_tokens_and_requests_from_request_data(data: Dict) -> Dict[str, str]:
+    """
+    Helper function to return x-litellm-key-remaining-tokens-{model_group} and x-litellm-key-remaining-requests-{model_group}
+
+    Returns {} when api_key + model rpm/tpm limit is not set
+
+    """
+    _metadata = data.get("metadata", None) or {}
+    model_group = get_model_group_from_request_data(data)
+
+    # Remaining Requests
+    remaining_requests_variable_name = f"litellm-key-remaining-requests-{model_group}"
+    remaining_requests = _metadata.get(remaining_requests_variable_name, None)
+
+    # Remaining Tokens
+    remaining_tokens_variable_name = f"litellm-key-remaining-tokens-{model_group}"
+    remaining_tokens = _metadata.get(remaining_tokens_variable_name, None)
+
+    return {
+        f"x-litellm-key-remaining-requests-{model_group}": str(remaining_requests),
+        f"x-litellm-key-remaining-tokens-{model_group}": str(remaining_tokens),
+    }

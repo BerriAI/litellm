@@ -1337,6 +1337,8 @@ class UserAPIKeyAuth(
     ] = None
     allowed_model_region: Optional[Literal["eu"]] = None
     parent_otel_span: Optional[Span] = None
+    rpm_limit_per_model: Optional[Dict[str, int]] = None
+    tpm_limit_per_model: Optional[Dict[str, int]] = None
 
     @model_validator(mode="before")
     @classmethod

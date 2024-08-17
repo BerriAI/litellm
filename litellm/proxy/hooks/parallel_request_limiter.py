@@ -11,6 +11,10 @@ from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.auth.auth_utils import (
+    get_key_model_rpm_limit,
+    get_key_model_tpm_limit,
+)
 
 
 class _PROXY_MaxParallelRequestsHandler(CustomLogger):
@@ -202,6 +206,82 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     additional_details=f"Hit limit for api_key: {api_key}. tpm_limit: {tpm_limit}, current_tpm {current['current_tpm']} , rpm_limit: {rpm_limit} current rpm {current['current_rpm']} "
                 )
 
+        # Check if request under RPM/TPM per model for a given API Key
+        if (
+            get_key_model_tpm_limit(user_api_key_dict) is not None
+            or get_key_model_rpm_limit(user_api_key_dict) is not None
+        ):
+            _model = data.get("model", None)
+            request_count_api_key = (
+                f"{api_key}::{_model}::{precise_minute}::request_count"
+            )
+
+            current = await self.internal_usage_cache.async_get_cache(
+                key=request_count_api_key
+            )  # {"current_requests": 1, "current_tpm": 1, "current_rpm": 10}
+
+            tpm_limit_for_model = None
+            rpm_limit_for_model = None
+
+            _tpm_limit_for_key_model = get_key_model_tpm_limit(user_api_key_dict)
+            _rpm_limit_for_key_model = get_key_model_rpm_limit(user_api_key_dict)
+
+            if _model is not None:
+
+                if _tpm_limit_for_key_model:
+                    tpm_limit_for_model = _tpm_limit_for_key_model.get(_model)
+
+                if _rpm_limit_for_key_model:
+                    rpm_limit_for_model = _rpm_limit_for_key_model.get(_model)
+            if current is None:
+                new_val = {
+                    "current_requests": 1,
+                    "current_tpm": 0,
+                    "current_rpm": 0,
+                }
+                await self.internal_usage_cache.async_set_cache(
+                    request_count_api_key, new_val
+                )
+            elif tpm_limit_for_model is not None or rpm_limit_for_model is not None:
+                # Increase count for this token
+                new_val = {
+                    "current_requests": current["current_requests"] + 1,
+                    "current_tpm": current["current_tpm"],
+                    "current_rpm": current["current_rpm"],
+                }
+                if (
+                    tpm_limit_for_model is not None
+                    and current["current_tpm"] >= tpm_limit_for_model
+                ):
+                    return self.raise_rate_limit_error(
+                        additional_details=f"Hit TPM limit for model: {_model} on api_key: {api_key}. tpm_limit: {tpm_limit_for_model}, current_tpm {current['current_tpm']} "
+                    )
+                elif (
+                    rpm_limit_for_model is not None
+                    and current["current_rpm"] >= rpm_limit_for_model
+                ):
+                    return self.raise_rate_limit_error(
+                        additional_details=f"Hit RPM limit for model: {_model} on api_key: {api_key}. rpm_limit: {rpm_limit_for_model}, current_rpm {current['current_rpm']} "
+                    )
+                else:
+                    await self.internal_usage_cache.async_set_cache(
+                        request_count_api_key, new_val
+                    )
+
+            _remaining_tokens = None
+            _remaining_requests = None
+            # Add remaining tokens, requests to metadata
+            if tpm_limit_for_model is not None:
+                _remaining_tokens = tpm_limit_for_model - new_val["current_tpm"]
+            if rpm_limit_for_model is not None:
+                _remaining_requests = rpm_limit_for_model - new_val["current_rpm"]
+
+            _remaining_limits_data = {
+                f"litellm-key-remaining-tokens-{_model}": _remaining_tokens,
+                f"litellm-key-remaining-requests-{_model}": _remaining_requests,
+            }
+            data["metadata"].update(_remaining_limits_data)
+
         # check if REQUEST ALLOWED for user_id
         user_id = user_api_key_dict.user_id
         if user_id is not None:
@@ -299,6 +379,10 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         return
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        from litellm.proxy.common_utils.callback_utils import (
+            get_model_group_from_litellm_kwargs,
+        )
+
         try:
             self.print_verbose("INSIDE parallel request limiter ASYNC SUCCESS LOGGING")
             global_max_parallel_requests = kwargs["litellm_params"]["metadata"].get(
@@ -364,6 +448,36 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 await self.internal_usage_cache.async_set_cache(
                     request_count_api_key, new_val, ttl=60
                 )  # store in cache for 1 min.
+
+            # ------------
+            # Update usage - model group + API Key
+            # ------------
+            model_group = get_model_group_from_litellm_kwargs(kwargs)
+            if user_api_key is not None and model_group is not None:
+                request_count_api_key = (
+                    f"{user_api_key}::{model_group}::{precise_minute}::request_count"
+                )
+
+                current = await self.internal_usage_cache.async_get_cache(
+                    key=request_count_api_key
+                ) or {
+                    "current_requests": 1,
+                    "current_tpm": total_tokens,
+                    "current_rpm": 1,
+                }
+
+                new_val = {
+                    "current_requests": max(current["current_requests"] - 1, 0),
+                    "current_tpm": current["current_tpm"] + total_tokens,
+                    "current_rpm": current["current_rpm"] + 1,
+                }
+
+                self.print_verbose(
+                    f"updated_value in success call: {new_val}, precise_minute: {precise_minute}"
+                )
+                await self.internal_usage_cache.async_set_cache(
+                    request_count_api_key, new_val, ttl=60
+                )
 
             # ------------
             # Update usage - User
