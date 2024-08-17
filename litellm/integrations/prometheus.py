@@ -318,11 +318,11 @@ class PrometheusLogger(CustomLogger):
         remaining_tokens = _metadata.get(remaining_tokens_variable_name, sys.maxsize)
 
         self.litellm_remaining_api_key_requests_for_model.labels(
-            user_api_key, user_api_key_alias, model
+            user_api_key, user_api_key_alias, model_group
         ).set(remaining_requests)
 
         self.litellm_remaining_api_key_tokens_for_model.labels(
-            user_api_key, user_api_key_alias, model
+            user_api_key, user_api_key_alias, model_group
         ).set(remaining_tokens)
 
         # set x-ratelimit headers
