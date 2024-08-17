@@ -1,4 +1,4 @@
-# 🪢 Logging
+# Logging
 
 Log Proxy input, output, and exceptions using:
 

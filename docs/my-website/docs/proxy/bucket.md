@@ -3,7 +3,7 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# 🪣 Logging GCS, s3 Buckets
+# Logging GCS, s3 Buckets
 
 LiteLLM Supports Logging to the following Cloud Buckets
 - (Enterprise) ✨ [Google Cloud Storage Buckets](#logging-proxy-inputoutput-to-google-cloud-storage-buckets)
