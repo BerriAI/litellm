@@ -199,7 +199,6 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     router as pass_through_router,
 )
 from litellm.proxy.route_llm_request import route_request
-
 from litellm.proxy.secret_managers.aws_secret_manager import (
     load_aws_kms,
     load_aws_secret_manager,
@@ -913,8 +912,8 @@ async def update_database(
                         + prisma_client.key_list_transactons.get(hashed_token, 0)
                     )
             except Exception as e:
-                verbose_proxy_logger.error(
-                    f"Update Key DB Call failed to execute - {str(e)}\n{traceback.format_exc()}"
+                verbose_proxy_logger.exception(
+                    f"Update Key DB Call failed to execute - {str(e)}"
                 )
                 raise e
 
@@ -1206,8 +1205,8 @@ async def update_cache(
                 existing_spend_obj.spend = new_spend
                 user_api_key_cache.set_cache(key=_id, value=existing_spend_obj.json())
         except Exception as e:
-            verbose_proxy_logger.error(
-                f"An error occurred updating end user cache: {str(e)}\n\n{traceback.format_exc()}"
+            verbose_proxy_logger.exception(
+                f"An error occurred updating end user cache: {str(e)}"
             )
 
     ### UPDATE TEAM SPEND ###
@@ -1248,8 +1247,8 @@ async def update_cache(
                 existing_spend_obj.spend = new_spend
                 user_api_key_cache.set_cache(key=_id, value=existing_spend_obj)
         except Exception as e:
-            verbose_proxy_logger.error(
-                f"An error occurred updating end user cache: {str(e)}\n\n{traceback.format_exc()}"
+            verbose_proxy_logger.exception(
+                f"An error occurred updating end user cache: {str(e)}"
             )
 
     if token is not None and response_cost is not None:
@@ -2116,7 +2115,7 @@ class ProxyConfig:
                 self._add_deployment(db_models=new_models)
 
         except Exception as e:
-            verbose_proxy_logger.error(
+            verbose_proxy_logger.exception(
                 f"Error adding/deleting model to llm_router: {str(e)}"
             )
 
@@ -2264,7 +2263,7 @@ class ProxyConfig:
             try:
                 new_models = await prisma_client.db.litellm_proxymodeltable.find_many()
             except Exception as e:
-                verbose_proxy_logger.error(
+                verbose_proxy_logger.exception(
                     "litellm.proxy_server.py::add_deployment() - Error getting new models from DB - {}".format(
                         str(e)
                     )
@@ -2286,8 +2285,10 @@ class ProxyConfig:
                 )
 
         except Exception as e:
-            verbose_proxy_logger.error(
-                "{}\nTraceback:{}".format(str(e), traceback.format_exc())
+            verbose_proxy_logger.exception(
+                "litellm.proxy.proxy_server.py::ProxyConfig:add_deployment - {}".format(
+                    str(e)
+                )
             )
 
 
@@ -2454,12 +2455,11 @@ async def async_assistants_data_generator(
         done_message = "[DONE]"
         yield f"data: {done_message}\n\n"
     except Exception as e:
-        verbose_proxy_logger.error(
+        verbose_proxy_logger.exception(
             "litellm.proxy.proxy_server.async_assistants_data_generator(): Exception occured - {}".format(
                 str(e)
             )
         )
-        verbose_proxy_logger.debug(traceback.format_exc())
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
             original_exception=e,
@@ -2512,9 +2512,9 @@ async def async_data_generator(
         done_message = "[DONE]"
         yield f"data: {done_message}\n\n"
     except Exception as e:
-        verbose_proxy_logger.error(
-            "litellm.proxy.proxy_server.async_data_generator(): Exception occured - {}\n{}".format(
-                str(e), traceback.format_exc()
+        verbose_proxy_logger.exception(
+            "litellm.proxy.proxy_server.async_data_generator(): Exception occured - {}".format(
+                str(e)
             )
         )
         await proxy_logging_obj.post_call_failure_hook(
@@ -2565,9 +2565,9 @@ async def async_data_generator_anthropic(
             except Exception as e:
                 yield f"event: {event_type}\ndata:{str(e)}\n\n"
     except Exception as e:
-        verbose_proxy_logger.error(
-            "litellm.proxy.proxy_server.async_data_generator(): Exception occured - {}\n{}".format(
-                str(e), traceback.format_exc()
+        verbose_proxy_logger.exception(
+            "litellm.proxy.proxy_server.async_data_generator(): Exception occured - {}".format(
+                str(e)
             )
         )
         await proxy_logging_obj.post_call_failure_hook(
@@ -3181,10 +3181,8 @@ async def chat_completion(
         _chat_response.usage = _usage  # type: ignore
         return _chat_response
     except Exception as e:
-        verbose_proxy_logger.error(
-            "litellm.proxy.proxy_server.chat_completion(): Exception occured - {}\n{}".format(
-                get_error_message_str(e=e), traceback.format_exc()
-            )
+        verbose_proxy_logger.exception(
+            f"litellm.proxy.proxy_server.chat_completion(): Exception occured - {str(e)}"
         )
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
@@ -3567,12 +3565,11 @@ async def embeddings(
             e,
             litellm_debug_info,
         )
-        verbose_proxy_logger.error(
-            "litellm.proxy.proxy_server.embeddings(): Exception occured - {}\n{}".format(
-                str(e), traceback.format_exc()
+        verbose_proxy_logger.exception(
+            "litellm.proxy.proxy_server.embeddings(): Exception occured - {}".format(
+                str(e)
             )
         )
-        verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             message = get_error_message_str(e)
             raise ProxyException(
@@ -5381,9 +5378,9 @@ async def anthropic_response(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        verbose_proxy_logger.error(
-            "litellm.proxy.proxy_server.anthropic_response(): Exception occured - {}\n{}".format(
-                str(e), traceback.format_exc()
+        verbose_proxy_logger.exception(
+            "litellm.proxy.proxy_server.anthropic_response(): Exception occured - {}".format(
+                str(e)
             )
         )
         error_msg = f"{str(e)}"
@@ -9540,12 +9537,11 @@ async def get_config():
             "available_callbacks": all_available_callbacks,
         }
     except Exception as e:
-        verbose_proxy_logger.error(
-            "litellm.proxy.proxy_server.get_config(): Exception occured - {}\n{}".format(
-                str(e), traceback.format_exc()
+        verbose_proxy_logger.exception(
+            "litellm.proxy.proxy_server.get_config(): Exception occured - {}".format(
+                str(e)
             )
         )
-        verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"Authentication Error({str(e)})"),

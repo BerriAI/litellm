@@ -806,7 +806,8 @@ def test_exception_mapping(provider):
         except expected_exception:
             continue
         except Exception as e:
-            response = "{}\n{}".format(str(e), traceback.format_exc())
+            traceback.print_exc()
+            response = "{}".format(str(e))
         pytest.fail(
             "Did not raise expected exception. Expected={}, Return={},".format(
                 expected_exception, response

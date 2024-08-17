@@ -1597,7 +1597,8 @@ async def test_gemini_pro_httpx_custom_api_base(provider):
                 extra_headers={"hello": "world"},
             )
         except Exception as e:
-            print("Receives error - {}\n{}".format(str(e), traceback.format_exc()))
+            traceback.print_exc()
+            print("Receives error - {}".format(str(e)))
 
         mock_call.assert_called_once()
 
