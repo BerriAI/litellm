@@ -204,6 +204,9 @@ class PrometheusLogger(CustomLogger):
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         # Define prometheus client
+        from litellm.proxy.common_utils.callback_utils import (
+            get_model_group_from_litellm_kwargs,
+        )
         from litellm.proxy.proxy_server import premium_user
 
         verbose_logger.debug(
@@ -306,7 +309,7 @@ class PrometheusLogger(CustomLogger):
 
         # Set remaining rpm/tpm for API Key + model
         # see parallel_request_limiter.py - variables are set there
-        model_group = _metadata.get("model_group", None)
+        model_group = get_model_group_from_litellm_kwargs(kwargs)
         remaining_requests_variable_name = (
             f"litellm-key-remaining-requests-{model_group}"
         )
