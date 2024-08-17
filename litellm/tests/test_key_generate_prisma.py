@@ -2710,3 +2710,60 @@ async def test_custom_api_key_header_name(prisma_client):
         pass
 
     # this should pass because X-Litellm-Key is valid
+
+
+@pytest.mark.asyncio()
+async def test_generate_key_with_model_tpm_limit(prisma_client):
+    print("prisma client=", prisma_client)
+
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    await litellm.proxy.proxy_server.prisma_client.connect()
+    request = GenerateKeyRequest(
+        metadata={
+            "team": "litellm-team3",
+            "model_tpm_limit": {"gpt-4": 100},
+            "model_rpm_limit": {"gpt-4": 2},
+        }
+    )
+    key = await generate_key_fn(
+        data=request,
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-1234",
+            user_id="1234",
+        ),
+    )
+    print(key)
+
+    generated_key = key.key
+
+    # use generated key to auth in
+    result = await info_key_fn(key=generated_key)
+    print("result from info_key_fn", result)
+    assert result["key"] == generated_key
+    print("\n info for key=", result["info"])
+    assert result["info"]["metadata"] == {
+        "team": "litellm-team3",
+        "model_tpm_limit": {"gpt-4": 100},
+        "model_rpm_limit": {"gpt-4": 2},
+    }
+
+    # Update model tpm_limit and rpm_limit
+    request = UpdateKeyRequest(
+        key=generated_key,
+        metadata={"model_tpm_limit": {"gpt-4": 200}, "model_rpm_limit": {"gpt-4": 3}},
+    )
+    _request = Request(scope={"type": "http"})
+    _request._url = URL(url="/update/key")
+
+    await update_key_fn(data=request, request=_request)
+    result = await info_key_fn(key=generated_key)
+    print("result from info_key_fn", result)
+    assert result["key"] == generated_key
+    print("\n info for key=", result["info"])
+    assert result["info"]["metadata"] == {
+        "team": "litellm-team3",
+        "model_tpm_limit": {"gpt-4": 200},
+        "model_rpm_limit": {"gpt-4": 3},
+    }
