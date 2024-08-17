@@ -3,7 +3,7 @@ import asyncio
 import json
 import traceback
 from base64 import b64encode
-from typing import List, Optional
+from typing import AsyncIterable, List, Optional
 
 import httpx
 from fastapi import (
@@ -267,12 +267,25 @@ def forward_headers_from_request(
     return headers
 
 
+def get_response_headers(headers: httpx.Headers) -> dict:
+    excluded_headers = {"transfer-encoding", "content-encoding"}
+    return_headers = {
+        key: value
+        for key, value in headers.items()
+        if key.lower() not in excluded_headers
+    }
+
+    return return_headers
+
+
 async def pass_through_request(
     request: Request,
     target: str,
     custom_headers: dict,
     user_api_key_dict: UserAPIKeyAuth,
     forward_headers: Optional[bool] = False,
+    query_params: Optional[dict] = None,
+    stream: Optional[bool] = None,
 ):
     try:
         import time
@@ -291,7 +304,7 @@ async def pass_through_request(
         body_str = request_body.decode()
         try:
             _parsed_body = ast.literal_eval(body_str)
-        except:
+        except Exception:
             _parsed_body = json.loads(body_str)
 
         verbose_proxy_logger.debug(
@@ -308,23 +321,9 @@ async def pass_through_request(
         )
 
         async_client = httpx.AsyncClient()
-        response = await async_client.request(
-            method=request.method,
-            url=url,
-            headers=headers,
-            params=request.query_params,
-            json=_parsed_body,
-        )
 
-        if response.status_code >= 300:
-            raise HTTPException(status_code=response.status_code, detail=response.text)
-
-        content = await response.aread()
-
-        ## LOG SUCCESS
-        start_time = time.time()
-        end_time = time.time()
         # create logging object
+        start_time = time.time()
         logging_obj = Logging(
             model="unknown",
             messages=[{"role": "user", "content": "no-message-pass-through-endpoint"}],
@@ -334,6 +333,7 @@ async def pass_through_request(
             litellm_call_id=str(uuid.uuid4()),
             function_id="1245",
         )
+
         # done for supporting 'parallel_request_limiter.py' with pass-through endpoints
         kwargs = {
             "litellm_params": {
@@ -354,6 +354,81 @@ async def pass_through_request(
             call_type="pass_through_endpoint",
         )
 
+        # combine url with query params for logging
+
+        requested_query_params = query_params or request.query_params.__dict__
+        requested_query_params_str = "&".join(
+            f"{k}={v}" for k, v in requested_query_params.items()
+        )
+
+        if "?" in str(url):
+            logging_url = str(url) + "&" + requested_query_params_str
+        else:
+            logging_url = str(url) + "?" + requested_query_params_str
+
+        logging_obj.pre_call(
+            input=[{"role": "user", "content": "no-message-pass-through-endpoint"}],
+            api_key="",
+            additional_args={
+                "complete_input_dict": _parsed_body,
+                "api_base": logging_url,
+                "headers": headers,
+            },
+        )
+
+        if stream:
+            req = async_client.build_request(
+                "POST",
+                url,
+                json=_parsed_body,
+                params=requested_query_params,
+                headers=headers,
+            )
+            response = await async_client.send(req, stream=stream)
+
+            # Create an async generator to yield the response content
+            async def stream_response() -> AsyncIterable[bytes]:
+                async for chunk in response.aiter_bytes():
+                    yield chunk
+
+            return StreamingResponse(
+                stream_response(),
+                headers=get_response_headers(response.headers),
+                status_code=response.status_code,
+            )
+
+        response = await async_client.request(
+            method=request.method,
+            url=url,
+            headers=headers,
+            params=requested_query_params,
+            json=_parsed_body,
+        )
+
+        if (
+            response.headers.get("content-type") is not None
+            and response.headers["content-type"] == "text/event-stream"
+        ):
+            # streaming response
+            # Create an async generator to yield the response content
+            async def stream_response() -> AsyncIterable[bytes]:
+                async for chunk in response.aiter_bytes():
+                    yield chunk
+
+            return StreamingResponse(
+                stream_response(),
+                headers=get_response_headers(response.headers),
+                status_code=response.status_code,
+            )
+
+        if response.status_code >= 300:
+            raise HTTPException(status_code=response.status_code, detail=response.text)
+
+        content = await response.aread()
+
+        ## LOG SUCCESS
+        end_time = time.time()
+
         await logging_obj.async_success_handler(
             result="",
             start_time=start_time,
@@ -361,17 +436,10 @@ async def pass_through_request(
             cache_hit=False,
         )
 
-        excluded_headers = {"transfer-encoding", "content-encoding"}
-        headers = {
-            key: value
-            for key, value in response.headers.items()
-            if key.lower() not in excluded_headers
-        }
-
         return Response(
             content=content,
             status_code=response.status_code,
-            headers=headers,
+            headers=get_response_headers(response.headers),
         )
     except Exception as e:
         verbose_proxy_logger.exception(
@@ -431,17 +499,23 @@ def create_pass_through_route(
     except Exception:
         verbose_proxy_logger.debug("Defaulting to target being a url.")
 
-        async def endpoint_func(
+        async def endpoint_func(  # type: ignore
             request: Request,
             fastapi_response: Response,
             user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+            query_params: Optional[dict] = None,
+            stream: Optional[
+                bool
+            ] = None,  # if pass-through endpoint is a streaming request
         ):
-            return await pass_through_request(
+            return await pass_through_request(  # type: ignore
                 request=request,
                 target=target,
                 custom_headers=custom_headers or {},
                 user_api_key_dict=user_api_key_dict,
                 forward_headers=_forward_headers,
+                query_params=query_params,
+                stream=stream,
             )
 
     return endpoint_func
