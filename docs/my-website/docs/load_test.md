@@ -1,6 +1,6 @@
 import Image from '@theme/IdealImage';
 
-# 🔥 Load Test LiteLLM 
+# Load Test LiteLLM 
 
 ## How to run a locust load test on LiteLLM Proxy 
 

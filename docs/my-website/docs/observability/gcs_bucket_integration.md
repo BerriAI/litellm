@@ -1,6 +1,6 @@
 import Image from '@theme/IdealImage';
 
-# 🪣 Google Cloud Storage Buckets - Logging LLM Input/Output
+# Google Cloud Storage Buckets
 
 Log LLM Logs to [Google Cloud Storage Buckets](https://cloud.google.com/storage?hl=en)
 
