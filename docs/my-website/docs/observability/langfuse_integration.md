@@ -200,6 +200,13 @@ The following parameters can be updated on a continuation of a trace by passing 
 
 Any other key value pairs passed into the metadata not listed in the above spec for a `litellm` completion will be added as a metadata key value pair for the generation.
 
+#### Disable Logging - Specific Calls
+
+To disable logging for specific calls use the `no-log` flag. 
+
+`completion(messages = ..., model = ...,  **{"no-log": True})`
+
+
 ### Use LangChain ChatLiteLLM + Langfuse
 Pass `trace_user_id`, `session_id` in model_kwargs
 ```python
