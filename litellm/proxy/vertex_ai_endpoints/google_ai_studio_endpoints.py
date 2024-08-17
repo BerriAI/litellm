@@ -75,10 +75,22 @@ async def gemini_proxy_route(
     merged_params = dict(request.query_params)
     merged_params.update({"key": gemini_api_key})
 
+    ## check for streaming
+    is_streaming_request = False
+    if "stream" in str(updated_url):
+        is_streaming_request = True
+
+    ## CREATE PASS-THROUGH
     endpoint_func = create_pass_through_route(
         endpoint=endpoint,
         target=str(updated_url),
     )  # dynamically construct pass-through endpoint based on incoming path
-    return await endpoint_func(
-        request, fastapi_response, user_api_key_dict, query_params=merged_params
+    received_value = await endpoint_func(
+        request,
+        fastapi_response,
+        user_api_key_dict,
+        query_params=merged_params,
+        stream=is_streaming_request,
     )
+
+    return received_value
