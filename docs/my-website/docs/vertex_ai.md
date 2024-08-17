@@ -1,4 +1,6 @@
-# [BETA] Vertex AI Endpoints
+# [BETA] Vertex AI Endpoints (Pass-Through)
+
+Pass-through endpoints for Vertex AI - call provider-specific endpoint, in native format (no translation).
 
 :::tip
 
