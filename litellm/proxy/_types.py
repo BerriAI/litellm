@@ -585,6 +585,8 @@ class GenerateKeyRequest(GenerateRequestBase):
 
     model_config = ConfigDict(protected_namespaces=())
     send_invite_email: Optional[bool] = None
+    model_rpm_limit: Optional[dict] = None
+    model_tpm_limit: Optional[dict] = None
 
 
 class GenerateKeyResponse(GenerateKeyRequest):
