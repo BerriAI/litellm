@@ -484,6 +484,8 @@ You can set:
 - tpm limits (tokens per minute)
 - rpm limits (requests per minute)
 - max parallel requests
+- rpm / tpm limits per model for a given key
+
 
 <Tabs>
 <TabItem value="per-user" label="Per Internal User">
@@ -531,6 +533,60 @@ curl --location 'http://0.0.0.0:4000/key/generate' \
     "user_id": "78c2c8fc-c233-43b9-b0c3-eb931da27b84"  // 👈 auto-generated
 }
 ```
+
+</TabItem>
+<TabItem value="per-key-model" label="Per API Key Per model">
+
+**Set rate limits per model per api key**
+
+Set `model_rpm_limit` and `model_tpm_limit` to set rate limits per model per api key
+
+Here `gpt-4` is the `model_name` set on the [litellm config.yaml](configs.md)
+
+```shell
+curl --location 'http://0.0.0.0:4000/key/generate' \
+--header 'Authorization: Bearer sk-1234' \
+--header 'Content-Type: application/json' \
+--data '{"model_rpm_limit": {"gpt-4": 2}, "model_tpm_limit": {"gpt-4":}}' 
+```
+
+**Expected Response**
+
+```json
+{
+    "key": "sk-ulGNRXWtv7M0lFnnsQk0wQ",
+    "expires": "2024-01-18T20:48:44.297973",
+}
+```
+
+**Verify Model Rate Limits set correctly for this key**
+
+**Make /chat/completions request check if `x-litellm-key-remaining-requests-gpt-4` returned**
+
+```shell
+curl -i http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-ulGNRXWtv7M0lFnnsQk0wQ" \
+  -d '{
+    "model": "gpt-4",
+    "messages": [
+      {"role": "user", "content": "Hello, Claude!ss eho ares"}
+    ]
+  }'
+```
+
+
+**Expected headers**
+
+```shell
+x-litellm-key-remaining-requests-gpt-4: 1
+x-litellm-key-remaining-tokens-gpt-4: 179
+```
+
+These headers indicate:
+
+- 1 request remaining for the GPT-4 model for key=`sk-ulGNRXWtv7M0lFnnsQk0wQ`
+- 179 tokens remaining for the GPT-4 model for key=`sk-ulGNRXWtv7M0lFnnsQk0wQ`
 
 </TabItem>
 <TabItem value="per-end-user" label="For customers">
