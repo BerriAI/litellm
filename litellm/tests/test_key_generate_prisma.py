@@ -2752,7 +2752,8 @@ async def test_generate_key_with_model_tpm_limit(prisma_client):
     # Update model tpm_limit and rpm_limit
     request = UpdateKeyRequest(
         key=generated_key,
-        metadata={"model_tpm_limit": {"gpt-4": 200}, "model_rpm_limit": {"gpt-4": 3}},
+        model_tpm_limit={"gpt-4": 200},
+        model_rpm_limit={"gpt-4": 3},
     )
     _request = Request(scope={"type": "http"})
     _request._url = URL(url="/update/key")
