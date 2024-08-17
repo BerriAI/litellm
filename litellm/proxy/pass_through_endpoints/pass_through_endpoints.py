@@ -308,7 +308,6 @@ async def pass_through_request(
         )
 
         async_client = httpx.AsyncClient()
-
         response = await async_client.request(
             method=request.method,
             url=url,
@@ -362,10 +361,17 @@ async def pass_through_request(
             cache_hit=False,
         )
 
+        excluded_headers = {"transfer-encoding", "content-encoding"}
+        headers = {
+            key: value
+            for key, value in response.headers.items()
+            if key.lower() not in excluded_headers
+        }
+
         return Response(
             content=content,
             status_code=response.status_code,
-            headers=dict(response.headers),
+            headers=headers,
         )
     except Exception as e:
         verbose_proxy_logger.exception(
@@ -423,7 +429,7 @@ def create_pass_through_route(
             )
 
     except Exception:
-        verbose_proxy_logger.warning("Defaulting to target being a url.")
+        verbose_proxy_logger.debug("Defaulting to target being a url.")
 
         async def endpoint_func(
             request: Request,
