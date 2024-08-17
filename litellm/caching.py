@@ -1570,8 +1570,9 @@ class DualCache(BaseCache):
             if self.redis_cache is not None and local_only == False:
                 await self.redis_cache.async_set_cache(key, value, **kwargs)
         except Exception as e:
-            verbose_logger.error(f"LiteLLM Cache: Excepton async add_cache: {str(e)}")
-            verbose_logger.debug(traceback.format_exc())
+            verbose_logger.exception(
+                f"LiteLLM Cache: Excepton async add_cache: {str(e)}"
+            )
 
     async def async_batch_set_cache(
         self, cache_list: list, local_only: bool = False, **kwargs
@@ -1593,8 +1594,9 @@ class DualCache(BaseCache):
                     cache_list=cache_list, ttl=kwargs.get("ttl", None), **kwargs
                 )
         except Exception as e:
-            verbose_logger.error(f"LiteLLM Cache: Excepton async add_cache: {str(e)}")
-            verbose_logger.debug(traceback.format_exc())
+            verbose_logger.exception(
+                f"LiteLLM Cache: Excepton async add_cache: {str(e)}"
+            )
 
     async def async_increment_cache(
         self, key, value: float, local_only: bool = False, **kwargs
@@ -1618,8 +1620,9 @@ class DualCache(BaseCache):
 
             return result
         except Exception as e:
-            verbose_logger.error(f"LiteLLM Cache: Excepton async add_cache: {str(e)}")
-            verbose_logger.debug(traceback.format_exc())
+            verbose_logger.exception(
+                f"LiteLLM Cache: Excepton async add_cache: {str(e)}"
+            )
             raise e
 
     async def async_set_cache_sadd(
@@ -1647,10 +1650,8 @@ class DualCache(BaseCache):
 
             return None
         except Exception as e:
-            verbose_logger.error(
-                "LiteLLM Cache: Excepton async set_cache_sadd: {}\n{}".format(
-                    str(e), traceback.format_exc()
-                )
+            verbose_logger.exception(
+                "LiteLLM Cache: Excepton async set_cache_sadd: {}".format(str(e))
             )
             raise e
 
@@ -2088,8 +2089,7 @@ class Cache:
             )
             self.cache.set_cache(cache_key, cached_data, **kwargs)
         except Exception as e:
-            verbose_logger.error(f"LiteLLM Cache: Excepton add_cache: {str(e)}")
-            verbose_logger.debug(traceback.format_exc())
+            verbose_logger.exception(f"LiteLLM Cache: Excepton add_cache: {str(e)}")
             pass
 
     async def async_add_cache(self, result, *args, **kwargs):
@@ -2106,8 +2106,7 @@ class Cache:
                 )
                 await self.cache.async_set_cache(cache_key, cached_data, **kwargs)
         except Exception as e:
-            verbose_logger.error(f"LiteLLM Cache: Excepton add_cache: {str(e)}")
-            verbose_logger.debug(traceback.format_exc())
+            verbose_logger.exception(f"LiteLLM Cache: Excepton add_cache: {str(e)}")
 
     async def async_add_cache_pipeline(self, result, *args, **kwargs):
         """
@@ -2137,8 +2136,7 @@ class Cache:
                     )
                 await asyncio.gather(*tasks)
         except Exception as e:
-            verbose_logger.error(f"LiteLLM Cache: Excepton add_cache: {str(e)}")
-            verbose_logger.debug(traceback.format_exc())
+            verbose_logger.exception(f"LiteLLM Cache: Excepton add_cache: {str(e)}")
 
     async def batch_cache_write(self, result, *args, **kwargs):
         cache_key, cached_data, kwargs = self._add_cache_logic(

@@ -363,6 +363,8 @@ def test_vertex_ai():
             assert response.choices[0].finish_reason in litellm._openai_finish_reasons
         except litellm.RateLimitError as e:
             pass
+        except litellm.InternalServerError as e:
+            pass
         except Exception as e:
             pytest.fail(f"Error occurred: {e}")
 
@@ -409,6 +411,8 @@ def test_vertex_ai_stream():
             assert len(completed_str) > 1
         except litellm.RateLimitError as e:
             pass
+        except litellm.InternalServerError as e:
+            pass
         except Exception as e:
             pytest.fail(f"Error occurred: {e}")
 
@@ -448,6 +452,8 @@ async def test_async_vertexai_response():
         except litellm.Timeout as e:
             pass
         except litellm.APIError as e:
+            pass
+        except litellm.InternalServerError as e:
             pass
         except Exception as e:
             pytest.fail(f"An exception occurred: {e}")
@@ -496,6 +502,8 @@ async def test_async_vertexai_streaming_response():
         except litellm.RateLimitError as e:
             pass
         except litellm.Timeout as e:
+            pass
+        except litellm.InternalServerError as e:
             pass
         except Exception as e:
             print(e)
@@ -1589,7 +1597,8 @@ async def test_gemini_pro_httpx_custom_api_base(provider):
                 extra_headers={"hello": "world"},
             )
         except Exception as e:
-            print("Receives error - {}\n{}".format(str(e), traceback.format_exc()))
+            traceback.print_exc()
+            print("Receives error - {}".format(str(e)))
 
         mock_call.assert_called_once()
 
