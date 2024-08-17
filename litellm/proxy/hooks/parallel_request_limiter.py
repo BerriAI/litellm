@@ -263,6 +263,17 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                         request_count_api_key, new_val
                     )
 
+            tpm_limit_for_model = tpm_limit_for_model or sys.maxsize
+            rpm_limit_for_model = rpm_limit_for_model or sys.maxsize
+            # Add remaining tokens, requests to metadata
+            _remaining_tokens = tpm_limit_for_model - new_val["current_tpm"]
+            _remaining_requests = rpm_limit_for_model - new_val["current_rpm"]
+            _remaining_limits_data = {
+                f"litellm-key-remaining-tokens-{_model}": _remaining_tokens,
+                f"litellm-key-remaining-requests-{_model}": _remaining_requests,
+            }
+            data["metadata"].update(_remaining_limits_data)
+
         # check if REQUEST ALLOWED for user_id
         user_id = user_api_key_dict.user_id
         if user_id is not None:
