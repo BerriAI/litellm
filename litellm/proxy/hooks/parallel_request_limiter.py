@@ -536,8 +536,8 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     request_count_api_key, new_val, ttl=60
                 )  # save in cache for up to 1 min.
         except Exception as e:
-            verbose_proxy_logger.info(
-                "Inside Parallel Request Limiter: An exception occurred - {}\n{}".format(
-                    str(e), traceback.format_exc()
+            verbose_proxy_logger.exception(
+                "Inside Parallel Request Limiter: An exception occurred - {}".format(
+                    str(e)
                 )
             )

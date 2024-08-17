@@ -233,12 +233,11 @@ async def chat_completion_pass_through_endpoint(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        verbose_proxy_logger.error(
-            "litellm.proxy.proxy_server.completion(): Exception occured - {}\n{}".format(
-                str(e), traceback.format_exc()
+        verbose_proxy_logger.exception(
+            "litellm.proxy.proxy_server.completion(): Exception occured - {}".format(
+                str(e)
             )
         )
-        verbose_proxy_logger.debug(traceback.format_exc())
         error_msg = f"{str(e)}"
         raise ProxyException(
             message=getattr(e, "message", error_msg),
@@ -369,12 +368,11 @@ async def pass_through_request(
             headers=dict(response.headers),
         )
     except Exception as e:
-        verbose_proxy_logger.error(
-            "litellm.proxy.proxy_server.pass_through_endpoint(): Exception occured - {}\n{}".format(
-                str(e), traceback.format_exc()
+        verbose_proxy_logger.exception(
+            "litellm.proxy.proxy_server.pass_through_endpoint(): Exception occured - {}".format(
+                str(e)
             )
         )
-        verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e.detail)),

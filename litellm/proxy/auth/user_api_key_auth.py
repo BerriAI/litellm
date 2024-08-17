@@ -1137,9 +1137,9 @@ async def user_api_key_auth(
         else:
             raise Exception()
     except Exception as e:
-        verbose_proxy_logger.error(
-            "litellm.proxy.proxy_server.user_api_key_auth(): Exception occured - {}\n{}".format(
-                str(e), traceback.format_exc()
+        verbose_proxy_logger.exception(
+            "litellm.proxy.proxy_server.user_api_key_auth(): Exception occured - {}".format(
+                str(e)
             )
         )
 
