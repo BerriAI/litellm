@@ -1010,6 +1010,9 @@ def convert_to_gemini_tool_call_invoke(
                 name = tool["function"].get("name", "")
                 arguments = tool["function"].get("arguments", "")
                 arguments_dict = json.loads(arguments)
+                function_call: Optional[litellm.types.llms.vertex_ai.FunctionCall] = (
+                    None
+                )
                 for k, v in arguments_dict.items():
                     inferred_protocol_value = infer_protocol_value(value=v)
                     _field = litellm.types.llms.vertex_ai.Field(
@@ -1022,9 +1025,18 @@ def convert_to_gemini_tool_call_invoke(
                         name=name,
                         args=_fields,
                     )
-                _parts_list.append(
-                    litellm.types.llms.vertex_ai.PartType(function_call=function_call)
-                )
+                if function_call is not None:
+                    _parts_list.append(
+                        litellm.types.llms.vertex_ai.PartType(
+                            function_call=function_call
+                        )
+                    )
+                else:  # don't silently drop params. Make it clear to user what's happening.
+                    raise Exception(
+                        "function_call missing. Received tool call with 'type': 'function'. No function call in argument - {}".format(
+                            tool
+                        )
+                    )
         return _parts_list
     except Exception as e:
         raise Exception(

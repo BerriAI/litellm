@@ -491,6 +491,16 @@ class VertexGeminiConfig:
             "SPII": "The token generation was stopped as the response was flagged for Sensitive Personally Identifiable Information (SPII) contents.",
         }
 
+    def translate_exception_str(self, exception_string: str):
+        if (
+            "GenerateContentRequest.tools[0].function_declarations[0].parameters.properties: should be non-empty for OBJECT type"
+            in exception_string
+        ):
+            return "'properties' field in tools[0]['function']['parameters'] cannot be empty if 'type' == 'object'. Received error from provider - {}".format(
+                exception_string
+            )
+        return exception_string
+
 
 async def make_call(
     client: Optional[AsyncHTTPHandler],
@@ -504,8 +514,15 @@ async def make_call(
     if client is None:
         client = AsyncHTTPHandler()  # Create a new client if none provided
 
-    response = await client.post(api_base, headers=headers, data=data, stream=True)
-
+    try:
+        response = await client.post(api_base, headers=headers, data=data, stream=True)
+        response.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        exception_string = str(await e.response.aread())
+        raise VertexAIError(
+            status_code=e.response.status_code,
+            message=VertexGeminiConfig().translate_exception_str(exception_string),
+        )
     if response.status_code != 200:
         raise VertexAIError(status_code=response.status_code, message=response.text)
 

@@ -384,7 +384,15 @@ async def pass_through_request(
                 params=requested_query_params,
                 headers=headers,
             )
+
             response = await async_client.send(req, stream=stream)
+
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as e:
+                raise HTTPException(
+                    status_code=e.response.status_code, detail=await e.response.aread()
+                )
 
             # Create an async generator to yield the response content
             async def stream_response() -> AsyncIterable[bytes]:
@@ -409,6 +417,13 @@ async def pass_through_request(
             response.headers.get("content-type") is not None
             and response.headers["content-type"] == "text/event-stream"
         ):
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as e:
+                raise HTTPException(
+                    status_code=e.response.status_code, detail=await e.response.aread()
+                )
+
             # streaming response
             # Create an async generator to yield the response content
             async def stream_response() -> AsyncIterable[bytes]:
@@ -419,6 +434,13 @@ async def pass_through_request(
                 stream_response(),
                 headers=get_response_headers(response.headers),
                 status_code=response.status_code,
+            )
+
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            raise HTTPException(
+                status_code=e.response.status_code, detail=e.response.text
             )
 
         if response.status_code >= 300:
