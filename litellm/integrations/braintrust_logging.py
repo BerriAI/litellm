@@ -235,10 +235,8 @@ class BraintrustLogger(CustomLogger):
             except httpx.HTTPStatusError as e:
                 raise Exception(e.response.text)
         except Exception as e:
-            verbose_logger.error(
-                "Error logging to braintrust - Exception received - {}\n{}".format(
-                    str(e), traceback.format_exc()
-                )
+            verbose_logger.exception(
+                "Error logging to braintrust - Exception received - {}".format(str(e))
             )
             raise e
 
@@ -362,10 +360,8 @@ class BraintrustLogger(CustomLogger):
             except httpx.HTTPStatusError as e:
                 raise Exception(e.response.text)
         except Exception as e:
-            verbose_logger.error(
-                "Error logging to braintrust - Exception received - {}\n{}".format(
-                    str(e), traceback.format_exc()
-                )
+            verbose_logger.exception(
+                "Error logging to braintrust - Exception received - {}".format(str(e))
             )
             raise e
 

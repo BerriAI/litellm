@@ -420,7 +420,9 @@ async def acompletion(
             )  # sets the logging event loop if the user does sync streaming (e.g. on proxy for sagemaker calls)
         return response
     except Exception as e:
-        verbose_logger.debug(traceback.format_exc())
+        verbose_logger.exception(
+            "litellm.main.py::acompletion() - Exception occurred - {}".format(str(e))
+        )
         custom_llm_provider = custom_llm_provider or "openai"
         raise exception_type(
             model=model,
@@ -585,10 +587,9 @@ def mock_completion(
     except Exception as e:
         if isinstance(e, openai.APIError):
             raise e
-        verbose_logger.error(
+        verbose_logger.exception(
             "litellm.mock_completion(): Exception occured - {}".format(str(e))
         )
-        verbose_logger.debug(traceback.format_exc())
         raise Exception("Mock completion response failed")
 
 
@@ -5238,9 +5239,9 @@ def stream_chunk_builder(
             end_time=end_time,
         )  # type: ignore
     except Exception as e:
-        verbose_logger.error(
-            "litellm.main.py::stream_chunk_builder() - Exception occurred - {}\n{}".format(
-                str(e), traceback.format_exc()
+        verbose_logger.exception(
+            "litellm.main.py::stream_chunk_builder() - Exception occurred - {}".format(
+                str(e)
             )
         )
         raise litellm.APIError(

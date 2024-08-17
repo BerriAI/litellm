@@ -246,10 +246,9 @@ class LangFuseLogger:
 
             return {"trace_id": trace_id, "generation_id": generation_id}
         except Exception as e:
-            verbose_logger.error(
+            verbose_logger.exception(
                 "Langfuse Layer Error(): Exception occured - {}".format(str(e))
             )
-            verbose_logger.debug(traceback.format_exc())
             return {"trace_id": None, "generation_id": None}
 
     async def _async_log_event(
