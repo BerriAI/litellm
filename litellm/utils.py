@@ -843,13 +843,13 @@ def client(original_function):
                     and str(original_function.__name__)
                     in litellm.cache.supported_call_types
                 ):
-                    print_verbose(f"Checking Cache")
+                    print_verbose("Checking Cache")
                     preset_cache_key = litellm.cache.get_cache_key(*args, **kwargs)
                     kwargs["preset_cache_key"] = (
                         preset_cache_key  # for streaming calls, we need to pass the preset_cache_key
                     )
                     cached_result = litellm.cache.get_cache(*args, **kwargs)
-                    if cached_result != None:
+                    if cached_result is not None:
                         if "detail" in cached_result:
                             # implies an error occurred
                             pass
@@ -5907,6 +5907,9 @@ def convert_to_model_response_object(
     end_time=None,
     hidden_params: Optional[dict] = None,
     _response_headers: Optional[dict] = None,
+    convert_tool_call_to_json_mode: Optional[
+        bool
+    ] = None,  # used for supporting 'json_schema' on older models
 ):
     received_args = locals()
     if _response_headers is not None:
@@ -5945,7 +5948,7 @@ def convert_to_model_response_object(
         ):
             if response_object is None or model_response_object is None:
                 raise Exception("Error in response object format")
-            if stream == True:
+            if stream is True:
                 # for returning cached responses, we need to yield a generator
                 return convert_to_streaming_response(response_object=response_object)
             choice_list = []
@@ -5955,16 +5958,31 @@ def convert_to_model_response_object(
             )
 
             for idx, choice in enumerate(response_object["choices"]):
-                message = Message(
-                    content=choice["message"].get("content", None),
-                    role=choice["message"]["role"] or "assistant",
-                    function_call=choice["message"].get("function_call", None),
-                    tool_calls=choice["message"].get("tool_calls", None),
-                )
-                finish_reason = choice.get("finish_reason", None)
-                if finish_reason == None:
+                ## HANDLE JSON MODE - anthropic returns single function call]
+                tool_calls = choice["message"].get("tool_calls", None)
+                if (
+                    convert_tool_call_to_json_mode
+                    and tool_calls is not None
+                    and len(tool_calls) == 1
+                ):
+                    # to support 'json_schema' logic on older models
+                    json_mode_content_str: Optional[str] = tool_calls[0][
+                        "function"
+                    ].get("arguments")
+                    if json_mode_content_str is not None:
+                        message = litellm.Message(content=json_mode_content_str)
+                        finish_reason = "stop"
+                else:
+                    message = Message(
+                        content=choice["message"].get("content", None),
+                        role=choice["message"]["role"] or "assistant",
+                        function_call=choice["message"].get("function_call", None),
+                        tool_calls=choice["message"].get("tool_calls", None),
+                    )
+                    finish_reason = choice.get("finish_reason", None)
+                if finish_reason is None:
                     # gpt-4 vision can return 'finish_reason' or 'finish_details'
-                    finish_reason = choice.get("finish_details")
+                    finish_reason = choice.get("finish_details") or "stop"
                 logprobs = choice.get("logprobs", None)
                 enhancements = choice.get("enhancements", None)
                 choice = Choices(
