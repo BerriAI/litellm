@@ -251,7 +251,7 @@ def test_cost_azure_gpt_35():
         )
 
         cost = litellm.completion_cost(
-            completion_response=resp, model="azure/chatgpt-v-2"
+            completion_response=resp, model="azure/gpt-35-turbo"
         )
         print("\n Calculated Cost for azure/gpt-3.5-turbo", cost)
         input_cost = model_cost["azure/gpt-35-turbo"]["input_cost_per_token"]
