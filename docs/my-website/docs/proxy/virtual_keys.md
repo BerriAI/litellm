@@ -34,6 +34,7 @@ You can then generate keys by hitting the `/key/generate` endpoint.
 
 [**See code**](https://github.com/BerriAI/litellm/blob/7a669a36d2689c7f7890bc9c93e04ff3c2641299/litellm/proxy/proxy_server.py#L672)
 
+## **Quick Start - Generate a Key**
 **Step 1: Save postgres db url**
 
 ```yaml
@@ -65,7 +66,7 @@ curl 'http://0.0.0.0:4000/key/generate' \
 --data-raw '{"models": ["gpt-3.5-turbo", "gpt-4"], "metadata": {"user": "ishaan@berri.ai"}}'
 ```
 
-## Advanced - Spend Tracking 
+## Spend Tracking 
 
 Get spend per:
 - key - via `/key/info` [Swagger](https://litellm-api.up.railway.app/#/key%20management/info_key_fn_key_info_get)
@@ -223,7 +224,7 @@ Expected Response
 </TabItem>
 </Tabs>
 
-## Advanced - Model Access
+## **Model Access**
 
 ### Restrict models by `team_id`
 `litellm-dev` can only access `azure-gpt-3.5`
@@ -347,7 +348,9 @@ curl --location 'http://localhost:4000/key/generate' \
 			"max_budget": 0,}'
 ```
 
-## Advanced - Pass LiteLLM Key in custom header
+## Advanced
+
+### Pass LiteLLM Key in custom header
 
 Use this to make LiteLLM proxy look for the virtual key in a custom header instead of the default `"Authorization"` header
 
@@ -411,7 +414,7 @@ client = openai.OpenAI(
 </TabItem>
 </Tabs>
 
-## Advanced - Custom Auth 
+### Custom Auth 
 
 You can now override the default api key auth.
 
@@ -550,7 +553,7 @@ general_settings:
 ```
 
 
-## Upperbound /key/generate params
+### Upperbound /key/generate params
 Use this, if you need to set default upperbounds for `max_budget`, `budget_duration` or any `key/generate` param per key. 
 
 Set `litellm_settings:upperbound_key_generate_params`:
@@ -566,7 +569,7 @@ litellm_settings:
 - Send a `/key/generate` request with `max_budget=200`
 - Key will be created with `max_budget=100` since 100 is the upper bound
 
-## Default /key/generate params
+### Default /key/generate params
 Use this, if you need to control the default `max_budget` or any `key/generate` param per key. 
 
 When a `/key/generate` request does not specify `max_budget`, it will use the `max_budget` specified in `default_key_generate_params`
@@ -582,7 +585,11 @@ litellm_settings:
     team_id: "core-infra"
 ```
 
-## Endpoints
+## **Next Steps - Set Budgets, Rate Limits per Virtual Key**
+
+[Follow this doc to set budgets, rate limiters per virtual key with LiteLLM](users)
+
+## Endpoint Reference (Spec)
 
 ### Keys 
 
