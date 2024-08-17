@@ -192,7 +192,8 @@ const sidebars = {
         "batches",
         "fine_tuning",
         "anthropic_completion",
-        "vertex_ai"
+        "pass_through/vertex_ai",
+        "pass_through/google_ai_studio"
       ],
     },
     "scheduler",
