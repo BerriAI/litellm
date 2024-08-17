@@ -274,6 +274,7 @@ class Logging:
                 headers = {}
             data = additional_args.get("complete_input_dict", {})
             api_base = str(additional_args.get("api_base", ""))
+            query_params = additional_args.get("query_params", {})
             if "key=" in api_base:
                 # Find the position of "key=" in the string
                 key_index = api_base.find("key=") + 4
@@ -2362,7 +2363,7 @@ def get_standard_logging_object_payload(
 
         return payload
     except Exception as e:
-        verbose_logger.error(
+        verbose_logger.exception(
             "Error creating standard logging object - {}".format(str(e))
         )
         return None

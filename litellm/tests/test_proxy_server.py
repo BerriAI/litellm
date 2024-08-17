@@ -1166,3 +1166,52 @@ async def test_add_callback_via_key_litellm_pre_call_utils(prisma_client):
     assert new_data["success_callback"] == ["langfuse"]
     assert "langfuse_public_key" in new_data
     assert "langfuse_secret_key" in new_data
+
+
+@pytest.mark.asyncio
+async def test_gemini_pass_through_endpoint():
+    from starlette.datastructures import URL
+
+    from litellm.proxy.vertex_ai_endpoints.google_ai_studio_endpoints import (
+        Request,
+        Response,
+        gemini_proxy_route,
+    )
+
+    body = b"""
+        {
+            "contents": [{
+                "parts":[{
+                "text": "The quick brown fox jumps over the lazy dog."
+                }]
+                }]
+        }
+        """
+
+    # Construct the scope dictionary
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/gemini/v1beta/models/gemini-1.5-flash:countTokens",
+        "query_string": b"key=sk-1234",
+        "headers": [
+            (b"content-type", b"application/json"),
+        ],
+    }
+
+    # Create a new Request object
+    async def async_receive():
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    request = Request(
+        scope=scope,
+        receive=async_receive,
+    )
+
+    resp = await gemini_proxy_route(
+        endpoint="v1beta/models/gemini-1.5-flash:countTokens?key=sk-1234",
+        request=request,
+        fastapi_response=Response(),
+    )
+
+    print(resp.body)
