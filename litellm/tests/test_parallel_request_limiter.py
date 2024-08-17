@@ -1046,7 +1046,9 @@ async def test_pre_call_hook_rpm_limits_per_model():
 
     kwargs = {
         "model": model,
-        "litellm_params": {"metadata": {"user_api_key": _api_key}},
+        "litellm_params": {
+            "metadata": {"user_api_key": _api_key, "model_group": model}
+        },
     }
 
     await parallel_request_handler.async_log_success_event(
@@ -1121,7 +1123,9 @@ async def test_pre_call_hook_tpm_limits_per_model():
 
     kwargs = {
         "model": model,
-        "litellm_params": {"metadata": {"user_api_key": _api_key}},
+        "litellm_params": {
+            "metadata": {"user_api_key": _api_key, "model_group": model}
+        },
     }
 
     await parallel_request_handler.async_log_success_event(
