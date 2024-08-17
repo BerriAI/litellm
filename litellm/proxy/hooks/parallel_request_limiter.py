@@ -280,6 +280,9 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 f"litellm-key-remaining-tokens-{_model}": _remaining_tokens,
                 f"litellm-key-remaining-requests-{_model}": _remaining_requests,
             }
+
+            if "metadata" not in data:
+                data["metadata"] = {}
             data["metadata"].update(_remaining_limits_data)
 
         # check if REQUEST ALLOWED for user_id
