@@ -1499,6 +1499,14 @@ class VertexLLM(BaseLLM):
         """
 
         _json_response = response.json()
+
+        if "predictions" not in _json_response:
+            raise litellm.InternalServerError(
+                message=f"image generation response does not contain 'predictions', got {_json_response}",
+                llm_provider="vertex_ai",
+                model=model,
+            )
+
         _predictions = _json_response["predictions"]
 
         _response_data: List[Image] = []

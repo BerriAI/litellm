@@ -118,4 +118,8 @@ class _ENTERPRISE_BlockedUserList(CustomLogger):
         except HTTPException as e:
             raise e
         except Exception as e:
-            verbose_proxy_logger.error(traceback.format_exc())
+            verbose_proxy_logger.exception(
+                "litellm.enterprise.enterprise_hooks.blocked_user_list::async_pre_call_hook - Exception occurred - {}".format(
+                    str(e)
+                )
+            )

@@ -356,7 +356,7 @@ def ollama_completion_stream(url, api_key, data, logging_obj):
         "json": data,
         "method": "POST",
         "timeout": litellm.request_timeout,
-        "follow_redirects": True
+        "follow_redirects": True,
     }
     if api_key is not None:
         _request["headers"] = {"Authorization": "Bearer {}".format(api_key)}
@@ -471,8 +471,9 @@ async def ollama_async_streaming(
                 async for transformed_chunk in streamwrapper:
                     yield transformed_chunk
     except Exception as e:
-        verbose_logger.error("LiteLLM.gemini(): Exception occured - {}".format(str(e)))
-        verbose_logger.debug(traceback.format_exc())
+        verbose_logger.exception(
+            "LiteLLM.ollama(): Exception occured - {}".format(str(e))
+        )
 
 
 async def ollama_acompletion(
@@ -559,9 +560,8 @@ async def ollama_acompletion(
             )
             return model_response
     except Exception as e:
-        verbose_logger.error(
+        verbose_logger.exception(
             "LiteLLM.ollama_acompletion(): Exception occured - {}".format(str(e))
         )
-        verbose_logger.debug(traceback.format_exc())
 
         raise e
