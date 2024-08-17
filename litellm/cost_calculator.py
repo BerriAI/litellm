@@ -412,7 +412,7 @@ def get_replicate_completion_pricing(completion_response=None, total_time=0.0):
 
 def _select_model_name_for_cost_calc(
     model: Optional[str],
-    completion_response: Union[BaseModel, dict],
+    completion_response: Union[BaseModel, dict, str],
     base_model: Optional[str] = None,
     custom_pricing: Optional[bool] = None,
 ) -> Optional[str]:
@@ -428,7 +428,12 @@ def _select_model_name_for_cost_calc(
     if base_model is not None:
         return base_model
 
-    return_model = model or completion_response.get("model", "")  # type: ignore
+    return_model = model
+    if isinstance(completion_response, str):
+        return return_model
+
+    elif return_model is None:
+        return_model = completion_response.get("model", "")  # type: ignore
     if hasattr(completion_response, "_hidden_params"):
         if (
             completion_response._hidden_params.get("model", None) is not None
