@@ -324,6 +324,9 @@ async def update_key_fn(
         # get non default values for key
         non_default_values = {}
         for k, v in data_json.items():
+            # this field gets stored in metadata
+            if key == "model_rpm_limit" or key == "model_tpm_limit":
+                continue
             if v is not None and v not in (
                 [],
                 {},
@@ -345,9 +348,23 @@ async def update_key_fn(
             non_default_values["budget_reset_at"] = key_reset_at
 
         # Update metadata for virtual Key
-        _metadata = existing_key_row.metadata or {}
-        _metadata.update(data_json.get("metadata", {}))
-        non_default_values["metadata"] = _metadata
+        if data.model_tpm_limit:
+            _metadata = existing_key_row.metadata or {}
+            if "model_tpm_limit" not in _metadata:
+                _metadata["model_tpm_limit"] = {}
+
+            _metadata["model_tpm_limit"].update(data.model_tpm_limit)
+            non_default_values["metadata"] = _metadata
+            non_default_values.pop("model_tpm_limit", None)
+
+        if data.model_rpm_limit:
+            _metadata = existing_key_row.metadata or {}
+            if "model_rpm_limit" not in _metadata:
+                _metadata["model_rpm_limit"] = {}
+
+            _metadata["model_rpm_limit"].update(data.model_rpm_limit)
+            non_default_values["metadata"] = _metadata
+            non_default_values.pop("model_rpm_limit", None)
 
         response = await prisma_client.update_data(
             token=key, data={**non_default_values, "token": key}
