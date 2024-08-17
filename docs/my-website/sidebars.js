@@ -235,7 +235,6 @@ const sidebars = {
         "observability/openmeter",
         "observability/promptlayer_integration",
         "observability/wandb_integration",
-        "observability/slack_integration",
         "observability/traceloop_integration",
         "observability/athina_integration",
         "observability/lunary_integration",
