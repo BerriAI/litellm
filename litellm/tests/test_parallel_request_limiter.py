@@ -948,8 +948,10 @@ async def test_bad_router_tpm_limit_per_model():
         api_key=_api_key,
         max_parallel_requests=10,
         tpm_limit=10,
-        tpm_limit_per_model={model: 5},
-        rpm_limit_per_model={model: 5},
+        metadata={
+            "model_rpm_limit": {model: 5},
+            "model_tpm_limit": {model: 5},
+        },
     )
     local_cache = DualCache()
     pl = ProxyLogging(user_api_key_cache=local_cache)
@@ -1026,7 +1028,9 @@ async def test_pre_call_hook_rpm_limits_per_model():
         max_parallel_requests=100,
         tpm_limit=900000,
         rpm_limit=100000,
-        rpm_limit_per_model={"azure-model": 1},
+        metadata={
+            "model_rpm_limit": {"azure-model": 1},
+        },
     )
     local_cache = DualCache()
     pl = ProxyLogging(user_api_key_cache=local_cache)
@@ -1096,8 +1100,10 @@ async def test_pre_call_hook_tpm_limits_per_model():
         max_parallel_requests=100,
         tpm_limit=900000,
         rpm_limit=100000,
-        rpm_limit_per_model={"azure-model": 100},
-        tpm_limit_per_model={"azure-model": 10},
+        metadata={
+            "model_tpm_limit": {"azure-model": 1},
+            "model_rpm_limit": {"azure-model": 100},
+        },
     )
     local_cache = DualCache()
     pl = ProxyLogging(user_api_key_cache=local_cache)
