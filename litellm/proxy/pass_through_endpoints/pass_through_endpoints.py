@@ -320,7 +320,7 @@ async def pass_through_request(
             call_type="pass_through_endpoint",
         )
 
-        async_client = httpx.AsyncClient()
+        async_client = httpx.AsyncClient(timeout=600)
 
         # create logging object
         start_time = time.time()

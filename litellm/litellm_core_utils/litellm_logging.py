@@ -2321,7 +2321,7 @@ def get_standard_logging_object_payload(
                     model_map_value=_model_cost_information,
                 )
             except Exception:
-                verbose_logger.warning(
+                verbose_logger.debug(  # keep in debug otherwise it will trigger on every call
                     "Model is not mapped in model cost map. Defaulting to None model_cost_information for standard_logging_payload"
                 )
                 model_cost_information = StandardLoggingModelInformation(
