@@ -4779,7 +4779,9 @@ async def ahealth_check(
     For azure/openai -> completion.with_raw_response
     For rest -> litellm.acompletion()
     """
+    passed_in_mode: Optional[str] = None
     try:
+
         model: Optional[str] = model_params.get("model", None)
 
         if model is None:
@@ -4793,7 +4795,10 @@ async def ahealth_check(
         if model in litellm.model_cost and mode is None:
             mode = litellm.model_cost[model].get("mode")
 
-        mode = mode or "chat"  # default to chat completion calls
+        mode = mode
+        passed_in_mode = mode
+        if mode is None:
+            mode = "chat"  # default to chat completion calls
 
         if custom_llm_provider == "azure":
             api_key = (
@@ -4883,13 +4888,14 @@ async def ahealth_check(
                 response = {}  # args like remaining ratelimit etc.
         return response
     except Exception as e:
-        verbose_logger.error(
+        verbose_logger.exception(
             "litellm.ahealth_check(): Exception occured - {}".format(str(e))
         )
         stack_trace = traceback.format_exc()
         if isinstance(stack_trace, str):
             stack_trace = stack_trace[:1000]
-        if model not in litellm.model_cost and mode is None:
+
+        if passed_in_mode is None:
             return {
                 "error": "Missing `mode`. Set the `mode` for the model - https://docs.litellm.ai/docs/proxy/health#embedding-models"
             }
