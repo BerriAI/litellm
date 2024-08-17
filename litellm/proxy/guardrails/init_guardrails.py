@@ -5,7 +5,7 @@ from pydantic import BaseModel, RootModel
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy.common_utils.init_callbacks import initialize_callbacks_on_proxy
+from litellm.proxy.common_utils.callback_utils import initialize_callbacks_on_proxy
 from litellm.types.guardrails import GuardrailItem, GuardrailItemSpec
 
 all_guardrails: List[GuardrailItem] = []
