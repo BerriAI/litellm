@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 ILLEGAL_DISPLAY_PARAMS = ["messages", "api_key", "prompt", "input"]
 
-MINIMAL_DISPLAY_PARAMS = ["model"]
+MINIMAL_DISPLAY_PARAMS = ["model", "mode_error"]
 
 
 def _get_random_llm_message():
@@ -31,7 +31,7 @@ def _clean_endpoint_data(endpoint_data: dict, details: Optional[bool] = True):
     """
     return (
         {k: v for k, v in endpoint_data.items() if k not in ILLEGAL_DISPLAY_PARAMS}
-        if details
+        if details is not False
         else {k: v for k, v in endpoint_data.items() if k in MINIMAL_DISPLAY_PARAMS}
     )
 
