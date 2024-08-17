@@ -210,3 +210,20 @@ def bytes_to_mb(bytes_value: int):
     Helper to convert bytes to MB
     """
     return bytes_value / (1024 * 1024)
+
+
+# helpers used by parallel request limiter to handle model rpm/tpm limits for a given api key
+def get_key_model_rpm_limit(user_api_key_dict: UserAPIKeyAuth) -> Optional[dict]:
+    if user_api_key_dict.metadata:
+        if "model_rpm_limit" in user_api_key_dict.metadata:
+            return user_api_key_dict.metadata["model_rpm_limit"]
+
+    return None
+
+
+def get_key_model_tpm_limit(user_api_key_dict: UserAPIKeyAuth) -> Optional[dict]:
+    if user_api_key_dict.metadata:
+        if "model_tpm_limit" in user_api_key_dict.metadata:
+            return user_api_key_dict.metadata["model_tpm_limit"]
+
+    return None

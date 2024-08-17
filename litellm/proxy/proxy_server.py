@@ -148,6 +148,7 @@ from litellm.proxy.common_utils.admin_ui_utils import (
     html_form,
     show_missing_vars_in_env,
 )
+from litellm.proxy.common_utils.callback_utils import initialize_callbacks_on_proxy
 from litellm.proxy.common_utils.debug_utils import init_verbose_loggers
 from litellm.proxy.common_utils.debug_utils import router as debugging_endpoints_router
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
@@ -158,7 +159,6 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     check_file_size_under_limit,
 )
-from litellm.proxy.common_utils.init_callbacks import initialize_callbacks_on_proxy
 from litellm.proxy.common_utils.load_config_utils import get_file_contents_from_s3
 from litellm.proxy.common_utils.openai_endpoint_utils import (
     remove_sensitive_info_from_deployment,
@@ -199,7 +199,6 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     router as pass_through_router,
 )
 from litellm.proxy.route_llm_request import route_request
-
 from litellm.proxy.secret_managers.aws_secret_manager import (
     load_aws_kms,
     load_aws_secret_manager,
