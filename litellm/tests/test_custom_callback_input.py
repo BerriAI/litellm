@@ -1171,7 +1171,8 @@ def test_turn_off_message_logging():
 ##### VALID JSON ######
 
 
-def test_standard_logging_payload():
+@pytest.mark.parametrize("model", ["gpt-3.5-turbo", "azure/chatgpt-v-2"])
+def test_standard_logging_payload(model):
     """
     Ensure valid standard_logging_payload is passed for logging calls to s3
 
@@ -1187,9 +1188,9 @@ def test_standard_logging_payload():
         customHandler, "log_success_event", new=MagicMock()
     ) as mock_client:
         _ = litellm.completion(
-            model="gpt-3.5-turbo",
+            model=model,
             messages=[{"role": "user", "content": "Hey, how's it going?"}],
-            mock_response="Going well!",
+            # mock_response="Going well!",
         )
 
         time.sleep(2)
@@ -1204,7 +1205,11 @@ def test_standard_logging_payload():
             is not None
         )
 
-        print(mock_client.call_args.kwargs["kwargs"]["standard_logging_object"])
+        print(
+            "Standard Logging Object - {}".format(
+                mock_client.call_args.kwargs["kwargs"]["standard_logging_object"]
+            )
+        )
 
         keys_list = list(StandardLoggingPayload.__annotations__.keys())
 
@@ -1225,4 +1230,10 @@ def test_standard_logging_payload():
                 "response_cost"
             ]
             > 0
+        )
+        assert (
+            mock_client.call_args.kwargs["kwargs"]["standard_logging_object"][
+                "model_map_information"
+            ]["model_map_value"]
+            is not None
         )
