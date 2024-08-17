@@ -215,6 +215,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             current = await self.internal_usage_cache.async_get_cache(
                 key=request_count_api_key
             )  # {"current_requests": 1, "current_tpm": 1, "current_rpm": 10}
+
             tpm_limit_for_model = None
             rpm_limit_for_model = None
 
@@ -237,8 +238,9 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     request_count_api_key, new_val
                 )
             elif tpm_limit_for_model is not None or rpm_limit_for_model is not None:
+                # Increase count for this token
                 new_val = {
-                    "current_requests": 1,
+                    "current_requests": current["current_requests"] + 1,
                     "current_tpm": current["current_tpm"],
                     "current_rpm": current["current_rpm"],
                 }
@@ -247,14 +249,18 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     and current["current_tpm"] >= tpm_limit_for_model
                 ):
                     return self.raise_rate_limit_error(
-                        additional_details=f"Hit limit for model: {_model} on  api_key: {api_key}. tpm_limit: {tpm_limit_for_model}, current_tpm {current['current_tpm']} "
+                        additional_details=f"Hit TPM limit for model: {_model} on api_key: {api_key}. tpm_limit: {tpm_limit_for_model}, current_tpm {current['current_tpm']} "
                     )
                 elif (
                     rpm_limit_for_model is not None
                     and current["current_rpm"] >= rpm_limit_for_model
                 ):
                     return self.raise_rate_limit_error(
-                        additional_details=f"Hit limit for model: {_model} on  api_key: {api_key}. rpm_limit: {rpm_limit_for_model}, current_rpm {current['current_rpm']} "
+                        additional_details=f"Hit RPM limit for model: {_model} on api_key: {api_key}. rpm_limit: {rpm_limit_for_model}, current_rpm {current['current_rpm']} "
+                    )
+                else:
+                    await self.internal_usage_cache.async_set_cache(
+                        request_count_api_key, new_val
                     )
 
         # check if REQUEST ALLOWED for user_id
