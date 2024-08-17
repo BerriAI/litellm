@@ -329,10 +329,9 @@ class PrometheusLogger(CustomLogger):
             ).inc()
             self.set_llm_deployment_failure_metrics(kwargs)
         except Exception as e:
-            verbose_logger.error(
+            verbose_logger.exception(
                 "prometheus Layer Error(): Exception occured - {}".format(str(e))
             )
-            verbose_logger.debug(traceback.format_exc())
             pass
         pass
 
