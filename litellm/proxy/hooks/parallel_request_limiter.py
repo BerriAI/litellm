@@ -202,6 +202,61 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     additional_details=f"Hit limit for api_key: {api_key}. tpm_limit: {tpm_limit}, current_tpm {current['current_tpm']} , rpm_limit: {rpm_limit} current rpm {current['current_rpm']} "
                 )
 
+        # Check if request under RPM/TPM per model for a given API Key
+        if (
+            user_api_key_dict.tpm_limit_per_model
+            or user_api_key_dict.rpm_limit_per_model
+        ):
+            _model = data.get("model", None)
+            request_count_api_key = (
+                f"{api_key}::{_model}::{precise_minute}::request_count"
+            )
+
+            current = await self.internal_usage_cache.async_get_cache(
+                key=request_count_api_key
+            )  # {"current_requests": 1, "current_tpm": 1, "current_rpm": 10}
+            tpm_limit_for_model = None
+            rpm_limit_for_model = None
+
+            if _model is not None:
+                if user_api_key_dict.tpm_limit_per_model:
+                    tpm_limit_for_model = user_api_key_dict.tpm_limit_per_model.get(
+                        _model
+                    )
+                if user_api_key_dict.rpm_limit_per_model:
+                    rpm_limit_for_model = user_api_key_dict.rpm_limit_per_model.get(
+                        _model
+                    )
+            if current is None:
+                new_val = {
+                    "current_requests": 1,
+                    "current_tpm": 0,
+                    "current_rpm": 0,
+                }
+                await self.internal_usage_cache.async_set_cache(
+                    request_count_api_key, new_val
+                )
+            elif tpm_limit_for_model is not None or rpm_limit_for_model is not None:
+                new_val = {
+                    "current_requests": 1,
+                    "current_tpm": current["current_tpm"],
+                    "current_rpm": current["current_rpm"],
+                }
+                if (
+                    tpm_limit_for_model is not None
+                    and current["current_tpm"] >= tpm_limit_for_model
+                ):
+                    return self.raise_rate_limit_error(
+                        additional_details=f"Hit limit for model: {_model} on  api_key: {api_key}. tpm_limit: {tpm_limit_for_model}, current_tpm {current['current_tpm']} "
+                    )
+                elif (
+                    rpm_limit_for_model is not None
+                    and current["current_rpm"] >= rpm_limit_for_model
+                ):
+                    return self.raise_rate_limit_error(
+                        additional_details=f"Hit limit for model: {_model} on  api_key: {api_key}. rpm_limit: {rpm_limit_for_model}, current_rpm {current['current_rpm']} "
+                    )
+
         # check if REQUEST ALLOWED for user_id
         user_id = user_api_key_dict.user_id
         if user_id is not None:
@@ -364,6 +419,36 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 await self.internal_usage_cache.async_set_cache(
                     request_count_api_key, new_val, ttl=60
                 )  # store in cache for 1 min.
+
+            # ------------
+            # Update usage - model + API Key
+            # ------------
+            _model = kwargs.get("model")
+            if user_api_key is not None and _model is not None:
+                request_count_api_key = (
+                    f"{user_api_key}::{_model}::{precise_minute}::request_count"
+                )
+
+                current = await self.internal_usage_cache.async_get_cache(
+                    key=request_count_api_key
+                ) or {
+                    "current_requests": 1,
+                    "current_tpm": total_tokens,
+                    "current_rpm": 1,
+                }
+
+                new_val = {
+                    "current_requests": max(current["current_requests"] - 1, 0),
+                    "current_tpm": current["current_tpm"] + total_tokens,
+                    "current_rpm": current["current_rpm"] + 1,
+                }
+
+                self.print_verbose(
+                    f"updated_value in success call: {new_val}, precise_minute: {precise_minute}"
+                )
+                await self.internal_usage_cache.async_set_cache(
+                    request_count_api_key, new_val, ttl=60
+                )
 
             # ------------
             # Update usage - User
