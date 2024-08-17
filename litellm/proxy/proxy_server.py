@@ -227,6 +227,9 @@ from litellm.proxy.utils import (
     send_email,
     update_spend,
 )
+from litellm.proxy.vertex_ai_endpoints.google_ai_studio_endpoints import (
+    router as gemini_router,
+)
 from litellm.proxy.vertex_ai_endpoints.vertex_endpoints import router as vertex_router
 from litellm.proxy.vertex_ai_endpoints.vertex_endpoints import set_default_vertex_config
 from litellm.router import (
@@ -9704,6 +9707,7 @@ def cleanup_router_config_variables():
 app.include_router(router)
 app.include_router(fine_tuning_router)
 app.include_router(vertex_router)
+app.include_router(gemini_router)
 app.include_router(pass_through_router)
 app.include_router(health_router)
 app.include_router(key_management_router)
