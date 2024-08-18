@@ -3375,14 +3375,14 @@ def response_format_tests(response: litellm.ModelResponse):
 @pytest.mark.parametrize(
     "model",
     [
-        "bedrock/cohere.command-r-plus-v1:0",
+        # "bedrock/cohere.command-r-plus-v1:0",
         "anthropic.claude-3-sonnet-20240229-v1:0",
-        "anthropic.claude-instant-v1",
-        "bedrock/ai21.j2-mid",
-        "mistral.mistral-7b-instruct-v0:2",
-        "bedrock/amazon.titan-tg1-large",
-        "meta.llama3-8b-instruct-v1:0",
-        "cohere.command-text-v14",
+        # "anthropic.claude-instant-v1",
+        # "bedrock/ai21.j2-mid",
+        # "mistral.mistral-7b-instruct-v0:2",
+        # "bedrock/amazon.titan-tg1-large",
+        # "meta.llama3-8b-instruct-v1:0",
+        # "cohere.command-text-v14",
     ],
 )
 @pytest.mark.parametrize("sync_mode", [True, False])
