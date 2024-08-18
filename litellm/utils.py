@@ -9053,6 +9053,9 @@ class CustomStreamWrapper:
             text = ""
             is_finished = False
             finish_reason = ""
+            index: Optional[int] = None
+            if "index" in data_json:
+                index = data_json.get("index")
             if "text" in data_json:
                 text = data_json["text"]
             elif "is_finished" in data_json:
@@ -9061,6 +9064,7 @@ class CustomStreamWrapper:
             else:
                 raise Exception(data_json)
             return {
+                "index": index,
                 "text": text,
                 "is_finished": is_finished,
                 "finish_reason": finish_reason,
@@ -10246,6 +10250,10 @@ class CustomStreamWrapper:
                             completion_obj["role"] = "assistant"
                             self.sent_first_chunk = True
                         model_response.choices[0].delta = Delta(**completion_obj)
+                        if completion_obj.get("index") is not None:
+                            model_response.choices[0].index = completion_obj.get(
+                                "index"
+                            )
                     print_verbose(f"returning model_response: {model_response}")
                     return model_response
                 else:
