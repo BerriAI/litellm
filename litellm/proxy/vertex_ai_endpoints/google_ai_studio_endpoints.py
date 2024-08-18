@@ -45,6 +45,16 @@ router = APIRouter()
 default_vertex_config = None
 
 
+def create_request_copy(request: Request):
+    return {
+        "method": request.method,
+        "url": str(request.url),
+        "headers": dict(request.headers),
+        "cookies": request.cookies,
+        "query_params": dict(request.query_params),
+    }
+
+
 @router.api_route("/gemini/{endpoint:path}", methods=["GET", "POST", "PUT", "DELETE"])
 async def gemini_proxy_route(
     endpoint: str,
@@ -133,6 +143,75 @@ async def cohere_proxy_route(
         fastapi_response,
         user_api_key_dict,
         stream=is_streaming_request,
+    )
+
+    return received_value
+
+
+@router.api_route("/bedrock/{endpoint:path}", methods=["GET", "POST", "PUT", "DELETE"])
+async def bedrock_proxy_route(
+    endpoint: str,
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    request_copy = create_request_copy(request)
+
+    try:
+        import boto3
+        from botocore.auth import SigV4Auth
+        from botocore.awsrequest import AWSRequest
+        from botocore.credentials import Credentials
+    except ImportError as e:
+        raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
+
+    aws_region_name = litellm.utils.get_secret(secret_name="AWS_REGION_NAME")
+    base_target_url = f"https://bedrock-runtime.{aws_region_name}.amazonaws.com"
+    encoded_endpoint = httpx.URL(endpoint).path
+
+    # Ensure endpoint starts with '/' for proper URL construction
+    if not encoded_endpoint.startswith("/"):
+        encoded_endpoint = "/" + encoded_endpoint
+
+    # Construct the full target URL using httpx
+    base_url = httpx.URL(base_target_url)
+    updated_url = base_url.copy_with(path=encoded_endpoint)
+
+    # Add or update query parameters
+    from litellm.llms.bedrock_httpx import BedrockConverseLLM
+
+    credentials: Credentials = BedrockConverseLLM().get_credentials()
+    sigv4 = SigV4Auth(credentials, "bedrock", aws_region_name)
+    headers = {"Content-Type": "application/json"}
+    # Assuming the body contains JSON data, parse it
+    try:
+        data = await request.json()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail={"error": e})
+    _request = AWSRequest(
+        method="POST", url=str(updated_url), data=json.dumps(data), headers=headers
+    )
+    sigv4.add_auth(_request)
+    prepped = _request.prepare()
+
+    ## check for streaming
+    is_streaming_request = False
+    if "stream" in str(updated_url):
+        is_streaming_request = True
+
+    ## CREATE PASS-THROUGH
+    endpoint_func = create_pass_through_route(
+        endpoint=endpoint,
+        target=str(prepped.url),
+        custom_headers=prepped.headers,
+    )  # dynamically construct pass-through endpoint based on incoming path
+    received_value = await endpoint_func(
+        request,
+        fastapi_response,
+        user_api_key_dict,
+        stream=is_streaming_request,
+        custom_body=data,
+        query_params={},
     )
 
     return received_value
