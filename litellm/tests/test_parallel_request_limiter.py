@@ -990,7 +990,13 @@ async def test_bad_router_tpm_limit_per_model():
             model=model,
             messages=[{"role": "user2", "content": "Write me a paragraph on the moon"}],
             stream=True,
-            metadata={"user_api_key": _api_key},
+            metadata={
+                "user_api_key": _api_key,
+                "user_api_key_metadata": {
+                    "model_rpm_limit": {model: 5},
+                    "model_tpm_limit": {model: 5},
+                },
+            },
         )
     except:
         pass
@@ -1047,7 +1053,11 @@ async def test_pre_call_hook_rpm_limits_per_model():
     kwargs = {
         "model": model,
         "litellm_params": {
-            "metadata": {"user_api_key": _api_key, "model_group": model}
+            "metadata": {
+                "user_api_key": _api_key,
+                "model_group": model,
+                "user_api_key_metadata": {"model_rpm_limit": {"azure-model": 1}},
+            },
         },
     }
 
@@ -1124,7 +1134,14 @@ async def test_pre_call_hook_tpm_limits_per_model():
     kwargs = {
         "model": model,
         "litellm_params": {
-            "metadata": {"user_api_key": _api_key, "model_group": model}
+            "metadata": {
+                "user_api_key": _api_key,
+                "model_group": model,
+                "user_api_key_metadata": {
+                    "model_tpm_limit": {"azure-model": 1},
+                    "model_rpm_limit": {"azure-model": 100},
+                },
+            }
         },
     }
 

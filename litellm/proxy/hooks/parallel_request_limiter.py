@@ -400,6 +400,11 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             )
             user_api_key_end_user_id = kwargs.get("user")
 
+            user_api_key_metadata = (
+                kwargs["litellm_params"]["metadata"].get("user_api_key_metadata", {})
+                or {}
+            )
+
             # ------------
             # Setup values
             # ------------
@@ -456,7 +461,14 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             # Update usage - model group + API Key
             # ------------
             model_group = get_model_group_from_litellm_kwargs(kwargs)
-            if user_api_key is not None and model_group is not None:
+            if (
+                user_api_key is not None
+                and model_group is not None
+                and (
+                    "model_rpm_limit" in user_api_key_metadata
+                    or "model_tpm_limit" in user_api_key_metadata
+                )
+            ):
                 request_count_api_key = (
                     f"{user_api_key}::{model_group}::{precise_minute}::request_count"
                 )
