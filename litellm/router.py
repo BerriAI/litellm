@@ -421,6 +421,7 @@ class Router:
             routing_strategy=routing_strategy,
             routing_strategy_args=routing_strategy_args,
         )
+        self.access_groups = None
         ## USAGE TRACKING ##
         if isinstance(litellm._async_success_callback, list):
             litellm._async_success_callback.append(self.deployment_callback_on_success)
@@ -4115,6 +4116,22 @@ class Router:
         if hasattr(self, "model_list"):
             return self.model_list
         return None
+
+    def get_model_access_groups(self):
+        from collections import defaultdict
+
+        access_groups = defaultdict(list)
+        if self.access_groups:
+            return self.access_groups
+
+        if self.model_list:
+            for m in self.model_list:
+                for group in m.get("model_info", {}).get("access_groups", []):
+                    model_name = m["model_name"]
+                    access_groups[group].append(model_name)
+        # set access groups
+        self.access_groups = access_groups
+        return access_groups
 
     def get_settings(self):
         """
