@@ -230,11 +230,6 @@ Expected Response
 
 Set allowed models for a key using the `models` param
 
-:::info
-
-This key can only make requests to `models` that are `gpt-3.5-turbo` or `gpt-4`
-
-:::
 
 ```shell
 curl 'http://0.0.0.0:4000/key/generate' \
@@ -243,6 +238,11 @@ curl 'http://0.0.0.0:4000/key/generate' \
 --data-raw '{"models": ["gpt-3.5-turbo", "gpt-4"]}'
 ```
 
+:::info
+
+This key can only make requests to `models` that are `gpt-3.5-turbo` or `gpt-4`
+
+:::
 
 Verify this is set correctly by 
 
