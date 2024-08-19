@@ -2944,7 +2944,7 @@ class Router:
                 elif isinstance(id, int):
                     id = str(id)
 
-                total_tokens = completion_response["usage"]["total_tokens"]
+                total_tokens = completion_response["usage"].get("total_tokens", 0)
 
                 # ------------
                 # Setup values
@@ -3865,6 +3865,7 @@ class Router:
                     if supported_openai_params is None:
                         supported_openai_params = []
                     model_info = ModelMapInfo(
+                        key=model_group,
                         max_tokens=None,
                         max_input_tokens=None,
                         max_output_tokens=None,

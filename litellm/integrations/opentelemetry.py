@@ -263,14 +263,25 @@ class OpenTelemetry(CustomLogger):
     def _handle_failure(self, kwargs, response_obj, start_time, end_time):
         from opentelemetry.trace import Status, StatusCode
 
+        verbose_logger.debug(
+            "OpenTelemetry Logger: Failure HandlerLogging kwargs: %s, OTEL config settings=%s",
+            kwargs,
+            self.config,
+        )
+        _parent_context, parent_otel_span = self._get_span_context(kwargs)
+
+        # Span 1: Requst sent to litellm SDK
         span = self.tracer.start_span(
             name=self._get_span_name(kwargs),
             start_time=self._to_ns(start_time),
-            context=self._get_span_context(kwargs),
+            context=_parent_context,
         )
         span.set_status(Status(StatusCode.ERROR))
         self.set_attributes(span, kwargs, response_obj)
         span.end(end_time=self._to_ns(end_time))
+
+        if parent_otel_span is not None:
+            parent_otel_span.end(end_time=self._to_ns(datetime.now()))
 
     def set_tools_attributes(self, span: Span, tools):
         import json
@@ -304,153 +315,165 @@ class OpenTelemetry(CustomLogger):
         return isinstance(value, (str, bool, int, float))
 
     def set_attributes(self, span: Span, kwargs, response_obj):
-        if self.callback_name == "arize":
-            from litellm.integrations.arize_ai import set_arize_ai_attributes
+        try:
+            if self.callback_name == "arize":
+                from litellm.integrations.arize_ai import set_arize_ai_attributes
 
-            set_arize_ai_attributes(span, kwargs, response_obj)
-            return
-        from litellm.proxy._types import SpanAttributes
+                set_arize_ai_attributes(span, kwargs, response_obj)
+                return
+            from litellm.proxy._types import SpanAttributes
 
-        optional_params = kwargs.get("optional_params", {})
-        litellm_params = kwargs.get("litellm_params", {}) or {}
+            optional_params = kwargs.get("optional_params", {})
+            litellm_params = kwargs.get("litellm_params", {}) or {}
 
-        # https://github.com/open-telemetry/semantic-conventions/blob/main/model/registry/gen-ai.yaml
-        # Following Conventions here: https://github.com/open-telemetry/semantic-conventions/blob/main/docs/gen-ai/llm-spans.md
-        #############################################
-        ############ LLM CALL METADATA ##############
-        #############################################
-        metadata = litellm_params.get("metadata", {}) or {}
+            # https://github.com/open-telemetry/semantic-conventions/blob/main/model/registry/gen-ai.yaml
+            # Following Conventions here: https://github.com/open-telemetry/semantic-conventions/blob/main/docs/gen-ai/llm-spans.md
+            #############################################
+            ############ LLM CALL METADATA ##############
+            #############################################
+            metadata = litellm_params.get("metadata", {}) or {}
 
-        clean_metadata = redact_user_api_key_info(metadata=metadata)
+            clean_metadata = redact_user_api_key_info(metadata=metadata)
 
-        for key, value in clean_metadata.items():
-            if self.is_primitive(value):
-                span.set_attribute("metadata.{}".format(key), value)
+            for key, value in clean_metadata.items():
+                if self.is_primitive(value):
+                    span.set_attribute("metadata.{}".format(key), value)
 
-        #############################################
-        ########## LLM Request Attributes ###########
-        #############################################
+            #############################################
+            ########## LLM Request Attributes ###########
+            #############################################
 
-        # The name of the LLM a request is being made to
-        if kwargs.get("model"):
-            span.set_attribute(SpanAttributes.LLM_REQUEST_MODEL, kwargs.get("model"))
+            # The name of the LLM a request is being made to
+            if kwargs.get("model"):
+                span.set_attribute(
+                    SpanAttributes.LLM_REQUEST_MODEL, kwargs.get("model")
+                )
 
-        # The Generative AI Provider: Azure, OpenAI, etc.
-        span.set_attribute(
-            SpanAttributes.LLM_SYSTEM,
-            litellm_params.get("custom_llm_provider", "Unknown"),
-        )
-
-        # The maximum number of tokens the LLM generates for a request.
-        if optional_params.get("max_tokens"):
+            # The Generative AI Provider: Azure, OpenAI, etc.
             span.set_attribute(
-                SpanAttributes.LLM_REQUEST_MAX_TOKENS, optional_params.get("max_tokens")
+                SpanAttributes.LLM_SYSTEM,
+                litellm_params.get("custom_llm_provider", "Unknown"),
             )
 
-        # The temperature setting for the LLM request.
-        if optional_params.get("temperature"):
+            # The maximum number of tokens the LLM generates for a request.
+            if optional_params.get("max_tokens"):
+                span.set_attribute(
+                    SpanAttributes.LLM_REQUEST_MAX_TOKENS,
+                    optional_params.get("max_tokens"),
+                )
+
+            # The temperature setting for the LLM request.
+            if optional_params.get("temperature"):
+                span.set_attribute(
+                    SpanAttributes.LLM_REQUEST_TEMPERATURE,
+                    optional_params.get("temperature"),
+                )
+
+            # The top_p sampling setting for the LLM request.
+            if optional_params.get("top_p"):
+                span.set_attribute(
+                    SpanAttributes.LLM_REQUEST_TOP_P, optional_params.get("top_p")
+                )
+
             span.set_attribute(
-                SpanAttributes.LLM_REQUEST_TEMPERATURE,
-                optional_params.get("temperature"),
+                SpanAttributes.LLM_IS_STREAMING,
+                str(optional_params.get("stream", False)),
             )
 
-        # The top_p sampling setting for the LLM request.
-        if optional_params.get("top_p"):
-            span.set_attribute(
-                SpanAttributes.LLM_REQUEST_TOP_P, optional_params.get("top_p")
-            )
+            if optional_params.get("tools"):
+                tools = optional_params["tools"]
+                self.set_tools_attributes(span, tools)
 
-        span.set_attribute(
-            SpanAttributes.LLM_IS_STREAMING, str(optional_params.get("stream", False))
-        )
+            if optional_params.get("user"):
+                span.set_attribute(SpanAttributes.LLM_USER, optional_params.get("user"))
 
-        if optional_params.get("tools"):
-            tools = optional_params["tools"]
-            self.set_tools_attributes(span, tools)
-
-        if optional_params.get("user"):
-            span.set_attribute(SpanAttributes.LLM_USER, optional_params.get("user"))
-
-        if kwargs.get("messages"):
-            for idx, prompt in enumerate(kwargs.get("messages")):
-                if prompt.get("role"):
-                    span.set_attribute(
-                        f"{SpanAttributes.LLM_PROMPTS}.{idx}.role",
-                        prompt.get("role"),
-                    )
-
-                if prompt.get("content"):
-                    if not isinstance(prompt.get("content"), str):
-                        prompt["content"] = str(prompt.get("content"))
-                    span.set_attribute(
-                        f"{SpanAttributes.LLM_PROMPTS}.{idx}.content",
-                        prompt.get("content"),
-                    )
-        #############################################
-        ########## LLM Response Attributes ##########
-        #############################################
-        if response_obj.get("choices"):
-            for idx, choice in enumerate(response_obj.get("choices")):
-                if choice.get("finish_reason"):
-                    span.set_attribute(
-                        f"{SpanAttributes.LLM_COMPLETIONS}.{idx}.finish_reason",
-                        choice.get("finish_reason"),
-                    )
-                if choice.get("message"):
-                    if choice.get("message").get("role"):
+            if kwargs.get("messages"):
+                for idx, prompt in enumerate(kwargs.get("messages")):
+                    if prompt.get("role"):
                         span.set_attribute(
-                            f"{SpanAttributes.LLM_COMPLETIONS}.{idx}.role",
-                            choice.get("message").get("role"),
+                            f"{SpanAttributes.LLM_PROMPTS}.{idx}.role",
+                            prompt.get("role"),
                         )
-                    if choice.get("message").get("content"):
-                        if not isinstance(choice.get("message").get("content"), str):
-                            choice["message"]["content"] = str(
-                                choice.get("message").get("content")
+
+                    if prompt.get("content"):
+                        if not isinstance(prompt.get("content"), str):
+                            prompt["content"] = str(prompt.get("content"))
+                        span.set_attribute(
+                            f"{SpanAttributes.LLM_PROMPTS}.{idx}.content",
+                            prompt.get("content"),
+                        )
+            #############################################
+            ########## LLM Response Attributes ##########
+            #############################################
+            if response_obj is not None:
+                if response_obj.get("choices"):
+                    for idx, choice in enumerate(response_obj.get("choices")):
+                        if choice.get("finish_reason"):
+                            span.set_attribute(
+                                f"{SpanAttributes.LLM_COMPLETIONS}.{idx}.finish_reason",
+                                choice.get("finish_reason"),
                             )
-                        span.set_attribute(
-                            f"{SpanAttributes.LLM_COMPLETIONS}.{idx}.content",
-                            choice.get("message").get("content"),
-                        )
+                        if choice.get("message"):
+                            if choice.get("message").get("role"):
+                                span.set_attribute(
+                                    f"{SpanAttributes.LLM_COMPLETIONS}.{idx}.role",
+                                    choice.get("message").get("role"),
+                                )
+                            if choice.get("message").get("content"):
+                                if not isinstance(
+                                    choice.get("message").get("content"), str
+                                ):
+                                    choice["message"]["content"] = str(
+                                        choice.get("message").get("content")
+                                    )
+                                span.set_attribute(
+                                    f"{SpanAttributes.LLM_COMPLETIONS}.{idx}.content",
+                                    choice.get("message").get("content"),
+                                )
 
-                    message = choice.get("message")
-                    tool_calls = message.get("tool_calls")
-                    if tool_calls:
-                        span.set_attribute(
-                            f"{SpanAttributes.LLM_COMPLETIONS}.{idx}.function_call.name",
-                            tool_calls[0].get("function").get("name"),
-                        )
-                        span.set_attribute(
-                            f"{SpanAttributes.LLM_COMPLETIONS}.{idx}.function_call.arguments",
-                            tool_calls[0].get("function").get("arguments"),
-                        )
+                            message = choice.get("message")
+                            tool_calls = message.get("tool_calls")
+                            if tool_calls:
+                                span.set_attribute(
+                                    f"{SpanAttributes.LLM_COMPLETIONS}.{idx}.function_call.name",
+                                    tool_calls[0].get("function").get("name"),
+                                )
+                                span.set_attribute(
+                                    f"{SpanAttributes.LLM_COMPLETIONS}.{idx}.function_call.arguments",
+                                    tool_calls[0].get("function").get("arguments"),
+                                )
 
-        # The unique identifier for the completion.
-        if response_obj.get("id"):
-            span.set_attribute("gen_ai.response.id", response_obj.get("id"))
+                # The unique identifier for the completion.
+                if response_obj.get("id"):
+                    span.set_attribute("gen_ai.response.id", response_obj.get("id"))
 
-        # The model used to generate the response.
-        if response_obj.get("model"):
-            span.set_attribute(
-                SpanAttributes.LLM_RESPONSE_MODEL, response_obj.get("model")
-            )
+                # The model used to generate the response.
+                if response_obj.get("model"):
+                    span.set_attribute(
+                        SpanAttributes.LLM_RESPONSE_MODEL, response_obj.get("model")
+                    )
 
-        usage = response_obj.get("usage")
-        if usage:
-            span.set_attribute(
-                SpanAttributes.LLM_USAGE_TOTAL_TOKENS,
-                usage.get("total_tokens"),
-            )
+                usage = response_obj.get("usage")
+                if usage:
+                    span.set_attribute(
+                        SpanAttributes.LLM_USAGE_TOTAL_TOKENS,
+                        usage.get("total_tokens"),
+                    )
 
-            # The number of tokens used in the LLM response (completion).
-            span.set_attribute(
-                SpanAttributes.LLM_USAGE_COMPLETION_TOKENS,
-                usage.get("completion_tokens"),
-            )
+                    # The number of tokens used in the LLM response (completion).
+                    span.set_attribute(
+                        SpanAttributes.LLM_USAGE_COMPLETION_TOKENS,
+                        usage.get("completion_tokens"),
+                    )
 
-            # The number of tokens used in the LLM prompt.
-            span.set_attribute(
-                SpanAttributes.LLM_USAGE_PROMPT_TOKENS,
-                usage.get("prompt_tokens"),
+                    # The number of tokens used in the LLM prompt.
+                    span.set_attribute(
+                        SpanAttributes.LLM_USAGE_PROMPT_TOKENS,
+                        usage.get("prompt_tokens"),
+                    )
+        except Exception as e:
+            verbose_logger.error(
+                "OpenTelemetry logging error in set_attributes %s", str(e)
             )
 
     def set_raw_request_attributes(self, span: Span, kwargs, response_obj):

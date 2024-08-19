@@ -3,7 +3,7 @@ import copy
 import os
 import traceback
 from datetime import datetime, timedelta
-from typing import Literal, Optional
+from typing import Literal, Optional, Union
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
@@ -54,8 +54,17 @@ async def test_endpoint(request: Request):
 )
 async def health_services_endpoint(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    service: Literal[
-        "slack_budget_alerts", "langfuse", "slack", "openmeter", "webhook", "email"
+    service: Union[
+        Literal[
+            "slack_budget_alerts",
+            "langfuse",
+            "slack",
+            "openmeter",
+            "webhook",
+            "email",
+            "braintrust",
+        ],
+        str,
     ] = fastapi.Query(description="Specify the service being hit."),
 ):
     """
@@ -81,6 +90,10 @@ async def health_services_endpoint(
             "slack",
             "openmeter",
             "webhook",
+            "braintrust",
+            "otel",
+            "custom_callback_api",
+            "langsmith",
         ]:
             raise HTTPException(
                 status_code=400,
@@ -89,7 +102,11 @@ async def health_services_endpoint(
                 },
             )
 
-        if service == "openmeter":
+        if (
+            service == "openmeter"
+            or service == "braintrust"
+            or (service in litellm.success_callback and service != "langfuse")
+        ):
             _ = await litellm.acompletion(
                 model="openai/litellm-mock-response-model",
                 messages=[{"role": "user", "content": "Hey, how's it going?"}],
@@ -98,7 +115,7 @@ async def health_services_endpoint(
             )
             return {
                 "status": "success",
-                "message": "Mock LLM request made - check openmeter.",
+                "message": "Mock LLM request made - check {}.".format(service),
             }
 
         if service == "langfuse":
@@ -283,11 +300,11 @@ async def health_endpoint(
     else, the health checks will be run on models when /health is called.
     """
     from litellm.proxy.proxy_server import (
+        health_check_details,
         health_check_results,
         llm_model_list,
         use_background_health_checks,
         user_model,
-        health_check_details
     )
 
     try:
@@ -438,7 +455,9 @@ async def health_readiness():
         try:
             # this was returning a JSON of the values in some of the callbacks
             # all we need is the callback name, hence we do str(callback)
-            success_callback_names = [callback_name(x) for x in litellm.success_callback]
+            success_callback_names = [
+                callback_name(x) for x in litellm.success_callback
+            ]
         except AttributeError:
             # don't let this block the /health/readiness response, if we can't convert to str -> return litellm.success_callback
             success_callback_names = litellm.success_callback
@@ -483,12 +502,12 @@ async def health_readiness():
 
 
 @router.get(
-    "/health/liveliness", # Historical LiteLLM name; doesn't match k8s terminology but kept for backwards compatibility
+    "/health/liveliness",  # Historical LiteLLM name; doesn't match k8s terminology but kept for backwards compatibility
     tags=["health"],
     dependencies=[Depends(user_api_key_auth)],
 )
 @router.get(
-    "/health/liveness",   # Kubernetes has "liveness" probes (https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/#define-a-liveness-command)
+    "/health/liveness",  # Kubernetes has "liveness" probes (https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/#define-a-liveness-command)
     tags=["health"],
     dependencies=[Depends(user_api_key_auth)],
 )
@@ -522,7 +541,7 @@ async def health_readiness_options():
     dependencies=[Depends(user_api_key_auth)],
 )
 @router.options(
-    "/health/liveness",   # Kubernetes has "liveness" probes (https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/#define-a-liveness-command)
+    "/health/liveness",  # Kubernetes has "liveness" probes (https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/#define-a-liveness-command)
     tags=["health"],
     dependencies=[Depends(user_api_key_auth)],
 )

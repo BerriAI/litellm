@@ -72,6 +72,10 @@ def test_create_batch():
 
     assert retrieved_batch.id == create_batch_response.id
 
+    # list all batches
+    list_batches = litellm.list_batches(custom_llm_provider="openai", limit=2)
+    print("list_batches=", list_batches)
+
     file_content = litellm.file_content(
         file_id=batch_input_file_id, custom_llm_provider="openai"
     )
@@ -139,6 +143,10 @@ async def test_async_create_batch():
     # just assert that we retrieved a non None batch
 
     assert retrieved_batch.id == create_batch_response.id
+
+    # list all batches
+    list_batches = await litellm.alist_batches(custom_llm_provider="openai", limit=2)
+    print("list_batches=", list_batches)
 
     # try to get file content for our original file
 

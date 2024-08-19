@@ -986,6 +986,7 @@ def completion(
             output_cost_per_second=output_cost_per_second,
             output_cost_per_token=output_cost_per_token,
             cooldown_time=cooldown_time,
+            text_completion=kwargs.get("text_completion"),
         )
         logging.update_environment_variables(
             model=model,
@@ -2074,14 +2075,18 @@ def completion(
                     timeout=timeout,
                     client=client,
                 )
-            elif model.startswith("meta/") or model.startswith("mistral"):
+            elif (
+                model.startswith("meta/")
+                or model.startswith("mistral")
+                or model.startswith("codestral")
+            ):
                 model_response = vertex_partner_models_chat_completion.completion(
                     model=model,
                     messages=messages,
                     model_response=model_response,
                     print_verbose=print_verbose,
                     optional_params=new_params,
-                    litellm_params=litellm_params,
+                    litellm_params=litellm_params,  # type: ignore
                     logger_fn=logger_fn,
                     encoding=encoding,
                     vertex_location=vertex_ai_location,
@@ -3114,6 +3119,8 @@ async def aembedding(*args, **kwargs) -> EmbeddingResponse:
             or custom_llm_provider == "vertex_ai"
             or custom_llm_provider == "databricks"
             or custom_llm_provider == "watsonx"
+            or custom_llm_provider == "cohere"
+            or custom_llm_provider == "huggingface"
         ):  # currently implemented aiohttp calls for just azure and openai, soon all.
             # Await normally
             init_response = await loop.run_in_executor(None, func_with_context)
@@ -3440,9 +3447,12 @@ def embedding(
                 input=input,
                 optional_params=optional_params,
                 encoding=encoding,
-                api_key=cohere_key,
+                api_key=cohere_key,  # type: ignore
                 logging_obj=logging,
                 model_response=EmbeddingResponse(),
+                aembedding=aembedding,
+                timeout=float(timeout),
+                client=client,
             )
         elif custom_llm_provider == "huggingface":
             api_key = (
@@ -3450,15 +3460,18 @@ def embedding(
                 or litellm.huggingface_key
                 or get_secret("HUGGINGFACE_API_KEY")
                 or litellm.api_key
-            )
+            )  # type: ignore
             response = huggingface.embedding(
                 model=model,
                 input=input,
-                encoding=encoding,
+                encoding=encoding,  # type: ignore
                 api_key=api_key,
                 api_base=api_base,
                 logging_obj=logging,
                 model_response=EmbeddingResponse(),
+                optional_params=optional_params,
+                client=client,
+                aembedding=aembedding,
             )
         elif custom_llm_provider == "bedrock":
             response = bedrock.embedding(
@@ -5183,17 +5196,24 @@ def stream_chunk_builder(
     prompt_tokens = 0
     completion_tokens = 0
     for chunk in chunks:
+        usage_chunk: Optional[Usage] = None
         if "usage" in chunk:
-            if "prompt_tokens" in chunk["usage"]:
-                prompt_tokens = chunk["usage"].get("prompt_tokens", 0) or 0
-            if "completion_tokens" in chunk["usage"]:
-                completion_tokens = chunk["usage"].get("completion_tokens", 0) or 0
+            usage_chunk = chunk.usage
+        elif hasattr(chunk, "_hidden_params") and "usage" in chunk._hidden_params:
+            usage_chunk = chunk._hidden_params["usage"]
+        if usage_chunk is not None:
+            if "prompt_tokens" in usage_chunk:
+                prompt_tokens = usage_chunk.get("prompt_tokens", 0) or 0
+            if "completion_tokens" in usage_chunk:
+                completion_tokens = usage_chunk.get("completion_tokens", 0) or 0
     try:
         response["usage"]["prompt_tokens"] = prompt_tokens or token_counter(
             model=model, messages=messages
         )
-    except:  # don't allow this failing to block a complete streaming response from being returned
-        print_verbose(f"token_counter failed, assuming prompt tokens is 0")
+    except (
+        Exception
+    ):  # don't allow this failing to block a complete streaming response from being returned
+        print_verbose("token_counter failed, assuming prompt tokens is 0")
         response["usage"]["prompt_tokens"] = 0
     response["usage"]["completion_tokens"] = completion_tokens or token_counter(
         model=model,

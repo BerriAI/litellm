@@ -460,6 +460,30 @@
         "supports_parallel_function_calling": true,
         "supports_vision": true
     },
+    "azure/global-standard/gpt-4o-mini": {
+        "max_tokens": 4096,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.00000015,
+        "output_cost_per_token": 0.00000060,
+        "litellm_provider": "azure",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_vision": true
+    },
+    "azure/gpt-4o-mini": {
+        "max_tokens": 4096,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.000000165,
+        "output_cost_per_token": 0.00000066,
+        "litellm_provider": "azure",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_vision": true
+    },
     "azure/gpt-4-turbo-2024-04-09": {
         "max_tokens": 4096,
         "max_input_tokens": 128000,
@@ -2048,11 +2072,31 @@
         "mode": "chat",
         "supports_function_calling": true
     },
+    "vertex_ai/mistral-nemo@latest": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000,
+        "input_cost_per_token": 0.000003,
+        "output_cost_per_token": 0.000003,
+        "litellm_provider": "vertex_ai-mistral_models",
+        "mode": "chat",
+        "supports_function_calling": true
+    },
     "vertex_ai/mistral-nemo@2407": {
         "max_tokens": 128000,
         "max_input_tokens": 128000,
         "max_output_tokens": 128000,
         "input_cost_per_token": 0.000003,
+        "output_cost_per_token": 0.000003,
+        "litellm_provider": "vertex_ai-mistral_models",
+        "mode": "chat",
+        "supports_function_calling": true
+    },
+    "vertex_ai/codestral@latest": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000,
+        "input_cost_per_token": 0.000001,
         "output_cost_per_token": 0.000003,
         "litellm_provider": "vertex_ai-mistral_models",
         "mode": "chat",
@@ -2295,6 +2339,23 @@
         "supports_vision": true,
         "supports_tool_choice": true, 
         "supports_response_schema": true, 
+        "source": "https://ai.google.dev/pricing"
+    },
+    "gemini/gemini-1.5-pro-exp-0801": {
+        "max_tokens": 8192,
+        "max_input_tokens": 2097152,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 0.0000035,
+        "input_cost_per_token_above_128k_tokens": 0.000007,
+        "output_cost_per_token": 0.0000105,
+        "output_cost_per_token_above_128k_tokens": 0.000021,
+        "litellm_provider": "gemini",
+        "mode": "chat",
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true,
         "source": "https://ai.google.dev/pricing"
     },
     "gemini/gemini-1.5-pro-latest": {
@@ -4653,6 +4714,26 @@
         "output_cost_per_token": 0.000000,
         "litellm_provider": "voyage",
         "mode": "embedding"
+    },
+    "databricks/databricks-meta-llama-3-1-405b-instruct": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000, 
+        "input_cost_per_token": 0.000005,
+        "output_cost_per_token": 0.000015,
+        "litellm_provider": "databricks",
+        "mode": "chat",
+        "source": "https://www.databricks.com/product/pricing/foundation-model-serving"
+    },
+    "databricks/databricks-meta-llama-3-1-70b-instruct": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000, 
+        "input_cost_per_token": 0.000001,
+        "output_cost_per_token": 0.000003,
+        "litellm_provider": "databricks",
+        "mode": "chat",
+        "source": "https://www.databricks.com/product/pricing/foundation-model-serving"
     },
     "databricks/databricks-dbrx-instruct": {
         "max_tokens": 32768,

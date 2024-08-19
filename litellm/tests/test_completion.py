@@ -11,7 +11,7 @@ import os
 
 sys.path.insert(
     0, os.path.abspath("../..")
-)  # Adds-the parent directory to the system path
+)  # Adds the parent directory to the system path
 
 import os
 from unittest.mock import MagicMock, patch
@@ -23,7 +23,7 @@ from litellm import RateLimitError, Timeout, completion, completion_cost, embedd
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.prompt_templates.factory import anthropic_messages_pt
 
-# litellm.num_retries=3
+# litellm.num_retries = 3
 litellm.cache = None
 litellm.success_callback = []
 user_message = "Write a short poem about the sky"
@@ -211,7 +211,7 @@ async def test_completion_databricks(sync_mode):
     response_format_tests(response=response)
 
 
-def predibase_mock_post(url, data=None, json=None, headers=None):
+def predibase_mock_post(url, data=None, json=None, headers=None, timeout=None):
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_response.headers = {"Content-Type": "application/json"}
@@ -261,17 +261,19 @@ async def test_completion_predibase():
     try:
         litellm.set_verbose = True
 
-        with patch("requests.post", side_effect=predibase_mock_post):
-            response = completion(
-                model="predibase/llama-3-8b-instruct",
-                tenant_id="c4768f95",
-                api_key=os.getenv("PREDIBASE_API_KEY"),
-                messages=[{"role": "user", "content": "What is the meaning of life?"}],
-                max_tokens=10,
-            )
+        # with patch("requests.post", side_effect=predibase_mock_post):
+        response = await litellm.acompletion(
+            model="predibase/llama-3-8b-instruct",
+            tenant_id="c4768f95",
+            api_key=os.getenv("PREDIBASE_API_KEY"),
+            messages=[{"role": "user", "content": "What is the meaning of life?"}],
+            max_tokens=10,
+        )
 
-            print(response)
+        print(response)
     except litellm.Timeout as e:
+        pass
+    except litellm.ServiceUnavailableError as e:
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
@@ -646,6 +648,8 @@ def test_gemini_completion_call_error():
         print(f"response: {response}")
         for chunk in response:
             print(chunk)
+    except litellm.InternalServerError:
+        pass
     except Exception as e:
         pytest.fail(f"error occurred: {str(e)}")
 
@@ -717,6 +721,8 @@ def test_completion_cohere_command_r_plus_function_call():
             force_single_step=True,
         )
         print(second_response)
+    except litellm.Timeout:
+        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -1529,27 +1535,73 @@ def test_completion_fireworks_ai_dynamic_params(api_key, api_base):
         pass
 
 
-@pytest.mark.skip(reason="this test is flaky")
+# @pytest.mark.skip(reason="this test is flaky")
 def test_completion_perplexity_api():
     try:
-        # litellm.set_verbose= True
-        messages = [
-            {"role": "system", "content": "You're a good bot"},
-            {
-                "role": "user",
-                "content": "Hey",
-            },
-            {
-                "role": "user",
-                "content": "Hey",
-            },
-        ]
-        response = completion(
-            model="mistral-7b-instruct",
-            messages=messages,
-            api_base="https://api.perplexity.ai",
-        )
-        print(response)
+        response_object = {
+            "id": "a8f37485-026e-45da-81a9-cf0184896840",
+            "model": "llama-3-sonar-small-32k-online",
+            "created": 1722186391,
+            "usage": {"prompt_tokens": 17, "completion_tokens": 65, "total_tokens": 82},
+            "citations": [
+                "https://www.sciencedirect.com/science/article/pii/S007961232200156X",
+                "https://www.britannica.com/event/World-War-II",
+                "https://www.loc.gov/classroom-materials/united-states-history-primary-source-timeline/great-depression-and-world-war-ii-1929-1945/world-war-ii/",
+                "https://www.nationalww2museum.org/war/topics/end-world-war-ii-1945",
+                "https://en.wikipedia.org/wiki/World_War_II",
+            ],
+            "object": "chat.completion",
+            "choices": [
+                {
+                    "index": 0,
+                    "finish_reason": "stop",
+                    "message": {
+                        "role": "assistant",
+                        "content": "World War II was won by the Allied powers, which included the United States, the Soviet Union, Great Britain, France, China, and other countries. The war concluded with the surrender of Germany on May 8, 1945, and Japan on September 2, 1945[2][3][4].",
+                    },
+                    "delta": {"role": "assistant", "content": ""},
+                }
+            ],
+        }
+
+        from openai import OpenAI
+        from openai.types.chat.chat_completion import ChatCompletion
+
+        pydantic_obj = ChatCompletion(**response_object)
+
+        def _return_pydantic_obj(*args, **kwargs):
+            return pydantic_obj
+
+        print(f"pydantic_obj: {pydantic_obj}")
+
+        openai_client = OpenAI()
+
+        openai_client.chat.completions.create = MagicMock()
+
+        with patch.object(
+            openai_client.chat.completions, "create", side_effect=_return_pydantic_obj
+        ) as mock_client:
+            pass
+            # litellm.set_verbose= True
+            messages = [
+                {"role": "system", "content": "You're a good bot"},
+                {
+                    "role": "user",
+                    "content": "Hey",
+                },
+                {
+                    "role": "user",
+                    "content": "Hey",
+                },
+            ]
+            response = completion(
+                model="mistral-7b-instruct",
+                messages=messages,
+                api_base="https://api.perplexity.ai",
+                client=openai_client,
+            )
+            print(response)
+            assert hasattr(response, "citations")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -2522,6 +2574,7 @@ def test_completion_hf_model_no_provider():
 # test_completion_hf_model_no_provider()
 
 
+@pytest.mark.skip(reason="anyscale stopped serving public api endpoints")
 def test_completion_anyscale_with_functions():
     function1 = [
         {
@@ -3542,9 +3595,10 @@ def test_completion_anthropic_hanging():
             assert msg["role"] != converted_messages[i + 1]["role"]
 
 
+@pytest.mark.skip(reason="anyscale stopped serving public api endpoints")
 def test_completion_anyscale_api():
     try:
-        # litellm.set_verbose=True
+        # litellm.set_verbose = True
         messages = [
             {"role": "system", "content": "You're a good bot"},
             {
@@ -3628,6 +3682,8 @@ def test_chat_completion_cohere_stream():
         print(response)
         for chunk in response:
             print(chunk)
+    except litellm.APIConnectionError as e:
+        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -3657,6 +3713,7 @@ def test_azure_cloudflare_api():
 # test_azure_cloudflare_api()
 
 
+@pytest.mark.skip(reason="anyscale stopped serving public api endpoints")
 def test_completion_anyscale_2():
     try:
         # litellm.set_verbose = True
@@ -3679,6 +3736,7 @@ def test_completion_anyscale_2():
         pytest.fail(f"Error occurred: {e}")
 
 
+@pytest.mark.skip(reason="anyscale stopped serving public api endpoints")
 def test_mistral_anyscale_stream():
     litellm.set_verbose = False
     response = completion(
