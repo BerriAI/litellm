@@ -1033,11 +1033,10 @@ def test_disk_cache_completion():
     assert response1.choices[0].message.content == response2.choices[0].message.content
 
 
-@pytest.mark.skip(reason="AWS Suspended Account")
+# @pytest.mark.skip(reason="AWS Suspended Account")
+@pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
-async def test_s3_cache_acompletion_stream_azure():
-    import asyncio
-
+async def test_s3_cache_stream_azure(sync_mode):
     try:
         litellm.set_verbose = True
         random_word = generate_random_word()
@@ -1049,8 +1048,8 @@ async def test_s3_cache_acompletion_stream_azure():
         ]
         litellm.cache = Cache(
             type="s3",
-            s3_bucket_name="litellm-my-test-bucket-2",
-            s3_region_name="us-east-1",
+            s3_bucket_name="litellm-proxy",
+            s3_region_name="us-west-2",
         )
         print("s3 Cache: test for caching, streaming + completion")
         response_1_content = ""
@@ -1059,34 +1058,65 @@ async def test_s3_cache_acompletion_stream_azure():
         response_1_created = ""
         response_2_created = ""
 
-        response1 = await litellm.acompletion(
-            model="azure/chatgpt-v-2",
-            messages=messages,
-            max_tokens=40,
-            temperature=1,
-            stream=True,
-        )
-        async for chunk in response1:
-            print(chunk)
-            response_1_created = chunk.created
-            response_1_content += chunk.choices[0].delta.content or ""
-        print(response_1_content)
+        if sync_mode:
+            response1 = litellm.completion(
+                model="azure/chatgpt-v-2",
+                messages=messages,
+                max_tokens=40,
+                temperature=1,
+                stream=True,
+            )
+            for chunk in response1:
+                print(chunk)
+                response_1_created = chunk.created
+                response_1_content += chunk.choices[0].delta.content or ""
+            print(response_1_content)
+        else:
+            response1 = await litellm.acompletion(
+                model="azure/chatgpt-v-2",
+                messages=messages,
+                max_tokens=40,
+                temperature=1,
+                stream=True,
+            )
+            async for chunk in response1:
+                print(chunk)
+                response_1_created = chunk.created
+                response_1_content += chunk.choices[0].delta.content or ""
+            print(response_1_content)
 
-        time.sleep(0.5)
+        if sync_mode:
+            time.sleep(0.5)
+        else:
+            await asyncio.sleep(0.5)
         print("\n\n Response 1 content: ", response_1_content, "\n\n")
 
-        response2 = await litellm.acompletion(
-            model="azure/chatgpt-v-2",
-            messages=messages,
-            max_tokens=40,
-            temperature=1,
-            stream=True,
-        )
-        async for chunk in response2:
-            print(chunk)
-            response_2_content += chunk.choices[0].delta.content or ""
-            response_2_created = chunk.created
-        print(response_2_content)
+        if sync_mode:
+            response2 = litellm.completion(
+                model="azure/chatgpt-v-2",
+                messages=messages,
+                max_tokens=40,
+                temperature=1,
+                stream=True,
+            )
+            for chunk in response2:
+                print(chunk)
+                response_2_content += chunk.choices[0].delta.content or ""
+                response_2_created = chunk.created
+            print(response_2_content)
+        else:
+            response2 = await litellm.acompletion(
+                model="azure/chatgpt-v-2",
+                messages=messages,
+                max_tokens=40,
+                temperature=1,
+                stream=True,
+            )
+            async for chunk in response2:
+                print(chunk)
+                response_2_content += chunk.choices[0].delta.content or ""
+                response_2_created = chunk.created
+            print(response_2_content)
 
         print("\nresponse 1", response_1_content)
         print("\nresponse 2", response_2_content)
