@@ -36,6 +36,11 @@ import {
   Grid,
 } from "@tremor/react";
 import { CogIcon } from "@heroicons/react/outline";
+const isLocal = process.env.NODE_ENV === "development";
+const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
+if (isLocal != true) {
+  console.log = function() {};
+}
 interface TeamProps {
   teams: any[] | null;
   searchParams: any;

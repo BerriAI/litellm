@@ -41,6 +41,19 @@ async def get_batch_by_id(session, batch_id):
             return None
 
 
+async def list_batches(session):
+    url = f"{BASE_URL}/v1/batches"
+    headers = {"Authorization": f"Bearer {API_KEY}"}
+
+    async with session.get(url, headers=headers) as response:
+        if response.status == 200:
+            result = await response.json()
+            return result
+        else:
+            print(f"Error: Failed to get batch. Status code: {response.status}")
+            return None
+
+
 @pytest.mark.asyncio
 async def test_batches_operations():
     async with aiohttp.ClientSession() as session:
@@ -59,6 +72,16 @@ async def test_batches_operations():
 
         assert get_batch_response["id"] == batch_id
         assert get_batch_response["input_file_id"] == file_id
+
+        # test LIST Batches
+        list_batch_response = await list_batches(session)
+        print("response from list batch", list_batch_response)
+
+        assert list_batch_response is not None
+        assert len(list_batch_response["data"]) > 0
+
+        element_0 = list_batch_response["data"][0]
+        assert element_0["id"] is not None
 
         # Test delete file
         await delete_file(session, file_id)

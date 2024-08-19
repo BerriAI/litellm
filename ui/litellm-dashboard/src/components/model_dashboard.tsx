@@ -1730,14 +1730,20 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                     rules={[{ required: true, message: "Required" }]}
                     noStyle
                   >
-                    <MultiSelect>
-                    <MultiSelectItem value="custom">Custom Model Name (Enter below)</MultiSelectItem>
-                      {providerModels.map((model, index) => (
-                        <MultiSelectItem key={index} value={model}>
-                          {model}
-                        </MultiSelectItem>
-                      ))}
-                    </MultiSelect>
+                     { (selectedProvider === Providers.Azure) || (selectedProvider === Providers.OpenAI_Compatible) || (selectedProvider === Providers.Ollama) ? (
+                      <TextInput placeholder={getPlaceholder(selectedProvider.toString())} />
+                    ) : providerModels.length > 0 ? (
+                      <MultiSelect>
+                      <MultiSelectItem value="custom">Custom Model Name (Enter below)</MultiSelectItem>
+                        {providerModels.map((model, index) => (
+                          <MultiSelectItem key={index} value={model}>
+                            {model}
+                          </MultiSelectItem>
+                        ))}
+                      </MultiSelect>
+                    ) : (
+                      <TextInput placeholder={getPlaceholder(selectedProvider.toString())} />
+                    )}
                   </Form.Item>
 
                   <Form.Item

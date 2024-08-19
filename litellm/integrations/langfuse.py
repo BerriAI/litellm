@@ -5,6 +5,7 @@ import os
 import traceback
 
 from packaging.version import Version
+from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_logger
@@ -331,7 +332,7 @@ class LangFuseLogger:
                 metadata = copy.deepcopy(
                     metadata
                 )  # Avoid modifying the original metadata
-            except:
+            except Exception:
                 new_metadata = {}
                 for key, value in metadata.items():
                     if (
@@ -342,6 +343,8 @@ class LangFuseLogger:
                         or isinstance(value, float)
                     ):
                         new_metadata[key] = copy.deepcopy(value)
+                    elif isinstance(value, BaseModel):
+                        new_metadata[key] = value.model_dump()
                 metadata = new_metadata
 
             supports_tags = Version(langfuse.version.__version__) >= Version("2.6.3")

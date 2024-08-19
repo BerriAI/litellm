@@ -8,6 +8,7 @@ Run checks for:
 2. If user is in budget 
 3. If end_user ('user' passed to /chat/completions, /embeddings endpoint) is in budget 
 """
+import time
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal, Optional
 
@@ -19,6 +20,7 @@ from litellm.proxy._types import (
     LiteLLM_JWTAuth,
     LiteLLM_OrganizationTable,
     LiteLLM_TeamTable,
+    LiteLLM_TeamTableCachedObj,
     LiteLLM_UserTable,
     LiteLLMRoutes,
     LitellmUserRoles,
@@ -368,11 +370,15 @@ async def get_user_object(
 
 async def _cache_team_object(
     team_id: str,
-    team_table: LiteLLM_TeamTable,
+    team_table: LiteLLM_TeamTableCachedObj,
     user_api_key_cache: DualCache,
     proxy_logging_obj: Optional[ProxyLogging],
 ):
     key = "team_id:{}".format(team_id)
+
+    ## CACHE REFRESH TIME!
+    team_table.last_refreshed_at = time.time()
+
     value = team_table.model_dump_json(exclude_unset=True)
     await user_api_key_cache.async_set_cache(key=key, value=value)
 
@@ -390,7 +396,8 @@ async def get_team_object(
     user_api_key_cache: DualCache,
     parent_otel_span: Optional[Span] = None,
     proxy_logging_obj: Optional[ProxyLogging] = None,
-) -> LiteLLM_TeamTable:
+    check_cache_only: Optional[bool] = None,
+) -> LiteLLM_TeamTableCachedObj:
     """
     - Check if team id in proxy Team Table
     - if valid, return LiteLLM_TeamTable object with defined limits
@@ -404,11 +411,17 @@ async def get_team_object(
     # check if in cache
     key = "team_id:{}".format(team_id)
 
-    cached_team_obj: Optional[LiteLLM_TeamTable] = None
+    cached_team_obj: Optional[LiteLLM_TeamTableCachedObj] = None
+
     ## CHECK REDIS CACHE ##
-    if proxy_logging_obj is not None:
-        cached_team_obj = await proxy_logging_obj.internal_usage_cache.async_get_cache(
-            key=key
+    if (
+        proxy_logging_obj is not None
+        and proxy_logging_obj.internal_usage_cache.redis_cache is not None
+    ):
+        cached_team_obj = (
+            await proxy_logging_obj.internal_usage_cache.redis_cache.async_get_cache(
+                key=key
+            )
         )
 
     if cached_team_obj is None:
@@ -416,9 +429,15 @@ async def get_team_object(
 
     if cached_team_obj is not None:
         if isinstance(cached_team_obj, dict):
-            return LiteLLM_TeamTable(**cached_team_obj)
-        elif isinstance(cached_team_obj, LiteLLM_TeamTable):
+            return LiteLLM_TeamTableCachedObj(**cached_team_obj)
+        elif isinstance(cached_team_obj, LiteLLM_TeamTableCachedObj):
             return cached_team_obj
+
+    if check_cache_only:
+        raise Exception(
+            f"Team doesn't exist in cache + check_cache_only=True. Team={team_id}. Create team via `/team/new` call."
+        )
+
     # else, check db
     try:
         response = await prisma_client.db.litellm_teamtable.find_unique(
@@ -428,7 +447,7 @@ async def get_team_object(
         if response is None:
             raise Exception
 
-        _response = LiteLLM_TeamTable(**response.dict())
+        _response = LiteLLM_TeamTableCachedObj(**response.dict())
         # save the team object to cache
         await _cache_team_object(
             team_id=team_id,

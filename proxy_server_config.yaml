@@ -120,6 +120,24 @@ litellm_settings:
       langfuse_secret: os.environ/LANGFUSE_PROJECT2_SECRET # Project 2
       langfuse_host: https://us.cloud.langfuse.com
 
+# For /fine_tuning/jobs endpoints
+finetune_settings:
+  - custom_llm_provider: azure
+    api_base: https://exampleopenaiendpoint-production.up.railway.app
+    api_key: fake-key
+    api_version: "2023-03-15-preview"
+  - custom_llm_provider: openai
+    api_key: os.environ/OPENAI_API_KEY
+
+# for /files endpoints
+files_settings:
+  - custom_llm_provider: azure
+    api_base: https://exampleopenaiendpoint-production.up.railway.app
+    api_key: fake-key
+    api_version: "2023-03-15-preview"
+  - custom_llm_provider: openai
+    api_key: os.environ/OPENAI_API_KEY
+
 router_settings:
   routing_strategy: usage-based-routing-v2 
   redis_host: os.environ/REDIS_HOST

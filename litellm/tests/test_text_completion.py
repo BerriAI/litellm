@@ -4104,9 +4104,19 @@ async def test_async_text_completion_chat_model_stream():
 # asyncio.run(test_async_text_completion_chat_model_stream())
 
 
+@pytest.mark.parametrize(
+    "model", ["vertex_ai/codestral@2405", "text-completion-codestral/codestral-2405"]  #
+)
 @pytest.mark.asyncio
-async def test_completion_codestral_fim_api():
+async def test_completion_codestral_fim_api(model):
     try:
+        if model == "vertex_ai/codestral@2405":
+            from litellm.tests.test_amazing_vertex_completion import (
+                load_vertex_ai_credentials,
+            )
+
+            load_vertex_ai_credentials()
+
         litellm.set_verbose = True
         import logging
 
@@ -4114,7 +4124,7 @@ async def test_completion_codestral_fim_api():
 
         verbose_logger.setLevel(level=logging.DEBUG)
         response = await litellm.atext_completion(
-            model="text-completion-codestral/codestral-2405",
+            model=model,
             prompt="def is_odd(n): \n return n % 2 == 1 \ndef test_is_odd():",
             suffix="return True",
             temperature=0,
@@ -4137,9 +4147,19 @@ async def test_completion_codestral_fim_api():
         pytest.fail(f"Error occurred: {e}")
 
 
+@pytest.mark.parametrize(
+    "model",
+    ["vertex_ai/codestral@2405", "text-completion-codestral/codestral-2405"],
+)
 @pytest.mark.asyncio
-async def test_completion_codestral_fim_api_stream():
+async def test_completion_codestral_fim_api_stream(model):
     try:
+        if model == "vertex_ai/codestral@2405":
+            from litellm.tests.test_amazing_vertex_completion import (
+                load_vertex_ai_credentials,
+            )
+
+            load_vertex_ai_credentials()
         import logging
 
         from litellm._logging import verbose_logger
@@ -4148,7 +4168,7 @@ async def test_completion_codestral_fim_api_stream():
 
         # verbose_logger.setLevel(level=logging.DEBUG)
         response = await litellm.atext_completion(
-            model="text-completion-codestral/codestral-2405",
+            model=model,
             prompt="def is_odd(n): \n return n % 2 == 1 \ndef test_is_odd():",
             suffix="return True",
             temperature=0,
