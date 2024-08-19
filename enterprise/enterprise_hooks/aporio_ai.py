@@ -137,13 +137,21 @@ class _ENTERPRISE_Aporio(CustomLogger):
         user_api_key_dict: UserAPIKeyAuth,
         response,
     ):
+        from litellm.proxy.common_utils.callback_utils import (
+            add_guardrail_to_applied_guardrails_header,
+        )
+
         """
         Use this for the post call moderation with Guardrails
         """
         response_str: Optional[str] = convert_litellm_response_object_to_str(response)
         if response_str is not None:
             await self.make_aporia_api_request(
-                response_string=response_str, new_messages=[]
+                response_string=response_str, new_messages=data.get("messages", [])
+            )
+
+            add_guardrail_to_applied_guardrails_header(
+                request_data=data, guardrail_name=f"post_call_{GUARDRAIL_NAME}"
             )
 
         pass
@@ -154,6 +162,9 @@ class _ENTERPRISE_Aporio(CustomLogger):
         user_api_key_dict: UserAPIKeyAuth,
         call_type: Literal["completion", "embeddings", "image_generation"],
     ):
+        from litellm.proxy.common_utils.callback_utils import (
+            add_guardrail_to_applied_guardrails_header,
+        )
 
         if (
             await should_proceed_based_on_metadata(
@@ -170,6 +181,9 @@ class _ENTERPRISE_Aporio(CustomLogger):
 
         if new_messages is not None:
             await self.make_aporia_api_request(new_messages=new_messages)
+            add_guardrail_to_applied_guardrails_header(
+                request_data=data, guardrail_name=f"during_call_{GUARDRAIL_NAME}"
+            )
         else:
             verbose_proxy_logger.warning(
                 "Aporia AI: not running guardrail. No messages in data"
