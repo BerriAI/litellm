@@ -30,6 +30,7 @@ from litellm.proxy._types import (
     UpdateTeamRequest,
     UserAPIKeyAuth,
 )
+from litellm.proxy.auth.auth_checks import _cache_team_object
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_helpers.utils import (
     add_new_member,
@@ -505,7 +506,12 @@ async def team_member_add(
                 team_id=data.team_id,
             )
         await asyncio.gather(*tasks)
-
+    await _cache_team_object(
+        team_id=data.team_id,
+        team_table=LiteLLM_TeamTableCachedObj(**updated_team.model_dump()),
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
     return updated_team
 
 
