@@ -133,6 +133,7 @@ class _ENTERPRISE_Aporio(CustomLogger):
 
     async def async_post_call_success_hook(
         self,
+        data: dict,
         user_api_key_dict: UserAPIKeyAuth,
         response,
     ):
