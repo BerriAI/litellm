@@ -46,6 +46,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "galileo",
     "braintrust",
     "arize",
+    "gcs_bucket",
 ]
 _known_custom_logger_compatible_callbacks: List = list(
     get_args(_custom_logger_compatible_callbacks_literal)
@@ -165,6 +166,7 @@ budget_duration: Optional[str] = (
 default_soft_budget: float = (
     50.0  # by default all litellm proxy keys have a soft budget of 50.0
 )
+forward_traceparent_to_llm_provider: bool = False
 _openai_finish_reasons = ["stop", "length", "function_call", "content_filter", "null"]
 _openai_completion_params = [
     "functions",
@@ -906,6 +908,7 @@ from .proxy.proxy_cli import run_server
 from .router import Router
 from .assistants.main import *
 from .batches.main import *
+from .fine_tuning.main import *
 from .files.main import *
 from .scheduler import *
 from .cost_calculator import response_cost_calculator, cost_per_token
