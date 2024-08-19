@@ -689,23 +689,7 @@ class Logging:
                     complete_streaming_response
                 )
                 self.model_call_details["response_cost"] = (
-                    litellm.response_cost_calculator(
-                        response_object=complete_streaming_response,
-                        model=self.model,
-                        cache_hit=self.model_call_details.get("cache_hit", False),
-                        custom_llm_provider=self.model_call_details.get(
-                            "custom_llm_provider", None
-                        ),
-                        base_model=_get_base_model_from_metadata(
-                            model_call_details=self.model_call_details
-                        ),
-                        call_type=self.call_type,
-                        optional_params=(
-                            self.optional_params
-                            if hasattr(self, "optional_params")
-                            else {}
-                        ),
-                    )
+                    self._response_cost_calculator(result=complete_streaming_response)
                 )
             if self.dynamic_success_callbacks is not None and isinstance(
                 self.dynamic_success_callbacks, list
@@ -1308,9 +1292,10 @@ class Logging:
                         model_call_details=self.model_call_details
                     )
                     # base_model defaults to None if not set on model_info
-                    self.model_call_details["response_cost"] = litellm.completion_cost(
-                        completion_response=complete_streaming_response,
-                        model=base_model,
+                    self.model_call_details["response_cost"] = (
+                        self._response_cost_calculator(
+                            result=complete_streaming_response
+                        )
                     )
                 verbose_logger.debug(
                     f"Model={self.model}; cost={self.model_call_details['response_cost']}"
