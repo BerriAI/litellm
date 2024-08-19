@@ -295,3 +295,21 @@ def get_remaining_tokens_and_requests_from_request_data(data: Dict) -> Dict[str,
         headers[f"x-litellm-key-remaining-tokens-{model_group}"] = remaining_tokens
 
     return headers
+
+
+def get_applied_guardrails_header(request_data: Dict) -> Optional[Dict]:
+    _metadata = request_data.get("metadata", None) or {}
+    if "applied_guardrails" in _metadata:
+        return {
+            "x-litellm-applied-guardrails": ",".join(_metadata["applied_guardrails"]),
+        }
+
+    return None
+
+
+def add_guardrail_to_applied_guardrails_header(request_data: Dict, guardrail_name: str):
+    _metadata = request_data.get("metadata", None) or {}
+    if "applied_guardrails" in _metadata:
+        _metadata["applied_guardrails"].append(guardrail_name)
+    else:
+        _metadata["applied_guardrails"] = [guardrail_name]
