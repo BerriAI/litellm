@@ -71,6 +71,7 @@ response_format: { "type": "json_schema", "json_schema": … , "strict": true }
 
 Works for:
 - OpenAI models 
+- Azure OpenAI models
 - Google AI Studio - Gemini models
 - Vertex AI models (Gemini + Anthropic)
 
