@@ -117,8 +117,8 @@ curl -i http://localhost:4000/v1/chat/completions \
 ### Control Guardrails per Project (API Key)
 
 Use this to control what guardrails run per project. In this tutorial we only want the following guardrails to run for 1 project
-- `pre_call_guardrails`: ["aporia"]
-- `post_call_guardrails`: ["aporia"]
+- `pre_call_guardrails`: ["aporia-pre-guard"]
+- `post_call_guardrails`: ["aporia-post-guard"]
 
 **Step 1** Create Key with guardrail settings
 
@@ -130,7 +130,7 @@ curl -X POST 'http://0.0.0.0:4000/key/generate' \
     -H 'Authorization: Bearer sk-1234' \
     -H 'Content-Type: application/json' \
     -D '{
-            "pre_call_guardrails": ["aporia"],
+            "pre_call_guardrails": ["aporia-pre-guard"],
             "post_call_guardrails": ["aporia"]
         }
     }'
