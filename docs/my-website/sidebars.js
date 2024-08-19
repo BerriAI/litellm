@@ -250,6 +250,7 @@ const sidebars = {
       type: "category",
       label: "Tutorials",
       items: [
+        'tutorials/litellm_proxy_aporia',
         'tutorials/azure_openai',
         'tutorials/instructor',
         "tutorials/gradio_integration",
