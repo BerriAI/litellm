@@ -717,6 +717,7 @@ class ProxyLogging:
 
     async def post_call_success_hook(
         self,
+        data: dict,
         response: Union[ModelResponse, EmbeddingResponse, ImageResponse],
         user_api_key_dict: UserAPIKeyAuth,
     ):
@@ -738,7 +739,9 @@ class ProxyLogging:
                     _callback = callback  # type: ignore
                 if _callback is not None and isinstance(_callback, CustomLogger):
                     await _callback.async_post_call_success_hook(
-                        user_api_key_dict=user_api_key_dict, response=response
+                        user_api_key_dict=user_api_key_dict,
+                        data=data,
+                        response=response,
                     )
             except Exception as e:
                 raise e
