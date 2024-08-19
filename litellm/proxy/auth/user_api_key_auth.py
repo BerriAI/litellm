@@ -1137,10 +1137,16 @@ async def user_api_key_auth(
         else:
             raise Exception()
     except Exception as e:
+        requester_ip = _get_request_ip_address(
+            request=request,
+            use_x_forwarded_for=general_settings.get("use_x_forwarded_for", False),
+        )
         verbose_proxy_logger.exception(
-            "litellm.proxy.proxy_server.user_api_key_auth(): Exception occured - {}".format(
-                str(e)
-            )
+            "litellm.proxy.proxy_server.user_api_key_auth(): Exception occured - {}\nRequester IP Address:{}".format(
+                str(e),
+                requester_ip,
+            ),
+            extra={"requester_ip": requester_ip},
         )
 
         # Log this exception to OTEL
@@ -1261,6 +1267,18 @@ def _get_user_role(
     return role
 
 
+def _get_request_ip_address(
+    request: Request, use_x_forwarded_for: Optional[bool] = False
+) -> str:
+
+    if use_x_forwarded_for is True and "x-forwarded-for" in request.headers:
+        client_ip = request.headers["x-forwarded-for"]
+    elif request.client is not None:
+        client_ip = request.client.host
+
+    return client_ip
+
+
 def _check_valid_ip(
     allowed_ips: Optional[List[str]],
     request: Request,
@@ -1273,11 +1291,9 @@ def _check_valid_ip(
         return True, None
 
     # if general_settings.get("use_x_forwarded_for") is True then use x-forwarded-for
-    client_ip = None
-    if use_x_forwarded_for is True and "x-forwarded-for" in request.headers:
-        client_ip = request.headers["x-forwarded-for"]
-    elif request.client is not None:
-        client_ip = request.client.host
+    client_ip = _get_request_ip_address(
+        request=request, use_x_forwarded_for=use_x_forwarded_for
+    )
 
     # Check if IP address is allowed
     if client_ip not in allowed_ips:
