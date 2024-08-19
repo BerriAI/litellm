@@ -34,6 +34,7 @@ Add the `Toxicity - Response` to your Post LLM API Call project
 
 ## 2. Define Guardrails on your LiteLLM config.yaml 
 
+- Define your guardrails under the `guardrails` section and set `pre_call_guardrails` and `post_call_guardrails`
 ```yaml
 model_list:
   - model_name: gpt-3.5-turbo
@@ -41,16 +42,29 @@ model_list:
       model: openai/gpt-3.5-turbo
       api_key: os.environ/OPENAI_API_KEY
 
+
+litellm_settings:
+    pre_call_guardrails: ["aporia-example-1"]  # run guardrail before making LLM API call
+    post_call_guardrails: ["aporia-example-2"] # run guardrail after making LLM API call
+    during_call_guardrails: []
 guardrails:
-  pre_call:  # guardrail only runs on input before LLM API call
-      guardrail: "aporia"                   # supported values ["aporia", "bedrock", "lakera"]
-      api_key: os.environ/APORIA_API_KEY_1
-      api_base: os.environ/APORIA_API_BASE_1
-  post_call: # guardrail only runs on output after LLM API call
-      guardrail: "aporia"                  # supported values ["aporia", "bedrock", "lakera"]
-      api_key: os.environ/APORIA_API_KEY_2
-      api_base: os.environ/APORIA_API_BASE_2
+    - guardrail_name: "aporia-pre-guard"
+        litellm_params:
+        guardrail: aporia  # supported values: "aporia", "bedrock", "lakera"
+        api_key: os.environ/APORIA_API_KEY_1
+        api_base: os.environ/APORIA_API_BASE_1
+    - guardrail_name: "aporia-post-guard"
+        litellm_params:
+        guardrail: aporia  # supported values: "aporia", "bedrock", "lakera"
+        api_key: os.environ/APORIA_API_KEY_2
+        api_base: os.environ/APORIA_API_BASE_2
 ```
+
+### Supported Event Hooks
+
+- pre_call_guardrails:    `Optional[List[str]]` Run **before** LLM call, on **input**
+- post_call_guardrails:   `Optional[List[str]]` Run **after** LLM call, on **input & output**
+- during_call_guardrails: `Optional[List[str]]` Run **during** LLM call, on **input**
 
 ## 3. Start LiteLLM Gateway 
 
@@ -62,7 +76,7 @@ litellm --config config.yaml --detailed_debug
 ## 4. Test request 
 
 <Tabs>
-<TabItem label="Fails Guardrail" value = "not-allowed">
+<TabItem label="Unsuccessful call" value = "not-allowed">
 
 Expect this to fail since since `ishaan@berri.ai` in the request is PII
 
@@ -80,7 +94,7 @@ curl -i http://localhost:4000/v1/chat/completions \
 
 </TabItem>
 
-<TabItem label="Success" value = "allowed">
+<TabItem label="Successful Call " value = "allowed">
 
 ```shell
 curl -i http://localhost:4000/v1/chat/completions \
@@ -102,9 +116,9 @@ curl -i http://localhost:4000/v1/chat/completions \
 ## Advanced
 ### Control Guardrails per Project (API Key)
 
-Use this to control what guardrail/s run per project. In this tutorial we only want the following guardrails to run for 1 project
-- pre_call: aporia
-- post_call: aporia
+Use this to control what guardrails run per project. In this tutorial we only want the following guardrails to run for 1 project
+- `pre_call_guardrails`: ["aporia"]
+- `post_call_guardrails`: ["aporia"]
 
 **Step 1** Create Key with guardrail settings
 
@@ -116,9 +130,8 @@ curl -X POST 'http://0.0.0.0:4000/key/generate' \
     -H 'Authorization: Bearer sk-1234' \
     -H 'Content-Type: application/json' \
     -D '{
-        "guardrails": {
-            "pre_call": ["aporia"],
-            "post_call": ["aporia"]
+            "pre_call_guardrails": ["aporia"],
+            "post_call_guardrails": ["aporia"]
         }
     }'
 ```
@@ -132,9 +145,8 @@ curl --location 'http://0.0.0.0:4000/key/update' \
     --header 'Content-Type: application/json' \
     --data '{
         "key": "sk-jNm1Zar7XfNdZXp49Z1kSQ",
-        "guardrails": {
-            "pre_call": ["aporia"],
-            "post_call": ["aporia"]
+        "pre_call_guardrails": ["aporia"],
+        "post_call_guardrails": ["aporia"]
         }
 }'
 ```
