@@ -1315,7 +1315,7 @@ class Logging:
                 verbose_logger.debug(
                     f"Model={self.model}; cost={self.model_call_details['response_cost']}"
                 )
-            except litellm.NotFoundError as e:
+            except litellm.NotFoundError:
                 verbose_logger.warning(
                     f"Model={self.model} not found in completion cost map. Setting 'response_cost' to None"
                 )
