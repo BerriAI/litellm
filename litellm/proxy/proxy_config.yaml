@@ -4,8 +4,15 @@ model_list:
       model: openai/gpt-3.5-turbo
       api_key: os.environ/OPENAI_API_KEY
 
-litellm_settings:
-  guardrails:
-  - prompt_injection:
-      callbacks: [aporio_prompt_injection] 
-      default_on: true
+guardrails:
+  - guardrail_name: prompt_injection_detection
+    litellm_params:
+      guardrail_name: openai/gpt-3.5-turbo
+      api_key: os.environ/OPENAI_API_KEY
+      api_base: os.environ/OPENAI_API_BASE
+  - guardrail_name: prompt_injection_detection
+    litellm_params:
+      guardrail_name: openai/gpt-3.5-turbo
+      api_key: os.environ/OPENAI_API_KEY
+      api_base: os.environ/OPENAI_API_BASE
+
