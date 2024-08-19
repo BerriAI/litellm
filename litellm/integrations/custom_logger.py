@@ -122,6 +122,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
 
     async def async_post_call_success_hook(
         self,
+        data: dict,
         user_api_key_dict: UserAPIKeyAuth,
         response,
     ):
