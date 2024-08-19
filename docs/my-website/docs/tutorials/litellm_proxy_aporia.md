@@ -44,8 +44,8 @@ model_list:
 
 
 litellm_settings:
-    pre_call_guardrails: ["aporia-example-1"]  # run guardrail before making LLM API call
-    post_call_guardrails: ["aporia-example-2"] # run guardrail after making LLM API call
+    pre_call_guardrails: ["aporia-pre-guard"]  # run guardrail before making LLM API call
+    post_call_guardrails: ["aporia-post-guard"] # run guardrail after making LLM API call
     during_call_guardrails: []
 guardrails:
     - guardrail_name: "aporia-pre-guard"
