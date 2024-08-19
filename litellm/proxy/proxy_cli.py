@@ -556,6 +556,22 @@ def run_server(
                     **key_management_settings
                 )
             database_url = general_settings.get("database_url", None)
+            if database_url is None:
+                # Check if all required variables are provided
+                database_host = os.getenv("DATABASE_HOST")
+                database_username = os.getenv("DATABASE_USERNAME")
+                database_password = os.getenv("DATABASE_PASSWORD")
+                database_name = os.getenv("DATABASE_NAME")
+
+                if (
+                    database_host
+                    and database_username
+                    and database_password
+                    and database_name
+                ):
+                    # Construct DATABASE_URL from the provided variables
+                    database_url = f"postgresql://{database_username}:{database_password}@{database_host}/{database_name}"
+                    os.environ["DATABASE_URL"] = database_url
             db_connection_pool_limit = general_settings.get(
                 "database_connection_pool_limit",
                 LiteLLMDatabaseConnectionPool.database_connection_pool_limit.value,
