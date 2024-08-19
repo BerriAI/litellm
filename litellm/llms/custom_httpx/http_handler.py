@@ -113,6 +113,48 @@ class AsyncHTTPHandler:
             raise e
         except Exception as e:
             raise e
+        
+    async def put(
+        self,
+        url: str,
+        data: Optional[Union[dict, str]] = None,  # type: ignore
+        json: Optional[dict] = None,
+        params: Optional[dict] = None,
+        headers: Optional[dict] = None,
+        stream: bool = False,
+    ):
+        try:
+            req = self.client.build_request(
+                "PUT", url, data=data, json=json, params=params, headers=headers  # type: ignore
+            )
+            response = await self.client.send(req, stream=stream)
+            response.raise_for_status()
+            return response
+        except (httpx.RemoteProtocolError, httpx.ConnectError):
+            # Retry the request with a new session if there is a connection error
+            new_client = self.create_client(timeout=self.timeout, concurrent_limit=1)
+            try:
+                return await self.single_connection_post_request(
+                    url=url,
+                    client=new_client,
+                    data=data,
+                    json=json,
+                    params=params,
+                    headers=headers,
+                    stream=stream,
+                )
+            finally:
+                await new_client.aclose()
+        except httpx.HTTPStatusError as e:
+            setattr(e, "status_code", e.response.status_code)
+            if stream is True:
+                setattr(e, "message", await e.response.aread())
+            else:
+                setattr(e, "message", e.response.text)
+            raise e
+        except Exception as e:
+            raise e
+
 
     async def single_connection_post_request(
         self,
@@ -199,6 +241,22 @@ class HTTPHandler:
         )
         response = self.client.send(req, stream=stream)
         return response
+    
+    def put(
+        self,
+        url: str,
+        data: Optional[Union[dict, str]] = None,
+        json: Optional[dict] = None,
+        params: Optional[dict] = None,
+        headers: Optional[dict] = None,
+        stream: bool = False,
+    ):
+        req = self.client.build_request(
+            "PUT", url, data=data, json=json, params=params, headers=headers # type: ignore
+        )
+        response = self.client.send(req, stream=stream)
+        return response
+
 
     def __del__(self) -> None:
         try:

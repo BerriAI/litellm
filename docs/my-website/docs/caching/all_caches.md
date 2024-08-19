@@ -146,11 +146,6 @@ assert response1.id == response2.id
 
 <TabItem value="qdrant-sem" label="qdrant-semantic cache">
 
-Install redis
-```shell
-pip install qdrant-client
-```
-
 You can set up your own cloud Qdrant cluster by following this: https://qdrant.tech/documentation/quickstart-cloud/
 
 To set up a Qdrant cluster locally follow: https://qdrant.tech/documentation/quickstart/
@@ -166,12 +161,12 @@ random_number = random.randint(
 print("testing semantic caching")
 litellm.cache = Cache(
     type="qdrant-semantic",
+    qdrant_host_type="cloud", # can be either 'cloud' or 'local'
     qdrant_url=os.environ["QDRANT_URL"], 
-    qdrant_username=os.environ["QDRANT_USERNAME"]", 
-    qdrant_password=os.environ["QDRANT_PASSWORD"], 
+    qdrant_api_key=os.environ["QDRANT_API_KEY"],
     qdrant_collection_name="your_collection_name", # any name of your collection
     similarity_threshold=0.7, # similarity threshold for cache hits, 0 == no similarity, 1 = exact matches, 0.5 == 50% similarity
-    qdrant_quantization_config = "binary", # can be one of 'binary', 'product' or 'scalar' quantizations that is supported by qdrant
+    qdrant_quantization_config ="binary", # can be one of 'binary', 'product' or 'scalar' quantizations that is supported by qdrant
     qdrant_semantic_cache_embedding_model="text-embedding-ada-002", # this model is passed to litellm.embedding(), any litellm.embedding() model is supported here
 )
 
@@ -496,12 +491,12 @@ def __init__(
     disk_cache_dir=None,
 
     # qdrant cache params
-    qdrant_username: Optional[str] = None,
-    qdrant_password: Optional[str] = None,
     qdrant_url: Optional[str] = None,
+    qdrant_api_key: Optional[str] = None,
     qdrant_collection_name: Optional[str] = None,
     qdrant_quantization_config: Optional[str] = None,
     qdrant_semantic_cache_embedding_model="text-embedding-ada-002",
+    qdrant_host_type: Optional[Literal["local","cloud"]] = "local",
 
     **kwargs
 ):
