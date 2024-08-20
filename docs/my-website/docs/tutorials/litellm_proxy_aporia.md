@@ -42,29 +42,26 @@ model_list:
       model: openai/gpt-3.5-turbo
       api_key: os.environ/OPENAI_API_KEY
 
-
-litellm_settings:
-    pre_call_guardrails: ["aporia-pre-guard"]  # run guardrail before making LLM API call
-    post_call_guardrails: ["aporia-post-guard"] # run guardrail after making LLM API call
-    during_call_guardrails: []
 guardrails:
-    - guardrail_name: "aporia-pre-guard"
-        litellm_params:
-        guardrail: aporia  # supported values: "aporia", "bedrock", "lakera"
-        api_key: os.environ/APORIA_API_KEY_1
-        api_base: os.environ/APORIA_API_BASE_1
-    - guardrail_name: "aporia-post-guard"
-        litellm_params:
-        guardrail: aporia  # supported values: "aporia", "bedrock", "lakera"
-        api_key: os.environ/APORIA_API_KEY_2
-        api_base: os.environ/APORIA_API_BASE_2
+  - guardrail_name: "aporia-pre-guard"
+    litellm_params:
+      guardrail: aporia  # supported values: "aporia", "lakera"
+      mode: "during_call"
+      api_key: os.environ/APORIA_API_KEY_1
+      api_base: os.environ/APORIA_API_BASE_1
+  - guardrail_name: "aporia-post-guard"
+    litellm_params:
+      guardrail: aporia  # supported values: "aporia", "lakera"
+      mode: "post_call"
+      api_key: os.environ/APORIA_API_KEY_2
+      api_base: os.environ/APORIA_API_BASE_2
 ```
 
-### Supported Event Hooks
+### Supported values for `mode`
 
-- pre_call_guardrails:    `Optional[List[str]]` Run **before** LLM call, on **input**
-- post_call_guardrails:   `Optional[List[str]]` Run **after** LLM call, on **input & output**
-- during_call_guardrails: `Optional[List[str]]` Run **during** LLM call, on **input**
+- `pre_call` Run **before** LLM call, on **input**
+- `post_call` Run **after** LLM call, on **input & output**
+- `during_call` Run **during** LLM call, on **input**
 
 ## 3. Start LiteLLM Gateway 
 
@@ -83,13 +80,36 @@ Expect this to fail since since `ishaan@berri.ai` in the request is PII
 ```shell
 curl -i http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-1234" \
+  -H "Authorization: Bearer sk-npnwjPQciVRok5yNZgKmFQ" \
   -d '{
     "model": "gpt-3.5-turbo",
     "messages": [
       {"role": "user", "content": "hi my email is ishaan@berri.ai"}
-    ]
+    ],
+    "guardrails": ["aporia-pre-guard", "aporia-post-guard"]
   }'
+```
+
+Expect response on failure
+
+```shell
+{
+  "error": {
+    "message": {
+      "error": "Violated guardrail policy",
+      "aporia_ai_response": {
+        "action": "block",
+        "revised_prompt": null,
+        "revised_response": "Aporia detected and blocked PII",
+        "explain_log": null
+      }
+    },
+    "type": "None",
+    "param": "None",
+    "code": "400"
+  }
+}
+
 ```
 
 </TabItem>
@@ -99,12 +119,13 @@ curl -i http://localhost:4000/v1/chat/completions \
 ```shell
 curl -i http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-1234" \
+  -H "Authorization: Bearer sk-npnwjPQciVRok5yNZgKmFQ" \
   -d '{
     "model": "gpt-3.5-turbo",
     "messages": [
-      {"role": "user", "content": "hi what is the weather?"}
-    ]
+      {"role": "user", "content": "hi what is the weather"}
+    ],
+    "guardrails": ["aporia-pre-guard", "aporia-post-guard"]
   }'
 ```
 
