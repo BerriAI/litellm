@@ -1276,6 +1276,8 @@ def _get_request_ip_address(
         client_ip = request.headers["x-forwarded-for"]
     elif request.client is not None:
         client_ip = request.client.host
+    else:
+        client_ip = ""
 
     return client_ip
 
