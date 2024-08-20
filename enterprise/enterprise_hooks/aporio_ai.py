@@ -15,7 +15,7 @@ from typing import Optional, Literal, Union, Any
 import litellm, traceback, sys, uuid
 from litellm.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from fastapi import HTTPException
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.guardrails.guardrail_helpers import should_proceed_based_on_metadata
@@ -29,19 +29,25 @@ from litellm._logging import verbose_proxy_logger
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 import httpx
 import json
+from litellm.types.guardrails import GuardrailEventHooks
 
 litellm.set_verbose = True
 
 GUARDRAIL_NAME = "aporio"
 
 
-class _ENTERPRISE_Aporio(CustomLogger):
-    def __init__(self, api_key: Optional[str] = None, api_base: Optional[str] = None):
+class _ENTERPRISE_Aporio(CustomGuardrail):
+    def __init__(
+        self, api_key: Optional[str] = None, api_base: Optional[str] = None, **kwargs
+    ):
         self.async_handler = AsyncHTTPHandler(
             timeout=httpx.Timeout(timeout=600.0, connect=5.0)
         )
         self.aporio_api_key = api_key or os.environ["APORIO_API_KEY"]
         self.aporio_api_base = api_base or os.environ["APORIO_API_BASE"]
+        self.event_hook: GuardrailEventHooks
+
+        super().__init__(**kwargs)
 
     #### CALL HOOKS - proxy only ####
     def transform_messages(self, messages: List[dict]) -> List[dict]:
@@ -140,10 +146,15 @@ class _ENTERPRISE_Aporio(CustomLogger):
         from litellm.proxy.common_utils.callback_utils import (
             add_guardrail_to_applied_guardrails_header,
         )
+        from litellm.types.guardrails import GuardrailEventHooks
 
         """
         Use this for the post call moderation with Guardrails
         """
+        event_type: GuardrailEventHooks = GuardrailEventHooks.post_call
+        if self.should_run_guardrail(data=data, event_type=event_type) is not True:
+            return
+
         response_str: Optional[str] = convert_litellm_response_object_to_str(response)
         if response_str is not None:
             await self.make_aporia_api_request(
@@ -151,7 +162,7 @@ class _ENTERPRISE_Aporio(CustomLogger):
             )
 
             add_guardrail_to_applied_guardrails_header(
-                request_data=data, guardrail_name=f"post_call_{GUARDRAIL_NAME}"
+                request_data=data, guardrail_name=self.guardrail_name
             )
 
         pass
@@ -165,7 +176,13 @@ class _ENTERPRISE_Aporio(CustomLogger):
         from litellm.proxy.common_utils.callback_utils import (
             add_guardrail_to_applied_guardrails_header,
         )
+        from litellm.types.guardrails import GuardrailEventHooks
 
+        event_type: GuardrailEventHooks = GuardrailEventHooks.during_call
+        if self.should_run_guardrail(data=data, event_type=event_type) is not True:
+            return
+
+        # old implementation - backwards compatibility
         if (
             await should_proceed_based_on_metadata(
                 data=data,
@@ -182,7 +199,7 @@ class _ENTERPRISE_Aporio(CustomLogger):
         if new_messages is not None:
             await self.make_aporia_api_request(new_messages=new_messages)
             add_guardrail_to_applied_guardrails_header(
-                request_data=data, guardrail_name=f"during_call_{GUARDRAIL_NAME}"
+                request_data=data, guardrail_name=self.guardrail_name
             )
         else:
             verbose_proxy_logger.warning(
