@@ -509,16 +509,16 @@ async def ollama_acompletion(
 async def ollama_aembeddings(
     api_base: str,
     model: str,
-    prompts: list,
+    prompts: List[str],
     model_response: litellm.EmbeddingResponse,
     optional_params: dict,
     logging_obj=None,
     encoding=None,
 ):
-    if api_base.endswith("/api/embeddings"):
+    if api_base.endswith("/api/embed"):
         url = api_base
     else:
-        url = f"{api_base}/api/embeddings"
+        url = f"{api_base}/api/embed"
 
     ## Load Config
     config = litellm.OllamaConfig.get_config()
@@ -528,64 +528,53 @@ async def ollama_aembeddings(
         ):  # completion(top_k=3) > cohere_config(top_k=3) <- allows for dynamic variables to be passed in
             optional_params[k] = v
 
-    input_data: Dict[str, Any] = {"model": model}
+    data: Dict[str, Any] = {"model": model, "input": prompts}
     special_optional_params = ["truncate", "options", "keep_alive"]
 
     for k, v in optional_params.items():
         if k in special_optional_params:
-            input_data[k] = v
+            data[k] = v
         else:
             # Ensure "options" is a dictionary before updating it
-            input_data.setdefault("options", {})
-            if isinstance(input_data["options"], dict):
-                input_data["options"].update({k: v})
+            data.setdefault("options", {})
+            if isinstance(data["options"], dict):
+                data["options"].update({k: v})
     total_input_tokens = 0
     output_data = []
 
     timeout = aiohttp.ClientTimeout(total=litellm.request_timeout)  # 10 minutes
     async with aiohttp.ClientSession(timeout=timeout) as session:
-        for idx, prompt in enumerate(prompts):
-            data = deepcopy(input_data)
-            data["prompt"] = prompt
-            ## LOGGING
-            logging_obj.pre_call(
-                input=None,
-                api_key=None,
-                additional_args={
-                    "api_base": url,
-                    "complete_input_dict": data,
-                    "headers": {},
-                },
-            )
+        ## LOGGING
+        logging_obj.pre_call(
+            input=None,
+            api_key=None,
+            additional_args={
+                "api_base": url,
+                "complete_input_dict": data,
+                "headers": {},
+            },
+        )
 
-            response = await session.post(url, json=data)
-            if response.status != 200:
-                text = await response.text()
-                raise OllamaError(status_code=response.status, message=text)
+        response = await session.post(url, json=data)
 
-            ## LOGGING
-            logging_obj.post_call(
-                input=prompt,
-                api_key="",
-                original_response=response.text,
-                additional_args={
-                    "headers": None,
-                    "api_base": api_base,
-                },
-            )
+        if response.status != 200:
+            text = await response.text()
+            raise OllamaError(status_code=response.status, message=text)
 
-            response_json = await response.json()
-            embeddings: list[float] = response_json["embedding"]
-            output_data.append(
-                {"object": "embedding", "index": idx, "embedding": embeddings}
-            )
+        response_json = await response.json()
 
-            input_tokens = len(encoding.encode(prompt))
-            total_input_tokens += input_tokens
+        embeddings: List[List[float]] = response_json["embeddings"]
+        for idx, emb in enumerate(embeddings):
+            output_data.append({"object": "embedding", "index": idx, "embedding": emb})
+
+        input_tokens = response_json.get("prompt_eval_count") or len(
+            encoding.encode("".join(prompt for prompt in prompts))
+        )
+        total_input_tokens += input_tokens
 
     model_response.object = "list"
     model_response.data = output_data
-    model_response.model = model
+    model_response.model = "ollama/" + model
     setattr(
         model_response,
         "usage",
