@@ -287,7 +287,7 @@ def test_azure_tool_choice(api_version):
     else:
         assert (
             "tool_choice" not in optional_params
-        ), "tool_choice={} for api version={}".format(
+        ), "tool choice should not be present. Got - tool_choice={} for api version={}".format(
             optional_params["tool_choice"], api_version
         )
 
