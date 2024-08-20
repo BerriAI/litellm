@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, TypedDict
 
 from pydantic import BaseModel, ConfigDict
 from typing_extensions import Required, TypedDict
@@ -63,3 +63,26 @@ class GuardrailItem(BaseModel):
             enabled_roles=enabled_roles,
             callback_args=callback_args,
         )
+
+
+# Define the TypedDicts
+class LitellmParams(TypedDict):
+    guardrail: str
+    mode: str
+    api_key: str
+    api_base: Optional[str]
+
+
+class Guardrail(TypedDict):
+    guardrail_name: str
+    litellm_params: LitellmParams
+
+
+class guardrailConfig(TypedDict):
+    guardrails: List[Guardrail]
+
+
+class GuardrailEventHooks(str, Enum):
+    pre_call = "pre_call"
+    post_call = "post_call"
+    during_call = "during_call"

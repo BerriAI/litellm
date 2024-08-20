@@ -169,7 +169,10 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
 )
 from litellm.proxy.fine_tuning_endpoints.endpoints import router as fine_tuning_router
 from litellm.proxy.fine_tuning_endpoints.endpoints import set_fine_tuning_config
-from litellm.proxy.guardrails.init_guardrails import initialize_guardrails
+from litellm.proxy.guardrails.init_guardrails import (
+    init_guardrails_v2,
+    initialize_guardrails,
+)
 from litellm.proxy.health_check import perform_health_check
 from litellm.proxy.health_endpoints._health_endpoints import router as health_router
 from litellm.proxy.hooks.prompt_injection_detection import (
@@ -1942,6 +1945,11 @@ class ProxyConfig:
                 async_only_mode=True  # only init async clients
             ),
         )  # type:ignore
+
+        # Guardrail settings
+        guardrails_v2 = config.get("guardrails", None)
+        if guardrails_v2:
+            init_guardrails_v2(all_guardrails=guardrails_v2)
         return router, router.get_model_list(), general_settings
 
     def get_model_info_with_id(self, model, db_model=False) -> RouterModelInfo:
