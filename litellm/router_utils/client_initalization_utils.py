@@ -1,7 +1,7 @@
 import asyncio
 import os
 import traceback
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 import httpx
 import openai
@@ -187,7 +187,7 @@ def set_client(litellm_router_instance: LitellmRouter, model: dict):
                     f"api_base is required for Azure OpenAI. Set it on your config. Model - {_filtered_model}"
                 )
             azure_ad_token = litellm_params.get("azure_ad_token")
-            azure_ad_token_provider = None
+            azure_ad_token_provider: Callable[[], str] | None = None
             if azure_ad_token is not None:
                 if azure_ad_token.startswith("oidc/"):
                     azure_ad_token = get_azure_ad_token_from_oidc(azure_ad_token)
