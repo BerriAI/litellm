@@ -318,13 +318,33 @@ async def add_litellm_data_to_request(
 
     # Guardrails
     move_guardrails_to_metadata(
-        data=data, _metadata_variable_name=_metadata_variable_name
+        data=data,
+        _metadata_variable_name=_metadata_variable_name,
+        user_api_key_dict=user_api_key_dict,
     )
 
     return data
 
 
-def move_guardrails_to_metadata(data: dict, _metadata_variable_name: str):
+def move_guardrails_to_metadata(
+    data: dict,
+    _metadata_variable_name: str,
+    user_api_key_dict: UserAPIKeyAuth,
+):
+    """
+    Heper to add guardrails from request to metadata
+
+    - If guardrails set on API Key metadata then sets guardrails on request metadata
+    - If guardrails not set on API key, then checks request metadata
+
+    """
+    if user_api_key_dict.metadata:
+        if "guardrails" in user_api_key_dict.metadata:
+            data[_metadata_variable_name]["guardrails"] = user_api_key_dict.metadata[
+                "guardrails"
+            ]
+            return
+
     if "guardrails" in data:
         data[_metadata_variable_name]["guardrails"] = data["guardrails"]
         del data["guardrails"]
