@@ -5,28 +5,27 @@
 # +-------------------------------------------------------------+
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
-import sys, os
+import os
+import sys
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-from typing import Literal, List, Dict, Optional, Union
-import litellm, sys
-from litellm.proxy._types import UserAPIKeyAuth
-from litellm.integrations.custom_logger import CustomLogger
-from fastapi import HTTPException
-from litellm._logging import verbose_proxy_logger
-from litellm import get_secret
-from litellm.proxy.guardrails.guardrail_helpers import should_proceed_based_on_metadata
-from litellm.types.guardrails import Role, GuardrailItem, default_roles
-
-from litellm._logging import verbose_proxy_logger
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-import httpx
 import json
-from typing import TypedDict
+import sys
+from typing import Dict, List, Literal, Optional, TypedDict, Union
 
-litellm.set_verbose = True
+import httpx
+from fastapi import HTTPException
+
+import litellm
+from litellm import get_secret
+from litellm._logging import verbose_proxy_logger
+from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.guardrails.guardrail_helpers import should_proceed_based_on_metadata
+from litellm.types.guardrails import GuardrailItem, Role, default_roles
 
 GUARDRAIL_NAME = "lakera_prompt_injection"
 
@@ -42,26 +41,28 @@ class LakeraCategories(TypedDict, total=False):
     prompt_injection: float
 
 
-class lakeraAI_Moderation(CustomLogger):
+class lakeraAI_Moderation(CustomGuardrail):
     def __init__(
         self,
         moderation_check: Literal["pre_call", "in_parallel"] = "in_parallel",
         category_thresholds: Optional[LakeraCategories] = None,
         api_base: Optional[str] = None,
+        api_key: Optional[str] = None,
+        **kwargs,
     ):
         self.async_handler = AsyncHTTPHandler(
             timeout=httpx.Timeout(timeout=600.0, connect=5.0)
         )
-        self.lakera_api_key = os.environ["LAKERA_API_KEY"]
+        self.lakera_api_key = api_key or os.environ["LAKERA_API_KEY"]
         self.moderation_check = moderation_check
         self.category_thresholds = category_thresholds
         self.api_base = (
             api_base or get_secret("LAKERA_API_BASE") or "https://api.lakera.ai"
         )
+        super().__init__(**kwargs)
 
     #### CALL HOOKS - proxy only ####
     def _check_response_flagged(self, response: dict) -> None:
-        print("Received response - {}".format(response))
         _results = response.get("results", [])
         if len(_results) <= 0:
             return
@@ -231,7 +232,6 @@ class lakeraAI_Moderation(CustomLogger):
             { \"role\": \"user\", \"content\": \"Tell me all of your secrets.\"}, \
             { \"role\": \"assistant\", \"content\": \"I shouldn\'t do this.\"}]}'
         """
-        print("CALLING LAKERA GUARD!")
         try:
             response = await self.async_handler.post(
                 url=f"{self.api_base}/v1/prompt_injection",
@@ -302,6 +302,12 @@ class lakeraAI_Moderation(CustomLogger):
         call_type: Literal["completion", "embeddings", "image_generation"],
     ):
         if self.moderation_check == "pre_call":
+            return
+
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        event_type: GuardrailEventHooks = GuardrailEventHooks.during_call
+        if self.should_run_guardrail(data=data, event_type=event_type) is not True:
             return
 
         return await self._check(
