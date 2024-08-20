@@ -308,7 +308,18 @@ async def add_litellm_data_to_request(
             for k, v in callback_settings_obj.callback_vars.items():
                 data[k] = v
 
+    # Guardrails
+    move_guardrails_to_metadata(
+        data=data, _metadata_variable_name=_metadata_variable_name
+    )
+
     return data
+
+
+def move_guardrails_to_metadata(data: dict, _metadata_variable_name: str):
+    if "guardrails" in data:
+        data[_metadata_variable_name]["guardrails"] = data["guardrails"]
+        del data["guardrails"]
 
 
 def add_provider_specific_headers_to_request(
