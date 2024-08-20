@@ -317,6 +317,10 @@ jobs:
               -e OPENAI_API_KEY=$OPENAI_API_KEY \
               -e LITELLM_LICENSE=$LITELLM_LICENSE \
               -e OTEL_EXPORTER="in_memory" \
+              -e APORIA_API_BASE_2=$APORIA_API_BASE_2 \
+              -e APORIA_API_KEY_2=$APORIA_API_KEY_2 \
+              -e APORIA_API_BASE_1=$APORIA_API_BASE_1 \
+              -e APORIA_API_KEY_1=$APORIA_API_KEY_1 \
               --name my-app \
               -v $(pwd)/litellm/proxy/example_config_yaml/otel_test_config.yaml:/app/config.yaml \
               my-app:latest \
