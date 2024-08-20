@@ -6,7 +6,7 @@ from typing import Optional, List, Union
 import uuid
 
 
-async def chat_completion(session, key, model: Union[str, List] = "gpt-4"):
+async def chat_completion(session, key, messages, model: Union[str, List] = "gpt-4"):
     url = "http://0.0.0.0:4000/chat/completions"
     headers = {
         "Authorization": f"Bearer {key}",
@@ -14,9 +14,7 @@ async def chat_completion(session, key, model: Union[str, List] = "gpt-4"):
     }
     data = {
         "model": model,
-        "messages": [
-            {"role": "user", "content": f"Hello! {str(uuid.uuid4())}"},
-        ],
+        "messages": messages,
         "guardrails": ["aporia-post-guard", "aporia-pre-guard"],
     }
 
@@ -45,7 +43,10 @@ async def test_no_llm_guard_triggered():
     """
     async with aiohttp.ClientSession() as session:
         response, headers = await chat_completion(
-            session, "sk-1234", model="fake-openai-endpoint"
+            session,
+            "sk-1234",
+            model="fake-openai-endpoint",
+            messages=[{"role": "user", "content": f"Hello what's the weather"}],
         )
         await asyncio.sleep(3)
 
@@ -57,3 +58,25 @@ async def test_no_llm_guard_triggered():
             headers["x-litellm-applied-guardrails"]
             == "aporia-pre-guard,aporia-post-guard"
         )
+
+
+@pytest.mark.asyncio
+async def test_llm_guard_triggered():
+    """
+    - Tests a request where no content mod is triggered
+    - Assert that the guardrails applied are returned in the response headers
+    """
+    async with aiohttp.ClientSession() as session:
+        try:
+            response, headers = await chat_completion(
+                session,
+                "sk-1234",
+                model="fake-openai-endpoint",
+                messages=[
+                    {"role": "user", "content": f"Hello my name is ishaan@berri.ai"}
+                ],
+            )
+            pytest.fail("Should have thrown an exception")
+        except Exception as e:
+            print(e)
+            assert "Aporia detected and blocked PII" in str(e)
