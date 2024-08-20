@@ -360,24 +360,22 @@ async def pass_through_request(
 
         # combine url with query params for logging
 
-        # requested_query_params = query_params or request.query_params.__dict__
-        # requested_query_params_str = "&".join(
-        #     f"{k}={v}" for k, v in requested_query_params.items()
-        # )
+        requested_query_params = query_params or request.query_params.__dict__
+        requested_query_params_str = "&".join(
+            f"{k}={v}" for k, v in requested_query_params.items()
+        )
 
-        requested_query_params = None
-
-        # if "?" in str(url):
-        #     logging_url = str(url) + "&" + requested_query_params_str
-        # else:
-        #     logging_url = str(url) + "?" + requested_query_params_str
+        if "?" in str(url):
+            logging_url = str(url) + "&" + requested_query_params_str
+        else:
+            logging_url = str(url) + "?" + requested_query_params_str
 
         logging_obj.pre_call(
             input=[{"role": "user", "content": "no-message-pass-through-endpoint"}],
             api_key="",
             additional_args={
                 "complete_input_dict": _parsed_body,
-                "api_base": str(url),
+                "api_base": str(logging_url),
                 "headers": headers,
             },
         )
