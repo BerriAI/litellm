@@ -90,7 +90,7 @@ curl -i http://localhost:4000/v1/chat/completions \
   }'
 ```
 
-Expect response on failure
+Expected response on failure
 
 ```shell
 {
