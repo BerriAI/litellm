@@ -622,3 +622,62 @@ def test_no_retry_for_not_found_error_404():
         )
     except Exception as e:
         print("got exception", e)
+
+
+internal_server_error = litellm.InternalServerError(
+    message="internal server error",
+    model="gpt-12",
+    llm_provider="azure",
+)
+
+rate_limit_error = litellm.RateLimitError(
+    message="rate limit error",
+    model="gpt-12",
+    llm_provider="azure",
+)
+
+service_unavailable_error = litellm.ServiceUnavailableError(
+    message="service unavailable error",
+    model="gpt-12",
+    llm_provider="azure",
+)
+
+timeout_error = litellm.Timeout(
+    message="timeout error",
+    model="gpt-12",
+    llm_provider="azure",
+)
+
+
+def test_no_retry_when_no_healthy_deployments():
+    healthy_deployments = []
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "azure/chatgpt-v-2",
+                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "api_base": os.getenv("AZURE_API_BASE"),
+                },
+            }
+        ]
+    )
+
+    for error in [
+        internal_server_error,
+        rate_limit_error,
+        service_unavailable_error,
+        timeout_error,
+    ]:
+        try:
+            response = router.should_retry_this_error(
+                error=error, healthy_deployments=healthy_deployments
+            )
+            pytest.fail(
+                "Should have raised an exception,  there's no point retrying an error when there are 0 healthy deployments"
+            )
+        except Exception as e:
+            print("got exception", e)

@@ -2727,6 +2727,11 @@ class Router:
             if _num_healthy_deployments <= 0:  # if no healthy deployments
                 raise error  # then raise error
 
+        # Do not retry if there are no healthy deployments
+        # just raise the error
+        if _num_healthy_deployments <= 0:  # if no healthy deployments
+            raise error
+
         return True
 
     def function_with_fallbacks(self, *args, **kwargs):
