@@ -417,6 +417,7 @@ async def team_member_add(
 
     If user doesn't exist, new user row will also be added to User Table
 
+    Only proxy_admin or admin of team, allowed to access this endpoint.
     ```
 
     curl -X POST 'http://0.0.0.0:4000/team/member_add' \
