@@ -1,7 +1,7 @@
 """
 What is this? 
 
-Google AI Studio Pass-Through Endpoints
+Provider-specific Pass-Through Endpoints
 """
 
 """
