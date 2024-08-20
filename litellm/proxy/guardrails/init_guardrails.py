@@ -113,9 +113,7 @@ def init_guardrails_v2(all_guardrails: dict):
 
         # Init guardrail CustomLoggerClass
         if litellm_params["guardrail"] == "aporia":
-            from litellm.proxy.enterprise.enterprise_hooks.aporia_ai import (
-                _ENTERPRISE_Aporia,
-            )
+            from guardrail_hooks.aporia_ai import _ENTERPRISE_Aporia
 
             _aporia_callback = _ENTERPRISE_Aporia(
                 api_base=litellm_params["api_base"],
