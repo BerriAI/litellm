@@ -930,6 +930,169 @@ async def test_create_team_member_add(prisma_client, new_member_method):
         )
 
 
+@pytest.mark.parametrize("team_member_role", ["admin", "user"])
+@pytest.mark.asyncio
+async def test_create_team_member_add_team_admin_user_api_key_auth(
+    prisma_client, team_member_role
+):
+    import time
+
+    from fastapi import Request
+
+    from litellm.proxy._types import LiteLLM_TeamTableCachedObj, Member
+    from litellm.proxy.proxy_server import (
+        ProxyException,
+        hash_token,
+        user_api_key_auth,
+        user_api_key_cache,
+    )
+
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm, "max_internal_user_budget", 10)
+    setattr(litellm, "internal_user_budget_duration", "5m")
+    await litellm.proxy.proxy_server.prisma_client.connect()
+    user = f"ishaan {uuid.uuid4().hex}"
+    _team_id = "litellm-test-client-id-new"
+    user_key = "sk-12345678"
+
+    valid_token = UserAPIKeyAuth(
+        team_id=_team_id,
+        token=hash_token(user_key),
+        team_member=Member(role=team_member_role, user_id=user),
+        last_refreshed_at=time.time(),
+    )
+    user_api_key_cache.set_cache(key=hash_token(user_key), value=valid_token)
+
+    team_obj = LiteLLM_TeamTableCachedObj(
+        team_id=_team_id,
+        blocked=False,
+        last_refreshed_at=time.time(),
+        metadata={"guardrails": {"modify_guardrails": False}},
+    )
+
+    user_api_key_cache.set_cache(key="team_id:{}".format(_team_id), value=team_obj)
+
+    setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
+
+    ## TEST IF TEAM ADMIN ALLOWED TO CALL /MEMBER_ADD ENDPOINT
+    import json
+
+    from starlette.datastructures import URL
+
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/team/member_add")
+
+    body = {}
+    json_bytes = json.dumps(body).encode("utf-8")
+
+    request._body = json_bytes
+
+    try:
+        await user_api_key_auth(request=request, api_key="Bearer " + user_key)
+        if team_member_role == "user":
+            pytest.fail(
+                "Expected this call to fail. User not allowed to access this route."
+            )
+    except ProxyException:
+        if team_member_role == "admin":
+            pytest.fail(
+                "Expected this call to succeed. Team admin allowed to access /team/member_add"
+            )
+
+
+@pytest.mark.parametrize("new_member_method", ["user_id", "user_email"])
+@pytest.mark.asyncio
+async def test_create_team_member_add_team_admin(prisma_client, new_member_method):
+    """
+    Relevant issue - https://github.com/BerriAI/litellm/issues/5300
+
+    Allow team admins to:
+        - Add and remove team members
+        - raise error if team member not an existing 'internal_user'
+    """
+    import time
+
+    from fastapi import Request
+
+    from litellm.proxy._types import LiteLLM_TeamTableCachedObj, Member
+    from litellm.proxy.proxy_server import (
+        ProxyException,
+        hash_token,
+        user_api_key_auth,
+        user_api_key_cache,
+    )
+
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm, "max_internal_user_budget", 10)
+    setattr(litellm, "internal_user_budget_duration", "5m")
+    await litellm.proxy.proxy_server.prisma_client.connect()
+    user = f"ishaan {uuid.uuid4().hex}"
+    _team_id = "litellm-test-client-id-new"
+    user_key = "sk-12345678"
+
+    valid_token = UserAPIKeyAuth(
+        team_id=_team_id,
+        token=hash_token(user_key),
+        team_member=Member(role="admin", user_id=user),
+        last_refreshed_at=time.time(),
+    )
+    user_api_key_cache.set_cache(key=hash_token(user_key), value=valid_token)
+
+    team_obj = LiteLLM_TeamTableCachedObj(
+        team_id=_team_id,
+        blocked=False,
+        last_refreshed_at=time.time(),
+        metadata={"guardrails": {"modify_guardrails": False}},
+    )
+
+    user_api_key_cache.set_cache(key="team_id:{}".format(_team_id), value=team_obj)
+
+    setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
+    if new_member_method == "user_id":
+        data = {
+            "team_id": _team_id,
+            "member": [{"role": "user", "user_id": user}],
+        }
+    elif new_member_method == "user_email":
+        data = {
+            "team_id": _team_id,
+            "member": [{"role": "user", "user_email": user}],
+        }
+    team_member_add_request = TeamMemberAddRequest(**data)
+
+    with patch(
+        "litellm.proxy.proxy_server.prisma_client.db.litellm_usertable",
+        new_callable=AsyncMock,
+    ) as mock_litellm_usertable:
+        mock_client = AsyncMock()
+        mock_litellm_usertable.upsert = mock_client
+        mock_litellm_usertable.find_many = AsyncMock(return_value=None)
+
+        await team_member_add(
+            data=team_member_add_request,
+            user_api_key_dict=valid_token,
+            http_request=Request(
+                scope={"type": "http", "path": "/user/new"},
+            ),
+        )
+
+        mock_client.assert_called()
+
+        print(f"mock_client.call_args: {mock_client.call_args}")
+        print("mock_client.call_args.kwargs: {}".format(mock_client.call_args.kwargs))
+
+        assert (
+            mock_client.call_args.kwargs["data"]["create"]["max_budget"]
+            == litellm.max_internal_user_budget
+        )
+        assert (
+            mock_client.call_args.kwargs["data"]["create"]["budget_duration"]
+            == litellm.internal_user_budget_duration
+        )
+
+
 @pytest.mark.asyncio
 async def test_user_info_team_list(prisma_client):
     """Assert user_info for admin calls team_list function"""

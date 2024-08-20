@@ -44,6 +44,7 @@ from litellm.proxy._types import (
     DynamoDBArgs,
     LiteLLM_VerificationTokenView,
     LitellmUserRoles,
+    Member,
     ResetTeamBudgetRequest,
     SpendLogsMetadata,
     SpendLogsPayload,
@@ -1395,6 +1396,7 @@ class PrismaClient:
                     t.blocked AS team_blocked,
                     t.team_alias AS team_alias,
                     t.metadata AS team_metadata,
+                    t.members_with_roles AS team_members_with_roles,
                     tm.spend AS team_member_spend,
                     m.aliases as team_model_aliases
                     FROM "LiteLLM_VerificationToken" AS v
@@ -1412,6 +1414,33 @@ class PrismaClient:
                             response["team_models"] = []
                         if response["team_blocked"] is None:
                             response["team_blocked"] = False
+
+                        team_member: Optional[Member] = None
+                        if (
+                            response["team_members_with_roles"] is not None
+                            and response["user_id"] is not None
+                        ):
+                            ## find the team member corresponding to user id
+                            """
+                            [
+                                {
+                                    "role": "admin",
+                                    "user_id": "default_user_id",
+                                    "user_email": null
+                                },
+                                {
+                                    "role": "user",
+                                    "user_id": null,
+                                    "user_email": "test@email.com"
+                                }
+                            ]
+                            """
+                            for tm in response["team_members_with_roles"]:
+                                if tm.get("user_id") is not None and response[
+                                    "user_id"
+                                ] == tm.get("user_id"):
+                                    team_member = Member(**tm)
+                        response["team_member"] = team_member
                         response = LiteLLM_VerificationTokenView(
                             **response, last_refreshed_at=time.time()
                         )

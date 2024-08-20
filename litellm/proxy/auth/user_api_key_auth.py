@@ -975,7 +975,7 @@ async def user_api_key_auth(
             if not _is_user_proxy_admin(user_obj=user_obj):  # if non-admin
                 if is_llm_api_route(route=route):
                     pass
-                elif is_llm_api_route(route=request["route"].name):
+                elif is_llm_api_route(route=route):
                     pass
                 elif (
                     route in LiteLLMRoutes.info_routes.value
@@ -1046,9 +1046,15 @@ async def user_api_key_auth(
                                 status_code=status.HTTP_403_FORBIDDEN,
                                 detail=f"user not allowed to access this route, role= {_user_role}. Trying to access: {route}",
                             )
+
                 elif (
                     _user_role == LitellmUserRoles.INTERNAL_USER.value
                     and route in LiteLLMRoutes.internal_user_routes.value
+                ):
+                    pass
+                elif (
+                    _is_user_team_admin(user_api_key_dict=valid_token)
+                    and route in LiteLLMRoutes.team_admin_routes.value
                 ):
                     pass
                 else:
@@ -1326,3 +1332,13 @@ def get_api_key_from_custom_header(
             f"No LiteLLM Virtual Key pass. Please set header={custom_litellm_key_header_name}: Bearer <api_key>"
         )
     return api_key
+
+
+def _is_user_team_admin(user_api_key_dict: UserAPIKeyAuth) -> bool:
+    if user_api_key_dict.team_member is None:
+        return False
+
+    if user_api_key_dict.team_member.role == LiteLLMTeamRoles.TEAM_ADMIN.value:
+        return True
+
+    return False
