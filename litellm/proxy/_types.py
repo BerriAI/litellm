@@ -342,7 +342,10 @@ class LiteLLMRoutes(enum.Enum):
         + sso_only_routes
     )
 
-    team_admin_routes: List = ["/team/member_add"] + internal_user_routes
+    team_admin_routes: List = [
+        "/team/member_add",
+        "/team/member_delete",
+    ] + internal_user_routes
 
 
 # class LiteLLMAllowedRoutes(LiteLLMBase):
