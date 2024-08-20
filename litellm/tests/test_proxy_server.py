@@ -931,9 +931,10 @@ async def test_create_team_member_add(prisma_client, new_member_method):
 
 
 @pytest.mark.parametrize("team_member_role", ["admin", "user"])
+@pytest.mark.parametrize("team_route", ["/team/member_add", "/team/member_delete"])
 @pytest.mark.asyncio
 async def test_create_team_member_add_team_admin_user_api_key_auth(
-    prisma_client, team_member_role
+    prisma_client, team_member_role, team_route
 ):
     import time
 
@@ -981,7 +982,7 @@ async def test_create_team_member_add_team_admin_user_api_key_auth(
     from starlette.datastructures import URL
 
     request = Request(scope={"type": "http"})
-    request._url = URL(url="/team/member_add")
+    request._url = URL(url=team_route)
 
     body = {}
     json_bytes = json.dumps(body).encode("utf-8")
