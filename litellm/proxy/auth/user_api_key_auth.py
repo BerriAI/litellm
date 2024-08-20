@@ -1269,8 +1269,9 @@ def _get_user_role(
 
 def _get_request_ip_address(
     request: Request, use_x_forwarded_for: Optional[bool] = False
-) -> str:
+) -> Optional[str]:
 
+    client_ip = None
     if use_x_forwarded_for is True and "x-forwarded-for" in request.headers:
         client_ip = request.headers["x-forwarded-for"]
     elif request.client is not None:
