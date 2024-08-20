@@ -59,6 +59,8 @@ litellm_settings:
   cache_params:        # set cache params for redis
     type: redis
     ttl: 600 # will be cached on redis for 600s
+    # default_in_memory_ttl: Optional[float], default is None. time in seconds. 
+    # default_in_redis_ttl: Optional[float], default is None. time in seconds. 
 ```
 
 
@@ -258,6 +260,21 @@ curl --location 'http://0.0.0.0:4000/cache/ping'  -H "Authorization: Bearer sk-1
 ```
 
 ## Advanced
+
+### Control Call Types Caching is on for - (`/chat/completion`, `/embeddings`, etc.)
+
+By default, caching is on for all call types. You can control which call types caching is on for by setting `supported_call_types` in `cache_params`
+
+**Cache will only be on for the call types specified in `supported_call_types`**
+
+```yaml
+litellm_settings:
+  cache: True
+  cache_params:
+    type: redis
+    supported_call_types: ["acompletion", "atext_completion", "aembedding", "atranscription"]
+                          # /chat/completions, /completions, /embeddings, /audio/transcriptions
+```
 ### Set Cache Params on config.yaml
 ```yaml
 model_list:
@@ -278,7 +295,8 @@ litellm_settings:
     password: "your_password"  # The password for the Redis cache. Required if type is "redis".
     
     # Optional configurations
-    supported_call_types: ["acompletion", "completion", "embedding", "aembedding"] # defaults to all litellm call types
+    supported_call_types: ["acompletion", "atext_completion", "aembedding", "atranscription"]
+                      # /chat/completions, /completions, /embeddings, /audio/transcriptions
 ```
 
 ### Turn on / off caching per request.  
@@ -293,6 +311,11 @@ The proxy support 4 cache-controls:
 [Let us know if you need more](https://github.com/BerriAI/litellm/issues/1218)
 
 **Turn off caching**
+
+Set `no-cache=True`, this will not return a cached response
+
+<Tabs>
+<TabItem value="openai" label="OpenAI Python SDK">
 
 ```python
 import os
@@ -319,8 +342,80 @@ chat_completion = client.chat.completions.create(
     }
 )
 ```
+</TabItem>
+
+<TabItem value="curl" label="curl">
+
+```shell
+curl http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "gpt-3.5-turbo",
+    "cache": {"no-cache": True},
+    "messages": [
+      {"role": "user", "content": "Say this is a test"}
+    ]
+  }'
+```
+
+</TabItem>
+
+</Tabs>
 
 **Turn on caching**
+
+By default cache is always on
+
+<Tabs>
+<TabItem value="openai" label="OpenAI Python SDK">
+
+```python
+import os
+from openai import OpenAI
+
+client = OpenAI(
+    # This is the default and can be omitted
+    api_key=os.environ.get("OPENAI_API_KEY"),
+		base_url="http://0.0.0.0:4000"
+)
+
+chat_completion = client.chat.completions.create(
+    messages=[
+        {
+            "role": "user",
+            "content": "Say this is a test",
+        }
+    ],
+    model="gpt-3.5-turbo"
+)
+```
+</TabItem>
+
+<TabItem value="curl on" label="curl">
+
+```shell
+curl http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "gpt-3.5-turbo",
+    "messages": [
+      {"role": "user", "content": "Say this is a test"}
+    ]
+  }'
+```
+
+</TabItem>
+
+</Tabs>
+
+**Set `ttl`**
+
+Set `ttl=600`, this will caches response for 10 minutes (600 seconds)
+
+<Tabs>
+<TabItem value="openai" label="OpenAI Python SDK">
 
 ```python
 import os
@@ -347,6 +442,35 @@ chat_completion = client.chat.completions.create(
     }
 )
 ```
+</TabItem>
+
+<TabItem value="curl on" label="curl">
+
+```shell
+curl http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "gpt-3.5-turbo",
+    "cache": {"ttl": 600},
+    "messages": [
+      {"role": "user", "content": "Say this is a test"}
+    ]
+  }'
+```
+
+</TabItem>
+
+</Tabs>
+
+
+
+**Set `s-maxage`**
+
+Set `s-maxage`, this will only get responses cached within last 10 minutes 
+
+<Tabs>
+<TabItem value="openai" label="OpenAI Python SDK">
 
 ```python
 import os
@@ -373,6 +497,27 @@ chat_completion = client.chat.completions.create(
     }
 )
 ```
+</TabItem>
+
+<TabItem value="curl on" label="curl">
+
+```shell
+curl http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "gpt-3.5-turbo",
+    "cache": {"s-maxage": 600},
+    "messages": [
+      {"role": "user", "content": "Say this is a test"}
+    ]
+  }'
+```
+
+</TabItem>
+
+</Tabs>
+
 
 ### Turn on / off caching per Key.
 
@@ -486,21 +631,25 @@ litellm_settings:
 
 ```yaml
 cache_params:
+  # ttl 
+  ttl: Optional[float]
+  default_in_memory_ttl: Optional[float]
+  default_in_redis_ttl: Optional[float]
+
   # Type of cache (options: "local", "redis", "s3")
   type: s3
 
   # List of litellm call types to cache for
   # Options: "completion", "acompletion", "embedding", "aembedding"
-  supported_call_types:
-    - completion
-    - acompletion
-    - embedding
-    - aembedding
+  supported_call_types: ["acompletion", "atext_completion", "aembedding", "atranscription"]
+                      # /chat/completions, /completions, /embeddings, /audio/transcriptions
 
   # Redis cache parameters
   host: localhost  # Redis server hostname or IP address
   port: "6379"  # Redis server port (as a string)
   password: secret_password  # Redis server password
+  namespace: Optional[str] = None,
+  
 
   # S3 cache parameters
   s3_bucket_name: your_s3_bucket_name  # Name of the S3 bucket

@@ -13,6 +13,7 @@ from enum import Enum
 from typing import Any, Callable, List, Optional, Union
 
 import httpx
+from openai.types.image import Image
 
 import litellm
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
@@ -1122,7 +1123,7 @@ def completion(
                             logging_obj=logging_obj,
                         )
 
-                model_response["finish_reason"] = map_finish_reason(
+                model_response.choices[0].finish_reason = map_finish_reason(
                     response_body["stop_reason"]
                 )
                 _usage = litellm.Usage(
@@ -1134,14 +1135,16 @@ def completion(
                 setattr(model_response, "usage", _usage)
             else:
                 outputText = response_body["completion"]
-                model_response["finish_reason"] = response_body["stop_reason"]
+                model_response.choices[0].finish_reason = response_body["stop_reason"]
         elif provider == "cohere":
             outputText = response_body["generations"][0]["text"]
         elif provider == "meta":
             outputText = response_body["generation"]
         elif provider == "mistral":
             outputText = response_body["outputs"][0]["text"]
-            model_response["finish_reason"] = response_body["outputs"][0]["stop_reason"]
+            model_response.choices[0].finish_reason = response_body["outputs"][0][
+                "stop_reason"
+            ]
         else:  # amazon titan
             outputText = response_body.get("results")[0].get("outputText")
 
@@ -1160,7 +1163,7 @@ def completion(
                     and getattr(model_response.choices[0].message, "tool_calls", None)
                     is None
                 ):
-                    model_response["choices"][0]["message"]["content"] = outputText
+                    model_response.choices[0].message.content = outputText
                 elif (
                     hasattr(model_response.choices[0], "message")
                     and getattr(model_response.choices[0].message, "tool_calls", None)
@@ -1199,8 +1202,8 @@ def completion(
             )
             setattr(model_response, "usage", usage)
 
-        model_response["created"] = int(time.time())
-        model_response["model"] = model
+        model_response.created = int(time.time())
+        model_response.model = model
 
         model_response._hidden_params["region_name"] = client.meta.region_name
         print_verbose(f"model_response._hidden_params: {model_response._hidden_params}")
@@ -1323,9 +1326,9 @@ def _embedding_func_single(
 def embedding(
     model: str,
     input: Union[list, str],
+    model_response: litellm.EmbeddingResponse,
     api_key: Optional[str] = None,
     logging_obj=None,
-    model_response=None,
     optional_params=None,
     encoding=None,
 ):
@@ -1391,9 +1394,9 @@ def embedding(
                 "embedding": embedding,
             }
         )
-    model_response["object"] = "list"
-    model_response["data"] = embedding_response
-    model_response["model"] = model
+    model_response.object = "list"
+    model_response.data = embedding_response
+    model_response.model = model
     input_tokens = 0
 
     input_str = "".join(input)
@@ -1411,10 +1414,10 @@ def embedding(
 def image_generation(
     model: str,
     prompt: str,
+    model_response: ImageResponse,
+    optional_params: dict,
     timeout=None,
     logging_obj=None,
-    model_response=None,
-    optional_params=None,
     aimg_generation=False,
 ):
     """
@@ -1511,9 +1514,10 @@ def image_generation(
     if model_response is None:
         model_response = ImageResponse()
 
-    image_list: List = []
+    image_list: List[Image] = []
     for artifact in response_body["artifacts"]:
-        image_dict = {"url": artifact["base64"]}
+        _image = Image(b64_json=artifact["base64"])
+        image_list.append(_image)
 
-    model_response.data = image_dict
+    model_response.data = image_list
     return model_response

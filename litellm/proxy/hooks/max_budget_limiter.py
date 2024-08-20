@@ -1,10 +1,12 @@
-from litellm import verbose_logger
-import litellm
-from litellm.caching import DualCache
-from litellm.proxy._types import UserAPIKeyAuth
-from litellm.integrations.custom_logger import CustomLogger
-from fastapi import HTTPException
 import traceback
+
+from fastapi import HTTPException
+
+import litellm
+from litellm import verbose_logger
+from litellm.caching import DualCache
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.proxy._types import UserAPIKeyAuth
 
 
 class _PROXY_MaxBudgetLimiter(CustomLogger):
@@ -44,9 +46,8 @@ class _PROXY_MaxBudgetLimiter(CustomLogger):
         except HTTPException as e:
             raise e
         except Exception as e:
-            verbose_logger.error(
+            verbose_logger.exception(
                 "litellm.proxy.hooks.max_budget_limiter.py::async_pre_call_hook(): Exception occured - {}".format(
                     str(e)
                 )
             )
-            verbose_logger.debug(traceback.format_exc())

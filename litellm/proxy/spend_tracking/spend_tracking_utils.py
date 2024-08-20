@@ -21,6 +21,8 @@ def get_logging_payload(
 
     if kwargs is None:
         kwargs = {}
+    if response_obj is None:
+        response_obj = {}
     # standardize this function to be used across, s3, dynamoDB, langfuse logging
     litellm_params = kwargs.get("litellm_params", {})
     metadata = (
@@ -119,9 +121,7 @@ def get_logging_payload(
 
         return payload
     except Exception as e:
-        verbose_proxy_logger.error(
-            "Error creating spendlogs object - {}\n{}".format(
-                str(e), traceback.format_exc()
-            )
+        verbose_proxy_logger.exception(
+            "Error creating spendlogs object - {}".format(str(e))
         )
         raise e

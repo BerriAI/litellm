@@ -1,8 +1,12 @@
 #### What this tests ####
 # This tests if the router timeout error handling during fallbacks
 
-import sys, os, time
-import traceback, asyncio
+import asyncio
+import os
+import sys
+import time
+import traceback
+
 import pytest
 
 sys.path.insert(
@@ -12,9 +16,10 @@ sys.path.insert(
 
 import os
 
+from dotenv import load_dotenv
+
 import litellm
 from litellm import Router
-from dotenv import load_dotenv
 
 load_dotenv()
 
@@ -37,6 +42,7 @@ def test_router_timeouts():
             "litellm_params": {
                 "model": "claude-instant-1.2",
                 "api_key": "os.environ/ANTHROPIC_API_KEY",
+                "mock_response": "hello world",
             },
             "tpm": 20000,
         },
@@ -90,7 +96,9 @@ def test_router_timeouts():
 
 @pytest.mark.asyncio
 async def test_router_timeouts_bedrock():
-    import openai, uuid
+    import uuid
+
+    import openai
 
     # Model list for OpenAI and Anthropic models
     _model_list = [

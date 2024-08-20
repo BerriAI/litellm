@@ -1,15 +1,30 @@
 # Start tracing memory allocations
+import json
 import os
 import tracemalloc
 
 from fastapi import APIRouter
 
+import litellm
 from litellm._logging import verbose_proxy_logger
 
 router = APIRouter()
 
 if os.environ.get("LITELLM_PROFILE", "false").lower() == "true":
-    tracemalloc.start()
+    try:
+        import objgraph
+
+        print("growth of objects")  # noqa
+        objgraph.show_growth()
+        print("\n\nMost common types")  # noqa
+        objgraph.show_most_common_types()
+        roots = objgraph.get_leaking_objects()
+        print("\n\nLeaking objects")  # noqa
+        objgraph.show_most_common_types(objects=roots)
+    except:
+        pass
+
+    tracemalloc.start(10)
 
     @router.get("/memory-usage", include_in_schema=False)
     async def memory_usage():
@@ -22,9 +37,66 @@ if os.environ.get("LITELLM_PROFILE", "false").lower() == "true":
         top_50 = top_stats[:50]
         result = []
         for stat in top_50:
-            result.append(f"{stat.traceback.format()}: {stat.size / 1024} KiB")
+            result.append(f"{stat.traceback.format(limit=10)}: {stat.size / 1024} KiB")
 
         return {"top_50_memory_usage": result}
+
+
+@router.get("/memory-usage-in-mem-cache", include_in_schema=False)
+async def memory_usage_in_mem_cache():
+    # returns the size of all in-memory caches on the proxy server
+    """
+    1. user_api_key_cache
+    2. router_cache
+    3. proxy_logging_cache
+    4. internal_usage_cache
+    """
+    from litellm.proxy.proxy_server import (
+        llm_router,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
+
+    num_items_in_user_api_key_cache = len(
+        user_api_key_cache.in_memory_cache.cache_dict
+    ) + len(user_api_key_cache.in_memory_cache.ttl_dict)
+    num_items_in_llm_router_cache = len(
+        llm_router.cache.in_memory_cache.cache_dict
+    ) + len(llm_router.cache.in_memory_cache.ttl_dict)
+    num_items_in_proxy_logging_obj_cache = len(
+        proxy_logging_obj.internal_usage_cache.in_memory_cache.cache_dict
+    ) + len(proxy_logging_obj.internal_usage_cache.in_memory_cache.ttl_dict)
+
+    return {
+        "num_items_in_user_api_key_cache": num_items_in_user_api_key_cache,
+        "num_items_in_llm_router_cache": num_items_in_llm_router_cache,
+        "num_items_in_proxy_logging_obj_cache": num_items_in_proxy_logging_obj_cache,
+    }
+
+
+@router.get("/memory-usage-in-mem-cache-items", include_in_schema=False)
+async def memory_usage_in_mem_cache_items():
+    # returns the size of all in-memory caches on the proxy server
+    """
+    1. user_api_key_cache
+    2. router_cache
+    3. proxy_logging_cache
+    4. internal_usage_cache
+    """
+    from litellm.proxy.proxy_server import (
+        llm_router,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
+
+    return {
+        "user_api_key_cache": user_api_key_cache.in_memory_cache.cache_dict,
+        "user_api_key_ttl": user_api_key_cache.in_memory_cache.ttl_dict,
+        "llm_router_cache": llm_router.cache.in_memory_cache.cache_dict,
+        "llm_router_ttl": llm_router.cache.in_memory_cache.ttl_dict,
+        "proxy_logging_obj_cache": proxy_logging_obj.internal_usage_cache.in_memory_cache.cache_dict,
+        "proxy_logging_obj_ttl": proxy_logging_obj.internal_usage_cache.in_memory_cache.ttl_dict,
+    }
 
 
 @router.get("/otel-spans", include_in_schema=False)
@@ -60,3 +132,85 @@ async def get_otel_spans():
         "spans_grouped_by_parent": spans_grouped_by_parent,
         "most_recent_parent": most_recent_parent,
     }
+
+
+# Helper functions for debugging
+def init_verbose_loggers():
+    try:
+        worker_config = litellm.get_secret("WORKER_CONFIG")
+        if os.path.isfile(worker_config):
+            return
+        # if not, assume it's a json string
+        _settings = json.loads(os.getenv("WORKER_CONFIG"))
+        if not isinstance(_settings, dict):
+            return
+
+        debug = _settings.get("debug", None)
+        detailed_debug = _settings.get("detailed_debug", None)
+        if debug is True:  # this needs to be first, so users can see Router init debugg
+            import logging
+
+            from litellm._logging import (
+                verbose_logger,
+                verbose_proxy_logger,
+                verbose_router_logger,
+            )
+
+            # this must ALWAYS remain logging.INFO, DO NOT MODIFY THIS
+            verbose_logger.setLevel(level=logging.INFO)  # sets package logs to info
+            verbose_router_logger.setLevel(
+                level=logging.INFO
+            )  # set router logs to info
+            verbose_proxy_logger.setLevel(level=logging.INFO)  # set proxy logs to info
+        if detailed_debug == True:
+            import logging
+
+            from litellm._logging import (
+                verbose_logger,
+                verbose_proxy_logger,
+                verbose_router_logger,
+            )
+
+            verbose_logger.setLevel(level=logging.DEBUG)  # set package log to debug
+            verbose_router_logger.setLevel(
+                level=logging.DEBUG
+            )  # set router logs to debug
+            verbose_proxy_logger.setLevel(
+                level=logging.DEBUG
+            )  # set proxy logs to debug
+        elif debug == False and detailed_debug == False:
+            # users can control proxy debugging using env variable = 'LITELLM_LOG'
+            litellm_log_setting = os.environ.get("LITELLM_LOG", "")
+            if litellm_log_setting != None:
+                if litellm_log_setting.upper() == "INFO":
+                    import logging
+
+                    from litellm._logging import (
+                        verbose_proxy_logger,
+                        verbose_router_logger,
+                    )
+
+                    # this must ALWAYS remain logging.INFO, DO NOT MODIFY THIS
+
+                    verbose_router_logger.setLevel(
+                        level=logging.INFO
+                    )  # set router logs to info
+                    verbose_proxy_logger.setLevel(
+                        level=logging.INFO
+                    )  # set proxy logs to info
+                elif litellm_log_setting.upper() == "DEBUG":
+                    import logging
+
+                    from litellm._logging import (
+                        verbose_proxy_logger,
+                        verbose_router_logger,
+                    )
+
+                    verbose_router_logger.setLevel(
+                        level=logging.DEBUG
+                    )  # set router logs to info
+                    verbose_proxy_logger.setLevel(
+                        level=logging.DEBUG
+                    )  # set proxy logs to debug
+    except Exception as e:
+        verbose_logger.warning(f"Failed to init verbose loggers: {str(e)}")

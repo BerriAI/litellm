@@ -1,5 +1,5 @@
 #### What this does ####
-#    On success + failure, log events to Supabase
+#    On success + failure, log events to Datadog
 
 import dotenv, os
 import requests  # type: ignore
@@ -7,6 +7,21 @@ import traceback
 import datetime, subprocess, sys
 import litellm, uuid
 from litellm._logging import print_verbose, verbose_logger
+
+
+def make_json_serializable(payload):
+    for key, value in payload.items():
+        try:
+            if isinstance(value, dict):
+                # recursively sanitize dicts
+                payload[key] = make_json_serializable(value.copy())
+            elif not isinstance(value, (str, int, float, bool, type(None))):
+                # everything else becomes a string
+                payload[key] = str(value)
+        except:
+            # non blocking if it can't cast to a str
+            pass
+    return payload
 
 
 class DataDogLogger:
@@ -61,7 +76,7 @@ class DataDogLogger:
             id = response_obj.get("id", str(uuid.uuid4()))
             usage = dict(usage)
             try:
-                response_time = (end_time - start_time).total_seconds()
+                response_time = (end_time - start_time).total_seconds() * 1000
             except:
                 response_time = None
 
@@ -91,12 +106,12 @@ class DataDogLogger:
                 "id": id,
                 "call_type": call_type,
                 "cache_hit": cache_hit,
-                "startTime": start_time,
-                "endTime": end_time,
-                "responseTime (seconds)": response_time,
+                "start_time": start_time,
+                "end_time": end_time,
+                "response_time": response_time,
                 "model": kwargs.get("model", ""),
                 "user": kwargs.get("user", ""),
-                "modelParameters": optional_params,
+                "model_parameters": optional_params,
                 "spend": kwargs.get("response_cost", 0),
                 "messages": messages,
                 "response": response_obj,
@@ -104,13 +119,7 @@ class DataDogLogger:
                 "metadata": clean_metadata,
             }
 
-            # Ensure everything in the payload is converted to str
-            for key, value in payload.items():
-                try:
-                    payload[key] = str(value)
-                except:
-                    # non blocking if it can't cast to a str
-                    pass
+            make_json_serializable(payload)
             import json
 
             payload = json.dumps(payload)

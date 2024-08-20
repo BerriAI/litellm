@@ -10,6 +10,7 @@
 import ast
 import asyncio
 import hashlib
+import io
 import json
 import logging
 import time
@@ -21,7 +22,9 @@ from openai._models import BaseModel as OpenAIObject
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
 from litellm.types.services import ServiceLoggerPayload, ServiceTypes
+from litellm.types.utils import all_litellm_params
 
 
 def print_verbose(print_statement):
@@ -31,16 +34,6 @@ def print_verbose(print_statement):
             print(print_statement)  # noqa
     except:
         pass
-
-
-def _get_parent_otel_span_from_kwargs(kwargs: Optional[dict] = None):
-    try:
-        if kwargs is None:
-            return None
-        _metadata = kwargs.get("metadata") or {}
-        return _metadata.get("litellm_parent_otel_span")
-    except:
-        return None
 
 
 class BaseCache:
@@ -97,8 +90,15 @@ class InMemoryCache(BaseCache):
         """
         for key in list(self.ttl_dict.keys()):
             if time.time() > self.ttl_dict[key]:
-                self.cache_dict.pop(key, None)
-                self.ttl_dict.pop(key, None)
+                removed_item = self.cache_dict.pop(key, None)
+                removed_ttl_item = self.ttl_dict.pop(key, None)
+
+                # de-reference the removed item
+                # https://www.geeksforgeeks.org/diagnosing-and-fixing-memory-leaks-in-python/
+                # One of the most common causes of memory leaks in Python is the retention of objects that are no longer being used.
+                # This can occur when an object is referenced by another object, but the reference is never removed.
+                removed_item = None
+                removed_ttl_item = None
 
     def set_cache(self, key, value, **kwargs):
         print_verbose(
@@ -1570,8 +1570,9 @@ class DualCache(BaseCache):
             if self.redis_cache is not None and local_only == False:
                 await self.redis_cache.async_set_cache(key, value, **kwargs)
         except Exception as e:
-            verbose_logger.error(f"LiteLLM Cache: Excepton async add_cache: {str(e)}")
-            verbose_logger.debug(traceback.format_exc())
+            verbose_logger.exception(
+                f"LiteLLM Cache: Excepton async add_cache: {str(e)}"
+            )
 
     async def async_batch_set_cache(
         self, cache_list: list, local_only: bool = False, **kwargs
@@ -1593,8 +1594,9 @@ class DualCache(BaseCache):
                     cache_list=cache_list, ttl=kwargs.get("ttl", None), **kwargs
                 )
         except Exception as e:
-            verbose_logger.error(f"LiteLLM Cache: Excepton async add_cache: {str(e)}")
-            verbose_logger.debug(traceback.format_exc())
+            verbose_logger.exception(
+                f"LiteLLM Cache: Excepton async add_cache: {str(e)}"
+            )
 
     async def async_increment_cache(
         self, key, value: float, local_only: bool = False, **kwargs
@@ -1618,8 +1620,9 @@ class DualCache(BaseCache):
 
             return result
         except Exception as e:
-            verbose_logger.error(f"LiteLLM Cache: Excepton async add_cache: {str(e)}")
-            verbose_logger.debug(traceback.format_exc())
+            verbose_logger.exception(
+                f"LiteLLM Cache: Excepton async add_cache: {str(e)}"
+            )
             raise e
 
     async def async_set_cache_sadd(
@@ -1647,10 +1650,8 @@ class DualCache(BaseCache):
 
             return None
         except Exception as e:
-            verbose_logger.error(
-                "LiteLLM Cache: Excepton async set_cache_sadd: {}\n{}".format(
-                    str(e), traceback.format_exc()
-                )
+            verbose_logger.exception(
+                "LiteLLM Cache: Excepton async set_cache_sadd: {}".format(str(e))
             )
             raise e
 
@@ -1661,6 +1662,9 @@ class DualCache(BaseCache):
             self.redis_cache.flush_cache()
 
     def delete_cache(self, key):
+        """
+        Delete a key from the cache
+        """
         if self.in_memory_cache is not None:
             self.in_memory_cache.delete_cache(key)
         if self.redis_cache is not None:
@@ -1691,6 +1695,8 @@ class Cache:
                     "aembedding",
                     "atranscription",
                     "transcription",
+                    "atext_completion",
+                    "text_completion",
                 ]
             ]
         ] = [
@@ -1700,6 +1706,8 @@ class Cache:
             "aembedding",
             "atranscription",
             "transcription",
+            "atext_completion",
+            "text_completion",
         ],
         # s3 Bucket, boto3 configuration
         s3_bucket_name: Optional[str] = None,
@@ -1820,6 +1828,7 @@ class Cache:
         completion_kwargs = [
             "model",
             "messages",
+            "prompt",
             "temperature",
             "top_p",
             "n",
@@ -1833,6 +1842,7 @@ class Cache:
             "seed",
             "tools",
             "tool_choice",
+            "stream",
         ]
         embedding_only_kwargs = [
             "input",
@@ -1846,9 +1856,9 @@ class Cache:
         combined_kwargs = (
             completion_kwargs + embedding_only_kwargs + transcription_only_kwargs
         )
-        for param in combined_kwargs:
-            # ignore litellm params here
-            if param in kwargs:
+        litellm_param_kwargs = all_litellm_params
+        for param in kwargs:
+            if param in combined_kwargs:
                 # check if param == model and model_group is passed in, then override model with model_group
                 if param == "model":
                     model_group = None
@@ -1878,21 +1888,33 @@ class Cache:
                         caching_group or model_group or kwargs[param]
                     )  # use caching_group, if set then model_group if it exists, else use kwargs["model"]
                 elif param == "file":
-                    metadata_file_name = kwargs.get("metadata", {}).get(
-                        "file_name", None
+                    file = kwargs.get("file")
+                    metadata = kwargs.get("metadata", {})
+                    litellm_params = kwargs.get("litellm_params", {})
+
+                    # get checksum of file content
+                    param_value = (
+                        metadata.get("file_checksum")
+                        or getattr(file, "name", None)
+                        or metadata.get("file_name")
+                        or litellm_params.get("file_name")
                     )
-                    litellm_params_file_name = kwargs.get("litellm_params", {}).get(
-                        "file_name", None
-                    )
-                    if metadata_file_name is not None:
-                        param_value = metadata_file_name
-                    elif litellm_params_file_name is not None:
-                        param_value = litellm_params_file_name
                 else:
                     if kwargs[param] is None:
                         continue  # ignore None params
                     param_value = kwargs[param]
                 cache_key += f"{str(param)}: {str(param_value)}"
+            elif (
+                param not in litellm_param_kwargs
+            ):  # check if user passed in optional param - e.g. top_k
+                if (
+                    litellm.enable_caching_on_provider_specific_optional_params is True
+                ):  # feature flagged for now
+                    if kwargs[param] is None:
+                        continue  # ignore None params
+                    param_value = kwargs[param]
+                    cache_key += f"{str(param)}: {str(param_value)}"
+
         print_verbose(f"\nCreated cache key: {cache_key}")
         # Use hashlib to create a sha256 hash of the cache key
         hash_object = hashlib.sha256(cache_key.encode())
@@ -2067,8 +2089,7 @@ class Cache:
             )
             self.cache.set_cache(cache_key, cached_data, **kwargs)
         except Exception as e:
-            verbose_logger.error(f"LiteLLM Cache: Excepton add_cache: {str(e)}")
-            verbose_logger.debug(traceback.format_exc())
+            verbose_logger.exception(f"LiteLLM Cache: Excepton add_cache: {str(e)}")
             pass
 
     async def async_add_cache(self, result, *args, **kwargs):
@@ -2085,8 +2106,7 @@ class Cache:
                 )
                 await self.cache.async_set_cache(cache_key, cached_data, **kwargs)
         except Exception as e:
-            verbose_logger.error(f"LiteLLM Cache: Excepton add_cache: {str(e)}")
-            verbose_logger.debug(traceback.format_exc())
+            verbose_logger.exception(f"LiteLLM Cache: Excepton add_cache: {str(e)}")
 
     async def async_add_cache_pipeline(self, result, *args, **kwargs):
         """
@@ -2097,9 +2117,7 @@ class Cache:
         try:
             cache_list = []
             for idx, i in enumerate(kwargs["input"]):
-                preset_cache_key = litellm.cache.get_cache_key(
-                    *args, **{**kwargs, "input": i}
-                )
+                preset_cache_key = self.get_cache_key(*args, **{**kwargs, "input": i})
                 kwargs["cache_key"] = preset_cache_key
                 embedding_response = result.data[idx]
                 cache_key, cached_data, kwargs = self._add_cache_logic(
@@ -2118,8 +2136,7 @@ class Cache:
                     )
                 await asyncio.gather(*tasks)
         except Exception as e:
-            verbose_logger.error(f"LiteLLM Cache: Excepton add_cache: {str(e)}")
-            verbose_logger.debug(traceback.format_exc())
+            verbose_logger.exception(f"LiteLLM Cache: Excepton add_cache: {str(e)}")
 
     async def batch_cache_write(self, result, *args, **kwargs):
         cache_key, cached_data, kwargs = self._add_cache_logic(
@@ -2234,6 +2251,8 @@ def enable_cache(
                 "aembedding",
                 "atranscription",
                 "transcription",
+                "atext_completion",
+                "text_completion",
             ]
         ]
     ] = [
@@ -2243,6 +2262,8 @@ def enable_cache(
         "aembedding",
         "atranscription",
         "transcription",
+        "atext_completion",
+        "text_completion",
     ],
     **kwargs,
 ):
@@ -2299,6 +2320,8 @@ def update_cache(
                 "aembedding",
                 "atranscription",
                 "transcription",
+                "atext_completion",
+                "text_completion",
             ]
         ]
     ] = [
@@ -2308,6 +2331,8 @@ def update_cache(
         "aembedding",
         "atranscription",
         "transcription",
+        "atext_completion",
+        "text_completion",
     ],
     **kwargs,
 ):

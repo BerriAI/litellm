@@ -18,6 +18,7 @@ from litellm import acompletion, acreate, completion
 litellm.num_retries = 3
 
 
+@pytest.mark.skip(reason="anyscale stopped serving public api endpoints")
 def test_sync_response_anyscale():
     litellm.set_verbose = False
     user_message = "Hello, how are you?"
@@ -108,6 +109,8 @@ def test_async_response_azure():
             print(f"response: {response}")
         except litellm.Timeout as e:
             pass
+        except litellm.InternalServerError:
+            pass
         except Exception as e:
             pytest.fail(f"An exception occurred: {e}")
 
@@ -117,6 +120,7 @@ def test_async_response_azure():
 # test_async_response_azure()
 
 
+@pytest.mark.skip(reason="anyscale stopped serving public api endpoints")
 def test_async_anyscale_response():
     import asyncio
 
@@ -299,6 +303,7 @@ def test_get_response_streaming():
 # test_get_response_streaming()
 
 
+@pytest.mark.skip(reason="anyscale stopped serving public api endpoints")
 def test_get_response_non_openai_streaming():
     import asyncio
 

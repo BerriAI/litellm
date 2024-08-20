@@ -10,7 +10,7 @@ https://github.com/BerriAI/litellm
 - Translate inputs to provider's `completion`, `embedding`, and `image_generation` endpoints
 - [Consistent output](https://docs.litellm.ai/docs/completion/output), text responses will always be available at `['choices'][0]['message']['content']`
 - Retry/fallback logic across multiple deployments (e.g. Azure/OpenAI) - [Router](https://docs.litellm.ai/docs/routing)
-- Track spend & set budgets per project [OpenAI Proxy Server](https://docs.litellm.ai/docs/simple_proxy)
+- Track spend & set budgets per project [LiteLLM Proxy Server](https://docs.litellm.ai/docs/simple_proxy)
 
 ## Basic usage
 
@@ -304,6 +304,7 @@ LiteLLM exposes pre defined callbacks to send data to Lunary, Langfuse, Helicone
 from litellm import completion
 
 ## set env variables for logging tools
+os.environ["HELICONE_API_KEY"] = "your-helicone-key"
 os.environ["LANGFUSE_PUBLIC_KEY"] = ""
 os.environ["LANGFUSE_SECRET_KEY"] = ""
 os.environ["LUNARY_PUBLIC_KEY"] = "your-lunary-public-key"

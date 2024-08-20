@@ -1,24 +1,30 @@
 import traceback
-from typing import Dict, List
+from typing import Dict, List, Literal
 
 from pydantic import BaseModel, RootModel
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy.common_utils.init_callbacks import initialize_callbacks_on_proxy
-from litellm.types.guardrails import GuardrailItem
+from litellm.proxy.common_utils.callback_utils import initialize_callbacks_on_proxy
+
+# v2 implementation
+from litellm.types.guardrails import (
+    Guardrail,
+    GuardrailItem,
+    GuardrailItemSpec,
+    LitellmParams,
+    guardrailConfig,
+)
 
 all_guardrails: List[GuardrailItem] = []
 
-guardrail_name_config_map: Dict[str, GuardrailItem] = {}
-
 
 def initialize_guardrails(
-    guardrails_config: list,
+    guardrails_config: List[Dict[str, GuardrailItemSpec]],
     premium_user: bool,
     config_file_path: str,
     litellm_settings: dict,
-):
+) -> Dict[str, GuardrailItem]:
     try:
         verbose_proxy_logger.debug(f"validating  guardrails passed {guardrails_config}")
         global all_guardrails
@@ -26,25 +32,31 @@ def initialize_guardrails(
             """
             one item looks like this:
 
-            {'prompt_injection': {'callbacks': ['lakera_prompt_injection', 'prompt_injection_api_2'], 'default_on': True}}
+            {'prompt_injection': {'callbacks': ['lakera_prompt_injection', 'prompt_injection_api_2'], 'default_on': True, 'enabled_roles': ['user']}}
             """
-
             for k, v in item.items():
                 guardrail_item = GuardrailItem(**v, guardrail_name=k)
                 all_guardrails.append(guardrail_item)
-                guardrail_name_config_map[k] = guardrail_item
+                litellm.guardrail_name_config_map[k] = guardrail_item
 
         # set appropriate callbacks if they are default on
         default_on_callbacks = set()
+        callback_specific_params = {}
         for guardrail in all_guardrails:
             verbose_proxy_logger.debug(guardrail.guardrail_name)
             verbose_proxy_logger.debug(guardrail.default_on)
+
+            callback_specific_params.update(guardrail.callback_args)
 
             if guardrail.default_on is True:
                 # add these to litellm callbacks if they don't exist
                 for callback in guardrail.callbacks:
                     if callback not in litellm.callbacks:
                         default_on_callbacks.add(callback)
+
+                    if guardrail.logging_only is True:
+                        if callback == "presidio":
+                            callback_specific_params["presidio"] = {"logging_only": True}  # type: ignore
 
         default_on_callbacks_list = list(default_on_callbacks)
         if len(default_on_callbacks_list) > 0:
@@ -53,9 +65,79 @@ def initialize_guardrails(
                 premium_user=premium_user,
                 config_file_path=config_file_path,
                 litellm_settings=litellm_settings,
+                callback_specific_params=callback_specific_params,
             )
 
+        return litellm.guardrail_name_config_map
     except Exception as e:
-        verbose_proxy_logger.error(f"error initializing guardrails {str(e)}")
-        traceback.print_exc()
+        verbose_proxy_logger.exception(
+            "error initializing guardrails {}".format(str(e))
+        )
         raise e
+
+
+"""
+Map guardrail_name: <pre_call>, <post_call>, during_call
+
+"""
+
+
+def init_guardrails_v2(all_guardrails: dict):
+    # Convert the loaded data to the TypedDict structure
+    guardrail_list = []
+
+    # Parse each guardrail and replace environment variables
+    for guardrail in all_guardrails:
+
+        # Init litellm params for guardrail
+        litellm_params_data = guardrail["litellm_params"]
+        verbose_proxy_logger.debug("litellm_params= %s", litellm_params_data)
+        litellm_params = LitellmParams(
+            guardrail=litellm_params_data["guardrail"],
+            mode=litellm_params_data["mode"],
+            api_key=litellm_params_data["api_key"],
+            api_base=litellm_params_data["api_base"],
+        )
+
+        if litellm_params["api_key"]:
+            if litellm_params["api_key"].startswith("os.environ/"):
+                litellm_params["api_key"] = litellm.get_secret(
+                    litellm_params["api_key"]
+                )
+
+        if litellm_params["api_base"]:
+            if litellm_params["api_base"].startswith("os.environ/"):
+                litellm_params["api_base"] = litellm.get_secret(
+                    litellm_params["api_base"]
+                )
+
+        # Init guardrail CustomLoggerClass
+        if litellm_params["guardrail"] == "aporia":
+            from litellm.proxy.guardrails.guardrail_hooks.aporia_ai import (
+                _ENTERPRISE_Aporia,
+            )
+
+            _aporia_callback = _ENTERPRISE_Aporia(
+                api_base=litellm_params["api_base"],
+                api_key=litellm_params["api_key"],
+                guardrail_name=guardrail["guardrail_name"],
+                event_hook=litellm_params["mode"],
+            )
+            litellm.callbacks.append(_aporia_callback)  # type: ignore
+        elif litellm_params["guardrail"] == "lakera":
+            from litellm.proxy.enterprise.enterprise_hooks.lakera_ai import (
+                _ENTERPRISE_lakeraAI_Moderation,
+            )
+
+            _lakera_callback = _ENTERPRISE_lakeraAI_Moderation()
+            litellm.callbacks.append(_lakera_callback)  # type: ignore
+
+        parsed_guardrail = Guardrail(
+            guardrail_name=guardrail["guardrail_name"], litellm_params=litellm_params
+        )
+
+        guardrail_list.append(parsed_guardrail)
+        guardrail_name = guardrail["guardrail_name"]
+
+    # pretty print guardrail_list in green
+    print(f"\nGuardrail List:{guardrail_list}\n")  # noqa

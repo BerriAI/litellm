@@ -106,7 +106,6 @@ def cost_per_token(
     Returns:
         tuple: A tuple containing the cost in USD dollars for prompt tokens and completion tokens, respectively.
     """
-    args = locals()
     if model is None:
         raise Exception("Invalid arg. Model cannot be none.")
     ## CUSTOM PRICING ##
@@ -117,6 +116,7 @@ def cost_per_token(
         custom_cost_per_second=custom_cost_per_second,
         custom_cost_per_token=custom_cost_per_token,
     )
+
     if response_cost is not None:
         return response_cost[0], response_cost[1]
 
@@ -410,6 +410,40 @@ def get_replicate_completion_pricing(completion_response=None, total_time=0.0):
     return a100_80gb_price_per_second_public * total_time / 1000
 
 
+def _select_model_name_for_cost_calc(
+    model: Optional[str],
+    completion_response: Union[BaseModel, dict, str],
+    base_model: Optional[str] = None,
+    custom_pricing: Optional[bool] = None,
+) -> Optional[str]:
+    """
+    1. If custom pricing is true, return received model name
+    2. If base_model is set (e.g. for azure models), return that
+    3. If completion response has model set return that
+    4. If model is passed in return that
+    """
+    if custom_pricing is True:
+        return model
+
+    if base_model is not None:
+        return base_model
+
+    return_model = model
+    if isinstance(completion_response, str):
+        return return_model
+
+    elif return_model is None:
+        return_model = completion_response.get("model", "")  # type: ignore
+    if hasattr(completion_response, "_hidden_params"):
+        if (
+            completion_response._hidden_params.get("model", None) is not None
+            and len(completion_response._hidden_params["model"]) > 0
+        ):
+            return_model = completion_response._hidden_params.get("model", model)
+
+    return return_model
+
+
 def completion_cost(
     completion_response=None,
     model: Optional[str] = None,
@@ -490,26 +524,33 @@ def completion_cost(
             isinstance(completion_response, BaseModel)
             or isinstance(completion_response, dict)
         ):  # tts returns a custom class
+
+            usage_obj: Optional[Union[dict, litellm.Usage]] = completion_response.get(
+                "usage", {}
+            )
+            if isinstance(usage_obj, BaseModel) and not isinstance(
+                usage_obj, litellm.Usage
+            ):
+                setattr(
+                    completion_response,
+                    "usage",
+                    litellm.Usage(**usage_obj.model_dump()),
+                )
             # get input/output tokens from completion_response
             prompt_tokens = completion_response.get("usage", {}).get("prompt_tokens", 0)
             completion_tokens = completion_response.get("usage", {}).get(
                 "completion_tokens", 0
             )
-            total_time = completion_response.get("_response_ms", 0)
+            total_time = getattr(completion_response, "_response_ms", 0)
             verbose_logger.debug(
-                f"completion_response response ms: {completion_response.get('_response_ms')} "
+                f"completion_response response ms: {getattr(completion_response, '_response_ms', None)} "
             )
-            model = model or completion_response.get(
-                "model", None
-            )  # check if user passed an override for model, if it's none check completion_response['model']
+            model = _select_model_name_for_cost_calc(
+                model=model, completion_response=completion_response
+            )
             if hasattr(completion_response, "_hidden_params"):
-                if (
-                    completion_response._hidden_params.get("model", None) is not None
-                    and len(completion_response._hidden_params["model"]) > 0
-                ):
-                    model = completion_response._hidden_params.get("model", model)
                 custom_llm_provider = completion_response._hidden_params.get(
-                    "custom_llm_provider", ""
+                    "custom_llm_provider", custom_llm_provider or ""
                 )
                 region_name = completion_response._hidden_params.get(
                     "region_name", region_name
@@ -624,7 +665,7 @@ def completion_cost(
 
         if custom_llm_provider is not None and custom_llm_provider == "vertex_ai":
             # Calculate the prompt characters + response characters
-            if len("messages") > 0:
+            if len(messages) > 0:
                 prompt_string = litellm.utils.get_formatted_prompt(
                     data={"messages": messages}, call_type="completion"
                 )
@@ -659,9 +700,7 @@ def completion_cost(
             call_type=call_type,
         )
         _final_cost = prompt_tokens_cost_usd_dollar + completion_tokens_cost_usd_dollar
-        print_verbose(
-            f"final cost: {_final_cost}; prompt_tokens_cost_usd_dollar: {prompt_tokens_cost_usd_dollar}; completion_tokens_cost_usd_dollar: {completion_tokens_cost_usd_dollar}"
-        )
+
         return _final_cost
     except Exception as e:
         raise e
@@ -718,9 +757,7 @@ def response_cost_calculator(
                     custom_llm_provider=custom_llm_provider,
                 )
             else:
-                if (
-                    model in litellm.model_cost or custom_pricing is True
-                ):  # override defaults if custom pricing is set
+                if custom_pricing is True:  # override defaults if custom pricing is set
                     base_model = model
                 # base_model defaults to None if not set on model_info
 
@@ -732,14 +769,21 @@ def response_cost_calculator(
                 )
         return response_cost
     except litellm.NotFoundError as e:
-        print_verbose(
+        verbose_logger.debug(  # debug since it can be spammy in logs, for calls
             f"Model={model} for LLM Provider={custom_llm_provider} not found in completion cost map."
         )
         return None
     except Exception as e:
-        verbose_logger.error(
-            "litellm.cost_calculator.py::response_cost_calculator - Exception occurred - {}/n{}".format(
-                str(e), traceback.format_exc()
+        if litellm.suppress_debug_info:  # allow cli tools to suppress this information.
+            verbose_logger.debug(
+                "litellm.cost_calculator.py::response_cost_calculator - Returning None. Exception occurred - {}/n{}".format(
+                    str(e), traceback.format_exc()
+                )
             )
-        )
+        else:
+            verbose_logger.warning(
+                "litellm.cost_calculator.py::response_cost_calculator - Returning None. Exception occurred - {}/n{}".format(
+                    str(e), traceback.format_exc()
+                )
+            )
         return None

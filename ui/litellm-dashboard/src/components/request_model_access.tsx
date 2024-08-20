@@ -12,7 +12,11 @@ interface RequestAccessProps {
   accessToken: string;
   userID: string;
 }
-
+const isLocal = process.env.NODE_ENV === "development";
+const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
+if (isLocal != true) {
+  console.log = function() {};
+}
 function onRequestAccess(formData: Record<string, any>): void {
     // This function does nothing for now
   }

@@ -1,5 +1,7 @@
 .venv
 .env
+.newenv
+newenv/*
 litellm/proxy/myenv/*
 litellm_uuid.txt
 __pycache__/

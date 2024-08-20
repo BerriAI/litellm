@@ -207,11 +207,17 @@ async def test_caching_with_cache_controls(sync_flag):
         else:
             ## TTL = 0
             response1 = await litellm.acompletion(
-                model="gpt-3.5-turbo", messages=messages, cache={"ttl": 0}
+                model="gpt-3.5-turbo",
+                messages=messages,
+                cache={"ttl": 0},
+                mock_response="Hello world",
             )
             await asyncio.sleep(10)
             response2 = await litellm.acompletion(
-                model="gpt-3.5-turbo", messages=messages, cache={"s-maxage": 10}
+                model="gpt-3.5-turbo",
+                messages=messages,
+                cache={"s-maxage": 10},
+                mock_response="Hello world",
             )
 
             assert response2["id"] != response1["id"]
@@ -220,21 +226,33 @@ async def test_caching_with_cache_controls(sync_flag):
         ## TTL = 5
         if sync_flag:
             response1 = completion(
-                model="gpt-3.5-turbo", messages=messages, cache={"ttl": 5}
+                model="gpt-3.5-turbo",
+                messages=messages,
+                cache={"ttl": 5},
+                mock_response="Hello world",
             )
             response2 = completion(
-                model="gpt-3.5-turbo", messages=messages, cache={"s-maxage": 5}
+                model="gpt-3.5-turbo",
+                messages=messages,
+                cache={"s-maxage": 5},
+                mock_response="Hello world",
             )
             print(f"response1: {response1}")
             print(f"response2: {response2}")
             assert response2["id"] == response1["id"]
         else:
             response1 = await litellm.acompletion(
-                model="gpt-3.5-turbo", messages=messages, cache={"ttl": 25}
+                model="gpt-3.5-turbo",
+                messages=messages,
+                cache={"ttl": 25},
+                mock_response="Hello world",
             )
             await asyncio.sleep(10)
             response2 = await litellm.acompletion(
-                model="gpt-3.5-turbo", messages=messages, cache={"s-maxage": 25}
+                model="gpt-3.5-turbo",
+                messages=messages,
+                cache={"s-maxage": 25},
+                mock_response="Hello world",
             )
             print(f"response1: {response1}")
             print(f"response2: {response2}")
@@ -281,6 +299,61 @@ def test_caching_with_models_v2():
 
 
 # test_caching_with_models_v2()
+
+
+def c():
+    litellm.enable_caching_on_provider_specific_optional_params = True
+    messages = [
+        {"role": "user", "content": "who is ishaan CTO of litellm from litellm 2023"}
+    ]
+    litellm.cache = Cache()
+    print("test2 for caching")
+    litellm.set_verbose = True
+
+    response1 = completion(
+        model="gpt-3.5-turbo",
+        messages=messages,
+        top_k=10,
+        caching=True,
+        mock_response="Hello: {}".format(uuid.uuid4()),
+    )
+    response2 = completion(
+        model="gpt-3.5-turbo",
+        messages=messages,
+        top_k=10,
+        caching=True,
+        mock_response="Hello: {}".format(uuid.uuid4()),
+    )
+    response3 = completion(
+        model="gpt-3.5-turbo",
+        messages=messages,
+        top_k=9,
+        caching=True,
+        mock_response="Hello: {}".format(uuid.uuid4()),
+    )
+    print(f"response1: {response1}")
+    print(f"response2: {response2}")
+    print(f"response3: {response3}")
+    litellm.cache = None
+    litellm.success_callback = []
+    litellm._async_success_callback = []
+    if (
+        response3["choices"][0]["message"]["content"]
+        == response2["choices"][0]["message"]["content"]
+    ):
+        # if models are different, it should not return cached response
+        print(f"response2: {response2}")
+        print(f"response3: {response3}")
+        pytest.fail(f"Error occurred:")
+    if (
+        response1["choices"][0]["message"]["content"]
+        != response2["choices"][0]["message"]["content"]
+    ):
+        print(f"response1: {response1}")
+        print(f"response2: {response2}")
+        pytest.fail(f"Error occurred:")
+    litellm.enable_caching_on_provider_specific_optional_params = False
+
 
 embedding_large_text = (
     """
@@ -960,11 +1033,10 @@ def test_disk_cache_completion():
     assert response1.choices[0].message.content == response2.choices[0].message.content
 
 
-@pytest.mark.skip(reason="AWS Suspended Account")
+# @pytest.mark.skip(reason="AWS Suspended Account")
+@pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
-async def test_s3_cache_acompletion_stream_azure():
-    import asyncio
-
+async def test_s3_cache_stream_azure(sync_mode):
     try:
         litellm.set_verbose = True
         random_word = generate_random_word()
@@ -976,8 +1048,8 @@ async def test_s3_cache_acompletion_stream_azure():
         ]
         litellm.cache = Cache(
             type="s3",
-            s3_bucket_name="litellm-my-test-bucket-2",
-            s3_region_name="us-east-1",
+            s3_bucket_name="litellm-proxy",
+            s3_region_name="us-west-2",
         )
         print("s3 Cache: test for caching, streaming + completion")
         response_1_content = ""
@@ -986,34 +1058,65 @@ async def test_s3_cache_acompletion_stream_azure():
         response_1_created = ""
         response_2_created = ""
 
-        response1 = await litellm.acompletion(
-            model="azure/chatgpt-v-2",
-            messages=messages,
-            max_tokens=40,
-            temperature=1,
-            stream=True,
-        )
-        async for chunk in response1:
-            print(chunk)
-            response_1_created = chunk.created
-            response_1_content += chunk.choices[0].delta.content or ""
-        print(response_1_content)
+        if sync_mode:
+            response1 = litellm.completion(
+                model="azure/chatgpt-v-2",
+                messages=messages,
+                max_tokens=40,
+                temperature=1,
+                stream=True,
+            )
+            for chunk in response1:
+                print(chunk)
+                response_1_created = chunk.created
+                response_1_content += chunk.choices[0].delta.content or ""
+            print(response_1_content)
+        else:
+            response1 = await litellm.acompletion(
+                model="azure/chatgpt-v-2",
+                messages=messages,
+                max_tokens=40,
+                temperature=1,
+                stream=True,
+            )
+            async for chunk in response1:
+                print(chunk)
+                response_1_created = chunk.created
+                response_1_content += chunk.choices[0].delta.content or ""
+            print(response_1_content)
 
-        time.sleep(0.5)
+        if sync_mode:
+            time.sleep(0.5)
+        else:
+            await asyncio.sleep(0.5)
         print("\n\n Response 1 content: ", response_1_content, "\n\n")
 
-        response2 = await litellm.acompletion(
-            model="azure/chatgpt-v-2",
-            messages=messages,
-            max_tokens=40,
-            temperature=1,
-            stream=True,
-        )
-        async for chunk in response2:
-            print(chunk)
-            response_2_content += chunk.choices[0].delta.content or ""
-            response_2_created = chunk.created
-        print(response_2_content)
+        if sync_mode:
+            response2 = litellm.completion(
+                model="azure/chatgpt-v-2",
+                messages=messages,
+                max_tokens=40,
+                temperature=1,
+                stream=True,
+            )
+            for chunk in response2:
+                print(chunk)
+                response_2_content += chunk.choices[0].delta.content or ""
+                response_2_created = chunk.created
+            print(response_2_content)
+        else:
+            response2 = await litellm.acompletion(
+                model="azure/chatgpt-v-2",
+                messages=messages,
+                max_tokens=40,
+                temperature=1,
+                stream=True,
+            )
+            async for chunk in response2:
+                print(chunk)
+                response_2_content += chunk.choices[0].delta.content or ""
+                response_2_created = chunk.created
+            print(response_2_content)
 
         print("\nresponse 1", response_1_content)
         print("\nresponse 2", response_2_content)
@@ -1347,7 +1450,7 @@ def test_get_cache_key():
                 "litellm_logging_obj": {},
             }
         )
-        cache_key_str = "model: gpt-3.5-turbomessages: [{'role': 'user', 'content': 'write a one sentence poem about: 7510'}]temperature: 0.2max_tokens: 40"
+        cache_key_str = "model: gpt-3.5-turbomessages: [{'role': 'user', 'content': 'write a one sentence poem about: 7510'}]max_tokens: 40temperature: 0.2stream: True"
         hash_object = hashlib.sha256(cache_key_str.encode())
         # Hexadecimal representation of the hash
         hash_hex = hash_object.hexdigest()
@@ -1579,18 +1682,21 @@ async def test_redis_semantic_cache_acompletion():
     assert response1.id == response2.id
 
 
-def test_caching_redis_simple(caplog):
+def test_caching_redis_simple(caplog, capsys):
     """
     Relevant issue - https://github.com/BerriAI/litellm/issues/4511
     """
+    litellm.set_verbose = True  ## REQUIRED FOR TEST.
     litellm.cache = Cache(
         type="redis", url=os.getenv("REDIS_SSL_URL")
     )  # passing `supported_call_types = ["completion"]` has no effect
 
     s = time.time()
+
+    uuid_str = str(uuid.uuid4())
     x = completion(
-        model="gpt-4o",
-        messages=[{"role": "user", "content": "Hello, how are you? Wink"}],
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": f"Hello, how are you? Wink {uuid_str}"}],
         stream=True,
     )
     for m in x:
@@ -1599,8 +1705,8 @@ def test_caching_redis_simple(caplog):
 
     s2 = time.time()
     x = completion(
-        model="gpt-4o",
-        messages=[{"role": "user", "content": "Hello, how are you? Wink"}],
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": f"Hello, how are you? Wink {uuid_str}"}],
         stream=True,
     )
     for m in x:
@@ -1609,11 +1715,15 @@ def test_caching_redis_simple(caplog):
 
     redis_async_caching_error = False
     redis_service_logging_error = False
+    captured = capsys.readouterr()
     captured_logs = [rec.message for rec in caplog.records]
 
     print(f"captured_logs: {captured_logs}")
     for item in captured_logs:
-        if "Error connecting to Async Redis client" in item:
+        if (
+            "Error connecting to Async Redis client" in item
+            or "Set ASYNC Redis Cache" in item
+        ):
             redis_async_caching_error = True
 
         if "ServiceLogging.async_service_success_hook" in item:
@@ -1621,3 +1731,4 @@ def test_caching_redis_simple(caplog):
 
     assert redis_async_caching_error is False
     assert redis_service_logging_error is False
+    assert "async success_callback: reaches cache for logging" not in captured.out

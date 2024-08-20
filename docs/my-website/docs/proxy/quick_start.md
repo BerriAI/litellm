@@ -5,7 +5,7 @@ import TabItem from '@theme/TabItem';
 # Quick Start
 Quick start CLI, Config, Docker
 
-LiteLLM Server manages:
+LiteLLM Server (LLM Gateway) manages:
 
 * **Unified Interface**: Calling 100+ LLMs [Huggingface/Bedrock/TogetherAI/etc.](#other-supported-models) in the OpenAI `ChatCompletions` & `Completions` format
 * **Cost tracking**: Authentication, Spend Tracking & Budgets [Virtual Keys](https://docs.litellm.ai/docs/proxy/virtual_keys)
@@ -243,7 +243,8 @@ model_list:
   - model_name: vllm-model
     litellm_params:
       model: openai/<your-model-name>
-      api_base: <your-api-base> # e.g. http://0.0.0.0:3000
+      api_base: <your-vllm-api-base> # e.g. http://0.0.0.0:3000/v1
+      api_key: <your-vllm-api-key|none>
 ```
 
 ### Run proxy with config
@@ -254,6 +255,12 @@ litellm --config your_config.yaml
 
 
 ## Using LiteLLM Proxy - Curl Request, OpenAI Package, Langchain
+
+:::info
+LiteLLM is compatible with several SDKs - including OpenAI SDK, Anthropic SDK, Mistral SDK, LLamaIndex, Langchain (Js, Python)
+
+[More examples here](user_keys)
+:::
 
 <Tabs>
 <TabItem value="Curl" label="Curl Request">
@@ -382,6 +389,34 @@ print(response)
 
 ```
 </TabItem>
+
+<TabItem value="anthropic-py" label="Anthropic Python SDK">
+
+```python
+import os
+
+from anthropic import Anthropic
+
+client = Anthropic(
+    base_url="http://localhost:4000", # proxy endpoint
+    api_key="sk-s4xN1IiLTCytwtZFJaYQrA", # litellm proxy virtual key
+)
+
+message = client.messages.create(
+    max_tokens=1024,
+    messages=[
+        {
+            "role": "user",
+            "content": "Hello, Claude",
+        }
+    ],
+    model="claude-3-opus-20240229",
+)
+print(message.content)
+```
+
+</TabItem>
+
 </Tabs>
 
 [**More Info**](./configs.md)
@@ -395,165 +430,6 @@ print(response)
 - GET `/models` - available models on server
 - POST `/key/generate` - generate a key to access the proxy
 
-
-## Using with OpenAI compatible projects
-Set `base_url` to the LiteLLM Proxy server
-
-<Tabs>
-<TabItem value="openai" label="OpenAI v1.0.0+">
-
-```python
-import openai
-client = openai.OpenAI(
-    api_key="anything",
-    base_url="http://0.0.0.0:4000"
-)
-
-# request sent to model set on litellm proxy, `litellm --model`
-response = client.chat.completions.create(model="gpt-3.5-turbo", messages = [
-    {
-        "role": "user",
-        "content": "this is a test request, write a short poem"
-    }
-])
-
-print(response)
-
-```
-</TabItem>
-<TabItem value="librechat" label="LibreChat">
-
-#### Start the LiteLLM proxy
-```shell
-litellm --model gpt-3.5-turbo
-
-#INFO: Proxy running on http://0.0.0.0:4000
-```
-
-#### 1. Clone the repo
-
-```shell
-git clone https://github.com/danny-avila/LibreChat.git
-```
-
-
-#### 2. Modify Librechat's `docker-compose.yml`
-LiteLLM Proxy is running on port `4000`, set `4000` as the proxy below
-```yaml
-OPENAI_REVERSE_PROXY=http://host.docker.internal:4000/v1/chat/completions
-```
-
-#### 3. Save fake OpenAI key in Librechat's `.env` 
-
-Copy Librechat's `.env.example` to `.env` and overwrite the default OPENAI_API_KEY (by default it requires the user to pass a key).
-```env
-OPENAI_API_KEY=sk-1234
-```
-
-#### 4. Run LibreChat: 
-```shell
-docker compose up
-```
-</TabItem>
-
-<TabItem value="continue-dev" label="ContinueDev">
-
-Continue-Dev brings ChatGPT to VSCode. See how to [install it here](https://continue.dev/docs/quickstart).
-
-In the [config.py](https://continue.dev/docs/reference/Models/openai) set this as your default model.
-```python
-  default=OpenAI(
-      api_key="IGNORED",
-      model="fake-model-name",
-      context_length=2048, # customize if needed for your model
-      api_base="http://localhost:4000" # your proxy server url
-  ),
-```
-
-Credits [@vividfog](https://github.com/ollama/ollama/issues/305#issuecomment-1751848077) for this tutorial. 
-</TabItem>
-
-<TabItem value="aider" label="Aider">
-
-```shell
-$ pip install aider 
-
-$ aider --openai-api-base http://0.0.0.0:4000 --openai-api-key fake-key
-```
-</TabItem>
-<TabItem value="autogen" label="AutoGen">
-
-```python
-pip install pyautogen
-```
-
-```python
-from autogen import AssistantAgent, UserProxyAgent, oai
-config_list=[
-    {
-        "model": "my-fake-model",
-        "api_base": "http://localhost:4000",  #litellm compatible endpoint
-        "api_type": "open_ai",
-        "api_key": "NULL", # just a placeholder
-    }
-]
-
-response = oai.Completion.create(config_list=config_list, prompt="Hi")
-print(response) # works fine
-
-llm_config={
-    "config_list": config_list,
-}
-
-assistant = AssistantAgent("assistant", llm_config=llm_config)
-user_proxy = UserProxyAgent("user_proxy")
-user_proxy.initiate_chat(assistant, message="Plot a chart of META and TESLA stock price change YTD.", config_list=config_list)
-```
-
-Credits [@victordibia](https://github.com/microsoft/autogen/issues/45#issuecomment-1749921972) for this tutorial.
-</TabItem>
-
-<TabItem value="guidance" label="guidance">
-A guidance language for controlling large language models.
-https://github.com/guidance-ai/guidance
-
-**NOTE:** Guidance sends additional params like `stop_sequences` which can cause some models to fail if they don't support it. 
-
-**Fix**: Start your proxy using the `--drop_params` flag
-
-```shell
-litellm --model ollama/codellama --temperature 0.3 --max_tokens 2048 --drop_params
-```
-
-```python
-import guidance
-
-# set api_base to your proxy
-# set api_key to anything
-gpt4 = guidance.llms.OpenAI("gpt-4", api_base="http://0.0.0.0:4000", api_key="anything")
-
-experts = guidance('''
-{{#system~}}
-You are a helpful and terse assistant.
-{{~/system}}
-
-{{#user~}}
-I want a response to the following question:
-{{query}}
-Name 3 world-class experts (past or present) who would be great at answering this?
-Don't answer the question yet.
-{{~/user}}
-
-{{#assistant~}}
-{{gen 'expert_names' temperature=0 max_tokens=300}}
-{{~/assistant}}
-''', llm=gpt4)
-
-result = experts(query='How can I be more productive?')
-print(result)
-```
-</TabItem>
-</Tabs>
 
 ## Debugging Proxy 
 
