@@ -119,7 +119,9 @@ def initialize_callbacks_on_proxy(
                 )
                 imported_list.append(lakera_moderations_object)
             elif isinstance(callback, str) and callback == "aporia_prompt_injection":
-                from enterprise.enterprise_hooks.aporia_ai import _ENTERPRISE_Aporia
+                from litellm.proxy.guardrails.guardrail_hooks.aporia_ai import (
+                    _ENTERPRISE_Aporia,
+                )
 
                 if premium_user is not True:
                     raise Exception(
