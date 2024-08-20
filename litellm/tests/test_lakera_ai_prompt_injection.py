@@ -27,7 +27,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.enterprise.enterprise_hooks.lakera_ai import lakeraAI_Moderation
+from litellm.proxy.guardrails.guardrail_hooks.lakera_ai import lakeraAI_Moderation
 from litellm.proxy.proxy_server import embeddings
 from litellm.proxy.utils import ProxyLogging, hash_token
 
@@ -345,7 +345,7 @@ async def test_callback_specific_param_run_pre_call_check_lakera():
     from typing import Dict, List, Optional, Union
 
     import litellm
-    from enterprise.enterprise_hooks.lakera_ai import lakeraAI_Moderation
+    from litellm.proxy.guardrails.guardrail_hooks.lakera_ai import lakeraAI_Moderation
     from litellm.proxy.guardrails.init_guardrails import initialize_guardrails
     from litellm.types.guardrails import GuardrailItem, GuardrailItemSpec
 
@@ -391,7 +391,7 @@ async def test_callback_specific_thresholds():
     from typing import Dict, List, Optional, Union
 
     import litellm
-    from enterprise.enterprise_hooks.lakera_ai import lakeraAI_Moderation
+    from litellm.proxy.guardrails.guardrail_hooks.lakera_ai import lakeraAI_Moderation
     from litellm.proxy.guardrails.init_guardrails import initialize_guardrails
     from litellm.types.guardrails import GuardrailItem, GuardrailItemSpec
 
