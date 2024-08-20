@@ -757,9 +757,7 @@ def response_cost_calculator(
                     custom_llm_provider=custom_llm_provider,
                 )
             else:
-                if (
-                    model in litellm.model_cost or custom_pricing is True
-                ):  # override defaults if custom pricing is set
+                if custom_pricing is True:  # override defaults if custom pricing is set
                     base_model = model
                 # base_model defaults to None if not set on model_info
 
