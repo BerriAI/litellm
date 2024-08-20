@@ -132,6 +132,7 @@ def test_ollama_aembeddings(mock_aembeddings):
 # test_ollama_aembeddings()
 
 
+@pytest.mark.skip(reason="local only test")
 def test_ollama_chat_function_calling():
     import json
 
