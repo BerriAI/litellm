@@ -2195,7 +2195,7 @@ def _convert_to_bedrock_tool_call_invoke(
 
 def _convert_to_bedrock_tool_call_result(
     message: dict,
-) -> BedrockMessageBlock:
+) -> BedrockContentBlock:
     """
     OpenAI message with a tool result looks like:
     {
@@ -2247,7 +2247,7 @@ def _convert_to_bedrock_tool_call_result(
     )
     content_block = BedrockContentBlock(toolResult=tool_result)
 
-    return BedrockMessageBlock(role="user", content=[content_block])
+    return content_block
 
 
 def _bedrock_converse_messages_pt(
@@ -2289,6 +2289,12 @@ def _bedrock_converse_messages_pt(
 
             msg_i += 1
 
+        ## MERGE CONSECUTIVE TOOL CALL MESSAGES ##
+        while msg_i < len(messages) and messages[msg_i]["role"] == "tool":
+            tool_call_result = _convert_to_bedrock_tool_call_result(messages[msg_i])
+
+            user_content.append(tool_call_result)
+            msg_i += 1
         if user_content:
             contents.append(BedrockMessageBlock(role="user", content=user_content))
         assistant_content: List[BedrockContentBlock] = []
@@ -2332,11 +2338,6 @@ def _bedrock_converse_messages_pt(
                 BedrockMessageBlock(role="assistant", content=assistant_content)
             )
 
-        ## APPEND TOOL CALL MESSAGES ##
-        if msg_i < len(messages) and messages[msg_i]["role"] == "tool":
-            tool_call_result = _convert_to_bedrock_tool_call_result(messages[msg_i])
-            contents.append(tool_call_result)
-            msg_i += 1
         if msg_i == init_msg_i:  # prevent infinite loops
             raise litellm.BadRequestError(
                 message=BAD_MESSAGE_ERROR_STR + f"passed in {messages[msg_i]}",
