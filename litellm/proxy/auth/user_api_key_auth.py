@@ -975,8 +975,6 @@ async def user_api_key_auth(
             if not _is_user_proxy_admin(user_obj=user_obj):  # if non-admin
                 if is_llm_api_route(route=route):
                     pass
-                elif is_llm_api_route(route=route):
-                    pass
                 elif (
                     route in LiteLLMRoutes.info_routes.value
                 ):  # check if user allowed to call an info route
@@ -1053,9 +1051,8 @@ async def user_api_key_auth(
                 ):
                     pass
                 elif (
-                    _is_user_team_admin(user_api_key_dict=valid_token)
-                    and route in LiteLLMRoutes.team_admin_routes.value
-                ):
+                    route in LiteLLMRoutes.self_managed_routes.value
+                ):  # routes that manage their own allowed/disallowed logic
                     pass
                 else:
                     user_role = "unknown"
@@ -1332,13 +1329,3 @@ def get_api_key_from_custom_header(
             f"No LiteLLM Virtual Key pass. Please set header={custom_litellm_key_header_name}: Bearer <api_key>"
         )
     return api_key
-
-
-def _is_user_team_admin(user_api_key_dict: UserAPIKeyAuth) -> bool:
-    if user_api_key_dict.team_member is None:
-        return False
-
-    if user_api_key_dict.team_member.role == LiteLLMTeamRoles.TEAM_ADMIN.value:
-        return True
-
-    return False
