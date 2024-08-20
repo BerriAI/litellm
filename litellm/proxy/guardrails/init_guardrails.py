@@ -129,11 +129,17 @@ def init_guardrails_v2(all_guardrails: dict):
                 lakeraAI_Moderation,
             )
 
-            _lakera_callback = lakeraAI_Moderation()
+            _lakera_callback = lakeraAI_Moderation(
+                api_base=litellm_params["api_base"],
+                api_key=litellm_params["api_key"],
+                guardrail_name=guardrail["guardrail_name"],
+                event_hook=litellm_params["mode"],
+            )
             litellm.callbacks.append(_lakera_callback)  # type: ignore
 
         parsed_guardrail = Guardrail(
-            guardrail_name=guardrail["guardrail_name"], litellm_params=litellm_params
+            guardrail_name=guardrail["guardrail_name"],
+            litellm_params=litellm_params,
         )
 
         guardrail_list.append(parsed_guardrail)
