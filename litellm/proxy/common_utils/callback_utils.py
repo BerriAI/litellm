@@ -120,7 +120,7 @@ def initialize_callbacks_on_proxy(
                 imported_list.append(lakera_moderations_object)
             elif isinstance(callback, str) and callback == "aporia_prompt_injection":
                 from litellm.proxy.guardrails.guardrail_hooks.aporia_ai import (
-                    _ENTERPRISE_Aporia,
+                    AporiaGuardrail,
                 )
 
                 if premium_user is not True:
@@ -129,7 +129,7 @@ def initialize_callbacks_on_proxy(
                         + CommonProxyErrors.not_premium_user.value
                     )
 
-                aporia_guardrail_object = _ENTERPRISE_Aporia()
+                aporia_guardrail_object = AporiaGuardrail()
                 imported_list.append(aporia_guardrail_object)
             elif isinstance(callback, str) and callback == "google_text_moderation":
                 from enterprise.enterprise_hooks.google_text_moderation import (
