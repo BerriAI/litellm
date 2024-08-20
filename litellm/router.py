@@ -62,6 +62,7 @@ from litellm.router_utils.cooldown_callbacks import router_cooldown_handler
 from litellm.router_utils.fallback_event_handlers import (
     log_failure_fallback_event,
     log_success_fallback_event,
+    run_async_fallback,
 )
 from litellm.router_utils.handle_error import send_llm_exception_alert
 from litellm.scheduler import FlowItem, Scheduler
@@ -2383,34 +2384,16 @@ class Router:
                         if fallback_model_group is None:
                             raise original_exception
 
-                        for mg in fallback_model_group:
-                            """
-                            Iterate through the model groups and try calling that deployment
-                            """
-                            try:
-                                kwargs["model"] = mg
-                                kwargs.setdefault("metadata", {}).update(
-                                    {"model_group": mg}
-                                )  # update model_group used, if fallbacks are done
-                                response = await self.async_function_with_retries(
-                                    *args, **kwargs
-                                )
-                                verbose_router_logger.info(
-                                    "Successful fallback b/w models."
-                                )
-                                # callback for successfull_fallback_event():
-                                await log_success_fallback_event(
-                                    original_model_group=original_model_group,
-                                    kwargs=kwargs,
-                                )
+                        response = await run_async_fallback(
+                            *args,
+                            litellm_router=self,
+                            fallback_model_group=fallback_model_group,
+                            original_model_group=original_model_group,
+                            original_exception=original_exception,
+                            **kwargs,
+                        )
+                        return response
 
-                                return response
-                            except Exception as e:
-                                await log_failure_fallback_event(
-                                    original_model_group=original_model_group,
-                                    kwargs=kwargs,
-                                )
-                                pass
                     else:
                         error_message = "model={}. context_window_fallbacks={}. fallbacks={}.\n\nSet 'context_window_fallback' - https://docs.litellm.ai/docs/routing#fallbacks".format(
                             model_group, context_window_fallbacks, fallbacks
@@ -2436,33 +2419,15 @@ class Router:
                         if fallback_model_group is None:
                             raise original_exception
 
-                        for mg in fallback_model_group:
-                            """
-                            Iterate through the model groups and try calling that deployment
-                            """
-                            try:
-                                kwargs["model"] = mg
-                                kwargs.setdefault("metadata", {}).update(
-                                    {"model_group": mg}
-                                )  # update model_group used, if fallbacks are done
-                                response = await self.async_function_with_retries(
-                                    *args, **kwargs
-                                )
-                                verbose_router_logger.info(
-                                    "Successful fallback b/w models."
-                                )
-                                # callback for successfull_fallback_event():
-                                await log_success_fallback_event(
-                                    original_model_group=original_model_group,
-                                    kwargs=kwargs,
-                                )
-                                return response
-                            except Exception as e:
-                                await log_failure_fallback_event(
-                                    original_model_group=original_model_group,
-                                    kwargs=kwargs,
-                                )
-                                pass
+                        response = await run_async_fallback(
+                            *args,
+                            litellm_router=self,
+                            fallback_model_group=fallback_model_group,
+                            original_model_group=original_model_group,
+                            original_exception=original_exception,
+                            **kwargs,
+                        )
+                        return response
                     else:
                         error_message = "model={}. content_policy_fallback={}. fallbacks={}.\n\nSet 'content_policy_fallback' - https://docs.litellm.ai/docs/routing#fallbacks".format(
                             model_group, content_policy_fallbacks, fallbacks
@@ -2502,39 +2467,16 @@ class Router:
                         if hasattr(original_exception, "message"):
                             original_exception.message += f"No fallback model group found for original model_group={model_group}. Fallbacks={fallbacks}"
                         raise original_exception
-                    for mg in fallback_model_group:
-                        """
-                        Iterate through the model groups and try calling that deployment
-                        """
-                        try:
-                            ## LOGGING
-                            kwargs = self.log_retry(kwargs=kwargs, e=original_exception)
-                            verbose_router_logger.info(
-                                f"Falling back to model_group = {mg}"
-                            )
-                            kwargs["model"] = mg
-                            kwargs.setdefault("metadata", {}).update(
-                                {"model_group": mg}
-                            )  # update model_group used, if fallbacks are done
-                            response = await self.async_function_with_fallbacks(
-                                *args, **kwargs
-                            )
-                            verbose_router_logger.info(
-                                "Successful fallback b/w models."
-                            )
-                            # callback for successfull_fallback_event():
-                            await log_success_fallback_event(
-                                original_model_group=original_model_group,
-                                kwargs=kwargs,
-                            )
 
-                            return response
-                        except Exception as e:
-                            await log_failure_fallback_event(
-                                original_model_group=original_model_group,
-                                kwargs=kwargs,
-                            )
-                            raise e
+                    response = await run_async_fallback(
+                        *args,
+                        litellm_router=self,
+                        fallback_model_group=fallback_model_group,
+                        original_model_group=original_model_group,
+                        original_exception=original_exception,
+                        **kwargs,
+                    )
+                    return response
             except Exception as new_exception:
                 verbose_router_logger.error(
                     "litellm.router.py::async_function_with_fallbacks() - Error occurred while trying to do fallbacks - {}\n{}\n\nDebug Information:\nCooldown Deployments={}".format(
