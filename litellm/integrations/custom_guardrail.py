@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Literal, Optional
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
@@ -7,9 +7,14 @@ from litellm.types.guardrails import GuardrailEventHooks
 
 class CustomGuardrail(CustomLogger):
 
-    def __init__(self, guardrail_name: str, event_hook: GuardrailEventHooks, **kwargs):
+    def __init__(
+        self,
+        guardrail_name: Optional[str] = None,
+        event_hook: Optional[GuardrailEventHooks] = None,
+        **kwargs
+    ):
         self.guardrail_name = guardrail_name
-        self.event_hook: GuardrailEventHooks = event_hook
+        self.event_hook: Optional[GuardrailEventHooks] = event_hook
         super().__init__(**kwargs)
 
     def should_run_guardrail(self, data, event_type: GuardrailEventHooks) -> bool:

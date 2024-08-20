@@ -36,7 +36,7 @@ litellm.set_verbose = True
 GUARDRAIL_NAME = "aporia"
 
 
-class _ENTERPRISE_Aporia(CustomGuardrail):
+class AporiaGuardrail(CustomGuardrail):
     def __init__(
         self, api_key: Optional[str] = None, api_base: Optional[str] = None, **kwargs
     ):

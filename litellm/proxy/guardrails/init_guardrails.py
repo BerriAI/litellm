@@ -114,10 +114,10 @@ def init_guardrails_v2(all_guardrails: dict):
         # Init guardrail CustomLoggerClass
         if litellm_params["guardrail"] == "aporia":
             from litellm.proxy.guardrails.guardrail_hooks.aporia_ai import (
-                _ENTERPRISE_Aporia,
+                AporiaGuardrail,
             )
 
-            _aporia_callback = _ENTERPRISE_Aporia(
+            _aporia_callback = AporiaGuardrail(
                 api_base=litellm_params["api_base"],
                 api_key=litellm_params["api_key"],
                 guardrail_name=guardrail["guardrail_name"],
@@ -125,15 +125,21 @@ def init_guardrails_v2(all_guardrails: dict):
             )
             litellm.callbacks.append(_aporia_callback)  # type: ignore
         elif litellm_params["guardrail"] == "lakera":
-            from litellm.proxy.enterprise.enterprise_hooks.lakera_ai import (
-                _ENTERPRISE_lakeraAI_Moderation,
+            from litellm.proxy.guardrails.guardrail_hooks.lakera_ai import (
+                lakeraAI_Moderation,
             )
 
-            _lakera_callback = _ENTERPRISE_lakeraAI_Moderation()
+            _lakera_callback = lakeraAI_Moderation(
+                api_base=litellm_params["api_base"],
+                api_key=litellm_params["api_key"],
+                guardrail_name=guardrail["guardrail_name"],
+                event_hook=litellm_params["mode"],
+            )
             litellm.callbacks.append(_lakera_callback)  # type: ignore
 
         parsed_guardrail = Guardrail(
-            guardrail_name=guardrail["guardrail_name"], litellm_params=litellm_params
+            guardrail_name=guardrail["guardrail_name"],
+            litellm_params=litellm_params,
         )
 
         guardrail_list.append(parsed_guardrail)

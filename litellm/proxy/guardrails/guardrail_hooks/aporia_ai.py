@@ -40,7 +40,7 @@ litellm.set_verbose = True
 GUARDRAIL_NAME = "aporia"
 
 
-class _ENTERPRISE_Aporia(CustomGuardrail):
+class AporiaGuardrail(CustomGuardrail):
     def __init__(
         self, api_key: Optional[str] = None, api_base: Optional[str] = None, **kwargs
     ):
@@ -49,8 +49,6 @@ class _ENTERPRISE_Aporia(CustomGuardrail):
         )
         self.aporia_api_key = api_key or os.environ["APORIO_API_KEY"]
         self.aporia_api_base = api_base or os.environ["APORIO_API_BASE"]
-        self.event_hook: GuardrailEventHooks
-
         super().__init__(**kwargs)
 
     #### CALL HOOKS - proxy only ####
