@@ -101,13 +101,9 @@ def initialize_callbacks_on_proxy(
                 openai_moderations_object = _ENTERPRISE_OpenAI_Moderation()
                 imported_list.append(openai_moderations_object)
             elif isinstance(callback, str) and callback == "lakera_prompt_injection":
-                from enterprise.enterprise_hooks.lakera_ai import lakeraAI_Moderation
-
-                if premium_user != True:
-                    raise Exception(
-                        "Trying to use LakeraAI Prompt Injection"
-                        + CommonProxyErrors.not_premium_user.value
-                    )
+                from litellm.proxy.guardrails.guardrail_hooks.lakera_ai import (
+                    lakeraAI_Moderation,
+                )
 
                 init_params = {}
                 if "lakera_prompt_injection" in callback_specific_params:
@@ -118,12 +114,6 @@ def initialize_callbacks_on_proxy(
                 from litellm.proxy.guardrails.guardrail_hooks.aporia_ai import (
                     AporiaGuardrail,
                 )
-
-                if premium_user is not True:
-                    raise Exception(
-                        "Trying to use Aporia AI Guardrail"
-                        + CommonProxyErrors.not_premium_user.value
-                    )
 
                 aporia_guardrail_object = AporiaGuardrail()
                 imported_list.append(aporia_guardrail_object)
@@ -305,7 +295,11 @@ def get_applied_guardrails_header(request_data: Dict) -> Optional[Dict]:
     return None
 
 
-def add_guardrail_to_applied_guardrails_header(request_data: Dict, guardrail_name: str):
+def add_guardrail_to_applied_guardrails_header(
+    request_data: Dict, guardrail_name: Optional[str]
+):
+    if guardrail_name is None:
+        return
     _metadata = request_data.get("metadata", None) or {}
     if "applied_guardrails" in _metadata:
         _metadata["applied_guardrails"].append(guardrail_name)
