@@ -1,9 +1,6 @@
 import os
 from typing import Callable
 
-from azure.identity import ClientSecretCredential
-from azure.identity import get_bearer_token_provider
-
 
 def get_azure_ad_token_provider() -> Callable[[], str]:
     """
@@ -17,6 +14,9 @@ def get_azure_ad_token_provider() -> Callable[[], str]:
     Returns:
         Callable that returns a temporary authentication token.
     """
+    from azure.identity import ClientSecretCredential
+    from azure.identity import get_bearer_token_provider
+
     try:
         credential = ClientSecretCredential(
             client_id=os.environ["AZURE_CLIENT_ID"],
