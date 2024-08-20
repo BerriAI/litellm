@@ -1172,7 +1172,13 @@ def test_turn_off_message_logging():
 
 
 @pytest.mark.parametrize("model", ["gpt-3.5-turbo", "azure/chatgpt-v-2"])
-def test_standard_logging_payload(model):
+@pytest.mark.parametrize(
+    "turn_off_message_logging",
+    [
+        True,
+    ],
+)  # False
+def test_standard_logging_payload(model, turn_off_message_logging):
     """
     Ensure valid standard_logging_payload is passed for logging calls to s3
 
@@ -1183,6 +1189,8 @@ def test_standard_logging_payload(model):
     # sync completion
     customHandler = CompletionCustomHandler()
     litellm.callbacks = [customHandler]
+
+    litellm.turn_off_message_logging = turn_off_message_logging
 
     with patch.object(
         customHandler, "log_success_event", new=MagicMock()
@@ -1237,3 +1245,10 @@ def test_standard_logging_payload(model):
             ]["model_map_value"]
             is not None
         )
+
+        ## turn off message logging
+        slobject: StandardLoggingPayload = mock_client.call_args.kwargs["kwargs"][
+            "standard_logging_object"
+        ]
+        if turn_off_message_logging:
+            assert "redacted-by-litellm" == slobject["messages"][0]["content"]
