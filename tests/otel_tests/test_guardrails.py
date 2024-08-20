@@ -41,7 +41,7 @@ async def chat_completion(
         print()
 
         if status != 200:
-            raise Exception(f"Request did not return a 200 status code: {status}")
+            return response_text
 
         # response headers
         response_headers = response.headers
