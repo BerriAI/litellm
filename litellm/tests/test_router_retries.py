@@ -392,7 +392,7 @@ def test_retry_rate_limit_error_with_healthy_deployments():
 
 def test_do_retry_rate_limit_error_with_no_fallbacks_and_no_healthy_deployments():
     """
-    Test 2. It SHOULD Retry, when healthy_deployments is [] and fallbacks is None
+    Test 2. It SHOULD NOT Retry, when healthy_deployments is [] and fallbacks is None
     """
     healthy_deployments = []
 
@@ -415,9 +415,10 @@ def test_do_retry_rate_limit_error_with_no_fallbacks_and_no_healthy_deployments(
         response = router.should_retry_this_error(
             error=rate_limit_error, healthy_deployments=healthy_deployments
         )
-        assert response == True
+        pytest.fail("Should have raised an error")
     except Exception as e:
-        pytest.fail("Should not have failed this error - {}".format(str(e)))
+        print("got an exception", e)
+        pass
 
 
 def test_raise_context_window_exceeded_error():
