@@ -181,7 +181,8 @@ async def add_litellm_data_to_request(
     ## check for api version in query params
     dynamic_api_version: Optional[str] = query_dict.get("api-version")
 
-    data["api_version"] = dynamic_api_version
+    if dynamic_api_version is not None:  # only pass, if set
+        data["api_version"] = dynamic_api_version
 
     ## Forward any LLM API Provider specific headers in extra_headers
     add_provider_specific_headers_to_request(data=data, headers=_headers)
