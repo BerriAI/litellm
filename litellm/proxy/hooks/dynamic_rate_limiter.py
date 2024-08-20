@@ -254,7 +254,7 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
         return None
 
     async def async_post_call_success_hook(
-        self, user_api_key_dict: UserAPIKeyAuth, response
+        self, data: dict, user_api_key_dict: UserAPIKeyAuth, response
     ):
         try:
             if isinstance(response, ModelResponse):
@@ -287,7 +287,9 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
 
                 return response
             return await super().async_post_call_success_hook(
-                user_api_key_dict, response
+                data=data,
+                user_api_key_dict=user_api_key_dict,
+                response=response,
             )
         except Exception as e:
             verbose_proxy_logger.exception(
