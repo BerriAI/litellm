@@ -1,18 +1,20 @@
-import sys, os
+import os
+import sys
 import traceback
+
 from dotenv import load_dotenv
 
 load_dotenv()
-import os, io
+import io
+import os
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import pytest
+
 import litellm
-from litellm import embedding, completion, completion_cost, Timeout
-from litellm import RateLimitError
-import pytest
+from litellm import RateLimitError, Timeout, completion, completion_cost, embedding
 
 litellm.num_retries = 0
 litellm.cache = None
@@ -41,7 +43,14 @@ def get_current_weather(location, unit="fahrenheit"):
 
 # In production, this could be your backend API or an external API
 @pytest.mark.parametrize(
-    "model", ["gpt-3.5-turbo-1106", "mistral/mistral-large-latest"]
+    "model",
+    [
+        "gpt-3.5-turbo-1106",
+        "mistral/mistral-large-latest",
+        "claude-3-haiku-20240307",
+        "gemini/gemini-1.5-pro",
+        "anthropic.claude-3-sonnet-20240229-v1:0",
+    ],
 )
 def test_parallel_function_call(model):
     try:
@@ -124,7 +133,12 @@ def test_parallel_function_call(model):
                 )  # extend conversation with function response
             print(f"messages: {messages}")
             second_response = litellm.completion(
-                model=model, messages=messages, temperature=0.2, seed=22
+                model=model,
+                messages=messages,
+                temperature=0.2,
+                seed=22,
+                tools=tools,
+                drop_params=True,
             )  # get a new response from the model where it can see the function response
             print("second response\n", second_response)
     except Exception as e:
