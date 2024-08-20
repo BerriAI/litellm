@@ -66,6 +66,7 @@ async def generate_key_fn(
     - budget_duration: Optional[str] - Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
     - max_parallel_requests: Optional[int] - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x.
     - metadata: Optional[dict] - Metadata for key, store information for key. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
+    - guardrails: Optional[List[str]] - List of active guardrails for the key
     - permissions: Optional[dict] - key-specific permissions. Currently just used for turning off pii masking (if connected). Example - {"pii": false}
     - model_max_budget: Optional[dict] - key-specific model budget in USD. Example - {"text-davinci-002": 0.5, "gpt-3.5-turbo": 0.5}. IF null or {} then no model specific budget.
     - model_rpm_limit: Optional[dict] - key-specific model rpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific rpm limit.
@@ -321,11 +322,12 @@ async def update_key_fn(
                 detail={"error": f"Team not found, passed team_id={data.team_id}"},
             )
 
+        _metadata_fields = ["model_rpm_limit", "model_tpm_limit", "guardrails"]
         # get non default values for key
         non_default_values = {}
         for k, v in data_json.items():
             # this field gets stored in metadata
-            if key == "model_rpm_limit" or key == "model_tpm_limit":
+            if key in _metadata_fields:
                 continue
             if v is not None and v not in (
                 [],
@@ -365,6 +367,14 @@ async def update_key_fn(
             _metadata["model_rpm_limit"].update(data.model_rpm_limit)
             non_default_values["metadata"] = _metadata
             non_default_values.pop("model_rpm_limit", None)
+
+        if data.guardrails:
+            _metadata = existing_key_row.metadata or {}
+            _metadata["guardrails"] = data.guardrails
+
+            # update values that will be written to the DB
+            non_default_values["metadata"] = _metadata
+            non_default_values.pop("guardrails", None)
 
         response = await prisma_client.update_data(
             token=key, data={**non_default_values, "token": key}
@@ -734,6 +744,7 @@ async def generate_key_helper_fn(
     model_max_budget: Optional[dict] = {},
     model_rpm_limit: Optional[dict] = {},
     model_tpm_limit: Optional[dict] = {},
+    guardrails: Optional[list] = None,
     teams: Optional[list] = None,
     organization_id: Optional[str] = None,
     table_name: Optional[Literal["key", "user"]] = None,
@@ -783,6 +794,9 @@ async def generate_key_helper_fn(
     if model_tpm_limit is not None:
         metadata = metadata or {}
         metadata["model_tpm_limit"] = model_tpm_limit
+    if guardrails is not None:
+        metadata = metadata or {}
+        metadata["guardrails"] = guardrails
 
     metadata_json = json.dumps(metadata)
     model_max_budget_json = json.dumps(model_max_budget)
