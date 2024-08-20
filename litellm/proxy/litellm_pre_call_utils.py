@@ -171,10 +171,12 @@ async def add_litellm_data_to_request(
     }
 
     ## Dynamic api version (Azure OpenAI endpoints) ##
-    query_params = request.query_params
-
-    # Convert query parameters to a dictionary (optional)
-    query_dict = dict(query_params)
+    try:
+        query_params = request.query_params
+        # Convert query parameters to a dictionary (optional)
+        query_dict = dict(query_params)
+    except KeyError:
+        query_dict = {}
 
     ## check for api version in query params
     dynamic_api_version: Optional[str] = query_dict.get("api-version")
