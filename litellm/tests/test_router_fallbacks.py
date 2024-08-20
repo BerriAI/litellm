@@ -1190,12 +1190,6 @@ async def test_router_content_policy_fallbacks(
 @pytest.mark.parametrize("sync_mode", [False, True])
 @pytest.mark.asyncio
 async def test_using_default_fallback(sync_mode):
-    """
-    Tests Client Side Fallbacks
-
-    User can pass "fallbacks": ["gpt-3.5-turbo"] and this should work
-
-    """
     litellm.set_verbose = True
 
     import logging
@@ -1232,3 +1226,41 @@ async def test_using_default_fallback(sync_mode):
     except Exception as e:
         print("got exception = ", e)
         assert "No healthy deployment available, passed model=very-bad-model" in str(e)
+
+
+@pytest.mark.parametrize("sync_mode", [False])
+@pytest.mark.asyncio
+async def test_using_default_working_fallback(sync_mode):
+    litellm.set_verbose = True
+
+    import logging
+
+    from litellm._logging import verbose_logger, verbose_router_logger
+
+    verbose_logger.setLevel(logging.DEBUG)
+    verbose_router_logger.setLevel(logging.DEBUG)
+    litellm.default_fallbacks = ["openai/gpt-3.5-turbo"]
+    router = Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {
+                    "model": "openai/*",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                },
+            },
+        ],
+    )
+
+    if sync_mode:
+        response = router.completion(
+            model="openai/foo",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+        )
+    else:
+        response = await router.acompletion(
+            model="openai/foo",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+        )
+    print("got response=", response)
+    assert response is not None

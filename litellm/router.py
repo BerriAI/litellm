@@ -318,6 +318,7 @@ class Router:
         self.default_deployment = None  # use this to track the users default deployment, when they want to use model = *
         self.default_max_parallel_requests = default_max_parallel_requests
         self.provider_default_deployments: Dict[str, List] = {}
+        self.provider_default_deployment_ids: List[str] = []
 
         if model_list is not None:
             model_list = copy.deepcopy(model_list)
@@ -3178,6 +3179,9 @@ class Router:
         if self._is_cooldown_required(exception_status=exception_status) == False:
             return
 
+        if deployment in self.provider_default_deployment_ids:
+            return
+
         _allowed_fails = self.get_allowed_fails_from_policy(
             exception=original_exception,
         )
@@ -3584,6 +3588,9 @@ class Router:
                 self.provider_default_deployments[custom_llm_provider] = [
                     deployment.to_json(exclude_none=True)
                 ]
+
+            if deployment.model_info.id:
+                self.provider_default_deployment_ids.append(deployment.model_info.id)
 
         # Azure GPT-Vision Enhancements, users can pass os.environ/
         data_sources = deployment.litellm_params.get("dataSources", []) or []
