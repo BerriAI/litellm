@@ -989,22 +989,16 @@ async def test_create_team_member_add_team_admin_user_api_key_auth(
 
     request._body = json_bytes
 
-    try:
-        await user_api_key_auth(request=request, api_key="Bearer " + user_key)
-        if team_member_role == "user":
-            pytest.fail(
-                "Expected this call to fail. User not allowed to access this route."
-            )
-    except ProxyException:
-        if team_member_role == "admin":
-            pytest.fail(
-                "Expected this call to succeed. Team admin allowed to access /team/member_add"
-            )
+    ## ALLOWED BY USER_API_KEY_AUTH
+    await user_api_key_auth(request=request, api_key="Bearer " + user_key)
 
 
 @pytest.mark.parametrize("new_member_method", ["user_id", "user_email"])
+@pytest.mark.parametrize("user_role", ["admin", "user"])
 @pytest.mark.asyncio
-async def test_create_team_member_add_team_admin(prisma_client, new_member_method):
+async def test_create_team_member_add_team_admin(
+    prisma_client, new_member_method, user_role
+):
     """
     Relevant issue - https://github.com/BerriAI/litellm/issues/5300
 
@@ -1018,6 +1012,7 @@ async def test_create_team_member_add_team_admin(prisma_client, new_member_metho
 
     from litellm.proxy._types import LiteLLM_TeamTableCachedObj, Member
     from litellm.proxy.proxy_server import (
+        HTTPException,
         ProxyException,
         hash_token,
         user_api_key_auth,
@@ -1035,8 +1030,8 @@ async def test_create_team_member_add_team_admin(prisma_client, new_member_metho
 
     valid_token = UserAPIKeyAuth(
         team_id=_team_id,
+        user_id=user,
         token=hash_token(user_key),
-        team_member=Member(role="admin", user_id=user),
         last_refreshed_at=time.time(),
     )
     user_api_key_cache.set_cache(key=hash_token(user_key), value=valid_token)
@@ -1045,6 +1040,7 @@ async def test_create_team_member_add_team_admin(prisma_client, new_member_metho
         team_id=_team_id,
         blocked=False,
         last_refreshed_at=time.time(),
+        members_with_roles=[Member(role=user_role, user_id=user)],
         metadata={"guardrails": {"modify_guardrails": False}},
     )
 
@@ -1071,13 +1067,19 @@ async def test_create_team_member_add_team_admin(prisma_client, new_member_metho
         mock_litellm_usertable.upsert = mock_client
         mock_litellm_usertable.find_many = AsyncMock(return_value=None)
 
-        await team_member_add(
-            data=team_member_add_request,
-            user_api_key_dict=valid_token,
-            http_request=Request(
-                scope={"type": "http", "path": "/user/new"},
-            ),
-        )
+        try:
+            await team_member_add(
+                data=team_member_add_request,
+                user_api_key_dict=valid_token,
+                http_request=Request(
+                    scope={"type": "http", "path": "/user/new"},
+                ),
+            )
+        except HTTPException as e:
+            if user_role == "user":
+                assert e.status_code == 403
+            else:
+                raise e
 
         mock_client.assert_called()
 
