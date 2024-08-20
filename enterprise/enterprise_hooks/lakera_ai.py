@@ -42,7 +42,7 @@ class LakeraCategories(TypedDict, total=False):
     prompt_injection: float
 
 
-class _ENTERPRISE_lakeraAI_Moderation(CustomLogger):
+class lakeraAI_Moderation(CustomLogger):
     def __init__(
         self,
         moderation_check: Literal["pre_call", "in_parallel"] = "in_parallel",
