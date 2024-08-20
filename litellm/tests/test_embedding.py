@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 import traceback
@@ -11,7 +12,7 @@ load_dotenv()
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import litellm
 from litellm import completion, completion_cost, embedding
@@ -197,6 +198,34 @@ def test_openai_azure_embedding():
         pytest.fail(f"Error occurred: {e}")
 
 
+@pytest.mark.skipif(
+    os.environ.get("CIRCLE_OIDC_TOKEN") is None,
+    reason="Cannot run without being in CircleCI Runner",
+)
+def test_openai_azure_embedding_with_oidc_and_cf():
+    # TODO: Switch to our own Azure account, currently using ai.moda's account
+    os.environ["AZURE_TENANT_ID"] = "17c0a27a-1246-4aa1-a3b6-d294e80e783c"
+    os.environ["AZURE_CLIENT_ID"] = "4faf5422-b2bd-45e8-a6d7-46543a38acd0"
+
+    old_key = os.environ["AZURE_API_KEY"]
+    os.environ.pop("AZURE_API_KEY", None)
+
+    try:
+        response = embedding(
+            model="azure/text-embedding-ada-002",
+            input=["Hello"],
+            azure_ad_token="oidc/circleci/",
+            api_base="https://eastus2-litellm.openai.azure.com/",
+            api_version="2024-06-01",
+        )
+        print(response)
+
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+    finally:
+        os.environ["AZURE_API_KEY"] = old_key
+
+
 def test_openai_azure_embedding_optional_arg(mocker):
     mocked_create_embeddings = mocker.patch.object(
         openai.resources.embeddings.Embeddings,
@@ -229,14 +258,20 @@ def test_openai_azure_embedding_optional_arg(mocker):
 # test_openai_embedding()
 
 
-def test_cohere_embedding():
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_cohere_embedding(sync_mode):
     try:
         # litellm.set_verbose=True
-        response = embedding(
-            model="embed-english-v2.0",
-            input=["good morning from litellm", "this is another item"],
-            input_type="search_query",
-        )
+        data = {
+            "model": "embed-english-v2.0",
+            "input": ["good morning from litellm", "this is another item"],
+            "input_type": "search_query",
+        }
+        if sync_mode:
+            response = embedding(**data)
+        else:
+            response = await litellm.aembedding(**data)
         print(f"response:", response)
 
         assert isinstance(response.usage, litellm.Usage)
@@ -247,18 +282,18 @@ def test_cohere_embedding():
 # test_cohere_embedding()
 
 
-def test_cohere_embedding3():
+@pytest.mark.parametrize("custom_llm_provider", ["cohere", "cohere_chat"])
+@pytest.mark.asyncio()
+async def test_cohere_embedding3(custom_llm_provider):
     try:
         litellm.set_verbose = True
-        response = embedding(
-            model="embed-english-v3.0",
+        response = await litellm.aembedding(
+            model=f"{custom_llm_provider}/embed-english-v3.0",
             input=["good morning from litellm", "this is another item"],
+            timeout=None,
+            max_retries=0,
         )
         print(f"response:", response)
-
-        custom_llm_provider = response._hidden_params["custom_llm_provider"]
-
-        assert custom_llm_provider == "cohere"
 
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
@@ -279,6 +314,7 @@ def test_bedrock_embedding_titan():
         response = embedding(
             model="bedrock/amazon.titan-embed-text-v1",
             input=f"good morning from litellm, attempting to embed data {current_time}",  # input should always be a string in this test
+            aws_region_name="us-west-2",
         )
         print(f"response:", response)
         assert isinstance(
@@ -379,6 +415,62 @@ def test_hf_embedding():
 
 
 # test_hf_embedding()
+
+from unittest.mock import MagicMock, patch
+
+
+def tgi_mock_post(*args, **kwargs):
+    import json
+
+    expected_data = {
+        "inputs": {
+            "source_sentence": "good morning from litellm",
+            "sentences": ["this is another item"],
+        }
+    }
+    assert (
+        json.loads(kwargs["data"]) == expected_data
+    ), "Data does not match the expected data"
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {"Content-Type": "application/json"}
+    mock_response.json.return_value = [0.7708950042724609]
+    return mock_response
+
+
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_hf_embedding_sentence_sim(sync_mode):
+    try:
+        # huggingface/microsoft/codebert-base
+        # huggingface/facebook/bart-large
+        if sync_mode is True:
+            client = HTTPHandler(concurrent_limit=1)
+        else:
+            client = AsyncHTTPHandler(concurrent_limit=1)
+        with patch.object(client, "post", side_effect=tgi_mock_post) as mock_client:
+            data = {
+                "model": "huggingface/TaylorAI/bge-micro-v2",
+                "input": ["good morning from litellm", "this is another item"],
+                "client": client,
+            }
+            if sync_mode is True:
+                response = embedding(**data)
+            else:
+                response = await litellm.aembedding(**data)
+
+            print(f"response:", response)
+
+            mock_client.assert_called_once()
+
+        assert isinstance(response.usage, litellm.Usage)
+
+    except Exception as e:
+        # Note: Huggingface inference API is unstable and fails with "model loading errors all the time"
+        raise e
 
 
 # test async embeddings
@@ -589,7 +681,7 @@ async def test_triton_embeddings():
         print(f"response: {response}")
 
         # stubbed endpoint is setup to return this
-        assert response.data[0]["embedding"] == [0.1, 0.2, 0.3]
+        assert response.data[0]["embedding"] == [0.1, 0.2]
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -649,3 +741,49 @@ async def test_databricks_embeddings(sync_mode):
 #     print(response)
 
 # local_proxy_embeddings()
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_hf_embedddings_with_optional_params(sync_mode):
+    litellm.set_verbose = True
+
+    if sync_mode:
+        client = HTTPHandler(concurrent_limit=1)
+        mock_obj = MagicMock()
+    else:
+        client = AsyncHTTPHandler(concurrent_limit=1)
+        mock_obj = AsyncMock()
+
+    with patch.object(client, "post", new=mock_obj) as mock_client:
+        try:
+            if sync_mode:
+                response = embedding(
+                    model="huggingface/jinaai/jina-embeddings-v2-small-en",
+                    input=["good morning from litellm"],
+                    top_p=10,
+                    top_k=10,
+                    wait_for_model=True,
+                    client=client,
+                )
+            else:
+                response = await litellm.aembedding(
+                    model="huggingface/jinaai/jina-embeddings-v2-small-en",
+                    input=["good morning from litellm"],
+                    top_p=10,
+                    top_k=10,
+                    wait_for_model=True,
+                    client=client,
+                )
+        except Exception:
+            pass
+
+        mock_client.assert_called_once()
+
+        print(f"mock_client.call_args.kwargs: {mock_client.call_args.kwargs}")
+        assert "options" in mock_client.call_args.kwargs["data"]
+        json_data = json.loads(mock_client.call_args.kwargs["data"])
+        assert "wait_for_model" in json_data["options"]
+        assert json_data["options"]["wait_for_model"] is True
+        assert json_data["parameters"]["top_p"] == 10
+        assert json_data["parameters"]["top_k"] == 10

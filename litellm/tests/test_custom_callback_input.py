@@ -1,14 +1,23 @@
 ### What this tests ####
 ## This test asserts the type of data passed into each method of the custom callback handler
-import sys, os, time, inspect, asyncio, traceback
+import asyncio
+import inspect
+import os
+import sys
+import time
+import traceback
+import uuid
 from datetime import datetime
-import pytest, uuid
+
+import pytest
 from pydantic import BaseModel
 
 sys.path.insert(0, os.path.abspath("../.."))
-from typing import Optional, Literal, List, Union
-from litellm import completion, embedding, Cache
+from typing import List, Literal, Optional, Union
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import litellm
+from litellm import Cache, completion, embedding
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.utils import LiteLLMCommonStrings
 
@@ -157,6 +166,11 @@ class CompletionCustomHandler(
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
+            print(f"\n\nkwargs={kwargs}\n\n")
+            print(
+                json.dumps(kwargs, default=str)
+            )  # this is a test to confirm no circular references are in the logging object
+
             self.states.append("sync_success")
             ## START TIME
             assert isinstance(start_time, datetime)
@@ -185,7 +199,10 @@ class CompletionCustomHandler(
             assert isinstance(kwargs["user"], (str, type(None)))
             assert (
                 isinstance(kwargs["input"], list)
-                and isinstance(kwargs["input"][0], dict)
+                and (
+                    isinstance(kwargs["input"][0], dict)
+                    or isinstance(kwargs["input"][0], str)
+                )
             ) or isinstance(kwargs["input"], (dict, str))
             assert isinstance(kwargs["api_key"], (str, type(None)))
             assert isinstance(
@@ -216,8 +233,10 @@ class CompletionCustomHandler(
             assert isinstance(kwargs["messages"], list) and isinstance(
                 kwargs["messages"][0], dict
             )
+
             assert isinstance(kwargs["optional_params"], dict)
             assert isinstance(kwargs["litellm_params"], dict)
+            assert isinstance(kwargs["litellm_params"]["metadata"], Optional[dict])
             assert isinstance(kwargs["start_time"], (datetime, type(None)))
             assert isinstance(kwargs["stream"], bool)
             assert isinstance(kwargs["user"], (str, type(None)))
@@ -498,6 +517,29 @@ async def test_async_chat_azure_stream():
 
 
 # asyncio.run(test_async_chat_azure_stream())
+
+
+@pytest.mark.asyncio
+async def test_async_chat_openai_stream_options():
+    try:
+        customHandler = CompletionCustomHandler()
+        litellm.callbacks = [customHandler]
+        with patch.object(
+            customHandler, "async_log_success_event", new=AsyncMock()
+        ) as mock_client:
+            response = await litellm.acompletion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "Hi 👋 - i'm async openai"}],
+                stream=True,
+                stream_options={"include_usage": True},
+            )
+
+            async for chunk in response:
+                continue
+
+            mock_client.assert_awaited_once()
+    except Exception as e:
+        pytest.fail(f"An exception occurred: {str(e)}")
 
 
 ## Test Bedrock + sync
@@ -822,6 +864,39 @@ async def test_async_embedding_openai():
 
 
 ## Test Azure + Async
+def test_amazing_sync_embedding():
+    try:
+        customHandler_success = CompletionCustomHandler()
+        customHandler_failure = CompletionCustomHandler()
+        litellm.callbacks = [customHandler_success]
+        response = litellm.embedding(
+            model="azure/azure-embedding-model", input=["good morning from litellm"]
+        )
+        print(f"customHandler_success.errors: {customHandler_success.errors}")
+        print(f"customHandler_success.states: {customHandler_success.states}")
+        time.sleep(2)
+        assert len(customHandler_success.errors) == 0
+        assert len(customHandler_success.states) == 3  # pre, post, success
+        # test failure callback
+        litellm.callbacks = [customHandler_failure]
+        try:
+            response = litellm.embedding(
+                model="azure/azure-embedding-model",
+                input=["good morning from litellm"],
+                api_key="my-bad-key",
+            )
+        except:
+            pass
+        print(f"customHandler_failure.errors: {customHandler_failure.errors}")
+        print(f"customHandler_failure.states: {customHandler_failure.states}")
+        time.sleep(2)
+        assert len(customHandler_failure.errors) == 1
+        assert len(customHandler_failure.states) == 3  # pre, post, failure
+    except Exception as e:
+        pytest.fail(f"An exception occurred: {str(e)}")
+
+
+## Test Azure + Async
 @pytest.mark.asyncio
 async def test_async_embedding_azure():
     try:
@@ -1091,3 +1166,89 @@ def test_turn_off_message_logging():
 
     time.sleep(2)
     assert len(customHandler.errors) == 0
+
+
+##### VALID JSON ######
+
+
+@pytest.mark.parametrize("model", ["gpt-3.5-turbo", "azure/chatgpt-v-2"])
+@pytest.mark.parametrize(
+    "turn_off_message_logging",
+    [
+        True,
+    ],
+)  # False
+def test_standard_logging_payload(model, turn_off_message_logging):
+    """
+    Ensure valid standard_logging_payload is passed for logging calls to s3
+
+    Motivation: provide a standard set of things that are logged to s3/gcs/future integrations across all llm calls
+    """
+    from litellm.types.utils import StandardLoggingPayload
+
+    # sync completion
+    customHandler = CompletionCustomHandler()
+    litellm.callbacks = [customHandler]
+
+    litellm.turn_off_message_logging = turn_off_message_logging
+
+    with patch.object(
+        customHandler, "log_success_event", new=MagicMock()
+    ) as mock_client:
+        _ = litellm.completion(
+            model=model,
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+            # mock_response="Going well!",
+        )
+
+        time.sleep(2)
+        mock_client.assert_called_once()
+
+        print(
+            f"mock_client_post.call_args: {mock_client.call_args.kwargs['kwargs'].keys()}"
+        )
+        assert "standard_logging_object" in mock_client.call_args.kwargs["kwargs"]
+        assert (
+            mock_client.call_args.kwargs["kwargs"]["standard_logging_object"]
+            is not None
+        )
+
+        print(
+            "Standard Logging Object - {}".format(
+                mock_client.call_args.kwargs["kwargs"]["standard_logging_object"]
+            )
+        )
+
+        keys_list = list(StandardLoggingPayload.__annotations__.keys())
+
+        for k in keys_list:
+            assert (
+                k in mock_client.call_args.kwargs["kwargs"]["standard_logging_object"]
+            )
+
+        ## json serializable
+        json_str_payload = json.dumps(
+            mock_client.call_args.kwargs["kwargs"]["standard_logging_object"]
+        )
+        json.loads(json_str_payload)
+
+        ## response cost
+        assert (
+            mock_client.call_args.kwargs["kwargs"]["standard_logging_object"][
+                "response_cost"
+            ]
+            > 0
+        )
+        assert (
+            mock_client.call_args.kwargs["kwargs"]["standard_logging_object"][
+                "model_map_information"
+            ]["model_map_value"]
+            is not None
+        )
+
+        ## turn off message logging
+        slobject: StandardLoggingPayload = mock_client.call_args.kwargs["kwargs"][
+            "standard_logging_object"
+        ]
+        if turn_off_message_logging:
+            assert "redacted-by-litellm" == slobject["messages"][0]["content"]

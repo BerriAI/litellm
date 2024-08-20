@@ -1,7 +1,16 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# 📈 Prometheus metrics [BETA]
+# 📈 [BETA] Prometheus metrics
+
+:::info
+🚨 Prometheus metrics will be out of Beta on September 15, 2024 - as part of this release it will be on LiteLLM Enterprise starting at $250/mo
+
+[Enterprise Pricing](https://www.litellm.ai/#pricing)
+
+[Contact us here to get a free trial](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+
+:::
 
 LiteLLM Exposes a `/metrics` endpoint for Prometheus to Poll
 
@@ -47,8 +56,10 @@ http://localhost:4000/metrics
 # <proxy_base_url>/metrics
 ```
 
-## Metrics Tracked 
+## 📈 Metrics Tracked 
 
+
+### Proxy Requests / Spend Metrics
 
 | Metric Name          | Description                          |
 |----------------------|--------------------------------------|
@@ -57,6 +68,23 @@ http://localhost:4000/metrics
 | `litellm_total_tokens`         | input + output tokens per `"user", "key", "model", "team", "end-user"`     |
 | `litellm_llm_api_failed_requests_metric`   | Number of failed LLM API requests per `"user", "key", "model", "team", "end-user"`    |
 
+### LLM API / Provider Metrics
+
+| Metric Name          | Description                          |
+|----------------------|--------------------------------------|
+| `litellm_deployment_state`             | The state of the deployment: 0 = healthy, 1 = partial outage, 2 = complete outage. |
+| `litellm_remaining_requests_metric`             | Track `x-ratelimit-remaining-requests` returned from LLM API Deployment |
+| `litellm_remaining_tokens`                | Track `x-ratelimit-remaining-tokens` return from LLM API Deployment |
+ `litellm_deployment_success_responses`              |  Total number of successful LLM API calls for deployment                               |
+| `litellm_deployment_failure_responses`              | Total number of failed LLM API calls for deployment                                   |
+| `litellm_deployment_total_requests`                 | Total number of LLM API calls for deployment - success + failure                      |
+| `litellm_deployment_latency_per_output_token`       | Latency per output token for deployment                                                          |
+| `litellm_deployment_successful_fallbacks`           |  Number of successful fallback requests from primary model -> fallback model        |
+| `litellm_deployment_failed_fallbacks`               | Number of failed fallback requests from primary model -> fallback model            |
+
+
+
+
 ### Budget Metrics
 | Metric Name          | Description                          |
 |----------------------|--------------------------------------|
@@ -64,55 +92,6 @@ http://localhost:4000/metrics
 | `litellm_remaining_api_key_budget_metric`                | Remaining Budget for API Key (A key Created on LiteLLM)|
 
 
-### ✨ (Enterprise) LLM Remaining Requests and Remaining Tokens
-Set this on your config.yaml to allow you to track how close you are to hitting your TPM / RPM limits on each model group 
-
-```yaml
-litellm_settings:
-  success_callback: ["prometheus"]
-  failure_callback: ["prometheus"]
-  return_response_headers: true # ensures the LLM API calls track the response headers
-```
-
-| Metric Name          | Description                          |
-|----------------------|--------------------------------------|
-| `litellm_remaining_requests_metric`             | Track `x-ratelimit-remaining-requests` returned from LLM API Deployment |
-| `litellm_remaining_tokens`                | Track `x-ratelimit-remaining-tokens` return from LLM API Deployment |
-
-Example Metric
-<Tabs>
-
-<TabItem value="Remaining Requests" label="Remaining Requests">
-
-```shell
-litellm_remaining_requests
-{
-  api_base="https://api.openai.com/v1",
-  api_provider="openai",
-  litellm_model_name="gpt-3.5-turbo",
-  model_group="gpt-3.5-turbo"
-} 
-8998.0
-```
-
-</TabItem>
-
-<TabItem value="Requests" label="Remaining Tokens">
-
-```shell
-litellm_remaining_tokens
-{
-  api_base="https://api.openai.com/v1",
-  api_provider="openai",
-  litellm_model_name="gpt-3.5-turbo",
-  model_group="gpt-3.5-turbo"
-} 
-999981.0
-```
-
-</TabItem>
-
-</Tabs>
 
 ## Monitor System Health
 

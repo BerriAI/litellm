@@ -17,6 +17,9 @@ import { useSearchParams, useRouter } from "next/navigation";
 import { jwtDecode } from "jwt-decode";
 import { Typography } from "antd";
 const isLocal = process.env.NODE_ENV === "development";
+if (isLocal != true) {
+  console.log = function() {};
+}
 console.log("isLocal:", isLocal);
 const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
 
@@ -271,6 +274,11 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
     const url = proxyBaseUrl
       ? `${proxyBaseUrl}/sso/key/generate`
       : `/sso/key/generate`;
+    
+
+    // clear cookie called "token" since user will be logging in again
+    document.cookie = "token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
+
     console.log("Full URL:", url);
     window.location.href = url;
 
@@ -307,6 +315,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
           <ViewUserSpend
             userID={userID}
             userRole={userRole}
+            userMaxBudget={userSpendData?.max_budget || null}
             accessToken={accessToken}
             userSpend={teamSpend}
             selectedTeam={selectedTeam ? selectedTeam : null}

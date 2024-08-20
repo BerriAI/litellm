@@ -1,17 +1,9 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# 🛡️ Guardrails
+# 🛡️ [Beta] Guardrails
 
 Setup Prompt Injection Detection, Secret Detection on LiteLLM Proxy
-
-:::info
-
-✨ Enterprise Only Feature
-
-Schedule a meeting with us to get an Enterprise License 👉 Talk to founders [here](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
-
-:::
 
 ## Quick Start
 
@@ -217,12 +209,12 @@ If you need to switch `pii_masking` off for an API Key set `"permissions": {"pii
 <TabItem value="/key/generate" label="/key/generate">
 
 ```shell
-curl --location 'http://0.0.0.0:4000/key/generate' \
-    --header 'Authorization: Bearer sk-1234' \
-    --header 'Content-Type: application/json' \
-    --data '{
+curl -X POST 'http://0.0.0.0:4000/key/generate' \
+    -H 'Authorization: Bearer sk-1234' \
+    -H 'Content-Type: application/json' \
+    -D '{
         "permissions": {"pii_masking": true}
-}'
+    }'
 ```
 
 ```shell
@@ -266,6 +258,54 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 }'
 ```
 
+## Disable team from turning on/off guardrails
+
+
+### 1. Disable team from modifying guardrails 
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/team/update' \
+-H 'Authorization: Bearer sk-1234' \
+-H 'Content-Type: application/json' \
+-D '{
+    "team_id": "4198d93c-d375-4c83-8d5a-71e7c5473e50",
+    "metadata": {"guardrails": {"modify_guardrails": false}}
+}'
+```
+
+### 2. Try to disable guardrails for a call 
+
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+--header 'Content-Type: application/json' \
+--header 'Authorization: Bearer $LITELLM_VIRTUAL_KEY' \
+--data '{
+"model": "gpt-3.5-turbo",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Think of 10 random colors."
+      }
+    ],
+    "metadata": {"guardrails": {"hide_secrets": false}}
+}'
+```
+
+### 3. Get 403 Error
+
+```
+{
+    "error": {
+        "message": {
+            "error": "Your team does not have permission to modify guardrails."
+        },
+        "type": "auth_error",
+        "param": "None",
+        "code": 403
+    }
+}
+```
+
 Expect to NOT see `+1 412-612-9992` in your server logs on your callback. 
 
 :::info
@@ -280,25 +320,36 @@ The `pii_masking` guardrail ran on this request because api key=sk-jNm1Zar7XfNdZ
 ```yaml
 litellm_settings:
   guardrails:
+    - string: GuardrailItemSpec
+```
+
+- `string` - Your custom guardrail name
+
+- `GuardrailItemSpec`:
+    - `callbacks`: List[str], list of supported guardrail callbacks.
+        - Full List: presidio, lakera_prompt_injection, hide_secrets, llmguard_moderations, llamaguard_moderations, google_text_moderation
+    - `default_on`: bool,  will run on all llm requests when true
+    - `logging_only`: Optional[bool], if true, run guardrail only on logged output, not on the actual LLM API call. Currently only supported for presidio pii masking. Requires `default_on` to be True as well.
+    - `callback_args`: Optional[Dict[str, Dict]]: If set, pass in init args for that specific guardrail
+
+Example: 
+
+```yaml
+litellm_settings:
+  guardrails:
     - prompt_injection:  # your custom name for guardrail
         callbacks: [lakera_prompt_injection, hide_secrets, llmguard_moderations, llamaguard_moderations, google_text_moderation] # litellm callbacks to use
         default_on: true # will run on all llm requests when true
+        callback_args: {"lakera_prompt_injection": {"moderation_check": "pre_call"}}
     - hide_secrets:
         callbacks: [hide_secrets]
         default_on: true
+    - pii_masking:
+        callback: ["presidio"]
+        default_on: true
+        logging_only: true
     - your-custom-guardrail
         callbacks: [hide_secrets]
         default_on: false
 ```
 
-
-### `guardrails`: List of guardrail configurations to be applied to LLM requests.
-
-#### Guardrail: `prompt_injection`: Configuration for detecting and preventing prompt injection attacks.
-
-- `callbacks`: List of LiteLLM callbacks used for this guardrail. [Can be one of `[lakera_prompt_injection, hide_secrets, presidio, llmguard_moderations, llamaguard_moderations, google_text_moderation]`](enterprise#content-moderation)
-- `default_on`: Boolean flag determining if this guardrail runs on all LLM requests by default.
-#### Guardrail: `your-custom-guardrail`: Configuration for a user-defined custom guardrail.
-
-- `callbacks`: List of callbacks for this custom guardrail. Can be one of `[lakera_prompt_injection, hide_secrets, presidio, llmguard_moderations, llamaguard_moderations, google_text_moderation]`
-- `default_on`: Boolean flag determining if this custom guardrail runs by default, set to false.

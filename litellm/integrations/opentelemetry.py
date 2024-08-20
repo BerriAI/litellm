@@ -2,11 +2,12 @@ import os
 from dataclasses import dataclass
 from datetime import datetime
 from functools import wraps
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, Optional, Union
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
 from litellm.types.services import ServiceLoggerPayload
 
 if TYPE_CHECKING:
@@ -27,9 +28,10 @@ else:
 
 
 LITELLM_TRACER_NAME = os.getenv("OTEL_TRACER_NAME", "litellm")
-LITELLM_RESOURCE = {
+LITELLM_RESOURCE: Dict[Any, Any] = {
     "service.name": os.getenv("OTEL_SERVICE_NAME", "litellm"),
     "deployment.environment": os.getenv("OTEL_ENVIRONMENT_NAME", "production"),
+    "model_id": os.getenv("OTEL_SERVICE_NAME", "litellm"),
 }
 RAW_REQUEST_SPAN_NAME = "raw_gen_ai_request"
 LITELLM_REQUEST_SPAN_NAME = "litellm_request"
@@ -68,7 +70,9 @@ class OpenTelemetryConfig:
 
 
 class OpenTelemetry(CustomLogger):
-    def __init__(self, config=OpenTelemetryConfig.from_env()):
+    def __init__(
+        self, config=OpenTelemetryConfig.from_env(), callback_name: Optional[str] = None
+    ):
         from opentelemetry import trace
         from opentelemetry.sdk.resources import Resource
         from opentelemetry.sdk.trace import TracerProvider
@@ -79,6 +83,7 @@ class OpenTelemetry(CustomLogger):
         self.OTEL_HEADERS = self.config.headers
         provider = TracerProvider(resource=Resource(attributes=LITELLM_RESOURCE))
         provider.add_span_processor(self._get_span_processor())
+        self.callback_name = callback_name
 
         trace.set_tracer_provider(provider)
         self.tracer = trace.get_tracer(LITELLM_TRACER_NAME)
@@ -114,14 +119,15 @@ class OpenTelemetry(CustomLogger):
         parent_otel_span: Optional[Span] = None,
         start_time: Optional[Union[datetime, float]] = None,
         end_time: Optional[Union[datetime, float]] = None,
+        event_metadata: Optional[dict] = None,
     ):
         from datetime import datetime
 
         from opentelemetry import trace
         from opentelemetry.trace import Status, StatusCode
 
-        _start_time_ns = start_time
-        _end_time_ns = end_time
+        _start_time_ns = 0
+        _end_time_ns = 0
 
         if isinstance(start_time, float):
             _start_time_ns = int(int(start_time) * 1e9)
@@ -144,23 +150,34 @@ class OpenTelemetry(CustomLogger):
             service_logging_span.set_attribute(
                 key="service", value=payload.service.value
             )
+
+            if event_metadata:
+                for key, value in event_metadata.items():
+                    if isinstance(value, dict):
+                        try:
+                            value = str(value)
+                        except Exception:
+                            value = "litllm logging error - could_not_json_serialize"
+                    service_logging_span.set_attribute(key, value)
             service_logging_span.set_status(Status(StatusCode.OK))
             service_logging_span.end(end_time=_end_time_ns)
 
     async def async_service_failure_hook(
         self,
         payload: ServiceLoggerPayload,
+        error: Optional[str] = "",
         parent_otel_span: Optional[Span] = None,
         start_time: Optional[Union[datetime, float]] = None,
         end_time: Optional[Union[float, datetime]] = None,
+        event_metadata: Optional[dict] = None,
     ):
         from datetime import datetime
 
         from opentelemetry import trace
         from opentelemetry.trace import Status, StatusCode
 
-        _start_time_ns = start_time
-        _end_time_ns = end_time
+        _start_time_ns = 0
+        _end_time_ns = 0
 
         if isinstance(start_time, float):
             _start_time_ns = int(int(start_time) * 1e9)
@@ -183,6 +200,17 @@ class OpenTelemetry(CustomLogger):
             service_logging_span.set_attribute(
                 key="service", value=payload.service.value
             )
+            if error:
+                service_logging_span.set_attribute(key="error", value=error)
+            if event_metadata:
+                for key, value in event_metadata.items():
+                    if isinstance(value, dict):
+                        try:
+                            value = str(value)
+                        except Exception:
+                            value = "litllm logging error - could_not_json_serialize"
+                    service_logging_span.set_attribute(key, value)
+
             service_logging_span.set_status(Status(StatusCode.ERROR))
             service_logging_span.end(end_time=_end_time_ns)
 
@@ -253,14 +281,25 @@ class OpenTelemetry(CustomLogger):
     def _handle_failure(self, kwargs, response_obj, start_time, end_time):
         from opentelemetry.trace import Status, StatusCode
 
+        verbose_logger.debug(
+            "OpenTelemetry Logger: Failure HandlerLogging kwargs: %s, OTEL config settings=%s",
+            kwargs,
+            self.config,
+        )
+        _parent_context, parent_otel_span = self._get_span_context(kwargs)
+
+        # Span 1: Requst sent to litellm SDK
         span = self.tracer.start_span(
             name=self._get_span_name(kwargs),
             start_time=self._to_ns(start_time),
-            context=self._get_span_context(kwargs),
+            context=_parent_context,
         )
         span.set_status(Status(StatusCode.ERROR))
         self.set_attributes(span, kwargs, response_obj)
         span.end(end_time=self._to_ns(end_time))
+
+        if parent_otel_span is not None:
+            parent_otel_span.end(end_time=self._to_ns(datetime.now()))
 
     def set_tools_attributes(self, span: Span, tools):
         import json
@@ -288,139 +327,171 @@ class OpenTelemetry(CustomLogger):
             )
             pass
 
+    def is_primitive(self, value):
+        if value is None:
+            return False
+        return isinstance(value, (str, bool, int, float))
+
     def set_attributes(self, span: Span, kwargs, response_obj):
-        from litellm.proxy._types import SpanAttributes
+        try:
+            if self.callback_name == "arize":
+                from litellm.integrations.arize_ai import set_arize_ai_attributes
 
-        optional_params = kwargs.get("optional_params", {})
-        litellm_params = kwargs.get("litellm_params", {}) or {}
+                set_arize_ai_attributes(span, kwargs, response_obj)
+                return
+            from litellm.proxy._types import SpanAttributes
 
-        # https://github.com/open-telemetry/semantic-conventions/blob/main/model/registry/gen-ai.yaml
-        # Following Conventions here: https://github.com/open-telemetry/semantic-conventions/blob/main/docs/gen-ai/llm-spans.md
+            optional_params = kwargs.get("optional_params", {})
+            litellm_params = kwargs.get("litellm_params", {}) or {}
 
-        #############################################
-        ########## LLM Request Attributes ###########
-        #############################################
+            # https://github.com/open-telemetry/semantic-conventions/blob/main/model/registry/gen-ai.yaml
+            # Following Conventions here: https://github.com/open-telemetry/semantic-conventions/blob/main/docs/gen-ai/llm-spans.md
+            #############################################
+            ############ LLM CALL METADATA ##############
+            #############################################
+            metadata = litellm_params.get("metadata", {}) or {}
 
-        # The name of the LLM a request is being made to
-        if kwargs.get("model"):
-            span.set_attribute(SpanAttributes.LLM_REQUEST_MODEL, kwargs.get("model"))
+            clean_metadata = redact_user_api_key_info(metadata=metadata)
 
-        # The Generative AI Provider: Azure, OpenAI, etc.
-        span.set_attribute(
-            SpanAttributes.LLM_SYSTEM,
-            litellm_params.get("custom_llm_provider", "Unknown"),
-        )
+            for key, value in clean_metadata.items():
+                if self.is_primitive(value):
+                    span.set_attribute("metadata.{}".format(key), value)
 
-        # The maximum number of tokens the LLM generates for a request.
-        if optional_params.get("max_tokens"):
+            #############################################
+            ########## LLM Request Attributes ###########
+            #############################################
+
+            # The name of the LLM a request is being made to
+            if kwargs.get("model"):
+                span.set_attribute(
+                    SpanAttributes.LLM_REQUEST_MODEL, kwargs.get("model")
+                )
+
+            # The Generative AI Provider: Azure, OpenAI, etc.
             span.set_attribute(
-                SpanAttributes.LLM_REQUEST_MAX_TOKENS, optional_params.get("max_tokens")
+                SpanAttributes.LLM_SYSTEM,
+                litellm_params.get("custom_llm_provider", "Unknown"),
             )
 
-        # The temperature setting for the LLM request.
-        if optional_params.get("temperature"):
+            # The maximum number of tokens the LLM generates for a request.
+            if optional_params.get("max_tokens"):
+                span.set_attribute(
+                    SpanAttributes.LLM_REQUEST_MAX_TOKENS,
+                    optional_params.get("max_tokens"),
+                )
+
+            # The temperature setting for the LLM request.
+            if optional_params.get("temperature"):
+                span.set_attribute(
+                    SpanAttributes.LLM_REQUEST_TEMPERATURE,
+                    optional_params.get("temperature"),
+                )
+
+            # The top_p sampling setting for the LLM request.
+            if optional_params.get("top_p"):
+                span.set_attribute(
+                    SpanAttributes.LLM_REQUEST_TOP_P, optional_params.get("top_p")
+                )
+
             span.set_attribute(
-                SpanAttributes.LLM_REQUEST_TEMPERATURE,
-                optional_params.get("temperature"),
+                SpanAttributes.LLM_IS_STREAMING,
+                str(optional_params.get("stream", False)),
             )
 
-        # The top_p sampling setting for the LLM request.
-        if optional_params.get("top_p"):
-            span.set_attribute(
-                SpanAttributes.LLM_REQUEST_TOP_P, optional_params.get("top_p")
-            )
+            if optional_params.get("tools"):
+                tools = optional_params["tools"]
+                self.set_tools_attributes(span, tools)
 
-        span.set_attribute(
-            SpanAttributes.LLM_IS_STREAMING, str(optional_params.get("stream", False))
-        )
+            if optional_params.get("user"):
+                span.set_attribute(SpanAttributes.LLM_USER, optional_params.get("user"))
 
-        if optional_params.get("tools"):
-            tools = optional_params["tools"]
-            self.set_tools_attributes(span, tools)
-
-        if optional_params.get("user"):
-            span.set_attribute(SpanAttributes.LLM_USER, optional_params.get("user"))
-
-        if kwargs.get("messages"):
-            for idx, prompt in enumerate(kwargs.get("messages")):
-                if prompt.get("role"):
-                    span.set_attribute(
-                        f"{SpanAttributes.LLM_PROMPTS}.{idx}.role",
-                        prompt.get("role"),
-                    )
-
-                if prompt.get("content"):
-                    if not isinstance(prompt.get("content"), str):
-                        prompt["content"] = str(prompt.get("content"))
-                    span.set_attribute(
-                        f"{SpanAttributes.LLM_PROMPTS}.{idx}.content",
-                        prompt.get("content"),
-                    )
-        #############################################
-        ########## LLM Response Attributes ##########
-        #############################################
-        if response_obj.get("choices"):
-            for idx, choice in enumerate(response_obj.get("choices")):
-                if choice.get("finish_reason"):
-                    span.set_attribute(
-                        f"{SpanAttributes.LLM_COMPLETIONS}.{idx}.finish_reason",
-                        choice.get("finish_reason"),
-                    )
-                if choice.get("message"):
-                    if choice.get("message").get("role"):
+            if kwargs.get("messages"):
+                for idx, prompt in enumerate(kwargs.get("messages")):
+                    if prompt.get("role"):
                         span.set_attribute(
-                            f"{SpanAttributes.LLM_COMPLETIONS}.{idx}.role",
-                            choice.get("message").get("role"),
+                            f"{SpanAttributes.LLM_PROMPTS}.{idx}.role",
+                            prompt.get("role"),
                         )
-                    if choice.get("message").get("content"):
-                        if not isinstance(choice.get("message").get("content"), str):
-                            choice["message"]["content"] = str(
-                                choice.get("message").get("content")
+
+                    if prompt.get("content"):
+                        if not isinstance(prompt.get("content"), str):
+                            prompt["content"] = str(prompt.get("content"))
+                        span.set_attribute(
+                            f"{SpanAttributes.LLM_PROMPTS}.{idx}.content",
+                            prompt.get("content"),
+                        )
+            #############################################
+            ########## LLM Response Attributes ##########
+            #############################################
+            if response_obj is not None:
+                if response_obj.get("choices"):
+                    for idx, choice in enumerate(response_obj.get("choices")):
+                        if choice.get("finish_reason"):
+                            span.set_attribute(
+                                f"{SpanAttributes.LLM_COMPLETIONS}.{idx}.finish_reason",
+                                choice.get("finish_reason"),
                             )
-                        span.set_attribute(
-                            f"{SpanAttributes.LLM_COMPLETIONS}.{idx}.content",
-                            choice.get("message").get("content"),
-                        )
+                        if choice.get("message"):
+                            if choice.get("message").get("role"):
+                                span.set_attribute(
+                                    f"{SpanAttributes.LLM_COMPLETIONS}.{idx}.role",
+                                    choice.get("message").get("role"),
+                                )
+                            if choice.get("message").get("content"):
+                                if not isinstance(
+                                    choice.get("message").get("content"), str
+                                ):
+                                    choice["message"]["content"] = str(
+                                        choice.get("message").get("content")
+                                    )
+                                span.set_attribute(
+                                    f"{SpanAttributes.LLM_COMPLETIONS}.{idx}.content",
+                                    choice.get("message").get("content"),
+                                )
 
-                    message = choice.get("message")
-                    tool_calls = message.get("tool_calls")
-                    if tool_calls:
-                        span.set_attribute(
-                            f"{SpanAttributes.LLM_COMPLETIONS}.{idx}.function_call.name",
-                            tool_calls[0].get("function").get("name"),
-                        )
-                        span.set_attribute(
-                            f"{SpanAttributes.LLM_COMPLETIONS}.{idx}.function_call.arguments",
-                            tool_calls[0].get("function").get("arguments"),
-                        )
+                            message = choice.get("message")
+                            tool_calls = message.get("tool_calls")
+                            if tool_calls:
+                                span.set_attribute(
+                                    f"{SpanAttributes.LLM_COMPLETIONS}.{idx}.function_call.name",
+                                    tool_calls[0].get("function").get("name"),
+                                )
+                                span.set_attribute(
+                                    f"{SpanAttributes.LLM_COMPLETIONS}.{idx}.function_call.arguments",
+                                    tool_calls[0].get("function").get("arguments"),
+                                )
 
-        # The unique identifier for the completion.
-        if response_obj.get("id"):
-            span.set_attribute("gen_ai.response.id", response_obj.get("id"))
+                # The unique identifier for the completion.
+                if response_obj.get("id"):
+                    span.set_attribute("gen_ai.response.id", response_obj.get("id"))
 
-        # The model used to generate the response.
-        if response_obj.get("model"):
-            span.set_attribute(
-                SpanAttributes.LLM_RESPONSE_MODEL, response_obj.get("model")
-            )
+                # The model used to generate the response.
+                if response_obj.get("model"):
+                    span.set_attribute(
+                        SpanAttributes.LLM_RESPONSE_MODEL, response_obj.get("model")
+                    )
 
-        usage = response_obj.get("usage")
-        if usage:
-            span.set_attribute(
-                SpanAttributes.LLM_USAGE_TOTAL_TOKENS,
-                usage.get("total_tokens"),
-            )
+                usage = response_obj.get("usage")
+                if usage:
+                    span.set_attribute(
+                        SpanAttributes.LLM_USAGE_TOTAL_TOKENS,
+                        usage.get("total_tokens"),
+                    )
 
-            # The number of tokens used in the LLM response (completion).
-            span.set_attribute(
-                SpanAttributes.LLM_USAGE_COMPLETION_TOKENS,
-                usage.get("completion_tokens"),
-            )
+                    # The number of tokens used in the LLM response (completion).
+                    span.set_attribute(
+                        SpanAttributes.LLM_USAGE_COMPLETION_TOKENS,
+                        usage.get("completion_tokens"),
+                    )
 
-            # The number of tokens used in the LLM prompt.
-            span.set_attribute(
-                SpanAttributes.LLM_USAGE_PROMPT_TOKENS,
-                usage.get("prompt_tokens"),
+                    # The number of tokens used in the LLM prompt.
+                    span.set_attribute(
+                        SpanAttributes.LLM_USAGE_PROMPT_TOKENS,
+                        usage.get("prompt_tokens"),
+                    )
+        except Exception as e:
+            verbose_logger.error(
+                "OpenTelemetry logging error in set_attributes %s", str(e)
             )
 
     def set_raw_request_attributes(self, span: Span, kwargs, response_obj):
@@ -438,7 +509,7 @@ class OpenTelemetry(CustomLogger):
         #############################################
 
         # OTEL Attributes for the RAW Request to https://docs.anthropic.com/en/api/messages
-        if complete_input_dict:
+        if complete_input_dict and isinstance(complete_input_dict, dict):
             for param, val in complete_input_dict.items():
                 if not isinstance(val, str):
                     val = str(val)
@@ -473,8 +544,6 @@ class OpenTelemetry(CustomLogger):
                     f"llm.{custom_llm_provider}.stringified_raw_response",
                     _raw_response,
                 )
-
-        pass
 
     def _to_ns(self, dt):
         return int(dt.timestamp() * 1e9)
@@ -601,8 +670,8 @@ class OpenTelemetry(CustomLogger):
         from opentelemetry import trace
         from opentelemetry.trace import Status, StatusCode
 
-        _start_time_ns = logging_payload.start_time
-        _end_time_ns = logging_payload.end_time
+        _start_time_ns = 0
+        _end_time_ns = 0
 
         start_time = logging_payload.start_time
         end_time = logging_payload.end_time
@@ -647,8 +716,8 @@ class OpenTelemetry(CustomLogger):
         from opentelemetry import trace
         from opentelemetry.trace import Status, StatusCode
 
-        _start_time_ns = logging_payload.start_time
-        _end_time_ns = logging_payload.end_time
+        _start_time_ns = 0
+        _end_time_ns = 0
 
         start_time = logging_payload.start_time
         end_time = logging_payload.end_time

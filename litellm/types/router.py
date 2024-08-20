@@ -91,6 +91,7 @@ class ModelInfo(BaseModel):
     base_model: Optional[str] = (
         None  # specify if the base model is azure/gpt-3.5-turbo etc for accurate cost tracking
     )
+    tier: Optional[Literal["free", "paid"]] = None
 
     def __init__(self, id: Optional[Union[str, int]] = None, **params):
         if id is None:
@@ -142,6 +143,7 @@ class GenericLiteLLMParams(BaseModel):
     ## VERTEX AI ##
     vertex_project: Optional[str] = None
     vertex_location: Optional[str] = None
+    vertex_credentials: Optional[str] = None
     ## AWS BEDROCK / SAGEMAKER ##
     aws_access_key_id: Optional[str] = None
     aws_secret_access_key: Optional[str] = None
@@ -153,6 +155,8 @@ class GenericLiteLLMParams(BaseModel):
     output_cost_per_token: Optional[float] = None
     input_cost_per_second: Optional[float] = None
     output_cost_per_second: Optional[float] = None
+
+    max_file_size_mb: Optional[float] = None
 
     model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
 
@@ -175,6 +179,7 @@ class GenericLiteLLMParams(BaseModel):
         ## VERTEX AI ##
         vertex_project: Optional[str] = None,
         vertex_location: Optional[str] = None,
+        vertex_credentials: Optional[str] = None,
         ## AWS BEDROCK / SAGEMAKER ##
         aws_access_key_id: Optional[str] = None,
         aws_secret_access_key: Optional[str] = None,
@@ -185,6 +190,7 @@ class GenericLiteLLMParams(BaseModel):
         output_cost_per_token: Optional[float] = None,
         input_cost_per_second: Optional[float] = None,
         output_cost_per_second: Optional[float] = None,
+        max_file_size_mb: Optional[float] = None,
         **params,
     ):
         args = locals()
@@ -243,6 +249,9 @@ class LiteLLM_Params(GenericLiteLLMParams):
         aws_access_key_id: Optional[str] = None,
         aws_secret_access_key: Optional[str] = None,
         aws_region_name: Optional[str] = None,
+        # OpenAI / Azure Whisper
+        # set a max-size of file that can be passed to litellm proxy
+        max_file_size_mb: Optional[float] = None,
         **params,
     ):
         args = locals()
@@ -317,6 +326,10 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     output_cost_per_second: Optional[float]
     ## MOCK RESPONSES ##
     mock_response: Optional[Union[str, ModelResponse, Exception]]
+
+    # routing params
+    # use this for tag-based routing
+    tags: Optional[List[str]]
 
 
 class DeploymentTypedDict(TypedDict):
@@ -474,6 +487,11 @@ class AssistantsTypedDict(TypedDict):
     litellm_params: LiteLLMParamsTypedDict
 
 
+class FineTuningConfig(BaseModel):
+
+    custom_llm_provider: Literal["azure", "openai"]
+
+
 class CustomRoutingStrategyBase:
     async def async_get_available_deployment(
         self,
@@ -528,3 +546,6 @@ class RouterGeneralSettings(BaseModel):
     async_only_mode: bool = Field(
         default=False
     )  # this will only initialize async clients. Good for memory utils
+    pass_through_all_models: bool = Field(
+        default=False
+    )  # if passed a model not llm_router model list, pass through the request to litellm.acompletion/embedding

@@ -25,13 +25,17 @@ from typing_extensions import overload
 import litellm
 import litellm.litellm_core_utils
 import litellm.litellm_core_utils.litellm_logging
-from litellm import EmbeddingResponse, ImageResponse, ModelResponse
+from litellm import EmbeddingResponse, ImageResponse, ModelResponse, get_litellm_params
 from litellm._logging import verbose_proxy_logger
 from litellm._service_logger import ServiceLogging, ServiceTypes
 from litellm.caching import DualCache, RedisCache
 from litellm.exceptions import RejectedRequestError
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.slack_alerting import SlackAlerting
+from litellm.litellm_core_utils.core_helpers import (
+    _get_parent_otel_span_from_kwargs,
+    get_litellm_metadata_from_kwargs,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
 from litellm.proxy._types import (
@@ -50,7 +54,7 @@ from litellm.proxy.hooks.max_budget_limiter import _PROXY_MaxBudgetLimiter
 from litellm.proxy.hooks.parallel_request_limiter import (
     _PROXY_MaxParallelRequestsHandler,
 )
-from litellm.types.utils import CallTypes
+from litellm.types.utils import CallTypes, LoggedLiteLLMParams
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -83,6 +87,8 @@ def safe_deep_copy(data):
 
     Use this function to safely deep copy the LiteLLM Request
     """
+    if litellm.safe_memory_mode is True:
+        return data
 
     # Step 1: Remove the litellm_parent_otel_span
     if isinstance(data, dict):
@@ -122,7 +128,35 @@ def log_to_opentelemetry(func):
                     duration=0.0,
                     start_time=start_time,
                     end_time=end_time,
+                    event_metadata={
+                        "function_name": func.__name__,
+                        "function_kwargs": kwargs,
+                        "function_args": args,
+                    },
                 )
+            elif (
+                # in litellm custom callbacks kwargs is passed as arg[0]
+                # https://docs.litellm.ai/docs/observability/custom_callback#callback-functions
+                args is not None
+                and len(args) > 0
+            ):
+                passed_kwargs = args[0]
+                parent_otel_span = _get_parent_otel_span_from_kwargs(
+                    kwargs=passed_kwargs
+                )
+                if parent_otel_span is not None:
+                    from litellm.proxy.proxy_server import proxy_logging_obj
+
+                    metadata = get_litellm_metadata_from_kwargs(kwargs=passed_kwargs)
+                    await proxy_logging_obj.service_logging_obj.async_service_success_hook(
+                        service=ServiceTypes.BATCH_WRITE_TO_DB,
+                        call_type=func.__name__,
+                        parent_otel_span=parent_otel_span,
+                        duration=0.0,
+                        start_time=start_time,
+                        end_time=end_time,
+                        event_metadata=metadata,
+                    )
             # end of logging to otel
             return result
         except Exception as e:
@@ -138,9 +172,15 @@ def log_to_opentelemetry(func):
                     error=e,
                     service=ServiceTypes.DB,
                     call_type=func.__name__,
+                    parent_otel_span=kwargs["parent_otel_span"],
                     duration=0.0,
                     start_time=start_time,
                     end_time=end_time,
+                    event_metadata={
+                        "function_name": func.__name__,
+                        "function_kwargs": kwargs,
+                        "function_args": args,
+                    },
                 )
             raise e
 
@@ -182,10 +222,12 @@ class ProxyLogging:
             "db_exceptions",
             "daily_reports",
             "spend_reports",
+            "fallback_reports",
             "cooldown_deployment",
             "new_model_added",
             "outage_alerts",
         ]
+        self.alert_to_webhook_url: Optional[dict] = None
         self.slack_alerting_instance: SlackAlerting = SlackAlerting(
             alerting_threshold=self.alerting_threshold,
             alerting=self.alerting,
@@ -200,6 +242,7 @@ class ProxyLogging:
         redis_cache: Optional[RedisCache] = None,
         alert_types: Optional[List[AlertType]] = None,
         alerting_args: Optional[dict] = None,
+        alert_to_webhook_url: Optional[dict] = None,
     ):
         updated_slack_alerting: bool = False
         if alerting is not None:
@@ -211,6 +254,9 @@ class ProxyLogging:
         if alert_types is not None:
             self.alert_types = alert_types
             updated_slack_alerting = True
+        if alert_to_webhook_url is not None:
+            self.alert_to_webhook_url = alert_to_webhook_url
+            updated_slack_alerting = True
 
         if updated_slack_alerting is True:
             self.slack_alerting_instance.update_values(
@@ -218,6 +264,7 @@ class ProxyLogging:
                 alerting_threshold=self.alerting_threshold,
                 alert_types=self.alert_types,
                 alerting_args=alerting_args,
+                alert_to_webhook_url=self.alert_to_webhook_url,
             )
 
             if (
@@ -278,11 +325,22 @@ class ProxyLogging:
     async def update_request_status(
         self, litellm_call_id: str, status: Literal["success", "fail"]
     ):
+        # only use this if slack alerting is being used
+        if self.alerting is None:
+            return
+
+        # current alerting threshold
+        alerting_threshold: float = self.alerting_threshold
+
+        # add a 100 second buffer to the alerting threshold
+        # ensures we don't send errant hanging request slack alerts
+        alerting_threshold += 100
+
         await self.internal_usage_cache.async_set_cache(
             key="request_status:{}".format(litellm_call_id),
             value=status,
             local_only=True,
-            ttl=3600,
+            ttl=alerting_threshold,
         )
 
     # The actual implementation of the function
@@ -297,6 +355,7 @@ class ProxyLogging:
             "image_generation",
             "moderation",
             "audio_transcription",
+            "pass_through_endpoint",
         ],
     ) -> dict:
         """
@@ -373,12 +432,11 @@ class ProxyLogging:
         """
         Runs the CustomLogger's async_moderation_hook()
         """
-        new_data = safe_deep_copy(data)
         for callback in litellm.callbacks:
             try:
                 if isinstance(callback, CustomLogger):
                     await callback.async_moderation_hook(
-                        data=new_data,
+                        data=data,
                         user_api_key_dict=user_api_key_dict,
                         call_type=call_type,
                     )
@@ -586,12 +644,47 @@ class ProxyLogging:
                 )
 
             if litellm_logging_obj is not None:
+                ## UPDATE LOGGING INPUT
+                _optional_params = {}
+                _litellm_params = {}
+
+                litellm_param_keys = LoggedLiteLLMParams.__annotations__.keys()
+                for k, v in request_data.items():
+                    if k in litellm_param_keys:
+                        _litellm_params[k] = v
+                    elif k != "model" and k != "user":
+                        _optional_params[k] = v
+
+                litellm_logging_obj.update_environment_variables(
+                    model=request_data.get("model", ""),
+                    user=request_data.get("user", ""),
+                    optional_params=_optional_params,
+                    litellm_params=_litellm_params,
+                )
+
+                input: Union[list, str, dict] = ""
+                if "messages" in request_data and isinstance(
+                    request_data["messages"], list
+                ):
+                    input = request_data["messages"]
+                elif "prompt" in request_data and isinstance(
+                    request_data["prompt"], str
+                ):
+                    input = request_data["prompt"]
+                elif "input" in request_data and isinstance(
+                    request_data["input"], list
+                ):
+                    input = request_data["input"]
+
+                litellm_logging_obj.pre_call(
+                    input=input,
+                    api_key="",
+                )
+
                 # log the custom exception
                 await litellm_logging_obj.async_failure_handler(
                     exception=original_exception,
                     traceback_exception=traceback.format_exc(),
-                    start_time=time.time(),
-                    end_time=time.time(),
                 )
 
                 threading.Thread(
@@ -599,8 +692,6 @@ class ProxyLogging:
                     args=(
                         original_exception,
                         traceback.format_exc(),
-                        time.time(),
-                        time.time(),
                     ),
                 ).start()
 
@@ -625,6 +716,7 @@ class ProxyLogging:
 
     async def post_call_success_hook(
         self,
+        data: dict,
         response: Union[ModelResponse, EmbeddingResponse, ImageResponse],
         user_api_key_dict: UserAPIKeyAuth,
     ):
@@ -646,7 +738,9 @@ class ProxyLogging:
                     _callback = callback  # type: ignore
                 if _callback is not None and isinstance(_callback, CustomLogger):
                     await _callback.async_post_call_success_hook(
-                        user_api_key_dict=user_api_key_dict, response=response
+                        user_api_key_dict=user_api_key_dict,
+                        data=data,
+                        response=response,
                     )
             except Exception as e:
                 raise e
@@ -724,7 +818,7 @@ class PrismaClient:
     spend_log_transactions: List = []
 
     def __init__(self, database_url: str, proxy_logging_obj: ProxyLogging):
-        print_verbose(
+        verbose_proxy_logger.debug(
             "LiteLLM: DATABASE_URL Set in config, trying to 'pip install prisma'"
         )
         ## init logging object
@@ -753,8 +847,9 @@ class PrismaClient:
                 os.chdir(original_dir)
             # Now you can import the Prisma Client
             from prisma import Prisma  # type: ignore
-
+        verbose_proxy_logger.debug("Connecting Prisma Client to DB..")
         self.db = Prisma()  # Client to connect to Prisma db
+        verbose_proxy_logger.debug("Success - Connected Prisma Client to DB")
 
     def hash_token(self, token: str):
         # Hash the string using SHA-256
@@ -791,6 +886,30 @@ class PrismaClient:
 
         If the view doesn't exist, one will be created.
         """
+
+        # Check to see if all of the necessary views exist and if they do, simply return
+        # This is more efficient because it lets us check for all views in one
+        # query instead of multiple queries.
+        try:
+            ret = await self.db.query_raw(
+                """
+                    SELECT SUM(1) FROM pg_views
+                    WHERE schemaname = 'public' AND viewname IN (
+                        'LiteLLM_VerificationTokenView',
+                        'MonthlyGlobalSpend',
+                        'Last30dKeysBySpend',
+                        'Last30dModelsBySpend',
+                        'MonthlyGlobalSpendPerKey',
+                        'Last30dTopEndUsersSpend'
+                    )
+                    """
+            )
+            if ret[0]["sum"] == 6:
+                print("All necessary views exist!")  # noqa
+                return
+        except Exception:
+            pass
+
         try:
             # Try to select one row from the view
             await self.db.query_raw(
@@ -1272,8 +1391,10 @@ class PrismaClient:
                     t.tpm_limit AS team_tpm_limit,
                     t.rpm_limit AS team_rpm_limit,
                     t.models AS team_models,
+                    t.metadata AS team_metadata,
                     t.blocked AS team_blocked,
                     t.team_alias AS team_alias,
+                    t.metadata AS team_metadata,
                     tm.spend AS team_member_spend,
                     m.aliases as team_model_aliases
                     FROM "LiteLLM_VerificationToken" AS v
@@ -1283,6 +1404,7 @@ class PrismaClient:
                     WHERE v.token = '{token}'
                     """
 
+                    print_verbose("sql_query being made={}".format(sql_query))
                     response = await self.db.query_first(query=sql_query)
 
                     if response is not None:
@@ -1290,7 +1412,9 @@ class PrismaClient:
                             response["team_models"] = []
                         if response["team_blocked"] is None:
                             response["team_blocked"] = False
-                        response = LiteLLM_VerificationTokenView(**response)
+                        response = LiteLLM_VerificationTokenView(
+                            **response, last_refreshed_at=time.time()
+                        )
                         # for prisma we need to cast the expires time to str
                         if response.expires is not None and isinstance(
                             response.expires, datetime
@@ -1878,6 +2002,34 @@ class PrismaClient:
                 )
             )
             raise e
+
+    async def apply_db_fixes(self):
+        try:
+            verbose_proxy_logger.debug(
+                "Applying LiteLLM - DB Fixes fixing logs in SpendLogs"
+            )
+            sql_query = """
+                UPDATE "LiteLLM_SpendLogs"
+                SET team_id = (
+                    SELECT vt.team_id
+                    FROM "LiteLLM_VerificationToken" vt
+                    WHERE vt.token = "LiteLLM_SpendLogs".api_key
+                )
+                WHERE team_id IS NULL
+                AND EXISTS (
+                    SELECT 1
+                    FROM "LiteLLM_VerificationToken" vt
+                    WHERE vt.token = "LiteLLM_SpendLogs".api_key
+                );
+            """
+            response = await self.db.query_raw(sql_query)
+            verbose_proxy_logger.debug(
+                "Applied LiteLLM - DB Fixes fixing logs in SpendLogs, Response=%s",
+                response,
+            )
+        except Exception as e:
+            verbose_proxy_logger.debug(f"Error apply_db_fixes: {str(e)}")
+        return
 
 
 class DBClient:

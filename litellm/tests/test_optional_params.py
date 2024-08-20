@@ -128,6 +128,34 @@ def test_azure_ai_mistral_optional_params():
     assert "user" not in optional_params
 
 
+def test_vertex_ai_llama_3_optional_params():
+    litellm.vertex_llama3_models = ["meta/llama3-405b-instruct-maas"]
+    litellm.drop_params = True
+    optional_params = get_optional_params(
+        model="meta/llama3-405b-instruct-maas",
+        user="John",
+        custom_llm_provider="vertex_ai",
+        max_tokens=10,
+        temperature=0.2,
+    )
+    assert "user" not in optional_params
+
+
+def test_vertex_ai_mistral_optional_params():
+    litellm.vertex_mistral_models = ["mistral-large@2407"]
+    litellm.drop_params = True
+    optional_params = get_optional_params(
+        model="mistral-large@2407",
+        user="John",
+        custom_llm_provider="vertex_ai",
+        max_tokens=10,
+        temperature=0.2,
+    )
+    assert "user" not in optional_params
+    assert "max_tokens" in optional_params
+    assert "temperature" in optional_params
+
+
 def test_azure_gpt_optional_params_gpt_vision():
     # for OpenAI, Azure all extra params need to get passed as extra_body to OpenAI python. We assert we actually set extra_body here
     optional_params = litellm.utils.get_optional_params(
@@ -273,7 +301,7 @@ def test_dynamic_drop_params(drop_params):
         optional_params = litellm.utils.get_optional_params(
             model="command-r",
             custom_llm_provider="cohere",
-            response_format="json",
+            response_format={"type": "json"},
             drop_params=drop_params,
         )
     else:
@@ -281,7 +309,7 @@ def test_dynamic_drop_params(drop_params):
             optional_params = litellm.utils.get_optional_params(
                 model="command-r",
                 custom_llm_provider="cohere",
-                response_format="json",
+                response_format={"type": "json"},
                 drop_params=drop_params,
             )
             pytest.fail("Expected to fail")
@@ -317,7 +345,7 @@ def test_drop_params_parallel_tool_calls(model, provider, should_drop):
     response = litellm.utils.get_optional_params(
         model=model,
         custom_llm_provider=provider,
-        response_format="json",
+        response_format={"type": "json"},
         parallel_tool_calls=True,
         drop_params=True,
     )
@@ -361,7 +389,7 @@ def test_dynamic_drop_additional_params(drop_params):
         optional_params = litellm.utils.get_optional_params(
             model="command-r",
             custom_llm_provider="cohere",
-            response_format="json",
+            response_format={"type": "json"},
             additional_drop_params=["response_format"],
         )
     else:
@@ -369,7 +397,7 @@ def test_dynamic_drop_additional_params(drop_params):
             optional_params = litellm.utils.get_optional_params(
                 model="command-r",
                 custom_llm_provider="cohere",
-                response_format="json",
+                response_format={"type": "json"},
             )
             pytest.fail("Expected to fail")
         except Exception as e:
@@ -392,3 +420,46 @@ def test_dynamic_drop_additional_params_e2e():
         print(mock_response.call_args.kwargs["data"])
         assert "response_format" not in mock_response.call_args.kwargs["data"]
         assert "additional_drop_params" not in mock_response.call_args.kwargs["data"]
+
+
+def test_get_optional_params_image_gen():
+    response = litellm.utils.get_optional_params_image_gen(
+        aws_region_name="us-east-1", custom_llm_provider="openai"
+    )
+
+    print(response)
+
+    assert "aws_region_name" not in response
+
+    response = litellm.utils.get_optional_params_image_gen(
+        aws_region_name="us-east-1", custom_llm_provider="bedrock"
+    )
+
+    print(response)
+
+    assert "aws_region_name" in response
+
+
+def test_bedrock_optional_params_embeddings_provider_specific_params():
+    optional_params = get_optional_params_embeddings(
+        custom_llm_provider="huggingface",
+        wait_for_model=True,
+    )
+    assert len(optional_params) == 1
+
+
+def test_get_optional_params_num_retries():
+    """
+    Relevant issue - https://github.com/BerriAI/litellm/issues/5124
+    """
+    with patch("litellm.main.get_optional_params", new=MagicMock()) as mock_client:
+        _ = litellm.completion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Hello world"}],
+            num_retries=10,
+        )
+
+        mock_client.assert_called()
+
+        print(f"mock_client.call_args: {mock_client.call_args}")
+        assert mock_client.call_args.kwargs["max_retries"] == 10

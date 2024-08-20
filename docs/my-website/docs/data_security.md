@@ -14,6 +14,14 @@
 
 For security inquiries, please contact us at support@berri.ai
 
+## Self-hosted Instances LiteLLM
+
+- ** No data or telemetry is stored on LiteLLM Servers when you self host **
+- For installation and configuration, see: [Self-hosting guided](../docs/proxy/deploy.md)
+- **Telemetry** We run no telemetry when you self host LiteLLM
+
+For security inquiries, please contact us at support@berri.ai
+
 ### Supported data regions for LiteLLM Cloud
 
 LiteLLM supports the following data regions:

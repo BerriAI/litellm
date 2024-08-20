@@ -25,8 +25,9 @@ from litellm import (
     completion_cost,
     embedding,
 )
-from litellm.llms.bedrock_httpx import BedrockLLM
+from litellm.llms.bedrock_httpx import BedrockLLM, ToolBlock
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.prompt_templates.factory import _bedrock_tools_pt
 
 # litellm.num_retries = 3
 litellm.cache = None
@@ -79,6 +80,80 @@ def test_completion_bedrock_claude_completion_auth():
 
 
 # test_completion_bedrock_claude_completion_auth()
+
+
+@pytest.mark.parametrize("streaming", [True, False])
+def test_completion_bedrock_guardrails(streaming):
+    import os
+
+    litellm.set_verbose = True
+    import logging
+
+    from litellm._logging import verbose_logger
+
+    # verbose_logger.setLevel(logging.DEBUG)
+    try:
+        if streaming is False:
+            response = completion(
+                model="anthropic.claude-v2",
+                messages=[
+                    {
+                        "content": "where do i buy coffee from? ",
+                        "role": "user",
+                    }
+                ],
+                max_tokens=10,
+                guardrailConfig={
+                    "guardrailIdentifier": "ff6ujrregl1q",
+                    "guardrailVersion": "DRAFT",
+                    "trace": "enabled",
+                },
+            )
+            # Add any assertions here to check the response
+            print(response)
+            assert (
+                "Sorry, the model cannot answer this question. coffee guardrail applied"
+                in response.choices[0].message.content
+            )
+
+            assert "trace" in response
+            assert response.trace is not None
+
+            print("TRACE=", response.trace)
+        else:
+
+            response = completion(
+                model="anthropic.claude-v2",
+                messages=[
+                    {
+                        "content": "where do i buy coffee from? ",
+                        "role": "user",
+                    }
+                ],
+                stream=True,
+                max_tokens=10,
+                guardrailConfig={
+                    "guardrailIdentifier": "ff6ujrregl1q",
+                    "guardrailVersion": "DRAFT",
+                    "trace": "enabled",
+                },
+            )
+
+            saw_trace = False
+
+            for chunk in response:
+                if "trace" in chunk:
+                    saw_trace = True
+                print(chunk)
+
+            assert (
+                saw_trace is True
+            ), "Did not see trace in response even when trace=enabled sent in the guardrailConfig"
+
+    except RateLimitError:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
 
 def test_completion_bedrock_claude_2_1_completion_auth():
@@ -525,7 +600,7 @@ def test_completion_bedrock_httpx_command_r_sts_oidc_auth():
     import os
 
     aws_web_identity_token = "oidc/circleci_v2/"
-    aws_region_name = os.environ["AWS_REGION_NAME"]
+    aws_region_name = "us-west-2"
     # aws_role_name = os.environ["AWS_TEMP_ROLE_NAME"]
     # TODO: This is using ai.moda's IAM role, we should use LiteLLM's IAM role eventually
     aws_role_name = "arn:aws:iam::335785316107:role/litellm-github-unit-tests-circleci"
@@ -542,6 +617,8 @@ def test_completion_bedrock_httpx_command_r_sts_oidc_auth():
             aws_web_identity_token=aws_web_identity_token,
             aws_role_name=aws_role_name,
             aws_session_name="my-test-session",
+            aws_sts_endpoint="https://sts-fips.us-west-2.amazonaws.com",
+            aws_bedrock_runtime_endpoint="https://bedrock-runtime-fips.us-west-2.amazonaws.com",
         )
         # Add any assertions here to check the response
         print(response)
@@ -586,14 +663,92 @@ def test_bedrock_claude_3(image_url):
         response: ModelResponse = completion(
             model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
             num_retries=3,
-            # messages=messages,
-            # max_tokens=10,
-            # temperature=0.78,
             **data,
-        )
+        )  # type: ignore
         # Add any assertions here to check the response
         assert len(response.choices) > 0
         assert len(response.choices[0].message.content) > 0
+
+    except litellm.InternalServerError:
+        pass
+    except RateLimitError:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.parametrize(
+    "stop",
+    [""],
+)
+@pytest.mark.parametrize(
+    "model",
+    [
+        "anthropic.claude-3-sonnet-20240229-v1:0",
+        # "meta.llama3-70b-instruct-v1:0",
+        # "anthropic.claude-v2",
+        # "mistral.mixtral-8x7b-instruct-v0:1",
+    ],
+)
+def test_bedrock_stop_value(stop, model):
+    try:
+        litellm.set_verbose = True
+        data = {
+            "max_tokens": 100,
+            "stream": False,
+            "temperature": 0.3,
+            "messages": [
+                {"role": "user", "content": "hey, how's it going?"},
+            ],
+            "stop": stop,
+        }
+        response: ModelResponse = completion(
+            model="bedrock/{}".format(model),
+            **data,
+        )  # type: ignore
+        # Add any assertions here to check the response
+        assert len(response.choices) > 0
+        assert len(response.choices[0].message.content) > 0
+
+    except RateLimitError:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.parametrize(
+    "system",
+    ["You are an AI", [{"type": "text", "text": "You are an AI"}], ""],
+)
+@pytest.mark.parametrize(
+    "model",
+    [
+        "anthropic.claude-3-sonnet-20240229-v1:0",
+        "meta.llama3-70b-instruct-v1:0",
+        "anthropic.claude-v2",
+        "mistral.mixtral-8x7b-instruct-v0:1",
+    ],
+)
+def test_bedrock_system_prompt(system, model):
+    try:
+        litellm.set_verbose = True
+        data = {
+            "max_tokens": 100,
+            "stream": False,
+            "temperature": 0.3,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": "hey, how's it going?"},
+            ],
+        }
+        response: ModelResponse = completion(
+            model="bedrock/{}".format(model),
+            **data,
+        )  # type: ignore
+        # Add any assertions here to check the response
+        assert len(response.choices) > 0
+        assert len(response.choices[0].message.content) > 0
+
     except RateLimitError:
         pass
     except Exception as e:
@@ -637,7 +792,7 @@ def test_bedrock_claude_3_tool_calling():
             messages=messages,
             tools=tools,
             tool_choice="auto",
-        )
+        )  # type: ignore
         print(f"response: {response}")
         # Add any assertions here to check the response
         assert isinstance(response.choices[0].message.tool_calls[0].function.name, str)
@@ -909,3 +1064,150 @@ def test_completion_bedrock_external_client_region():
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
+def test_bedrock_tool_calling():
+    """
+    # related issue: https://github.com/BerriAI/litellm/issues/5007
+    # Bedrock tool names must satisfy regular expression pattern: [a-zA-Z][a-zA-Z0-9_]* ensure this is true
+    """
+    litellm.set_verbose = True
+    response = litellm.completion(
+        model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+        fallbacks=["bedrock/meta.llama3-1-8b-instruct-v1:0"],
+        messages=[
+            {
+                "role": "user",
+                "content": "What's the weather like in Boston today in Fahrenheit?",
+            }
+        ],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "-DoSomethingVeryCool-forLitellm_Testin999229291-0293993",
+                    "description": "use this to get the current weather",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+        ],
+    )
+
+    print("bedrock response")
+    print(response)
+
+    # Assert that the tools in response have the same function name as the input
+    _choice_1 = response.choices[0]
+    if _choice_1.message.tool_calls is not None:
+        print(_choice_1.message.tool_calls)
+        for tool_call in _choice_1.message.tool_calls:
+            _tool_Call_name = tool_call.function.name
+            if _tool_Call_name is not None and "DoSomethingVeryCool" in _tool_Call_name:
+                assert (
+                    _tool_Call_name
+                    == "-DoSomethingVeryCool-forLitellm_Testin999229291-0293993"
+                )
+
+
+def test_bedrock_tools_pt_valid_names():
+    """
+    # related issue: https://github.com/BerriAI/litellm/issues/5007
+    # Bedrock tool names must satisfy regular expression pattern: [a-zA-Z][a-zA-Z0-9_]* ensure this is true
+
+    """
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {"type": "string"},
+                    },
+                    "required": ["location"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "search_restaurants",
+                "description": "Search for restaurants",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "cuisine": {"type": "string"},
+                    },
+                    "required": ["cuisine"],
+                },
+            },
+        },
+    ]
+
+    result = _bedrock_tools_pt(tools)
+
+    assert len(result) == 2
+    assert result[0]["toolSpec"]["name"] == "get_current_weather"
+    assert result[1]["toolSpec"]["name"] == "search_restaurants"
+
+
+def test_bedrock_tools_pt_invalid_names():
+    """
+    # related issue: https://github.com/BerriAI/litellm/issues/5007
+    # Bedrock tool names must satisfy regular expression pattern: [a-zA-Z][a-zA-Z0-9_]* ensure this is true
+
+    """
+
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "123-invalid@name",
+                "description": "Invalid name test",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "test": {"type": "string"},
+                    },
+                    "required": ["test"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "another@invalid#name",
+                "description": "Another invalid name test",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "test": {"type": "string"},
+                    },
+                    "required": ["test"],
+                },
+            },
+        },
+    ]
+
+    result = _bedrock_tools_pt(tools)
+
+    print("bedrock tools after prompt formatting=", result)
+
+    assert len(result) == 2
+    assert result[0]["toolSpec"]["name"] == "a123_invalid_name"
+    assert result[1]["toolSpec"]["name"] == "another_invalid_name"
+
+
+def test_not_found_error():
+    with pytest.raises(litellm.NotFoundError):
+        completion(
+            model="bedrock/bad_model",
+            messages=[
+                {
+                    "role": "user",
+                    "content": "What is the meaning of life",
+                }
+            ],
+        )

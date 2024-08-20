@@ -75,9 +75,16 @@ def test_chat_completion_exception(client):
         print("ERROR=", json_response["error"])
         assert isinstance(json_response["error"]["message"], str)
         assert (
-            json_response["error"]["message"]
-            == "litellm.AuthenticationError: AuthenticationError: OpenAIException - Incorrect API key provided: bad-key. You can find your API key at https://platform.openai.com/account/api-keys."
+            "litellm.AuthenticationError: AuthenticationError: OpenAIException - Incorrect API key provided: bad-key. You can find your API key at https://platform.openai.com/account/api-keys."
+            in json_response["error"]["message"]
         )
+
+        code_in_error = json_response["error"]["code"]
+        # OpenAI SDK required code to be STR, https://github.com/BerriAI/litellm/issues/4970
+        # If we look on official python OpenAI lib, the code should be a string:
+        # https://github.com/openai/openai-python/blob/195c05a64d39c87b2dfdf1eca2d339597f1fce03/src/openai/types/shared/error_object.py#L11
+        # Related LiteLLM issue: https://github.com/BerriAI/litellm/discussions/4834
+        assert type(code_in_error) == str
 
         # make an openai client to call _make_status_error_from_response
         openai_client = openai.OpenAI(api_key="anything")
@@ -222,8 +229,9 @@ def test_chat_completion_exception_any_model(client):
         )
         assert isinstance(openai_exception, openai.BadRequestError)
         _error_message = openai_exception.message
-        assert "chat_completion: Invalid model name passed in model=Lite-GPT-12" in str(
-            _error_message
+        assert (
+            "/chat/completions: Invalid model name passed in model=Lite-GPT-12"
+            in str(_error_message)
         )
 
     except Exception as e:
@@ -252,7 +260,7 @@ def test_embedding_exception_any_model(client):
         print("Exception raised=", openai_exception)
         assert isinstance(openai_exception, openai.BadRequestError)
         _error_message = openai_exception.message
-        assert "embeddings: Invalid model name passed in model=Lite-GPT-12" in str(
+        assert "/embeddings: Invalid model name passed in model=Lite-GPT-12" in str(
             _error_message
         )
 

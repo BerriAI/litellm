@@ -1,0 +1,32 @@
+from typing import Literal
+
+from litellm._logging import verbose_logger
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.types.guardrails import GuardrailEventHooks
+
+
+class CustomGuardrail(CustomLogger):
+
+    def __init__(self, guardrail_name: str, event_hook: GuardrailEventHooks, **kwargs):
+        self.guardrail_name = guardrail_name
+        self.event_hook: GuardrailEventHooks = event_hook
+        super().__init__(**kwargs)
+
+    def should_run_guardrail(self, data, event_type: GuardrailEventHooks) -> bool:
+        verbose_logger.debug(
+            "inside should_run_guardrail for guardrail=%s event_type= %s guardrail_supported_event_hooks= %s",
+            self.guardrail_name,
+            event_type,
+            self.event_hook,
+        )
+
+        metadata = data.get("metadata") or {}
+        requested_guardrails = metadata.get("guardrails") or []
+
+        if self.guardrail_name not in requested_guardrails:
+            return False
+
+        if self.event_hook != event_type:
+            return False
+
+        return True
