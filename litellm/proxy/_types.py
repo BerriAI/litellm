@@ -587,6 +587,7 @@ class GenerateKeyRequest(GenerateRequestBase):
     send_invite_email: Optional[bool] = None
     model_rpm_limit: Optional[dict] = None
     model_tpm_limit: Optional[dict] = None
+    guardrails: Optional[List[str]] = None
 
 
 class GenerateKeyResponse(GenerateKeyRequest):
