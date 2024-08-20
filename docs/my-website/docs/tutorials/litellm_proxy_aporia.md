@@ -61,7 +61,7 @@ guardrails:
 
 - `pre_call` Run **before** LLM call, on **input**
 - `post_call` Run **after** LLM call, on **input & output**
-- `during_call` Run **during** LLM call, on **input**
+- `during_call` Run **during** LLM call, on **input** Same as `pre_call` but runs in parallel as LLM call.  Response not returned until guardrail check completes
 
 ## 3. Start LiteLLM Gateway 
 
@@ -71,6 +71,8 @@ litellm --config config.yaml --detailed_debug
 ```
 
 ## 4. Test request 
+
+**[Langchain, OpenAI SDK Usage Examples](../proxy/user_keys##request-format)**
 
 <Tabs>
 <TabItem label="Unsuccessful call" value = "not-allowed">
@@ -134,12 +136,10 @@ curl -i http://localhost:4000/v1/chat/completions \
 
 </Tabs>
 
-## Advanced
-### Control Guardrails per Project (API Key)
+## 5. Control Guardrails per Project (API Key)
 
-Use this to control what guardrails run per project. In this tutorial we only want the following guardrails to run for 1 project
-- `pre_call_guardrails`: ["aporia-pre-guard"]
-- `post_call_guardrails`: ["aporia-post-guard"]
+Use this to control what guardrails run per project. In this tutorial we only want the following guardrails to run for 1 project (API Key)
+- `guardrails`: ["aporia-pre-guard", "aporia-post-guard"]
 
 **Step 1** Create Key with guardrail settings
 
@@ -151,8 +151,7 @@ curl -X POST 'http://0.0.0.0:4000/key/generate' \
     -H 'Authorization: Bearer sk-1234' \
     -H 'Content-Type: application/json' \
     -D '{
-            "pre_call_guardrails": ["aporia-pre-guard"],
-            "post_call_guardrails": ["aporia"]
+            "guardrails": ["aporia-pre-guard", "aporia-post-guard"]
         }
     }'
 ```
@@ -166,8 +165,7 @@ curl --location 'http://0.0.0.0:4000/key/update' \
     --header 'Content-Type: application/json' \
     --data '{
         "key": "sk-jNm1Zar7XfNdZXp49Z1kSQ",
-        "pre_call_guardrails": ["aporia"],
-        "post_call_guardrails": ["aporia"]
+        "guardrails": ["aporia-pre-guard", "aporia-post-guard"]
         }
 }'
 ```
