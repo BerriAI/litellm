@@ -100,6 +100,40 @@ def convert_key_logging_metadata_to_callback(
     return team_callback_settings_obj
 
 
+def _get_dynamic_logging_metadata(
+    user_api_key_dict: UserAPIKeyAuth,
+) -> Optional[TeamCallbackMetadata]:
+    callback_settings_obj: Optional[TeamCallbackMetadata] = None
+    if user_api_key_dict.team_metadata is not None:
+        team_metadata = user_api_key_dict.team_metadata
+        if "callback_settings" in team_metadata:
+            callback_settings = team_metadata.get("callback_settings", None) or {}
+            callback_settings_obj = TeamCallbackMetadata(**callback_settings)
+            verbose_proxy_logger.debug(
+                "Team callback settings activated: %s", callback_settings_obj
+            )
+            """
+            callback_settings = {
+              {
+                'callback_vars': {'langfuse_public_key': 'pk', 'langfuse_secret_key': 'sk_'}, 
+                'failure_callback': [], 
+                'success_callback': ['langfuse', 'langfuse']
+            }
+            }
+            """
+    elif (
+        user_api_key_dict.metadata is not None
+        and "logging" in user_api_key_dict.metadata
+    ):
+        for item in user_api_key_dict.metadata["logging"]:
+            callback_settings_obj = convert_key_logging_metadata_to_callback(
+                data=AddTeamCallback(**item),
+                team_callback_settings_obj=callback_settings_obj,
+            )
+
+    return callback_settings_obj
+
+
 async def add_litellm_data_to_request(
     data: dict,
     request: Request,
@@ -270,35 +304,9 @@ async def add_litellm_data_to_request(
             }  # add the team-specific configs to the completion call
 
     # Team Callbacks controls
-    callback_settings_obj: Optional[TeamCallbackMetadata] = None
-    if user_api_key_dict.team_metadata is not None:
-        team_metadata = user_api_key_dict.team_metadata
-        if "callback_settings" in team_metadata:
-            callback_settings = team_metadata.get("callback_settings", None) or {}
-            callback_settings_obj = TeamCallbackMetadata(**callback_settings)
-            verbose_proxy_logger.debug(
-                "Team callback settings activated: %s", callback_settings_obj
-            )
-            """
-            callback_settings = {
-              {
-                'callback_vars': {'langfuse_public_key': 'pk', 'langfuse_secret_key': 'sk_'}, 
-                'failure_callback': [], 
-                'success_callback': ['langfuse', 'langfuse']
-            }
-            }
-            """
-    elif (
-        user_api_key_dict.metadata is not None
-        and "logging" in user_api_key_dict.metadata
-    ):
-        for item in user_api_key_dict.metadata["logging"]:
-
-            callback_settings_obj = convert_key_logging_metadata_to_callback(
-                data=AddTeamCallback(**item),
-                team_callback_settings_obj=callback_settings_obj,
-            )
-
+    callback_settings_obj = _get_dynamic_logging_metadata(
+        user_api_key_dict=user_api_key_dict
+    )
     if callback_settings_obj is not None:
         data["success_callback"] = callback_settings_obj.success_callback
         data["failure_callback"] = callback_settings_obj.failure_callback
