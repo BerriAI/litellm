@@ -118,17 +118,19 @@ def initialize_callbacks_on_proxy(
                     **init_params
                 )
                 imported_list.append(lakera_moderations_object)
-            elif isinstance(callback, str) and callback == "aporio_prompt_injection":
-                from enterprise.enterprise_hooks.aporio_ai import _ENTERPRISE_Aporio
+            elif isinstance(callback, str) and callback == "aporia_prompt_injection":
+                from litellm.proxy.guardrails.guardrail_hooks.aporia_ai import (
+                    _ENTERPRISE_Aporia,
+                )
 
                 if premium_user is not True:
                     raise Exception(
-                        "Trying to use Aporio AI Guardrail"
+                        "Trying to use Aporia AI Guardrail"
                         + CommonProxyErrors.not_premium_user.value
                     )
 
-                aporio_guardrail_object = _ENTERPRISE_Aporio()
-                imported_list.append(aporio_guardrail_object)
+                aporia_guardrail_object = _ENTERPRISE_Aporia()
+                imported_list.append(aporia_guardrail_object)
             elif isinstance(callback, str) and callback == "google_text_moderation":
                 from enterprise.enterprise_hooks.google_text_moderation import (
                     _ENTERPRISE_GoogleTextModeration,
@@ -295,3 +297,21 @@ def get_remaining_tokens_and_requests_from_request_data(data: Dict) -> Dict[str,
         headers[f"x-litellm-key-remaining-tokens-{model_group}"] = remaining_tokens
 
     return headers
+
+
+def get_applied_guardrails_header(request_data: Dict) -> Optional[Dict]:
+    _metadata = request_data.get("metadata", None) or {}
+    if "applied_guardrails" in _metadata:
+        return {
+            "x-litellm-applied-guardrails": ",".join(_metadata["applied_guardrails"]),
+        }
+
+    return None
+
+
+def add_guardrail_to_applied_guardrails_header(request_data: Dict, guardrail_name: str):
+    _metadata = request_data.get("metadata", None) or {}
+    if "applied_guardrails" in _metadata:
+        _metadata["applied_guardrails"].append(guardrail_name)
+    else:
+        _metadata["applied_guardrails"] = [guardrail_name]
