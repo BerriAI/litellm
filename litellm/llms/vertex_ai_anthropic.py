@@ -7,7 +7,7 @@ import time
 import types
 import uuid
 from enum import Enum
-from typing import Any, Callable, List, Optional, Tuple
+from typing import Any, Callable, List, Optional, Tuple, Union
 
 import httpx  # type: ignore
 import requests  # type: ignore
@@ -15,7 +15,14 @@ import requests  # type: ignore
 import litellm
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.types.llms.anthropic import AnthropicMessagesToolChoice
+from litellm.types.llms.anthropic import (
+    AnthropicMessagesTool,
+    AnthropicMessagesToolChoice,
+)
+from litellm.types.llms.openai import (
+    ChatCompletionToolParam,
+    ChatCompletionToolParamFunctionChunk,
+)
 from litellm.types.utils import ResponseFormatChunk
 from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
 
@@ -141,8 +148,33 @@ class VertexAIAnthropicConfig:
                 optional_params["temperature"] = value
             if param == "top_p":
                 optional_params["top_p"] = value
-            if param == "response_format" and "response_schema" in value:
-                optional_params["response_format"] = ResponseFormatChunk(**value)  # type: ignore
+            if param == "response_format" and isinstance(value, dict):
+                json_schema: Optional[dict] = None
+                if "response_schema" in value:
+                    json_schema = value["response_schema"]
+                elif "json_schema" in value:
+                    json_schema = value["json_schema"]["schema"]
+                """
+                When using tools in this way: - https://docs.anthropic.com/en/docs/build-with-claude/tool-use#json-mode
+                - You usually want to provide a single tool
+                - You should set tool_choice (see Forcing tool use) to instruct the model to explicitly use that tool
+                - Remember that the model will pass the input to the tool, so the name of the tool and description should be from the model’s perspective.
+                """
+                _tool_choice = None
+                _tool_choice = {"name": "json_tool_call", "type": "tool"}
+
+                _tool = AnthropicMessagesTool(
+                    name="json_tool_call",
+                    input_schema={
+                        "type": "object",
+                        "properties": {"values": json_schema},  # type: ignore
+                    },
+                )
+
+                optional_params["tools"] = [_tool]
+                optional_params["tool_choice"] = _tool_choice
+                optional_params["json_mode"] = True
+
         return optional_params
 
 
@@ -222,6 +254,7 @@ def completion(
     optional_params: dict,
     custom_prompt_dict: dict,
     headers: Optional[dict],
+    timeout: Union[float, httpx.Timeout],
     vertex_project=None,
     vertex_location=None,
     vertex_credentials=None,
@@ -301,6 +334,8 @@ def completion(
             litellm_params=litellm_params,
             logger_fn=logger_fn,
             headers=vertex_headers,
+            client=client,
+            timeout=timeout,
         )
 
     except Exception as e:
@@ -367,8 +402,8 @@ async def async_completion(
     prompt_tokens = message.usage.input_tokens
     completion_tokens = message.usage.output_tokens
 
-    model_response["created"] = int(time.time())
-    model_response["model"] = model
+    model_response.created = int(time.time())
+    model_response.model = model
     usage = Usage(
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,

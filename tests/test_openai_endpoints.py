@@ -7,6 +7,9 @@ from openai import OpenAI, AsyncOpenAI
 from typing import Optional, List, Union
 
 
+LITELLM_MASTER_KEY = "sk-1234"
+
+
 def response_header_check(response):
     """
     - assert if response headers < 4kb (nginx limit).
@@ -116,7 +119,9 @@ async def chat_completion(session, key, model: Union[str, List] = "gpt-4"):
         print()
 
         if status != 200:
-            raise Exception(f"Request did not return a 200 status code: {status}")
+            raise Exception(
+                f"Request did not return a 200 status code: {status}, response text={response_text}"
+            )
 
         response_header_check(
             response
@@ -465,6 +470,28 @@ async def test_openai_wildcard_chat_completion():
 
         # call chat/completions with a model that the key was not created for + the model is not on the config.yaml
         await chat_completion(session=session, key=key, model="gpt-3.5-turbo-0125")
+
+
+@pytest.mark.asyncio
+async def test_proxy_all_models():
+    """
+    - proxy_server_config.yaml has model = * / *
+    - Make chat completion call
+    - groq is NOT defined on /models
+
+
+    """
+    async with aiohttp.ClientSession() as session:
+        # call chat/completions with a model that the key was not created for + the model is not on the config.yaml
+        await chat_completion(
+            session=session, key=LITELLM_MASTER_KEY, model="groq/llama3-8b-8192"
+        )
+
+        await chat_completion(
+            session=session,
+            key=LITELLM_MASTER_KEY,
+            model="anthropic/claude-3-sonnet-20240229",
+        )
 
 
 @pytest.mark.asyncio

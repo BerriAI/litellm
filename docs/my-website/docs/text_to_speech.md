@@ -110,3 +110,32 @@ response = speech(
     )
 response.stream_to_file(speech_file_path)
 ```
+
+## ✨ Enterprise LiteLLM Proxy - Set Max Request File Size 
+
+Use this when you want to limit the file size for requests sent to `audio/transcriptions`
+
+```yaml
+- model_name: whisper
+  litellm_params:
+    model: whisper-1
+    api_key: sk-*******
+    max_file_size_mb: 0.00001 # 👈 max file size in MB  (Set this intentionally very small for testing)
+  model_info:
+    mode: audio_transcription
+```
+
+Make a test Request with a valid file
+```shell
+curl --location 'http://localhost:4000/v1/audio/transcriptions' \
+--header 'Authorization: Bearer sk-1234' \
+--form 'file=@"/Users/ishaanjaffer/Github/litellm/tests/gettysburg.wav"' \
+--form 'model="whisper"'
+```
+
+
+Expect to see the follow response 
+
+```shell
+{"error":{"message":"File size is too large. Please check your file size. Passed file size: 0.7392807006835938 MB. Max file size: 0.0001 MB","type":"bad_request","param":"file","code":500}}%  
+```

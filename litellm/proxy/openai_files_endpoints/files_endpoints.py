@@ -34,6 +34,37 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 router = APIRouter()
 
+files_config = None
+
+
+def set_files_config(config):
+    global files_config
+    if config is None:
+        return
+
+    if not isinstance(config, list):
+        raise ValueError("invalid files config, expected a list is not a list")
+
+    for element in config:
+        if isinstance(element, dict):
+            for key, value in element.items():
+                if isinstance(value, str) and value.startswith("os.environ/"):
+                    element[key] = litellm.get_secret(value)
+
+    files_config = config
+
+
+def get_files_provider_config(
+    custom_llm_provider: str,
+):
+    global files_config
+    if files_config is None:
+        raise ValueError("files_config is not set, set it on your config.yaml file.")
+    for setting in files_config:
+        if setting.get("custom_llm_provider") == custom_llm_provider:
+            return setting
+    return None
+
 
 @router.post(
     "/v1/files",
@@ -49,6 +80,7 @@ async def create_file(
     request: Request,
     fastapi_response: Response,
     purpose: str = Form(...),
+    custom_llm_provider: str = Form(default="openai"),
     file: UploadFile = File(...),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
@@ -100,10 +132,16 @@ async def create_file(
 
         _create_file_request = CreateFileRequest(file=file_data, **data)
 
-        # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
-        response = await litellm.acreate_file(
-            custom_llm_provider="openai", **_create_file_request
+        # get configs for custom_llm_provider
+        llm_provider_config = get_files_provider_config(
+            custom_llm_provider=custom_llm_provider
         )
+
+        # add llm_provider_config to data
+        _create_file_request.update(llm_provider_config)
+
+        # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
+        response = await litellm.acreate_file(**_create_file_request)
 
         ### ALERTING ###
         asyncio.create_task(

@@ -212,7 +212,9 @@ def completion(
     headers = validate_environment(api_key)
     completion_url = api_base
     model = model
-    most_recent_message, chat_history = cohere_messages_pt_v2(messages=messages)
+    most_recent_message, chat_history = cohere_messages_pt_v2(
+        messages=messages, model=model, llm_provider="cohere_chat"
+    )
 
     ## Load Config
     config = litellm.CohereConfig.get_config()
@@ -231,8 +233,14 @@ def completion(
         optional_params["tool_results"] = [most_recent_message]
     elif isinstance(most_recent_message, str):
         optional_params["message"] = most_recent_message
+
+    ## check if chat history message is 'user' and 'tool_results' is given -> force_single_step=True, else cohere api fails
+    if len(chat_history) > 0 and chat_history[-1]["role"] == "USER":
+        optional_params["force_single_step"] = True
+
     data = {
         "model": model,
+        "chat_history": chat_history,
         **optional_params,
     }
 
@@ -305,8 +313,8 @@ def completion(
         prompt_tokens = billed_units.get("input_tokens", 0)
         completion_tokens = billed_units.get("output_tokens", 0)
 
-        model_response["created"] = int(time.time())
-        model_response["model"] = model
+        model_response.created = int(time.time())
+        model_response.model = model
         usage = Usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,

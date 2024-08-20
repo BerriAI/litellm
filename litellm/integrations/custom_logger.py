@@ -2,7 +2,7 @@
 #    On success, logs events to Promptlayer
 import os
 import traceback
-from typing import Literal, Optional, Union
+from typing import Any, Literal, Optional, Tuple, Union
 
 import dotenv
 from pydantic import BaseModel
@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from litellm.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.llms.openai import ChatCompletionRequest
-from litellm.types.utils import ModelResponse
+from litellm.types.utils import AdapterCompletionStreamWrapper, ModelResponse
 
 
 class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callback#callback-class
@@ -58,6 +58,13 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     def pre_call_check(self, deployment: dict) -> Optional[dict]:
         pass
 
+    #### Fallback Events - router/proxy only ####
+    async def log_success_fallback_event(self, original_model_group: str, kwargs: dict):
+        pass
+
+    async def log_failure_fallback_event(self, original_model_group: str, kwargs: dict):
+        pass
+
     #### ADAPTERS #### Allow calling 100+ LLMs in custom format - https://github.com/BerriAI/litellm/pulls
 
     def translate_completion_input_params(
@@ -76,7 +83,9 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         """
         pass
 
-    def translate_completion_output_params_streaming(self) -> Optional[BaseModel]:
+    def translate_completion_output_params_streaming(
+        self, completion_stream: Any
+    ) -> Optional[AdapterCompletionStreamWrapper]:
         """
         Translates the streaming chunk, from the OpenAI format to the custom format.
         """
@@ -99,6 +108,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
             "image_generation",
             "moderation",
             "audio_transcription",
+            "pass_through_endpoint",
         ],
     ) -> Optional[
         Union[Exception, str, dict]
@@ -112,10 +122,23 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
 
     async def async_post_call_success_hook(
         self,
+        data: dict,
         user_api_key_dict: UserAPIKeyAuth,
         response,
     ):
         pass
+
+    async def async_logging_hook(
+        self, kwargs: dict, result: Any, call_type: str
+    ) -> Tuple[dict, Any]:
+        """For masking logged request/response. Return a modified version of the request/result."""
+        return kwargs, result
+
+    def logging_hook(
+        self, kwargs: dict, result: Any, call_type: str
+    ) -> Tuple[dict, Any]:
+        """For masking logged request/response. Return a modified version of the request/result."""
+        return kwargs, result
 
     async def async_moderation_hook(
         self,

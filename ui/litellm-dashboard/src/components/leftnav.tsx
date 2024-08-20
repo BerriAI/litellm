@@ -31,6 +31,12 @@ const Sidebar: React.FC<SidebarProps> = ({
             <Menu.Item key="1" onClick={() => setPage("usage")}>
               Usage
             </Menu.Item>
+            <Menu.Item key="6" onClick={() => setPage("teams")}>
+              <Text>Teams</Text>
+            </Menu.Item>
+            <Menu.Item key="9" onClick={() => setPage("caching")}>
+              <Text>Caching</Text>
+            </Menu.Item>
           </Menu>
         </Sider>
       </Layout>
@@ -45,7 +51,7 @@ const Sidebar: React.FC<SidebarProps> = ({
           style={{ height: "100%", borderRight: 0 }}
         >
           <Menu.Item key="1" onClick={() => setPage("api-keys")}>
-            <Text>API Keys</Text>
+            <Text>Virtual Keys</Text>
           </Menu.Item>
           <Menu.Item key="3" onClick={() => setPage("llm-playground")}>
             <Text>Test Key</Text>
@@ -96,15 +102,21 @@ const Sidebar: React.FC<SidebarProps> = ({
               <Text>Router Settings</Text>
             </Menu.Item>
           ) : null}
+          
           {userRole == "Admin" ? (
-            <Menu.Item key="12" onClick={() => setPage("admin-panel")}>
+            <Menu.Item key="12" onClick={() => setPage("pass-through-settings")}>
+              <Text>Pass-Through</Text>
+            </Menu.Item>
+          ) : null}
+          {userRole == "Admin" ? (
+            <Menu.Item key="13" onClick={() => setPage("admin-panel")}>
               <Text>Admin Settings</Text>
             </Menu.Item>
           ) : null}
-          <Menu.Item key="13" onClick={() => setPage("api_ref")}>
+          <Menu.Item key="14" onClick={() => setPage("api_ref")}>
             <Text>API Reference</Text>
           </Menu.Item>
-          <Menu.Item key="15" onClick={() => setPage("model-hub")}>
+          <Menu.Item key="16" onClick={() => setPage("model-hub")}>
             <Text>Model Hub</Text>
           </Menu.Item>
         </Menu>

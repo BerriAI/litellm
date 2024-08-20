@@ -1,6 +1,6 @@
 import Image from '@theme/IdealImage';
 
-# ✨ 📧 Email Notifications 
+# Email Notifications 
 
 Send an Email to your users when:
 - A Proxy API Key is created for them 

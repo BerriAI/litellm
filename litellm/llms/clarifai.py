@@ -1,13 +1,18 @@
-import os, types, traceback
 import json
-import requests
+import os
 import time
+import traceback
+import types
 from typing import Callable, Optional
-from litellm.utils import ModelResponse, Usage, Choices, Message, CustomStreamWrapper
-import litellm
+
 import httpx
+import requests
+
+import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from .prompt_templates.factory import prompt_factory, custom_prompt
+from litellm.utils import Choices, CustomStreamWrapper, Message, ModelResponse, Usage
+
+from .prompt_templates.factory import custom_prompt, prompt_factory
 
 
 class ClarifaiError(Exception):
@@ -87,7 +92,14 @@ def completions_to_model(payload):
 
 
 def process_response(
-    model, prompt, response, model_response, api_key, data, encoding, logging_obj
+    model,
+    prompt,
+    response,
+    model_response: litellm.ModelResponse,
+    api_key,
+    data,
+    encoding,
+    logging_obj,
 ):
     logging_obj.post_call(
         input=prompt,
@@ -116,7 +128,7 @@ def process_response(
                 message=message_obj,
             )
             choices_list.append(choice_obj)
-        model_response["choices"] = choices_list
+        model_response.choices = choices_list  # type: ignore
 
     except Exception as e:
         raise ClarifaiError(
@@ -128,18 +140,21 @@ def process_response(
     completion_tokens = len(
         encoding.encode(model_response["choices"][0]["message"].get("content"))
     )
-    model_response["model"] = model
-    model_response["usage"] = Usage(
-        prompt_tokens=prompt_tokens,
-        completion_tokens=completion_tokens,
-        total_tokens=prompt_tokens + completion_tokens,
+    model_response.model = model
+    setattr(
+        model_response,
+        "usage",
+        Usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens,
+        ),
     )
     return model_response
 
 
 def convert_model_to_url(model: str, api_base: str):
     user_id, app_id, model_id = model.split(".")
-    model_id = model_id.lower()
     return f"{api_base}/users/{user_id}/apps/{app_id}/models/{model_id}/outputs"
 
 
@@ -202,7 +217,7 @@ async def async_completion(
                 message=message_obj,
             )
             choices_list.append(choice_obj)
-        model_response["choices"] = choices_list
+        model_response.choices = choices_list  # type: ignore
 
     except Exception as e:
         raise ClarifaiError(
@@ -214,11 +229,15 @@ async def async_completion(
     completion_tokens = len(
         encoding.encode(model_response["choices"][0]["message"].get("content"))
     )
-    model_response["model"] = model
-    model_response["usage"] = Usage(
-        prompt_tokens=prompt_tokens,
-        completion_tokens=completion_tokens,
-        total_tokens=prompt_tokens + completion_tokens,
+    model_response.model = model
+    setattr(
+        model_response,
+        "usage",
+        Usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens,
+        ),
     )
     return model_response
 

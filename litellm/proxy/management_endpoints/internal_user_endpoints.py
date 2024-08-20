@@ -27,7 +27,12 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.key_management_endpoints import (
+    _duration_in_seconds,
     generate_key_helper_fn,
+)
+from litellm.proxy.management_helpers.utils import (
+    add_new_member,
+    management_endpoint_wrapper,
 )
 
 router = APIRouter()
@@ -39,7 +44,11 @@ router = APIRouter()
     dependencies=[Depends(user_api_key_auth)],
     response_model=NewUserResponse,
 )
-async def new_user(data: NewUserRequest):
+@management_endpoint_wrapper
+async def new_user(
+    data: NewUserRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     """
     Use this to create a new INTERNAL user with a budget.
     Internal Users can access LiteLLM Admin UI to make keys, request access to models.
@@ -78,6 +87,18 @@ async def new_user(data: NewUserRequest):
         data_json["table_name"] = (
             "user"  # only create a user, don't create key if 'auto_create_key' set to False
         )
+
+    is_internal_user = False
+    if data.user_role == LitellmUserRoles.INTERNAL_USER:
+        is_internal_user = True
+
+    if "max_budget" in data_json and data_json["max_budget"] is None:
+        if is_internal_user and litellm.max_internal_user_budget is not None:
+            data_json["max_budget"] = litellm.max_internal_user_budget
+
+    if "budget_duration" in data_json and data_json["budget_duration"] is None:
+        if is_internal_user and litellm.internal_user_budget_duration is not None:
+            data_json["budget_duration"] = litellm.internal_user_budget_duration
 
     response = await generate_key_helper_fn(request_type="user", **data_json)
 
@@ -254,6 +275,7 @@ async def ui_get_available_role(
     tags=["Internal User management"],
     dependencies=[Depends(user_api_key_auth)],
 )
+@management_endpoint_wrapper
 async def user_info(
     user_id: Optional[str] = fastapi.Query(
         default=None, description="User ID in the request parameters"
@@ -290,12 +312,12 @@ async def user_info(
     try:
         if prisma_client is None:
             raise Exception(
-                f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
+                "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
         ## GET USER ROW ##
         if user_id is not None:
             user_info = await prisma_client.get_data(user_id=user_id)
-        elif view_all == True:
+        elif view_all is True:
             if page is None:
                 page = 0
             if page_size is None:
@@ -343,10 +365,13 @@ async def user_info(
                 getattr(caller_user_info, "user_role", None)
                 == LitellmUserRoles.PROXY_ADMIN
             ):
-                teams_2 = await prisma_client.get_data(
-                    table_name="team",
-                    query_type="find_all",
-                    team_id_list=None,
+                from litellm.proxy.management_endpoints.team_endpoints import list_team
+
+                teams_2 = await list_team(
+                    http_request=Request(
+                        scope={"type": "http", "path": "/user/info"},
+                    ),
+                    user_api_key_dict=user_api_key_dict,
                 )
             else:
                 teams_2 = await prisma_client.get_data(
@@ -441,7 +466,11 @@ async def user_info(
     tags=["Internal User management"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def user_update(data: UpdateUserRequest):
+@management_endpoint_wrapper
+async def user_update(
+    data: UpdateUserRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     """
     Example curl 
 
@@ -474,6 +503,13 @@ async def user_update(data: UpdateUserRequest):
                 0,
             ):  # models default to [], spend defaults to 0, we should not reset these values
                 non_default_values[k] = v
+
+        if "budget_duration" in non_default_values:
+            duration_s = _duration_in_seconds(
+                duration=non_default_values["budget_duration"]
+            )
+            user_reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
+            non_default_values["budget_reset_at"] = user_reset_at
 
         ## ADD USER, IF NEW ##
         verbose_proxy_logger.debug("/user/update: Received data = %s", data)
@@ -683,6 +719,7 @@ async def get_users(
     tags=["Internal User management"],
     dependencies=[Depends(user_api_key_auth)],
 )
+@management_endpoint_wrapper
 async def delete_user(
     data: DeleteUserRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -763,6 +800,11 @@ async def delete_user(
 
     ## DELETE ASSOCIATED KEYS
     await prisma_client.db.litellm_verificationtoken.delete_many(
+        where={"user_id": {"in": data.user_ids}}
+    )
+
+    ## DELETE ASSOCIATED INVITATION LINKS
+    await prisma_client.db.litellm_invitationlink.delete_many(
         where={"user_id": {"in": data.user_ids}}
     )
 

@@ -1,5 +1,9 @@
 # Helm Chart for LiteLLM
 
+> [!IMPORTANT]
+> This is community maintained, Please make an issue if you run into a bug
+> We recommend using [Docker or Kubernetes for production deployments](https://docs.litellm.ai/docs/proxy/prod)
+
 ## Prerequisites
 
 - Kubernetes 1.21+
