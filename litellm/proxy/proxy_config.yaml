@@ -15,7 +15,7 @@ guardrails:
   - guardrail_name: "lakera-pre-guard"
     litellm_params:
       guardrail: lakera  # supported values: "aporia", "bedrock", "lakera"
-      mode: "pre_call"
+      mode: "during_call"
       api_key: os.environ/LAKERA_API_KEY
       api_base: os.environ/LAKERA_API_BASE
   

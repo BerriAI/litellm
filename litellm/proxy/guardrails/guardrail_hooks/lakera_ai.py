@@ -301,8 +301,9 @@ class lakeraAI_Moderation(CustomGuardrail):
         user_api_key_dict: UserAPIKeyAuth,
         call_type: Literal["completion", "embeddings", "image_generation"],
     ):
-        if self.moderation_check == "pre_call":
-            return
+        if self.event_hook is None:
+            if self.moderation_check == "pre_call":
+                return
 
         from litellm.types.guardrails import GuardrailEventHooks
 
