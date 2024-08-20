@@ -1187,7 +1187,7 @@ async def test_router_content_policy_fallbacks(
     assert response.model == "my-fake-model"
 
 
-@pytest.mark.parametrize("sync_mode", [False])
+@pytest.mark.parametrize("sync_mode", [False, True])
 @pytest.mark.asyncio
 async def test_using_default_fallback(sync_mode):
     """
