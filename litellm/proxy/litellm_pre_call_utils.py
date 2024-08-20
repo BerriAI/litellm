@@ -170,6 +170,19 @@ async def add_litellm_data_to_request(
         "body": copy.copy(data),  # use copy instead of deepcopy
     }
 
+    ## Dynamic api version (Azure OpenAI endpoints) ##
+    try:
+        query_params = request.query_params
+        # Convert query parameters to a dictionary (optional)
+        query_dict = dict(query_params)
+    except KeyError:
+        query_dict = {}
+
+    ## check for api version in query params
+    dynamic_api_version: Optional[str] = query_dict.get("api-version")
+
+    data["api_version"] = dynamic_api_version
+
     ## Forward any LLM API Provider specific headers in extra_headers
     add_provider_specific_headers_to_request(data=data, headers=_headers)
 

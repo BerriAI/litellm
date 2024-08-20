@@ -144,7 +144,6 @@ async def test_no_llm_guard_triggered():
 
         assert "x-litellm-applied-guardrails" not in headers
 
-
 @pytest.mark.asyncio
 async def test_guardrails_with_api_key_controls():
     """

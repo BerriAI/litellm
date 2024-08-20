@@ -104,7 +104,7 @@ from .llms import (
 )
 from .llms.anthropic import AnthropicChatCompletion
 from .llms.anthropic_text import AnthropicTextCompletion
-from .llms.azure import AzureChatCompletion
+from .llms.azure import AzureChatCompletion, _check_dynamic_azure_params
 from .llms.azure_text import AzureTextCompletion
 from .llms.bedrock_httpx import BedrockConverseLLM, BedrockLLM
 from .llms.custom_llm import CustomLLM, custom_chat_llm_router
@@ -967,6 +967,17 @@ def completion(
 
         if custom_llm_provider == "azure":
             # azure configs
+            ## check dynamic params ##
+            dynamic_params = False
+            if client is not None and (
+                isinstance(client, openai.AzureOpenAI)
+                or isinstance(client, openai.AsyncAzureOpenAI)
+            ):
+                dynamic_params = _check_dynamic_azure_params(
+                    azure_client_params={"api_version": api_version},
+                    azure_client=client,
+                )
+
             api_type = get_secret("AZURE_API_TYPE") or "azure"
 
             api_base = api_base or litellm.api_base or get_secret("AZURE_API_BASE")
@@ -1006,6 +1017,7 @@ def completion(
                 api_base=api_base,
                 api_version=api_version,
                 api_type=api_type,
+                dynamic_params=dynamic_params,
                 azure_ad_token=azure_ad_token,
                 model_response=model_response,
                 print_verbose=print_verbose,
