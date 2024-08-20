@@ -39,6 +39,7 @@ from litellm.batches.main import FileObject
 from litellm.fine_tuning.main import vertex_fine_tuning_apis_instance
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.litellm_pre_call_utils import _get_dynamic_logging_metadata
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     create_pass_through_route,
 )
@@ -71,13 +72,36 @@ async def langfuse_proxy_route(
 
     decoded_bytes = base64.b64decode(api_key)
     decoded_str = decoded_bytes.decode("utf-8")
-    api_key = decoded_str.split(":")[1]
+    api_key = decoded_str.split(":")[1]  # assume api key is passed in as secret key
 
     user_api_key_dict = await user_api_key_auth(
         request=request, api_key="Bearer {}".format(api_key)
     )
 
-    base_target_url = os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
+    callback_settings_obj: Optional[TeamCallbackMetadata] = (
+        _get_dynamic_logging_metadata(user_api_key_dict=user_api_key_dict)
+    )
+
+    dynamic_langfuse_public_key: Optional[str] = None
+    dynamic_langfuse_secret_key: Optional[str] = None
+    dynamic_langfuse_host: Optional[str] = None
+    if (
+        callback_settings_obj is not None
+        and callback_settings_obj.callback_vars is not None
+    ):
+        for k, v in callback_settings_obj.callback_vars.items():
+            if k == "langfuse_public_key":
+                dynamic_langfuse_public_key = v
+            elif k == "langfuse_secret_key":
+                dynamic_langfuse_secret_key = v
+            elif k == "langfuse_host":
+                dynamic_langfuse_host = v
+
+    base_target_url: str = (
+        dynamic_langfuse_host
+        or os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
+        or "https://cloud.langfuse.com"
+    )
     if not (
         base_target_url.startswith("http://") or base_target_url.startswith("https://")
     ):
@@ -95,8 +119,12 @@ async def langfuse_proxy_route(
     updated_url = base_url.copy_with(path=encoded_endpoint)
 
     # Add or update query parameters
-    langfuse_public_key = litellm.utils.get_secret(secret_name="LANGFUSE_PUBLIC_KEY")
-    langfuse_secret_key = litellm.utils.get_secret(secret_name="LANGFUSE_SECRET_KEY")
+    langfuse_public_key = dynamic_langfuse_public_key or litellm.utils.get_secret(
+        secret_name="LANGFUSE_PUBLIC_KEY"
+    )
+    langfuse_secret_key = dynamic_langfuse_secret_key or litellm.utils.get_secret(
+        secret_name="LANGFUSE_SECRET_KEY"
+    )
 
     langfuse_combined_key = "Basic " + b64encode(
         f"{langfuse_public_key}:{langfuse_secret_key}".encode("utf-8")
