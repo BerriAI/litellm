@@ -1,6 +1,6 @@
 # +-------------------------------------------------------------+
 #
-#           Use AporioAI for your LLM calls
+#           Use AporiaAI for your LLM calls
 #
 # +-------------------------------------------------------------+
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
@@ -33,18 +33,18 @@ from litellm.types.guardrails import GuardrailEventHooks
 
 litellm.set_verbose = True
 
-GUARDRAIL_NAME = "aporio"
+GUARDRAIL_NAME = "aporia"
 
 
-class _ENTERPRISE_Aporio(CustomGuardrail):
+class _ENTERPRISE_Aporia(CustomGuardrail):
     def __init__(
         self, api_key: Optional[str] = None, api_base: Optional[str] = None, **kwargs
     ):
         self.async_handler = AsyncHTTPHandler(
             timeout=httpx.Timeout(timeout=600.0, connect=5.0)
         )
-        self.aporio_api_key = api_key or os.environ["APORIO_API_KEY"]
-        self.aporio_api_base = api_base or os.environ["APORIO_API_BASE"]
+        self.aporia_api_key = api_key or os.environ["APORIO_API_KEY"]
+        self.aporia_api_base = api_base or os.environ["APORIO_API_BASE"]
         self.event_hook: GuardrailEventHooks
 
         super().__init__(**kwargs)
@@ -114,10 +114,10 @@ class _ENTERPRISE_Aporio(CustomGuardrail):
         """
 
         response = await self.async_handler.post(
-            url=self.aporio_api_base + "/validate",
+            url=self.aporia_api_base + "/validate",
             data=_json_data,
             headers={
-                "X-APORIA-API-KEY": self.aporio_api_key,
+                "X-APORIA-API-KEY": self.aporia_api_key,
                 "Content-Type": "application/json",
             },
         )
@@ -133,7 +133,7 @@ class _ENTERPRISE_Aporio(CustomGuardrail):
                     status_code=400,
                     detail={
                         "error": "Violated guardrail policy",
-                        "aporio_ai_response": _json_response,
+                        "aporia_ai_response": _json_response,
                     },
                 )
 
