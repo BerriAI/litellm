@@ -613,6 +613,10 @@ class Huggingface(BaseLLM):
                 },
             )
             ## COMPLETION CALL
+
+            # SSL certificates (a.k.a CA bundle) used to verify the identity of requested hosts.
+            ssl_verify = os.getenv("SSL_VERIFY", litellm.ssl_verify)
+
             if acompletion is True:
                 ### ASYNC STREAMING
                 if optional_params.get("stream", False):
@@ -627,12 +631,16 @@ class Huggingface(BaseLLM):
                     headers=headers,
                     data=json.dumps(data),
                     stream=optional_params["stream"],
+                    verify=ssl_verify
                 )
                 return response.iter_lines()
             ### SYNC COMPLETION
             else:
                 response = requests.post(
-                    completion_url, headers=headers, data=json.dumps(data)
+                    completion_url,
+                    headers=headers,
+                    data=json.dumps(data),
+                    verify=ssl_verify
                 )
 
                 ## Some servers might return streaming responses even though stream was not set to true. (e.g. Baseten)
@@ -728,9 +736,12 @@ class Huggingface(BaseLLM):
         optional_params: dict,
         timeout: float,
     ):
+        # SSL certificates (a.k.a CA bundle) used to verify the identity of requested hosts.
+        ssl_verify = os.getenv("SSL_VERIFY", litellm.ssl_verify)
+
         response = None
         try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
+            async with httpx.AsyncClient(timeout=timeout, verify=ssl_verify) as client:
                 response = await client.post(url=api_base, json=data, headers=headers)
                 response_json = response.json()
                 if response.status_code != 200:
@@ -782,7 +793,10 @@ class Huggingface(BaseLLM):
         model: str,
         timeout: float,
     ):
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        # SSL certificates (a.k.a CA bundle) used to verify the identity of requested hosts.
+        ssl_verify = os.getenv("SSL_VERIFY", litellm.ssl_verify)
+
+        async with httpx.AsyncClient(timeout=timeout, verify=ssl_verify) as client:
             response = client.stream(
                 "POST", url=f"{api_base}", json=data, headers=headers
             )
