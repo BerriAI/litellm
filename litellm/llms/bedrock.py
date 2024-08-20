@@ -605,6 +605,9 @@ def init_bedrock_client(
         aws_web_identity_token,
     ) = params_to_check
 
+    # SSL certificates (a.k.a CA bundle) used to verify the identity of requested hosts.
+    ssl_verify = os.getenv("SSL_VERIFY", litellm.ssl_verify)
+
     ### SET REGION NAME
     if region_name:
         pass
@@ -673,6 +676,7 @@ def init_bedrock_client(
             region_name=region_name,
             endpoint_url=endpoint_url,
             config=config,
+            verify=ssl_verify,
         )
     elif aws_role_name is not None and aws_session_name is not None:
         # use sts if role name passed in
@@ -694,6 +698,7 @@ def init_bedrock_client(
             region_name=region_name,
             endpoint_url=endpoint_url,
             config=config,
+            verify=ssl_verify,
         )
     elif aws_access_key_id is not None:
         # uses auth params passed to completion
@@ -706,6 +711,7 @@ def init_bedrock_client(
             region_name=region_name,
             endpoint_url=endpoint_url,
             config=config,
+            verify=ssl_verify,
         )
     elif aws_profile_name is not None:
         # uses auth values from AWS profile usually stored in ~/.aws/credentials
@@ -715,6 +721,7 @@ def init_bedrock_client(
             region_name=region_name,
             endpoint_url=endpoint_url,
             config=config,
+            verify=ssl_verify,
         )
     else:
         # aws_access_key_id is None, assume user is trying to auth using env variables
@@ -725,6 +732,7 @@ def init_bedrock_client(
             region_name=region_name,
             endpoint_url=endpoint_url,
             config=config,
+            verify=ssl_verify,
         )
     if extra_headers:
         client.meta.events.register(
