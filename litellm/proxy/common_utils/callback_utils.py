@@ -101,9 +101,7 @@ def initialize_callbacks_on_proxy(
                 openai_moderations_object = _ENTERPRISE_OpenAI_Moderation()
                 imported_list.append(openai_moderations_object)
             elif isinstance(callback, str) and callback == "lakera_prompt_injection":
-                from enterprise.enterprise_hooks.lakera_ai import (
-                    _ENTERPRISE_lakeraAI_Moderation,
-                )
+                from enterprise.enterprise_hooks.lakera_ai import lakeraAI_Moderation
 
                 if premium_user != True:
                     raise Exception(
@@ -114,9 +112,7 @@ def initialize_callbacks_on_proxy(
                 init_params = {}
                 if "lakera_prompt_injection" in callback_specific_params:
                     init_params = callback_specific_params["lakera_prompt_injection"]
-                lakera_moderations_object = _ENTERPRISE_lakeraAI_Moderation(
-                    **init_params
-                )
+                lakera_moderations_object = lakeraAI_Moderation(**init_params)
                 imported_list.append(lakera_moderations_object)
             elif isinstance(callback, str) and callback == "aporia_prompt_injection":
                 from litellm.proxy.guardrails.guardrail_hooks.aporia_ai import (
