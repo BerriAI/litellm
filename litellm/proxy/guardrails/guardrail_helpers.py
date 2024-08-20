@@ -1,9 +1,15 @@
+import os
+import sys
 from typing import Dict
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.proxy_server import LiteLLM_TeamTable, UserAPIKeyAuth
 from litellm.types.guardrails import *
+
+sys.path.insert(
+    0, os.path.abspath("../..")
+)  # Adds the parent directory to the system path
 
 
 def can_modify_guardrails(team_obj: Optional[LiteLLM_TeamTable]) -> bool:
