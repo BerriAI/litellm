@@ -195,7 +195,8 @@ const sidebars = {
         "pass_through/vertex_ai",
         "pass_through/google_ai_studio",
         "pass_through/cohere",
-        "pass_through/bedrock"
+        "pass_through/bedrock",
+        "pass_through/langfuse"
       ],
     },
     "scheduler",

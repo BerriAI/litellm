@@ -365,6 +365,7 @@ class CodestralTextCompletion(BaseLLM):
         stream = optional_params.pop("stream", False)
 
         data = {
+            "model": model,
             "prompt": prompt,
             **optional_params,
         }

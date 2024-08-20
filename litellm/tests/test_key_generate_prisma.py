@@ -2771,6 +2771,60 @@ async def test_generate_key_with_model_tpm_limit(prisma_client):
 
 
 @pytest.mark.asyncio()
+async def test_generate_key_with_guardrails(prisma_client):
+    print("prisma client=", prisma_client)
+
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    await litellm.proxy.proxy_server.prisma_client.connect()
+    request = GenerateKeyRequest(
+        guardrails=["aporia-pre-call"],
+        metadata={
+            "team": "litellm-team3",
+        },
+    )
+    key = await generate_key_fn(
+        data=request,
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-1234",
+            user_id="1234",
+        ),
+    )
+    print("generated key=", key)
+
+    generated_key = key.key
+
+    # use generated key to auth in
+    result = await info_key_fn(key=generated_key)
+    print("result from info_key_fn", result)
+    assert result["key"] == generated_key
+    print("\n info for key=", result["info"])
+    assert result["info"]["metadata"] == {
+        "team": "litellm-team3",
+        "guardrails": ["aporia-pre-call"],
+    }
+
+    # Update model tpm_limit and rpm_limit
+    request = UpdateKeyRequest(
+        key=generated_key,
+        guardrails=["aporia-pre-call", "aporia-post-call"],
+    )
+    _request = Request(scope={"type": "http"})
+    _request._url = URL(url="/update/key")
+
+    await update_key_fn(data=request, request=_request)
+    result = await info_key_fn(key=generated_key)
+    print("result from info_key_fn", result)
+    assert result["key"] == generated_key
+    print("\n info for key=", result["info"])
+    assert result["info"]["metadata"] == {
+        "team": "litellm-team3",
+        "guardrails": ["aporia-pre-call", "aporia-post-call"],
+    }
+
+
+@pytest.mark.asyncio()
 async def test_team_access_groups(prisma_client):
     """
     Test team based model access groups

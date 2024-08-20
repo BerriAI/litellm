@@ -313,3 +313,78 @@ def test_anthropic_cache_controls_pt():
             assert msg["content"][0]["cache_control"] == {"type": "ephemeral"}
 
     print("translated_messages: ", translated_messages)
+
+
+@pytest.mark.parametrize("provider", ["bedrock", "anthropic"])
+def test_bedrock_parallel_tool_calling_pt(provider):
+    """
+    Make sure parallel tool call blocks are merged correctly - https://github.com/BerriAI/litellm/issues/5277
+    """
+    from litellm.llms.prompt_templates.factory import _bedrock_converse_messages_pt
+    from litellm.types.utils import ChatCompletionMessageToolCall, Function, Message
+
+    messages = [
+        {
+            "role": "user",
+            "content": "What's the weather like in San Francisco, Tokyo, and Paris? - give me 3 responses",
+        },
+        Message(
+            content="Here are the current weather conditions for San Francisco, Tokyo, and Paris:",
+            role="assistant",
+            tool_calls=[
+                ChatCompletionMessageToolCall(
+                    index=1,
+                    function=Function(
+                        arguments='{"city": "New York"}',
+                        name="get_current_weather",
+                    ),
+                    id="tooluse_XcqEBfm8R-2YVaPhDUHsPQ",
+                    type="function",
+                ),
+                ChatCompletionMessageToolCall(
+                    index=2,
+                    function=Function(
+                        arguments='{"city": "London"}',
+                        name="get_current_weather",
+                    ),
+                    id="tooluse_VB9nk7UGRniVzGcaj6xrAQ",
+                    type="function",
+                ),
+            ],
+            function_call=None,
+        ),
+        {
+            "tool_call_id": "tooluse_XcqEBfm8R-2YVaPhDUHsPQ",
+            "role": "tool",
+            "name": "get_current_weather",
+            "content": "25 degrees celsius.",
+        },
+        {
+            "tool_call_id": "tooluse_VB9nk7UGRniVzGcaj6xrAQ",
+            "role": "tool",
+            "name": "get_current_weather",
+            "content": "28 degrees celsius.",
+        },
+    ]
+
+    if provider == "bedrock":
+        translated_messages = _bedrock_converse_messages_pt(
+            messages=messages,
+            model="anthropic.claude-3-sonnet-20240229-v1:0",
+            llm_provider="bedrock",
+        )
+    else:
+        translated_messages = anthropic_messages_pt(
+            messages=messages,
+            model="claude-3-sonnet-20240229-v1:0",
+            llm_provider=provider,
+        )
+    print(translated_messages)
+
+    number_of_messages = len(translated_messages)
+
+    # assert last 2 messages are not the same role
+    assert (
+        translated_messages[number_of_messages - 1]["role"]
+        != translated_messages[number_of_messages - 2]["role"]
+    )
