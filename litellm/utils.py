@@ -5203,19 +5203,43 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
             if custom_llm_provider == "predibase":
                 _model_info["supports_response_schema"] = True
 
+            _input_cost_per_token: Optional[float] = _model_info.get(
+                "input_cost_per_token"
+            )
+            if _input_cost_per_token is None:
+                # default value to 0, be noisy about this
+                verbose_logger.debug(
+                    "model={}, custom_llm_provider={} has no input_cost_per_token in model_cost_map. Defaulting to 0.".format(
+                        model, custom_llm_provider
+                    )
+                )
+                _input_cost_per_token = 0
+
+            _output_cost_per_token: Optional[float] = _model_info.get(
+                "output_cost_per_token"
+            )
+            if _output_cost_per_token is None:
+                # default value to 0, be noisy about this
+                verbose_logger.debug(
+                    "model={}, custom_llm_provider={} has no output_cost_per_token in model_cost_map. Defaulting to 0.".format(
+                        model, custom_llm_provider
+                    )
+                )
+                _output_cost_per_token = 0
+
             return ModelInfo(
                 key=key,
                 max_tokens=_model_info.get("max_tokens", None),
                 max_input_tokens=_model_info.get("max_input_tokens", None),
                 max_output_tokens=_model_info.get("max_output_tokens", None),
-                input_cost_per_token=_model_info.get("input_cost_per_token", 0),
+                input_cost_per_token=_input_cost_per_token,
                 input_cost_per_character=_model_info.get(
                     "input_cost_per_character", None
                 ),
                 input_cost_per_token_above_128k_tokens=_model_info.get(
                     "input_cost_per_token_above_128k_tokens", None
                 ),
-                output_cost_per_token=_model_info.get("output_cost_per_token", 0),
+                output_cost_per_token=_output_cost_per_token,
                 output_cost_per_character=_model_info.get(
                     "output_cost_per_character", None
                 ),
