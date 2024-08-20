@@ -126,10 +126,10 @@ def init_guardrails_v2(all_guardrails: dict):
             litellm.callbacks.append(_aporia_callback)  # type: ignore
         elif litellm_params["guardrail"] == "lakera":
             from litellm.proxy.enterprise.enterprise_hooks.lakera_ai import (
-                _ENTERPRISE_lakeraAI_Moderation,
+                lakeraAI_Moderation,
             )
 
-            _lakera_callback = _ENTERPRISE_lakeraAI_Moderation()
+            _lakera_callback = lakeraAI_Moderation()
             litellm.callbacks.append(_lakera_callback)  # type: ignore
 
         parsed_guardrail = Guardrail(
