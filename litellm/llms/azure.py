@@ -692,7 +692,7 @@ class AzureChatCompletion(BaseLLM):
                 "api_version": api_version,
                 "azure_endpoint": api_base,
                 "azure_deployment": model,
-                "http_client": litellm.client_session,
+                "http_client": litellm.aclient_session,
                 "max_retries": max_retries,
                 "timeout": timeout,
             }
@@ -860,7 +860,7 @@ class AzureChatCompletion(BaseLLM):
                 "api_version": api_version,
                 "azure_endpoint": api_base,
                 "azure_deployment": model,
-                "http_client": litellm.client_session,
+                "http_client": litellm.aclient_session,
                 "max_retries": data.pop("max_retries", 2),
                 "timeout": timeout,
             }
@@ -989,13 +989,16 @@ class AzureChatCompletion(BaseLLM):
                 "api_version": api_version,
                 "azure_endpoint": api_base,
                 "azure_deployment": model,
-                "http_client": litellm.client_session,
                 "max_retries": max_retries,
                 "timeout": timeout,
             }
             azure_client_params = select_azure_base_url_or_endpoint(
                 azure_client_params=azure_client_params
             )
+            if aembedding:
+                azure_client_params["http_client"] = litellm.aclient_session
+            else:
+                azure_client_params["http_client"] = litellm.client_session
             if api_key is not None:
                 azure_client_params["api_key"] = api_key
             elif azure_ad_token is not None:
