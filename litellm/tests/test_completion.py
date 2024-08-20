@@ -4345,3 +4345,89 @@ def test_moderation():
     output = response.results[0]
     print(output)
     return output
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("sync_mode", [False, True])
+@pytest.mark.asyncio
+async def test_dynamic_azure_params(stream, sync_mode):
+    """
+    If dynamic params are given, which are different from the initialized client, use a new client
+    """
+    from openai import AsyncAzureOpenAI, AzureOpenAI
+
+    if sync_mode:
+        client = AzureOpenAI(
+            api_key="my-test-key",
+            base_url="my-test-base",
+            api_version="my-test-version",
+        )
+        mock_client = MagicMock(return_value="Hello world!")
+    else:
+        client = AsyncAzureOpenAI(
+            api_key="my-test-key",
+            base_url="my-test-base",
+            api_version="my-test-version",
+        )
+        mock_client = AsyncMock(return_value="Hello world!")
+
+    ## CHECK IF CLIENT IS USED (NO PARAM CHANGE)
+    with patch.object(
+        client.chat.completions.with_raw_response, "create", new=mock_client
+    ) as mock_client:
+        try:
+            # client.chat.completions.with_raw_response.create = mock_client
+            if sync_mode:
+                _ = completion(
+                    model="azure/chatgpt-v2",
+                    messages=[{"role": "user", "content": "Hello world"}],
+                    client=client,
+                    stream=stream,
+                )
+            else:
+                _ = await litellm.acompletion(
+                    model="azure/chatgpt-v2",
+                    messages=[{"role": "user", "content": "Hello world"}],
+                    client=client,
+                    stream=stream,
+                )
+        except Exception:
+            pass
+
+        mock_client.assert_called()
+
+    ## recreate mock client
+    if sync_mode:
+        mock_client = MagicMock(return_value="Hello world!")
+    else:
+        mock_client = AsyncMock(return_value="Hello world!")
+
+    ## CHECK IF NEW CLIENT IS USED (PARAM CHANGE)
+    with patch.object(
+        client.chat.completions.with_raw_response, "create", new=mock_client
+    ) as mock_client:
+        try:
+            if sync_mode:
+                _ = completion(
+                    model="azure/chatgpt-v2",
+                    messages=[{"role": "user", "content": "Hello world"}],
+                    client=client,
+                    api_version="my-new-version",
+                    stream=stream,
+                )
+            else:
+                _ = await litellm.acompletion(
+                    model="azure/chatgpt-v2",
+                    messages=[{"role": "user", "content": "Hello world"}],
+                    client=client,
+                    api_version="my-new-version",
+                    stream=stream,
+                )
+        except Exception:
+            pass
+
+        try:
+            mock_client.assert_not_called()
+        except Exception as e:
+            traceback.print_stack()
+            raise e
