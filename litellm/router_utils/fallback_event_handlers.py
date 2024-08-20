@@ -52,6 +52,37 @@ async def run_async_fallback(
     raise error_from_fallbacks
 
 
+def run_sync_fallback(
+    litellm_router: LitellmRouter,
+    *args: Tuple[Any],
+    fallback_model_group: List[str],
+    original_model_group: str,
+    original_exception: Exception,
+    **kwargs,
+) -> Any:
+    """
+    Iterate through the model groups and try calling that deployment.
+    """
+    error_from_fallbacks = original_exception
+    for mg in fallback_model_group:
+        if mg == original_model_group:
+            continue
+        try:
+            # LOGGING
+            kwargs = litellm_router.log_retry(kwargs=kwargs, e=original_exception)
+            verbose_router_logger.info(f"Falling back to model_group = {mg}")
+            kwargs["model"] = mg
+            kwargs.setdefault("metadata", {}).update(
+                {"model_group": mg}
+            )  # update model_group used, if fallbacks are done
+            response = litellm_router.function_with_fallbacks(*args, **kwargs)
+            verbose_router_logger.info("Successful fallback b/w models.")
+            return response
+        except Exception as e:
+            error_from_fallbacks = e
+    raise error_from_fallbacks
+
+
 async def log_success_fallback_event(original_model_group: str, kwargs: dict):
     for _callback in litellm.callbacks:
         if isinstance(_callback, CustomLogger):
