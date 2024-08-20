@@ -220,8 +220,8 @@ class AzureOpenAIConfig:
                 elif value == "required" and (
                     api_version_year == "2024" and api_version_month <= "05"
                 ):  ## check if tool_choice value is supported ##
-                    if litellm.drop_params == True or (
-                        drop_params is not None and drop_params == True
+                    if litellm.drop_params is True or (
+                        drop_params is not None and drop_params is True
                     ):
                         pass
                     else:
@@ -231,7 +231,7 @@ class AzureOpenAIConfig:
                         )
                 else:
                     optional_params["tool_choice"] = value
-            if param == "response_format" and isinstance(value, dict):
+            elif param == "response_format" and isinstance(value, dict):
                 json_schema: Optional[dict] = None
                 schema_name: str = ""
                 if "response_schema" in value:
@@ -268,6 +268,7 @@ class AzureOpenAIConfig:
                     optional_params["json_mode"] = True
             elif param in supported_openai_params:
                 optional_params[param] = value
+
         return optional_params
 
     def get_mapped_special_auth_params(self) -> dict:
