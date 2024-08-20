@@ -125,7 +125,7 @@ def init_guardrails_v2(all_guardrails: dict):
             )
             litellm.callbacks.append(_aporia_callback)  # type: ignore
         elif litellm_params["guardrail"] == "lakera":
-            from litellm.proxy.enterprise.enterprise_hooks.lakera_ai import (
+            from litellm.proxy.guardrails.guardrail_hooks.lakera_ai import (
                 lakeraAI_Moderation,
             )
 
