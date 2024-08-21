@@ -205,8 +205,9 @@ class GoogleAIStudioGeminiConfig:  # key diff from VertexAI - 'frequency_penalty
                     gtool_func_declaration = FunctionDeclaration(
                         name=tool["function"]["name"],
                         description=tool["function"].get("description", ""),
-                        parameters=_parameters,
                     )
+                    if len(_parameters.keys()) > 0:
+                        gtool_func_declaration["parameters"] = _parameters
                     gtool_func_declarations.append(gtool_func_declaration)
                 optional_params["tools"] = [
                     Tools(function_declarations=gtool_func_declarations)
