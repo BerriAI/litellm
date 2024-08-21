@@ -4032,7 +4032,9 @@ def test_completion_gemini(model):
         # Add any assertions,here to check the response
         print(response)
         assert response.choices[0]["index"] == 0
-    except litellm.APIError as e:
+    except litellm.RateLimitError:
+        pass
+    except litellm.APIError:
         pass
     except Exception as e:
         if "InternalServerError" in str(e):
