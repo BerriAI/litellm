@@ -277,7 +277,8 @@ class Router:
             "local"  # default to an in-memory cache
         )
         redis_cache = None
-        cache_config = {}
+        cache_config: Dict[str, Any] = {}
+
         self.client_ttl = client_ttl
         if redis_url is not None or (
             redis_host is not None
