@@ -1450,7 +1450,7 @@ curl http://0.0.0.0:4000/v1/chat/completions \
 | code-gecko@latest| `completion('code-gecko@latest', messages)` |
 
 
-## Embedding Models
+## **Embedding Models**
 
 #### Usage - Embedding
 ```python
@@ -1504,7 +1504,158 @@ response = litellm.embedding(
 )
 ```
 
-## Image Generation Models
+## **Multi-Modal Embeddings**
+
+Usage
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+response = await litellm.aembedding(
+    model="vertex_ai/multimodalembedding@001",
+    input=[
+        {
+            "image": {
+                "gcsUri": "gs://cloud-samples-data/vertex-ai/llm/prompts/landmark1.png"
+            },
+            "text": "this is a unicorn",
+        },
+    ],
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="LiteLLM PROXY (Unified Endpoint)">
+
+1. Add model to config.yaml
+```yaml
+model_list:
+  - model_name: multimodalembedding@001
+    litellm_params:
+      model: vertex_ai/multimodalembedding@001
+      vertex_project: "adroit-crow-413218"
+      vertex_location: "us-central1"
+      vertex_credentials: adroit-crow-413218-a956eef1a2a8.json 
+
+litellm_settings:
+  drop_params: True
+```
+
+2. Start Proxy 
+
+```
+$ litellm --config /path/to/config.yaml
+```
+
+3. Make Request use OpenAI Python SDK
+
+```python
+import openai
+
+client = openai.OpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+
+# # request sent to model set on litellm proxy, `litellm --model`
+response = client.embeddings.create(
+    model="multimodalembedding@001", 
+    input = None,
+    extra_body = {
+        "instances": [
+        {
+            "image": {
+                "gcsUri": "gs://cloud-samples-data/vertex-ai/llm/prompts/landmark1.png"
+            },
+            "text": "this is a unicorn",
+        },
+    ],
+    }
+)
+
+print(response)
+```
+
+</TabItem>
+<TabItem value="proxy-vtx" label="LiteLLM PROXY (Vertex SDK)">
+
+1. Add model to config.yaml
+```yaml
+default_vertex_config:
+  vertex_project: "adroit-crow-413218"
+  vertex_location: "us-central1"
+  vertex_credentials: adroit-crow-413218-a956eef1a2a8.json 
+```
+
+2. Start Proxy 
+
+```
+$ litellm --config /path/to/config.yaml
+```
+
+3. Make Request use OpenAI Python SDK
+
+```python
+import vertexai
+
+from vertexai.vision_models import Image, MultiModalEmbeddingModel, Video
+from vertexai.vision_models import VideoSegmentConfig
+from google.auth.credentials import Credentials
+
+
+LITELLM_PROXY_API_KEY = "sk-1234"
+LITELLM_PROXY_BASE = "http://0.0.0.0:4000/vertex-ai"
+
+import datetime
+
+class CredentialsWrapper(Credentials):
+    def __init__(self, token=None):
+        super().__init__()
+        self.token = token
+        self.expiry = None  # or set to a future date if needed
+        
+    def refresh(self, request):
+        pass
+    
+    def apply(self, headers, token=None):
+        headers['Authorization'] = f'Bearer {self.token}'
+
+    @property
+    def expired(self):
+        return False  # Always consider the token as non-expired
+
+    @property
+    def valid(self):
+        return True  # Always consider the credentials as valid
+
+credentials = CredentialsWrapper(token=LITELLM_PROXY_API_KEY)
+
+vertexai.init(
+    project="adroit-crow-413218",
+    location="us-central1",
+    api_endpoint=LITELLM_PROXY_BASE,
+    credentials = credentials,
+    api_transport="rest",
+    request_metadata=[("Authorization", f"Bearer {LITELLM_PROXY_API_KEY}")],
+)
+
+model = MultiModalEmbeddingModel.from_pretrained("multimodalembedding")
+image = Image.load_from_file(
+    "gs://cloud-samples-data/vertex-ai/llm/prompts/landmark1.png"
+)
+
+embeddings = model.get_embeddings(
+    image=image,
+    contextual_text="Colosseum",
+    dimension=1408,
+)
+print(f"Image Embedding: {embeddings.image_embedding}")
+print(f"Text Embedding: {embeddings.text_embedding}")
+```
+
+</TabItem>
+</Tabs>
+
+
+## **Image Generation Models**
 
 Usage 
 
