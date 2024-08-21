@@ -1252,7 +1252,7 @@ class QdrantSemanticCache(BaseCache):
         self.embedding_model = embedding_model
         headers = {}
         if qdrant_url is None:
-            qdrant_url = os.getenv("QDRANT_URL")
+            qdrant_url = os.getenv("QDRANT_URL") or os.getenv("QDRANT_API_BASE")
         if qdrant_api_key is None:
             qdrant_api_key = os.getenv("QDRANT_API_KEY")
         if qdrant_url is not None and qdrant_api_key is not None:
@@ -2116,7 +2116,6 @@ class Cache:
         qdrant_collection_name: Optional[str] = None,
         qdrant_quantization_config: Optional[str] = None,
         qdrant_semantic_cache_embedding_model="text-embedding-ada-002",
-        qdrant_host_type: Optional[Literal["local", "cloud"]] = "local",
         **kwargs,
     ):
         """
@@ -2128,8 +2127,7 @@ class Cache:
             port (int, optional): The port number for the Redis cache. Required if type is "redis".
             password (str, optional): The password for the Redis cache. Required if type is "redis".
             qdrant_url (str, optional): The url for your qdrant cluster. Required if type is "qdrant-semantic".
-            qdrant_api_key (str, optional): The api_key for the local or cloud qdrant cluster. Required if qdrant_host_type is "cloud" and optional if qdrant_host_type is "local".
-            qdrant_host_type (str, optional): Can be either "local" or "cloud". Should be "local" when you are running a local qdrant cluster or "cloud" when you are using a qdrant cloud cluster.
+            qdrant_api_key (str, optional): The api_key for the local or cloud qdrant cluster.
             qdrant_collection_name (str, optional): The name for your qdrant collection. Required if type is "qdrant-semantic".
             similarity_threshold (float, optional): The similarity threshold for semantic-caching, Required if type is "redis-semantic" or "qdrant-semantic".
 
@@ -2164,7 +2162,6 @@ class Cache:
                 similarity_threshold=similarity_threshold,
                 quantization_config=qdrant_quantization_config,
                 embedding_model=qdrant_semantic_cache_embedding_model,
-                host_type=qdrant_host_type,
             )
         elif type == "local":
             self.cache = InMemoryCache()
