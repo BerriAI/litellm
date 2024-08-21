@@ -25,7 +25,12 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_helpers import should_proceed_based_on_metadata
-from litellm.types.guardrails import GuardrailItem, Role, default_roles
+from litellm.types.guardrails import (
+    GuardrailItem,
+    LakeraCategoryThresholds,
+    Role,
+    default_roles,
+)
 
 GUARDRAIL_NAME = "lakera_prompt_injection"
 
@@ -36,16 +41,11 @@ INPUT_POSITIONING_MAP = {
 }
 
 
-class LakeraCategories(TypedDict, total=False):
-    jailbreak: float
-    prompt_injection: float
-
-
 class lakeraAI_Moderation(CustomGuardrail):
     def __init__(
         self,
         moderation_check: Literal["pre_call", "in_parallel"] = "in_parallel",
-        category_thresholds: Optional[LakeraCategories] = None,
+        category_thresholds: Optional[LakeraCategoryThresholds] = None,
         api_base: Optional[str] = None,
         api_key: Optional[str] = None,
         **kwargs,
@@ -72,7 +72,7 @@ class lakeraAI_Moderation(CustomGuardrail):
 
         if self.category_thresholds is not None:
             if category_scores is not None:
-                typed_cat_scores = LakeraCategories(**category_scores)
+                typed_cat_scores = LakeraCategoryThresholds(**category_scores)
                 if (
                     "jailbreak" in typed_cat_scores
                     and "jailbreak" in self.category_thresholds
@@ -219,6 +219,8 @@ class lakeraAI_Moderation(CustomGuardrail):
             text = "\n".join(data["input"])
             _json_data = json.dumps({"input": text})
 
+        verbose_proxy_logger.debug("Lakera AI Request Args %s", _json_data)
+
         # https://platform.lakera.ai/account/api-keys
 
         """
@@ -288,8 +290,21 @@ class lakeraAI_Moderation(CustomGuardrail):
             "pass_through_endpoint",
         ],
     ) -> Optional[Union[Exception, str, Dict]]:
-        if self.moderation_check == "in_parallel":
-            return None
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        if self.event_hook is None:
+            if self.moderation_check == "in_parallel":
+                return None
+        else:
+            # v2 guardrails implementation
+
+            if (
+                self.should_run_guardrail(
+                    data=data, event_type=GuardrailEventHooks.pre_call
+                )
+                is not True
+            ):
+                return None
 
         return await self._check(
             data=data, user_api_key_dict=user_api_key_dict, call_type=call_type
@@ -304,12 +319,13 @@ class lakeraAI_Moderation(CustomGuardrail):
         if self.event_hook is None:
             if self.moderation_check == "pre_call":
                 return
+        else:
+            # V2 Guardrails implementation
+            from litellm.types.guardrails import GuardrailEventHooks
 
-        from litellm.types.guardrails import GuardrailEventHooks
-
-        event_type: GuardrailEventHooks = GuardrailEventHooks.during_call
-        if self.should_run_guardrail(data=data, event_type=event_type) is not True:
-            return
+            event_type: GuardrailEventHooks = GuardrailEventHooks.during_call
+            if self.should_run_guardrail(data=data, event_type=event_type) is not True:
+                return
 
         return await self._check(
             data=data, user_api_key_dict=user_api_key_dict, call_type=call_type

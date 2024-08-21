@@ -50,6 +50,12 @@ const sidebars = {
           label: "🪢 Logging",
           items: ["proxy/logging", "proxy/bucket", "proxy/streaming_logging"],
         },
+        "proxy/team_logging",
+        {
+          type: "category",
+          label: "🛡️ [Beta] Guardrails",
+          items: ["proxy/guardrails/quick_start", "proxy/guardrails/aporia_api", "proxy/guardrails/lakera_ai"],
+        },
         {
           type: "category", 
           label: "Secret Manager - storing LLM API Keys", 
@@ -58,8 +64,6 @@ const sidebars = {
             "oidc"
           ]
         },
-        "proxy/team_logging",
-        "proxy/guardrails",
         "proxy/tag_routing",
         "proxy/users",
         "proxy/team_budgets",
@@ -84,7 +88,6 @@ const sidebars = {
         "proxy/health",
         "proxy/debugging",
         "proxy/pii_masking",
-        "proxy/prompt_injection",
         "proxy/caching",
         "proxy/call_hooks",
         "proxy/rules",
@@ -273,6 +276,8 @@ const sidebars = {
         "migration_policy",
         "contributing",
         "rules",
+        "old_guardrails",
+        "prompt_injection",
         "proxy_server",
         {
           type: "category",

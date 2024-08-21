@@ -66,11 +66,17 @@ class GuardrailItem(BaseModel):
 
 
 # Define the TypedDicts
-class LitellmParams(TypedDict):
+class LakeraCategoryThresholds(TypedDict, total=False):
+    prompt_injection: float
+    jailbreak: float
+
+
+class LitellmParams(TypedDict, total=False):
     guardrail: str
     mode: str
     api_key: str
     api_base: Optional[str]
+    category_thresholds: Optional[LakeraCategoryThresholds]
 
 
 class Guardrail(TypedDict):
