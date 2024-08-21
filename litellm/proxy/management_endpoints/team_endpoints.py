@@ -488,7 +488,8 @@ async def team_member_add(
             status_code=403,
             detail={
                 "error": "Call not allowed. User not proxy admin OR team admin. route={}, team_id={}".format(
-                    "/team/member_add", complete_team_data.team_id
+                    "/team/member_add",
+                    complete_team_data.team_id,
                 )
             },
         )
