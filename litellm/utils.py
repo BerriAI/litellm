@@ -121,7 +121,7 @@ import importlib.metadata
 from openai import OpenAIError as OriginalError
 
 from ._logging import verbose_logger
-from .caching import RedisCache, RedisSemanticCache, S3Cache, QdrantSemanticCache
+from .caching import QdrantSemanticCache, RedisCache, RedisSemanticCache, S3Cache
 from .exceptions import (
     APIConnectionError,
     APIError,
@@ -8622,7 +8622,9 @@ def get_secret(
                     return secret_value_as_bool
                 else:
                     return secret
-            except:
+            except Exception:
+                if default_value is not None:
+                    return default_value
                 return secret
     except Exception as e:
         if default_value is not None:
