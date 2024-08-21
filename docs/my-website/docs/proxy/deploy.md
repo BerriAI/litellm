@@ -827,9 +827,12 @@ Once the container is running, you can access the application by going to `http:
 <TabItem value="google-cloud-run" label="Google Cloud Run">
 
 ### Deploy on Google Cloud Run
-**Click the button** to deploy to Google Cloud Run
 
-[![Deploy](https://deploy.cloud.run/button.svg)](https://deploy.cloud.run/?git_repo=https://github.com/BerriAI/litellm)
+1. Fork this repo - [github.com/BerriAI/example_litellm_gcp_cloud_run](https://github.com/BerriAI/example_litellm_gcp_cloud_run)
+
+2. Edit the `litellm_config.yaml` file in the repo to include your model settings 
+
+3. Deploy your forked github repo on Google Cloud Run
 
 #### Testing your deployed proxy
 **Assuming the required keys are set as Environment Variables**
