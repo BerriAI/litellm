@@ -4,8 +4,8 @@ import TabItem from '@theme/TabItem';
 
 # Lakera AI
 
-
-## 1. Define Guardrails on your LiteLLM config.yaml 
+## Quick Start
+### 1. Define Guardrails on your LiteLLM config.yaml 
 
 Define your guardrails under the `guardrails` section
 ```yaml
@@ -22,23 +22,29 @@ guardrails:
       mode: "during_call"
       api_key: os.environ/LAKERA_API_KEY
       api_base: os.environ/LAKERA_API_BASE
+  - guardrail_name: "lakera-pre-guard"
+    litellm_params:
+      guardrail: lakera  # supported values: "aporia", "bedrock", "lakera"
+      mode: "pre_call"
+      api_key: os.environ/LAKERA_API_KEY
+      api_base: os.environ/LAKERA_API_BASE
   
 ```
 
-### Supported values for `mode`
+#### Supported values for `mode`
 
 - `pre_call` Run **before** LLM call, on **input**
 - `post_call` Run **after** LLM call, on **input & output**
 - `during_call` Run **during** LLM call, on **input** Same as `pre_call` but runs in parallel as LLM call.  Response not returned until guardrail check completes
 
-## 2. Start LiteLLM Gateway 
+### 2. Start LiteLLM Gateway 
 
 
 ```shell
 litellm --config config.yaml --detailed_debug
 ```
 
-## 3. Test request 
+### 3. Test request 
 
 **[Langchain, OpenAI SDK Usage Examples](../proxy/user_keys##request-format)**
 
@@ -120,4 +126,30 @@ curl -i http://localhost:4000/v1/chat/completions \
 
 </Tabs>
 
+## Advanced 
+### Set category-based thresholds.
 
+Lakera has 2 categories for prompt_injection attacks:
+- jailbreak
+- prompt_injection
+
+```yaml
+model_list:
+  - model_name: fake-openai-endpoint
+    litellm_params:
+      model: openai/fake
+      api_key: fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+
+guardrails:
+  - guardrail_name: "lakera-pre-guard"
+    litellm_params:
+      guardrail: lakera  # supported values: "aporia", "bedrock", "lakera"
+      mode: "during_call"
+      api_key: os.environ/LAKERA_API_KEY
+      api_base: os.environ/LAKERA_API_BASE
+      category_thresholds:
+        prompt_injection: 0.1
+        jailbreak: 0.1
+  
+```

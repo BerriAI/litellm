@@ -12,4 +12,7 @@ guardrails:
       mode: "during_call"
       api_key: os.environ/LAKERA_API_KEY
       api_base: os.environ/LAKERA_API_BASE
+      category_thresholds:
+        prompt_injection: 0.1
+        jailbreak: 0.1
   
