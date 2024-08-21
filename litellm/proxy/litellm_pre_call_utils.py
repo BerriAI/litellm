@@ -95,7 +95,9 @@ def convert_key_logging_metadata_to_callback(
     for var, value in data.callback_vars.items():
         if team_callback_settings_obj.callback_vars is None:
             team_callback_settings_obj.callback_vars = {}
-        team_callback_settings_obj.callback_vars[var] = litellm.get_secret(value)
+        team_callback_settings_obj.callback_vars[var] = (
+            litellm.utils.get_secret(value, default_value=value) or value
+        )
 
     return team_callback_settings_obj
 
@@ -130,7 +132,6 @@ def _get_dynamic_logging_metadata(
                 data=AddTeamCallback(**item),
                 team_callback_settings_obj=callback_settings_obj,
             )
-
     return callback_settings_obj
 
 
