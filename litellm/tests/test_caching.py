@@ -1761,6 +1761,7 @@ async def test_qdrant_semantic_cache_acompletion():
                 "content": f"write a one sentence poem about: {random_number}",
             }
         ],
+        mock_response="hello",
         max_tokens=20,
     )
     print(f"Response1: {response1}")
@@ -1810,6 +1811,7 @@ async def test_qdrant_semantic_cache_acompletion_stream():
             max_tokens=40,
             temperature=1,
             stream=True,
+            mock_response="hi",
         )
         async for chunk in response1:
             response_1_id = chunk.id
