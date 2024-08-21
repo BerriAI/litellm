@@ -2157,7 +2157,7 @@ def use_custom_pricing_for_model(litellm_params: Optional[dict]) -> bool:
     if litellm_params is None:
         return False
     for k, v in litellm_params.items():
-        if k in SPECIAL_MODEL_INFO_PARAMS:
+        if k in SPECIAL_MODEL_INFO_PARAMS and v is not None:
             return True
     metadata: Optional[dict] = litellm_params.get("metadata", {})
     if metadata is None:
