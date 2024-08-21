@@ -1583,7 +1583,7 @@ class ProxyConfig:
                         verbose_proxy_logger.debug(  # noqa
                             f"{blue_color_code}Set Cache on LiteLLM Proxy: {vars(litellm.cache.cache)}{reset_color_code}"
                         )
-                elif key == "cache" and value == False:
+                elif key == "cache" and value is False:
                     pass
                 elif key == "guardrails":
                     if premium_user is not True:
