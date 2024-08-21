@@ -582,9 +582,6 @@ class Logging:
                     or isinstance(result, HttpxBinaryResponseContent)  # tts
                 ):
                     ## RESPONSE COST ##
-                    custom_pricing = use_custom_pricing_for_model(
-                        litellm_params=self.litellm_params
-                    )
                     self.model_call_details["response_cost"] = (
                         self._response_cost_calculator(result=result)
                     )
@@ -2159,6 +2156,9 @@ def get_custom_logger_compatible_class(
 def use_custom_pricing_for_model(litellm_params: Optional[dict]) -> bool:
     if litellm_params is None:
         return False
+    for k, v in litellm_params.items():
+        if k in SPECIAL_MODEL_INFO_PARAMS:
+            return True
     metadata: Optional[dict] = litellm_params.get("metadata", {})
     if metadata is None:
         return False
@@ -2167,6 +2167,7 @@ def use_custom_pricing_for_model(litellm_params: Optional[dict]) -> bool:
         for k, v in model_info.items():
             if k in SPECIAL_MODEL_INFO_PARAMS:
                 return True
+
     return False
 
 
