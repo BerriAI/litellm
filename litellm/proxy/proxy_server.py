@@ -2784,26 +2784,29 @@ async def startup_event():
         await custom_db_client.connect()
 
     if prisma_client is not None and master_key is not None:
-        # add master key to db
         if os.getenv("PROXY_ADMIN_ID", None) is not None:
             litellm_proxy_admin_name = os.getenv(
                 "PROXY_ADMIN_ID", litellm_proxy_admin_name
             )
-        asyncio.create_task(
-            generate_key_helper_fn(
-                request_type="user",
-                duration=None,
-                models=[],
-                aliases={},
-                config={},
-                spend=0,
-                token=master_key,
-                user_id=litellm_proxy_admin_name,
-                user_role=LitellmUserRoles.PROXY_ADMIN,
-                query_type="update_data",
-                update_key_values={"user_role": LitellmUserRoles.PROXY_ADMIN},
+        if general_settings.get("disable_adding_master_key_hash_to_db") is True:
+            verbose_proxy_logger.info("Skipping writing master key hash to db")
+        else:
+            # add master key to db
+            asyncio.create_task(
+                generate_key_helper_fn(
+                    request_type="user",
+                    duration=None,
+                    models=[],
+                    aliases={},
+                    config={},
+                    spend=0,
+                    token=master_key,
+                    user_id=litellm_proxy_admin_name,
+                    user_role=LitellmUserRoles.PROXY_ADMIN,
+                    query_type="update_data",
+                    update_key_values={"user_role": LitellmUserRoles.PROXY_ADMIN},
+                )
             )
-        )
 
     if prisma_client is not None and litellm.max_budget > 0:
         if litellm.budget_duration is None:
