@@ -1836,7 +1836,7 @@ async def test_vertexai_multimodal_embedding():
         litellm.set_verbose = True
         response = await litellm.aembedding(
             model="vertex_ai/multimodalembedding@001",
-            instances=[
+            input=[
                 {
                     "image": {
                         "gcsUri": "gs://cloud-samples-data/vertex-ai/llm/prompts/landmark1.png"
