@@ -909,7 +909,7 @@ async def test_create_team_member_add(prisma_client, new_member_method):
 
         await team_member_add(
             data=team_member_add_request,
-            user_api_key_dict=UserAPIKeyAuth(),
+            user_api_key_dict=UserAPIKeyAuth(user_role="proxy_admin"),
             http_request=Request(
                 scope={"type": "http", "path": "/user/new"},
             ),
