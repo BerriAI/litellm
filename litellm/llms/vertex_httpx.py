@@ -1586,6 +1586,8 @@ class VertexLLM(BaseLLM):
 
         if "instances" in optional_params:
             request_data["instances"] = optional_params["instances"]
+        elif isinstance(input, list):
+            request_data["instances"] = input
         else:
             # construct instances
             vertex_request_instance = Instance(**optional_params)
