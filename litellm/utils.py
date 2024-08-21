@@ -121,7 +121,7 @@ import importlib.metadata
 from openai import OpenAIError as OriginalError
 
 from ._logging import verbose_logger
-from .caching import RedisCache, RedisSemanticCache, S3Cache
+from .caching import RedisCache, RedisSemanticCache, S3Cache, QdrantSemanticCache
 from .exceptions import (
     APIConnectionError,
     APIError,
@@ -1157,6 +1157,14 @@ def client(original_function):
                     elif isinstance(
                         litellm.cache.cache, RedisSemanticCache
                     ) or isinstance(litellm.cache.cache, RedisCache):
+                        preset_cache_key = litellm.cache.get_cache_key(*args, **kwargs)
+                        kwargs["preset_cache_key"] = (
+                            preset_cache_key  # for streaming calls, we need to pass the preset_cache_key
+                        )
+                        cached_result = await litellm.cache.async_get_cache(
+                            *args, **kwargs
+                        )
+                    elif isinstance(litellm.cache.cache, QdrantSemanticCache):
                         preset_cache_key = litellm.cache.get_cache_key(*args, **kwargs)
                         kwargs["preset_cache_key"] = (
                             preset_cache_key  # for streaming calls, we need to pass the preset_cache_key
