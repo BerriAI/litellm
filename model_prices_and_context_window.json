@@ -2793,7 +2793,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
-        "tool_use_system_prompt_tokens": 159
+        "tool_use_system_prompt_tokens": 159,
+        "supports_assistant_prefill": true
     },
     "openrouter/anthropic/claude-3-sonnet": {
         "max_tokens": 200000,
