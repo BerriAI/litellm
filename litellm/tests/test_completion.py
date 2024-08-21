@@ -707,6 +707,8 @@ def test_gemini_completion_call_error():
         print(f"response: {response}")
         for chunk in response:
             print(chunk)
+    except litellm.RateLimitError:
+        pass
     except litellm.InternalServerError:
         pass
     except Exception as e:
