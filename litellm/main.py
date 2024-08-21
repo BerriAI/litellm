@@ -3477,7 +3477,11 @@ def embedding(
                 or get_secret("VERTEX_CREDENTIALS")
             )
 
-            if "image" in optional_params or "video" in optional_params:
+            if (
+                "image" in optional_params
+                or "video" in optional_params
+                or model in vertex_chat_completion.SUPPORTED_MULTIMODAL_EMBEDDING_MODELS
+            ):
                 # multimodal embedding is supported on vertex httpx
                 response = vertex_chat_completion.multimodal_embedding(
                     model=model,

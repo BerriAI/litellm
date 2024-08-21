@@ -121,7 +121,7 @@ import importlib.metadata
 from openai import OpenAIError as OriginalError
 
 from ._logging import verbose_logger
-from .caching import RedisCache, RedisSemanticCache, S3Cache, QdrantSemanticCache
+from .caching import QdrantSemanticCache, RedisCache, RedisSemanticCache, S3Cache
 from .exceptions import (
     APIConnectionError,
     APIError,
@@ -541,7 +541,7 @@ def function_setup(
             call_type == CallTypes.embedding.value
             or call_type == CallTypes.aembedding.value
         ):
-            messages = args[1] if len(args) > 1 else kwargs["input"]
+            messages = args[1] if len(args) > 1 else kwargs.get("input", None)
         elif (
             call_type == CallTypes.image_generation.value
             or call_type == CallTypes.aimage_generation.value
