@@ -111,3 +111,67 @@ curl -i http://localhost:4000/v1/chat/completions \
 
 
 </Tabs>
+
+
+## Advanced
+### ✨ Control Guardrails per Project (API Key)
+
+:::info
+
+✨ This is an Enterprise only feature [Contact us to get a free trial](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+
+:::
+
+Use this to control what guardrails run per project. In this tutorial we only want the following guardrails to run for 1 project (API Key)
+- `guardrails`: ["aporia-pre-guard", "aporia-post-guard"]
+
+**Step 1** Create Key with guardrail settings
+
+<Tabs>
+<TabItem value="/key/generate" label="/key/generate">
+
+```shell
+curl -X POST 'http://0.0.0.0:4000/key/generate' \
+    -H 'Authorization: Bearer sk-1234' \
+    -H 'Content-Type: application/json' \
+    -D '{
+            "guardrails": ["aporia-pre-guard", "aporia-post-guard"]
+        }
+    }'
+```
+
+</TabItem>
+<TabItem value="/key/update" label="/key/update">
+
+```shell
+curl --location 'http://0.0.0.0:4000/key/update' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'Content-Type: application/json' \
+    --data '{
+        "key": "sk-jNm1Zar7XfNdZXp49Z1kSQ",
+        "guardrails": ["aporia-pre-guard", "aporia-post-guard"]
+        }
+}'
+```
+
+</TabItem>
+</Tabs>
+
+**Step 2** Test it with new key
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Authorization: Bearer sk-jNm1Zar7XfNdZXp49Z1kSQ' \
+    --header 'Content-Type: application/json' \
+    --data '{
+    "model": "gpt-3.5-turbo",
+    "messages": [
+        {
+        "role": "user",
+        "content": "my email is ishaan@berri.ai"
+        }
+    ]
+}'
+```
+
+
