@@ -1746,7 +1746,7 @@ async def test_qdrant_semantic_cache_acompletion():
     litellm.cache = Cache(
         type="qdrant-semantic",
         _host_type="cloud",
-        qdrant_url=os.getenv("QDRANT_URL"),
+        qdrant_api_base=os.getenv("QDRANT_URL"),
         qdrant_api_key=os.getenv("QDRANT_API_KEY"),
         qdrant_collection_name="test_collection",
         similarity_threshold=0.8,
@@ -1794,8 +1794,7 @@ async def test_qdrant_semantic_cache_acompletion_stream():
         ]
         litellm.cache = Cache(
             type="qdrant-semantic",
-            qdrant_host_type="cloud",
-            qdrant_url=os.getenv("QDRANT_URL"),
+            qdrant_api_base=os.getenv("QDRANT_URL"),
             qdrant_api_key=os.getenv("QDRANT_API_KEY"),
             qdrant_collection_name="test_collection",
             similarity_threshold=0.8,

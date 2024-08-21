@@ -161,7 +161,7 @@ random_number = random.randint(
 print("testing semantic caching")
 litellm.cache = Cache(
     type="qdrant-semantic",
-    qdrant_url=os.environ["QDRANT_API_BASE"], 
+    qdrant_api_base=os.environ["QDRANT_API_BASE"], 
     qdrant_api_key=os.environ["QDRANT_API_KEY"],
     qdrant_collection_name="your_collection_name", # any name of your collection
     similarity_threshold=0.7, # similarity threshold for cache hits, 0 == no similarity, 1 = exact matches, 0.5 == 50% similarity
@@ -490,7 +490,7 @@ def __init__(
     disk_cache_dir=None,
 
     # qdrant cache params
-    qdrant_url: Optional[str] = None,
+    qdrant_api_base: Optional[str] = None,
     qdrant_api_key: Optional[str] = None,
     qdrant_collection_name: Optional[str] = None,
     qdrant_quantization_config: Optional[str] = None,
