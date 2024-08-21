@@ -295,14 +295,16 @@ class lakeraAI_Moderation(CustomGuardrail):
         if self.event_hook is None:
             if self.moderation_check == "in_parallel":
                 return None
+        else:
+            # v2 guardrails implementation
 
-        if (
-            self.should_run_guardrail(
-                data=data, event_type=GuardrailEventHooks.pre_call
-            )
-            is not True
-        ):
-            return None
+            if (
+                self.should_run_guardrail(
+                    data=data, event_type=GuardrailEventHooks.pre_call
+                )
+                is not True
+            ):
+                return None
 
         return await self._check(
             data=data, user_api_key_dict=user_api_key_dict, call_type=call_type
@@ -317,12 +319,13 @@ class lakeraAI_Moderation(CustomGuardrail):
         if self.event_hook is None:
             if self.moderation_check == "pre_call":
                 return
+        else:
+            # V2 Guardrails implementation
+            from litellm.types.guardrails import GuardrailEventHooks
 
-        from litellm.types.guardrails import GuardrailEventHooks
-
-        event_type: GuardrailEventHooks = GuardrailEventHooks.during_call
-        if self.should_run_guardrail(data=data, event_type=event_type) is not True:
-            return
+            event_type: GuardrailEventHooks = GuardrailEventHooks.during_call
+            if self.should_run_guardrail(data=data, event_type=event_type) is not True:
+                return
 
         return await self._check(
             data=data, user_api_key_dict=user_api_key_dict, call_type=call_type
