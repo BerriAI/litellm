@@ -285,14 +285,18 @@ def get_remaining_tokens_and_requests_from_request_data(data: Dict) -> Dict[str,
     return headers
 
 
-def get_applied_guardrails_header(request_data: Dict) -> Optional[Dict]:
+def get_logging_caching_headers(request_data: Dict) -> Optional[Dict]:
     _metadata = request_data.get("metadata", None) or {}
+    headers = {}
     if "applied_guardrails" in _metadata:
-        return {
-            "x-litellm-applied-guardrails": ",".join(_metadata["applied_guardrails"]),
-        }
+        headers["x-litellm-applied-guardrails"] = ",".join(
+            _metadata["applied_guardrails"]
+        )
 
-    return None
+    if "semantic-similarity" in _metadata:
+        headers["x-litellm-semantic-similarity"] = str(_metadata["semantic-similarity"])
+
+    return headers
 
 
 def add_guardrail_to_applied_guardrails_header(

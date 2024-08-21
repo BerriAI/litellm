@@ -149,7 +149,7 @@ from litellm.proxy.common_utils.admin_ui_utils import (
     show_missing_vars_in_env,
 )
 from litellm.proxy.common_utils.callback_utils import (
-    get_applied_guardrails_header,
+    get_logging_caching_headers,
     get_remaining_tokens_and_requests_from_request_data,
     initialize_callbacks_on_proxy,
 )
@@ -543,9 +543,9 @@ def get_custom_headers(
         )
         headers.update(remaining_tokens_header)
 
-        applied_guardrails = get_applied_guardrails_header(request_data)
-        if applied_guardrails:
-            headers.update(applied_guardrails)
+        logging_caching_headers = get_logging_caching_headers(request_data)
+        if logging_caching_headers:
+            headers.update(logging_caching_headers)
 
     try:
         return {
