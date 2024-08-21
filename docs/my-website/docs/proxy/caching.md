@@ -7,6 +7,7 @@ Cache LLM Responses
 LiteLLM supports:
 - In Memory Cache
 - Redis Cache 
+- Qdrant Semantic Cache
 - Redis Semantic Cache
 - s3 Bucket Cache 
 
@@ -103,6 +104,66 @@ $ litellm --config /path/to/config.yaml
 ```
 </TabItem>
 
+
+<TabItem value="qdrant-semantic" label="Qdrant Semantic cache">
+
+Caching can be enabled by adding the `cache` key in the `config.yaml`
+
+#### Step 1: Add `cache` to the config.yaml
+```yaml
+model_list:
+  - model_name: fake-openai-endpoint
+    litellm_params:
+      model: openai/fake
+      api_key: fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+  - model_name: openai-embedding
+    litellm_params:
+      model: openai/text-embedding-3-small
+      api_key: os.environ/OPENAI_API_KEY
+
+litellm_settings:
+  set_verbose: True
+  cache: True          # set cache responses to True, litellm defaults to using a redis cache
+  cache_params:
+    type: qdrant-semantic
+    qdrant_semantic_cache_embedding_model: openai-embedding # the model should be defined on the model_list
+    qdrant_collection_name: test_collection
+    qdrant_quantization_config: binary
+    similarity_threshold: 0.8   # similarity threshold for semantic cache
+```
+
+#### Step 2: Add Qdrant Credentials to your .env
+
+```shell
+QDRANT_API_KEY = "16rJUMBRx*************"
+QDRANT_API_BASE = "https://5392d382-45*********.cloud.qdrant.io"
+```
+
+#### Step 3: Run proxy with config
+```shell
+$ litellm --config /path/to/config.yaml
+```
+
+
+#### Step 4. Test it
+
+```shell
+curl -i http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "fake-openai-endpoint",
+    "messages": [
+      {"role": "user", "content": "Hello"}
+    ]
+  }'
+```
+
+**Expect to see `x-litellm-semantic-similarity` in the response headers when semantic caching is one**
+
+</TabItem>
+
 <TabItem value="s3" label="s3 cache">
 
 #### Step 1: Add `cache` to the config.yaml
@@ -182,6 +243,9 @@ REDIS_<redis-kwarg-name> = ""
 $ litellm --config /path/to/config.yaml
 ```
 </TabItem>
+
+
+
 </Tabs>
 
 
