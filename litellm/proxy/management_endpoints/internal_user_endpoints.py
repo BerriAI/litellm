@@ -119,6 +119,7 @@ async def new_user(
             http_request=Request(
                 scope={"type": "http", "path": "/user/new"},
             ),
+            user_api_key_dict=user_api_key_dict,
         )
 
     if data.send_invite_email is True:
