@@ -804,7 +804,7 @@ def test_redis_cache_completion_stream():
 # test_redis_cache_completion_stream()
 
 
-# @pytest.mark.skip(reason="Local test. Requires running redis cluster locally.")
+@pytest.mark.skip(reason="Local test. Requires running redis cluster locally.")
 @pytest.mark.asyncio
 async def test_redis_cache_cluster_init_unit_test():
     try:
