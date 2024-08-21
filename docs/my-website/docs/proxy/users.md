@@ -684,7 +684,7 @@ Use this to set a default budget for users who you give keys to.
 
 This will apply when a user has [`user_role="internal_user"`](./self_serve.md#available-roles) (set this via `/user/new` or `/user/update`). 
 
-This will NOT apply if a key has a team_id (team budgets will apply then).
+This will NOT apply if a key has a team_id (team budgets will apply then). [Tell us how we can improve this!](https://github.com/BerriAI/litellm/issues)
 
 1. Define max budget in your config.yaml
 
