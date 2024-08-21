@@ -1826,6 +1826,38 @@ def test_vertexai_embedding():
         pytest.fail(f"Error occurred: {e}")
 
 
+@pytest.mark.asyncio()
+async def test_vertexai_multimodal_embedding():
+    image_path = "../proxy/cached_logo.jpg"
+    # Getting the base64 string
+    base64_image = encode_image(image_path)
+    print("base 64 img ", base64_image)
+    try:
+        litellm.set_verbose = True
+        response = await litellm.aembedding(
+            model="vertex_ai/multimodalembedding@001",
+            instances=[
+                {
+                    "image": {
+                        "gcsUri": "gs://cloud-samples-data/vertex-ai/llm/prompts/landmark1.png"
+                    },
+                    "text": "this is a unicorn",
+                },
+            ],
+        )
+        print(f"response:", response)
+        assert response.model == "multimodalembedding@001"
+
+        _response_data = response.data[0]
+
+        assert "imageEmbedding" in _response_data
+        assert "textEmbedding" in _response_data
+    except litellm.RateLimitError as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
 @pytest.mark.skip(
     reason="new test - works locally running into vertex version issues on ci/cd"
 )
