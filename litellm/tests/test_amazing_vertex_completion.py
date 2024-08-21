@@ -1828,10 +1828,8 @@ def test_vertexai_embedding():
 
 @pytest.mark.asyncio()
 async def test_vertexai_multimodal_embedding():
-    image_path = "../proxy/cached_logo.jpg"
-    # Getting the base64 string
-    base64_image = encode_image(image_path)
-    print("base 64 img ", base64_image)
+    load_vertex_ai_credentials()
+
     try:
         litellm.set_verbose = True
         response = await litellm.aembedding(
