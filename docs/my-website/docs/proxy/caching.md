@@ -185,6 +185,8 @@ $ litellm --config /path/to/config.yaml
 </Tabs>
 
 
+
+
 ## Using Caching - /chat/completions
 
 <Tabs>
@@ -229,6 +231,22 @@ curl --location 'http://0.0.0.0:4000/embeddings' \
 ```
 </TabItem>
 </Tabs>
+
+## Set cache for proxy, but not on the actual llm api call
+
+Use this if you just want to enable features like rate limiting, and loadbalancing across multiple instances.
+
+Set `supported_call_types: []` to disable caching on the actual api call. 
+
+
+```yaml
+litellm_settings:
+  cache: True
+  cache_params:
+    type: redis
+    supported_call_types: [] 
+```
+
 
 ## Debugging Caching - `/cache/ping`
 LiteLLM Proxy exposes a `/cache/ping` endpoint to test if the cache is working as expected
