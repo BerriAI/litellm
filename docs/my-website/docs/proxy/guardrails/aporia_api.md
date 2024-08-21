@@ -135,7 +135,13 @@ curl -i http://localhost:4000/v1/chat/completions \
 
 </Tabs>
 
-## 5. Control Guardrails per Project (API Key)
+## 5. ✨ Control Guardrails per Project (API Key)
+
+:::info
+
+✨ This is an Enterprise only feature [Contact us to get a free trial](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+
+:::
 
 Use this to control what guardrails run per project. In this tutorial we only want the following guardrails to run for 1 project (API Key)
 - `guardrails`: ["aporia-pre-guard", "aporia-post-guard"]
