@@ -354,6 +354,13 @@ def move_guardrails_to_metadata(
     """
     if user_api_key_dict.metadata:
         if "guardrails" in user_api_key_dict.metadata:
+            from litellm.proxy.proxy_server import premium_user
+
+            if premium_user is not True:
+                raise ValueError(
+                    f"Using Guardrails on API Key {CommonProxyErrors.not_premium_user}"
+                )
+
             data[_metadata_variable_name]["guardrails"] = user_api_key_dict.metadata[
                 "guardrails"
             ]
