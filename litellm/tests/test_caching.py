@@ -1733,8 +1733,10 @@ def test_caching_redis_simple(caplog, capsys):
     assert redis_service_logging_error is False
     assert "async success_callback: reaches cache for logging" not in captured.out
 
+
 @pytest.mark.asyncio
 async def test_qdrant_semantic_cache_acompletion():
+    litellm.set_verbose = True
     random_number = random.randint(
         1, 100000
     )  # add a random number to ensure it's always adding /reading from cache
@@ -1742,13 +1744,13 @@ async def test_qdrant_semantic_cache_acompletion():
     print("Testing Qdrant Semantic Caching with acompletion")
 
     litellm.cache = Cache(
-        type="qdrant-semantic", 
-        qdrant_host_type="cloud",
-        qdrant_url=os.getenv("QDRANT_URL"), 
-        qdrant_api_key=os.getenv("QDRANT_API_KEY"), 
-        qdrant_collection_name='test_collection', 
-        similarity_threshold=0.8, 
-        qdrant_quantization_config="binary"
+        type="qdrant-semantic",
+        _host_type="cloud",
+        qdrant_api_base=os.getenv("QDRANT_URL"),
+        qdrant_api_key=os.getenv("QDRANT_API_KEY"),
+        qdrant_collection_name="test_collection",
+        similarity_threshold=0.8,
+        qdrant_quantization_config="binary",
     )
 
     response1 = await litellm.acompletion(
@@ -1759,6 +1761,7 @@ async def test_qdrant_semantic_cache_acompletion():
                 "content": f"write a one sentence poem about: {random_number}",
             }
         ],
+        mock_response="hello",
         max_tokens=20,
     )
     print(f"Response1: {response1}")
@@ -1778,6 +1781,7 @@ async def test_qdrant_semantic_cache_acompletion():
     print(f"Response2: {response2}")
     assert response1.id == response2.id
 
+
 @pytest.mark.asyncio
 async def test_qdrant_semantic_cache_acompletion_stream():
     try:
@@ -1789,13 +1793,12 @@ async def test_qdrant_semantic_cache_acompletion_stream():
             }
         ]
         litellm.cache = Cache(
-            type="qdrant-semantic", 
-            qdrant_host_type="cloud",
-            qdrant_url=os.getenv("QDRANT_URL"), 
-            qdrant_api_key=os.getenv("QDRANT_API_KEY"), 
-            qdrant_collection_name='test_collection', 
-            similarity_threshold=0.8, 
-            qdrant_quantization_config="binary"
+            type="qdrant-semantic",
+            qdrant_api_base=os.getenv("QDRANT_URL"),
+            qdrant_api_key=os.getenv("QDRANT_API_KEY"),
+            qdrant_collection_name="test_collection",
+            similarity_threshold=0.8,
+            qdrant_quantization_config="binary",
         )
         print("Test Qdrant Semantic Caching with streaming + acompletion")
         response_1_content = ""
@@ -1807,6 +1810,7 @@ async def test_qdrant_semantic_cache_acompletion_stream():
             max_tokens=40,
             temperature=1,
             stream=True,
+            mock_response="hi",
         )
         async for chunk in response1:
             response_1_id = chunk.id
@@ -1830,7 +1834,9 @@ async def test_qdrant_semantic_cache_acompletion_stream():
         assert (
             response_1_content == response_2_content
         ), f"Response 1 != Response 2. Same params, Response 1{response_1_content} != Response 2{response_2_content}"
-        assert (response_1_id == response_2_id), f"Response 1 id != Response 2 id, Response 1 id: {response_1_id} != Response 2 id: {response_2_id}" 
+        assert (
+            response_1_id == response_2_id
+        ), f"Response 1 id != Response 2 id, Response 1 id: {response_1_id} != Response 2 id: {response_2_id}"
         litellm.cache = None
         litellm.success_callback = []
         litellm._async_success_callback = []
