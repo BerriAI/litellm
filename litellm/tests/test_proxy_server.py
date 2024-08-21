@@ -1116,8 +1116,8 @@ async def test_add_callback_via_key_litellm_pre_call_utils(prisma_client):
                         "callback_name": "langfuse",
                         "callback_type": "success",
                         "callback_vars": {
-                            "langfuse_public_key": "os.environ/LANGFUSE_PUBLIC_KEY",
-                            "langfuse_secret_key": "os.environ/LANGFUSE_SECRET_KEY",
+                            "langfuse_public_key": "my-mock-public-key",
+                            "langfuse_secret_key": "my-mock-secret-key",
                             "langfuse_host": "https://us.cloud.langfuse.com",
                         },
                     }
@@ -1165,7 +1165,9 @@ async def test_add_callback_via_key_litellm_pre_call_utils(prisma_client):
     assert "success_callback" in new_data
     assert new_data["success_callback"] == ["langfuse"]
     assert "langfuse_public_key" in new_data
+    assert new_data["langfuse_public_key"] == "my-mock-public-key"
     assert "langfuse_secret_key" in new_data
+    assert new_data["langfuse_secret_key"] == "my-mock-secret-key"
 
 
 @pytest.mark.asyncio
