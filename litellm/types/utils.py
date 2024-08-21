@@ -1218,6 +1218,7 @@ class StandardLoggingPayload(TypedDict):
     metadata: StandardLoggingMetadata
     cache_hit: Optional[bool]
     cache_key: Optional[str]
+    saved_cache_cost: Optional[float]
     request_tags: list
     end_user: Optional[str]
     requester_ip_address: Optional[str]
