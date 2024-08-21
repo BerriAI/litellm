@@ -16,7 +16,7 @@ model_list:
       api_key: os.environ/OPENAI_API_KEY
 
 guardrails:
-  - guardrail_name: "lakera-pre-guard"
+  - guardrail_name: "lakera-guard"
     litellm_params:
       guardrail: lakera  # supported values: "aporia", "bedrock", "lakera"
       mode: "during_call"
@@ -62,7 +62,7 @@ curl -i http://localhost:4000/v1/chat/completions \
     "messages": [
       {"role": "user", "content": "hi my email is ishaan@berri.ai"}
     ],
-    "guardrails": ["lakera-pre-guard"]
+    "guardrails": ["lakera-guard"]
   }'
 ```
 
@@ -117,7 +117,7 @@ curl -i http://localhost:4000/v1/chat/completions \
     "messages": [
       {"role": "user", "content": "hi what is the weather"}
     ],
-    "guardrails": ["lakera-pre-guard"]
+    "guardrails": ["lakera-guard"]
   }'
 ```
 
@@ -142,7 +142,7 @@ model_list:
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
 
 guardrails:
-  - guardrail_name: "lakera-pre-guard"
+  - guardrail_name: "lakera-guard"
     litellm_params:
       guardrail: lakera  # supported values: "aporia", "bedrock", "lakera"
       mode: "during_call"
