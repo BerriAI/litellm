@@ -3231,6 +3231,9 @@ def embedding(
         "cooldown_time",
         "tags",
         "azure_ad_token_provider",
+        "tenant_id",
+        "client_id",
+        "client_secret",
     ]
     default_params = openai_params + litellm_params
     non_default_params = {
