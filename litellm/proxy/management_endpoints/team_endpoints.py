@@ -479,7 +479,8 @@ async def team_member_add(
     ## CHECK IF USER IS PROXY ADMIN OR TEAM ADMIN
 
     if (
-        user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
+        hasattr(user_api_key_dict, "user_role")
+        and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
         and not _is_user_team_admin(
             user_api_key_dict=user_api_key_dict, team_obj=complete_team_data
         )
