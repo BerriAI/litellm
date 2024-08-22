@@ -100,14 +100,14 @@ class GuardrailEventHooks(str, Enum):
     during_call = "during_call"
 
 
-class BedrockTextContent(TypedDict):
+class BedrockTextContent(TypedDict, total=False):
     text: str
 
 
-class BedrockContentItem(TypedDict):
+class BedrockContentItem(TypedDict, total=False):
     text: BedrockTextContent
 
 
-class BedrockMessage(TypedDict):
+class BedrockRequest(TypedDict, total=False):
     source: Literal["INPUT", "OUTPUT"]
     content: List[BedrockContentItem]
