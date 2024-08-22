@@ -120,6 +120,8 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         max_parallel_requests = user_api_key_dict.max_parallel_requests
         if max_parallel_requests is None:
             max_parallel_requests = sys.maxsize
+        if data is None:
+            data = {}
         global_max_parallel_requests = data.get("metadata", {}).get(
             "global_max_parallel_requests", None
         )
