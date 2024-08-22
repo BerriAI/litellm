@@ -1,9 +1,11 @@
 model_list:
   - model_name: gpt-4
     litellm_params:
-      model: openai/fake
-      api_key: fake-key
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+      model: azure/chatgpt-v-2
+      api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
+      api_version: "2023-05-15"
+      azure_ad_token_provider: True
+
 
 guardrails:
   - guardrail_name: "lakera-pre-guard"
