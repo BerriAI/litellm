@@ -172,7 +172,7 @@ def set_client(litellm_router_instance: LitellmRouter, model: dict):
             organization_env_name = organization.replace("os.environ/", "")
             organization = litellm.get_secret(organization_env_name)
             litellm_params["organization"] = organization
-
+        azure_ad_token_provider = None
         if litellm_params.get("tenant_id"):
             verbose_router_logger.debug("Using Azure AD Token Provider for Azure Auth")
             azure_ad_token_provider = get_azure_ad_token_from_entrata_id(
