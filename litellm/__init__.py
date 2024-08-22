@@ -339,6 +339,7 @@ api_version = None
 organization = None
 project = None
 config_path = None
+vertex_ai_safety_settings: Optional[dict] = None
 ####### COMPLETION MODELS ###################
 open_ai_chat_completion_models: List = []
 open_ai_text_completion_models: List = []
