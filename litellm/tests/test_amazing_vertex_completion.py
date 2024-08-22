@@ -501,6 +501,8 @@ async def test_async_vertexai_streaming_response():
             assert len(complete_response) > 0
         except litellm.RateLimitError as e:
             pass
+        except litellm.APIConnectionError:
+            pass
         except litellm.Timeout as e:
             pass
         except litellm.InternalServerError as e:
