@@ -2,7 +2,7 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# 💥 OpenAI Proxy Server
+# 💥 LiteLLM Proxy Server
 
 LiteLLM Server manages:
 

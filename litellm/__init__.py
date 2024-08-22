@@ -43,26 +43,17 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "logfire",
     "dynamic_rate_limiter",
     "langsmith",
+    "prometheus",
     "galileo",
     "braintrust",
     "arize",
+    "gcs_bucket",
 ]
 _known_custom_logger_compatible_callbacks: List = list(
     get_args(_custom_logger_compatible_callbacks_literal)
 )
 callbacks: List[Union[Callable, _custom_logger_compatible_callbacks_literal]] = []
-_langfuse_default_tags: Optional[
-    List[
-        Literal[
-            "user_api_key_alias",
-            "user_api_key_user_id",
-            "user_api_key_user_email",
-            "user_api_key_team_alias",
-            "semantic-similarity",
-            "proxy_base_url",
-        ]
-    ]
-] = None
+langfuse_default_tags: Optional[List[str]] = None
 _async_input_callback: List[Callable] = (
     []
 )  # internal variable - async custom callbacks are routed here.
@@ -143,8 +134,12 @@ enable_preview_features: bool = False
 return_response_headers: bool = (
     False  # get response headers from LLM Api providers - example x-remaining-requests,
 )
+enable_json_schema_validation: bool = False
 ##################
 logging: bool = True
+enable_caching_on_provider_specific_optional_params: bool = (
+    False  # feature-flag for caching on optional params - e.g. 'top_k'
+)
 caching: bool = (
     False  # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
 )
@@ -165,6 +160,7 @@ budget_duration: Optional[str] = (
 default_soft_budget: float = (
     50.0  # by default all litellm proxy keys have a soft budget of 50.0
 )
+forward_traceparent_to_llm_provider: bool = False
 _openai_finish_reasons = ["stop", "length", "function_call", "content_filter", "null"]
 _openai_completion_params = [
     "functions",
@@ -254,10 +250,13 @@ upperbound_key_generate_params: Optional[LiteLLM_UpperboundKeyGenerateParams] = 
 default_user_params: Optional[Dict] = None
 default_team_settings: Optional[List] = None
 max_user_budget: Optional[float] = None
+max_internal_user_budget: Optional[float] = None
+internal_user_budget_duration: Optional[str] = None
 max_end_user_budget: Optional[float] = None
 #### REQUEST PRIORITIZATION ####
 priority_reservation: Optional[Dict[str, float]] = None
 #### RELIABILITY ####
+REPEATED_STREAMING_CHUNK_LIMIT = 100  # catch if model starts looping the same chunk while streaming. Uses high default to prevent false positives.
 request_timeout: float = 6000
 module_level_aclient = AsyncHTTPHandler(timeout=request_timeout)
 module_level_client = HTTPHandler(timeout=request_timeout)
@@ -266,7 +265,7 @@ default_fallbacks: Optional[List] = None
 fallbacks: Optional[List] = None
 context_window_fallbacks: Optional[List] = None
 content_policy_fallbacks: Optional[List] = None
-allowed_fails: int = 0
+allowed_fails: int = 3
 num_retries_per_request: Optional[int] = (
     None  # for the request overall (incl. fallbacks + model retries)
 )
@@ -340,6 +339,7 @@ api_version = None
 organization = None
 project = None
 config_path = None
+vertex_ai_safety_settings: Optional[dict] = None
 ####### COMPLETION MODELS ###################
 open_ai_chat_completion_models: List = []
 open_ai_text_completion_models: List = []
@@ -357,6 +357,8 @@ vertex_text_models: List = []
 vertex_code_text_models: List = []
 vertex_embedding_models: List = []
 vertex_anthropic_models: List = []
+vertex_llama3_models: List = []
+vertex_mistral_models: List = []
 ai21_models: List = []
 nlp_cloud_models: List = []
 aleph_alpha_models: List = []
@@ -399,6 +401,12 @@ for key, value in model_cost.items():
     elif value.get("litellm_provider") == "vertex_ai-anthropic_models":
         key = key.replace("vertex_ai/", "")
         vertex_anthropic_models.append(key)
+    elif value.get("litellm_provider") == "vertex_ai-llama_models":
+        key = key.replace("vertex_ai/", "")
+        vertex_llama3_models.append(key)
+    elif value.get("litellm_provider") == "vertex_ai-mistral_models":
+        key = key.replace("vertex_ai/", "")
+        vertex_mistral_models.append(key)
     elif value.get("litellm_provider") == "ai21":
         ai21_models.append(key)
     elif value.get("litellm_provider") == "nlp_cloud":
@@ -448,6 +456,7 @@ openai_compatible_providers: List = [
     "empower",
     "friendliai",
     "azure_ai",
+    "github",
 ]
 
 
@@ -688,12 +697,13 @@ provider_list: List = [
     "predibase",
     "databricks",
     "empower",
+    "github",
     "custom",  # custom apis
 ]
 
 models_by_provider: dict = {
     "openai": open_ai_chat_completion_models + open_ai_text_completion_models,
-    "cohere": cohere_models,
+    "cohere": cohere_models + cohere_chat_models,
     "cohere_chat": cohere_chat_models,
     "anthropic": anthropic_models,
     "replicate": replicate_models,
@@ -805,10 +815,22 @@ from .utils import (
     ModelResponse,
     EmbeddingResponse,
     ImageResponse,
+    TranscriptionResponse,
+    TextCompletionResponse,
     get_provider_fields,
+    ModelResponseListIterator,
 )
 
+ALL_LITELLM_RESPONSE_TYPES = [
+    ModelResponse,
+    EmbeddingResponse,
+    ImageResponse,
+    TranscriptionResponse,
+    TextCompletionResponse,
+]
+
 from .types.utils import ImageObject
+from .llms.custom_llm import CustomLLM
 from .llms.huggingface_restapi import HuggingfaceConfig
 from .llms.anthropic import AnthropicConfig
 from .llms.databricks import DatabricksConfig, DatabricksEmbeddingConfig
@@ -828,6 +850,7 @@ from .llms.petals import PetalsConfig
 from .llms.vertex_httpx import VertexGeminiConfig, GoogleAIStudioGeminiConfig
 from .llms.vertex_ai import VertexAIConfig, VertexAITextEmbeddingConfig
 from .llms.vertex_ai_anthropic import VertexAIAnthropicConfig
+from .llms.vertex_ai_partner import VertexAILlama3Config
 from .llms.sagemaker import SagemakerConfig
 from .llms.ollama import OllamaConfig
 from .llms.ollama_chat import OllamaChatConfig
@@ -836,6 +859,7 @@ from .llms.bedrock_httpx import (
     AmazonCohereChatConfig,
     AmazonConverseConfig,
     BEDROCK_CONVERSE_MODELS,
+    bedrock_tool_name_mappings,
 )
 from .llms.bedrock import (
     AmazonTitanConfig,
@@ -883,6 +907,7 @@ from .exceptions import (
     APIError,
     Timeout,
     APIConnectionError,
+    UnsupportedParamsError,
     APIResponseValidationError,
     UnprocessableEntityError,
     InternalServerError,
@@ -895,6 +920,7 @@ from .proxy.proxy_cli import run_server
 from .router import Router
 from .assistants.main import *
 from .batches.main import *
+from .fine_tuning.main import *
 from .files.main import *
 from .scheduler import *
 from .cost_calculator import response_cost_calculator, cost_per_token
@@ -903,3 +929,12 @@ from .cost_calculator import response_cost_calculator, cost_per_token
 from .types.adapter import AdapterItem
 
 adapters: List[AdapterItem] = []
+
+### CUSTOM LLMs ###
+from .types.llms.custom_llm import CustomLLMItem
+from .types.utils import GenericStreamingChunk
+
+custom_provider_map: List[CustomLLMItem] = []
+_custom_providers: List[str] = (
+    []
+)  # internal helper util, used to track names of custom providers

@@ -1,6 +1,6 @@
 import Image from '@theme/IdealImage';
 
-# 🔥 Arize AI - Logging LLM Input/Output
+# Arize AI
 
 AI Observability and Evaluation Platform
 

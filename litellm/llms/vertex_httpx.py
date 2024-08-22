@@ -9,10 +9,11 @@ import types
 import uuid
 from enum import Enum
 from functools import partial
-from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
+from typing import Any, Callable, Coroutine, Dict, List, Literal, Optional, Tuple, Union
 
 import httpx  # type: ignore
 import requests  # type: ignore
+from openai.types.image import Image
 
 import litellm
 import litellm.litellm_core_utils
@@ -37,12 +38,15 @@ from litellm.types.llms.vertex_ai import (
     FunctionDeclaration,
     GenerateContentResponseBody,
     GenerationConfig,
+    Instance,
+    InstanceVideo,
     PartType,
     RequestBody,
     SafetSettingsConfig,
     SystemInstructions,
     ToolConfig,
     Tools,
+    VertexMultimodalEmbeddingRequest,
 )
 from litellm.types.utils import GenericStreamingChunk
 from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
@@ -180,8 +184,19 @@ class GoogleAIStudioGeminiConfig:  # key diff from VertexAI - 'frequency_penalty
                     optional_params["stop_sequences"] = value
             if param == "max_tokens":
                 optional_params["max_output_tokens"] = value
-            if param == "response_format" and value["type"] == "json_object":  # type: ignore
-                optional_params["response_mime_type"] = "application/json"
+            if param == "response_format":  # type: ignore
+                if value["type"] == "json_object":  # type: ignore
+                    if value["type"] == "json_object":  # type: ignore
+                        optional_params["response_mime_type"] = "application/json"
+                    elif value["type"] == "text":  # type: ignore
+                        optional_params["response_mime_type"] = "text/plain"
+                    if "response_schema" in value:  # type: ignore
+                        optional_params["response_mime_type"] = "application/json"
+                        optional_params["response_schema"] = value["response_schema"]  # type: ignore
+                elif value["type"] == "json_schema":  # type: ignore
+                    if "json_schema" in value and "schema" in value["json_schema"]:  # type: ignore
+                        optional_params["response_mime_type"] = "application/json"
+                        optional_params["response_schema"] = value["json_schema"]["schema"]  # type: ignore
             if param == "tools" and isinstance(value, list):
                 gtool_func_declarations = []
                 for tool in value:
@@ -195,8 +210,9 @@ class GoogleAIStudioGeminiConfig:  # key diff from VertexAI - 'frequency_penalty
                     gtool_func_declaration = FunctionDeclaration(
                         name=tool["function"]["name"],
                         description=tool["function"].get("description", ""),
-                        parameters=_parameters,
                     )
+                    if len(_parameters.keys()) > 0:
+                        gtool_func_declaration["parameters"] = _parameters
                     gtool_func_declarations.append(gtool_func_declaration)
                 optional_params["tools"] = [
                     Tools(function_declarations=gtool_func_declarations)
@@ -389,7 +405,12 @@ class VertexGeminiConfig:
                 elif value["type"] == "text":
                     optional_params["response_mime_type"] = "text/plain"
                 if "response_schema" in value:
+                    optional_params["response_mime_type"] = "application/json"
                     optional_params["response_schema"] = value["response_schema"]
+                elif value["type"] == "json_schema":  # type: ignore
+                    if "json_schema" in value and "schema" in value["json_schema"]:  # type: ignore
+                        optional_params["response_mime_type"] = "application/json"
+                        optional_params["response_schema"] = value["json_schema"]["schema"]  # type: ignore
             if param == "frequency_penalty":
                 optional_params["frequency_penalty"] = value
             if param == "presence_penalty":
@@ -408,12 +429,13 @@ class VertexGeminiConfig:
                         )
                         gtool_func_declarations.append(gtool_func_declaration)
                     except KeyError:
-                        # assume it's a provider-specific param
-                        verbose_logger.warning(
-                            "Got KeyError parsing tool={}. Assuming it's a provider-specific param. Use `litellm.set_verbose` or `litellm --detailed_debug` to see raw request."
-                        )
                         if tool.get("googleSearchRetrieval", None) is not None:
                             googleSearchRetrieval = tool["googleSearchRetrieval"]
+                        else:
+                            # assume it's a provider-specific param
+                            verbose_logger.warning(
+                                "Got KeyError parsing tool={}. Assuming it's a provider-specific param. Use `litellm.set_verbose` or `litellm --detailed_debug` to see raw request."
+                            )
                 _tools = Tools(
                     function_declarations=gtool_func_declarations,
                 )
@@ -477,6 +499,16 @@ class VertexGeminiConfig:
             "SPII": "The token generation was stopped as the response was flagged for Sensitive Personally Identifiable Information (SPII) contents.",
         }
 
+    def translate_exception_str(self, exception_string: str):
+        if (
+            "GenerateContentRequest.tools[0].function_declarations[0].parameters.properties: should be non-empty for OBJECT type"
+            in exception_string
+        ):
+            return "'properties' field in tools[0]['function']['parameters'] cannot be empty if 'type' == 'object'. Received error from provider - {}".format(
+                exception_string
+            )
+        return exception_string
+
 
 async def make_call(
     client: Optional[AsyncHTTPHandler],
@@ -490,8 +522,15 @@ async def make_call(
     if client is None:
         client = AsyncHTTPHandler()  # Create a new client if none provided
 
-    response = await client.post(api_base, headers=headers, data=data, stream=True)
-
+    try:
+        response = await client.post(api_base, headers=headers, data=data, stream=True)
+        response.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        exception_string = str(await e.response.aread())
+        raise VertexAIError(
+            status_code=e.response.status_code,
+            message=VertexGeminiConfig().translate_exception_str(exception_string),
+        )
     if response.status_code != 200:
         raise VertexAIError(status_code=response.status_code, message=response.text)
 
@@ -562,6 +601,10 @@ class VertexLLM(BaseLLM):
         self._credentials: Optional[Any] = None
         self.project_id: Optional[str] = None
         self.async_handler: Optional[AsyncHTTPHandler] = None
+        self.SUPPORTED_MULTIMODAL_EMBEDDING_MODELS = [
+            "multimodalembedding",
+            "multimodalembedding@001",
+        ]
 
     def _process_response(
         self,
@@ -688,6 +731,8 @@ class VertexLLM(BaseLLM):
         try:
             ## CHECK IF GROUNDING METADATA IN REQUEST
             grounding_metadata: List[dict] = []
+            safety_ratings: List = []
+            citation_metadata: List = []
             ## GET TEXT ##
             chat_completion_message = {"role": "assistant"}
             content_str = ""
@@ -699,6 +744,11 @@ class VertexLLM(BaseLLM):
                 if "groundingMetadata" in candidate:
                     grounding_metadata.append(candidate["groundingMetadata"])
 
+                if "safetyRatings" in candidate:
+                    safety_ratings.append(candidate["safetyRatings"])
+
+                if "citationMetadata" in candidate:
+                    citation_metadata.append(candidate["citationMetadata"])
                 if "text" in candidate["content"]["parts"][0]:
                     content_str = candidate["content"]["parts"][0]["text"]
 
@@ -746,9 +796,25 @@ class VertexLLM(BaseLLM):
             setattr(model_response, "usage", usage)
 
             ## ADD GROUNDING METADATA ##
-            model_response._hidden_params["vertex_ai_grounding_metadata"] = (
+            setattr(model_response, "vertex_ai_grounding_metadata", grounding_metadata)
+            model_response._hidden_params[
+                "vertex_ai_grounding_metadata"
+            ] = (  # older approach - maintaining to prevent regressions
                 grounding_metadata
             )
+
+            ## ADD SAFETY RATINGS ##
+            setattr(model_response, "vertex_ai_safety_results", safety_ratings)
+            model_response._hidden_params["vertex_ai_safety_results"] = (
+                safety_ratings  # older approach - maintaining to prevent regressions
+            )
+
+            ## ADD CITATION METADATA ##
+            setattr(model_response, "vertex_ai_citation_metadata", citation_metadata)
+            model_response._hidden_params["vertex_ai_citation_metadata"] = (
+                citation_metadata  # older approach - maintaining to prevent regressions
+            )
+
         except Exception as e:
             raise VertexAIError(
                 message="Received={}, Error converting to valid response block={}. File an issue if litellm error - https://github.com/BerriAI/litellm/issues".format(
@@ -774,7 +840,20 @@ class VertexLLM(BaseLLM):
         if credentials is not None and isinstance(credentials, str):
             import google.oauth2.service_account
 
-            json_obj = json.loads(credentials)
+            verbose_logger.debug(
+                "Vertex: Loading vertex credentials from %s", credentials
+            )
+            verbose_logger.debug(
+                "Vertex: checking if credentials is a valid path, os.path.exists(%s)=%s, current dir %s",
+                credentials,
+                os.path.exists(credentials),
+                os.getcwd(),
+            )
+
+            if os.path.exists(credentials):
+                json_obj = json.load(open(credentials))
+            else:
+                json_obj = json.loads(credentials)
 
             creds = google.oauth2.service_account.Credentials.from_service_account_info(
                 json_obj,
@@ -839,6 +918,21 @@ class VertexLLM(BaseLLM):
 
         return self._credentials.token, self.project_id
 
+    def is_using_v1beta1_features(self, optional_params: dict) -> bool:
+        """
+        VertexAI only supports ContextCaching on v1beta1
+
+        use this helper to decide if request should be sent to v1 or v1beta1
+
+        Returns v1beta1 if context caching is enabled
+        Returns v1 in all other cases
+        """
+        if "cached_content" in optional_params:
+            return True
+        if "CachedContent" in optional_params:
+            return True
+        return False
+
     def _get_token_and_url(
         self,
         model: str,
@@ -849,6 +943,7 @@ class VertexLLM(BaseLLM):
         stream: Optional[bool],
         custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
         api_base: Optional[str],
+        should_use_v1beta1_features: Optional[bool] = False,
     ) -> Tuple[Optional[str], str]:
         """
         Internal function. Returns the token and url for the call.
@@ -878,12 +973,13 @@ class VertexLLM(BaseLLM):
             vertex_location = self.get_vertex_region(vertex_region=vertex_location)
 
             ### SET RUNTIME ENDPOINT ###
+            version = "v1beta1" if should_use_v1beta1_features is True else "v1"
             endpoint = "generateContent"
             if stream is True:
                 endpoint = "streamGenerateContent"
-                url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}?alt=sse"
+                url = f"https://{vertex_location}-aiplatform.googleapis.com/{version}/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}?alt=sse"
             else:
-                url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}"
+                url = f"https://{vertex_location}-aiplatform.googleapis.com/{version}/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}"
 
         if (
             api_base is not None
@@ -1013,6 +1109,9 @@ class VertexLLM(BaseLLM):
     ) -> Union[ModelResponse, CustomStreamWrapper]:
         stream: Optional[bool] = optional_params.pop("stream", None)  # type: ignore
 
+        should_use_v1beta1_features = self.is_using_v1beta1_features(
+            optional_params=optional_params
+        )
         auth_header, url = self._get_token_and_url(
             model=model,
             gemini_api_key=gemini_api_key,
@@ -1022,6 +1121,7 @@ class VertexLLM(BaseLLM):
             stream=stream,
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
+            should_use_v1beta1_features=should_use_v1beta1_features,
         )
 
         ## TRANSFORMATION ##
@@ -1189,7 +1289,7 @@ class VertexLLM(BaseLLM):
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code = err.response.status_code
-            raise VertexAIError(status_code=error_code, message=response.text)
+            raise VertexAIError(status_code=error_code, message=err.response.text)
         except httpx.TimeoutException:
             raise VertexAIError(status_code=408, message="Timeout error occurred.")
 
@@ -1310,12 +1410,18 @@ class VertexLLM(BaseLLM):
         """
 
         _json_response = response.json()
+        if "predictions" not in _json_response:
+            raise litellm.InternalServerError(
+                message=f"image generation response does not contain 'predictions', got {_json_response}",
+                llm_provider="vertex_ai",
+                model=model,
+            )
         _predictions = _json_response["predictions"]
 
-        _response_data: List[litellm.ImageObject] = []
+        _response_data: List[Image] = []
         for _prediction in _predictions:
             _bytes_base64_encoded = _prediction["bytesBase64Encoded"]
-            image_object = litellm.ImageObject(b64_json=_bytes_base64_encoded)
+            image_object = Image(b64_json=_bytes_base64_encoded)
             _response_data.append(image_object)
 
         model_response.data = _response_data
@@ -1422,15 +1528,177 @@ class VertexLLM(BaseLLM):
         """
 
         _json_response = response.json()
+
+        if "predictions" not in _json_response:
+            raise litellm.InternalServerError(
+                message=f"image generation response does not contain 'predictions', got {_json_response}",
+                llm_provider="vertex_ai",
+                model=model,
+            )
+
         _predictions = _json_response["predictions"]
 
-        _response_data: List[litellm.ImageObject] = []
+        _response_data: List[Image] = []
         for _prediction in _predictions:
             _bytes_base64_encoded = _prediction["bytesBase64Encoded"]
-            image_object = litellm.ImageObject(b64_json=_bytes_base64_encoded)
+            image_object = Image(b64_json=_bytes_base64_encoded)
             _response_data.append(image_object)
 
         model_response.data = _response_data
+
+        return model_response
+
+    def multimodal_embedding(
+        self,
+        model: str,
+        input: Union[list, str],
+        print_verbose,
+        model_response: litellm.EmbeddingResponse,
+        optional_params: dict,
+        api_key: Optional[str] = None,
+        logging_obj=None,
+        encoding=None,
+        vertex_project=None,
+        vertex_location=None,
+        vertex_credentials=None,
+        aembedding=False,
+        timeout=300,
+        client=None,
+    ):
+
+        if client is None:
+            _params = {}
+            if timeout is not None:
+                if isinstance(timeout, float) or isinstance(timeout, int):
+                    _httpx_timeout = httpx.Timeout(timeout)
+                    _params["timeout"] = _httpx_timeout
+            else:
+                _params["timeout"] = httpx.Timeout(timeout=600.0, connect=5.0)
+
+            sync_handler: HTTPHandler = HTTPHandler(**_params)  # type: ignore
+        else:
+            sync_handler = client  # type: ignore
+
+        url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:predict"
+
+        auth_header, _ = self._ensure_access_token(
+            credentials=vertex_credentials, project_id=vertex_project
+        )
+        optional_params = optional_params or {}
+
+        request_data = VertexMultimodalEmbeddingRequest()
+
+        if "instances" in optional_params:
+            request_data["instances"] = optional_params["instances"]
+        elif isinstance(input, list):
+            request_data["instances"] = input
+        else:
+            # construct instances
+            vertex_request_instance = Instance(**optional_params)
+
+            if isinstance(input, str):
+                vertex_request_instance["text"] = input
+
+            request_data["instances"] = [vertex_request_instance]
+
+        request_str = f"\n curl -X POST \\\n -H \"Authorization: Bearer {auth_header[:10] + 'XXXXXXXXXX'}\" \\\n -H \"Content-Type: application/json; charset=utf-8\" \\\n -d {request_data} \\\n \"{url}\""
+        logging_obj.pre_call(
+            input=[],
+            api_key=None,
+            additional_args={
+                "complete_input_dict": optional_params,
+                "request_str": request_str,
+            },
+        )
+
+        logging_obj.pre_call(
+            input=[],
+            api_key=None,
+            additional_args={
+                "complete_input_dict": optional_params,
+                "request_str": request_str,
+            },
+        )
+
+        headers = {
+            "Content-Type": "application/json; charset=utf-8",
+            "Authorization": f"Bearer {auth_header}",
+        }
+
+        if aembedding is True:
+            return self.async_multimodal_embedding(
+                model=model,
+                api_base=url,
+                data=request_data,
+                timeout=timeout,
+                headers=headers,
+                client=client,
+                model_response=model_response,
+            )
+
+        response = sync_handler.post(
+            url=url,
+            headers=headers,
+            data=json.dumps(request_data),
+        )
+
+        if response.status_code != 200:
+            raise Exception(f"Error: {response.status_code} {response.text}")
+
+        _json_response = response.json()
+        if "predictions" not in _json_response:
+            raise litellm.InternalServerError(
+                message=f"embedding response does not contain 'predictions', got {_json_response}",
+                llm_provider="vertex_ai",
+                model=model,
+            )
+        _predictions = _json_response["predictions"]
+
+        model_response.data = _predictions
+        model_response.model = model
+
+        return model_response
+
+    async def async_multimodal_embedding(
+        self,
+        model: str,
+        api_base: str,
+        data: VertexMultimodalEmbeddingRequest,
+        model_response: litellm.EmbeddingResponse,
+        timeout: Optional[Union[float, httpx.Timeout]],
+        headers={},
+        client: Optional[AsyncHTTPHandler] = None,
+    ) -> litellm.EmbeddingResponse:
+        if client is None:
+            _params = {}
+            if timeout is not None:
+                if isinstance(timeout, float) or isinstance(timeout, int):
+                    timeout = httpx.Timeout(timeout)
+                _params["timeout"] = timeout
+            client = AsyncHTTPHandler(**_params)  # type: ignore
+        else:
+            client = client  # type: ignore
+
+        try:
+            response = await client.post(api_base, headers=headers, json=data)  # type: ignore
+            response.raise_for_status()
+        except httpx.HTTPStatusError as err:
+            error_code = err.response.status_code
+            raise VertexAIError(status_code=error_code, message=err.response.text)
+        except httpx.TimeoutException:
+            raise VertexAIError(status_code=408, message="Timeout error occurred.")
+
+        _json_response = response.json()
+        if "predictions" not in _json_response:
+            raise litellm.InternalServerError(
+                message=f"embedding response does not contain 'predictions', got {_json_response}",
+                llm_provider="vertex_ai",
+                model=model,
+            )
+        _predictions = _json_response["predictions"]
+
+        model_response.data = _predictions
+        model_response.model = model
 
         return model_response
 

@@ -1,3 +1,6 @@
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
 # Ollama 
 LiteLLM supports all models from [Ollama](https://github.com/ollama/ollama)
 
@@ -83,6 +86,120 @@ response = completion(
   format = "json"
 )
 ```
+
+## Example Usage - Tool Calling 
+
+To use ollama tool calling, pass `tools=[{..}]` to `litellm.completion()` 
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+import litellm 
+
+## [OPTIONAL] REGISTER MODEL - not all ollama models support function calling, litellm defaults to json mode tool calls if native tool calling not supported.
+
+# litellm.register_model(model_cost={
+#                 "ollama_chat/llama3.1": { 
+#                   "supports_function_calling": true
+#                 },
+#             })
+
+tools = [
+  {
+    "type": "function",
+    "function": {
+      "name": "get_current_weather",
+      "description": "Get the current weather in a given location",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "location": {
+            "type": "string",
+            "description": "The city and state, e.g. San Francisco, CA",
+          },
+          "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+        },
+        "required": ["location"],
+      },
+    }
+  }
+]
+
+messages = [{"role": "user", "content": "What's the weather like in Boston today?"}]
+
+
+response = completion(
+  model="ollama_chat/llama3.1",
+  messages=messages,
+  tools=tools
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml 
+
+```yaml
+model_list:
+  - model_name: "llama3.1"             
+    litellm_params:
+      model: "ollama_chat/llama3.1"
+    model_info:
+      supports_function_calling: true
+```
+
+2. Start proxy 
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-d '{
+    "model": "llama3.1",
+  "messages": [
+    {
+      "role": "user",
+      "content": "What'\''s the weather like in Boston today?"
+    }
+  ],
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_current_weather",
+        "description": "Get the current weather in a given location",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "location": {
+              "type": "string",
+              "description": "The city and state, e.g. San Francisco, CA"
+            },
+            "unit": {
+              "type": "string",
+              "enum": ["celsius", "fahrenheit"]
+            }
+          },
+          "required": ["location"]
+        }
+      }
+    }
+  ],
+  "tool_choice": "auto",
+  "stream": true
+}'
+```
+</TabItem>
+</Tabs>
 
 ## Using ollama `api/chat` 
 In order to send ollama requests to `POST /api/chat` on your ollama server, set the model prefix to `ollama_chat`

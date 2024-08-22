@@ -14,7 +14,7 @@ In production, litellm supports using Redis as a way to track cooldown server an
 
 :::info
 
-If you want a server to load balance across different LLM APIs, use our [OpenAI Proxy Server](./proxy/load_balancing.md)
+If you want a server to load balance across different LLM APIs, use our [LiteLLM Proxy Server](./proxy/load_balancing.md)
 
 :::
 
@@ -88,8 +88,8 @@ print(response)
 ### Available Endpoints
 - `router.completion()` - chat completions endpoint to call 100+ LLMs
 - `router.acompletion()` - async chat completion calls
-- `router.embeddings()` - embedding endpoint for Azure, OpenAI, Huggingface endpoints
-- `router.aembeddings()` - async embeddings calls
+- `router.embedding()` - embedding endpoint for Azure, OpenAI, Huggingface endpoints
+- `router.aembedding()` - async embeddings calls
 - `router.text_completion()` - completion calls in the old OpenAI `/v1/completions` endpoint format
 - `router.atext_completion()` - async text completion calls
 - `router.image_generation()` - completion calls in OpenAI `/v1/images/generations` endpoint format
@@ -1637,7 +1637,7 @@ response = router.completion(
 
 ## Deploy Router 
 
-If you want a server to load balance across different LLM APIs, use our [OpenAI Proxy Server](./simple_proxy#load-balancing---multiple-instances-of-1-model)
+If you want a server to load balance across different LLM APIs, use our [LiteLLM Proxy Server](./simple_proxy#load-balancing---multiple-instances-of-1-model)
 
 
 ## Init Params for the litellm.Router

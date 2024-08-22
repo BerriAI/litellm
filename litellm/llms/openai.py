@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 import time
 import traceback
 import types
@@ -23,6 +24,7 @@ from pydantic import BaseModel
 from typing_extensions import overload, override
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.types.utils import ProviderField
 from litellm.utils import (
@@ -82,6 +84,8 @@ class MistralConfig:
 
     - `tool_choice` (string - 'auto'/'any'/'none' or null): Specifies if/how functions are called. If set to none the model won't call a function and will generate a message instead. If set to auto the model can choose to either generate a message or call a function. If set to any the model is forced to call a function. Default - 'auto'.
 
+    - `stop` (string or array of strings): Stop generation if this token is detected. Or if one of these tokens is detected when providing an array
+
     - `random_seed` (integer or null): The seed to use for random sampling. If set, different calls will generate deterministic results.
 
     - `safe_prompt` (boolean): Whether to inject a safety prompt before all conversations. API Default - 'false'.
@@ -97,6 +101,7 @@ class MistralConfig:
     random_seed: Optional[int] = None
     safe_prompt: Optional[bool] = None
     response_format: Optional[dict] = None
+    stop: Optional[Union[str, list]] = None
 
     def __init__(
         self,
@@ -108,6 +113,7 @@ class MistralConfig:
         random_seed: Optional[int] = None,
         safe_prompt: Optional[bool] = None,
         response_format: Optional[dict] = None,
+        stop: Optional[Union[str, list]] = None
     ) -> None:
         locals_ = locals().copy()
         for key, value in locals_.items():
@@ -141,6 +147,7 @@ class MistralConfig:
             "tools",
             "tool_choice",
             "seed",
+            "stop",
             "response_format",
         ]
 
@@ -158,12 +165,14 @@ class MistralConfig:
                 optional_params["max_tokens"] = value
             if param == "tools":
                 optional_params["tools"] = value
-            if param == "stream" and value == True:
+            if param == "stream" and value is True:
                 optional_params["stream"] = value
             if param == "temperature":
                 optional_params["temperature"] = value
             if param == "top_p":
                 optional_params["top_p"] = value
+            if param == "stop":
+                optional_params["stop"] = value                
             if param == "tool_choice" and isinstance(value, str):
                 optional_params["tool_choice"] = self._map_tool_choice(
                     tool_choice=value
@@ -766,21 +775,15 @@ class OpenAIChatCompletion(BaseLLM):
         - call chat.completions.create by default
         """
         try:
-            if litellm.return_response_headers is True:
-                raw_response = (
-                    await openai_aclient.chat.completions.with_raw_response.create(
-                        **data, timeout=timeout
-                    )
-                )
-
-                headers = dict(raw_response.headers)
-                response = raw_response.parse()
-                return headers, response
-            else:
-                response = await openai_aclient.chat.completions.create(
+            raw_response = (
+                await openai_aclient.chat.completions.with_raw_response.create(
                     **data, timeout=timeout
                 )
-                return None, response
+            )
+
+            headers = dict(raw_response.headers)
+            response = raw_response.parse()
+            return headers, response
         except Exception as e:
             raise e
 
@@ -968,9 +971,9 @@ class OpenAIChatCompletion(BaseLLM):
                 except openai.UnprocessableEntityError as e:
                     ## check if body contains unprocessable params - related issue https://github.com/BerriAI/litellm/issues/4800
                     if litellm.drop_params is True or drop_params is True:
+                        invalid_params: List[str] = []
                         if e.body is not None and isinstance(e.body, dict) and e.body.get("detail"):  # type: ignore
                             detail = e.body.get("detail")  # type: ignore
-                            invalid_params: List[str] = []
                             if (
                                 isinstance(detail, List)
                                 and len(detail) > 0
@@ -1100,9 +1103,9 @@ class OpenAIChatCompletion(BaseLLM):
             except openai.UnprocessableEntityError as e:
                 ## check if body contains unprocessable params - related issue https://github.com/BerriAI/litellm/issues/4800
                 if litellm.drop_params is True or drop_params is True:
+                    invalid_params: List[str] = []
                     if e.body is not None and isinstance(e.body, dict) and e.body.get("detail"):  # type: ignore
                         detail = e.body.get("detail")  # type: ignore
-                        invalid_params: List[str] = []
                         if (
                             isinstance(detail, List)
                             and len(detail) > 0
@@ -1231,9 +1234,9 @@ class OpenAIChatCompletion(BaseLLM):
             except openai.UnprocessableEntityError as e:
                 ## check if body contains unprocessable params - related issue https://github.com/BerriAI/litellm/issues/4800
                 if litellm.drop_params is True or drop_params is True:
+                    invalid_params: List[str] = []
                     if e.body is not None and isinstance(e.body, dict) and e.body.get("detail"):  # type: ignore
                         detail = e.body.get("detail")  # type: ignore
-                        invalid_params: List[str] = []
                         if (
                             isinstance(detail, List)
                             and len(detail) > 0
@@ -1870,8 +1873,25 @@ class OpenAIChatCompletion(BaseLLM):
                 model=model,  # type: ignore
                 prompt=prompt,  # type: ignore
             )
+        elif mode == "audio_transcription":
+            # Get the current directory of the file being run
+            pwd = os.path.dirname(os.path.realpath(__file__))
+            file_path = os.path.join(pwd, "../tests/gettysburg.wav")
+            audio_file = open(file_path, "rb")
+            completion = await client.audio.transcriptions.with_raw_response.create(
+                file=audio_file,
+                model=model,  # type: ignore
+                prompt=prompt,  # type: ignore
+            )
+        elif mode == "audio_speech":
+            # Get the current directory of the file being run
+            completion = await client.audio.speech.with_raw_response.create(
+                model=model,  # type: ignore
+                input=prompt,  # type: ignore
+                voice="alloy",
+            )
         else:
-            raise Exception("mode not set")
+            raise ValueError("mode not set, passed in mode: " + mode)
         response = {}
 
         if completion is None or not hasattr(completion, "headers"):
@@ -2516,6 +2536,7 @@ class OpenAIBatchesAPI(BaseLLM):
         retrieve_batch_data: RetrieveBatchRequest,
         openai_client: AsyncOpenAI,
     ) -> Batch:
+        verbose_logger.debug("retrieving batch, args= %s", retrieve_batch_data)
         response = await openai_client.batches.retrieve(**retrieve_batch_data)
         return response
 
@@ -2582,26 +2603,52 @@ class OpenAIBatchesAPI(BaseLLM):
         response = openai_client.batches.cancel(**cancel_batch_data)
         return response
 
-    # def list_batch(
-    #     self,
-    #     list_batch_data: ListBatchRequest,
-    #     api_key: Optional[str],
-    #     api_base: Optional[str],
-    #     timeout: Union[float, httpx.Timeout],
-    #     max_retries: Optional[int],
-    #     organization: Optional[str],
-    #     client: Optional[OpenAI] = None,
-    # ):
-    #     openai_client: OpenAI = self.get_openai_client(
-    #         api_key=api_key,
-    #         api_base=api_base,
-    #         timeout=timeout,
-    #         max_retries=max_retries,
-    #         organization=organization,
-    #         client=client,
-    #     )
-    #     response = openai_client.batches.list(**list_batch_data)
-    #     return response
+    async def alist_batches(
+        self,
+        openai_client: AsyncOpenAI,
+        after: Optional[str] = None,
+        limit: Optional[int] = None,
+    ):
+        verbose_logger.debug("listing batches, after= %s, limit= %s", after, limit)
+        response = await openai_client.batches.list(after=after, limit=limit)  # type: ignore
+        return response
+
+    def list_batches(
+        self,
+        _is_async: bool,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        organization: Optional[str],
+        after: Optional[str] = None,
+        limit: Optional[int] = None,
+        client: Optional[OpenAI] = None,
+    ):
+        openai_client: Optional[Union[OpenAI, AsyncOpenAI]] = self.get_openai_client(
+            api_key=api_key,
+            api_base=api_base,
+            timeout=timeout,
+            max_retries=max_retries,
+            organization=organization,
+            client=client,
+            _is_async=_is_async,
+        )
+        if openai_client is None:
+            raise ValueError(
+                "OpenAI client is not initialized. Make sure api_key is passed or OPENAI_API_KEY is set in the environment."
+            )
+
+        if _is_async is True:
+            if not isinstance(openai_client, AsyncOpenAI):
+                raise ValueError(
+                    "OpenAI client is not an instance of AsyncOpenAI. Make sure you passed an AsyncOpenAI client."
+                )
+            return self.alist_batches(  # type: ignore
+                openai_client=openai_client, after=after, limit=limit
+            )
+        response = openai_client.batches.list(after=after, limit=limit)  # type: ignore
+        return response
 
 
 class OpenAIAssistantsAPI(BaseLLM):

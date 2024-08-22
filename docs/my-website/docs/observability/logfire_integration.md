@@ -1,6 +1,6 @@
 import Image from '@theme/IdealImage';
 
-# 🔥 Logfire - Logging LLM Input/Output
+# Logfire
 
 Logfire is open Source Observability & Analytics for LLM Apps
 Detailed production traces and a granular view on quality, cost and latency
