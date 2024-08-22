@@ -103,25 +103,26 @@ class PrometheusLogger(CustomLogger):
                 "Remaining budget for api key",
                 labelnames=["hashed_api_key", "api_key_alias"],
             )
+
+            ########################################
+            # LiteLLM Virtual API KEY metrics
+            ########################################
+            # Remaining MODEL RPM limit for API Key
+            self.litellm_remaining_api_key_requests_for_model = Gauge(
+                "litellm_remaining_api_key_requests_for_model",
+                "Remaining Requests API Key can make for model (model based rpm limit on key)",
+                labelnames=["hashed_api_key", "api_key_alias", "model"],
+            )
+
+            # Remaining MODEL TPM limit for API Key
+            self.litellm_remaining_api_key_tokens_for_model = Gauge(
+                "litellm_remaining_api_key_tokens_for_model",
+                "Remaining Tokens API Key can make for model (model based tpm limit on key)",
+                labelnames=["hashed_api_key", "api_key_alias", "model"],
+            )
+
             # Litellm-Enterprise Metrics
             if premium_user is True:
-
-                ########################################
-                # LiteLLM Virtual API KEY metrics
-                ########################################
-                # Remaining MODEL RPM limit for API Key
-                self.litellm_remaining_api_key_requests_for_model = Gauge(
-                    "litellm_remaining_api_key_requests_for_model",
-                    "Remaining Requests API Key can make for model (model based rpm limit on key)",
-                    labelnames=["hashed_api_key", "api_key_alias", "model"],
-                )
-
-                # Remaining MODEL TPM limit for API Key
-                self.litellm_remaining_api_key_tokens_for_model = Gauge(
-                    "litellm_remaining_api_key_tokens_for_model",
-                    "Remaining Tokens API Key can make for model (model based tpm limit on key)",
-                    labelnames=["hashed_api_key", "api_key_alias", "model"],
-                )
 
                 ########################################
                 # LLM API Deployment Metrics / analytics
