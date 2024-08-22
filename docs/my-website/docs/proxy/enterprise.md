@@ -101,8 +101,38 @@ Requirements:
 
 
 <Tabs>
+<TabItem value="key" label="Set on Key">
 
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/key/generate' \
+-H 'Authorization: Bearer sk-1234' \
+-H 'Content-Type: application/json' \
+-d '{
+    "metadata": {
+        "tags": ["tag1", "tag2", "tag3"]
+    }
+}
 
+'
+```
+
+</TabItem>
+<TabItem value="team" label="Set on Team">
+
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/team/new' \
+-H 'Authorization: Bearer sk-1234' \
+-H 'Content-Type: application/json' \
+-d '{
+    "metadata": {
+        "tags": ["tag1", "tag2", "tag3"]
+    }
+}
+
+'
+```
+
+</TabItem>
 <TabItem value="openai" label="OpenAI Python v1.0.0+">
 
 Set `extra_body={"metadata": { }}` to `metadata` you want to pass
@@ -270,7 +300,42 @@ Requirements:
 
 
 <Tabs>
+<TabItem value="key" label="Set on Key">
 
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/key/generate' \
+-H 'Authorization: Bearer sk-1234' \
+-H 'Content-Type: application/json' \
+-d '{
+    "metadata": {
+      "spend_logs_metadata": {
+          "hello": "world"
+      }
+    }
+}
+
+'
+```
+
+</TabItem>
+<TabItem value="team" label="Set on Team">
+
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/team/new' \
+-H 'Authorization: Bearer sk-1234' \
+-H 'Content-Type: application/json' \
+-d '{
+    "metadata": {
+      "spend_logs_metadata": {
+          "hello": "world"
+      }
+    }
+}
+
+'
+```
+
+</TabItem>
 
 <TabItem value="openai" label="OpenAI Python v1.0.0+">
 
