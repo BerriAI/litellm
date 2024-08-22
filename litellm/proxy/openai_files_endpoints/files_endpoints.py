@@ -67,6 +67,11 @@ def get_files_provider_config(
 
 
 @router.post(
+    "/{provider}/v1/files",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["files"],
+)
+@router.post(
     "/v1/files",
     dependencies=[Depends(user_api_key_auth)],
     tags=["files"],
@@ -80,6 +85,7 @@ async def create_file(
     request: Request,
     fastapi_response: Response,
     purpose: str = Form(...),
+    provider: Optional[str] = None,
     custom_llm_provider: str = Form(default="openai"),
     file: UploadFile = File(...),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -110,6 +116,8 @@ async def create_file(
 
     data: Dict = {}
     try:
+        if provider is not None:
+            custom_llm_provider = provider
         # Use orjson to parse JSON data, orjson speeds up requests significantly
         # Read the file content
         file_content = await file.read()
@@ -141,7 +149,9 @@ async def create_file(
         _create_file_request.update(llm_provider_config)
 
         # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
-        response = await litellm.acreate_file(**_create_file_request)
+        response = await litellm.acreate_file(
+            **_create_file_request, custom_llm_provider=custom_llm_provider
+        )
 
         ### ALERTING ###
         asyncio.create_task(
@@ -196,6 +206,11 @@ async def create_file(
 
 
 @router.get(
+    "/{provider}/v1/files/{file_id:path}",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["files"],
+)
+@router.get(
     "/v1/files/{file_id:path}",
     dependencies=[Depends(user_api_key_auth)],
     tags=["files"],
@@ -209,6 +224,7 @@ async def get_file(
     request: Request,
     fastapi_response: Response,
     file_id: str,
+    provider: Optional[str] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -246,9 +262,10 @@ async def get_file(
             proxy_config=proxy_config,
         )
 
-        # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
+        if provider is None:  # default to openai
+            provider = "openai"
         response = await litellm.afile_retrieve(
-            custom_llm_provider="openai", file_id=file_id, **data
+            custom_llm_provider=provider, file_id=file_id, **data
         )
 
         ### ALERTING ###
@@ -304,6 +321,11 @@ async def get_file(
 
 
 @router.delete(
+    "/{provider}/v1/files/{file_id:path}",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["files"],
+)
+@router.delete(
     "/v1/files/{file_id:path}",
     dependencies=[Depends(user_api_key_auth)],
     tags=["files"],
@@ -317,6 +339,7 @@ async def delete_file(
     request: Request,
     fastapi_response: Response,
     file_id: str,
+    provider: Optional[str] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -355,9 +378,10 @@ async def delete_file(
             proxy_config=proxy_config,
         )
 
-        # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
+        if provider is None:  # default to openai
+            provider = "openai"
         response = await litellm.afile_delete(
-            custom_llm_provider="openai", file_id=file_id, **data
+            custom_llm_provider=provider, file_id=file_id, **data
         )
 
         ### ALERTING ###
@@ -413,6 +437,11 @@ async def delete_file(
 
 
 @router.get(
+    "/{provider}/v1/files",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["files"],
+)
+@router.get(
     "/v1/files",
     dependencies=[Depends(user_api_key_auth)],
     tags=["files"],
@@ -426,6 +455,7 @@ async def list_files(
     request: Request,
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    provider: Optional[str] = None,
     purpose: Optional[str] = None,
 ):
     """
@@ -463,9 +493,10 @@ async def list_files(
             proxy_config=proxy_config,
         )
 
-        # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
+        if provider is None:
+            provider = "openai"
         response = await litellm.afile_list(
-            custom_llm_provider="openai", purpose=purpose, **data
+            custom_llm_provider=provider, purpose=purpose, **data
         )
 
         ### ALERTING ###
@@ -521,6 +552,11 @@ async def list_files(
 
 
 @router.get(
+    "/{provider}/v1/files/{file_id:path}/content",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["files"],
+)
+@router.get(
     "/v1/files/{file_id:path}/content",
     dependencies=[Depends(user_api_key_auth)],
     tags=["files"],
@@ -534,6 +570,7 @@ async def get_file_content(
     request: Request,
     fastapi_response: Response,
     file_id: str,
+    provider: Optional[str] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -571,9 +608,10 @@ async def get_file_content(
             proxy_config=proxy_config,
         )
 
-        # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
+        if provider is None:
+            provider = "openai"
         response = await litellm.afile_content(
-            custom_llm_provider="openai", file_id=file_id, **data
+            custom_llm_provider=provider, file_id=file_id, **data
         )
 
         ### ALERTING ###
