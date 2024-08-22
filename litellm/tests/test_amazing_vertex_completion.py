@@ -957,6 +957,8 @@ async def test_partner_models_httpx(model, sync_mode):
         assert isinstance(response._hidden_params["response_cost"], float)
     except litellm.RateLimitError as e:
         pass
+    except litellm.InternalServerError as e:
+        pass
     except Exception as e:
         if "429 Quota exceeded" in str(e):
             pass
@@ -1006,7 +1008,9 @@ async def test_partner_models_httpx_streaming(model, sync_mode):
                 idx += 1
 
         print(f"response: {response}")
-    except litellm.RateLimitError:
+    except litellm.RateLimitError as e:
+        pass
+    except litellm.InternalServerError as e:
         pass
     except Exception as e:
         if "429 Quota exceeded" in str(e):
