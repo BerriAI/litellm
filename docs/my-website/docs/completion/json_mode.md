@@ -81,6 +81,7 @@ Works for:
 ```python
 import os
 from litellm import completion 
+from pydantic import BaseModel
 
 # add to env var 
 os.environ["OPENAI_API_KEY"] = ""

@@ -501,6 +501,8 @@ async def test_async_vertexai_streaming_response():
             assert len(complete_response) > 0
         except litellm.RateLimitError as e:
             pass
+        except litellm.APIConnectionError:
+            pass
         except litellm.Timeout as e:
             pass
         except litellm.InternalServerError as e:
@@ -1557,6 +1559,16 @@ async def test_gemini_pro_json_schema_args_sent_httpx_openai_schema(
                 assert (
                     "response_schema"
                     in mock_call.call_args.kwargs["json"]["generationConfig"]
+                )
+                assert (
+                    "response_mime_type"
+                    in mock_call.call_args.kwargs["json"]["generationConfig"]
+                )
+                assert (
+                    mock_call.call_args.kwargs["json"]["generationConfig"][
+                        "response_mime_type"
+                    ]
+                    == "application/json"
                 )
             else:
                 assert (

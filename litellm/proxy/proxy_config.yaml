@@ -1,6 +1,7 @@
 model_list:
   - model_name: multimodalembedding@001
     litellm_params:
+
       model: vertex_ai/multimodalembedding@001
       vertex_project: "adroit-crow-413218"
       vertex_location: "us-central1"
@@ -10,6 +11,3 @@ default_vertex_config:
   vertex_project: "adroit-crow-413218"
   vertex_location: "us-central1"
   vertex_credentials: adroit-crow-413218-a956eef1a2a8.json 
-
-litellm_settings:
-  drop_params: True

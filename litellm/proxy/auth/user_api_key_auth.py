@@ -975,8 +975,6 @@ async def user_api_key_auth(
             if not _is_user_proxy_admin(user_obj=user_obj):  # if non-admin
                 if is_llm_api_route(route=route):
                     pass
-                elif is_llm_api_route(route=request["route"].name):
-                    pass
                 elif (
                     route in LiteLLMRoutes.info_routes.value
                 ):  # check if user allowed to call an info route
@@ -1046,10 +1044,15 @@ async def user_api_key_auth(
                                 status_code=status.HTTP_403_FORBIDDEN,
                                 detail=f"user not allowed to access this route, role= {_user_role}. Trying to access: {route}",
                             )
+
                 elif (
                     _user_role == LitellmUserRoles.INTERNAL_USER.value
                     and route in LiteLLMRoutes.internal_user_routes.value
                 ):
+                    pass
+                elif (
+                    route in LiteLLMRoutes.self_managed_routes.value
+                ):  # routes that manage their own allowed/disallowed logic
                     pass
                 else:
                     user_role = "unknown"
