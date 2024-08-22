@@ -5,6 +5,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 import os
+from uuid import uuid4
+import tempfile
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -12,6 +14,8 @@ sys.path.insert(
 import pytest
 from litellm import get_secret
 from litellm.proxy.secret_managers.aws_secret_manager import load_aws_secret_manager
+from litellm.llms.azure import get_azure_ad_token_from_oidc
+from litellm.llms.bedrock_httpx import BedrockLLM, BedrockConverseLLM
 
 
 @pytest.mark.skip(reason="AWS Suspended Account")
@@ -60,7 +64,7 @@ def test_oidc_github():
 )
 def test_oidc_circleci():
     secret_val = get_secret(
-        "oidc/circleci/https://bedrock-runtime.us-east-1.amazonaws.com/model/amazon.titan-text-express-v1/invoke"
+        "oidc/circleci/"
     )
 
     print(f"secret_val: {redact_oidc_signature(secret_val)}")
@@ -76,3 +80,119 @@ def test_oidc_circleci_v2():
     )
 
     print(f"secret_val: {redact_oidc_signature(secret_val)}")
+
+
+@pytest.mark.skipif(
+    os.environ.get("CIRCLE_OIDC_TOKEN") is None,
+    reason="Cannot run without being in CircleCI Runner",
+)
+def test_oidc_circleci_with_azure():
+    # TODO: Switch to our own Azure account, currently using ai.moda's account
+    os.environ["AZURE_TENANT_ID"] = "17c0a27a-1246-4aa1-a3b6-d294e80e783c"
+    os.environ["AZURE_CLIENT_ID"] = "4faf5422-b2bd-45e8-a6d7-46543a38acd0"
+    azure_ad_token = get_azure_ad_token_from_oidc("oidc/circleci/")
+
+    print(f"secret_val: {redact_oidc_signature(azure_ad_token)}")
+
+
+@pytest.mark.skipif(
+    os.environ.get("CIRCLE_OIDC_TOKEN") is None,
+    reason="Cannot run without being in CircleCI Runner",
+)
+def test_oidc_circle_v1_with_amazon():
+    # The purpose of this test is to get logs using the older v1 of the CircleCI OIDC token
+
+    # TODO: This is using ai.moda's IAM role, we should use LiteLLM's IAM role eventually
+    aws_role_name = (
+        "arn:aws:iam::335785316107:role/litellm-github-unit-tests-circleci-v1-assume-only"
+    )
+    aws_web_identity_token = "oidc/circleci/"
+
+    bllm = BedrockLLM()
+    creds = bllm.get_credentials(
+        aws_region_name="ca-west-1",
+        aws_web_identity_token=aws_web_identity_token,
+        aws_role_name=aws_role_name,
+        aws_session_name="assume-v1-session",
+    )
+
+@pytest.mark.skipif(
+    os.environ.get("CIRCLE_OIDC_TOKEN") is None,
+    reason="Cannot run without being in CircleCI Runner",
+)
+def test_oidc_circle_v1_with_amazon_fips():
+    # The purpose of this test is to validate that we can assume a role in a FIPS region
+
+    # TODO: This is using ai.moda's IAM role, we should use LiteLLM's IAM role eventually
+    aws_role_name = (
+        "arn:aws:iam::335785316107:role/litellm-github-unit-tests-circleci-v1-assume-only"
+    )
+    aws_web_identity_token = "oidc/circleci/"
+
+    bllm = BedrockConverseLLM()
+    creds = bllm.get_credentials(
+        aws_region_name="us-west-1",
+        aws_web_identity_token=aws_web_identity_token,
+        aws_role_name=aws_role_name,
+        aws_session_name="assume-v1-session-fips",
+        aws_sts_endpoint="https://sts-fips.us-west-1.amazonaws.com",
+    )
+
+
+def test_oidc_env_variable():
+    # Create a unique environment variable name
+    env_var_name = "OIDC_TEST_PATH_" + uuid4().hex
+    os.environ[env_var_name] = "secret-" + uuid4().hex
+    secret_val = get_secret(
+        f"oidc/env/{env_var_name}"
+    )
+
+    print(f"secret_val: {redact_oidc_signature(secret_val)}")
+
+    assert secret_val == os.environ[env_var_name]
+
+    # now unset the environment variable
+    del os.environ[env_var_name]
+
+
+def test_oidc_file():
+    # Create a temporary file
+    with tempfile.NamedTemporaryFile(mode='w+') as temp_file:
+        secret_value = "secret-" + uuid4().hex
+        temp_file.write(secret_value)
+        temp_file.flush()
+        temp_file_path = temp_file.name
+
+        secret_val = get_secret(
+            f"oidc/file/{temp_file_path}"
+        )
+
+        print(f"secret_val: {redact_oidc_signature(secret_val)}")
+
+        assert secret_val == secret_value
+
+
+def test_oidc_env_path():
+    # Create a temporary file
+    with tempfile.NamedTemporaryFile(mode='w+') as temp_file:
+        secret_value = "secret-" + uuid4().hex
+        temp_file.write(secret_value)
+        temp_file.flush()
+        temp_file_path = temp_file.name
+
+        # Create a unique environment variable name
+        env_var_name = "OIDC_TEST_PATH_" + uuid4().hex
+
+        # Set the environment variable to the temporary file path
+        os.environ[env_var_name] = temp_file_path
+
+        # Test getting the secret using the environment variable
+        secret_val = get_secret(
+            f"oidc/env_path/{env_var_name}"
+        )
+
+        print(f"secret_val: {redact_oidc_signature(secret_val)}")
+
+        assert secret_val == secret_value
+
+        del os.environ[env_var_name]

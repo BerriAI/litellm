@@ -10,7 +10,6 @@ import json
 import os
 from typing import Optional
 
-import jwt
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
@@ -195,6 +194,7 @@ class JWTHandler:
         if audience is None:
             decode_options = {"verify_aud": False}
 
+        import jwt
         from jwt.algorithms import RSAAlgorithm
 
         header = jwt.get_unverified_header(token)

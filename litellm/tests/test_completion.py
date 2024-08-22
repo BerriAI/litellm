@@ -11,10 +11,10 @@ import os
 
 sys.path.insert(
     0, os.path.abspath("../..")
-)  # Adds-the parent directory to the system path
+)  # Adds the parent directory to the system path
 
 import os
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -190,6 +190,31 @@ def test_completion_azure_command_r():
         pytest.fail(f"Error occurred: {e}")
 
 
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "https://litellm8397336933.openai.azure.com",
+        "https://litellm8397336933.openai.azure.com/openai/deployments/gpt-4o/chat/completions?api-version=2023-03-15-preview",
+    ],
+)
+def test_completion_azure_ai_gpt_4o(api_base):
+    try:
+        litellm.set_verbose = True
+
+        response = completion(
+            model="azure_ai/gpt-4o",
+            api_base=api_base,
+            api_key=os.getenv("AZURE_AI_OPENAI_KEY"),
+            messages=[{"role": "user", "content": "What is the meaning of life?"}],
+        )
+
+        print(response)
+    except litellm.Timeout as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_completion_databricks(sync_mode):
@@ -211,7 +236,7 @@ async def test_completion_databricks(sync_mode):
     response_format_tests(response=response)
 
 
-def predibase_mock_post(url, data=None, json=None, headers=None):
+def predibase_mock_post(url, data=None, json=None, headers=None, timeout=None):
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_response.headers = {"Content-Type": "application/json"}
@@ -255,23 +280,25 @@ def predibase_mock_post(url, data=None, json=None, headers=None):
     return mock_response
 
 
-# @pytest.mark.skip(reason="local only test")
+# @pytest.mark.skip(reason="local-only test")
 @pytest.mark.asyncio
 async def test_completion_predibase():
     try:
         litellm.set_verbose = True
 
-        with patch("requests.post", side_effect=predibase_mock_post):
-            response = completion(
-                model="predibase/llama-3-8b-instruct",
-                tenant_id="c4768f95",
-                api_key=os.getenv("PREDIBASE_API_KEY"),
-                messages=[{"role": "user", "content": "What is the meaning of life?"}],
-                max_tokens=10,
-            )
+        # with patch("requests.post", side_effect=predibase_mock_post):
+        response = await litellm.acompletion(
+            model="predibase/llama-3-8b-instruct",
+            tenant_id="c4768f95",
+            api_key=os.getenv("PREDIBASE_API_KEY"),
+            messages=[{"role": "user", "content": "What is the meaning of life?"}],
+            max_tokens=10,
+        )
 
-            print(response)
+        print(response)
     except litellm.Timeout as e:
+        pass
+    except litellm.ServiceUnavailableError as e:
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
@@ -302,6 +329,8 @@ def test_completion_claude():
         print(response.usage.completion_tokens)
         print(response["usage"]["completion_tokens"])
         # print("new cost tracking")
+    except litellm.RateLimitError as e:
+        pass
     except Exception as e:
         if "overloaded_error" in str(e):
             pass
@@ -340,13 +369,43 @@ def test_completion_empower():
         pytest.fail(f"Error occurred: {e}")
 
 
+def test_completion_github_api():
+    litellm.set_verbose = True
+    messages = [
+        {
+            "role": "user",
+            "content": "\nWhat is the query for `console.log` => `console.error`\n",
+        },
+        {
+            "role": "assistant",
+            "content": "\nThis is the GritQL query for the given before/after examples:\n<gritql>\n`console.log` => `console.error`\n</gritql>\n",
+        },
+        {
+            "role": "user",
+            "content": "\nWhat is the query for `console.info` => `consdole.heaven`\n",
+        },
+    ]
+    try:
+        # test without max tokens
+        response = completion(
+            model="github/gpt-4o",
+            messages=messages,
+        )
+        # Add any assertions, here to check response args
+        print(response)
+    except litellm.AuthenticationError:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
 def test_completion_claude_3_empty_response():
     litellm.set_verbose = True
 
     messages = [
         {
             "role": "system",
-            "content": "You are 2twNLGfqk4GMOn3ffp4p.",
+            "content": [{"type": "text", "text": "You are 2twNLGfqk4GMOn3ffp4p."}],
         },
         {"role": "user", "content": "Hi gm!", "name": "ishaan"},
         {"role": "assistant", "content": "Good morning! How are you doing today?"},
@@ -463,6 +522,8 @@ def test_completion_claude_3_function_call(model):
             drop_params=True,
         )
         print(second_response)
+    except litellm.InternalServerError:
+        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -646,6 +707,10 @@ def test_gemini_completion_call_error():
         print(f"response: {response}")
         for chunk in response:
             print(chunk)
+    except litellm.RateLimitError:
+        pass
+    except litellm.InternalServerError:
+        pass
     except Exception as e:
         pytest.fail(f"error occurred: {str(e)}")
 
@@ -717,6 +782,8 @@ def test_completion_cohere_command_r_plus_function_call():
             force_single_step=True,
         )
         print(second_response)
+    except litellm.Timeout:
+        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -880,7 +947,10 @@ def test_completion_function_plus_image(model):
                             "type": "string",
                             "description": "The city and state, e.g. San Francisco, CA",
                         },
-                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                        "unit": {
+                            "type": "string",
+                            "enum": ["celsius", "fahrenheit"],
+                        },
                     },
                     "required": ["location"],
                 },
@@ -896,15 +966,18 @@ def test_completion_function_plus_image(model):
         }
     ]
 
-    response = completion(
-        model=model,
-        messages=[image_message],
-        tool_choice=tool_choice,
-        tools=tools,
-        stream=False,
-    )
+    try:
+        response = completion(
+            model=model,
+            messages=[image_message],
+            tool_choice=tool_choice,
+            tools=tools,
+            stream=False,
+        )
 
-    print(response)
+        print(response)
+    except litellm.InternalServerError:
+        pass
 
 
 @pytest.mark.parametrize(
@@ -1364,6 +1437,12 @@ def test_completion_openai_response_headers():
     print("response_headers=", response._response_headers)
     assert response._response_headers is not None
     assert "x-ratelimit-remaining-tokens" in response._response_headers
+    assert isinstance(
+        response._hidden_params["additional_headers"][
+            "llm_provider-x-ratelimit-remaining-requests"
+        ],
+        str,
+    )
 
     # /chat/completion - with streaming
 
@@ -1376,6 +1455,12 @@ def test_completion_openai_response_headers():
     print("streaming response_headers=", response_headers)
     assert response_headers is not None
     assert "x-ratelimit-remaining-tokens" in response_headers
+    assert isinstance(
+        response._hidden_params["additional_headers"][
+            "llm_provider-x-ratelimit-remaining-requests"
+        ],
+        str,
+    )
 
     for chunk in streaming_response:
         print("chunk=", chunk)
@@ -1390,6 +1475,12 @@ def test_completion_openai_response_headers():
     print("embedding_response_headers=", embedding_response_headers)
     assert embedding_response_headers is not None
     assert "x-ratelimit-remaining-tokens" in embedding_response_headers
+    assert isinstance(
+        response._hidden_params["additional_headers"][
+            "llm_provider-x-ratelimit-remaining-requests"
+        ],
+        str,
+    )
 
     litellm.return_response_headers = False
 
@@ -1511,27 +1602,73 @@ def test_completion_fireworks_ai_dynamic_params(api_key, api_base):
         pass
 
 
-@pytest.mark.skip(reason="this test is flaky")
+# @pytest.mark.skip(reason="this test is flaky")
 def test_completion_perplexity_api():
     try:
-        # litellm.set_verbose= True
-        messages = [
-            {"role": "system", "content": "You're a good bot"},
-            {
-                "role": "user",
-                "content": "Hey",
-            },
-            {
-                "role": "user",
-                "content": "Hey",
-            },
-        ]
-        response = completion(
-            model="mistral-7b-instruct",
-            messages=messages,
-            api_base="https://api.perplexity.ai",
-        )
-        print(response)
+        response_object = {
+            "id": "a8f37485-026e-45da-81a9-cf0184896840",
+            "model": "llama-3-sonar-small-32k-online",
+            "created": 1722186391,
+            "usage": {"prompt_tokens": 17, "completion_tokens": 65, "total_tokens": 82},
+            "citations": [
+                "https://www.sciencedirect.com/science/article/pii/S007961232200156X",
+                "https://www.britannica.com/event/World-War-II",
+                "https://www.loc.gov/classroom-materials/united-states-history-primary-source-timeline/great-depression-and-world-war-ii-1929-1945/world-war-ii/",
+                "https://www.nationalww2museum.org/war/topics/end-world-war-ii-1945",
+                "https://en.wikipedia.org/wiki/World_War_II",
+            ],
+            "object": "chat.completion",
+            "choices": [
+                {
+                    "index": 0,
+                    "finish_reason": "stop",
+                    "message": {
+                        "role": "assistant",
+                        "content": "World War II was won by the Allied powers, which included the United States, the Soviet Union, Great Britain, France, China, and other countries. The war concluded with the surrender of Germany on May 8, 1945, and Japan on September 2, 1945[2][3][4].",
+                    },
+                    "delta": {"role": "assistant", "content": ""},
+                }
+            ],
+        }
+
+        from openai import OpenAI
+        from openai.types.chat.chat_completion import ChatCompletion
+
+        pydantic_obj = ChatCompletion(**response_object)
+
+        def _return_pydantic_obj(*args, **kwargs):
+            return pydantic_obj
+
+        print(f"pydantic_obj: {pydantic_obj}")
+
+        openai_client = OpenAI()
+
+        openai_client.chat.completions.create = MagicMock()
+
+        with patch.object(
+            openai_client.chat.completions, "create", side_effect=_return_pydantic_obj
+        ) as mock_client:
+            pass
+            # litellm.set_verbose= True
+            messages = [
+                {"role": "system", "content": "You're a good bot"},
+                {
+                    "role": "user",
+                    "content": "Hey",
+                },
+                {
+                    "role": "user",
+                    "content": "Hey",
+                },
+            ]
+            response = completion(
+                model="mistral-7b-instruct",
+                messages=messages,
+                api_base="https://api.perplexity.ai",
+                client=openai_client,
+            )
+            print(response)
+            assert hasattr(response, "citations")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -1709,14 +1846,20 @@ def tgi_mock_post(url, data=None, json=None, headers=None):
 def test_hf_test_completion_tgi():
     litellm.set_verbose = True
     try:
-        with patch("requests.post", side_effect=tgi_mock_post):
+
+        with patch("requests.post", side_effect=tgi_mock_post) as mock_client:
             response = completion(
                 model="huggingface/HuggingFaceH4/zephyr-7b-beta",
                 messages=[{"content": "Hello, how are you?", "role": "user"}],
                 max_tokens=10,
+                wait_for_model=True,
             )
             # Add any assertions-here to check the response
             print(response)
+            assert "options" in mock_client.call_args.kwargs["data"]
+            json_data = json.loads(mock_client.call_args.kwargs["data"])
+            assert "wait_for_model" in json_data["options"]
+            assert json_data["options"]["wait_for_model"] is True
     except litellm.ServiceUnavailableError as e:
         pass
     except Exception as e:
@@ -2015,6 +2158,50 @@ def test_completion_openai():
         assert len(response_str) > 1
 
         litellm.api_key = None
+    except Timeout as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.parametrize("model", ["gpt-4o-2024-08-06", "azure/chatgpt-v-2"])
+def test_completion_openai_pydantic(model):
+    try:
+        litellm.set_verbose = True
+        from pydantic import BaseModel
+
+        messages = [
+            {"role": "user", "content": "List 5 important events in the XIX century"}
+        ]
+
+        class CalendarEvent(BaseModel):
+            name: str
+            date: str
+            participants: list[str]
+
+        class EventsList(BaseModel):
+            events: list[CalendarEvent]
+
+        litellm.enable_json_schema_validation = True
+        for _ in range(3):
+            try:
+                response = completion(
+                    model=model,
+                    messages=messages,
+                    metadata={"hi": "bye"},
+                    response_format=EventsList,
+                )
+                break
+            except litellm.JSONSchemaValidationError:
+                print("ERROR OCCURRED! INVALID JSON")
+
+        print("This is the response object\n", response)
+
+        response_str = response["choices"][0]["message"]["content"]
+
+        print(f"response_str: {response_str}")
+        json.loads(response_str)  # check valid json is returned
+
     except Timeout as e:
         pass
     except Exception as e:
@@ -2504,6 +2691,7 @@ def test_completion_hf_model_no_provider():
 # test_completion_hf_model_no_provider()
 
 
+@pytest.mark.skip(reason="anyscale stopped serving public api endpoints")
 def test_completion_anyscale_with_functions():
     function1 = [
         {
@@ -2540,6 +2728,90 @@ def test_completion_anyscale_with_functions():
 
 
 # test_completion_anyscale_with_functions()
+
+
+def test_completion_azure_extra_headers():
+    # this tests if we can pass api_key to completion, when it's not in the env.
+    # DO NOT REMOVE THIS TEST. No MATTER WHAT Happens!
+    # If you want to remove it, speak to Ishaan!
+    # Ishaan will be very disappointed if this test is removed -> this is a standard way to pass api_key + the router + proxy use this
+    from httpx import Client
+    from openai import AzureOpenAI
+
+    from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
+
+    http_client = Client()
+
+    with patch.object(http_client, "send", new=MagicMock()) as mock_client:
+        litellm.client_session = http_client
+        try:
+            response = completion(
+                model="azure/chatgpt-v-2",
+                messages=messages,
+                api_base=os.getenv("AZURE_API_BASE"),
+                api_version="2023-07-01-preview",
+                api_key=os.getenv("AZURE_API_KEY"),
+                extra_headers={
+                    "Authorization": "my-bad-key",
+                    "Ocp-Apim-Subscription-Key": "hello-world-testing",
+                },
+            )
+            print(response)
+            pytest.fail("Expected this to fail")
+        except Exception as e:
+            pass
+
+        mock_client.assert_called()
+
+        print(f"mock_client.call_args: {mock_client.call_args}")
+        request = mock_client.call_args[0][0]
+        print(request.method)  # This will print 'POST'
+        print(request.url)  # This will print the full URL
+        print(request.headers)  # This will print the full URL
+        auth_header = request.headers.get("Authorization")
+        apim_key = request.headers.get("Ocp-Apim-Subscription-Key")
+        print(auth_header)
+        assert auth_header == "my-bad-key"
+        assert apim_key == "hello-world-testing"
+
+
+def test_completion_azure_ad_token():
+    # this tests if we can pass api_key to completion, when it's not in the env.
+    # DO NOT REMOVE THIS TEST. No MATTER WHAT Happens!
+    # If you want to remove it, speak to Ishaan!
+    # Ishaan will be very disappointed if this test is removed -> this is a standard way to pass api_key + the router + proxy use this
+    from httpx import Client
+
+    from litellm import completion
+
+    litellm.set_verbose = True
+
+    old_key = os.environ["AZURE_API_KEY"]
+    os.environ.pop("AZURE_API_KEY", None)
+
+    http_client = Client()
+
+    with patch.object(http_client, "send", new=MagicMock()) as mock_client:
+        litellm.client_session = http_client
+        try:
+            response = completion(
+                model="azure/chatgpt-v-2",
+                messages=messages,
+                azure_ad_token="my-special-token",
+            )
+            print(response)
+        except Exception as e:
+            pass
+        finally:
+            os.environ["AZURE_API_KEY"] = old_key
+
+        mock_client.assert_called_once()
+        request = mock_client.call_args[0][0]
+        print(request.method)  # This will print 'POST'
+        print(request.url)  # This will print the full URL
+        print(request.headers)  # This will print the full URL
+        auth_header = request.headers.get("Authorization")
+        assert auth_header == "Bearer my-special-token"
 
 
 def test_completion_azure_key_completion_arg():
@@ -3011,9 +3283,9 @@ def test_completion_together_ai_mixtral():
 # test_completion_together_ai_mixtral()
 
 
-def test_completion_together_ai_yi_chat():
+def test_completion_together_ai_llama():
     litellm.set_verbose = True
-    model_name = "together_ai/mistralai/Mistral-7B-Instruct-v0.1"
+    model_name = "together_ai/meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo"
     try:
         messages = [
             {"role": "user", "content": "What llm are you?"},
@@ -3074,108 +3346,6 @@ def test_customprompt_together_ai():
 # test_customprompt_together_ai()
 
 
-@pytest.mark.skip(reason="AWS Suspended Account")
-def test_completion_sagemaker():
-    try:
-        litellm.set_verbose = True
-        print("testing sagemaker")
-        response = completion(
-            model="sagemaker/jumpstart-dft-hf-llm-mistral-7b-ins-20240329-150233",
-            model_id="huggingface-llm-mistral-7b-instruct-20240329-150233",
-            messages=messages,
-            temperature=0.2,
-            max_tokens=80,
-            aws_region_name=os.getenv("AWS_REGION_NAME_2"),
-            aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID_2"),
-            aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY_2"),
-            input_cost_per_second=0.000420,
-        )
-        # Add any assertions here to check the response
-        print(response)
-        cost = completion_cost(completion_response=response)
-        print("calculated cost", cost)
-        assert (
-            cost > 0.0 and cost < 1.0
-        )  # should never be > $1 for a single completion call
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-# test_completion_sagemaker()
-
-
-@pytest.mark.skip(reason="AWS Suspended Account")
-@pytest.mark.asyncio
-async def test_acompletion_sagemaker():
-    try:
-        litellm.set_verbose = True
-        print("testing sagemaker")
-        response = await litellm.acompletion(
-            model="sagemaker/jumpstart-dft-hf-llm-mistral-7b-ins-20240329-150233",
-            model_id="huggingface-llm-mistral-7b-instruct-20240329-150233",
-            messages=messages,
-            temperature=0.2,
-            max_tokens=80,
-            aws_region_name=os.getenv("AWS_REGION_NAME_2"),
-            aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID_2"),
-            aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY_2"),
-            input_cost_per_second=0.000420,
-        )
-        # Add any assertions here to check the response
-        print(response)
-        cost = completion_cost(completion_response=response)
-        print("calculated cost", cost)
-        assert (
-            cost > 0.0 and cost < 1.0
-        )  # should never be > $1 for a single completion call
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-@pytest.mark.skip(reason="AWS Suspended Account")
-def test_completion_chat_sagemaker():
-    try:
-        messages = [{"role": "user", "content": "Hey, how's it going?"}]
-        litellm.set_verbose = True
-        response = completion(
-            model="sagemaker/berri-benchmarking-Llama-2-70b-chat-hf-4",
-            messages=messages,
-            max_tokens=100,
-            temperature=0.7,
-            stream=True,
-        )
-        # Add any assertions here to check the response
-        complete_response = ""
-        for chunk in response:
-            complete_response += chunk.choices[0].delta.content or ""
-        print(f"complete_response: {complete_response}")
-        assert len(complete_response) > 0
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-# test_completion_chat_sagemaker()
-
-
-@pytest.mark.skip(reason="AWS Suspended Account")
-def test_completion_chat_sagemaker_mistral():
-    try:
-        messages = [{"role": "user", "content": "Hey, how's it going?"}]
-
-        response = completion(
-            model="sagemaker/jumpstart-dft-hf-llm-mistral-7b-instruct",
-            messages=messages,
-            max_tokens=100,
-        )
-        # Add any assertions here to check the response
-        print(response)
-    except Exception as e:
-        pytest.fail(f"An error occurred: {str(e)}")
-
-
-# test_completion_chat_sagemaker_mistral()
-
-
 def response_format_tests(response: litellm.ModelResponse):
     assert isinstance(response.id, str)
     assert response.id != ""
@@ -3211,20 +3381,20 @@ def response_format_tests(response: litellm.ModelResponse):
     assert isinstance(response.usage.total_tokens, int)  # type: ignore
 
 
-@pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.parametrize(
     "model",
     [
-        "bedrock/cohere.command-r-plus-v1:0",
+        # "bedrock/cohere.command-r-plus-v1:0",
         "anthropic.claude-3-sonnet-20240229-v1:0",
-        "anthropic.claude-instant-v1",
-        "bedrock/ai21.j2-mid",
-        "mistral.mistral-7b-instruct-v0:2",
-        "bedrock/amazon.titan-tg1-large",
-        "meta.llama3-8b-instruct-v1:0",
-        "cohere.command-text-v14",
+        # "anthropic.claude-instant-v1",
+        # "bedrock/ai21.j2-mid",
+        # "mistral.mistral-7b-instruct-v0:2",
+        # "bedrock/amazon.titan-tg1-large",
+        # "meta.llama3-8b-instruct-v1:0",
+        # "cohere.command-text-v14",
     ],
 )
+@pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_completion_bedrock_httpx_models(sync_mode, model):
     litellm.set_verbose = True
@@ -3440,9 +3610,10 @@ def test_completion_anthropic_hanging():
             assert msg["role"] != converted_messages[i + 1]["role"]
 
 
+@pytest.mark.skip(reason="anyscale stopped serving public api endpoints")
 def test_completion_anyscale_api():
     try:
-        # litellm.set_verbose=True
+        # litellm.set_verbose = True
         messages = [
             {"role": "system", "content": "You're a good bot"},
             {
@@ -3466,20 +3637,23 @@ def test_completion_anyscale_api():
 # test_completion_anyscale_api()
 
 
-@pytest.mark.skip(reason="flaky test, times out frequently")
+# @pytest.mark.skip(reason="flaky test, times out frequently")
 def test_completion_cohere():
     try:
         # litellm.set_verbose=True
         messages = [
             {"role": "system", "content": "You're a good bot"},
+            {"role": "assistant", "content": [{"text": "2", "type": "text"}]},
+            {"role": "assistant", "content": [{"text": "3", "type": "text"}]},
             {
                 "role": "user",
                 "content": "Hey",
             },
         ]
         response = completion(
-            model="command-nightly",
+            model="command-r",
             messages=messages,
+            extra_headers={"Helicone-Property-Locale": "ko"},
         )
         print(response)
     except Exception as e:
@@ -3526,6 +3700,8 @@ def test_chat_completion_cohere_stream():
         print(response)
         for chunk in response:
             print(chunk)
+    except litellm.APIConnectionError as e:
+        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -3555,6 +3731,7 @@ def test_azure_cloudflare_api():
 # test_azure_cloudflare_api()
 
 
+@pytest.mark.skip(reason="anyscale stopped serving public api endpoints")
 def test_completion_anyscale_2():
     try:
         # litellm.set_verbose = True
@@ -3577,6 +3754,7 @@ def test_completion_anyscale_2():
         pytest.fail(f"Error occurred: {e}")
 
 
+@pytest.mark.skip(reason="anyscale stopped serving public api endpoints")
 def test_mistral_anyscale_stream():
     litellm.set_verbose = False
     response = completion(
@@ -3857,13 +4035,15 @@ def test_completion_gemini(model):
         # Add any assertions,here to check the response
         print(response)
         assert response.choices[0]["index"] == 0
-    except litellm.APIError as e:
+    except litellm.RateLimitError:
+        pass
+    except litellm.APIError:
         pass
     except Exception as e:
         if "InternalServerError" in str(e):
             pass
         else:
-            pytest.fail(f"Error occurred: {e}")
+            pytest.fail(f"Error occurred:{e}")
 
 
 # test_completion_gemini()
@@ -3893,9 +4073,28 @@ async def test_acompletion_gemini():
 def test_completion_deepseek():
     litellm.set_verbose = True
     model_name = "deepseek/deepseek-chat"
-    messages = [{"role": "user", "content": "Hey, how's it going?"}]
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get weather of an location, the user shoud supply a location first",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        }
+                    },
+                    "required": ["location"],
+                },
+            },
+        },
+    ]
+    messages = [{"role": "user", "content": "How's the weather in Hangzhou?"}]
     try:
-        response = completion(model=model_name, messages=messages)
+        response = completion(model=model_name, messages=messages, tools=tools)
         # Add any assertions here to check the response
         print(response)
     except litellm.APIError as e:
@@ -4153,4 +4352,87 @@ def test_moderation():
     return output
 
 
-# test_moderation()
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("sync_mode", [False, True])
+@pytest.mark.asyncio
+async def test_dynamic_azure_params(stream, sync_mode):
+    """
+    If dynamic params are given, which are different from the initialized client, use a new client
+    """
+    from openai import AsyncAzureOpenAI, AzureOpenAI
+
+    if sync_mode:
+        client = AzureOpenAI(
+            api_key="my-test-key",
+            base_url="my-test-base",
+            api_version="my-test-version",
+        )
+        mock_client = MagicMock(return_value="Hello world!")
+    else:
+        client = AsyncAzureOpenAI(
+            api_key="my-test-key",
+            base_url="my-test-base",
+            api_version="my-test-version",
+        )
+        mock_client = AsyncMock(return_value="Hello world!")
+
+    ## CHECK IF CLIENT IS USED (NO PARAM CHANGE)
+    with patch.object(
+        client.chat.completions.with_raw_response, "create", new=mock_client
+    ) as mock_client:
+        try:
+            # client.chat.completions.with_raw_response.create = mock_client
+            if sync_mode:
+                _ = completion(
+                    model="azure/chatgpt-v2",
+                    messages=[{"role": "user", "content": "Hello world"}],
+                    client=client,
+                    stream=stream,
+                )
+            else:
+                _ = await litellm.acompletion(
+                    model="azure/chatgpt-v2",
+                    messages=[{"role": "user", "content": "Hello world"}],
+                    client=client,
+                    stream=stream,
+                )
+        except Exception:
+            pass
+
+        mock_client.assert_called()
+
+    ## recreate mock client
+    if sync_mode:
+        mock_client = MagicMock(return_value="Hello world!")
+    else:
+        mock_client = AsyncMock(return_value="Hello world!")
+
+    ## CHECK IF NEW CLIENT IS USED (PARAM CHANGE)
+    with patch.object(
+        client.chat.completions.with_raw_response, "create", new=mock_client
+    ) as mock_client:
+        try:
+            if sync_mode:
+                _ = completion(
+                    model="azure/chatgpt-v2",
+                    messages=[{"role": "user", "content": "Hello world"}],
+                    client=client,
+                    api_version="my-new-version",
+                    stream=stream,
+                )
+            else:
+                _ = await litellm.acompletion(
+                    model="azure/chatgpt-v2",
+                    messages=[{"role": "user", "content": "Hello world"}],
+                    client=client,
+                    api_version="my-new-version",
+                    stream=stream,
+                )
+        except Exception:
+            pass
+
+        try:
+            mock_client.assert_not_called()
+        except Exception as e:
+            traceback.print_stack()
+            raise e

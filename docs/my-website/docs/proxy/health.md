@@ -41,28 +41,6 @@ litellm --health
 }
 ```
 
-### Background Health Checks 
-
-You can enable model health checks being run in the background, to prevent each model from being queried too frequently via `/health`.
-
-Here's how to use it: 
-1. in the config.yaml add:
-```
-general_settings: 
-  background_health_checks: True # enable background health checks
-  health_check_interval: 300 # frequency of background health checks
-```
-
-2. Start server 
-```
-$ litellm /path/to/config.yaml
-```
-
-3. Query health endpoint: 
-```
-curl --location 'http://0.0.0.0:4000/health'
-```
-
 ### Embedding Models 
 
 We need some way to know if the model is an embedding model when running checks, if you have this in your config, specifying mode it makes an embedding health check
@@ -122,6 +100,41 @@ model_list:
       api_key: os.environ/OPENAI_API_KEY
     model_info:
       mode: audio_transcription
+```
+
+
+### Text to Speech Models 
+
+```yaml
+# OpenAI Text to Speech Models
+  - model_name: tts
+    litellm_params:
+      model: openai/tts-1
+      api_key: "os.environ/OPENAI_API_KEY"
+    model_info:
+      mode: audio_speech
+```
+
+## Background Health Checks 
+
+You can enable model health checks being run in the background, to prevent each model from being queried too frequently via `/health`.
+
+Here's how to use it: 
+1. in the config.yaml add:
+```
+general_settings: 
+  background_health_checks: True # enable background health checks
+  health_check_interval: 300 # frequency of background health checks
+```
+
+2. Start server 
+```
+$ litellm /path/to/config.yaml
+```
+
+3. Query health endpoint: 
+```
+curl --location 'http://0.0.0.0:4000/health'
 ```
 
 ### Hide details

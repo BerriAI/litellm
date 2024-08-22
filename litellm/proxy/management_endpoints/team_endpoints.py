@@ -18,6 +18,7 @@ from litellm.proxy._types import (
     LiteLLM_AuditLogs,
     LiteLLM_ModelTable,
     LiteLLM_TeamTable,
+    LiteLLM_TeamTableCachedObj,
     LitellmTableNames,
     LitellmUserRoles,
     Member,
@@ -29,13 +30,23 @@ from litellm.proxy._types import (
     UpdateTeamRequest,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.auth.user_api_key_auth import _is_user_proxy_admin, user_api_key_auth
 from litellm.proxy.management_helpers.utils import (
     add_new_member,
     management_endpoint_wrapper,
 )
 
 router = APIRouter()
+
+
+def _is_user_team_admin(
+    user_api_key_dict: UserAPIKeyAuth, team_obj: LiteLLM_TeamTable
+) -> bool:
+    for member in team_obj.members_with_roles:
+        if member.user_id is not None and member.user_id == user_api_key_dict.user_id:
+            return True
+
+    return False
 
 
 #### TEAM MANAGEMENT ####
@@ -83,11 +94,8 @@ async def new_team(
     Example Request:
     ```
     curl --location 'http://0.0.0.0:4000/team/new' \
-
     --header 'Authorization: Bearer sk-1234' \
-
     --header 'Content-Type: application/json' \
-
     --data '{
       "team_alias": "my-new-team_2",
       "members_with_roles": [{"role": "admin", "user_id": "user-1234"},
@@ -98,17 +106,13 @@ async def new_team(
 
      ```
     curl --location 'http://0.0.0.0:4000/team/new' \
-
     --header 'Authorization: Bearer sk-1234' \
-
     --header 'Content-Type: application/json' \
-
     --data '{
                 "team_alias": "QA Prod Bot", 
                 "max_budget": 0.000000001, 
                 "budget_duration": "1d"
             }'
-
     ```
     """
     from litellm.proxy.proxy_server import (
@@ -302,28 +306,22 @@ async def update_team(
     Example - update team TPM Limit
 
     ```
-    curl --location 'http://0.0.0.0:8000/team/update' \
-
+    curl --location 'http://0.0.0.0:4000/team/update' \
     --header 'Authorization: Bearer sk-1234' \
-
     --header 'Content-Type: application/json' \
-
     --data-raw '{
-        "team_id": "litellm-test-client-id-new",
+        "team_id": "8d916b1c-510d-4894-a334-1c16a93344f5",
         "tpm_limit": 100
     }'
     ```
 
     Example - Update Team `max_budget` budget
     ```
-    curl --location 'http://0.0.0.0:8000/team/update' \
-
+    curl --location 'http://0.0.0.0:4000/team/update' \
     --header 'Authorization: Bearer sk-1234' \
-
     --header 'Content-Type: application/json' \
-
     --data-raw '{
-        "team_id": "litellm-test-client-id-new",
+        "team_id": "8d916b1c-510d-4894-a334-1c16a93344f5",
         "max_budget": 10
     }'
     ```
@@ -334,6 +332,7 @@ async def update_team(
         create_audit_log_for_update,
         litellm_proxy_admin_name,
         prisma_client,
+        proxy_logging_obj,
         user_api_key_cache,
     )
 
@@ -378,8 +377,9 @@ async def update_team(
 
     await _cache_team_object(
         team_id=team_row.team_id,
-        team_table=team_row,
+        team_table=LiteLLM_TeamTableCachedObj(**team_row.model_dump()),
         user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
     )
 
     # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
@@ -427,6 +427,7 @@ async def team_member_add(
 
     If user doesn't exist, new user row will also be added to User Table
 
+    Only proxy_admin or admin of team, allowed to access this endpoint.
     ```
 
     curl -X POST 'http://0.0.0.0:4000/team/member_add' \
@@ -439,8 +440,11 @@ async def team_member_add(
     from litellm.proxy.proxy_server import (
         _duration_in_seconds,
         create_audit_log_for_update,
+        get_team_object,
         litellm_proxy_admin_name,
         prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
     )
 
     if prisma_client is None:
@@ -454,8 +458,13 @@ async def team_member_add(
             status_code=400, detail={"error": "No member/members passed in"}
         )
 
-    existing_team_row = await prisma_client.db.litellm_teamtable.find_unique(
-        where={"team_id": data.team_id}
+    existing_team_row = await get_team_object(
+        team_id=data.team_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        parent_otel_span=None,
+        proxy_logging_obj=proxy_logging_obj,
+        check_cache_only=False,
     )
     if existing_team_row is None:
         raise HTTPException(
@@ -466,6 +475,25 @@ async def team_member_add(
         )
 
     complete_team_data = LiteLLM_TeamTable(**existing_team_row.model_dump())
+
+    ## CHECK IF USER IS PROXY ADMIN OR TEAM ADMIN
+
+    if (
+        hasattr(user_api_key_dict, "user_role")
+        and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
+        and not _is_user_team_admin(
+            user_api_key_dict=user_api_key_dict, team_obj=complete_team_data
+        )
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "Call not allowed. User not proxy admin OR team admin. route={}, team_id={}".format(
+                    "/team/member_add",
+                    complete_team_data.team_id,
+                )
+            },
+        )
 
     if isinstance(data.member, Member):
         # add to team db
@@ -571,6 +599,23 @@ async def team_member_delete(
         )
     existing_team_row = LiteLLM_TeamTable(**_existing_team_row.model_dump())
 
+    ## CHECK IF USER IS PROXY ADMIN OR TEAM ADMIN
+
+    if (
+        user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
+        and not _is_user_team_admin(
+            user_api_key_dict=user_api_key_dict, team_obj=existing_team_row
+        )
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "Call not allowed. User not proxy admin OR team admin. route={}, team_id={}".format(
+                    "/team/member_delete", existing_team_row.team_id
+                )
+            },
+        )
+
     ## DELETE MEMBER FROM TEAM
     new_team_members: List[Member] = []
     for m in existing_team_row.members_with_roles:
@@ -644,14 +689,11 @@ async def delete_team(
     delete team and associated team keys
 
     ```
-    curl --location 'http://0.0.0.0:8000/team/delete' \
-
+    curl --location 'http://0.0.0.0:4000/team/delete' \
     --header 'Authorization: Bearer sk-1234' \
-
     --header 'Content-Type: application/json' \
-
     --data-raw '{
-        "team_ids": ["45e3e396-ee08-4a61-a88e-16b3ce7e0849"]
+        "team_ids": ["8d916b1c-510d-4894-a334-1c16a93344f5"]
     }'
     ```
     """
@@ -763,7 +805,11 @@ async def team_info(
                 detail={"message": "Malformed request. No team id passed in."},
             )
 
-        if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        if (
+            user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
+            or user_api_key_dict.user_role
+            == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value
+        ):
             pass
         elif user_api_key_dict.team_id is None or (
             team_id != user_api_key_dict.team_id
@@ -913,7 +959,10 @@ async def list_team(
         prisma_client,
     )
 
-    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+    if (
+        user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
+        and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
+    ):
         raise HTTPException(
             status_code=401,
             detail={

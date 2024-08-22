@@ -16,6 +16,7 @@ import pytest
 from openai import OpenAI
 
 import litellm
+import litellm.tests.stream_chunk_testdata
 from litellm import completion, stream_chunk_builder
 
 dotenv.load_dotenv()
@@ -196,3 +197,32 @@ def test_stream_chunk_builder_litellm_usage_chunks():
     # assert prompt tokens are the same
 
     assert gemini_pt == stream_rebuilt_pt
+
+
+def test_stream_chunk_builder_litellm_mixed_calls():
+    response = stream_chunk_builder(litellm.tests.stream_chunk_testdata.chunks)
+    assert (
+        response.choices[0].message.content
+        == "To answer your question about how many rows are in the 'users' table, I'll need to run a SQL query. Let me do that for you."
+    )
+
+    print(response.choices[0].message.tool_calls[0].to_dict())
+
+    assert len(response.choices[0].message.tool_calls) == 1
+    assert response.choices[0].message.tool_calls[0].to_dict() == {
+        "index": 1,
+        "function": {
+            "arguments": '{"query": "SELECT COUNT(*) FROM users;"}',
+            "name": "sql_query",
+        },
+        "id": "toolu_01H3AjkLpRtGQrof13CBnWfK",
+        "type": "function",
+    }
+
+
+def test_stream_chunk_builder_litellm_empty_chunks():
+    with pytest.raises(litellm.APIError):
+        response = stream_chunk_builder(chunks=None)
+
+    response = stream_chunk_builder(chunks=[])
+    assert response is None

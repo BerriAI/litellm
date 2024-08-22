@@ -29,6 +29,24 @@ const config = {
 
   plugins: [
     [
+      require.resolve("@getcanary/docusaurus-pagefind"),
+      {
+        indexOnly: true,
+        styles: {
+          "--canary-color-primary-c": 0.1,
+          "--canary-color-primary-h": 270,
+        },
+        pagefind: {
+          ranking: {
+            pageLength: 0.9,
+            termFrequency: 1.0,
+            termSimilarity: 1.0,
+            termSaturation: 1.5,
+          }
+        }
+      },
+    ],
+    [
       '@docusaurus/plugin-ideal-image',
       {
         quality: 100,
@@ -116,6 +134,11 @@ const config = {
             position: 'left',
             label: '🚀 Hosted',
             to: "docs/hosted"
+          },
+          {
+            href: 'https://models.litellm.ai/',
+            label: '💸 LLM Model Cost Map',
+            position: 'right',
           },
           {
             href: 'https://github.com/BerriAI/litellm',

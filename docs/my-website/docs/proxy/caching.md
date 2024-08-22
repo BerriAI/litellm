@@ -7,6 +7,7 @@ Cache LLM Responses
 LiteLLM supports:
 - In Memory Cache
 - Redis Cache 
+- Qdrant Semantic Cache
 - Redis Semantic Cache
 - s3 Bucket Cache 
 
@@ -59,6 +60,8 @@ litellm_settings:
   cache_params:        # set cache params for redis
     type: redis
     ttl: 600 # will be cached on redis for 600s
+    # default_in_memory_ttl: Optional[float], default is None. time in seconds. 
+    # default_in_redis_ttl: Optional[float], default is None. time in seconds. 
 ```
 
 
@@ -99,6 +102,66 @@ REDIS_<redis-kwarg-name> = ""
 ```shell
 $ litellm --config /path/to/config.yaml
 ```
+</TabItem>
+
+
+<TabItem value="qdrant-semantic" label="Qdrant Semantic cache">
+
+Caching can be enabled by adding the `cache` key in the `config.yaml`
+
+#### Step 1: Add `cache` to the config.yaml
+```yaml
+model_list:
+  - model_name: fake-openai-endpoint
+    litellm_params:
+      model: openai/fake
+      api_key: fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+  - model_name: openai-embedding
+    litellm_params:
+      model: openai/text-embedding-3-small
+      api_key: os.environ/OPENAI_API_KEY
+
+litellm_settings:
+  set_verbose: True
+  cache: True          # set cache responses to True, litellm defaults to using a redis cache
+  cache_params:
+    type: qdrant-semantic
+    qdrant_semantic_cache_embedding_model: openai-embedding # the model should be defined on the model_list
+    qdrant_collection_name: test_collection
+    qdrant_quantization_config: binary
+    similarity_threshold: 0.8   # similarity threshold for semantic cache
+```
+
+#### Step 2: Add Qdrant Credentials to your .env
+
+```shell
+QDRANT_API_KEY = "16rJUMBRx*************"
+QDRANT_API_BASE = "https://5392d382-45*********.cloud.qdrant.io"
+```
+
+#### Step 3: Run proxy with config
+```shell
+$ litellm --config /path/to/config.yaml
+```
+
+
+#### Step 4. Test it
+
+```shell
+curl -i http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "fake-openai-endpoint",
+    "messages": [
+      {"role": "user", "content": "Hello"}
+    ]
+  }'
+```
+
+**Expect to see `x-litellm-semantic-similarity` in the response headers when semantic caching is one**
+
 </TabItem>
 
 <TabItem value="s3" label="s3 cache">
@@ -180,7 +243,12 @@ REDIS_<redis-kwarg-name> = ""
 $ litellm --config /path/to/config.yaml
 ```
 </TabItem>
+
+
+
 </Tabs>
+
+
 
 
 ## Using Caching - /chat/completions
@@ -228,6 +296,22 @@ curl --location 'http://0.0.0.0:4000/embeddings' \
 </TabItem>
 </Tabs>
 
+## Set cache for proxy, but not on the actual llm api call
+
+Use this if you just want to enable features like rate limiting, and loadbalancing across multiple instances.
+
+Set `supported_call_types: []` to disable caching on the actual api call. 
+
+
+```yaml
+litellm_settings:
+  cache: True
+  cache_params:
+    type: redis
+    supported_call_types: [] 
+```
+
+
 ## Debugging Caching - `/cache/ping`
 LiteLLM Proxy exposes a `/cache/ping` endpoint to test if the cache is working as expected
 
@@ -258,6 +342,21 @@ curl --location 'http://0.0.0.0:4000/cache/ping'  -H "Authorization: Bearer sk-1
 ```
 
 ## Advanced
+
+### Control Call Types Caching is on for - (`/chat/completion`, `/embeddings`, etc.)
+
+By default, caching is on for all call types. You can control which call types caching is on for by setting `supported_call_types` in `cache_params`
+
+**Cache will only be on for the call types specified in `supported_call_types`**
+
+```yaml
+litellm_settings:
+  cache: True
+  cache_params:
+    type: redis
+    supported_call_types: ["acompletion", "atext_completion", "aembedding", "atranscription"]
+                          # /chat/completions, /completions, /embeddings, /audio/transcriptions
+```
 ### Set Cache Params on config.yaml
 ```yaml
 model_list:
@@ -278,7 +377,8 @@ litellm_settings:
     password: "your_password"  # The password for the Redis cache. Required if type is "redis".
     
     # Optional configurations
-    supported_call_types: ["acompletion", "completion", "embedding", "aembedding"] # defaults to all litellm call types
+    supported_call_types: ["acompletion", "atext_completion", "aembedding", "atranscription"]
+                      # /chat/completions, /completions, /embeddings, /audio/transcriptions
 ```
 
 ### Turn on / off caching per request.  
@@ -613,21 +713,25 @@ litellm_settings:
 
 ```yaml
 cache_params:
+  # ttl 
+  ttl: Optional[float]
+  default_in_memory_ttl: Optional[float]
+  default_in_redis_ttl: Optional[float]
+
   # Type of cache (options: "local", "redis", "s3")
   type: s3
 
   # List of litellm call types to cache for
   # Options: "completion", "acompletion", "embedding", "aembedding"
-  supported_call_types:
-    - completion
-    - acompletion
-    - embedding
-    - aembedding
+  supported_call_types: ["acompletion", "atext_completion", "aembedding", "atranscription"]
+                      # /chat/completions, /completions, /embeddings, /audio/transcriptions
 
   # Redis cache parameters
   host: localhost  # Redis server hostname or IP address
   port: "6379"  # Redis server port (as a string)
   password: secret_password  # Redis server password
+  namespace: Optional[str] = None,
+  
 
   # S3 cache parameters
   s3_bucket_name: your_s3_bucket_name  # Name of the S3 bucket

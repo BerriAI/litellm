@@ -31,7 +31,18 @@ model_list:
       api_base: https://openai-france-1234.openai.azure.com/
       api_key: <your-azure-api-key>
       rpm: 1440
+routing_strategy: simple-shuffle # Literal["simple-shuffle", "least-busy", "usage-based-routing","latency-based-routing"], default="simple-shuffle"
+  model_group_alias: {"gpt-4": "gpt-3.5-turbo"} # all requests with `gpt-4` will be routed to models with `gpt-3.5-turbo`
+  num_retries: 2
+  timeout: 30                                  # 30 seconds
+  redis_host: <your redis host>                # set this when using multiple litellm proxy deployments, load balancing state stored in redis
+  redis_password: <your redis password>
+  redis_port: 1992
 ```
+
+:::info
+Detailed information about [routing strategies can be found here](../routing)
+:::
 
 #### Step 2: Start Proxy with config
 
@@ -39,7 +50,7 @@ model_list:
 $ litellm --config /path/to/config.yaml
 ```
 
-### Test - Load Balancing
+### Test - Simple Call
 
 Here requests with model=gpt-3.5-turbo will be routed across multiple instances of azure/gpt-3.5-turbo
 
@@ -126,6 +137,27 @@ print(response)
 
 </Tabs>
 
+
+### Test - Loadbalancing
+
+In this request, the following will occur:
+1. A rate limit exception will be raised 
+2. LiteLLM proxy will retry the request on the model group (default is 3).
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-d '{
+  "model": "gpt-3.5-turbo",
+  "messages": [
+        {"role": "user", "content": "Hi there!"}
+    ],
+    "mock_testing_rate_limit_error": true
+}'
+```
+
+[**See Code**](https://github.com/BerriAI/litellm/blob/6b8806b45f970cb2446654d2c379f8dcaa93ce3c/litellm/router.py#L2535)
 
 ### Test - Client Side Fallbacks
 In this request the following will occur:

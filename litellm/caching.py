@@ -10,6 +10,7 @@
 import ast
 import asyncio
 import hashlib
+import io
 import json
 import logging
 import time
@@ -21,7 +22,9 @@ from openai._models import BaseModel as OpenAIObject
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
 from litellm.types.services import ServiceLoggerPayload, ServiceTypes
+from litellm.types.utils import all_litellm_params
 
 
 def print_verbose(print_statement):
@@ -31,16 +34,6 @@ def print_verbose(print_statement):
             print(print_statement)  # noqa
     except:
         pass
-
-
-def _get_parent_otel_span_from_kwargs(kwargs: Optional[dict] = None):
-    try:
-        if kwargs is None:
-            return None
-        _metadata = kwargs.get("metadata") or {}
-        return _metadata.get("litellm_parent_otel_span")
-    except:
-        return None
 
 
 class BaseCache:
@@ -1227,6 +1220,405 @@ class RedisSemanticCache(BaseCache):
         return await self.index.ainfo()
 
 
+class QdrantSemanticCache(BaseCache):
+    def __init__(
+        self,
+        qdrant_api_base=None,
+        qdrant_api_key=None,
+        collection_name=None,
+        similarity_threshold=None,
+        quantization_config=None,
+        embedding_model="text-embedding-ada-002",
+        host_type=None,
+    ):
+        import os
+
+        from litellm.llms.custom_httpx.http_handler import (
+            _get_async_httpx_client,
+            _get_httpx_client,
+        )
+
+        if collection_name is None:
+            raise Exception("collection_name must be provided, passed None")
+
+        self.collection_name = collection_name
+        print_verbose(
+            f"qdrant semantic-cache initializing COLLECTION - {self.collection_name}"
+        )
+
+        if similarity_threshold is None:
+            raise Exception("similarity_threshold must be provided, passed None")
+        self.similarity_threshold = similarity_threshold
+        self.embedding_model = embedding_model
+        headers = {}
+
+        # check if defined as os.environ/ variable
+        if qdrant_api_base:
+            if isinstance(qdrant_api_base, str) and qdrant_api_base.startswith(
+                "os.environ/"
+            ):
+                qdrant_api_base = litellm.get_secret(qdrant_api_base)
+        if qdrant_api_key:
+            if isinstance(qdrant_api_key, str) and qdrant_api_key.startswith(
+                "os.environ/"
+            ):
+                qdrant_api_key = litellm.get_secret(qdrant_api_key)
+
+        qdrant_api_base = (
+            qdrant_api_base or os.getenv("QDRANT_URL") or os.getenv("QDRANT_API_BASE")
+        )
+        qdrant_api_key = qdrant_api_key or os.getenv("QDRANT_API_KEY")
+        headers = {"api-key": qdrant_api_key, "Content-Type": "application/json"}
+
+        if qdrant_api_key is None or qdrant_api_base is None:
+            raise ValueError("Qdrant url and api_key must be")
+
+        self.qdrant_api_base = qdrant_api_base
+        self.qdrant_api_key = qdrant_api_key
+        print_verbose(f"qdrant semantic-cache qdrant_api_base: {self.qdrant_api_base}")
+
+        self.headers = headers
+
+        self.sync_client = _get_httpx_client()
+        self.async_client = _get_async_httpx_client()
+
+        if quantization_config is None:
+            print_verbose(
+                "Quantization config is not provided. Default binary quantization will be used."
+            )
+        collection_exists = self.sync_client.get(
+            url=f"{self.qdrant_api_base}/collections/{self.collection_name}/exists",
+            headers=self.headers,
+        )
+        if collection_exists.status_code != 200:
+            raise ValueError(
+                f"Error from qdrant checking if /collections exist {collection_exists.text}"
+            )
+
+        if collection_exists.json()["result"]["exists"]:
+            collection_details = self.sync_client.get(
+                url=f"{self.qdrant_api_base}/collections/{self.collection_name}",
+                headers=self.headers,
+            )
+            self.collection_info = collection_details.json()
+            print_verbose(
+                f"Collection already exists.\nCollection details:{self.collection_info}"
+            )
+        else:
+            if quantization_config is None or quantization_config == "binary":
+                quantization_params = {
+                    "binary": {
+                        "always_ram": False,
+                    }
+                }
+            elif quantization_config == "scalar":
+                quantization_params = {
+                    "scalar": {"type": "int8", "quantile": 0.99, "always_ram": False}
+                }
+            elif quantization_config == "product":
+                quantization_params = {
+                    "product": {"compression": "x16", "always_ram": False}
+                }
+            else:
+                raise Exception(
+                    "Quantization config must be one of 'scalar', 'binary' or 'product'"
+                )
+
+            new_collection_status = self.sync_client.put(
+                url=f"{self.qdrant_api_base}/collections/{self.collection_name}",
+                json={
+                    "vectors": {"size": 1536, "distance": "Cosine"},
+                    "quantization_config": quantization_params,
+                },
+                headers=self.headers,
+            )
+            if new_collection_status.json()["result"]:
+                collection_details = self.sync_client.get(
+                    url=f"{self.qdrant_api_base}/collections/{self.collection_name}",
+                    headers=self.headers,
+                )
+                self.collection_info = collection_details.json()
+                print_verbose(
+                    f"New collection created.\nCollection details:{self.collection_info}"
+                )
+            else:
+                raise Exception("Error while creating new collection")
+
+    def _get_cache_logic(self, cached_response: Any):
+        if cached_response is None:
+            return cached_response
+        try:
+            cached_response = json.loads(
+                cached_response
+            )  # Convert string to dictionary
+        except:
+            cached_response = ast.literal_eval(cached_response)
+        return cached_response
+
+    def set_cache(self, key, value, **kwargs):
+        print_verbose(f"qdrant semantic-cache set_cache, kwargs: {kwargs}")
+        import uuid
+
+        # get the prompt
+        messages = kwargs["messages"]
+        prompt = ""
+        for message in messages:
+            prompt += message["content"]
+
+        # create an embedding for prompt
+        embedding_response = litellm.embedding(
+            model=self.embedding_model,
+            input=prompt,
+            cache={"no-store": True, "no-cache": True},
+        )
+
+        # get the embedding
+        embedding = embedding_response["data"][0]["embedding"]
+
+        value = str(value)
+        assert isinstance(value, str)
+
+        data = {
+            "points": [
+                {
+                    "id": str(uuid.uuid4()),
+                    "vector": embedding,
+                    "payload": {
+                        "text": prompt,
+                        "response": value,
+                    },
+                },
+            ]
+        }
+        keys = self.sync_client.put(
+            url=f"{self.qdrant_api_base}/collections/{self.collection_name}/points",
+            headers=self.headers,
+            json=data,
+        )
+        return
+
+    def get_cache(self, key, **kwargs):
+        print_verbose(f"sync qdrant semantic-cache get_cache, kwargs: {kwargs}")
+
+        # get the messages
+        messages = kwargs["messages"]
+        prompt = ""
+        for message in messages:
+            prompt += message["content"]
+
+        # convert to embedding
+        embedding_response = litellm.embedding(
+            model=self.embedding_model,
+            input=prompt,
+            cache={"no-store": True, "no-cache": True},
+        )
+
+        # get the embedding
+        embedding = embedding_response["data"][0]["embedding"]
+
+        data = {
+            "vector": embedding,
+            "params": {
+                "quantization": {
+                    "ignore": False,
+                    "rescore": True,
+                    "oversampling": 3.0,
+                }
+            },
+            "limit": 1,
+            "with_payload": True,
+        }
+
+        search_response = self.sync_client.post(
+            url=f"{self.qdrant_api_base}/collections/{self.collection_name}/points/search",
+            headers=self.headers,
+            json=data,
+        )
+        results = search_response.json()["result"]
+
+        if results == None:
+            return None
+        if isinstance(results, list):
+            if len(results) == 0:
+                return None
+
+        similarity = results[0]["score"]
+        cached_prompt = results[0]["payload"]["text"]
+
+        # check similarity, if more than self.similarity_threshold, return results
+        print_verbose(
+            f"semantic cache: similarity threshold: {self.similarity_threshold}, similarity: {similarity}, prompt: {prompt}, closest_cached_prompt: {cached_prompt}"
+        )
+        if similarity >= self.similarity_threshold:
+            # cache hit !
+            cached_value = results[0]["payload"]["response"]
+            print_verbose(
+                f"got a cache hit, similarity: {similarity}, Current prompt: {prompt}, cached_prompt: {cached_prompt}"
+            )
+            return self._get_cache_logic(cached_response=cached_value)
+        else:
+            # cache miss !
+            return None
+        pass
+
+    async def async_set_cache(self, key, value, **kwargs):
+        import uuid
+
+        from litellm.proxy.proxy_server import llm_model_list, llm_router
+
+        print_verbose(f"async qdrant semantic-cache set_cache, kwargs: {kwargs}")
+
+        # get the prompt
+        messages = kwargs["messages"]
+        prompt = ""
+        for message in messages:
+            prompt += message["content"]
+        # create an embedding for prompt
+        router_model_names = (
+            [m["model_name"] for m in llm_model_list]
+            if llm_model_list is not None
+            else []
+        )
+        if llm_router is not None and self.embedding_model in router_model_names:
+            user_api_key = kwargs.get("metadata", {}).get("user_api_key", "")
+            embedding_response = await llm_router.aembedding(
+                model=self.embedding_model,
+                input=prompt,
+                cache={"no-store": True, "no-cache": True},
+                metadata={
+                    "user_api_key": user_api_key,
+                    "semantic-cache-embedding": True,
+                    "trace_id": kwargs.get("metadata", {}).get("trace_id", None),
+                },
+            )
+        else:
+            # convert to embedding
+            embedding_response = await litellm.aembedding(
+                model=self.embedding_model,
+                input=prompt,
+                cache={"no-store": True, "no-cache": True},
+            )
+
+        # get the embedding
+        embedding = embedding_response["data"][0]["embedding"]
+
+        value = str(value)
+        assert isinstance(value, str)
+
+        data = {
+            "points": [
+                {
+                    "id": str(uuid.uuid4()),
+                    "vector": embedding,
+                    "payload": {
+                        "text": prompt,
+                        "response": value,
+                    },
+                },
+            ]
+        }
+
+        keys = await self.async_client.put(
+            url=f"{self.qdrant_api_base}/collections/{self.collection_name}/points",
+            headers=self.headers,
+            json=data,
+        )
+        return
+
+    async def async_get_cache(self, key, **kwargs):
+        print_verbose(f"async qdrant semantic-cache get_cache, kwargs: {kwargs}")
+        from litellm.proxy.proxy_server import llm_model_list, llm_router
+
+        # get the messages
+        messages = kwargs["messages"]
+        prompt = ""
+        for message in messages:
+            prompt += message["content"]
+
+        router_model_names = (
+            [m["model_name"] for m in llm_model_list]
+            if llm_model_list is not None
+            else []
+        )
+        if llm_router is not None and self.embedding_model in router_model_names:
+            user_api_key = kwargs.get("metadata", {}).get("user_api_key", "")
+            embedding_response = await llm_router.aembedding(
+                model=self.embedding_model,
+                input=prompt,
+                cache={"no-store": True, "no-cache": True},
+                metadata={
+                    "user_api_key": user_api_key,
+                    "semantic-cache-embedding": True,
+                    "trace_id": kwargs.get("metadata", {}).get("trace_id", None),
+                },
+            )
+        else:
+            # convert to embedding
+            embedding_response = await litellm.aembedding(
+                model=self.embedding_model,
+                input=prompt,
+                cache={"no-store": True, "no-cache": True},
+            )
+
+        # get the embedding
+        embedding = embedding_response["data"][0]["embedding"]
+
+        data = {
+            "vector": embedding,
+            "params": {
+                "quantization": {
+                    "ignore": False,
+                    "rescore": True,
+                    "oversampling": 3.0,
+                }
+            },
+            "limit": 1,
+            "with_payload": True,
+        }
+
+        search_response = await self.async_client.post(
+            url=f"{self.qdrant_api_base}/collections/{self.collection_name}/points/search",
+            headers=self.headers,
+            json=data,
+        )
+
+        results = search_response.json()["result"]
+
+        if results == None:
+            kwargs.setdefault("metadata", {})["semantic-similarity"] = 0.0
+            return None
+        if isinstance(results, list):
+            if len(results) == 0:
+                kwargs.setdefault("metadata", {})["semantic-similarity"] = 0.0
+                return None
+
+        similarity = results[0]["score"]
+        cached_prompt = results[0]["payload"]["text"]
+
+        # check similarity, if more than self.similarity_threshold, return results
+        print_verbose(
+            f"semantic cache: similarity threshold: {self.similarity_threshold}, similarity: {similarity}, prompt: {prompt}, closest_cached_prompt: {cached_prompt}"
+        )
+
+        # update kwargs["metadata"] with similarity, don't rewrite the original metadata
+        kwargs.setdefault("metadata", {})["semantic-similarity"] = similarity
+
+        if similarity >= self.similarity_threshold:
+            # cache hit !
+            cached_value = results[0]["payload"]["response"]
+            print_verbose(
+                f"got a cache hit, similarity: {similarity}, Current prompt: {prompt}, cached_prompt: {cached_prompt}"
+            )
+            return self._get_cache_logic(cached_response=cached_value)
+        else:
+            # cache miss !
+            return None
+        pass
+
+    async def _collection_info(self):
+        return self.collection_info
+
+
 class S3Cache(BaseCache):
     def __init__(
         self,
@@ -1577,8 +1969,9 @@ class DualCache(BaseCache):
             if self.redis_cache is not None and local_only == False:
                 await self.redis_cache.async_set_cache(key, value, **kwargs)
         except Exception as e:
-            verbose_logger.error(f"LiteLLM Cache: Excepton async add_cache: {str(e)}")
-            verbose_logger.debug(traceback.format_exc())
+            verbose_logger.exception(
+                f"LiteLLM Cache: Excepton async add_cache: {str(e)}"
+            )
 
     async def async_batch_set_cache(
         self, cache_list: list, local_only: bool = False, **kwargs
@@ -1600,8 +1993,9 @@ class DualCache(BaseCache):
                     cache_list=cache_list, ttl=kwargs.get("ttl", None), **kwargs
                 )
         except Exception as e:
-            verbose_logger.error(f"LiteLLM Cache: Excepton async add_cache: {str(e)}")
-            verbose_logger.debug(traceback.format_exc())
+            verbose_logger.exception(
+                f"LiteLLM Cache: Excepton async add_cache: {str(e)}"
+            )
 
     async def async_increment_cache(
         self, key, value: float, local_only: bool = False, **kwargs
@@ -1625,8 +2019,9 @@ class DualCache(BaseCache):
 
             return result
         except Exception as e:
-            verbose_logger.error(f"LiteLLM Cache: Excepton async add_cache: {str(e)}")
-            verbose_logger.debug(traceback.format_exc())
+            verbose_logger.exception(
+                f"LiteLLM Cache: Excepton async add_cache: {str(e)}"
+            )
             raise e
 
     async def async_set_cache_sadd(
@@ -1654,10 +2049,8 @@ class DualCache(BaseCache):
 
             return None
         except Exception as e:
-            verbose_logger.error(
-                "LiteLLM Cache: Excepton async set_cache_sadd: {}\n{}".format(
-                    str(e), traceback.format_exc()
-                )
+            verbose_logger.exception(
+                "LiteLLM Cache: Excepton async set_cache_sadd: {}".format(str(e))
             )
             raise e
 
@@ -1682,7 +2075,7 @@ class Cache:
     def __init__(
         self,
         type: Optional[
-            Literal["local", "redis", "redis-semantic", "s3", "disk"]
+            Literal["local", "redis", "redis-semantic", "s3", "disk", "qdrant-semantic"]
         ] = "local",
         host: Optional[str] = None,
         port: Optional[str] = None,
@@ -1701,6 +2094,8 @@ class Cache:
                     "aembedding",
                     "atranscription",
                     "transcription",
+                    "atext_completion",
+                    "text_completion",
                 ]
             ]
         ] = [
@@ -1710,6 +2105,8 @@ class Cache:
             "aembedding",
             "atranscription",
             "transcription",
+            "atext_completion",
+            "text_completion",
         ],
         # s3 Bucket, boto3 configuration
         s3_bucket_name: Optional[str] = None,
@@ -1727,17 +2124,25 @@ class Cache:
         redis_semantic_cache_embedding_model="text-embedding-ada-002",
         redis_flush_size=None,
         disk_cache_dir=None,
+        qdrant_api_base: Optional[str] = None,
+        qdrant_api_key: Optional[str] = None,
+        qdrant_collection_name: Optional[str] = None,
+        qdrant_quantization_config: Optional[str] = None,
+        qdrant_semantic_cache_embedding_model="text-embedding-ada-002",
         **kwargs,
     ):
         """
         Initializes the cache based on the given type.
 
         Args:
-            type (str, optional): The type of cache to initialize. Can be "local", "redis", "redis-semantic", "s3" or "disk". Defaults to "local".
+            type (str, optional): The type of cache to initialize. Can be "local", "redis", "redis-semantic", "qdrant-semantic", "s3" or "disk". Defaults to "local".
             host (str, optional): The host address for the Redis cache. Required if type is "redis".
             port (int, optional): The port number for the Redis cache. Required if type is "redis".
             password (str, optional): The password for the Redis cache. Required if type is "redis".
-            similarity_threshold (float, optional): The similarity threshold for semantic-caching, Required if type is "redis-semantic"
+            qdrant_api_base (str, optional): The url for your qdrant cluster. Required if type is "qdrant-semantic".
+            qdrant_api_key (str, optional): The api_key for the local or cloud qdrant cluster.
+            qdrant_collection_name (str, optional): The name for your qdrant collection. Required if type is "qdrant-semantic".
+            similarity_threshold (float, optional): The similarity threshold for semantic-caching, Required if type is "redis-semantic" or "qdrant-semantic".
 
             supported_call_types (list, optional): List of call types to cache for. Defaults to cache == on for all call types.
             **kwargs: Additional keyword arguments for redis.Redis() cache
@@ -1761,6 +2166,15 @@ class Cache:
                 use_async=redis_semantic_cache_use_async,
                 embedding_model=redis_semantic_cache_embedding_model,
                 **kwargs,
+            )
+        elif type == "qdrant-semantic":
+            self.cache = QdrantSemanticCache(
+                qdrant_api_base=qdrant_api_base,
+                qdrant_api_key=qdrant_api_key,
+                collection_name=qdrant_collection_name,
+                similarity_threshold=similarity_threshold,
+                quantization_config=qdrant_quantization_config,
+                embedding_model=qdrant_semantic_cache_embedding_model,
             )
         elif type == "local":
             self.cache = InMemoryCache()
@@ -1830,6 +2244,7 @@ class Cache:
         completion_kwargs = [
             "model",
             "messages",
+            "prompt",
             "temperature",
             "top_p",
             "n",
@@ -1843,6 +2258,7 @@ class Cache:
             "seed",
             "tools",
             "tool_choice",
+            "stream",
         ]
         embedding_only_kwargs = [
             "input",
@@ -1856,9 +2272,9 @@ class Cache:
         combined_kwargs = (
             completion_kwargs + embedding_only_kwargs + transcription_only_kwargs
         )
-        for param in combined_kwargs:
-            # ignore litellm params here
-            if param in kwargs:
+        litellm_param_kwargs = all_litellm_params
+        for param in kwargs:
+            if param in combined_kwargs:
                 # check if param == model and model_group is passed in, then override model with model_group
                 if param == "model":
                     model_group = None
@@ -1888,21 +2304,33 @@ class Cache:
                         caching_group or model_group or kwargs[param]
                     )  # use caching_group, if set then model_group if it exists, else use kwargs["model"]
                 elif param == "file":
-                    metadata_file_name = kwargs.get("metadata", {}).get(
-                        "file_name", None
+                    file = kwargs.get("file")
+                    metadata = kwargs.get("metadata", {})
+                    litellm_params = kwargs.get("litellm_params", {})
+
+                    # get checksum of file content
+                    param_value = (
+                        metadata.get("file_checksum")
+                        or getattr(file, "name", None)
+                        or metadata.get("file_name")
+                        or litellm_params.get("file_name")
                     )
-                    litellm_params_file_name = kwargs.get("litellm_params", {}).get(
-                        "file_name", None
-                    )
-                    if metadata_file_name is not None:
-                        param_value = metadata_file_name
-                    elif litellm_params_file_name is not None:
-                        param_value = litellm_params_file_name
                 else:
                     if kwargs[param] is None:
                         continue  # ignore None params
                     param_value = kwargs[param]
                 cache_key += f"{str(param)}: {str(param_value)}"
+            elif (
+                param not in litellm_param_kwargs
+            ):  # check if user passed in optional param - e.g. top_k
+                if (
+                    litellm.enable_caching_on_provider_specific_optional_params is True
+                ):  # feature flagged for now
+                    if kwargs[param] is None:
+                        continue  # ignore None params
+                    param_value = kwargs[param]
+                    cache_key += f"{str(param)}: {str(param_value)}"
+
         print_verbose(f"\nCreated cache key: {cache_key}")
         # Use hashlib to create a sha256 hash of the cache key
         hash_object = hashlib.sha256(cache_key.encode())
@@ -2077,8 +2505,7 @@ class Cache:
             )
             self.cache.set_cache(cache_key, cached_data, **kwargs)
         except Exception as e:
-            verbose_logger.error(f"LiteLLM Cache: Excepton add_cache: {str(e)}")
-            verbose_logger.debug(traceback.format_exc())
+            verbose_logger.exception(f"LiteLLM Cache: Excepton add_cache: {str(e)}")
             pass
 
     async def async_add_cache(self, result, *args, **kwargs):
@@ -2095,8 +2522,7 @@ class Cache:
                 )
                 await self.cache.async_set_cache(cache_key, cached_data, **kwargs)
         except Exception as e:
-            verbose_logger.error(f"LiteLLM Cache: Excepton add_cache: {str(e)}")
-            verbose_logger.debug(traceback.format_exc())
+            verbose_logger.exception(f"LiteLLM Cache: Excepton add_cache: {str(e)}")
 
     async def async_add_cache_pipeline(self, result, *args, **kwargs):
         """
@@ -2107,9 +2533,7 @@ class Cache:
         try:
             cache_list = []
             for idx, i in enumerate(kwargs["input"]):
-                preset_cache_key = litellm.cache.get_cache_key(
-                    *args, **{**kwargs, "input": i}
-                )
+                preset_cache_key = self.get_cache_key(*args, **{**kwargs, "input": i})
                 kwargs["cache_key"] = preset_cache_key
                 embedding_response = result.data[idx]
                 cache_key, cached_data, kwargs = self._add_cache_logic(
@@ -2128,8 +2552,7 @@ class Cache:
                     )
                 await asyncio.gather(*tasks)
         except Exception as e:
-            verbose_logger.error(f"LiteLLM Cache: Excepton add_cache: {str(e)}")
-            verbose_logger.debug(traceback.format_exc())
+            verbose_logger.exception(f"LiteLLM Cache: Excepton add_cache: {str(e)}")
 
     async def batch_cache_write(self, result, *args, **kwargs):
         cache_key, cached_data, kwargs = self._add_cache_logic(
@@ -2244,6 +2667,8 @@ def enable_cache(
                 "aembedding",
                 "atranscription",
                 "transcription",
+                "atext_completion",
+                "text_completion",
             ]
         ]
     ] = [
@@ -2253,6 +2678,8 @@ def enable_cache(
         "aembedding",
         "atranscription",
         "transcription",
+        "atext_completion",
+        "text_completion",
     ],
     **kwargs,
 ):
@@ -2309,6 +2736,8 @@ def update_cache(
                 "aembedding",
                 "atranscription",
                 "transcription",
+                "atext_completion",
+                "text_completion",
             ]
         ]
     ] = [
@@ -2318,6 +2747,8 @@ def update_cache(
         "aembedding",
         "atranscription",
         "transcription",
+        "atext_completion",
+        "text_completion",
     ],
     **kwargs,
 ):

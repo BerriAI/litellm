@@ -20,12 +20,22 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 from dotenv import load_dotenv
+from pydantic import BaseModel
 
 import litellm
 from litellm import Router
 from litellm.router import Deployment, LiteLLM_Params, ModelInfo
+from litellm.types.router import DeploymentTypedDict
 
 load_dotenv()
+
+
+def test_router_deployment_typing():
+    deployment_typed_dict = DeploymentTypedDict(
+        model_name="hi", litellm_params={"model": "hello-world"}
+    )
+    for value in deployment_typed_dict.items():
+        assert not isinstance(value, BaseModel)
 
 
 def test_router_multi_org_list():
@@ -48,6 +58,63 @@ def test_router_multi_org_list():
     )
 
     assert len(router.get_model_list()) == 3
+
+
+@pytest.mark.asyncio()
+async def test_router_provider_wildcard_routing():
+    """
+    Pass list of orgs in 1 model definition,
+    expect a unique deployment for each to be created
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {
+                    "model": "openai/*",
+                    "api_key": os.environ["OPENAI_API_KEY"],
+                    "api_base": "https://api.openai.com/v1",
+                },
+            },
+            {
+                "model_name": "anthropic/*",
+                "litellm_params": {
+                    "model": "anthropic/*",
+                    "api_key": os.environ["ANTHROPIC_API_KEY"],
+                },
+            },
+            {
+                "model_name": "groq/*",
+                "litellm_params": {
+                    "model": "groq/*",
+                    "api_key": os.environ["GROQ_API_KEY"],
+                },
+            },
+        ]
+    )
+
+    print("router model list = ", router.get_model_list())
+
+    response1 = await router.acompletion(
+        model="anthropic/claude-3-sonnet-20240229",
+        messages=[{"role": "user", "content": "hello"}],
+    )
+
+    print("response 1 = ", response1)
+
+    response2 = await router.acompletion(
+        model="openai/gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hello"}],
+    )
+
+    print("response 2 = ", response2)
+
+    response3 = await router.acompletion(
+        model="groq/llama3-8b-8192",
+        messages=[{"role": "user", "content": "hello"}],
+    )
+
+    print("response 3 = ", response3)
 
 
 def test_router_specific_model_via_id():
@@ -1117,6 +1184,8 @@ async def test_aimg_gen_on_router():
         assert len(response.data) > 0
 
         router.reset()
+    except litellm.InternalServerError as e:
+        pass
     except Exception as e:
         if "Your task failed as a result of our safety system." in str(e):
             pass

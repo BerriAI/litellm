@@ -54,9 +54,9 @@ def _generic_cost_per_character(
 
         prompt_cost = prompt_characters * custom_prompt_cost
     except Exception as e:
-        verbose_logger.error(
-            "litellm.litellm_core_utils.llm_cost_calc.utils.py::cost_per_character(): Exception occured - {}\n{}\nDefaulting to None".format(
-                str(e), traceback.format_exc()
+        verbose_logger.exception(
+            "litellm.litellm_core_utils.llm_cost_calc.utils.py::cost_per_character(): Exception occured - {}\nDefaulting to None".format(
+                str(e)
             )
         )
 
@@ -74,9 +74,9 @@ def _generic_cost_per_character(
             custom_completion_cost = model_info["output_cost_per_character"]
         completion_cost = completion_characters * custom_completion_cost
     except Exception as e:
-        verbose_logger.error(
-            "litellm.litellm_core_utils.llm_cost_calc.utils.py::cost_per_character(): Exception occured - {}\n{}\nDefaulting to None".format(
-                str(e), traceback.format_exc()
+        verbose_logger.exception(
+            "litellm.litellm_core_utils.llm_cost_calc.utils.py::cost_per_character(): Exception occured - {}\nDefaulting to None".format(
+                str(e)
             )
         )
 
