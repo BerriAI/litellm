@@ -2464,7 +2464,7 @@ def completion(
                 model_response=model_response,
                 encoding=encoding,
             )
-            if acompletion is True or optional_params.get("stream", False) == True:
+            if acompletion is True or optional_params.get("stream", False) is True:
                 return generator
 
             response = generator
