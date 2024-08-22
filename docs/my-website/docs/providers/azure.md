@@ -95,9 +95,8 @@ model_list:
       api_key: os.environ/AZURE_API_KEY # The `os.environ/` prefix tells litellm to read this from the env.
 ```
 </TabItem>
-<TabItem value="config-*" label="config.yaml - use tenant_id, client_id, client_secret">
+<TabItem value="config-*" label="config.yaml (Entrata ID) use tenant_id, client_id, client_secret">
 
-This uses the `ClientSecretCredential` 
 
 ```yaml
 model_list:
