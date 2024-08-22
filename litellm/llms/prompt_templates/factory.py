@@ -38,6 +38,18 @@ def prompt_injection_detection_default_pt():
 
 BAD_MESSAGE_ERROR_STR = "Invalid Message "
 
+# used to interweave user messages, to ensure user/assistant alternating
+DEFAULT_USER_CONTINUE_MESSAGE = {
+    "role": "user",
+    "content": "Please continue.",
+}  # similar to autogen. Only used if `litellm.modify_params=True`.
+
+# used to interweave assistant messages, to ensure user/assistant alternating
+DEFAULT_ASSISTANT_CONTINUE_MESSAGE = {
+    "role": "assistant",
+    "content": "Please continue.",
+}  # similar to autogen. Only used if `litellm.modify_params=True`.
+
 
 def map_system_message_pt(messages: list) -> list:
     """
@@ -2254,6 +2266,7 @@ def _bedrock_converse_messages_pt(
     messages: List,
     model: str,
     llm_provider: str,
+    user_continue_message: Optional[dict] = None,
 ) -> List[BedrockMessageBlock]:
     """
     Converts given messages from OpenAI format to Bedrock format
@@ -2264,6 +2277,21 @@ def _bedrock_converse_messages_pt(
 
     contents: List[BedrockMessageBlock] = []
     msg_i = 0
+
+    # if initial message is assistant message
+    if messages[0].get("role") is not None and messages[0]["role"] == "assistant":
+        if user_continue_message is not None:
+            messages.insert(0, user_continue_message)
+        elif litellm.modify_params:
+            messages.insert(0, DEFAULT_USER_CONTINUE_MESSAGE)
+
+    # if final message is assistant message
+    if messages[-1].get("role") is not None and messages[-1]["role"] == "assistant":
+        if user_continue_message is not None:
+            messages.append(user_continue_message)
+        elif litellm.modify_params:
+            messages.append(DEFAULT_USER_CONTINUE_MESSAGE)
+
     while msg_i < len(messages):
         user_content: List[BedrockContentBlock] = []
         init_msg_i = msg_i
@@ -2344,6 +2372,7 @@ def _bedrock_converse_messages_pt(
                 model=model,
                 llm_provider=llm_provider,
             )
+
     return contents
 
 

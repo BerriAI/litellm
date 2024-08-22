@@ -943,6 +943,7 @@ def completion(
             output_cost_per_token=output_cost_per_token,
             cooldown_time=cooldown_time,
             text_completion=kwargs.get("text_completion"),
+            user_continue_message=kwargs.get("user_continue_message"),
         )
         logging.update_environment_variables(
             model=model,
@@ -2304,7 +2305,7 @@ def completion(
                     model_response=model_response,
                     print_verbose=print_verbose,
                     optional_params=optional_params,
-                    litellm_params=litellm_params,
+                    litellm_params=litellm_params,  # type: ignore
                     logger_fn=logger_fn,
                     encoding=encoding,
                     logging_obj=logging,
