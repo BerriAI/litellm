@@ -3477,19 +3477,39 @@ def embedding(
                 or get_secret("VERTEX_CREDENTIALS")
             )
 
-            response = vertex_ai.embedding(
-                model=model,
-                input=input,
-                encoding=encoding,
-                logging_obj=logging,
-                optional_params=optional_params,
-                model_response=EmbeddingResponse(),
-                vertex_project=vertex_ai_project,
-                vertex_location=vertex_ai_location,
-                vertex_credentials=vertex_credentials,
-                aembedding=aembedding,
-                print_verbose=print_verbose,
-            )
+            if (
+                "image" in optional_params
+                or "video" in optional_params
+                or model in vertex_chat_completion.SUPPORTED_MULTIMODAL_EMBEDDING_MODELS
+            ):
+                # multimodal embedding is supported on vertex httpx
+                response = vertex_chat_completion.multimodal_embedding(
+                    model=model,
+                    input=input,
+                    encoding=encoding,
+                    logging_obj=logging,
+                    optional_params=optional_params,
+                    model_response=EmbeddingResponse(),
+                    vertex_project=vertex_ai_project,
+                    vertex_location=vertex_ai_location,
+                    vertex_credentials=vertex_credentials,
+                    aembedding=aembedding,
+                    print_verbose=print_verbose,
+                )
+            else:
+                response = vertex_ai.embedding(
+                    model=model,
+                    input=input,
+                    encoding=encoding,
+                    logging_obj=logging,
+                    optional_params=optional_params,
+                    model_response=EmbeddingResponse(),
+                    vertex_project=vertex_ai_project,
+                    vertex_location=vertex_ai_location,
+                    vertex_credentials=vertex_credentials,
+                    aembedding=aembedding,
+                    print_verbose=print_verbose,
+                )
         elif custom_llm_provider == "oobabooga":
             response = oobabooga.embedding(
                 model=model,
