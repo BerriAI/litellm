@@ -1116,6 +1116,7 @@ all_litellm_params = [
     "cooldown_time",
     "cache_key",
     "max_retries",
+    "user_continue_message",
 ]
 
 
