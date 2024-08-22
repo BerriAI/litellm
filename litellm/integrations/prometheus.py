@@ -61,8 +61,8 @@ class PrometheusLogger(CustomLogger):
             )
 
             # request latency metrics
-            self.litellm_request_latency_metric = Histogram(
-                "litellm_request_latency_metric",
+            self.litellm_request_total_latency_metric = Histogram(
+                "litellm_request_total_latency_metric",
                 "Total latency (seconds) for a request to LiteLLM",
                 labelnames=[
                     "model",
@@ -70,8 +70,8 @@ class PrometheusLogger(CustomLogger):
                 ],
             )
 
-            self.litellm_deployment_latency_metric = Histogram(
-                "litellm_deployment_latency_metric",
+            self.litellm_llm_api_latency_metric = Histogram(
+                "litellm_llm_api_latency_metric",
                 "Total latency (seconds) for a models LLM API call",
                 labelnames=[
                     "model",
@@ -359,11 +359,11 @@ class PrometheusLogger(CustomLogger):
 
         litellm_call_id = kwargs.get("litellm_call_id")
 
-        self.litellm_request_latency_metric.labels(model, litellm_call_id).observe(
-            total_time_seconds
-        )
+        self.litellm_request_total_latency_metric.labels(
+            model, litellm_call_id
+        ).observe(total_time_seconds)
 
-        self.litellm_deployment_latency_metric.labels(model, litellm_call_id).observe(
+        self.litellm_llm_api_latency_metric.labels(model, litellm_call_id).observe(
             api_call_total_time_seconds
         )
 
