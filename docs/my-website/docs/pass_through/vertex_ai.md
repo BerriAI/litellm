@@ -4,7 +4,7 @@ import TabItem from '@theme/TabItem';
 
 # [BETA] Vertex AI Endpoints (Pass-Through)
 
-Pass-through endpoints for Vertex AI - call provider-specific endpoint, in native format (no translation).
+Use VertexAI SDK to call endpoints on LiteLLM Gateway (native provider format)
 
 :::tip
 
