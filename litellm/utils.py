@@ -541,7 +541,7 @@ def function_setup(
             call_type == CallTypes.embedding.value
             or call_type == CallTypes.aembedding.value
         ):
-            messages = args[1] if len(args) > 1 else kwargs["input"]
+            messages = args[1] if len(args) > 1 else kwargs.get("input", None)
         elif (
             call_type == CallTypes.image_generation.value
             or call_type == CallTypes.aimage_generation.value
