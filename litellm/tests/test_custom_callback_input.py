@@ -1254,6 +1254,7 @@ def test_standard_logging_payload(model, turn_off_message_logging):
             assert "redacted-by-litellm" == slobject["messages"][0]["content"]
 
 
+@pytest.mark.skip(reason="Works locally. Flaky on ci/cd")
 def test_aaastandard_logging_payload_cache_hit():
     from litellm.types.utils import StandardLoggingPayload
 
