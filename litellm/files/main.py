@@ -35,7 +35,7 @@ azure_files_instance = AzureOpenAIFilesAPI()
 
 async def afile_retrieve(
     file_id: str,
-    custom_llm_provider: Literal["openai", "azure"] = "openai",
+    custom_llm_provider: str = "openai",
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
@@ -189,7 +189,7 @@ def file_retrieve(
 # Delete file
 async def afile_delete(
     file_id: str,
-    custom_llm_provider: Literal["openai", "azure"] = "openai",
+    custom_llm_provider: str = "openai",
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
@@ -339,7 +339,7 @@ def file_delete(
 
 # List files
 async def afile_list(
-    custom_llm_provider: Literal["openai", "azure"] = "openai",
+    custom_llm_provider: str = "openai",
     purpose: Optional[str] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
@@ -493,7 +493,7 @@ def file_list(
 async def acreate_file(
     file: FileTypes,
     purpose: Literal["assistants", "batch", "fine-tune"],
-    custom_llm_provider: Literal["openai", "azure"] = "openai",
+    custom_llm_provider: str = "openai",
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
@@ -654,7 +654,7 @@ def create_file(
 
 async def afile_content(
     file_id: str,
-    custom_llm_provider: Literal["openai", "azure"] = "openai",
+    custom_llm_provider: str = "openai",
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
