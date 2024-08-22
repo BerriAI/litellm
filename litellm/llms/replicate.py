@@ -387,7 +387,7 @@ def process_response(
         result = " "
 
     ## Building RESPONSE OBJECT
-    if len(result) > 1:
+    if len(result) >= 1:
         model_response.choices[0].message.content = result  # type: ignore
 
     # Calculate usage

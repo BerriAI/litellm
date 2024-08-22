@@ -770,7 +770,9 @@ def test_litellm_predibase_exception():
 # print(f"accuracy_score: {accuracy_score}")
 
 
-@pytest.mark.parametrize("provider", ["predibase", "vertex_ai_beta", "anthropic"])
+@pytest.mark.parametrize(
+    "provider", ["predibase", "vertex_ai_beta", "anthropic", "databricks"]
+)
 def test_exception_mapping(provider):
     """
     For predibase, run through a set of mock exceptions
@@ -804,7 +806,8 @@ def test_exception_mapping(provider):
         except expected_exception:
             continue
         except Exception as e:
-            response = "{}\n{}".format(str(e), traceback.format_exc())
+            traceback.print_exc()
+            response = "{}".format(str(e))
         pytest.fail(
             "Did not raise expected exception. Expected={}, Return={},".format(
                 expected_exception, response

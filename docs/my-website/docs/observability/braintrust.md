@@ -2,7 +2,7 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# ⚡️ Braintrust - Evals + Logging 
+# Braintrust - Evals + Logging 
 
 [Braintrust](https://www.braintrust.dev/) manages evaluations, logging, prompt playground, to data management for AI products.
 

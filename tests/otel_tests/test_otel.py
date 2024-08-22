@@ -5,6 +5,7 @@ import asyncio
 import aiohttp, openai
 from openai import OpenAI, AsyncOpenAI
 from typing import Optional, List, Union
+import uuid
 
 
 async def generate_key(
@@ -46,7 +47,7 @@ async def chat_completion(session, key, model: Union[str, List] = "gpt-4"):
     data = {
         "model": model,
         "messages": [
-            {"role": "user", "content": "Hello!"},
+            {"role": "user", "content": f"Hello! {str(uuid.uuid4())}"},
         ],
     }
 
@@ -96,6 +97,8 @@ async def test_chat_completion_check_otel_spans():
         key = key_gen["key"]
         await chat_completion(session=session, key=key, model="fake-openai-endpoint")
 
+        await asyncio.sleep(3)
+
         otel_spans = await get_otel_spans(session=session, key=key)
         print("otel_spans: ", otel_spans)
 
@@ -107,11 +110,12 @@ async def test_chat_completion_check_otel_spans():
 
         print("Parent trace spans: ", parent_trace_spans)
 
-        # either 4 or 5 traces depending on how many redis calls were made
-        assert len(parent_trace_spans) == 5 or len(parent_trace_spans) == 4
+        # either 5 or 6 traces depending on how many redis calls were made
+        assert len(parent_trace_spans) == 6 or len(parent_trace_spans) == 5
 
         # 'postgres', 'redis', 'raw_gen_ai_request', 'litellm_request', 'Received Proxy Server Request' in the span
         assert "postgres" in parent_trace_spans
         assert "redis" in parent_trace_spans
         assert "raw_gen_ai_request" in parent_trace_spans
         assert "litellm_request" in parent_trace_spans
+        assert "batch_write_to_db" in parent_trace_spans

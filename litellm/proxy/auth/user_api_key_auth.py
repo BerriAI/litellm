@@ -12,7 +12,7 @@ import json
 import secrets
 import traceback
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Optional, Tuple
 from uuid import uuid4
 
 import fastapi
@@ -57,9 +57,12 @@ from litellm.proxy.auth.auth_checks import (
     log_to_opentelemetry,
 )
 from litellm.proxy.auth.auth_utils import (
+    check_if_request_size_is_safe,
+    get_request_route,
     is_llm_api_route,
     route_in_additonal_public_routes,
 )
+from litellm.proxy.auth.oauth2_check import check_oauth2_token
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.proxy.utils import _to_ns
 
@@ -83,6 +86,8 @@ def _get_bearer_token(
 ):
     if api_key.startswith("Bearer "):  # ensure Bearer token passed in
         api_key = api_key.replace("Bearer ", "")  # extract the token
+    elif api_key.startswith("Basic "):
+        api_key = api_key.replace("Basic ", "")  # handle langfuse input
     else:
         api_key = ""
     return api_key
@@ -114,12 +119,28 @@ async def user_api_key_auth(
     )
 
     try:
-        route: str = request.url.path
+        route: str = get_request_route(request=request)
+
+        ### LiteLLM Enterprise Security Checks
+        # Check 1. Check if request size is under max_request_size_mb
+        # Check 2. FILTER IP ADDRESS
+        await check_if_request_size_is_safe(request=request)
+
+        is_valid_ip, passed_in_ip = _check_valid_ip(
+            allowed_ips=general_settings.get("allowed_ips", None),
+            use_x_forwarded_for=general_settings.get("use_x_forwarded_for", False),
+            request=request,
+        )
+
+        if not is_valid_ip:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Access forbidden: IP address {passed_in_ip} not allowed.",
+            )
 
         pass_through_endpoints: Optional[List[dict]] = general_settings.get(
             "pass_through_endpoints", None
         )
-
         if isinstance(api_key, str):
             passed_in_key = api_key
             api_key = _get_bearer_token(api_key=api_key)
@@ -170,24 +191,25 @@ async def user_api_key_auth(
         ```
         """
 
-        ### FILTER IP ADDRESS ###
-
-        is_valid_ip = _check_valid_ip(
-            allowed_ips=general_settings.get("allowed_ips", None), request=request
-        )
-
-        if not is_valid_ip:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Access forbidden: IP address not allowed.",
-            )
-
         if (
             route in LiteLLMRoutes.public_routes.value
             or route_in_additonal_public_routes(current_route=route)
         ):
             # check if public endpoint
             return UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY)
+
+        if general_settings.get("enable_oauth2_auth", False) is True:
+            # return UserAPIKeyAuth object
+            # helper to check if the api_key is a valid oauth2 token
+            from litellm.proxy.proxy_server import premium_user
+
+            if premium_user is not True:
+                raise ValueError(
+                    "Oauth2 token validation is only available for premium users"
+                    + CommonProxyErrors.not_premium_user.value
+                )
+
+            return await check_oauth2_token(token=api_key)
 
         if general_settings.get("enable_jwt_auth", False) is True:
             is_jwt = jwt_handler.is_jwt(token=api_key)
@@ -360,6 +382,40 @@ async def user_api_key_auth(
                     parent_otel_span=parent_otel_span,
                 )
         #### ELSE ####
+
+        ## CHECK PASS-THROUGH ENDPOINTS ##
+        if pass_through_endpoints is not None:
+            for endpoint in pass_through_endpoints:
+                if endpoint.get("path", "") == route:
+                    ## IF AUTH DISABLED
+                    if endpoint.get("auth") is not True:
+                        return UserAPIKeyAuth()
+                    ## IF AUTH ENABLED
+                    ### IF CUSTOM PARSER REQUIRED
+                    if (
+                        endpoint.get("custom_auth_parser") is not None
+                        and endpoint.get("custom_auth_parser") == "langfuse"
+                    ):
+                        """
+                        - langfuse returns {'Authorization': 'Basic YW55dGhpbmc6YW55dGhpbmc'}
+                        - check the langfuse public key if it contains the litellm api key
+                        """
+                        import base64
+
+                        api_key = api_key.replace("Basic ", "").strip()
+                        decoded_bytes = base64.b64decode(api_key)
+                        decoded_str = decoded_bytes.decode("utf-8")
+                        api_key = decoded_str.split(":")[0]
+                    else:
+                        headers = endpoint.get("headers", None)
+                        if headers is not None:
+                            header_key = headers.get("litellm_user_api_key", "")
+                            if (
+                                isinstance(request.headers, dict)
+                                and request.headers.get(key=header_key) is not None
+                            ):
+                                api_key = request.headers.get(key=header_key)
+
         if master_key is None:
             if isinstance(api_key, str):
                 return UserAPIKeyAuth(
@@ -457,27 +513,31 @@ async def user_api_key_auth(
             valid_token is not None
             and isinstance(valid_token, UserAPIKeyAuth)
             and valid_token.team_id is not None
-            and user_api_key_cache.get_cache(
-                key="team_id:{}".format(valid_token.team_id)
-            )
-            is not None
         ):
             ## UPDATE TEAM VALUES BASED ON CACHED TEAM OBJECT - allows `/team/update` values to work for cached token
-            team_obj: LiteLLM_TeamTable = user_api_key_cache.get_cache(
-                key="team_id:{}".format(valid_token.team_id)
-            )
+            try:
+                team_obj: LiteLLM_TeamTableCachedObj = await get_team_object(
+                    team_id=valid_token.team_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    parent_otel_span=parent_otel_span,
+                    proxy_logging_obj=proxy_logging_obj,
+                    check_cache_only=True,
+                )
 
-            if (
-                team_obj.last_refreshed_at is not None
-                and valid_token.last_refreshed_at is not None
-                and team_obj.last_refreshed_at > valid_token.last_refreshed_at
-            ):
-                team_obj_dict = team_obj.__dict__
+                if (
+                    team_obj.last_refreshed_at is not None
+                    and valid_token.last_refreshed_at is not None
+                    and team_obj.last_refreshed_at > valid_token.last_refreshed_at
+                ):
+                    team_obj_dict = team_obj.__dict__
 
-                for k, v in team_obj_dict.items():
-                    field_name = f"team_{k}"
-                    if field_name in valid_token.__fields__:
-                        setattr(valid_token, field_name, v)
+                    for k, v in team_obj_dict.items():
+                        field_name = f"team_{k}"
+                        if field_name in valid_token.__fields__:
+                            setattr(valid_token, field_name, v)
+            except Exception as e:
+                verbose_logger.warning(e)
 
         try:
             is_master_key_valid = secrets.compare_digest(api_key, master_key)  # type: ignore
@@ -522,7 +582,17 @@ async def user_api_key_auth(
         if isinstance(
             api_key, str
         ):  # if generated token, make sure it starts with sk-.
-            assert api_key.startswith("sk-")  # prevent token hashes from being used
+            assert api_key.startswith(
+                "sk-"
+            ), "LiteLLM Virtual Key expected. Received={}, expected to start with 'sk-'.".format(
+                api_key
+            )  # prevent token hashes from being used
+        else:
+            verbose_logger.warning(
+                "litellm.proxy.proxy_server.user_api_key_auth(): Warning - Key={} is not a string.".format(
+                    api_key
+                )
+            )
 
         if (
             prisma_client is None and custom_db_client is None
@@ -566,8 +636,8 @@ async def user_api_key_auth(
                 "allowed_model_region"
             )
 
-        user_id_information: Optional[List] = None
         if valid_token is not None:
+            user_obj: Optional[LiteLLM_UserTable] = None
             # Got Valid Token from Cache, DB
             # Run checks for
             # 1. If token can call model
@@ -635,113 +705,24 @@ async def user_api_key_auth(
                             valid_token=valid_token,
                         )
 
-            # Check 2. If user_id for this token is in budget
+            # Check 2. If user_id for this token is in budget - done in common_checks()
             if valid_token.user_id is not None:
-                user_id_list = [valid_token.user_id]
-                for id in user_id_list:
-                    value = user_api_key_cache.get_cache(key=id)
-                    if value is not None:
-                        if user_id_information is None:
-                            user_id_information = []
-                        user_id_information.append(value)
-                if user_id_information is None or (
-                    isinstance(user_id_information, list)
-                    and len(user_id_information) < 1
-                ):
-                    if prisma_client is not None:
-                        user_id_information = await prisma_client.get_data(
-                            user_id_list=[
-                                valid_token.user_id,
-                            ],
-                            table_name="user",
-                            query_type="find_all",
+                try:
+                    user_obj = await get_user_object(
+                        user_id=valid_token.user_id,
+                        prisma_client=prisma_client,
+                        user_api_key_cache=user_api_key_cache,
+                        user_id_upsert=False,
+                        parent_otel_span=parent_otel_span,
+                        proxy_logging_obj=proxy_logging_obj,
+                    )
+                except Exception as e:
+                    verbose_logger.debug(
+                        "litellm.proxy.auth.user_api_key_auth.py::user_api_key_auth() - Unable to get user from db/cache. Setting user_obj to None. Exception received - {}".format(
+                            str(e)
                         )
-                        if user_id_information is not None:
-                            for _id in user_id_information:
-                                await user_api_key_cache.async_set_cache(
-                                    key=_id["user_id"],
-                                    value=_id,
-                                )
-
-                verbose_proxy_logger.debug(
-                    f"user_id_information: {user_id_information}"
-                )
-
-                if user_id_information is not None:
-                    if isinstance(user_id_information, list):
-                        ## Check if user in budget
-                        for _user in user_id_information:
-                            if _user is None:
-                                continue
-                            assert isinstance(_user, dict)
-                            # check if user is admin #
-
-                            # Token exists, not expired now check if its in budget for the user
-                            user_max_budget = _user.get("max_budget", None)
-                            user_current_spend = _user.get("spend", None)
-
-                            verbose_proxy_logger.debug(
-                                f"user_id: {_user.get('user_id', None)}; user_max_budget: {user_max_budget}; user_current_spend: {user_current_spend}"
-                            )
-
-                            if (
-                                user_max_budget is not None
-                                and user_current_spend is not None
-                            ):
-                                call_info = CallInfo(
-                                    token=valid_token.token,
-                                    spend=user_current_spend,
-                                    max_budget=user_max_budget,
-                                    user_id=_user.get("user_id", None),
-                                    user_email=_user.get("user_email", None),
-                                    key_alias=valid_token.key_alias,
-                                )
-                                asyncio.create_task(
-                                    proxy_logging_obj.budget_alerts(
-                                        type="user_budget",
-                                        user_info=call_info,
-                                    )
-                                )
-
-                                _user_id = _user.get("user_id", None)
-                                if user_current_spend > user_max_budget:
-                                    raise litellm.BudgetExceededError(
-                                        current_cost=user_current_spend,
-                                        max_budget=user_max_budget,
-                                    )
-                    else:
-                        # Token exists, not expired now check if its in budget for the user
-                        user_max_budget = getattr(
-                            user_id_information, "max_budget", None
-                        )
-                        user_current_spend = getattr(user_id_information, "spend", None)
-
-                        if (
-                            user_max_budget is not None
-                            and user_current_spend is not None
-                        ):
-                            call_info = CallInfo(
-                                token=valid_token.token,
-                                spend=user_current_spend,
-                                max_budget=user_max_budget,
-                                user_id=getattr(user_id_information, "user_id", None),
-                                user_email=getattr(
-                                    user_id_information, "user_email", None
-                                ),
-                                key_alias=valid_token.key_alias,
-                            )
-                            asyncio.create_task(
-                                proxy_logging_obj.budget_alerts(
-                                    type="user_budget",
-                                    user_info=call_info,
-                                )
-                            )
-
-                            if user_current_spend > user_max_budget:
-                                raise litellm.BudgetExceededError(
-                                    current_cost=user_current_spend,
-                                    max_budget=user_max_budget,
-                                )
+                    )
+                    user_obj = None
 
             # Check 3. Check if user is in their team budget
             if valid_token.team_member_spend is not None:
@@ -814,11 +795,8 @@ async def user_api_key_auth(
 
                 user_email: Optional[str] = None
                 # Check if the token has any user id information
-                if user_id_information is not None and len(user_id_information) > 0:
-                    specific_user_id_information = user_id_information[0]
-                    _user_email = specific_user_id_information.get("user_email", None)
-                    if _user_email is not None:
-                        user_email = str(_user_email)
+                if user_obj is not None:
+                    user_email = user_obj.user_email
 
                 call_info = CallInfo(
                     token=valid_token.token,
@@ -968,7 +946,7 @@ async def user_api_key_auth(
             _ = common_checks(
                 request_body=request_data,
                 team_object=_team_obj,
-                user_object=None,
+                user_object=user_obj,
                 end_user_object=_end_user_object,
                 general_settings=general_settings,
                 global_proxy_spend=global_proxy_spend,
@@ -992,12 +970,10 @@ async def user_api_key_auth(
             if _end_user_object is not None:
                 valid_token_dict.update(end_user_params)
 
-            _user_role = _get_user_role(user_id_information=user_id_information)
+            _user_role = _get_user_role(user_obj=user_obj)
 
-            if not _is_user_proxy_admin(user_id_information):  # if non-admin
+            if not _is_user_proxy_admin(user_obj=user_obj):  # if non-admin
                 if is_llm_api_route(route=route):
-                    pass
-                elif is_llm_api_route(route=request["route"].name):
                     pass
                 elif (
                     route in LiteLLMRoutes.info_routes.value
@@ -1029,14 +1005,7 @@ async def user_api_key_auth(
                         # /model/info just shows models user has access to
                         pass
                     elif route == "/team/info":
-                        # check if key can access this team's info
-                        query_params = request.query_params
-                        team_id = query_params.get("team_id")
-                        if team_id != valid_token.team_id:
-                            raise HTTPException(
-                                status_code=status.HTTP_403_FORBIDDEN,
-                                detail="key not allowed to access this team's info",
-                            )
+                        pass  # handled by function itself
                 elif (
                     _has_user_setup_sso()
                     and route in LiteLLMRoutes.sso_only_routes.value
@@ -1075,22 +1044,22 @@ async def user_api_key_auth(
                                 status_code=status.HTTP_403_FORBIDDEN,
                                 detail=f"user not allowed to access this route, role= {_user_role}. Trying to access: {route}",
                             )
+
                 elif (
                     _user_role == LitellmUserRoles.INTERNAL_USER.value
                     and route in LiteLLMRoutes.internal_user_routes.value
                 ):
                     pass
+                elif (
+                    route in LiteLLMRoutes.self_managed_routes.value
+                ):  # routes that manage their own allowed/disallowed logic
+                    pass
                 else:
                     user_role = "unknown"
                     user_id = "unknown"
-                    if (
-                        user_id_information is not None
-                        and isinstance(user_id_information, list)
-                        and len(user_id_information) > 0
-                    ):
-                        _user = user_id_information[0]
-                        user_role = _user.get("user_role", "unknown")
-                        user_id = _user.get("user_id", "unknown")
+                    if user_obj is not None:
+                        user_role = user_obj.user_role or "unknown"
+                        user_id = user_obj.user_id or "unknown"
                     raise Exception(
                         f"Only proxy admin can be used to generate, delete, update info for new keys/users/teams. Route={route}. Your role={user_role}. Your user_id={user_id}"
                     )
@@ -1136,9 +1105,7 @@ async def user_api_key_auth(
                 # Do something if the current route starts with any of the allowed routes
                 pass
             else:
-                if user_id_information is not None and _is_user_proxy_admin(
-                    user_id_information
-                ):
+                if user_obj is not None and _is_user_proxy_admin(user_obj=user_obj):
                     return UserAPIKeyAuth(
                         api_key=api_key,
                         user_role=LitellmUserRoles.PROXY_ADMIN,
@@ -1151,7 +1118,7 @@ async def user_api_key_auth(
                 ):
                     return UserAPIKeyAuth(
                         api_key=api_key,
-                        user_role=_user_role,
+                        user_role=_user_role,  # type: ignore
                         parent_otel_span=parent_otel_span,
                         **valid_token_dict,
                     )
@@ -1163,36 +1130,26 @@ async def user_api_key_auth(
             # No token was found when looking up in the DB
             raise Exception("Invalid proxy server token passed")
         if valid_token_dict is not None:
-            if user_id_information is not None and _is_user_proxy_admin(
-                user_id_information
-            ):
-                return UserAPIKeyAuth(
-                    api_key=api_key,
-                    user_role=LitellmUserRoles.PROXY_ADMIN,
-                    parent_otel_span=parent_otel_span,
-                    **valid_token_dict,
-                )
-            elif _has_user_setup_sso() and route in LiteLLMRoutes.sso_only_routes.value:
-                return UserAPIKeyAuth(
-                    api_key=api_key,
-                    user_role=LitellmUserRoles.INTERNAL_USER,
-                    parent_otel_span=parent_otel_span,
-                    **valid_token_dict,
-                )
-            else:
-                return UserAPIKeyAuth(
-                    api_key=api_key,
-                    user_role=LitellmUserRoles.INTERNAL_USER,
-                    parent_otel_span=parent_otel_span,
-                    **valid_token_dict,
-                )
+            return _return_user_api_key_auth_obj(
+                user_obj=user_obj,
+                api_key=api_key,
+                parent_otel_span=parent_otel_span,
+                valid_token_dict=valid_token_dict,
+                route=route,
+            )
         else:
             raise Exception()
     except Exception as e:
-        verbose_proxy_logger.error(
-            "litellm.proxy.proxy_server.user_api_key_auth(): Exception occured - {}\n{}".format(
-                str(e), traceback.format_exc()
-            )
+        requester_ip = _get_request_ip_address(
+            request=request,
+            use_x_forwarded_for=general_settings.get("use_x_forwarded_for", False),
+        )
+        verbose_proxy_logger.exception(
+            "litellm.proxy.proxy_server.user_api_key_auth(): Exception occured - {}\nRequester IP Address:{}".format(
+                str(e),
+                requester_ip,
+            ),
+            extra={"requester_ip": requester_ip},
         )
 
         # Log this exception to OTEL
@@ -1226,6 +1183,39 @@ async def user_api_key_auth(
         )
 
 
+def _return_user_api_key_auth_obj(
+    user_obj: Optional[LiteLLM_UserTable],
+    api_key: str,
+    parent_otel_span: Optional[Span],
+    valid_token_dict: dict,
+    route: str,
+) -> UserAPIKeyAuth:
+    retrieved_user_role = (
+        _get_user_role(user_obj=user_obj) or LitellmUserRoles.INTERNAL_USER
+    )
+    if user_obj is not None and _is_user_proxy_admin(user_obj=user_obj):
+        return UserAPIKeyAuth(
+            api_key=api_key,
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            parent_otel_span=parent_otel_span,
+            **valid_token_dict,
+        )
+    elif _has_user_setup_sso() and route in LiteLLMRoutes.sso_only_routes.value:
+        return UserAPIKeyAuth(
+            api_key=api_key,
+            user_role=retrieved_user_role,
+            parent_otel_span=parent_otel_span,
+            **valid_token_dict,
+        )
+    else:
+        return UserAPIKeyAuth(
+            api_key=api_key,
+            user_role=retrieved_user_role,
+            parent_otel_span=parent_otel_span,
+            **valid_token_dict,
+        )
+
+
 def _has_user_setup_sso():
     """
     Check if the user has set up single sign-on (SSO) by verifying the presence of Microsoft client ID, Google client ID, and UI username environment variables.
@@ -1244,64 +1234,78 @@ def _has_user_setup_sso():
     return sso_setup
 
 
-def _is_user_proxy_admin(user_id_information: Optional[list]):
-    if user_id_information is None:
+def _is_user_proxy_admin(user_obj: Optional[LiteLLM_UserTable]):
+    if user_obj is None:
         return False
 
-    if len(user_id_information) == 0 or user_id_information[0] is None:
-        return False
-
-    _user = user_id_information[0]
     if (
-        _user.get("user_role", None) is not None
-        and _user.get("user_role") == LitellmUserRoles.PROXY_ADMIN.value
+        user_obj.user_role is not None
+        and user_obj.user_role == LitellmUserRoles.PROXY_ADMIN.value
     ):
         return True
 
-    # if user_id_information contains litellm-proxy-budget
-    # get first user_id that is not litellm-proxy-budget
-    for user in user_id_information:
-        if user.get("user_id") != "litellm-proxy-budget":
-            _user = user
-            break
-
     if (
-        _user.get("user_role", None) is not None
-        and _user.get("user_role") == LitellmUserRoles.PROXY_ADMIN.value
+        user_obj.user_role is not None
+        and user_obj.user_role == LitellmUserRoles.PROXY_ADMIN.value
     ):
         return True
 
     return False
 
 
-def _get_user_role(user_id_information: Optional[list]):
-    if user_id_information is None:
+def _get_user_role(
+    user_obj: Optional[LiteLLM_UserTable],
+) -> Optional[LitellmUserRoles]:
+    if user_obj is None:
         return None
 
-    if len(user_id_information) == 0 or user_id_information[0] is None:
-        return None
+    _user = user_obj
 
-    _user = user_id_information[0]
-    return _user.get("user_role")
+    _user_role = _user.user_role
+    try:
+        role = LitellmUserRoles(_user_role)
+    except ValueError:
+        return LitellmUserRoles.INTERNAL_USER
+
+    return role
 
 
-def _check_valid_ip(allowed_ips: Optional[List[str]], request: Request) -> bool:
+def _get_request_ip_address(
+    request: Request, use_x_forwarded_for: Optional[bool] = False
+) -> Optional[str]:
+
+    client_ip = None
+    if use_x_forwarded_for is True and "x-forwarded-for" in request.headers:
+        client_ip = request.headers["x-forwarded-for"]
+    elif request.client is not None:
+        client_ip = request.client.host
+    else:
+        client_ip = ""
+
+    return client_ip
+
+
+def _check_valid_ip(
+    allowed_ips: Optional[List[str]],
+    request: Request,
+    use_x_forwarded_for: Optional[bool] = False,
+) -> Tuple[bool, Optional[str]]:
     """
     Returns if ip is allowed or not
     """
     if allowed_ips is None:  # if not set, assume true
-        return True
+        return True, None
 
-    if request.client is not None:
-        client_ip = request.client.host
-    else:
-        client_ip = None
+    # if general_settings.get("use_x_forwarded_for") is True then use x-forwarded-for
+    client_ip = _get_request_ip_address(
+        request=request, use_x_forwarded_for=use_x_forwarded_for
+    )
 
     # Check if IP address is allowed
     if client_ip not in allowed_ips:
-        return False
+        return False, client_ip
 
-    return True
+    return True, client_ip
 
 
 def get_api_key_from_custom_header(
@@ -1310,8 +1314,9 @@ def get_api_key_from_custom_header(
     # use this as the virtual key passed to litellm proxy
     custom_litellm_key_header_name = custom_litellm_key_header_name.lower()
     verbose_proxy_logger.debug(
-        "searching for custom_litellm_key_header_name= %s",
+        "searching for custom_litellm_key_header_name= %s, in headers=%s",
         custom_litellm_key_header_name,
+        request.headers,
     )
     custom_api_key = request.headers.get(custom_litellm_key_header_name)
     if custom_api_key:

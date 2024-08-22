@@ -13,6 +13,7 @@ from enum import Enum
 from typing import Any, Callable, List, Optional, Union
 
 import httpx
+from openai.types.image import Image
 
 import litellm
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
@@ -1413,10 +1414,10 @@ def embedding(
 def image_generation(
     model: str,
     prompt: str,
+    model_response: ImageResponse,
+    optional_params: dict,
     timeout=None,
     logging_obj=None,
-    model_response=None,
-    optional_params=None,
     aimg_generation=False,
 ):
     """
@@ -1513,9 +1514,10 @@ def image_generation(
     if model_response is None:
         model_response = ImageResponse()
 
-    image_list: List = []
+    image_list: List[Image] = []
     for artifact in response_body["artifacts"]:
-        image_dict = {"url": artifact["base64"]}
+        _image = Image(b64_json=artifact["base64"])
+        image_list.append(_image)
 
-    model_response.data = image_dict
+    model_response.data = image_list
     return model_response

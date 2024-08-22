@@ -251,6 +251,21 @@ async def delete_team(
         return await response.json()
 
 
+async def list_teams(
+    session,
+    i,
+):
+    url = "http://0.0.0.0:4000/team/list"
+    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+
+    async with session.get(url, headers=headers) as response:
+        status = response.status
+        if status != 200:
+            raise Exception(f"Request {i} did not return a 200 status code: {status}")
+
+        return await response.json()
+
+
 @pytest.mark.asyncio
 async def test_team_new():
     """
@@ -397,6 +412,42 @@ async def test_team_update_sc_2():
                 pass
             else:
                 assert new_team_data["data"][k] == team_data[k]
+
+
+@pytest.mark.asyncio
+async def test_team_member_add_email():
+    from test_users import get_user_info
+
+    async with aiohttp.ClientSession() as session:
+        ## Create admin
+        admin_user = f"{uuid.uuid4()}"
+        await new_user(session=session, i=0, user_id=admin_user)
+        ## Create team with 1 admin and 1 user
+        member_list = [
+            {"role": "admin", "user_id": admin_user},
+        ]
+        team_data = await new_team(session=session, i=0, member_list=member_list)
+        ## Add 1 user via email
+        user_email = "krrish{}@berri.ai".format(uuid.uuid4())
+        new_user_info = await new_user(session=session, i=0, user_email=user_email)
+        new_member = {"role": "user", "user_email": user_email}
+        await add_member(
+            session=session, i=0, team_id=team_data["team_id"], members=[new_member]
+        )
+
+        ## check user info to confirm user is in team
+        updated_user_info = await get_user_info(
+            session=session, get_user=new_user_info["user_id"], call_user="sk-1234"
+        )
+
+        print(updated_user_info)
+
+        ## check if team in user table
+        is_team_in_list: bool = False
+        for team in updated_user_info["teams"]:
+            if team_data["team_id"] == team["team_id"]:
+                is_team_in_list = True
+        assert is_team_in_list
 
 
 @pytest.mark.asyncio

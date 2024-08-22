@@ -9,8 +9,6 @@ services:
     #########################################
     ## Uncomment these lines to start proxy with a config.yaml file ##
     # volumes:
-    #   - ./proxy_server_config.yaml:/app/config.yaml
-    # command: [ "--config", "./config.yaml", "--port", "4000"]
     ###############################################
     ports:
       - "4000:4000" # Map the container port to the host, change the host port if necessary
@@ -33,5 +31,23 @@ services:
       interval: 1s
       timeout: 5s
       retries: 10
+  
+  prometheus:
+    image: prom/prometheus
+    volumes:
+      - prometheus_data:/prometheus
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=15d'
+    restart: always
+
+volumes:
+  prometheus_data:
+    driver: local
+
 
 # ...rest of your docker-compose config if any

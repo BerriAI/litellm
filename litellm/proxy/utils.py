@@ -32,6 +32,10 @@ from litellm.caching import DualCache, RedisCache
 from litellm.exceptions import RejectedRequestError
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.slack_alerting import SlackAlerting
+from litellm.litellm_core_utils.core_helpers import (
+    _get_parent_otel_span_from_kwargs,
+    get_litellm_metadata_from_kwargs,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
 from litellm.proxy._types import (
@@ -40,6 +44,7 @@ from litellm.proxy._types import (
     DynamoDBArgs,
     LiteLLM_VerificationTokenView,
     LitellmUserRoles,
+    Member,
     ResetTeamBudgetRequest,
     SpendLogsMetadata,
     SpendLogsPayload,
@@ -124,7 +129,35 @@ def log_to_opentelemetry(func):
                     duration=0.0,
                     start_time=start_time,
                     end_time=end_time,
+                    event_metadata={
+                        "function_name": func.__name__,
+                        "function_kwargs": kwargs,
+                        "function_args": args,
+                    },
                 )
+            elif (
+                # in litellm custom callbacks kwargs is passed as arg[0]
+                # https://docs.litellm.ai/docs/observability/custom_callback#callback-functions
+                args is not None
+                and len(args) > 0
+            ):
+                passed_kwargs = args[0]
+                parent_otel_span = _get_parent_otel_span_from_kwargs(
+                    kwargs=passed_kwargs
+                )
+                if parent_otel_span is not None:
+                    from litellm.proxy.proxy_server import proxy_logging_obj
+
+                    metadata = get_litellm_metadata_from_kwargs(kwargs=passed_kwargs)
+                    await proxy_logging_obj.service_logging_obj.async_service_success_hook(
+                        service=ServiceTypes.BATCH_WRITE_TO_DB,
+                        call_type=func.__name__,
+                        parent_otel_span=parent_otel_span,
+                        duration=0.0,
+                        start_time=start_time,
+                        end_time=end_time,
+                        event_metadata=metadata,
+                    )
             # end of logging to otel
             return result
         except Exception as e:
@@ -140,9 +173,15 @@ def log_to_opentelemetry(func):
                     error=e,
                     service=ServiceTypes.DB,
                     call_type=func.__name__,
+                    parent_otel_span=kwargs["parent_otel_span"],
                     duration=0.0,
                     start_time=start_time,
                     end_time=end_time,
+                    event_metadata={
+                        "function_name": func.__name__,
+                        "function_kwargs": kwargs,
+                        "function_args": args,
+                    },
                 )
             raise e
 
@@ -184,10 +223,12 @@ class ProxyLogging:
             "db_exceptions",
             "daily_reports",
             "spend_reports",
+            "fallback_reports",
             "cooldown_deployment",
             "new_model_added",
             "outage_alerts",
         ]
+        self.alert_to_webhook_url: Optional[dict] = None
         self.slack_alerting_instance: SlackAlerting = SlackAlerting(
             alerting_threshold=self.alerting_threshold,
             alerting=self.alerting,
@@ -202,6 +243,7 @@ class ProxyLogging:
         redis_cache: Optional[RedisCache] = None,
         alert_types: Optional[List[AlertType]] = None,
         alerting_args: Optional[dict] = None,
+        alert_to_webhook_url: Optional[dict] = None,
     ):
         updated_slack_alerting: bool = False
         if alerting is not None:
@@ -213,6 +255,9 @@ class ProxyLogging:
         if alert_types is not None:
             self.alert_types = alert_types
             updated_slack_alerting = True
+        if alert_to_webhook_url is not None:
+            self.alert_to_webhook_url = alert_to_webhook_url
+            updated_slack_alerting = True
 
         if updated_slack_alerting is True:
             self.slack_alerting_instance.update_values(
@@ -220,6 +265,7 @@ class ProxyLogging:
                 alerting_threshold=self.alerting_threshold,
                 alert_types=self.alert_types,
                 alerting_args=alerting_args,
+                alert_to_webhook_url=self.alert_to_webhook_url,
             )
 
             if (
@@ -387,12 +433,11 @@ class ProxyLogging:
         """
         Runs the CustomLogger's async_moderation_hook()
         """
-        new_data = safe_deep_copy(data)
         for callback in litellm.callbacks:
             try:
                 if isinstance(callback, CustomLogger):
                     await callback.async_moderation_hook(
-                        data=new_data,
+                        data=data,
                         user_api_key_dict=user_api_key_dict,
                         call_type=call_type,
                     )
@@ -672,6 +717,7 @@ class ProxyLogging:
 
     async def post_call_success_hook(
         self,
+        data: dict,
         response: Union[ModelResponse, EmbeddingResponse, ImageResponse],
         user_api_key_dict: UserAPIKeyAuth,
     ):
@@ -693,7 +739,9 @@ class ProxyLogging:
                     _callback = callback  # type: ignore
                 if _callback is not None and isinstance(_callback, CustomLogger):
                     await _callback.async_post_call_success_hook(
-                        user_api_key_dict=user_api_key_dict, response=response
+                        user_api_key_dict=user_api_key_dict,
+                        data=data,
+                        response=response,
                     )
             except Exception as e:
                 raise e
@@ -771,7 +819,7 @@ class PrismaClient:
     spend_log_transactions: List = []
 
     def __init__(self, database_url: str, proxy_logging_obj: ProxyLogging):
-        print_verbose(
+        verbose_proxy_logger.debug(
             "LiteLLM: DATABASE_URL Set in config, trying to 'pip install prisma'"
         )
         ## init logging object
@@ -800,8 +848,9 @@ class PrismaClient:
                 os.chdir(original_dir)
             # Now you can import the Prisma Client
             from prisma import Prisma  # type: ignore
-
+        verbose_proxy_logger.debug("Connecting Prisma Client to DB..")
         self.db = Prisma()  # Client to connect to Prisma db
+        verbose_proxy_logger.debug("Success - Connected Prisma Client to DB")
 
     def hash_token(self, token: str):
         # Hash the string using SHA-256
@@ -838,6 +887,30 @@ class PrismaClient:
 
         If the view doesn't exist, one will be created.
         """
+
+        # Check to see if all of the necessary views exist and if they do, simply return
+        # This is more efficient because it lets us check for all views in one
+        # query instead of multiple queries.
+        try:
+            ret = await self.db.query_raw(
+                """
+                    SELECT SUM(1) FROM pg_views
+                    WHERE schemaname = 'public' AND viewname IN (
+                        'LiteLLM_VerificationTokenView',
+                        'MonthlyGlobalSpend',
+                        'Last30dKeysBySpend',
+                        'Last30dModelsBySpend',
+                        'MonthlyGlobalSpendPerKey',
+                        'Last30dTopEndUsersSpend'
+                    )
+                    """
+            )
+            if ret[0]["sum"] == 6:
+                print("All necessary views exist!")  # noqa
+                return
+        except Exception:
+            pass
+
         try:
             # Try to select one row from the view
             await self.db.query_raw(
@@ -1323,6 +1396,7 @@ class PrismaClient:
                     t.blocked AS team_blocked,
                     t.team_alias AS team_alias,
                     t.metadata AS team_metadata,
+                    t.members_with_roles AS team_members_with_roles,
                     tm.spend AS team_member_spend,
                     m.aliases as team_model_aliases
                     FROM "LiteLLM_VerificationToken" AS v
@@ -1332,6 +1406,7 @@ class PrismaClient:
                     WHERE v.token = '{token}'
                     """
 
+                    print_verbose("sql_query being made={}".format(sql_query))
                     response = await self.db.query_first(query=sql_query)
 
                     if response is not None:
@@ -1339,6 +1414,33 @@ class PrismaClient:
                             response["team_models"] = []
                         if response["team_blocked"] is None:
                             response["team_blocked"] = False
+
+                        team_member: Optional[Member] = None
+                        if (
+                            response["team_members_with_roles"] is not None
+                            and response["user_id"] is not None
+                        ):
+                            ## find the team member corresponding to user id
+                            """
+                            [
+                                {
+                                    "role": "admin",
+                                    "user_id": "default_user_id",
+                                    "user_email": null
+                                },
+                                {
+                                    "role": "user",
+                                    "user_id": null,
+                                    "user_email": "test@email.com"
+                                }
+                            ]
+                            """
+                            for tm in response["team_members_with_roles"]:
+                                if tm.get("user_id") is not None and response[
+                                    "user_id"
+                                ] == tm.get("user_id"):
+                                    team_member = Member(**tm)
+                        response["team_member"] = team_member
                         response = LiteLLM_VerificationTokenView(
                             **response, last_refreshed_at=time.time()
                         )

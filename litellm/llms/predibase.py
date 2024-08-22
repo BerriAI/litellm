@@ -17,6 +17,7 @@ import requests  # type: ignore
 import litellm
 import litellm.litellm_core_utils
 import litellm.litellm_core_utils.litellm_logging
+from litellm import verbose_logger
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.utils import Choices, CustomStreamWrapper, Message, ModelResponse, Usage
@@ -61,8 +62,11 @@ async def make_call(
     model: str,
     messages: list,
     logging_obj,
+    timeout: Optional[Union[float, httpx.Timeout]],
 ):
-    response = await client.post(api_base, headers=headers, data=data, stream=True)
+    response = await client.post(
+        api_base, headers=headers, data=data, stream=True, timeout=timeout
+    )
 
     if response.status_code != 200:
         raise PredibaseError(status_code=response.status_code, message=response.text)
@@ -359,6 +363,16 @@ class PredibaseChatCompletion(BaseLLM):
             total_tokens=total_tokens,
         )
         model_response.usage = usage  # type: ignore
+
+        ## RESPONSE HEADERS
+        predibase_headers = response.headers
+        response_headers = {}
+        for k, v in predibase_headers.items():
+            if k.startswith("x-"):
+                response_headers["llm_provider-{}".format(k)] = v
+
+        model_response._hidden_params["additional_headers"] = response_headers
+
         return model_response
 
     def completion(
@@ -484,6 +498,7 @@ class PredibaseChatCompletion(BaseLLM):
                 headers=headers,
                 data=json.dumps(data),
                 stream=stream,
+                timeout=timeout,  # type: ignore
             )
             _response = CustomStreamWrapper(
                 response.iter_lines(),
@@ -498,6 +513,7 @@ class PredibaseChatCompletion(BaseLLM):
                 url=completion_url,
                 headers=headers,
                 data=json.dumps(data),
+                timeout=timeout,  # type: ignore
             )
         return self.process_response(
             model=model,
@@ -545,9 +561,15 @@ class PredibaseChatCompletion(BaseLLM):
                 ),
             )
         except Exception as e:
-            raise PredibaseError(
-                status_code=500, message="{}\n{}".format(str(e), traceback.format_exc())
+            for exception in litellm.LITELLM_EXCEPTION_TYPES:
+                if isinstance(e, exception):
+                    raise e
+            verbose_logger.exception(
+                "litellm.llms.predibase.py::async_completion() - Exception occurred - {}".format(
+                    str(e)
+                )
             )
+            raise PredibaseError(status_code=500, message="{}".format(str(e)))
         return self.process_response(
             model=model,
             response=response,
@@ -591,6 +613,7 @@ class PredibaseChatCompletion(BaseLLM):
                 model=model,
                 messages=messages,
                 logging_obj=logging_obj,
+                timeout=timeout,
             ),
             model=model,
             custom_llm_provider="predibase",

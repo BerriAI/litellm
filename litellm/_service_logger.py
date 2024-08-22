@@ -56,6 +56,7 @@ class ServiceLogging(CustomLogger):
         parent_otel_span: Optional[Span] = None,
         start_time: Optional[Union[datetime, float]] = None,
         end_time: Optional[Union[datetime, float]] = None,
+        event_metadata: Optional[dict] = None,
     ):
         """
         - For counting if the redis, postgres call is successful
@@ -72,6 +73,7 @@ class ServiceLogging(CustomLogger):
         )
         for callback in litellm.service_callback:
             if callback == "prometheus_system":
+                await self.init_prometheus_services_logger_if_none()
                 await self.prometheusServicesLogger.async_service_success_hook(
                     payload=payload
                 )
@@ -84,7 +86,19 @@ class ServiceLogging(CustomLogger):
                         parent_otel_span=parent_otel_span,
                         start_time=start_time,
                         end_time=end_time,
+                        event_metadata=event_metadata,
                     )
+
+    async def init_prometheus_services_logger_if_none(self):
+        """
+        initializes prometheusServicesLogger if it is None or no attribute exists on ServiceLogging Object
+
+        """
+        if not hasattr(self, "prometheusServicesLogger"):
+            self.prometheusServicesLogger = PrometheusServicesLogger()
+        elif self.prometheusServicesLogger is None:
+            self.prometheusServicesLogger = self.prometheusServicesLogger()
+        return
 
     async def async_service_failure_hook(
         self,
@@ -95,6 +109,7 @@ class ServiceLogging(CustomLogger):
         parent_otel_span: Optional[Span] = None,
         start_time: Optional[Union[datetime, float]] = None,
         end_time: Optional[Union[float, datetime]] = None,
+        event_metadata: Optional[dict] = None,
     ):
         """
         - For counting if the redis, postgres call is unsuccessful
@@ -117,20 +132,23 @@ class ServiceLogging(CustomLogger):
         )
         for callback in litellm.service_callback:
             if callback == "prometheus_system":
-                if self.prometheusServicesLogger is None:
-                    self.prometheusServicesLogger = self.prometheusServicesLogger()
+                await self.init_prometheus_services_logger_if_none()
                 await self.prometheusServicesLogger.async_service_failure_hook(
                     payload=payload
                 )
 
         from litellm.proxy.proxy_server import open_telemetry_logger
 
-        if parent_otel_span is not None and open_telemetry_logger is not None:
+        if not isinstance(error, str):
+            error = str(error)
+        if open_telemetry_logger is not None:
             await open_telemetry_logger.async_service_failure_hook(
                 payload=payload,
                 parent_otel_span=parent_otel_span,
                 start_time=start_time,
                 end_time=end_time,
+                event_metadata=event_metadata,
+                error=error,
             )
 
     async def async_post_call_failure_hook(

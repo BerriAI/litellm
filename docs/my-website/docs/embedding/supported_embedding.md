@@ -270,7 +270,7 @@ response = embedding(
 | embed-multilingual-v2.0  | `embedding(model="embed-multilingual-v2.0", input=["good morning from litellm", "this is another item"])` |
 
 ## HuggingFace Embedding Models
-LiteLLM supports all Feature-Extraction Embedding models: https://huggingface.co/models?pipeline_tag=feature-extraction
+LiteLLM supports all Feature-Extraction + Sentence Similarity Embedding models: https://huggingface.co/models?pipeline_tag=feature-extraction
 
 ### Usage
 ```python
@@ -282,6 +282,25 @@ response = embedding(
     input=["good morning from litellm"]
 )
 ```
+
+### Usage - Set input_type
+
+LiteLLM infers input type (feature-extraction or sentence-similarity) by making a GET request to the api base. 
+
+Override this, by setting the `input_type` yourself.
+
+```python
+from litellm import embedding
+import os
+os.environ['HUGGINGFACE_API_KEY'] = ""
+response = embedding(
+    model='huggingface/microsoft/codebert-base', 
+    input=["good morning from litellm", "you are a good bot"],
+    api_base = "https://p69xlsj6rpno5drq.us-east-1.aws.endpoints.huggingface.cloud", 
+    input_type="sentence-similarity"
+)
+```
+
 ### Usage - Custom API Base
 ```python
 from litellm import embedding

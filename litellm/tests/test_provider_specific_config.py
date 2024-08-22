@@ -2,16 +2,19 @@
 #    This tests setting provider specific configs across providers
 # There are 2 types of tests - changing config dynamically or by setting class variables
 
-import sys, os
+import os
+import sys
 import traceback
+
 import pytest
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import litellm
-from litellm import completion
-from litellm import RateLimitError
+from litellm import RateLimitError, completion
 
 #  Huggingface - Expensive to deploy models and keep them running. Maybe we can try doing this via baseten??
 # def hf_test_completion_tgi():
@@ -513,101 +516,164 @@ def sagemaker_test_completion():
 # sagemaker_test_completion()
 
 
-def test_sagemaker_default_region(mocker):
+def test_sagemaker_default_region():
     """
     If no regions are specified in config or in environment, the default region is us-west-2
     """
-    mock_client = mocker.patch("boto3.client")
-    try:
+    mock_response = MagicMock()
+
+    def return_val():
+        return {
+            "generated_text": "This is a mock response from SageMaker.",
+            "id": "cmpl-mockid",
+            "object": "text_completion",
+            "created": 1629800000,
+            "model": "sagemaker/jumpstart-dft-hf-textgeneration1-mp-20240815-185614",
+            "choices": [
+                {
+                    "text": "This is a mock response from SageMaker.",
+                    "index": 0,
+                    "logprobs": None,
+                    "finish_reason": "length",
+                }
+            ],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 8, "total_tokens": 9},
+        }
+
+    mock_response.json = return_val
+    mock_response.status_code = 200
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.HTTPHandler.post",
+        return_value=mock_response,
+    ) as mock_post:
         response = litellm.completion(
             model="sagemaker/mock-endpoint",
-            messages=[
-                {
-                    "content": "Hello, world!",
-                    "role": "user"
-                }
-            ]
+            messages=[{"content": "Hello, world!", "role": "user"}],
         )
-    except Exception:
-        pass  # expected serialization exception because AWS client was replaced with a Mock
-    assert mock_client.call_args.kwargs["region_name"] == "us-west-2"
+        mock_post.assert_called_once()
+        _, kwargs = mock_post.call_args
+        args_to_sagemaker = kwargs["json"]
+        print("Arguments passed to sagemaker=", args_to_sagemaker)
+        print("url=", kwargs["url"])
+
+        assert (
+            kwargs["url"]
+            == "https://runtime.sagemaker.us-west-2.amazonaws.com/endpoints/mock-endpoint/invocations"
+        )
+
 
 # test_sagemaker_default_region()
 
 
-def test_sagemaker_environment_region(mocker):
+def test_sagemaker_environment_region():
     """
     If a region is specified in the environment, use that region instead of us-west-2
     """
     expected_region = "us-east-1"
     os.environ["AWS_REGION_NAME"] = expected_region
-    mock_client = mocker.patch("boto3.client")
-    try:
+    mock_response = MagicMock()
+
+    def return_val():
+        return {
+            "generated_text": "This is a mock response from SageMaker.",
+            "id": "cmpl-mockid",
+            "object": "text_completion",
+            "created": 1629800000,
+            "model": "sagemaker/jumpstart-dft-hf-textgeneration1-mp-20240815-185614",
+            "choices": [
+                {
+                    "text": "This is a mock response from SageMaker.",
+                    "index": 0,
+                    "logprobs": None,
+                    "finish_reason": "length",
+                }
+            ],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 8, "total_tokens": 9},
+        }
+
+    mock_response.json = return_val
+    mock_response.status_code = 200
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.HTTPHandler.post",
+        return_value=mock_response,
+    ) as mock_post:
         response = litellm.completion(
             model="sagemaker/mock-endpoint",
-            messages=[
-                {
-                    "content": "Hello, world!",
-                    "role": "user"
-                }
-            ]
+            messages=[{"content": "Hello, world!", "role": "user"}],
         )
-    except Exception:
-        pass  # expected serialization exception because AWS client was replaced with a Mock
-    del os.environ["AWS_REGION_NAME"]  # cleanup
-    assert mock_client.call_args.kwargs["region_name"] == expected_region
+        mock_post.assert_called_once()
+        _, kwargs = mock_post.call_args
+        args_to_sagemaker = kwargs["json"]
+        print("Arguments passed to sagemaker=", args_to_sagemaker)
+        print("url=", kwargs["url"])
+
+        assert (
+            kwargs["url"]
+            == f"https://runtime.sagemaker.{expected_region}.amazonaws.com/endpoints/mock-endpoint/invocations"
+        )
+
+        del os.environ["AWS_REGION_NAME"]  # cleanup
+
 
 # test_sagemaker_environment_region()
 
 
-def test_sagemaker_config_region(mocker):
+def test_sagemaker_config_region():
     """
     If a region is specified as part of the optional parameters of the completion, including as
     part of the config file, then use that region instead of us-west-2
     """
     expected_region = "us-east-1"
-    mock_client = mocker.patch("boto3.client")
-    try:
-        response = litellm.completion(
-            model="sagemaker/mock-endpoint",
-            messages=[
+    mock_response = MagicMock()
+
+    def return_val():
+        return {
+            "generated_text": "This is a mock response from SageMaker.",
+            "id": "cmpl-mockid",
+            "object": "text_completion",
+            "created": 1629800000,
+            "model": "sagemaker/jumpstart-dft-hf-textgeneration1-mp-20240815-185614",
+            "choices": [
                 {
-                    "content": "Hello, world!",
-                    "role": "user"
+                    "text": "This is a mock response from SageMaker.",
+                    "index": 0,
+                    "logprobs": None,
+                    "finish_reason": "length",
                 }
             ],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 8, "total_tokens": 9},
+        }
+
+    mock_response.json = return_val
+    mock_response.status_code = 200
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.HTTPHandler.post",
+        return_value=mock_response,
+    ) as mock_post:
+
+        response = litellm.completion(
+            model="sagemaker/mock-endpoint",
+            messages=[{"content": "Hello, world!", "role": "user"}],
             aws_region_name=expected_region,
         )
-    except Exception:
-        pass  # expected serialization exception because AWS client was replaced with a Mock
-    assert mock_client.call_args.kwargs["region_name"] == expected_region
+
+        mock_post.assert_called_once()
+        _, kwargs = mock_post.call_args
+        args_to_sagemaker = kwargs["json"]
+        print("Arguments passed to sagemaker=", args_to_sagemaker)
+        print("url=", kwargs["url"])
+
+        assert (
+            kwargs["url"]
+            == f"https://runtime.sagemaker.{expected_region}.amazonaws.com/endpoints/mock-endpoint/invocations"
+        )
+
 
 # test_sagemaker_config_region()
 
-
-def test_sagemaker_config_and_environment_region(mocker):
-    """
-    If both the environment and config file specify a region, the environment region is expected
-    """
-    expected_region = "us-east-1"
-    unexpected_region = "us-east-2"
-    os.environ["AWS_REGION_NAME"] = expected_region
-    mock_client = mocker.patch("boto3.client")
-    try:
-        response = litellm.completion(
-            model="sagemaker/mock-endpoint",
-            messages=[
-                {
-                    "content": "Hello, world!",
-                    "role": "user"
-                }
-            ],
-            aws_region_name=unexpected_region,
-        )
-    except Exception:
-        pass  # expected serialization exception because AWS client was replaced with a Mock
-    del os.environ["AWS_REGION_NAME"]  # cleanup
-    assert mock_client.call_args.kwargs["region_name"] == expected_region
 
 # test_sagemaker_config_and_environment_region()
 

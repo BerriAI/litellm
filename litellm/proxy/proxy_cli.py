@@ -19,9 +19,15 @@ litellm_mode = os.getenv("LITELLM_MODE", "DEV")  # "PRODUCTION", "DEV"
 if litellm_mode == "DEV":
     load_dotenv()
 import shutil
+from enum import Enum
 from importlib import resources
 
 telemetry = None
+
+
+class LiteLLMDatabaseConnectionPool(Enum):
+    database_connection_pool_limit = 10
+    database_connection_pool_timeout = 60
 
 
 def append_query_params(url, params) -> str:
@@ -172,6 +178,12 @@ def is_port_in_use(port):
     help="Calls async endpoints /queue/requests and /queue/response",
 )
 @click.option(
+    "--iam_token_db_auth",
+    default=False,
+    is_flag=True,
+    help="Connects to RDS DB with IAM token",
+)
+@click.option(
     "--num_requests",
     default=10,
     type=int,
@@ -222,6 +234,7 @@ def run_server(
     local,
     num_workers,
     test_async,
+    iam_token_db_auth,
     num_requests,
     use_queue,
     health,
@@ -442,6 +455,24 @@ def run_server(
 
         db_connection_pool_limit = 100
         db_connection_timeout = 60
+        ### GET DB TOKEN FOR IAM AUTH ###
+
+        if iam_token_db_auth:
+            from litellm.proxy.auth.rds_iam_token import generate_iam_auth_token
+
+            db_host = os.getenv("DATABASE_HOST")
+            db_port = os.getenv("DATABASE_PORT")
+            db_user = os.getenv("DATABASE_USER")
+            db_name = os.getenv("DATABASE_NAME")
+
+            token = generate_iam_auth_token(
+                db_host=db_host, db_port=db_port, db_user=db_user
+            )
+
+            # print(f"token: {token}")
+            _db_url = f"postgresql://{db_user}:{token}@{db_host}:{db_port}/{db_name}"
+            os.environ["DATABASE_URL"] = _db_url
+
         ### DECRYPT ENV VAR ###
 
         from litellm.proxy.secret_managers.aws_secret_manager import decrypt_env_var
@@ -525,11 +556,29 @@ def run_server(
                     **key_management_settings
                 )
             database_url = general_settings.get("database_url", None)
+            if database_url is None:
+                # Check if all required variables are provided
+                database_host = os.getenv("DATABASE_HOST")
+                database_username = os.getenv("DATABASE_USERNAME")
+                database_password = os.getenv("DATABASE_PASSWORD")
+                database_name = os.getenv("DATABASE_NAME")
+
+                if (
+                    database_host
+                    and database_username
+                    and database_password
+                    and database_name
+                ):
+                    # Construct DATABASE_URL from the provided variables
+                    database_url = f"postgresql://{database_username}:{database_password}@{database_host}/{database_name}"
+                    os.environ["DATABASE_URL"] = database_url
             db_connection_pool_limit = general_settings.get(
-                "database_connection_pool_limit", 100
+                "database_connection_pool_limit",
+                LiteLLMDatabaseConnectionPool.database_connection_pool_limit.value,
             )
             db_connection_timeout = general_settings.get(
-                "database_connection_timeout", 60
+                "database_connection_timeout",
+                LiteLLMDatabaseConnectionPool.database_connection_pool_timeout.value,
             )
             if database_url and database_url.startswith("os.environ/"):
                 original_dir = os.getcwd()
