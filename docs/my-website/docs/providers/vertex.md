@@ -661,6 +661,7 @@ Here's how to use Vertex AI with the LiteLLM Proxy Server
 ## Specifying Safety Settings 
 In certain use-cases you may need to make calls to the models and pass [safety settigns](https://ai.google.dev/docs/safety_setting_gemini) different from the defaults. To do so, simple pass the `safety_settings` argument to `completion` or `acompletion`. For example:
 
+### Set per model/request
 
 <Tabs>
 
@@ -748,6 +749,65 @@ response = client.chat.completions.create(
         ],
     }
 )
+```
+</TabItem>
+</Tabs>
+
+### Set Globally
+
+<Tabs>
+
+<TabItem value="sdk" label="SDK">
+
+```python
+import litellm 
+
+litellm.set_verbose = True 👈 See RAW REQUEST/RESPONSE 
+
+litellm.vertex_ai_safety_settings = [
+        {
+            "category": "HARM_CATEGORY_HARASSMENT",
+            "threshold": "BLOCK_NONE",
+        },
+        {
+            "category": "HARM_CATEGORY_HATE_SPEECH",
+            "threshold": "BLOCK_NONE",
+        },
+        {
+            "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+            "threshold": "BLOCK_NONE",
+        },
+        {
+            "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+            "threshold": "BLOCK_NONE",
+        },
+    ]
+response = completion(
+    model="vertex_ai/gemini-pro", 
+    messages=[{"role": "user", "content": "write code for saying hi from LiteLLM"}]
+)
+```
+</TabItem>
+<TabItem value="proxy" label="Proxy">
+
+```yaml
+model_list:
+  - model_name: gemini-experimental
+    litellm_params:
+      model: vertex_ai/gemini-experimental
+      vertex_project: litellm-epic
+      vertex_location: us-central1
+
+litellm_settings:
+    vertex_ai_safety_settings:
+      - category: HARM_CATEGORY_HARASSMENT
+        threshold: BLOCK_NONE
+      - category: HARM_CATEGORY_HATE_SPEECH
+        threshold: BLOCK_NONE
+      - category: HARM_CATEGORY_SEXUALLY_EXPLICIT
+        threshold: BLOCK_NONE
+      - category: HARM_CATEGORY_DANGEROUS_CONTENT
+        threshold: BLOCK_NONE
 ```
 </TabItem>
 </Tabs>
