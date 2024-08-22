@@ -46,7 +46,7 @@ async def acreate_batch(
     completion_window: Literal["24h"],
     endpoint: Literal["/v1/chat/completions", "/v1/embeddings", "/v1/completions"],
     input_file_id: str,
-    custom_llm_provider: str = "openai",
+    custom_llm_provider: Literal["openai", "azure"] = "openai",
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
@@ -215,7 +215,7 @@ def create_batch(
 
 async def aretrieve_batch(
     batch_id: str,
-    custom_llm_provider: str = "openai",
+    custom_llm_provider: Literal["openai", "azure"] = "openai",
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
@@ -379,7 +379,7 @@ def retrieve_batch(
 async def alist_batches(
     after: Optional[str] = None,
     limit: Optional[int] = None,
-    custom_llm_provider: str = "openai",
+    custom_llm_provider: Literal["openai", "azure"] = "openai",
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,

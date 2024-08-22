@@ -150,7 +150,7 @@ async def create_file(
 
         # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
         response = await litellm.acreate_file(
-            **_create_file_request, custom_llm_provider=custom_llm_provider
+            **_create_file_request, custom_llm_provider=custom_llm_provider  # type: ignore
         )
 
         ### ALERTING ###
@@ -265,7 +265,7 @@ async def get_file(
         if provider is None:  # default to openai
             provider = "openai"
         response = await litellm.afile_retrieve(
-            custom_llm_provider=provider, file_id=file_id, **data
+            custom_llm_provider=provider, file_id=file_id, **data  # type: ignore
         )
 
         ### ALERTING ###
@@ -381,7 +381,7 @@ async def delete_file(
         if provider is None:  # default to openai
             provider = "openai"
         response = await litellm.afile_delete(
-            custom_llm_provider=provider, file_id=file_id, **data
+            custom_llm_provider=provider, file_id=file_id, **data  # type: ignore
         )
 
         ### ALERTING ###
@@ -496,7 +496,7 @@ async def list_files(
         if provider is None:
             provider = "openai"
         response = await litellm.afile_list(
-            custom_llm_provider=provider, purpose=purpose, **data
+            custom_llm_provider=provider, purpose=purpose, **data  # type: ignore
         )
 
         ### ALERTING ###
@@ -611,7 +611,7 @@ async def get_file_content(
         if provider is None:
             provider = "openai"
         response = await litellm.afile_content(
-            custom_llm_provider=provider, file_id=file_id, **data
+            custom_llm_provider=provider, file_id=file_id, **data  # type: ignore
         )
 
         ### ALERTING ###
