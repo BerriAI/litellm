@@ -1,20 +1,18 @@
 model_list:
-  - model_name: fake-openai-endpoint
+  - model_name: gpt-4
     litellm_params:
       model: openai/fake
       api_key: fake-key
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
-  - model_name: openai-embedding
-    litellm_params:
-      model: openai/text-embedding-3-small
-      api_key: os.environ/OPENAI_API_KEY
 
-litellm_settings:
-  set_verbose: True
-  cache: True          # set cache responses to True, litellm defaults to using a redis cache
-  cache_params:
-    type: qdrant-semantic
-    qdrant_semantic_cache_embedding_model: openai-embedding
-    qdrant_collection_name: test_collection
-    qdrant_quantization_config: binary
-    similarity_threshold: 0.8   # similarity threshold for semantic cache
+guardrails:
+  - guardrail_name: "lakera-pre-guard"
+    litellm_params:
+      guardrail: lakera  # supported values: "aporia", "bedrock", "lakera"
+      mode: "during_call"
+      api_key: os.environ/LAKERA_API_KEY
+      api_base: os.environ/LAKERA_API_BASE
+      category_thresholds:
+        prompt_injection: 0.1
+        jailbreak: 0.1
+  

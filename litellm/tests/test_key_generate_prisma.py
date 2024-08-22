@@ -2328,6 +2328,11 @@ async def test_master_key_hashing(prisma_client):
         from litellm.proxy.proxy_server import user_api_key_cache
 
         _team_id = "ishaans-special-team_{}".format(uuid.uuid4())
+        user_api_key_dict = UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-1234",
+            user_id="1234",
+        )
         await new_team(
             NewTeamRequest(team_id=_team_id),
             user_api_key_dict=UserAPIKeyAuth(
@@ -2343,7 +2348,8 @@ async def test_master_key_hashing(prisma_client):
                 models=["azure-gpt-3.5"],
                 team_id=_team_id,
                 tpm_limit=20,
-            )
+            ),
+            user_api_key_dict=user_api_key_dict,
         )
         print(_response)
         assert _response.models == ["azure-gpt-3.5"]

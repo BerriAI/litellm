@@ -1252,3 +1252,48 @@ def test_standard_logging_payload(model, turn_off_message_logging):
         ]
         if turn_off_message_logging:
             assert "redacted-by-litellm" == slobject["messages"][0]["content"]
+
+
+@pytest.mark.skip(reason="Works locally. Flaky on ci/cd")
+def test_aaastandard_logging_payload_cache_hit():
+    from litellm.types.utils import StandardLoggingPayload
+
+    # sync completion
+
+    litellm.cache = Cache()
+
+    _ = litellm.completion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "Hey, how's it going?"}],
+        caching=True,
+    )
+
+    customHandler = CompletionCustomHandler()
+    litellm.callbacks = [customHandler]
+    litellm.success_callback = []
+
+    with patch.object(
+        customHandler, "log_success_event", new=MagicMock()
+    ) as mock_client:
+        _ = litellm.completion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+            caching=True,
+        )
+
+        time.sleep(2)
+        mock_client.assert_called_once()
+
+        assert "standard_logging_object" in mock_client.call_args.kwargs["kwargs"]
+        assert (
+            mock_client.call_args.kwargs["kwargs"]["standard_logging_object"]
+            is not None
+        )
+
+        standard_logging_object: StandardLoggingPayload = mock_client.call_args.kwargs[
+            "kwargs"
+        ]["standard_logging_object"]
+
+        assert standard_logging_object["cache_hit"] is True
+        assert standard_logging_object["response_cost"] == 0
+        assert standard_logging_object["saved_cache_cost"] > 0

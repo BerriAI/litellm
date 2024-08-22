@@ -124,12 +124,14 @@ class CohereConfig:
         }
 
 
-def validate_environment(api_key):
-    headers = {
-        "Request-Source": "unspecified:litellm",
-        "accept": "application/json",
-        "content-type": "application/json",
-    }
+def validate_environment(api_key, headers: dict):
+    headers.update(
+        {
+            "Request-Source": "unspecified:litellm",
+            "accept": "application/json",
+            "content-type": "application/json",
+        }
+    )
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
     return headers
@@ -144,11 +146,12 @@ def completion(
     encoding,
     api_key,
     logging_obj,
+    headers: dict,
     optional_params=None,
     litellm_params=None,
     logger_fn=None,
 ):
-    headers = validate_environment(api_key)
+    headers = validate_environment(api_key, headers=headers)
     completion_url = api_base
     model = model
     prompt = " ".join(message["content"] for message in messages)
@@ -338,13 +341,14 @@ def embedding(
     model_response: litellm.EmbeddingResponse,
     logging_obj: LiteLLMLoggingObj,
     optional_params: dict,
+    headers: dict,
     encoding: Any,
     api_key: Optional[str] = None,
     aembedding: Optional[bool] = None,
     timeout: Union[float, httpx.Timeout] = httpx.Timeout(None),
     client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
 ):
-    headers = validate_environment(api_key)
+    headers = validate_environment(api_key, headers=headers)
     embed_url = "https://api.cohere.ai/v1/embed"
     model = model
     data = {"model": model, "texts": input, **optional_params}

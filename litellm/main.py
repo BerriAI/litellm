@@ -943,6 +943,7 @@ def completion(
             output_cost_per_token=output_cost_per_token,
             cooldown_time=cooldown_time,
             text_completion=kwargs.get("text_completion"),
+            user_continue_message=kwargs.get("user_continue_message"),
         )
         logging.update_environment_variables(
             model=model,
@@ -1634,6 +1635,13 @@ def completion(
                 or "https://api.cohere.ai/v1/generate"
             )
 
+            headers = headers or litellm.headers or {}
+            if headers is None:
+                headers = {}
+
+            if extra_headers is not None:
+                headers.update(extra_headers)
+
             model_response = cohere.completion(
                 model=model,
                 messages=messages,
@@ -1644,6 +1652,7 @@ def completion(
                 litellm_params=litellm_params,
                 logger_fn=logger_fn,
                 encoding=encoding,
+                headers=headers,
                 api_key=cohere_key,
                 logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
             )
@@ -1674,6 +1683,13 @@ def completion(
                 or "https://api.cohere.ai/v1/chat"
             )
 
+            headers = headers or litellm.headers or {}
+            if headers is None:
+                headers = {}
+
+            if extra_headers is not None:
+                headers.update(extra_headers)
+
             model_response = cohere_chat.completion(
                 model=model,
                 messages=messages,
@@ -1682,6 +1698,7 @@ def completion(
                 print_verbose=print_verbose,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
+                headers=headers,
                 logger_fn=logger_fn,
                 encoding=encoding,
                 api_key=cohere_key,
@@ -2288,7 +2305,7 @@ def completion(
                     model_response=model_response,
                     print_verbose=print_verbose,
                     optional_params=optional_params,
-                    litellm_params=litellm_params,
+                    litellm_params=litellm_params,  # type: ignore
                     logger_fn=logger_fn,
                     encoding=encoding,
                     logging_obj=logging,
@@ -2464,7 +2481,7 @@ def completion(
                 model_response=model_response,
                 encoding=encoding,
             )
-            if acompletion is True or optional_params.get("stream", False) == True:
+            if acompletion is True or optional_params.get("stream", False) is True:
                 return generator
 
             response = generator
@@ -3158,6 +3175,7 @@ def embedding(
     encoding_format = kwargs.get("encoding_format", None)
     proxy_server_request = kwargs.get("proxy_server_request", None)
     aembedding = kwargs.get("aembedding", None)
+    extra_headers = kwargs.get("extra_headers", None)
     ### CUSTOM MODEL COST ###
     input_cost_per_token = kwargs.get("input_cost_per_token", None)
     output_cost_per_token = kwargs.get("output_cost_per_token", None)
@@ -3229,6 +3247,7 @@ def embedding(
         "model_config",
         "cooldown_time",
         "tags",
+        "extra_headers",
     ]
     default_params = openai_params + litellm_params
     non_default_params = {
@@ -3292,7 +3311,7 @@ def embedding(
                 "cooldown_time": cooldown_time,
             },
         )
-        if azure == True or custom_llm_provider == "azure":
+        if azure is True or custom_llm_provider == "azure":
             # azure configs
             api_type = get_secret("AZURE_API_TYPE") or "azure"
 
@@ -3398,12 +3417,18 @@ def embedding(
                 or get_secret("CO_API_KEY")
                 or litellm.api_key
             )
+
+            if extra_headers is not None and isinstance(extra_headers, dict):
+                headers = extra_headers
+            else:
+                headers = {}
             response = cohere.embedding(
                 model=model,
                 input=input,
                 optional_params=optional_params,
                 encoding=encoding,
                 api_key=cohere_key,  # type: ignore
+                headers=headers,
                 logging_obj=logging,
                 model_response=EmbeddingResponse(),
                 aembedding=aembedding,
@@ -3477,19 +3502,39 @@ def embedding(
                 or get_secret("VERTEX_CREDENTIALS")
             )
 
-            response = vertex_ai.embedding(
-                model=model,
-                input=input,
-                encoding=encoding,
-                logging_obj=logging,
-                optional_params=optional_params,
-                model_response=EmbeddingResponse(),
-                vertex_project=vertex_ai_project,
-                vertex_location=vertex_ai_location,
-                vertex_credentials=vertex_credentials,
-                aembedding=aembedding,
-                print_verbose=print_verbose,
-            )
+            if (
+                "image" in optional_params
+                or "video" in optional_params
+                or model in vertex_chat_completion.SUPPORTED_MULTIMODAL_EMBEDDING_MODELS
+            ):
+                # multimodal embedding is supported on vertex httpx
+                response = vertex_chat_completion.multimodal_embedding(
+                    model=model,
+                    input=input,
+                    encoding=encoding,
+                    logging_obj=logging,
+                    optional_params=optional_params,
+                    model_response=EmbeddingResponse(),
+                    vertex_project=vertex_ai_project,
+                    vertex_location=vertex_ai_location,
+                    vertex_credentials=vertex_credentials,
+                    aembedding=aembedding,
+                    print_verbose=print_verbose,
+                )
+            else:
+                response = vertex_ai.embedding(
+                    model=model,
+                    input=input,
+                    encoding=encoding,
+                    logging_obj=logging,
+                    optional_params=optional_params,
+                    model_response=EmbeddingResponse(),
+                    vertex_project=vertex_ai_project,
+                    vertex_location=vertex_ai_location,
+                    vertex_credentials=vertex_credentials,
+                    aembedding=aembedding,
+                    print_verbose=print_verbose,
+                )
         elif custom_llm_provider == "oobabooga":
             response = oobabooga.embedding(
                 model=model,
