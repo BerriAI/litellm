@@ -488,9 +488,34 @@ You can set:
 
 
 <Tabs>
+<TabItem value="per-team" label="Per Team">
+
+Use `/team/new` or `/team/update`, to persist rate limits across multiple keys for a team.
+
+
+```shell
+curl --location 'http://0.0.0.0:4000/team/new' \
+--header 'Authorization: Bearer sk-1234' \
+--header 'Content-Type: application/json' \
+--data '{"team_id": "my-prod-team", "max_parallel_requests": 10, "tpm_limit": 20, "rpm_limit": 4}' 
+```
+
+[**See Swagger**](https://litellm-api.up.railway.app/#/team%20management/new_team_team_new_post)
+
+**Expected Response**
+
+```json
+{
+    "key": "sk-sA7VDkyhlQ7m8Gt77Mbt3Q",
+    "expires": "2024-01-19T01:21:12.816168",
+    "team_id": "my-prod-team",
+}
+```
+
+</TabItem>
 <TabItem value="per-user" label="Per Internal User">
 
-Use `/user/new`, to persist rate limits across multiple keys.
+Use `/user/new` or `/user/update`, to persist rate limits across multiple keys for internal users.
 
 
 ```shell
@@ -653,6 +678,70 @@ curl --location 'http://localhost:4000/chat/completions' \
 </TabItem>
 </Tabs>
 
+## Set default budget for ALL internal users 
+
+Use this to set a default budget for users who you give keys to.
+
+This will apply when a user has [`user_role="internal_user"`](./self_serve.md#available-roles) (set this via `/user/new` or `/user/update`). 
+
+This will NOT apply if a key has a team_id (team budgets will apply then). [Tell us how we can improve this!](https://github.com/BerriAI/litellm/issues)
+
+1. Define max budget in your config.yaml
+
+```yaml
+model_list: 
+  - model_name: "gpt-3.5-turbo"
+    litellm_params:
+      model: gpt-3.5-turbo
+      api_key: os.environ/OPENAI_API_KEY
+
+litellm_settings:
+  max_internal_user_budget: 0 # amount in USD
+  internal_user_budget_duration: "1mo" # reset every month
+```
+
+2. Create key for user 
+
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/key/generate' \
+-H 'Authorization: Bearer sk-1234' \
+-H 'Content-Type: application/json' \
+-d '{}'
+```
+
+Expected Response: 
+
+```bash
+{
+  ...
+  "key": "sk-X53RdxnDhzamRwjKXR4IHg"
+}
+```
+
+3. Test it! 
+
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-X53RdxnDhzamRwjKXR4IHg' \
+-d '{
+    "model": "gpt-3.5-turbo",
+    "messages": [{"role": "user", "content": "Hey, how's it going?"}]
+}'
+```
+
+Expected Response: 
+
+```bash
+{
+    "error": {
+        "message": "ExceededBudget: User=<user_id> over budget. Spend=3.7e-05, Budget=0.0",
+        "type": "budget_exceeded",
+        "param": null,
+        "code": "400"
+    }
+}
+```
 ## Grant Access to new model 
 
 Use model access groups to give users access to select models, and add new ones to it over time (e.g. mistral, llama-2, etc.). 

@@ -191,9 +191,11 @@ class GoogleAIStudioGeminiConfig:  # key diff from VertexAI - 'frequency_penalty
                     elif value["type"] == "text":  # type: ignore
                         optional_params["response_mime_type"] = "text/plain"
                     if "response_schema" in value:  # type: ignore
+                        optional_params["response_mime_type"] = "application/json"
                         optional_params["response_schema"] = value["response_schema"]  # type: ignore
                 elif value["type"] == "json_schema":  # type: ignore
                     if "json_schema" in value and "schema" in value["json_schema"]:  # type: ignore
+                        optional_params["response_mime_type"] = "application/json"
                         optional_params["response_schema"] = value["json_schema"]["schema"]  # type: ignore
             if param == "tools" and isinstance(value, list):
                 gtool_func_declarations = []
@@ -403,9 +405,11 @@ class VertexGeminiConfig:
                 elif value["type"] == "text":
                     optional_params["response_mime_type"] = "text/plain"
                 if "response_schema" in value:
+                    optional_params["response_mime_type"] = "application/json"
                     optional_params["response_schema"] = value["response_schema"]
                 elif value["type"] == "json_schema":  # type: ignore
                     if "json_schema" in value and "schema" in value["json_schema"]:  # type: ignore
+                        optional_params["response_mime_type"] = "application/json"
                         optional_params["response_schema"] = value["json_schema"]["schema"]  # type: ignore
             if param == "frequency_penalty":
                 optional_params["frequency_penalty"] = value
