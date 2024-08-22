@@ -2323,6 +2323,7 @@ def get_litellm_params(
     output_cost_per_second=None,
     cooldown_time=None,
     text_completion=None,
+    azure_ad_token_provider=None,
 ):
     litellm_params = {
         "acompletion": acompletion,
@@ -2347,6 +2348,7 @@ def get_litellm_params(
         "output_cost_per_second": output_cost_per_second,
         "cooldown_time": cooldown_time,
         "text_completion": text_completion,
+        "azure_ad_token_provider": azure_ad_token_provider,
     }
 
     return litellm_params
