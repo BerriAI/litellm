@@ -7128,7 +7128,7 @@ def exception_type(
                 elif "A conversation must start with a user message." in error_str:
                     exception_mapping_worked = True
                     raise BadRequestError(
-                        message=f"BedrockException - {error_str}\n. Pass in default user message via `completion(..,user_continue_message=)` or enable `litellm.modify_params=True`.",
+                        message=f"BedrockException - {error_str}\n. Pass in default user message via `completion(..,user_continue_message=)` or enable `litellm.modify_params=True`.\nFor Proxy: do via `litellm_settings::modify_params: True` or user_continue_message under `litellm_params`",
                         model=model,
                         llm_provider="bedrock",
                         response=original_exception.response,
