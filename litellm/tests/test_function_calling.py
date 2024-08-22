@@ -141,6 +141,8 @@ def test_parallel_function_call(model):
                 drop_params=True,
             )  # get a new response from the model where it can see the function response
             print("second response\n", second_response)
+    except litellm.RateLimitError:
+        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
