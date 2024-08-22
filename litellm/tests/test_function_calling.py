@@ -54,6 +54,7 @@ def get_current_weather(location, unit="fahrenheit"):
 )
 def test_parallel_function_call(model):
     try:
+        litellm.set_verbose = True
         # Step 1: send the conversation and available functions to the model
         messages = [
             {
