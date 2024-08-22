@@ -210,7 +210,7 @@ class Logging:
         self.optional_params = optional_params
         self.model = model
         self.user = user
-        self.litellm_params = litellm_params
+        self.litellm_params = scrub_sensitive_keys_in_metadata(litellm_params)
         self.logger_fn = litellm_params.get("logger_fn", None)
         verbose_logger.debug(f"self.optional_params: {self.optional_params}")
 
@@ -524,6 +524,7 @@ class Logging:
             TextCompletionResponse,
             HttpxBinaryResponseContent,
         ],
+        cache_hit: Optional[bool] = None,
     ):
         """
         Calculate response cost using result + logging object variables.
@@ -535,10 +536,13 @@ class Logging:
             litellm_params=self.litellm_params
         )
 
+        if cache_hit is None:
+            cache_hit = self.model_call_details.get("cache_hit", False)
+
         response_cost = litellm.response_cost_calculator(
             response_object=result,
             model=self.model,
-            cache_hit=self.model_call_details.get("cache_hit", False),
+            cache_hit=cache_hit,
             custom_llm_provider=self.model_call_details.get(
                 "custom_llm_provider", None
             ),
@@ -630,6 +634,7 @@ class Logging:
                     init_response_obj=result,
                     start_time=start_time,
                     end_time=end_time,
+                    logging_obj=self,
                 )
             )
             return start_time, end_time, result
@@ -2181,6 +2186,7 @@ def get_standard_logging_object_payload(
     init_response_obj: Any,
     start_time: dt_object,
     end_time: dt_object,
+    logging_obj: Logging,
 ) -> Optional[StandardLoggingPayload]:
     try:
         if kwargs is None:
@@ -2277,10 +2283,16 @@ def get_standard_logging_object_payload(
             cache_key = litellm.cache.get_cache_key(**kwargs)
         else:
             cache_key = None
+
+        saved_cache_cost: Optional[float] = None
         if cache_hit is True:
             import time
 
             id = f"{id}_cache_hit{time.time()}"  # do not duplicate the request id
+
+            saved_cache_cost = logging_obj._response_cost_calculator(
+                result=init_response_obj, cache_hit=False
+            )
 
         ## Get model cost information ##
         base_model = _get_base_model_from_metadata(model_call_details=kwargs)
@@ -2318,6 +2330,7 @@ def get_standard_logging_object_payload(
             id=str(id),
             call_type=call_type or "",
             cache_hit=cache_hit,
+            saved_cache_cost=saved_cache_cost,
             startTime=start_time_float,
             endTime=end_time_float,
             completionStartTime=completion_start_time_float,
@@ -2353,3 +2366,28 @@ def get_standard_logging_object_payload(
             "Error creating standard logging object - {}".format(str(e))
         )
         return None
+
+
+def scrub_sensitive_keys_in_metadata(litellm_params: Optional[dict]):
+    if litellm_params is None:
+        litellm_params = {}
+
+    metadata = litellm_params.get("metadata", {}) or {}
+
+    ## check user_api_key_metadata for sensitive logging keys
+    cleaned_user_api_key_metadata = {}
+    if "user_api_key_metadata" in metadata and isinstance(
+        metadata["user_api_key_metadata"], dict
+    ):
+        for k, v in metadata["user_api_key_metadata"].items():
+            if k == "logging":  # prevent logging user logging keys
+                cleaned_user_api_key_metadata[k] = (
+                    "scrubbed_by_litellm_for_sensitive_keys"
+                )
+            else:
+                cleaned_user_api_key_metadata[k] = v
+
+        metadata["user_api_key_metadata"] = cleaned_user_api_key_metadata
+        litellm_params["metadata"] = metadata
+
+    return litellm_params

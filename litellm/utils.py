@@ -8622,7 +8622,9 @@ def get_secret(
                     return secret_value_as_bool
                 else:
                     return secret
-            except:
+            except Exception:
+                if default_value is not None:
+                    return default_value
                 return secret
     except Exception as e:
         if default_value is not None:
