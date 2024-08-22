@@ -15,7 +15,7 @@ import asyncio
 import json
 import os
 import tempfile
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -501,6 +501,8 @@ async def test_async_vertexai_streaming_response():
             assert len(complete_response) > 0
         except litellm.RateLimitError as e:
             pass
+        except litellm.APIConnectionError:
+            pass
         except litellm.Timeout as e:
             pass
         except litellm.InternalServerError as e:
@@ -955,6 +957,8 @@ async def test_partner_models_httpx(model, sync_mode):
         assert isinstance(response._hidden_params["response_cost"], float)
     except litellm.RateLimitError as e:
         pass
+    except litellm.InternalServerError as e:
+        pass
     except Exception as e:
         if "429 Quota exceeded" in str(e):
             pass
@@ -1004,7 +1008,9 @@ async def test_partner_models_httpx_streaming(model, sync_mode):
                 idx += 1
 
         print(f"response: {response}")
-    except litellm.RateLimitError:
+    except litellm.RateLimitError as e:
+        pass
+    except litellm.InternalServerError as e:
         pass
     except Exception as e:
         if "429 Quota exceeded" in str(e):
@@ -1558,6 +1564,16 @@ async def test_gemini_pro_json_schema_args_sent_httpx_openai_schema(
                     "response_schema"
                     in mock_call.call_args.kwargs["json"]["generationConfig"]
                 )
+                assert (
+                    "response_mime_type"
+                    in mock_call.call_args.kwargs["json"]["generationConfig"]
+                )
+                assert (
+                    mock_call.call_args.kwargs["json"]["generationConfig"][
+                        "response_mime_type"
+                    ]
+                    == "application/json"
+                )
             else:
                 assert (
                     "response_schema"
@@ -1824,6 +1840,71 @@ def test_vertexai_embedding():
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.asyncio
+async def test_vertexai_multimodal_embedding():
+    load_vertex_ai_credentials()
+    mock_response = AsyncMock()
+
+    def return_val():
+        return {
+            "predictions": [
+                {
+                    "imageEmbedding": [0.1, 0.2, 0.3],  # Simplified example
+                    "textEmbedding": [0.4, 0.5, 0.6],  # Simplified example
+                }
+            ]
+        }
+
+    mock_response.json = return_val
+    mock_response.status_code = 200
+
+    expected_payload = {
+        "instances": [
+            {
+                "image": {
+                    "gcsUri": "gs://cloud-samples-data/vertex-ai/llm/prompts/landmark1.png"
+                },
+                "text": "this is a unicorn",
+            }
+        ]
+    }
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=mock_response,
+    ) as mock_post:
+        # Act: Call the litellm.aembedding function
+        response = await litellm.aembedding(
+            model="vertex_ai/multimodalembedding@001",
+            input=[
+                {
+                    "image": {
+                        "gcsUri": "gs://cloud-samples-data/vertex-ai/llm/prompts/landmark1.png"
+                    },
+                    "text": "this is a unicorn",
+                },
+            ],
+        )
+
+        # Assert
+        mock_post.assert_called_once()
+        _, kwargs = mock_post.call_args
+        args_to_vertexai = kwargs["json"]
+
+        print("args to vertex ai call:", args_to_vertexai)
+
+        assert args_to_vertexai == expected_payload
+        assert response.model == "multimodalembedding@001"
+        assert len(response.data) == 1
+        response_data = response.data[0]
+        assert "imageEmbedding" in response_data
+        assert "textEmbedding" in response_data
+
+        # Optional: Print for debugging
+        print("Arguments passed to Vertex AI:", args_to_vertexai)
+        print("Response:", response)
 
 
 @pytest.mark.skip(

@@ -1,6 +1,6 @@
 import json
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, TypedDict, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple, TypedDict, Union
 
 from typing_extensions import (
     Protocol,
@@ -305,3 +305,18 @@ class ResponseTuningJob(TypedDict):
     ]
     createTime: Optional[str]
     updateTime: Optional[str]
+
+
+class InstanceVideo(TypedDict, total=False):
+    gcsUri: str
+    videoSegmentConfig: Tuple[float, float, float]
+
+
+class Instance(TypedDict, total=False):
+    text: str
+    image: Dict[str, str]
+    video: InstanceVideo
+
+
+class VertexMultimodalEmbeddingRequest(TypedDict, total=False):
+    instances: List[Instance]

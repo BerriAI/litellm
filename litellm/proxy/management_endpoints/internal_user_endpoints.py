@@ -119,6 +119,7 @@ async def new_user(
             http_request=Request(
                 scope={"type": "http", "path": "/user/new"},
             ),
+            user_api_key_dict=user_api_key_dict,
         )
 
     if data.send_invite_email is True:
@@ -732,7 +733,7 @@ async def delete_user(
     delete user and associated user keys
 
     ```
-    curl --location 'http://0.0.0.0:8000/team/delete' \
+    curl --location 'http://0.0.0.0:8000/user/delete' \
 
     --header 'Authorization: Bearer sk-1234' \
 

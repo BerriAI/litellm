@@ -21,6 +21,13 @@ else:
     Span = Any
 
 
+class LiteLLMTeamRoles(enum.Enum):
+    # team admin
+    TEAM_ADMIN = "admin"
+    # team member
+    TEAM_MEMBER = "user"
+
+
 class LitellmUserRoles(str, enum.Enum):
     """
     Admin Roles:
@@ -334,6 +341,11 @@ class LiteLLMRoutes(enum.Enum):
         + spend_tracking_routes
         + sso_only_routes
     )
+
+    self_managed_routes: List = [
+        "/team/member_add",
+        "/team/member_delete",
+    ]  # routes that manage their own allowed/disallowed logic
 
 
 # class LiteLLMAllowedRoutes(LiteLLMBase):
@@ -1308,6 +1320,7 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     soft_budget: Optional[float] = None
     team_model_aliases: Optional[Dict] = None
     team_member_spend: Optional[float] = None
+    team_member: Optional[Member] = None
     team_metadata: Optional[Dict] = None
 
     # End User Params

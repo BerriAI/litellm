@@ -1498,6 +1498,11 @@ class ProxyConfig:
                     litellm.get_secret(secret_name=key, default_value=value)
                 )
 
+            # check if litellm_license in general_settings
+            if "LITELLM_LICENSE" in environment_variables:
+                _license_check.license_str = os.getenv("LITELLM_LICENSE", None)
+                premium_user = _license_check.is_premium()
+
         ## LITELLM MODULE SETTINGS (e.g. litellm.drop_params=True,..)
         litellm_settings = config.get("litellm_settings", None)
         if litellm_settings is None:
@@ -1877,6 +1882,11 @@ class ProxyConfig:
                     "Trying to use `enforced_params`"
                     + CommonProxyErrors.not_premium_user.value
                 )
+
+            # check if litellm_license in general_settings
+            if "litellm_license" in general_settings:
+                _license_check.license_str = general_settings["litellm_license"]
+                premium_user = _license_check.is_premium()
 
         router_params: dict = {
             "cache_responses": litellm.cache
@@ -2784,26 +2794,29 @@ async def startup_event():
         await custom_db_client.connect()
 
     if prisma_client is not None and master_key is not None:
-        # add master key to db
         if os.getenv("PROXY_ADMIN_ID", None) is not None:
             litellm_proxy_admin_name = os.getenv(
                 "PROXY_ADMIN_ID", litellm_proxy_admin_name
             )
-        asyncio.create_task(
-            generate_key_helper_fn(
-                request_type="user",
-                duration=None,
-                models=[],
-                aliases={},
-                config={},
-                spend=0,
-                token=master_key,
-                user_id=litellm_proxy_admin_name,
-                user_role=LitellmUserRoles.PROXY_ADMIN,
-                query_type="update_data",
-                update_key_values={"user_role": LitellmUserRoles.PROXY_ADMIN},
+        if general_settings.get("disable_adding_master_key_hash_to_db") is True:
+            verbose_proxy_logger.info("Skipping writing master key hash to db")
+        else:
+            # add master key to db
+            asyncio.create_task(
+                generate_key_helper_fn(
+                    request_type="user",
+                    duration=None,
+                    models=[],
+                    aliases={},
+                    config={},
+                    spend=0,
+                    token=master_key,
+                    user_id=litellm_proxy_admin_name,
+                    user_role=LitellmUserRoles.PROXY_ADMIN,
+                    query_type="update_data",
+                    update_key_values={"user_role": LitellmUserRoles.PROXY_ADMIN},
+                )
             )
-        )
 
     if prisma_client is not None and litellm.max_budget > 0:
         if litellm.budget_duration is None:
@@ -3011,6 +3024,29 @@ async def chat_completion(
     model: Optional[str] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
+    """
+
+    Follows the exact same API spec as `OpenAI's Chat API https://platform.openai.com/docs/api-reference/chat`
+
+    ```bash
+    curl -X POST http://localhost:4000/v1/chat/completions \
+
+    -H "Content-Type: application/json" \
+
+    -H "Authorization: Bearer sk-1234" \
+
+    -d '{
+        "model": "gpt-4o",
+        "messages": [
+            {
+                "role": "user",
+                "content": "Hello!"
+            }
+        ]
+    }'
+    ```
+
+    """
     global general_settings, user_debug, proxy_logging_obj, llm_model_list
 
     data = {}
@@ -3268,6 +3304,24 @@ async def completion(
     model: Optional[str] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
+    """
+    Follows the exact same API spec as `OpenAI's Completions API https://platform.openai.com/docs/api-reference/completions`
+
+    ```bash
+    curl -X POST http://localhost:4000/v1/completions \
+
+    -H "Content-Type: application/json" \
+
+    -H "Authorization: Bearer sk-1234" \
+
+    -d '{
+        "model": "gpt-3.5-turbo-instruct",
+        "prompt": "Once upon a time",
+        "max_tokens": 50,
+        "temperature": 0.7
+    }'
+    ```
+    """
     global user_temperature, user_request_timeout, user_max_tokens, user_api_base
     data = {}
     try:
@@ -3474,12 +3528,34 @@ async def embeddings(
     model: Optional[str] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
+    """
+    Follows the exact same API spec as `OpenAI's Embeddings API https://platform.openai.com/docs/api-reference/embeddings`
+
+    ```bash
+    curl -X POST http://localhost:4000/v1/embeddings \
+
+    -H "Content-Type: application/json" \
+
+    -H "Authorization: Bearer sk-1234" \
+
+    -d '{
+        "model": "text-embedding-ada-002",
+        "input": "The quick brown fox jumps over the lazy dog"
+    }'
+    ```
+
+"""
     global proxy_logging_obj
     data: Any = {}
     try:
         # Use orjson to parse JSON data, orjson speeds up requests significantly
         body = await request.body()
         data = orjson.loads(body)
+
+        verbose_proxy_logger.debug(
+            "Request received by LiteLLM:\n%s",
+            json.dumps(data, indent=4),
+        )
 
         # Include original request and headers in the data
         data = await add_litellm_data_to_request(

@@ -849,7 +849,7 @@ async def generate_key_helper_fn(
         }
 
         if (
-            litellm.get_secret("DISABLE_KEY_NAME", False) == True
+            litellm.get_secret("DISABLE_KEY_NAME", False) is True
         ):  # allow user to disable storing abbreviated key name (shown in UI, to help figure out which key spent how much)
             pass
         else:
