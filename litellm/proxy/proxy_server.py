@@ -1498,6 +1498,11 @@ class ProxyConfig:
                     litellm.get_secret(secret_name=key, default_value=value)
                 )
 
+            # check if litellm_license in general_settings
+            if "LITELLM_LICENSE" in environment_variables:
+                _license_check.license_str = os.getenv("LITELLM_LICENSE", None)
+                premium_user = _license_check.is_premium()
+
         ## LITELLM MODULE SETTINGS (e.g. litellm.drop_params=True,..)
         litellm_settings = config.get("litellm_settings", None)
         if litellm_settings is None:
