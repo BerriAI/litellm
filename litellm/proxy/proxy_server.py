@@ -1878,6 +1878,11 @@ class ProxyConfig:
                     + CommonProxyErrors.not_premium_user.value
                 )
 
+            # check if litellm_license in general_settings
+            if "litellm_license" in general_settings:
+                _license_check.license_str = general_settings["litellm_license"]
+                premium_user = _license_check.is_premium()
+
         router_params: dict = {
             "cache_responses": litellm.cache
             != None,  # cache if user passed in cache values
