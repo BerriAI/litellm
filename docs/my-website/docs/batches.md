@@ -5,6 +5,9 @@ import TabItem from '@theme/TabItem';
 
 Covers Batches, Files
 
+Supported Providers:
+- Azure OpenAI
+- OpenAI
 
 ## Quick Start 
 
@@ -139,3 +142,12 @@ print("list_batches_response=", list_batches_response)
 </Tabs>
 
 ## [👉 Proxy API Reference](https://litellm-api.up.railway.app/#/batch)
+
+## Azure Batches API 
+
+Just add the azure env vars to your environment. 
+
+```bash
+export AZURE_API_KEY=""
+export AZURE_API_BASE=""
+```
