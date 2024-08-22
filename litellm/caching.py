@@ -284,6 +284,8 @@ class RedisCache(BaseCache):
 
     def set_cache(self, key, value, **kwargs):
         ttl = kwargs.get("ttl", None)
+        if ttl <= 0:
+            return
         print_verbose(
             f"Set Redis Cache: key: {key}\nValue {value}\nttl={ttl}, redis_version={self.redis_version}"
         )
