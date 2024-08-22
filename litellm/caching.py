@@ -203,6 +203,7 @@ class RedisCache(BaseCache):
         password=None,
         redis_flush_size=100,
         namespace: Optional[str] = None,
+        startup_nodes: Optional[List] = None,  # for redis-cluster
         **kwargs,
     ):
         import redis
@@ -218,7 +219,8 @@ class RedisCache(BaseCache):
             redis_kwargs["port"] = port
         if password is not None:
             redis_kwargs["password"] = password
-
+        if startup_nodes is not None:
+            redis_kwargs["startup_nodes"] = startup_nodes
         ### HEALTH MONITORING OBJECT ###
         if kwargs.get("service_logger_obj", None) is not None and isinstance(
             kwargs["service_logger_obj"], ServiceLogging
@@ -246,7 +248,7 @@ class RedisCache(BaseCache):
         ### ASYNC HEALTH PING ###
         try:
             # asyncio.get_running_loop().create_task(self.ping())
-            result = asyncio.get_running_loop().create_task(self.ping())
+            _ = asyncio.get_running_loop().create_task(self.ping())
         except Exception as e:
             if "no running event loop" in str(e):
                 verbose_logger.debug(
@@ -2123,6 +2125,7 @@ class Cache:
         redis_semantic_cache_use_async=False,
         redis_semantic_cache_embedding_model="text-embedding-ada-002",
         redis_flush_size=None,
+        redis_startup_nodes: Optional[List] = None,
         disk_cache_dir=None,
         qdrant_api_base: Optional[str] = None,
         qdrant_api_key: Optional[str] = None,
@@ -2155,7 +2158,12 @@ class Cache:
         """
         if type == "redis":
             self.cache: BaseCache = RedisCache(
-                host, port, password, redis_flush_size, **kwargs
+                host,
+                port,
+                password,
+                redis_flush_size,
+                startup_nodes=redis_startup_nodes,
+                **kwargs,
             )
         elif type == "redis-semantic":
             self.cache = RedisSemanticCache(
