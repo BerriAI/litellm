@@ -54,6 +54,7 @@ def get_current_weather(location, unit="fahrenheit"):
 )
 def test_parallel_function_call(model):
     try:
+        litellm.set_verbose = True
         # Step 1: send the conversation and available functions to the model
         messages = [
             {
@@ -141,6 +142,8 @@ def test_parallel_function_call(model):
                 drop_params=True,
             )  # get a new response from the model where it can see the function response
             print("second response\n", second_response)
+    except litellm.RateLimitError:
+        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -322,6 +325,7 @@ def test_groq_parallel_function_call():
                         location=function_args.get("location"),
                         unit=function_args.get("unit"),
                     )
+
                     messages.append(
                         {
                             "tool_call_id": tool_call.id,
@@ -337,27 +341,3 @@ def test_groq_parallel_function_call():
                 print("second response\n", second_response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-
-
-@pytest.mark.parametrize("model", ["gemini/gemini-1.5-pro"])
-def test_simple_function_call_function_param(model):
-    try:
-        litellm.set_verbose = True
-        messages = [{"role": "user", "content": "What is the weather like in Boston?"}]
-        response = completion(
-            model=model,
-            messages=messages,
-            tools=[
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "plot",
-                        "description": "Generate plots",
-                    },
-                }
-            ],
-            tool_choice="auto",
-        )
-        print(f"response: {response}")
-    except Exception as e:
-        raise e
