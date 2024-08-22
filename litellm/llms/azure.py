@@ -1970,6 +1970,8 @@ class AzureChatCompletion(BaseLLM):
                 input=prompt,  # type: ignore
                 voice="alloy",
             )
+        elif mode == "batch":
+            completion = await client.batches.with_raw_response.list(limit=1)  # type: ignore
         else:
             raise Exception("mode not set")
         response = {}
