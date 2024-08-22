@@ -42,7 +42,6 @@ vertexai.init(
     api_endpoint=LITELLM_PROXY_BASE,
     credentials=credentials,
     api_transport="rest",
-    request_metadata=[("Authorization", f"Bearer {LITELLM_PROXY_API_KEY}")],
 )
 
 model = MultiModalEmbeddingModel.from_pretrained("multimodalembedding")
