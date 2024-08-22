@@ -4945,7 +4945,7 @@ async def create_batch(
         if provider is None:
             provider = "openai"
         response = await litellm.acreate_batch(
-            custom_llm_provider=provider, **_create_batch_data
+            custom_llm_provider=provider, **_create_batch_data  # type: ignore
         )
 
         ### ALERTING ###
@@ -5048,7 +5048,7 @@ async def retrieve_batch(
         if provider is None:
             provider = "openai"
         response = await litellm.aretrieve_batch(
-            custom_llm_provider=provider, **_retrieve_batch_request
+            custom_llm_provider=provider, **_retrieve_batch_request  # type: ignore
         )
 
         ### ALERTING ###
@@ -5146,7 +5146,7 @@ async def list_batches(
         if provider is None:
             provider = "openai"
         response = await litellm.alist_batches(
-            custom_llm_provider=provider,
+            custom_llm_provider=provider,  # type: ignore
             after=after,
             limit=limit,
         )
