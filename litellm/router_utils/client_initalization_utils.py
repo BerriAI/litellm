@@ -1,7 +1,7 @@
 import asyncio
 import os
 import traceback
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 import httpx
 import openai
@@ -173,6 +173,11 @@ def set_client(litellm_router_instance: LitellmRouter, model: dict):
             organization = litellm.get_secret(organization_env_name)
             litellm_params["organization"] = organization
 
+        azure_ad_token_provider = litellm_params.get("azure_ad_token_provider", None)
+        if azure_ad_token_provider is not None:
+            verbose_router_logger.debug("Using Azure AD Token Provider for Azure Auth")
+            azure_ad_token_provider = get_azure_ad_token_from_entrata_id()
+
         if custom_llm_provider == "azure" or custom_llm_provider == "azure_text":
             if api_base is None or not isinstance(api_base, str):
                 filtered_litellm_params = {
@@ -190,7 +195,9 @@ def set_client(litellm_router_instance: LitellmRouter, model: dict):
                 if azure_ad_token.startswith("oidc/"):
                     azure_ad_token = get_azure_ad_token_from_oidc(azure_ad_token)
             if api_version is None:
-                api_version = os.getenv("AZURE_API_VERSION", litellm.AZURE_DEFAULT_API_VERSION)
+                api_version = os.getenv(
+                    "AZURE_API_VERSION", litellm.AZURE_DEFAULT_API_VERSION
+                )
 
             if "gateway.ai.cloudflare.com" in api_base:
                 if not api_base.endswith("/"):
@@ -304,6 +311,11 @@ def set_client(litellm_router_instance: LitellmRouter, model: dict):
                     "api_version": api_version,
                     "azure_ad_token": azure_ad_token,
                 }
+
+                if azure_ad_token_provider is not None:
+                    azure_client_params["azure_ad_token_provider"] = (
+                        azure_ad_token_provider
+                    )
                 from litellm.llms.azure import select_azure_base_url_or_endpoint
 
                 # this decides if we should set azure_endpoint or base_url on Azure OpenAI Client
@@ -493,3 +505,17 @@ def set_client(litellm_router_instance: LitellmRouter, model: dict):
                     ttl=client_ttl,
                     local_only=True,
                 )  # cache for 1 hr
+
+
+def get_azure_ad_token_from_entrata_id() -> Callable[[], str]:
+    from azure.identity import DefaultAzureCredential, get_bearer_token_provider
+
+    verbose_router_logger.debug("Getting Azure AD Token from Entrata ID")
+
+    token_provider = get_bearer_token_provider(
+        DefaultAzureCredential(), "https://cognitiveservices.azure.com/.default"
+    )
+
+    verbose_router_logger.debug("token_provider %s", token_provider)
+
+    return token_provider
