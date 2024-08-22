@@ -733,7 +733,7 @@ async def delete_user(
     delete user and associated user keys
 
     ```
-    curl --location 'http://0.0.0.0:8000/team/delete' \
+    curl --location 'http://0.0.0.0:8000/user/delete' \
 
     --header 'Authorization: Bearer sk-1234' \
 
