@@ -261,6 +261,7 @@ const sidebars = {
           items: [
             "projects/Docq.AI",
             "projects/OpenInterpreter",
+            "projects/dbally",
             "projects/FastREPL",
             "projects/PROMPTMETHEUS",
             "projects/Codium PR Agent",
