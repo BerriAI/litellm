@@ -149,9 +149,7 @@ async def create_file(
         _create_file_request.update(llm_provider_config)
 
         # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
-        response = await litellm.acreate_file(
-            **_create_file_request, custom_llm_provider=custom_llm_provider  # type: ignore
-        )
+        response = await litellm.acreate_file(**_create_file_request)  # type: ignore
 
         ### ALERTING ###
         asyncio.create_task(
