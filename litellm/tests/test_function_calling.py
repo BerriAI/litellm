@@ -324,6 +324,7 @@ def test_groq_parallel_function_call():
                         location=function_args.get("location"),
                         unit=function_args.get("unit"),
                     )
+
                     messages.append(
                         {
                             "tool_call_id": tool_call.id,
