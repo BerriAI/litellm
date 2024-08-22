@@ -4219,6 +4219,7 @@ def get_supported_openai_params(
             "presence_penalty",
             "stop",
             "n",
+            "extra_headers",
         ]
     elif custom_llm_provider == "cohere_chat":
         return [
@@ -4233,6 +4234,7 @@ def get_supported_openai_params(
             "tools",
             "tool_choice",
             "seed",
+            "extra_headers",
         ]
     elif custom_llm_provider == "maritalk":
         return [
