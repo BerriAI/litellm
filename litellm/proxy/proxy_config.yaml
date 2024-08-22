@@ -6,13 +6,9 @@ model_list:
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
 
 guardrails:
-  - guardrail_name: "lakera-pre-guard"
+  - guardrail_name: "bedrock-pre-guard"
     litellm_params:
-      guardrail: lakera  # supported values: "aporia", "bedrock", "lakera"
+      guardrail: bedrock  # supported values: "aporia", "bedrock", "lakera"
       mode: "during_call"
-      api_key: os.environ/LAKERA_API_KEY
-      api_base: os.environ/LAKERA_API_BASE
-      category_thresholds:
-        prompt_injection: 0.1
-        jailbreak: 0.1
-  
+      guardrailIdentifier: ff6ujrregl1q
+      guardrailVersion: "DRAFT"
