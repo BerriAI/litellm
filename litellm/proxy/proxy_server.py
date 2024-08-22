@@ -3484,6 +3484,11 @@ async def embeddings(
         body = await request.body()
         data = orjson.loads(body)
 
+        verbose_proxy_logger.debug(
+            "Request received by LiteLLM:\n%s",
+            json.dumps(data, indent=4),
+        )
+
         # Include original request and headers in the data
         data = await add_litellm_data_to_request(
             data=data,
