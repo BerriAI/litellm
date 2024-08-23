@@ -1,20 +1,14 @@
 model_list:
-  - model_name: gpt-4
+  - model_name: fake-openai-endpoint
     litellm_params:
       model: openai/fake
       api_key: fake-key
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
-litellm_settings:
-  success_callback: ["prometheus"]
-  failure_callback: ["prometheus"]
+
 guardrails:
-  - guardrail_name: "lakera-pre-guard"
+  - guardrail_name: "bedrock-pre-guard"
     litellm_params:
-      guardrail: lakera  # supported values: "aporia", "bedrock", "lakera"
-      mode: "during_call"
-      api_key: os.environ/LAKERA_API_KEY
-      api_base: os.environ/LAKERA_API_BASE
-      category_thresholds:
-        prompt_injection: 0.1
-        jailbreak: 0.1
-  
+      guardrail: bedrock  # supported values: "aporia", "bedrock", "lakera"
+      mode: "post_call"
+      guardrailIdentifier: ff6ujrregl1q
+      guardrailVersion: "DRAFT"
