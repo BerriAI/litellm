@@ -4831,7 +4831,7 @@ def speech(
 async def ahealth_check(
     model_params: dict,
     mode: Optional[
-        Literal["completion", "embedding", "image_generation", "chat"]
+        Literal["completion", "embedding", "image_generation", "chat", "batch"]
     ] = None,
     prompt: Optional[str] = None,
     input: Optional[List] = None,
