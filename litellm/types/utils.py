@@ -1120,6 +1120,7 @@ all_litellm_params = [
     "tenant_id",
     "client_id",
     "client_secret",
+    "user_continue_message",
 ]
 
 

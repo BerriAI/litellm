@@ -60,6 +60,25 @@ class PrometheusLogger(CustomLogger):
                 ],
             )
 
+            # request latency metrics
+            self.litellm_request_total_latency_metric = Histogram(
+                "litellm_request_total_latency_metric",
+                "Total latency (seconds) for a request to LiteLLM",
+                labelnames=[
+                    "model",
+                    "litellm_call_id",
+                ],
+            )
+
+            self.litellm_llm_api_latency_metric = Histogram(
+                "litellm_llm_api_latency_metric",
+                "Total latency (seconds) for a models LLM API call",
+                labelnames=[
+                    "model",
+                    "litellm_call_id",
+                ],
+            )
+
             # Counter for spend
             self.litellm_spend_metric = Counter(
                 "litellm_spend_metric",
@@ -103,25 +122,26 @@ class PrometheusLogger(CustomLogger):
                 "Remaining budget for api key",
                 labelnames=["hashed_api_key", "api_key_alias"],
             )
+
+            ########################################
+            # LiteLLM Virtual API KEY metrics
+            ########################################
+            # Remaining MODEL RPM limit for API Key
+            self.litellm_remaining_api_key_requests_for_model = Gauge(
+                "litellm_remaining_api_key_requests_for_model",
+                "Remaining Requests API Key can make for model (model based rpm limit on key)",
+                labelnames=["hashed_api_key", "api_key_alias", "model"],
+            )
+
+            # Remaining MODEL TPM limit for API Key
+            self.litellm_remaining_api_key_tokens_for_model = Gauge(
+                "litellm_remaining_api_key_tokens_for_model",
+                "Remaining Tokens API Key can make for model (model based tpm limit on key)",
+                labelnames=["hashed_api_key", "api_key_alias", "model"],
+            )
+
             # Litellm-Enterprise Metrics
             if premium_user is True:
-
-                ########################################
-                # LiteLLM Virtual API KEY metrics
-                ########################################
-                # Remaining MODEL RPM limit for API Key
-                self.litellm_remaining_api_key_requests_for_model = Gauge(
-                    "litellm_remaining_api_key_requests_for_model",
-                    "Remaining Requests API Key can make for model (model based rpm limit on key)",
-                    labelnames=["hashed_api_key", "api_key_alias", "model"],
-                )
-
-                # Remaining MODEL TPM limit for API Key
-                self.litellm_remaining_api_key_tokens_for_model = Gauge(
-                    "litellm_remaining_api_key_tokens_for_model",
-                    "Remaining Tokens API Key can make for model (model based tpm limit on key)",
-                    labelnames=["hashed_api_key", "api_key_alias", "model"],
-                )
 
                 ########################################
                 # LLM API Deployment Metrics / analytics
@@ -327,6 +347,25 @@ class PrometheusLogger(CustomLogger):
         self.litellm_remaining_api_key_tokens_for_model.labels(
             user_api_key, user_api_key_alias, model_group
         ).set(remaining_tokens)
+
+        # latency metrics
+        total_time: timedelta = kwargs.get("end_time") - kwargs.get("start_time")
+        total_time_seconds = total_time.total_seconds()
+        api_call_total_time: timedelta = kwargs.get("end_time") - kwargs.get(
+            "api_call_start_time"
+        )
+
+        api_call_total_time_seconds = api_call_total_time.total_seconds()
+
+        litellm_call_id = kwargs.get("litellm_call_id")
+
+        self.litellm_request_total_latency_metric.labels(
+            model, litellm_call_id
+        ).observe(total_time_seconds)
+
+        self.litellm_llm_api_latency_metric.labels(model, litellm_call_id).observe(
+            api_call_total_time_seconds
+        )
 
         # set x-ratelimit headers
         if premium_user is True:
