@@ -66,7 +66,7 @@ const sidebars = {
         {
           type: "category",
           label: "🛡️ [Beta] Guardrails",
-          items: ["proxy/guardrails/quick_start", "proxy/guardrails/aporia_api", "proxy/guardrails/lakera_ai", "proxy/guardrails/bedrock", "prompt_injection"],
+          items: ["proxy/guardrails/quick_start", "proxy/guardrails/aporia_api", "proxy/guardrails/lakera_ai", "proxy/guardrails/bedrock",  "proxy/guardrails/custom_guardrail", "prompt_injection"],
         },
         {
           type: "category", 
