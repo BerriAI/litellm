@@ -51,6 +51,7 @@ jobs:
             pip install prisma==0.11.0   
             pip install "detect_secrets==1.5.0"         
             pip install "httpx==0.24.1"
+            pip install "respx==0.21.1"
             pip install fastapi
             pip install "gunicorn==21.2.0"
             pip install "anyio==3.7.1"
