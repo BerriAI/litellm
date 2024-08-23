@@ -499,3 +499,40 @@ def test_vertex_safety_settings(provider):
         model="gemini-1.5-pro", custom_llm_provider=provider
     )
     assert len(optional_params) == 1
+
+
+def test_parse_additional_properties_json_schema():
+    optional_params = get_optional_params(
+        model="gemini-1.5-pro",
+        custom_llm_provider="vertex_ai_beta",
+        response_format={
+            "type": "json_schema",
+            "json_schema": {
+                "name": "math_reasoning",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "steps": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "explanation": {"type": "string"},
+                                    "output": {"type": "string"},
+                                },
+                                "required": ["explanation", "output"],
+                                "additionalProperties": False,
+                            },
+                        },
+                        "final_answer": {"type": "string"},
+                    },
+                    "required": ["steps", "final_answer"],
+                    "additionalProperties": False,
+                },
+                "strict": True,
+            },
+        },
+    )
+
+    print(optional_params)
+    assert "additionalProperties" not in optional_params["response_schema"]
