@@ -1,4 +1,4 @@
-# Cohere API (Pass-Through)
+# Cohere API
 
 Pass-through endpoints for Cohere - call provider-specific endpoint, in native format (no translation).
 
