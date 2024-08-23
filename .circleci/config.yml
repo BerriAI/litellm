@@ -40,6 +40,7 @@ jobs:
             pip install "aioboto3==12.3.0"
             pip install langchain
             pip install lunary==0.2.5
+            pip install "azure-identity==1.16.1"
             pip install "langfuse==2.27.1"
             pip install "logfire==0.29.0"
             pip install numpydoc
