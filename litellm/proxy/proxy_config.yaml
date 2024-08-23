@@ -1,5 +1,5 @@
 model_list:
-  - model_name: gpt-4
+  - model_name: fake-openai-endpoint
     litellm_params:
       model: azure/chatgpt-v-2
       api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
@@ -9,13 +9,9 @@ model_list:
       client_secret: os.environ/AZURE_CLIENT_SECRET
 
 guardrails:
-  - guardrail_name: "lakera-pre-guard"
+  - guardrail_name: "bedrock-pre-guard"
     litellm_params:
-      guardrail: lakera  # supported values: "aporia", "bedrock", "lakera"
-      mode: "during_call"
-      api_key: os.environ/LAKERA_API_KEY
-      api_base: os.environ/LAKERA_API_BASE
-      category_thresholds:
-        prompt_injection: 0.1
-        jailbreak: 0.1
-  
+      guardrail: bedrock  # supported values: "aporia", "bedrock", "lakera"
+      mode: "post_call"
+      guardrailIdentifier: ff6ujrregl1q
+      guardrailVersion: "DRAFT"

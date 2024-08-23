@@ -2324,6 +2324,7 @@ def get_litellm_params(
     cooldown_time=None,
     text_completion=None,
     azure_ad_token_provider=None,
+    user_continue_message=None,
 ):
     litellm_params = {
         "acompletion": acompletion,
@@ -2349,6 +2350,7 @@ def get_litellm_params(
         "cooldown_time": cooldown_time,
         "text_completion": text_completion,
         "azure_ad_token_provider": azure_ad_token_provider,
+        "user_continue_message": user_continue_message,
     }
 
     return litellm_params
@@ -4221,6 +4223,7 @@ def get_supported_openai_params(
             "presence_penalty",
             "stop",
             "n",
+            "extra_headers",
         ]
     elif custom_llm_provider == "cohere_chat":
         return [
@@ -4235,6 +4238,7 @@ def get_supported_openai_params(
             "tools",
             "tool_choice",
             "seed",
+            "extra_headers",
         ]
     elif custom_llm_provider == "maritalk":
         return [
@@ -7119,6 +7123,14 @@ def exception_type(
                     exception_mapping_worked = True
                     raise BadRequestError(
                         message=f"BedrockException - {error_str}",
+                        model=model,
+                        llm_provider="bedrock",
+                        response=original_exception.response,
+                    )
+                elif "A conversation must start with a user message." in error_str:
+                    exception_mapping_worked = True
+                    raise BadRequestError(
+                        message=f"BedrockException - {error_str}\n. Pass in default user message via `completion(..,user_continue_message=)` or enable `litellm.modify_params=True`.\nFor Proxy: do via `litellm_settings::modify_params: True` or user_continue_message under `litellm_params`",
                         model=model,
                         llm_provider="bedrock",
                         response=original_exception.response,

@@ -68,6 +68,15 @@ http://localhost:4000/metrics
 | `litellm_total_tokens`         | input + output tokens per `"user", "key", "model", "team", "end-user"`     |
 | `litellm_llm_api_failed_requests_metric`   | Number of failed LLM API requests per `"user", "key", "model", "team", "end-user"`    |
 
+### Request Latency Metrics 
+
+| Metric Name          | Description                          |
+|----------------------|--------------------------------------|
+| `litellm_request_total_latency_metric`             | Total latency (seconds) for a request to LiteLLM Proxy Server - tracked for labels `litellm_call_id`, `model` |
+| `litellm_llm_api_latency_metric`             | latency (seconds) for just the LLM API call - tracked for labels `litellm_call_id`, `model` |
+
+
+
 ### LLM API / Provider Metrics
 
 | Metric Name          | Description                          |

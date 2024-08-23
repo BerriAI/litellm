@@ -84,6 +84,7 @@ BEDROCK_CONVERSE_MODELS = [
     "meta.llama3-1-8b-instruct-v1:0",
     "meta.llama3-1-70b-instruct-v1:0",
     "meta.llama3-1-405b-instruct-v1:0",
+    "meta.llama3-70b-instruct-v1:0",
     "mistral.mistral-large-2407-v1:0",
 ]
 
@@ -1480,7 +1481,7 @@ class BedrockConverseLLM(BaseAWSLLM):
         optional_params: dict,
         acompletion: bool,
         timeout: Optional[Union[float, httpx.Timeout]],
-        litellm_params=None,
+        litellm_params: dict,
         logger_fn=None,
         extra_headers: Optional[dict] = None,
         client: Optional[Union[AsyncHTTPHandler, HTTPHandler]] = None,
@@ -1596,6 +1597,14 @@ class BedrockConverseLLM(BaseAWSLLM):
         supported_tool_call_params = ["tools", "tool_choice"]
         supported_guardrail_params = ["guardrailConfig"]
         ## TRANSFORMATION ##
+
+        bedrock_messages: List[MessageBlock] = _bedrock_converse_messages_pt(
+            messages=messages,
+            model=model,
+            llm_provider="bedrock_converse",
+            user_continue_message=litellm_params.pop("user_continue_message", None),
+        )
+
         # send all model-specific params in 'additional_request_params'
         for k, v in inference_params.items():
             if (
@@ -1608,11 +1617,6 @@ class BedrockConverseLLM(BaseAWSLLM):
         for key in additional_request_keys:
             inference_params.pop(key, None)
 
-        bedrock_messages: List[MessageBlock] = _bedrock_converse_messages_pt(
-            messages=messages,
-            model=model,
-            llm_provider="bedrock_converse",
-        )
         bedrock_tools: List[ToolBlock] = _bedrock_tools_pt(
             inference_params.pop("tools", [])
         )

@@ -3653,6 +3653,7 @@ def test_completion_cohere():
         response = completion(
             model="command-r",
             messages=messages,
+            extra_headers={"Helicone-Property-Locale": "ko"},
         )
         print(response)
     except Exception as e:
