@@ -52,6 +52,22 @@ and keys will be stored like:
 litellm_caching:<hash>
 ```
 
+## Redis Cluster 
+
+```yaml
+model_list:
+  - model_name: "*"
+    litellm_params:
+      model: "*"
+
+
+litellm_settings:
+  cache: True
+  cache_params:
+    type: redis
+    redis_startup_nodes: [{"host": "127.0.0.1", "port": "7001"}] 
+```
+
 ## TTL
 
 ```yaml
