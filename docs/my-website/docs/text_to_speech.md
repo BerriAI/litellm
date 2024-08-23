@@ -1,6 +1,7 @@
 # Text to Speech
 
-## Quick Start 
+## **LiteLLM Python SDK Usage**
+### Quick Start 
 
 ```python
 from pathlib import Path
@@ -18,7 +19,7 @@ response = speech(
 response.stream_to_file(speech_file_path)
 ```
 
-## Async Usage 
+### Async Usage 
 
 ```python
 from litellm import aspeech
@@ -47,7 +48,7 @@ async def test_async_speech():
 asyncio.run(test_async_speech())
 ```
 
-## Proxy Usage 
+## **LiteLLM Proxy Usage**
 
 LiteLLM provides an openai-compatible `/audio/speech` endpoint for Text-to-speech calls.
 
