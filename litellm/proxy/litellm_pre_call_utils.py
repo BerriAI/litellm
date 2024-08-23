@@ -248,9 +248,11 @@ async def add_litellm_data_to_request(
         if "spend_logs_metadata" in data[_metadata_variable_name] and isinstance(
             data[_metadata_variable_name]["spend_logs_metadata"], dict
         ):
-            data[_metadata_variable_name]["spend_logs_metadata"].update(
-                key_metadata["spend_logs_metadata"]
-            )
+            for key, value in key_metadata["spend_logs_metadata"].items():
+                if (
+                    key not in data[_metadata_variable_name]["spend_logs_metadata"]
+                ):  # don't override k-v pair sent by request (user request)
+                    data[_metadata_variable_name]["spend_logs_metadata"][key] = value
         else:
             data[_metadata_variable_name]["spend_logs_metadata"] = key_metadata[
                 "spend_logs_metadata"
@@ -271,9 +273,11 @@ async def add_litellm_data_to_request(
         if "spend_logs_metadata" in data[_metadata_variable_name] and isinstance(
             data[_metadata_variable_name]["spend_logs_metadata"], dict
         ):
-            data[_metadata_variable_name]["spend_logs_metadata"].update(
-                team_metadata["spend_logs_metadata"]
-            )
+            for key, value in team_metadata["spend_logs_metadata"].items():
+                if (
+                    key not in data[_metadata_variable_name]["spend_logs_metadata"]
+                ):  # don't override k-v pair sent by request (user request)
+                    data[_metadata_variable_name]["spend_logs_metadata"][key] = value
         else:
             data[_metadata_variable_name]["spend_logs_metadata"] = team_metadata[
                 "spend_logs_metadata"
