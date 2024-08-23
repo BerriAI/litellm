@@ -117,3 +117,39 @@ async def test_audio_speech_router(mode):
     from litellm.llms.openai import HttpxBinaryResponseContent
 
     assert isinstance(response, HttpxBinaryResponseContent)
+
+
+@pytest.mark.parametrize(
+    "sync_mode",
+    [False],
+)
+@pytest.mark.asyncio
+async def test_audio_speech_litellm_vertex(sync_mode):
+    litellm.set_verbose = True
+    speech_file_path = Path(__file__).parent / "speech_vertex.mp3"
+    model = "vertex_ai/test"
+    if sync_mode:
+        response = litellm.speech(
+            model=model,
+            voice="alloy",
+            input="hello what llm guardrail do you have",
+        )
+
+        from types import SimpleNamespace
+
+        from litellm.llms.openai import HttpxBinaryResponseContent
+
+        response.stream_to_file(speech_file_path)
+
+    else:
+        response = await litellm.aspeech(
+            model=model,
+            voice="alloy",
+            input="async hello what llm guardrail do you have",
+        )
+
+        from types import SimpleNamespace
+
+        from litellm.llms.openai import HttpxBinaryResponseContent
+
+        response.stream_to_file(speech_file_path)
