@@ -182,6 +182,10 @@ class SagemakerLLM(BaseAWSLLM):
         else:
             api_base = f"https://runtime.sagemaker.{aws_region_name}.amazonaws.com/endpoints/{model}/invocations"
 
+        sagemaker_base_url = optional_params.get("sagemaker_base_url", None)
+        if sagemaker_base_url is not None:
+            api_base = sagemaker_base_url
+
         encoded_data = json.dumps(data).encode("utf-8")
         headers = {"Content-Type": "application/json"}
         if extra_headers is not None:
