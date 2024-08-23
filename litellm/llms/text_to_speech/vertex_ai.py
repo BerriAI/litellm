@@ -47,7 +47,6 @@ class VertexTextToSpeechAPI(VertexLLM):
     def audio_speech(
         self,
         logging_obj,
-        _is_async: bool,
         vertex_project: Optional[str],
         vertex_location: Optional[str],
         vertex_credentials: Optional[str],
@@ -56,6 +55,7 @@ class VertexTextToSpeechAPI(VertexLLM):
         model: str,
         input: str,
         voice: str,
+        _is_async: Optional[bool] = False,
         optional_params: Optional[dict] = None,
         **kwargs,
     ):
