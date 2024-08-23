@@ -123,7 +123,7 @@ For Azure models deployed as 'batch' models, set `mode: batch`.
 model_list:
   - model_name: "batch-gpt-4o-mini"
     litellm_params:
-      model: "azure/gpt-4o-mini"
+      model: "azure/batch-gpt-4o-mini"
       api_key: os.environ/AZURE_API_KEY
       api_base: os.environ/AZURE_API_BASE
     model_info:
