@@ -400,6 +400,7 @@ def hf_chat_template(model: str, messages: list, chat_template: Optional[Any] = 
             tokenizer_config = known_tokenizer_config[model]
         else:
             tokenizer_config = _get_tokenizer_config(model)
+            known_tokenizer_config.update({model: tokenizer_config})
 
         if (
             tokenizer_config["status"] == "failure"
