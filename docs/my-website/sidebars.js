@@ -41,6 +41,17 @@ const sidebars = {
         "proxy/demo",
         "proxy/configs",
         "proxy/reliability",
+        {
+          type: "category",
+          label: "Use with Vertex, Bedrock, Cohere SDK",
+          items: [
+            "pass_through/vertex_ai",
+            "pass_through/google_ai_studio",
+            "pass_through/cohere",
+            "pass_through/bedrock",
+            "pass_through/langfuse"
+          ],
+        },
         "proxy/cost_tracking",
         "proxy/custom_pricing",
         "proxy/self_serve",
@@ -195,11 +206,6 @@ const sidebars = {
         "batches",
         "fine_tuning",
         "anthropic_completion",
-        "pass_through/vertex_ai",
-        "pass_through/google_ai_studio",
-        "pass_through/cohere",
-        "pass_through/bedrock",
-        "pass_through/langfuse"
       ],
     },
     "scheduler",
