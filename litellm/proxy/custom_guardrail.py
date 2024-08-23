@@ -1,18 +1,4 @@
-import os
-import sys
-
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
-import asyncio
-import json
-import sys
-import traceback
-import uuid
-from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional, Union
-
-from fastapi import HTTPException
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -48,7 +34,13 @@ class myCustomGuardrail(CustomGuardrail):
             "pass_through_endpoint",
         ],
     ) -> Optional[Union[Exception, str, dict]]:
-        # In this guardrail, if a user inputs `litellm` we will mask it.
+        """
+        Runs before the LLM API call
+        Runs on only Input
+        Use this if you want to MODIFY the input
+        """
+
+        # In this guardrail, if a user inputs `litellm` we will mask it and then send it to the LLM
         _messages = data.get("messages")
         if _messages:
             for message in _messages:
@@ -73,6 +65,8 @@ class myCustomGuardrail(CustomGuardrail):
         """
         Runs in parallel to LLM API call
         Runs on only Input
+
+        This can NOT modify the input, only used to reject or accept a call before going to LLM API
         """
 
         # this works the same as async_pre_call_hook, but just runs in parallel as the LLM API Call
@@ -83,13 +77,7 @@ class myCustomGuardrail(CustomGuardrail):
                 _content = message.get("content")
                 if isinstance(_content, str):
                     if "litellm" in _content.lower():
-                        _content = _content.replace("litellm", "********")
-                        message["content"] = _content
-
-            verbose_proxy_logger.debug(
-                "async_pre_call_hook: Message after masking %s", _messages
-            )
-        pass
+                        raise ValueError("Guardrail failed words - `litellm` detected")
 
     async def async_post_call_success_hook(
         self,
@@ -99,6 +87,8 @@ class myCustomGuardrail(CustomGuardrail):
     ):
         """
         Runs on response from LLM API call
+
+        It can be used to reject a response
 
         If a response contains the word "coffee" -> we will raise an exception
         """
