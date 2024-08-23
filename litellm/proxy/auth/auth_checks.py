@@ -66,7 +66,7 @@ def common_checks(
         raise Exception(
             f"Team={team_object.team_id} is blocked. Update via `/team/unblock` if your admin."
         )
-    # 2. If user can call model
+    # 2. If team can call model
     if (
         _model is not None
         and team_object is not None
@@ -74,7 +74,11 @@ def common_checks(
         and _model not in team_object.models
     ):
         # this means the team has access to all models on the proxy
-        if "all-proxy-models" in team_object.models:
+        if (
+            "all-proxy-models" in team_object.models
+            or "*" in team_object.models
+            or "openai/*" in team_object.models
+        ):
             # this means the team has access to all models on the proxy
             pass
         # check if the team model is an access_group

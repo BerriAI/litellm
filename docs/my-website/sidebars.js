@@ -41,6 +41,18 @@ const sidebars = {
         "proxy/demo",
         "proxy/configs",
         "proxy/reliability",
+        {
+          type: "category",
+          label: "Use with Vertex, Bedrock, Cohere SDK",
+          items: [
+            "pass_through/vertex_ai",
+            "pass_through/google_ai_studio",
+            "pass_through/cohere",
+            "anthropic_completion",
+            "pass_through/bedrock",
+            "pass_through/langfuse"
+          ],
+        },
         "proxy/cost_tracking",
         "proxy/custom_pricing",
         "proxy/self_serve",
@@ -54,7 +66,7 @@ const sidebars = {
         {
           type: "category",
           label: "🛡️ [Beta] Guardrails",
-          items: ["proxy/guardrails/quick_start", "proxy/guardrails/aporia_api", "proxy/guardrails/lakera_ai"],
+          items: ["proxy/guardrails/quick_start", "proxy/guardrails/aporia_api", "proxy/guardrails/lakera_ai", "proxy/guardrails/bedrock", "prompt_injection"],
         },
         {
           type: "category", 
@@ -186,20 +198,17 @@ const sidebars = {
       label: "Supported Endpoints - /images, /audio/speech, /assistants etc",
       items: [
         "embedding/supported_embedding",
-        "embedding/async_embedding",
-        "embedding/moderation",
         "image_generation",
         "audio_transcription",
         "text_to_speech",
         "assistants",
         "batches",
         "fine_tuning",
-        "anthropic_completion",
-        "pass_through/vertex_ai",
-        "pass_through/google_ai_studio",
-        "pass_through/cohere",
-        "pass_through/bedrock",
-        "pass_through/langfuse"
+        {
+          type: "link",
+          label: "Use LiteLLM Proxy with Vertex, Bedrock SDK",
+          href: "/docs/pass_through/vertex_ai",
+        },
       ],
     },
     "scheduler",
@@ -211,6 +220,8 @@ const sidebars = {
         "set_keys",
         "completion/token_usage",
         "sdk_custom_pricing",
+        "embedding/async_embedding",
+        "embedding/moderation",
         "budget_manager",
         "caching/all_caches",
         "migration",
@@ -276,8 +287,6 @@ const sidebars = {
         "migration_policy",
         "contributing",
         "rules",
-        "old_guardrails",
-        "prompt_injection",
         "proxy_server",
         {
           type: "category",
@@ -292,6 +301,7 @@ const sidebars = {
           items: [
             "projects/Docq.AI",
             "projects/OpenInterpreter",
+            "projects/dbally",
             "projects/FastREPL",
             "projects/PROMPTMETHEUS",
             "projects/Codium PR Agent",

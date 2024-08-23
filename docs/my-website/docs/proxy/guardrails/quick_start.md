@@ -175,3 +175,64 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 ```
 
 
+
+### ✨ Disable team from turning on/off guardrails
+
+:::info
+
+✨ This is an Enterprise only feature [Contact us to get a free trial](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+
+:::
+
+
+#### 1. Disable team from modifying guardrails 
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/team/update' \
+-H 'Authorization: Bearer sk-1234' \
+-H 'Content-Type: application/json' \
+-D '{
+    "team_id": "4198d93c-d375-4c83-8d5a-71e7c5473e50",
+    "metadata": {"guardrails": {"modify_guardrails": false}}
+}'
+```
+
+#### 2. Try to disable guardrails for a call 
+
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+--header 'Content-Type: application/json' \
+--header 'Authorization: Bearer $LITELLM_VIRTUAL_KEY' \
+--data '{
+"model": "gpt-3.5-turbo",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Think of 10 random colors."
+      }
+    ],
+    "metadata": {"guardrails": {"hide_secrets": false}}
+}'
+```
+
+#### 3. Get 403 Error
+
+```
+{
+    "error": {
+        "message": {
+            "error": "Your team does not have permission to modify guardrails."
+        },
+        "type": "auth_error",
+        "param": "None",
+        "code": 403
+    }
+}
+```
+
+Expect to NOT see `+1 412-612-9992` in your server logs on your callback. 
+
+:::info
+The `pii_masking` guardrail ran on this request because api key=sk-jNm1Zar7XfNdZXp49Z1kSQ has `"permissions": {"pii_masking": true}`
+:::
+
