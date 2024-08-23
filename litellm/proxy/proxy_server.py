@@ -4884,6 +4884,11 @@ async def run_thread(
 
 
 ######################################################################
+@router.get(
+    "/{provider}/v1/batches",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["batch"],
+)
 @router.post(
     "/v1/batches",
     dependencies=[Depends(user_api_key_auth)],
@@ -4897,6 +4902,7 @@ async def run_thread(
 async def create_batch(
     request: Request,
     fastapi_response: Response,
+    provider: Optional[str] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -4943,9 +4949,10 @@ async def create_batch(
 
         _create_batch_data = CreateBatchRequest(**data)
 
-        # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
+        if provider is None:
+            provider = "openai"
         response = await litellm.acreate_batch(
-            custom_llm_provider="openai", **_create_batch_data
+            custom_llm_provider=provider, **_create_batch_data  # type: ignore
         )
 
         ### ALERTING ###
@@ -5002,6 +5009,11 @@ async def create_batch(
 
 
 @router.get(
+    "/{provider}/v1/batches/{batch_id:path}",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["batch"],
+)
+@router.get(
     "/v1/batches/{batch_id:path}",
     dependencies=[Depends(user_api_key_auth)],
     tags=["batch"],
@@ -5015,6 +5027,7 @@ async def retrieve_batch(
     request: Request,
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    provider: Optional[str] = None,
     batch_id: str = Path(
         title="Batch ID to retrieve", description="The ID of the batch to retrieve"
     ),
@@ -5039,9 +5052,10 @@ async def retrieve_batch(
             batch_id=batch_id,
         )
 
-        # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
+        if provider is None:
+            provider = "openai"
         response = await litellm.aretrieve_batch(
-            custom_llm_provider="openai", **_retrieve_batch_request
+            custom_llm_provider=provider, **_retrieve_batch_request  # type: ignore
         )
 
         ### ALERTING ###
@@ -5099,6 +5113,11 @@ async def retrieve_batch(
 
 
 @router.get(
+    "/{provider}/v1/batches",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["batch"],
+)
+@router.get(
     "/v1/batches",
     dependencies=[Depends(user_api_key_auth)],
     tags=["batch"],
@@ -5110,6 +5129,7 @@ async def retrieve_batch(
 )
 async def list_batches(
     fastapi_response: Response,
+    provider: Optional[str] = None,
     limit: Optional[int] = None,
     after: Optional[str] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -5130,9 +5150,10 @@ async def list_batches(
     global proxy_logging_obj
     verbose_proxy_logger.debug("GET /v1/batches after={} limit={}".format(after, limit))
     try:
-        # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
+        if provider is None:
+            provider = "openai"
         response = await litellm.alist_batches(
-            custom_llm_provider="openai",
+            custom_llm_provider=provider,  # type: ignore
             after=after,
             limit=limit,
         )

@@ -78,7 +78,7 @@ def is_port_in_use(port):
 @click.option("--api_base", default=None, help="API base URL.")
 @click.option(
     "--api_version",
-    default="2024-02-01",
+    default="2024-07-01-preview",
     help="For azure - pass in the api version.",
 )
 @click.option(
