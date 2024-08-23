@@ -198,7 +198,6 @@ const sidebars = {
       label: "Supported Endpoints - /images, /audio/speech, /assistants etc",
       items: [
         "embedding/supported_embedding",
-        "embedding/async_embedding",
         "image_generation",
         "audio_transcription",
         "text_to_speech",
@@ -221,6 +220,7 @@ const sidebars = {
         "set_keys",
         "completion/token_usage",
         "sdk_custom_pricing",
+        "embedding/async_embedding",
         "embedding/moderation",
         "budget_manager",
         "caching/all_caches",
