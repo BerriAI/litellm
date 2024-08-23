@@ -144,6 +144,7 @@ async def test_no_llm_guard_triggered():
 
         assert "x-litellm-applied-guardrails" not in headers
 
+
 @pytest.mark.asyncio
 async def test_guardrails_with_api_key_controls():
     """
@@ -194,3 +195,25 @@ async def test_guardrails_with_api_key_controls():
         except Exception as e:
             print(e)
             assert "Aporia detected and blocked PII" in str(e)
+
+
+@pytest.mark.asyncio
+async def test_bedrock_guardrail_triggered():
+    """
+    - Tests a request where our bedrock guardrail should be triggered
+    - Assert that the guardrails applied are returned in the response headers
+    """
+    async with aiohttp.ClientSession() as session:
+        try:
+            response, headers = await chat_completion(
+                session,
+                "sk-1234",
+                model="fake-openai-endpoint",
+                messages=[{"role": "user", "content": f"Hello do you like coffee?"}],
+                guardrails=["bedrock-pre-guard"],
+            )
+            pytest.fail("Should have thrown an exception")
+        except Exception as e:
+            print(e)
+            assert "GUARDRAIL_INTERVENED" in str(e)
+            assert "Violated guardrail policy" in str(e)

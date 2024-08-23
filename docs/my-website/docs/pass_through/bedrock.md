@@ -1,4 +1,4 @@
-# Bedrock (Pass-Through)
+# Bedrock SDK
 
 Pass-through endpoints for Bedrock - call provider-specific endpoint, in native format (no translation).
 

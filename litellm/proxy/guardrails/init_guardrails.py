@@ -96,8 +96,10 @@ def init_guardrails_v2(all_guardrails: dict):
         litellm_params = LitellmParams(
             guardrail=litellm_params_data["guardrail"],
             mode=litellm_params_data["mode"],
-            api_key=litellm_params_data["api_key"],
-            api_base=litellm_params_data["api_base"],
+            api_key=litellm_params_data.get("api_key"),
+            api_base=litellm_params_data.get("api_base"),
+            guardrailIdentifier=litellm_params_data.get("guardrailIdentifier"),
+            guardrailVersion=litellm_params_data.get("guardrailVersion"),
         )
 
         if (
@@ -134,6 +136,18 @@ def init_guardrails_v2(all_guardrails: dict):
                 event_hook=litellm_params["mode"],
             )
             litellm.callbacks.append(_aporia_callback)  # type: ignore
+        if litellm_params["guardrail"] == "bedrock":
+            from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
+                BedrockGuardrail,
+            )
+
+            _bedrock_callback = BedrockGuardrail(
+                guardrail_name=guardrail["guardrail_name"],
+                event_hook=litellm_params["mode"],
+                guardrailIdentifier=litellm_params["guardrailIdentifier"],
+                guardrailVersion=litellm_params["guardrailVersion"],
+            )
+            litellm.callbacks.append(_bedrock_callback)  # type: ignore
         elif litellm_params["guardrail"] == "lakera":
             from litellm.proxy.guardrails.guardrail_hooks.lakera_ai import (
                 lakeraAI_Moderation,
