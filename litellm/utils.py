@@ -10611,6 +10611,7 @@ class CustomStreamWrapper:
                 or self.custom_llm_provider == "vertex_ai"
                 or self.custom_llm_provider == "vertex_ai_beta"
                 or self.custom_llm_provider == "sagemaker"
+                or self.custom_llm_provider == "sagemaker_chat"
                 or self.custom_llm_provider == "gemini"
                 or self.custom_llm_provider == "replicate"
                 or self.custom_llm_provider == "cached_response"

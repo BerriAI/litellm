@@ -85,6 +85,40 @@ async def test_completion_sagemaker(sync_mode):
 
 
 @pytest.mark.asyncio()
+@pytest.mark.parametrize(
+    "sync_mode",
+    [True, False],
+)
+async def test_completion_sagemaker_messages_api(sync_mode):
+    try:
+        litellm.set_verbose = True
+        verbose_logger.setLevel(logging.DEBUG)
+        print("testing sagemaker")
+        if sync_mode is True:
+            resp = litellm.completion(
+                model="sagemaker_chat/huggingface-pytorch-tgi-inference-2024-08-23-15-48-59-245",
+                messages=[
+                    {"role": "user", "content": "hi"},
+                ],
+                temperature=0.2,
+                max_tokens=80,
+            )
+            print(resp)
+        else:
+            resp = await litellm.acompletion(
+                model="sagemaker_chat/huggingface-pytorch-tgi-inference-2024-08-23-15-48-59-245",
+                messages=[
+                    {"role": "user", "content": "hi"},
+                ],
+                temperature=0.2,
+                max_tokens=80,
+            )
+            print(resp)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.asyncio()
 @pytest.mark.parametrize("sync_mode", [False, True])
 async def test_completion_sagemaker_stream(sync_mode):
     try:
