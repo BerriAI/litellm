@@ -804,6 +804,38 @@ def test_redis_cache_completion_stream():
 # test_redis_cache_completion_stream()
 
 
+@pytest.mark.skip(reason="Local test. Requires running redis cluster locally.")
+@pytest.mark.asyncio
+async def test_redis_cache_cluster_init_unit_test():
+    try:
+        from redis.asyncio import RedisCluster as AsyncRedisCluster
+        from redis.cluster import RedisCluster
+
+        from litellm.caching import RedisCache
+
+        litellm.set_verbose = True
+
+        # List of startup nodes
+        startup_nodes = [
+            {"host": "127.0.0.1", "port": "7001"},
+        ]
+
+        resp = RedisCache(startup_nodes=startup_nodes)
+
+        assert isinstance(resp.redis_client, RedisCluster)
+        assert isinstance(resp.init_async_client(), AsyncRedisCluster)
+
+        resp = litellm.Cache(type="redis", redis_startup_nodes=startup_nodes)
+
+        assert isinstance(resp.cache, RedisCache)
+        assert isinstance(resp.cache.redis_client, RedisCluster)
+        assert isinstance(resp.cache.init_async_client(), AsyncRedisCluster)
+
+    except Exception as e:
+        print(f"{str(e)}\n\n{traceback.format_exc()}")
+        raise e
+
+
 @pytest.mark.asyncio
 async def test_redis_cache_acompletion_stream():
     try:
