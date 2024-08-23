@@ -2893,10 +2893,13 @@ def get_optional_params(
             response_format=non_default_params["response_format"]
         )
         # # clean out 'additionalProperties = False'. Causes vertexai/gemini OpenAI API Schema errors - https://github.com/langchain-ai/langchainjs/issues/5240
-        if (
-            non_default_params["response_format"].get("json_schema", {}).get("schema")
-            is not None
-        ):
+        if non_default_params["response_format"].get("json_schema", {}).get(
+            "schema"
+        ) is not None and custom_llm_provider in [
+            "gemini",
+            "vertex_ai",
+            "vertex_ai_beta",
+        ]:
             old_schema = copy.deepcopy(
                 non_default_params["response_format"]
                 .get("json_schema", {})
