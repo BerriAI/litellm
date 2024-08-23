@@ -738,8 +738,9 @@ def test_bedrock_system_prompt(system, model):
             "temperature": 0.3,
             "messages": [
                 {"role": "system", "content": system},
-                {"role": "user", "content": "hey, how's it going?"},
+                {"role": "assistant", "content": "hey, how's it going?"},
             ],
+            "user_continue_message": {"role": "user", "content": "Be a good bot!"},
         }
         response: ModelResponse = completion(
             model="bedrock/{}".format(model),

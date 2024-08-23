@@ -116,12 +116,14 @@ class CohereChatConfig:
         }
 
 
-def validate_environment(api_key):
-    headers = {
-        "Request-Source": "unspecified:litellm",
-        "accept": "application/json",
-        "content-type": "application/json",
-    }
+def validate_environment(api_key, headers: dict):
+    headers.update(
+        {
+            "Request-Source": "unspecified:litellm",
+            "accept": "application/json",
+            "content-type": "application/json",
+        }
+    )
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
     return headers
@@ -203,13 +205,14 @@ def completion(
     model_response: ModelResponse,
     print_verbose: Callable,
     optional_params: dict,
+    headers: dict,
     encoding,
     api_key,
     logging_obj,
     litellm_params=None,
     logger_fn=None,
 ):
-    headers = validate_environment(api_key)
+    headers = validate_environment(api_key, headers=headers)
     completion_url = api_base
     model = model
     most_recent_message, chat_history = cohere_messages_pt_v2(

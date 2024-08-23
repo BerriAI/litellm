@@ -1588,7 +1588,7 @@ class ProxyConfig:
                         verbose_proxy_logger.debug(  # noqa
                             f"{blue_color_code}Set Cache on LiteLLM Proxy: {vars(litellm.cache.cache)}{reset_color_code}"
                         )
-                elif key == "cache" and value == False:
+                elif key == "cache" and value is False:
                     pass
                 elif key == "guardrails":
                     if premium_user is not True:
@@ -2672,6 +2672,13 @@ def giveup(e):
         and isinstance(e.message, str)
         and "Max parallel request limit reached" in e.message
     )
+
+    if (
+        general_settings.get("disable_retry_on_max_parallel_request_limit_error")
+        is True
+    ):
+        return True  # giveup if queuing max parallel request limits is disabled
+
     if result:
         verbose_proxy_logger.info(json.dumps({"event": "giveup", "exception": str(e)}))
     return result
