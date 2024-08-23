@@ -752,7 +752,8 @@ general_settings:
     },
     "otel": true,
     "custom_auth": "string",
-    "max_parallel_requests": 0,
+    "max_parallel_requests": 0, # the max parallel requests allowed per deployment 
+    "global_max_parallel_requests": 0, # the max parallel requests allowed on the proxy all up 
     "infer_model_from_keys": true,
     "background_health_checks": true,
     "health_check_interval": 300,
