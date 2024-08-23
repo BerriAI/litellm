@@ -501,10 +501,14 @@ def test_vertex_safety_settings(provider):
     assert len(optional_params) == 1
 
 
-def test_parse_additional_properties_json_schema():
+@pytest.mark.parametrize(
+    "model, provider, expectedAddProp",
+    [("gemini-1.5-pro", "vertex_ai_beta", False), ("gpt-3.5-turbo", "openai", True)],
+)
+def test_parse_additional_properties_json_schema(model, provider, expectedAddProp):
     optional_params = get_optional_params(
-        model="gemini-1.5-pro",
-        custom_llm_provider="vertex_ai_beta",
+        model=model,
+        custom_llm_provider=provider,
         response_format={
             "type": "json_schema",
             "json_schema": {
@@ -535,4 +539,9 @@ def test_parse_additional_properties_json_schema():
     )
 
     print(optional_params)
-    assert "additionalProperties" not in optional_params["response_schema"]
+
+    if provider == "vertex_ai_beta":
+        schema = optional_params["response_schema"]
+    elif provider == "openai":
+        schema = optional_params["response_format"]["json_schema"]["schema"]
+    assert ("additionalProperties" in schema) == expectedAddProp
