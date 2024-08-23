@@ -217,3 +217,24 @@ async def test_bedrock_guardrail_triggered():
             print(e)
             assert "GUARDRAIL_INTERVENED" in str(e)
             assert "Violated guardrail policy" in str(e)
+
+
+@pytest.mark.asyncio
+async def test_custom_guardrail_during_call_triggered():
+    """
+    - Tests a request where our bedrock guardrail should be triggered
+    - Assert that the guardrails applied are returned in the response headers
+    """
+    async with aiohttp.ClientSession() as session:
+        try:
+            response, headers = await chat_completion(
+                session,
+                "sk-1234",
+                model="fake-openai-endpoint",
+                messages=[{"role": "user", "content": f"Hello do you like litellm?"}],
+                guardrails=["custom-during-guard"],
+            )
+            pytest.fail("Should have thrown an exception")
+        except Exception as e:
+            print(e)
+            assert "Guardrail failed words - `litellm` detected" in str(e)
