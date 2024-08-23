@@ -18,15 +18,15 @@ class CustomGuardrail(CustomLogger):
         super().__init__(**kwargs)
 
     def should_run_guardrail(self, data, event_type: GuardrailEventHooks) -> bool:
+        metadata = data.get("metadata") or {}
+        requested_guardrails = metadata.get("guardrails") or []
         verbose_logger.debug(
-            "inside should_run_guardrail for guardrail=%s event_type= %s guardrail_supported_event_hooks= %s",
+            "inside should_run_guardrail for guardrail=%s event_type= %s guardrail_supported_event_hooks= %s requested_guardrails= %s",
             self.guardrail_name,
             event_type,
             self.event_hook,
+            requested_guardrails,
         )
-
-        metadata = data.get("metadata") or {}
-        requested_guardrails = metadata.get("guardrails") or []
 
         if self.guardrail_name not in requested_guardrails:
             return False
