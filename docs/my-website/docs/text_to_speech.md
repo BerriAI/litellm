@@ -78,6 +78,13 @@ litellm --config /path/to/config.yaml
 
 # RUNNING on http://0.0.0.0:4000
 ```
+## **Supported Providers**
+
+| Provider    | Link to Usage      |
+|-------------|--------------------|
+| OpenAI      |                    |
+| Azure OpenAI|                    |
+| Vertex AI   |   [Usage](../docs/providers/vertex#text-to-speech-apis)                 |
 
 ## Azure Usage 
 
