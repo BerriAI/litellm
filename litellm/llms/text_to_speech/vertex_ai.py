@@ -54,7 +54,7 @@ class VertexTextToSpeechAPI(VertexLLM):
         timeout: Union[float, httpx.Timeout],
         model: str,
         input: str,
-        voice: str,
+        voice: Optional[str] = None,
         _is_async: Optional[bool] = False,
         optional_params: Optional[dict] = None,
         **kwargs,
