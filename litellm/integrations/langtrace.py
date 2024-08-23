@@ -39,7 +39,7 @@ class LangtraceLogger(CustomLogger):
 
             optional_params = kwargs.get("optional_params", {})
             options = {**kwargs, **optional_params}
-            self.set_request_attributes(span, options)
+            self.set_request_attributes(span, options, vendor)
             self.set_response_attributes(span, response_obj)
             self.set_usage_attributes(span, response_obj)
 
@@ -47,12 +47,13 @@ class LangtraceLogger(CustomLogger):
         except Exception as e:
             print_verbose(f"LangtraceLogger Error - {traceback.format_exc()}")
 
-    def set_request_attributes(self, span, kwargs):
+    def set_request_attributes(self, span, kwargs, vendor):
         """
         This function is used to get span attributes for the LLM request
         """
         span_attributes = {
             "gen_ai.operation.name": "chat",
+            "langtrace.service.name": vendor,
             SpanAttributes.LLM_REQUEST_MODEL.value: kwargs.get("model"),
             SpanAttributes.LLM_IS_STREAMING.value: kwargs.get("stream"),
             SpanAttributes.LLM_REQUEST_TEMPERATURE.value: kwargs.get("temperature"),
