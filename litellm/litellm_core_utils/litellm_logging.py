@@ -354,6 +354,8 @@ class Logging:
                             str(e)
                         )
                     )
+
+            self.model_call_details["api_call_start_time"] = datetime.datetime.now()
             # Input Integration Logging -> If you want to log the fact that an attempt to call the model was made
             callbacks = litellm.input_callback + self.dynamic_input_callbacks
             for callback in callbacks:
