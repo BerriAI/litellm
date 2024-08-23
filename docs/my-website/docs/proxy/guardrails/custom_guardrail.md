@@ -10,6 +10,16 @@ Use this is you want to write code to run a custom guardrail
 
 ### 1. Write a `CustomGuardrail` Class
 
+A CustomGuardrail has 3 methods to enforce guardrails 
+- `async_pre_call_hook` - (Optional) modify input or reject request before making LLM API call
+- `async_moderation_hook` - (Optional) reject request, runs while making LLM API call (help to lower latency)
+- `async_post_call_success_hook`- (Optional) apply guardrail on input/output, runs after making LLM API call
+
+**[See detailed spec of methods here](#customguardrail-methods)**
+
+**Example `CustomGuardrail` Class**
+
+Create a new file called `custom_guardrail.py` and add this code to it
 ```python
 from typing import Any, Dict, List, Literal, Optional, Union
 
@@ -122,10 +132,7 @@ class myCustomGuardrail(CustomGuardrail):
 
 ### 2. Pass your custom guardrail class in LiteLLM `config.yaml`
 
-We pass the custom callback class defined in **Step1** to the config.yaml. 
-Set `callbacks` to `python_filename.logger_instance_name`
-
-In the config below, we pass
+In the config below, we point the guardrail to our custom guardrail by setting `guardrail: custom_guardrail.myCustomGuardrail`
 
 - Python Filename: `custom_guardrail.py`
 - Guardrail class name : `myCustomGuardrail`. This is defined in Step 1
@@ -142,7 +149,7 @@ model_list:
 guardrails:
   - guardrail_name: "custom-pre-guard"
     litellm_params:
-      guardrail: custom_guardrail.myCustomGuardrail  
+      guardrail: custom_guardrail.myCustomGuardrail  # 👈 Key change
       mode: "pre_call"                  # runs async_pre_call_hook
   - guardrail_name: "custom-during-guard"
     litellm_params:
@@ -172,7 +179,7 @@ litellm --config config.yaml --detailed_debug
 <Tabs>
 <TabItem label="Modify input" value = "not-allowed">
 
-Expect this to mask the word `litellm` before sending the request to the LLM API
+Expect this to mask the word `litellm` before sending the request to the LLM API. [This runs the `async_pre_call_hook`](#1-write-a-customguardrail-class)
 
 ```shell
 curl -i  -X POST http://localhost:4000/v1/chat/completions \
@@ -252,7 +259,8 @@ curl -i http://localhost:4000/v1/chat/completions \
 <Tabs>
 <TabItem label="Unsuccessful call" value = "not-allowed">
 
-Expect this to fail since since `litellm` is in the message content
+Expect this to fail since since `litellm` is in the message content. [This runs the `async_moderation_hook`](#1-write-a-customguardrail-class)
+
 
 ```shell
 curl -i  -X POST http://localhost:4000/v1/chat/completions \
@@ -315,7 +323,8 @@ curl -i http://localhost:4000/v1/chat/completions \
 <Tabs>
 <TabItem label="Unsuccessful call" value = "not-allowed">
 
-Expect this to fail since since `coffee` will be in the response content
+Expect this to fail since since `coffee` will be in the response content. [This runs the `async_post_call_success_hook`](#1-write-a-customguardrail-class)
+
 
 ```shell
 curl -i  -X POST http://localhost:4000/v1/chat/completions \
