@@ -1,3 +1,4 @@
+import importlib
 import traceback
 from typing import Dict, List, Literal
 
@@ -83,7 +84,10 @@ Map guardrail_name: <pre_call>, <post_call>, during_call
 """
 
 
-def init_guardrails_v2(all_guardrails: dict):
+def init_guardrails_v2(
+    all_guardrails: dict,
+    config_file_path: str,
+):
     # Convert the loaded data to the TypedDict structure
     guardrail_list = []
 
@@ -161,6 +165,43 @@ def init_guardrails_v2(all_guardrails: dict):
                 category_thresholds=litellm_params.get("category_thresholds"),
             )
             litellm.callbacks.append(_lakera_callback)  # type: ignore
+        elif (
+            isinstance(litellm_params["guardrail"], str)
+            and "." in litellm_params["guardrail"]
+        ):
+            import os
+
+            from litellm.proxy.utils import get_instance_fn
+
+            # Custom guardrail
+            _guardrail = litellm_params["guardrail"]
+            _file_name, _class_name = _guardrail.split(".")
+            verbose_proxy_logger.debug(
+                "Initializing custom guardrail: %s, file_name: %s, class_name: %s",
+                _guardrail,
+                _file_name,
+                _class_name,
+            )
+
+            directory = os.path.dirname(config_file_path)
+            module_file_path = os.path.join(directory, _file_name)
+            module_file_path += ".py"
+
+            spec = importlib.util.spec_from_file_location(_class_name, module_file_path)  # type: ignore
+            if spec is None:
+                raise ImportError(
+                    f"Could not find a module specification for {module_file_path}"
+                )
+
+            module = importlib.util.module_from_spec(spec)  # type: ignore
+            spec.loader.exec_module(module)  # type: ignore
+            _guardrail_class = getattr(module, _class_name)
+
+            _guardrail_callback = _guardrail_class(
+                guardrail_name=guardrail["guardrail_name"],
+                event_hook=litellm_params["mode"],
+            )
+            litellm.callbacks.append(_guardrail_callback)  # type: ignore
 
         parsed_guardrail = Guardrail(
             guardrail_name=guardrail["guardrail_name"],
@@ -169,6 +210,5 @@ def init_guardrails_v2(all_guardrails: dict):
 
         guardrail_list.append(parsed_guardrail)
         guardrail_name = guardrail["guardrail_name"]
-
     # pretty print guardrail_list in green
     print(f"\nGuardrail List:{guardrail_list}\n")  # noqa
