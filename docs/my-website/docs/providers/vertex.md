@@ -1610,6 +1610,33 @@ $ litellm --config /path/to/config.yaml
 
 3. Make Request use OpenAI Python SDK
 
+
+```python
+import openai
+
+client = openai.OpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+
+# # request sent to model set on litellm proxy, `litellm --model`
+response = client.embeddings.create(
+    model="multimodalembedding@001", 
+    input = None,
+    extra_body = {
+        "instances": [
+        {
+            "image": {
+                "bytesBase64Encoded": "base64"
+            },
+            "text": "this is a unicorn",
+        },
+    ],
+    }
+)
+
+print(response)
+```
+
+
+
 ```python
 import openai
 
