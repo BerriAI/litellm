@@ -77,6 +77,7 @@ from ..integrations.prompt_layer import PromptLayerLogger
 from ..integrations.s3 import S3Logger
 from ..integrations.supabase import Supabase
 from ..integrations.traceloop import TraceloopLogger
+from ..integrations.langtrace import LangtraceLogger
 from ..integrations.weights_biases import WeightsBiasesLogger
 
 _in_memory_loggers: List[Any] = []
@@ -1090,6 +1091,27 @@ class Logging:
                             end_time=end_time,
                             print_verbose=print_verbose,
                         )
+                    if callback == "langtrace":
+                        kwargs = {}
+                        for k, v in self.model_call_details.items():
+                            if (
+                                k != "original_response"
+                            ):  # copy.deepcopy raises errors as this could be a coroutine
+                                kwargs[k] = v
+                        # this only logs streaming once, complete_streaming_response exists i.e when stream ends
+                        if self.stream:
+                            if complete_streaming_response is None:
+                                continue
+                            else:
+                                result = kwargs["complete_streaming_response"]
+
+                        langtraceLogger.log_event(
+                            kwargs=kwargs,
+                            response_obj=result,
+                            start_time=start_time,
+                            end_time=end_time,
+                            print_verbose=print_verbose,
+                        )
                     if callback == "traceloop":
                         deep_copy = {}
                         for k, v in self.model_call_details.items():
@@ -1874,7 +1896,7 @@ def set_callbacks(callback_list, function_id=None):
     """
     Globally sets the callback client
     """
-    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, athinaLogger, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, lunaryLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, logfireLogger, dynamoLogger, s3Logger, dataDogLogger, prometheusLogger, greenscaleLogger, openMeterLogger
+    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, athinaLogger, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, lunaryLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, logfireLogger, dynamoLogger, s3Logger, dataDogLogger, prometheusLogger, greenscaleLogger, openMeterLogger, langtraceLogger
 
     try:
         for callback in callback_list:
@@ -1929,6 +1951,8 @@ def set_callbacks(callback_list, function_id=None):
                 print_verbose(f"Initialized Slack App: {slack_app}")
             elif callback == "traceloop":
                 traceloopLogger = TraceloopLogger()
+            elif callback == "langtrace":
+                langtraceLogger = LangtraceLogger()
             elif callback == "athina":
                 athinaLogger = AthinaLogger()
                 print_verbose("Initialized Athina Logger")
