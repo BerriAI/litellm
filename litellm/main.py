@@ -4699,7 +4699,7 @@ async def aspeech(*args, **kwargs) -> HttpxBinaryResponseContent:
 def speech(
     model: str,
     input: str,
-    voice: str,
+    voice: Optional[str] = None,
     api_key: Optional[str] = None,
     api_base: Optional[str] = None,
     api_version: Optional[str] = None,
@@ -4735,6 +4735,12 @@ def speech(
     logging_obj = kwargs.get("litellm_logging_obj", None)
     response: Optional[HttpxBinaryResponseContent] = None
     if custom_llm_provider == "openai":
+        if voice is None:
+            raise litellm.BadRequestError(
+                message="'voice' is required for OpenAI TTS",
+                model=model,
+                llm_provider=custom_llm_provider,
+            )
         api_base = (
             api_base  # for deepinfra/perplexity/anyscale/groq/friendliai we check in get_llm_provider and pass in the api base from there
             or litellm.api_base
@@ -4781,6 +4787,12 @@ def speech(
         )
     elif custom_llm_provider == "azure":
         # azure configs
+        if voice is None:
+            raise litellm.BadRequestError(
+                message="'voice' is required for Azure TTS",
+                model=model,
+                llm_provider=custom_llm_provider,
+            )
         api_base = api_base or litellm.api_base or get_secret("AZURE_API_BASE")  # type: ignore
 
         api_version = (
