@@ -21,20 +21,38 @@ class LangtraceLogger(CustomLogger):
 
         self.tracer = get_tracer(__name__)
 
+    def get_timestamps_ns(self, start_time, end_time):
+        """
+        This function is used to get the timestamps in nanoseconds
+        """
+        _start_time_ns = 0
+        _end_time_ns = 0
+
+        if isinstance(start_time, float):
+            _start_time_ns = int(int(start_time) * 1e9)
+        else:
+            _start_time_ns = int(start_time.timestamp() * 1e9)
+
+        if isinstance(end_time, float):
+            _end_time_ns = int(int(end_time) * 1e9)
+        else:
+            _end_time_ns = int(end_time.timestamp() * 1e9)
+
+        return _start_time_ns, _end_time_ns
+
     def log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
         """
         This function is used to log the event to Langtrace
         """
         try:
-            from opentelemetry.trace import SpanKind, Status, StatusCode
+            from opentelemetry.trace import SpanKind
 
-            start_time = int(start_time.timestamp())
-            end_time = int(end_time.timestamp())
+            _start_time_ns, _end_time_ns = self.get_timestamps_ns(start_time, end_time)
             vendor = kwargs.get("litellm_params").get("custom_llm_provider")
             span = self.tracer.start_span(
                 name=f"chat {kwargs.get('model')}",
                 kind=SpanKind.CLIENT,
-                start_time=start_time,
+                start_time=_start_time_ns,
             )
 
             optional_params = kwargs.get("optional_params", {})
@@ -43,7 +61,7 @@ class LangtraceLogger(CustomLogger):
             self.set_response_attributes(span, response_obj)
             self.set_usage_attributes(span, response_obj)
 
-            span.end()
+            span.end(end_time=_end_time_ns)
         except Exception as e:
             print_verbose(f"LangtraceLogger Error - {traceback.format_exc()}")
 
