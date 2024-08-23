@@ -66,7 +66,6 @@ class PrometheusLogger(CustomLogger):
                 "Total latency (seconds) for a request to LiteLLM",
                 labelnames=[
                     "model",
-                    "litellm_call_id",
                 ],
             )
 
@@ -75,7 +74,6 @@ class PrometheusLogger(CustomLogger):
                 "Total latency (seconds) for a models LLM API call",
                 labelnames=[
                     "model",
-                    "litellm_call_id",
                 ],
             )
 
@@ -357,13 +355,11 @@ class PrometheusLogger(CustomLogger):
 
         api_call_total_time_seconds = api_call_total_time.total_seconds()
 
-        litellm_call_id = kwargs.get("litellm_call_id")
-
-        self.litellm_request_total_latency_metric.labels(
-            model, litellm_call_id
-        ).observe(total_time_seconds)
-
-        self.litellm_llm_api_latency_metric.labels(model, litellm_call_id).observe(
+        # log metrics
+        self.litellm_request_total_latency_metric.labels(model).observe(
+            total_time_seconds
+        )
+        self.litellm_llm_api_latency_metric.labels(model).observe(
             api_call_total_time_seconds
         )
 
