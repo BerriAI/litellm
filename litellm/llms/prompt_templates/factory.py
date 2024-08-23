@@ -14,6 +14,7 @@ import litellm
 import litellm.types
 import litellm.types.llms
 import litellm.types.llms.vertex_ai
+from litellm import verbose_logger
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.types.completion import (
     ChatCompletionFunctionMessageParam,
@@ -380,12 +381,14 @@ def hf_chat_template(model: str, messages: list, chat_template: Optional[Any] = 
     if chat_template is None:
 
         def _get_tokenizer_config(hf_model_name):
-            url = (
-                f"https://huggingface.co/{hf_model_name}/raw/main/tokenizer_config.json"
-            )
-            # Make a GET request to fetch the JSON data
-            client = HTTPHandler(concurrent_limit=1)
-            response = client.get(url)
+            try:
+                url = f"https://huggingface.co/{hf_model_name}/raw/main/tokenizer_config.json"
+                # Make a GET request to fetch the JSON data
+                client = HTTPHandler(concurrent_limit=1)
+
+                response = client.get(url)
+            except Exception as e:
+                raise e
             if response.status_code == 200:
                 # Parse the JSON data
                 tokenizer_config = json.loads(response.content)
@@ -397,6 +400,7 @@ def hf_chat_template(model: str, messages: list, chat_template: Optional[Any] = 
             tokenizer_config = known_tokenizer_config[model]
         else:
             tokenizer_config = _get_tokenizer_config(model)
+
         if (
             tokenizer_config["status"] == "failure"
             or "chat_template" not in tokenizer_config["tokenizer"]
@@ -406,7 +410,13 @@ def hf_chat_template(model: str, messages: list, chat_template: Optional[Any] = 
         tokenizer_config = tokenizer_config["tokenizer"]  # type: ignore
 
         bos_token = tokenizer_config["bos_token"]  # type: ignore
+        if bos_token is not None and not isinstance(bos_token, str):
+            if isinstance(bos_token, dict):
+                bos_token = bos_token.get("content", None)
         eos_token = tokenizer_config["eos_token"]  # type: ignore
+        if eos_token is not None and not isinstance(eos_token, str):
+            if isinstance(eos_token, dict):
+                eos_token = eos_token.get("content", None)
         chat_template = tokenizer_config["chat_template"]  # type: ignore
     try:
         template = env.from_string(chat_template)  # type: ignore
@@ -431,7 +441,10 @@ def hf_chat_template(model: str, messages: list, chat_template: Optional[Any] = 
         # Render the template with the provided values
         if _is_system_in_template():
             rendered_text = template.render(
-                bos_token=bos_token, eos_token=eos_token, messages=messages
+                bos_token=bos_token,
+                eos_token=eos_token,
+                messages=messages,
+                add_generation_prompt=True,
             )
         else:
             # treat a system message as a user message, if system not in template
@@ -448,6 +461,7 @@ def hf_chat_template(model: str, messages: list, chat_template: Optional[Any] = 
                     bos_token=bos_token,
                     eos_token=eos_token,
                     messages=reformatted_messages,
+                    add_generation_prompt=True,
                 )
             except Exception as e:
                 if "Conversation roles must alternate user/assistant" in str(e):
@@ -469,8 +483,12 @@ def hf_chat_template(model: str, messages: list, chat_template: Optional[Any] = 
                     rendered_text = template.render(
                         bos_token=bos_token, eos_token=eos_token, messages=new_messages
                     )
+
         return rendered_text
     except Exception as e:
+        verbose_logger.exception(
+            "Error rendering huggingface chat template - {}".format(str(e))
+        )
         raise Exception(f"Error rendering template - {str(e)}")
 
 

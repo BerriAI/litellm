@@ -179,6 +179,9 @@ class HuggingfaceConfig:
                 optional_params["decoder_input_details"] = True
         return optional_params
 
+    def get_hf_api_key(self) -> Optional[str]:
+        return litellm.utils.get_secret("HUGGINGFACE_API_KEY")
+
 
 def output_parser(generated_text: str):
     """
