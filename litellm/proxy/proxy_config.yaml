@@ -1,8 +1,9 @@
 model_list:
   - model_name: fake-openai-endpoint
     litellm_params:
-      model: openai/gpt-4
-      api_key: os.environ/OPENAI_API_KEY
+      model: openai/fake
+      api_key: fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
 
 guardrails:
   - guardrail_name: "bedrock-pre-guard"
