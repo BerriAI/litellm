@@ -1959,7 +1959,9 @@ class ProxyConfig:
         # Guardrail settings
         guardrails_v2 = config.get("guardrails", None)
         if guardrails_v2:
-            init_guardrails_v2(all_guardrails=guardrails_v2)
+            init_guardrails_v2(
+                all_guardrails=guardrails_v2, config_file_path=config_file_path
+            )
         return router, router.get_model_list(), general_settings
 
     def get_model_info_with_id(self, model, db_model=False) -> RouterModelInfo:
