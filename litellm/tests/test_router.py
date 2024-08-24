@@ -2254,7 +2254,9 @@ def test_router_dynamic_cooldown_correct_retry_after_time(sync_mode):
         assert response_headers["retry-after"] == cooldown_time
 
 
-def test_router_dynamic_cooldown_message_retry_time():
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_router_dynamic_cooldown_message_retry_time(sync_mode):
     """
     User feedback: litellm says "No deployments available for selected model, Try again in 60 seconds"
     but Azure says to retry in at most 9s
@@ -2294,19 +2296,49 @@ def test_router_dynamic_cooldown_message_retry_time():
     ):
         for _ in range(2):
             try:
+                if sync_mode:
+                    router.embedding(
+                        model="text-embedding-ada-002",
+                        input="Hello world!",
+                        client=openai_client,
+                    )
+                else:
+                    await router.aembedding(
+                        model="text-embedding-ada-002",
+                        input="Hello world!",
+                        client=openai_client,
+                    )
+            except litellm.RateLimitError:
+                pass
+
+        if sync_mode:
+            cooldown_deployments = router._get_cooldown_deployments()
+        else:
+            cooldown_deployments = await router._async_get_cooldown_deployments()
+        print(
+            "Cooldown deployments - {}\n{}".format(
+                cooldown_deployments, len(cooldown_deployments)
+            )
+        )
+
+        assert len(cooldown_deployments) > 0
+        exception_raised = False
+        try:
+            if sync_mode:
                 router.embedding(
                     model="text-embedding-ada-002",
                     input="Hello world!",
                     client=openai_client,
                 )
-            except litellm.RateLimitError:
-                pass
-
-        try:
-            router.embedding(
-                model="text-embedding-ada-002",
-                input="Hello world!",
-                client=openai_client,
-            )
+            else:
+                await router.aembedding(
+                    model="text-embedding-ada-002",
+                    input="Hello world!",
+                    client=openai_client,
+                )
         except litellm.types.router.RouterRateLimitError as e:
+            print(e)
+            exception_raised = True
             assert e.cooldown_time == cooldown_time
+
+        assert exception_raised
