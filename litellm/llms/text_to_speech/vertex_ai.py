@@ -57,7 +57,7 @@ class VertexTextToSpeechAPI(VertexLLM):
         voice: Optional[dict] = None,
         _is_async: Optional[bool] = False,
         optional_params: Optional[dict] = None,
-        **kwargs,
+        kwargs: Optional[dict] = None,
     ):
         import base64
 
@@ -87,10 +87,11 @@ class VertexTextToSpeechAPI(VertexLLM):
         vertex_input = VertexInput(text=input)
         # required param
         optional_params = optional_params or {}
+        kwargs = kwargs or {}
         if voice is not None:
             vertex_voice = VertexVoice(**voice)
-        elif "voice" in optional_params:
-            vertex_voice = VertexVoice(**optional_params["voice"])
+        elif "voice" in kwargs:
+            vertex_voice = VertexVoice(**kwargs["voice"])
         else:
             # use defaults to not fail the request
             vertex_voice = VertexVoice(
@@ -98,8 +99,8 @@ class VertexTextToSpeechAPI(VertexLLM):
                 name="en-US-Studio-O",
             )
 
-        if "audioConfig" in optional_params:
-            vertex_audio_config = VertexAudioConfig(**optional_params["audioConfig"])
+        if "audioConfig" in kwargs:
+            vertex_audio_config = VertexAudioConfig(**kwargs["audioConfig"])
         else:
             # use defaults to not fail the request
             vertex_audio_config = VertexAudioConfig(

@@ -4867,6 +4867,7 @@ def speech(
             input=input,
             voice=voice,
             optional_params=optional_params,
+            kwargs=kwargs,
             logging_obj=logging_obj,
         )
 
