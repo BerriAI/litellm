@@ -619,6 +619,8 @@ class Huggingface(BaseLLM):
 
             # SSL certificates (a.k.a CA bundle) used to verify the identity of requested hosts.
             ssl_verify = os.getenv("SSL_VERIFY", litellm.ssl_verify)
+            if ssl_verify in ["True", "False"]:
+                ssl_verify = bool(ssl_verify)
 
             if acompletion is True:
                 ### ASYNC STREAMING
@@ -634,7 +636,7 @@ class Huggingface(BaseLLM):
                     headers=headers,
                     data=json.dumps(data),
                     stream=optional_params["stream"],
-                    verify=ssl_verify
+                    verify=ssl_verify,
                 )
                 return response.iter_lines()
             ### SYNC COMPLETION
@@ -643,7 +645,7 @@ class Huggingface(BaseLLM):
                     completion_url,
                     headers=headers,
                     data=json.dumps(data),
-                    verify=ssl_verify
+                    verify=ssl_verify,
                 )
 
                 ## Some servers might return streaming responses even though stream was not set to true. (e.g. Baseten)
