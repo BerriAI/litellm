@@ -17,14 +17,17 @@ from litellm.proxy._types import (
     DeleteTeamRequest,
     LiteLLM_AuditLogs,
     LiteLLM_ModelTable,
+    LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
     LiteLLM_TeamTableCachedObj,
+    LiteLLM_UserTable,
     LitellmTableNames,
     LitellmUserRoles,
     Member,
     NewTeamRequest,
     ProxyErrorTypes,
     ProxyException,
+    TeamAddMemberResponse,
     TeamMemberAddRequest,
     TeamMemberDeleteRequest,
     UpdateTeamRequest,
@@ -413,6 +416,7 @@ async def update_team(
     "/team/member_add",
     tags=["team management"],
     dependencies=[Depends(user_api_key_auth)],
+    response_model=TeamAddMemberResponse,
 )
 @management_endpoint_wrapper
 async def team_member_add(
@@ -514,29 +518,64 @@ async def team_member_add(
         data={"members_with_roles": json.dumps(_db_team_members)},  # type: ignore
     )
 
+    updated_users: List[LiteLLM_UserTable] = []
+    updated_team_memberships: List[LiteLLM_TeamMembership] = []
+
     if isinstance(data.member, Member):
-        await add_new_member(
-            new_member=data.member,
-            max_budget_in_team=data.max_budget_in_team,
-            prisma_client=prisma_client,
-            user_api_key_dict=user_api_key_dict,
-            litellm_proxy_admin_name=litellm_proxy_admin_name,
-            team_id=data.team_id,
-        )
-    elif isinstance(data.member, List):
-        tasks: List = []
-        for m in data.member:
-            await add_new_member(
-                new_member=m,
+        try:
+            updated_user, updated_tm = await add_new_member(
+                new_member=data.member,
                 max_budget_in_team=data.max_budget_in_team,
                 prisma_client=prisma_client,
                 user_api_key_dict=user_api_key_dict,
                 litellm_proxy_admin_name=litellm_proxy_admin_name,
                 team_id=data.team_id,
             )
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "error": "Unable to add user - {}, to team - {}, for reason - {}".format(
+                        data.member, data.team_id, str(e)
+                    )
+                },
+            )
+
+        updated_users.append(updated_user)
+        if updated_tm is not None:
+            updated_team_memberships.append(updated_tm)
+    elif isinstance(data.member, List):
+        tasks: List = []
+        for m in data.member:
+            try:
+                updated_user, updated_tm = await add_new_member(
+                    new_member=m,
+                    max_budget_in_team=data.max_budget_in_team,
+                    prisma_client=prisma_client,
+                    user_api_key_dict=user_api_key_dict,
+                    litellm_proxy_admin_name=litellm_proxy_admin_name,
+                    team_id=data.team_id,
+                )
+            except Exception as e:
+                raise HTTPException(
+                    status_code=500,
+                    detail={
+                        "error": "Unable to add user - {}, to team - {}, for reason - {}".format(
+                            data.member, data.team_id, str(e)
+                        )
+                    },
+                )
+            updated_users.append(updated_user)
+            if updated_tm is not None:
+                updated_team_memberships.append(updated_tm)
+
         await asyncio.gather(*tasks)
 
-    return updated_team
+    return TeamAddMemberResponse(
+        **updated_team.model_dump(),
+        updated_users=updated_users,
+        updated_team_memberships=updated_team_memberships,
+    )
 
 
 @router.post(
