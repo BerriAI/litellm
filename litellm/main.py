@@ -121,6 +121,7 @@ from .llms.prompt_templates.factory import (
 )
 from .llms.sagemaker import SagemakerLLM
 from .llms.text_completion_codestral import CodestralTextCompletion
+from .llms.text_to_speech.vertex_ai import VertexTextToSpeechAPI
 from .llms.triton import TritonChatCompletion
 from .llms.vertex_ai_partner import VertexAIPartnerModels
 from .llms.vertex_httpx import VertexLLM
@@ -165,6 +166,7 @@ bedrock_chat_completion = BedrockLLM()
 bedrock_converse_chat_completion = BedrockConverseLLM()
 vertex_chat_completion = VertexLLM()
 vertex_partner_models_chat_completion = VertexAIPartnerModels()
+vertex_text_to_speech = VertexTextToSpeechAPI()
 watsonxai = IBMWatsonXAI()
 sagemaker_llm = SagemakerLLM()
 ####### COMPLETION ENDPOINTS ################
@@ -381,6 +383,7 @@ async def acompletion(
             or custom_llm_provider == "vertex_ai_beta"
             or custom_llm_provider == "gemini"
             or custom_llm_provider == "sagemaker"
+            or custom_llm_provider == "sagemaker_chat"
             or custom_llm_provider == "anthropic"
             or custom_llm_provider == "predibase"
             or custom_llm_provider == "bedrock"
@@ -945,7 +948,6 @@ def completion(
             text_completion=kwargs.get("text_completion"),
             azure_ad_token_provider=kwargs.get("azure_ad_token_provider"),
             user_continue_message=kwargs.get("user_continue_message"),
-
         )
         logging.update_environment_variables(
             model=model,
@@ -2247,7 +2249,10 @@ def completion(
 
             ## RESPONSE OBJECT
             response = model_response
-        elif custom_llm_provider == "sagemaker":
+        elif (
+            custom_llm_provider == "sagemaker"
+            or custom_llm_provider == "sagemaker_chat"
+        ):
             # boto3 reads keys from .env
             model_response = sagemaker_llm.completion(
                 model=model,
@@ -2262,6 +2267,9 @@ def completion(
                 encoding=encoding,
                 logging_obj=logging,
                 acompletion=acompletion,
+                use_messages_api=(
+                    True if custom_llm_provider == "sagemaker_chat" else False
+                ),
             )
             if optional_params.get("stream", False):
                 ## LOGGING
@@ -4698,7 +4706,7 @@ async def aspeech(*args, **kwargs) -> HttpxBinaryResponseContent:
 def speech(
     model: str,
     input: str,
-    voice: str,
+    voice: Optional[Union[str, dict]] = None,
     api_key: Optional[str] = None,
     api_base: Optional[str] = None,
     api_version: Optional[str] = None,
@@ -4730,8 +4738,16 @@ def speech(
 
     if max_retries is None:
         max_retries = litellm.num_retries or openai.DEFAULT_MAX_RETRIES
+
+    logging_obj = kwargs.get("litellm_logging_obj", None)
     response: Optional[HttpxBinaryResponseContent] = None
     if custom_llm_provider == "openai":
+        if voice is None or not (isinstance(voice, str)):
+            raise litellm.BadRequestError(
+                message="'voice' is required to be passed as a string for OpenAI TTS",
+                model=model,
+                llm_provider=custom_llm_provider,
+            )
         api_base = (
             api_base  # for deepinfra/perplexity/anyscale/groq/friendliai we check in get_llm_provider and pass in the api base from there
             or litellm.api_base
@@ -4778,6 +4794,12 @@ def speech(
         )
     elif custom_llm_provider == "azure":
         # azure configs
+        if voice is None or not (isinstance(voice, str)):
+            raise litellm.BadRequestError(
+                message="'voice' is required to be passed as a string for Azure TTS",
+                model=model,
+                llm_provider=custom_llm_provider,
+            )
         api_base = api_base or litellm.api_base or get_secret("AZURE_API_BASE")  # type: ignore
 
         api_version = (
@@ -4814,6 +4836,46 @@ def speech(
             timeout=timeout,
             client=client,  # pass AsyncOpenAI, OpenAI client
             aspeech=aspeech,
+        )
+    elif custom_llm_provider == "vertex_ai" or custom_llm_provider == "vertex_ai_beta":
+        from litellm.types.router import GenericLiteLLMParams
+
+        generic_optional_params = GenericLiteLLMParams(**kwargs)
+
+        api_base = generic_optional_params.api_base or ""
+        vertex_ai_project = (
+            generic_optional_params.vertex_project
+            or litellm.vertex_project
+            or get_secret("VERTEXAI_PROJECT")
+        )
+        vertex_ai_location = (
+            generic_optional_params.vertex_location
+            or litellm.vertex_location
+            or get_secret("VERTEXAI_LOCATION")
+        )
+        vertex_credentials = generic_optional_params.vertex_credentials or get_secret(
+            "VERTEXAI_CREDENTIALS"
+        )
+
+        if voice is not None and not isinstance(voice, dict):
+            raise litellm.BadRequestError(
+                message=f"'voice' is required to be passed as a dict for Vertex AI TTS, passed in voice={voice}",
+                model=model,
+                llm_provider=custom_llm_provider,
+            )
+        response = vertex_text_to_speech.audio_speech(
+            _is_async=aspeech,
+            vertex_credentials=vertex_credentials,
+            vertex_project=vertex_ai_project,
+            vertex_location=vertex_ai_location,
+            timeout=timeout,
+            api_base=api_base,
+            model=model,
+            input=input,
+            voice=voice,
+            optional_params=optional_params,
+            kwargs=kwargs,
+            logging_obj=logging_obj,
         )
 
     if response is None:

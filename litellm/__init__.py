@@ -111,7 +111,7 @@ common_cloud_provider_auth_params: dict = {
     "providers": ["vertex_ai", "bedrock", "watsonx", "azure", "vertex_ai_beta"],
 }
 use_client: bool = False
-ssl_verify: bool = True
+ssl_verify: Union[str, bool] = True
 ssl_certificate: Optional[str] = None
 disable_streaming_logging: bool = False
 in_memory_llm_clients_cache: dict = {}
@@ -669,6 +669,7 @@ provider_list: List = [
     "azure_text",
     "azure_ai",
     "sagemaker",
+    "sagemaker_chat",
     "bedrock",
     "vllm",
     "nlp_cloud",

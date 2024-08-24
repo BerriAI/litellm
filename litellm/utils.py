@@ -3125,6 +3125,8 @@ def get_optional_params(
             optional_params["tools"] = tools
         if tool_choice is not None:
             optional_params["tool_choice"] = tool_choice
+        if response_format is not None:
+            optional_params["response_format"] = response_format
     elif custom_llm_provider == "ai21":
         ## check if unsupported param passed in
         supported_params = get_supported_openai_params(
@@ -10614,6 +10616,7 @@ class CustomStreamWrapper:
                 or self.custom_llm_provider == "vertex_ai"
                 or self.custom_llm_provider == "vertex_ai_beta"
                 or self.custom_llm_provider == "sagemaker"
+                or self.custom_llm_provider == "sagemaker_chat"
                 or self.custom_llm_provider == "gemini"
                 or self.custom_llm_provider == "replicate"
                 or self.custom_llm_provider == "cached_response"

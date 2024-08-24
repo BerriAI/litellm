@@ -245,22 +245,65 @@ class SagemakerLLM(BaseAWSLLM):
     def completion(
         self,
         model: str,
-        messages: list,
+                messages: list,
         model_response: ModelResponse,
         print_verbose: Callable,
         encoding,
         logging_obj,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
         custom_prompt_dict={},
         hf_model_name=None,
         optional_params=None,
         litellm_params=None,
         logger_fn=None,
         acompletion: bool = False,
+        use_messages_api: Optional[bool] = None,
     ):
 
         # pop streaming if it's in the optional params as 'stream' raises an error with sagemaker
         credentials, aws_region_name = self._load_credentials(optional_params)
         inference_params = deepcopy(optional_params)
+        stream = inference_params.pop("stream", None)
+        model_id = optional_params.get("model_id", None)
+
+        if use_messages_api is True:
+            from litellm.llms.databricks import DatabricksChatCompletion
+
+            openai_like_chat_completions = DatabricksChatCompletion()
+            inference_params["stream"] = True if stream is True else False
+            _data = {
+                "model": model,
+                "messages": messages,
+                **inference_params,
+            }
+
+            prepared_request = self._prepare_request(
+                model=model,
+                data=_data,
+                optional_params=optional_params,
+                credentials=credentials,
+                aws_region_name=aws_region_name,
+            )
+
+            return openai_like_chat_completions.completion(
+                model=model,
+                messages=messages,
+                api_base=prepared_request.url,
+                api_key=None,
+                custom_prompt_dict=custom_prompt_dict,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                logging_obj=logging_obj,
+                optional_params=inference_params,
+                acompletion=acompletion,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                timeout=timeout,
+                encoding=encoding,
+                headers=prepared_request.headers,
+                custom_endpoint=True,
+                custom_llm_provider="sagemaker_chat",
+            )
 
         ## Load Config
         config = litellm.SagemakerConfig.get_config()
@@ -270,11 +313,23 @@ class SagemakerLLM(BaseAWSLLM):
             ):  # completion(top_k=3) > sagemaker_config(top_k=3) <- allows for dynamic variables to be passed in
                 inference_params[k] = v
 
-        stream = inference_params.pop("stream", None)
-        model_id = optional_params.get("model_id", None)
 
         if stream is True:
             data = {"parameters": inference_params, "stream": True}
+            prepared_request = self._prepare_request(
+                model=model,
+                data=data,
+                optional_params=optional_params,
+                credentials=credentials,
+                aws_region_name=aws_region_name,
+            )
+            if model_id is not None:
+                # Add model_id as InferenceComponentName header
+                # boto3 doc: https://docs.aws.amazon.com/sagemaker/latest/APIReference/API_runtime_InvokeEndpoint.html
+                prepared_request.headers.update(
+                    {"X-Amzn-SageMaker-Inference-Component": model_id}
+                )
+
             if acompletion is True:
                 response = self.async_streaming(
                     messages=messages,
@@ -388,7 +443,7 @@ class SagemakerLLM(BaseAWSLLM):
                 # Add model_id as InferenceComponentName header
                 # boto3 doc: https://docs.aws.amazon.com/sagemaker/latest/APIReference/API_runtime_InvokeEndpoint.html
                 prepared_request.headers.update(
-                    {"X-Amzn-SageMaker-Inference-Componen": model_id}
+                    {"X-Amzn-SageMaker-Inference-Component": model_id}
                 )
 
             ## LOGGING

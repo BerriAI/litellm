@@ -311,6 +311,24 @@ except Exception as e:
 server_root_path = os.getenv("SERVER_ROOT_PATH", "")
 _license_check = LicenseCheck()
 premium_user: bool = _license_check.is_premium()
+global_max_parallel_request_retries_env: Optional[str] = os.getenv(
+    "LITELLM_GLOBAL_MAX_PARALLEL_REQUEST_RETRIES"
+)
+if global_max_parallel_request_retries_env is None:
+    global_max_parallel_request_retries: int = 3
+else:
+    global_max_parallel_request_retries = int(global_max_parallel_request_retries_env)
+
+global_max_parallel_request_retry_timeout_env: Optional[str] = os.getenv(
+    "LITELLM_GLOBAL_MAX_PARALLEL_REQUEST_RETRY_TIMEOUT"
+)
+if global_max_parallel_request_retry_timeout_env is None:
+    global_max_parallel_request_retry_timeout: float = 60.0
+else:
+    global_max_parallel_request_retry_timeout = float(
+        global_max_parallel_request_retry_timeout_env
+    )
+
 ui_link = f"{server_root_path}/ui/"
 ui_message = (
     f"👉 [```LiteLLM Admin Panel on /ui```]({ui_link}). Create, Edit Keys with SSO"
@@ -3021,8 +3039,8 @@ def model_list(
 @backoff.on_exception(
     backoff.expo,
     Exception,  # base exception to catch for the backoff
-    max_tries=litellm.num_retries or 3,  # maximum number of retries
-    max_time=litellm.request_timeout or 60,  # maximum total time to retry for
+    max_tries=global_max_parallel_request_retries,  # maximum number of retries
+    max_time=global_max_parallel_request_retry_timeout,  # maximum total time to retry for
     on_backoff=on_backoff,  # specifying the function to call on backoff
     giveup=giveup,
     logger=verbose_proxy_logger,
@@ -4886,7 +4904,7 @@ async def run_thread(
 
 
 ######################################################################
-@router.get(
+@router.post(
     "/{provider}/v1/batches",
     dependencies=[Depends(user_api_key_auth)],
     tags=["batch"],
