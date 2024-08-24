@@ -1814,3 +1814,15 @@ class CreatePassThroughEndpoint(LiteLLMBase):
     path: str
     target: str
     headers: dict
+
+
+class LiteLLM_TeamMembership(LiteLLMBase):
+    user_id: str
+    team_id: str
+    budget_id: str
+    litellm_budget_table: Optional[LiteLLM_BudgetTable]
+
+
+class TeamAddMemberResponse(LiteLLM_TeamTable):
+    updated_users: List[LiteLLM_UserTable]
+    updated_team_memberships: List[LiteLLM_TeamMembership]
