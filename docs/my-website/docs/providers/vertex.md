@@ -1768,6 +1768,89 @@ response = await litellm.aimage_generation(
 )
 ```
 
+## **Text to Speech APIs**
+
+:::info
+
+LiteLLM supports calling [Vertex AI Text to Speech API](https://console.cloud.google.com/vertex-ai/generative/speech/text-to-speech) in the OpenAI text to speech API format
+
+:::
+
+
+
+Usage
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+Vertex AI does not support passing a `model` param - so passing `model=vertex_ai/` is the only required param
+
+**Sync Usage**
+
+```python
+speech_file_path = Path(__file__).parent / "speech_vertex.mp3"
+response = litellm.speech(
+    model="vertex_ai/",
+    input="hello what llm guardrail do you have",
+)
+response.stream_to_file(speech_file_path)
+```
+
+**Async Usage**
+```python
+speech_file_path = Path(__file__).parent / "speech_vertex.mp3"
+response = litellm.aspeech(
+    model="vertex_ai/",
+    input="hello what llm guardrail do you have",
+)
+response.stream_to_file(speech_file_path)
+```
+
+</TabItem>
+<TabItem value="proxy" label="LiteLLM PROXY (Unified Endpoint)">
+
+1. Add model to config.yaml
+```yaml
+model_list:
+  - model_name: vertex-tts
+    litellm_params:
+      model: vertex_ai/ # Vertex AI does not support passing a `model` param - so passing `model=vertex_ai/` is the only required param
+      vertex_project: "adroit-crow-413218"
+      vertex_location: "us-central1"
+      vertex_credentials: adroit-crow-413218-a956eef1a2a8.json 
+
+litellm_settings:
+  drop_params: True
+```
+
+2. Start Proxy 
+
+```
+$ litellm --config /path/to/config.yaml
+```
+
+3. Make Request use OpenAI Python SDK
+
+
+```python
+import openai
+
+client = openai.OpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+
+# see supported values for "voice" on vertex here: 
+# https://console.cloud.google.com/vertex-ai/generative/speech/text-to-speech
+response = client.audio.speech.create(
+    model = "vertex-tts",
+    input="the quick brown fox jumped over the lazy dogs",
+    voice={'languageCode': 'en-US', 'name': 'en-US-Studio-O'}
+)
+print("response from proxy", response)
+```
+
+</TabItem>
+</Tabs>
+
+
 ## Extra
 
 ### Using `GOOGLE_APPLICATION_CREDENTIALS`
