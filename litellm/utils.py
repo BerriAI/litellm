@@ -6382,6 +6382,7 @@ def _get_retry_after_from_exception_header(
                     retry_after = int(retry_date - time.time())
         else:
             retry_after = -1
+
         return retry_after
 
     except Exception as e:
@@ -6563,6 +6564,40 @@ def get_model_list():
 
 
 ####### EXCEPTION MAPPING ################
+def _get_litellm_response_headers(
+    original_exception: Exception,
+) -> Optional[httpx.Headers]:
+    """
+    Extract and return the response headers from a mapped exception, if present.
+
+    Used for accurate retry logic.
+    """
+    _response_headers: Optional[httpx.Headers] = None
+    try:
+        _response_headers = getattr(
+            original_exception, "litellm_response_headers", None
+        )
+    except Exception:
+        return None
+
+    return _response_headers
+
+
+def _get_response_headers(original_exception: Exception) -> Optional[httpx.Headers]:
+    """
+    Extract and return the response headers from an exception, if present.
+
+    Used for accurate retry logic.
+    """
+    _response_headers: Optional[httpx.Headers] = None
+    try:
+        _response_headers = getattr(original_exception, "headers", None)
+    except Exception:
+        return None
+
+    return _response_headers
+
+
 def exception_type(
     model,
     original_exception,
@@ -6587,6 +6622,10 @@ def exception_type(
             "LiteLLM.Info: If you need to debug this error, use `litellm.set_verbose=True'."  # noqa
         )  # noqa
         print()  # noqa
+
+    litellm_response_headers = _get_response_headers(
+        original_exception=original_exception
+    )
     try:
         if model:
             if hasattr(original_exception, "message"):
@@ -8469,20 +8508,20 @@ def exception_type(
             threading.Thread(target=get_all_keys, args=(e.llm_provider,)).start()
         # don't let an error with mapping interrupt the user from receiving an error from the llm api calls
         if exception_mapping_worked:
+            setattr(e, "litellm_response_headers", litellm_response_headers)
             raise e
         else:
             for error_type in litellm.LITELLM_EXCEPTION_TYPES:
                 if isinstance(e, error_type):
+                    setattr(e, "litellm_response_headers", litellm_response_headers)
                     raise e  # it's already mapped
-            raise APIConnectionError(
+            raised_exc = APIConnectionError(
                 message="{}\n{}".format(original_exception, traceback.format_exc()),
                 llm_provider="",
                 model="",
-                request=httpx.Request(
-                    method="POST",
-                    url="https://www.litellm.ai/",
-                ),
             )
+            setattr(raised_exc, "litellm_response_headers", _response_headers)
+            raise raised_exc
 
 
 ######### Secret Manager ############################

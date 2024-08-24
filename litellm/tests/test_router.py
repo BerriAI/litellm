@@ -10,6 +10,9 @@ import traceback
 import openai
 import pytest
 
+import litellm.types
+import litellm.types.router
+
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
@@ -2184,3 +2187,126 @@ def test_router_correctly_reraise_error():
         )
     except litellm.RateLimitError:
         pass
+
+
+def test_router_dynamic_cooldown_correct_retry_after_time():
+    """
+    User feedback: litellm says "No deployments available for selected model, Try again in 60 seconds"
+    but Azure says to retry in at most 9s
+
+    ```
+    {"message": "litellm.proxy.proxy_server.embeddings(): Exception occured - No deployments available for selected model, Try again in 60 seconds. Passed model=text-embedding-ada-002. pre-call-checks=False, allowed_model_region=n/a, cooldown_list=[('b49cbc9314273db7181fe69b1b19993f04efb88f2c1819947c538bac08097e4c', {'Exception Received': 'litellm.RateLimitError: AzureException RateLimitError - Requests to the Embeddings_Create Operation under Azure OpenAI API version 2023-09-01-preview have exceeded call rate limit of your current OpenAI S0 pricing tier. Please retry after 9 seconds. Please go here: https://aka.ms/oai/quotaincrease if you would like to further increase the default rate limit.', 'Status Code': '429'})]", "level": "ERROR", "timestamp": "2024-08-22T03:25:36.900476"}
+    ```
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "text-embedding-ada-002",
+                "litellm_params": {
+                    "model": "openai/text-embedding-ada-002",
+                },
+            }
+        ]
+    )
+
+    openai_client = openai.OpenAI(api_key="")
+
+    cooldown_time = 30.0
+
+    def _return_exception(*args, **kwargs):
+        from fastapi import HTTPException
+
+        raise HTTPException(
+            status_code=429,
+            detail="Rate Limited!",
+            headers={"retry-after": cooldown_time},
+        )
+
+    with patch.object(
+        openai_client.embeddings.with_raw_response,
+        "create",
+        side_effect=_return_exception,
+    ):
+        new_retry_after_mock_client = MagicMock(return_value=-1)
+
+        litellm.utils._get_retry_after_from_exception_header = (
+            new_retry_after_mock_client
+        )
+
+        try:
+            router.embedding(
+                model="text-embedding-ada-002",
+                input="Hello world!",
+                client=openai_client,
+            )
+        except litellm.RateLimitError:
+            pass
+
+        new_retry_after_mock_client.assert_called()
+        print(
+            f"new_retry_after_mock_client.call_args.kwargs: {new_retry_after_mock_client.call_args.kwargs}"
+        )
+
+        response_headers: httpx.Headers = new_retry_after_mock_client.call_args.kwargs[
+            "response_headers"
+        ]
+        assert "retry-after" in response_headers
+        assert response_headers["retry-after"] == cooldown_time
+
+
+def test_router_dynamic_cooldown_message_retry_time():
+    """
+    User feedback: litellm says "No deployments available for selected model, Try again in 60 seconds"
+    but Azure says to retry in at most 9s
+
+    ```
+    {"message": "litellm.proxy.proxy_server.embeddings(): Exception occured - No deployments available for selected model, Try again in 60 seconds. Passed model=text-embedding-ada-002. pre-call-checks=False, allowed_model_region=n/a, cooldown_list=[('b49cbc9314273db7181fe69b1b19993f04efb88f2c1819947c538bac08097e4c', {'Exception Received': 'litellm.RateLimitError: AzureException RateLimitError - Requests to the Embeddings_Create Operation under Azure OpenAI API version 2023-09-01-preview have exceeded call rate limit of your current OpenAI S0 pricing tier. Please retry after 9 seconds. Please go here: https://aka.ms/oai/quotaincrease if you would like to further increase the default rate limit.', 'Status Code': '429'})]", "level": "ERROR", "timestamp": "2024-08-22T03:25:36.900476"}
+    ```
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "text-embedding-ada-002",
+                "litellm_params": {
+                    "model": "openai/text-embedding-ada-002",
+                },
+            }
+        ]
+    )
+
+    openai_client = openai.OpenAI(api_key="")
+
+    cooldown_time = 30.0
+
+    def _return_exception(*args, **kwargs):
+        from fastapi import HTTPException
+
+        raise HTTPException(
+            status_code=429,
+            detail="Rate Limited!",
+            headers={"retry-after": cooldown_time},
+        )
+
+    with patch.object(
+        openai_client.embeddings.with_raw_response,
+        "create",
+        side_effect=_return_exception,
+    ):
+        for _ in range(2):
+            try:
+                router.embedding(
+                    model="text-embedding-ada-002",
+                    input="Hello world!",
+                    client=openai_client,
+                )
+            except litellm.RateLimitError:
+                pass
+
+        try:
+            router.embedding(
+                model="text-embedding-ada-002",
+                input="Hello world!",
+                client=openai_client,
+            )
+        except litellm.types.router.RouterRateLimitError as e:
+            assert e.cooldown_time == cooldown_time
