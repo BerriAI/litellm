@@ -381,7 +381,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
       const fetchAvailableModels = async () => {
         try {
           const modelDataResponse = await modelInfoCall(accessToken, "", "");
-          const allModelGroups = Array.from(new Set(modelDataResponse.data.map((model: any) => model.model_name)));
+          const allModelGroups: string[] = Array.from(new Set(modelDataResponse.data.map((model: any) => model.model_name)));
           setAvailableModels(allModelGroups);
         } catch (error) {
           console.error("Error fetching model data:", error);
