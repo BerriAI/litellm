@@ -90,6 +90,7 @@ from litellm.types.router import (
     RetryPolicy,
     RouterErrors,
     RouterGeneralSettings,
+    RouterRateLimitError,
     updateDeployment,
     updateLiteLLMParams,
 )
@@ -1939,6 +1940,7 @@ class Router:
             raise e
 
     def _embedding(self, input: Union[str, List], model: str, **kwargs):
+        model_name = None
         try:
             verbose_router_logger.debug(
                 f"Inside embedding()- model: {model}; kwargs: {kwargs}"
@@ -2813,19 +2815,27 @@ class Router:
         ):
             return 0
 
+        response_headers: Optional[httpx.Headers] = None
         if hasattr(e, "response") and hasattr(e.response, "headers"):
+            response_headers = e.response.headers
+        elif hasattr(e, "litellm_response_headers"):
+            response_headers = e.litellm_response_headers
+
+        if response_headers is not None:
             timeout = litellm._calculate_retry_after(
                 remaining_retries=remaining_retries,
                 max_retries=num_retries,
-                response_headers=e.response.headers,
+                response_headers=response_headers,
                 min_timeout=self.retry_after,
             )
+
         else:
             timeout = litellm._calculate_retry_after(
                 remaining_retries=remaining_retries,
                 max_retries=num_retries,
                 min_timeout=self.retry_after,
             )
+
         return timeout
 
     def function_with_retries(self, *args, **kwargs):
@@ -2997,8 +3007,9 @@ class Router:
             metadata = kwargs.get("litellm_params", {}).get("metadata", None)
             _model_info = kwargs.get("litellm_params", {}).get("model_info", {})
 
-            exception_response = getattr(exception, "response", {})
-            exception_headers = getattr(exception_response, "headers", None)
+            exception_headers = litellm.utils._get_litellm_response_headers(
+                original_exception=exception
+            )
             _time_to_cooldown = kwargs.get("litellm_params", {}).get(
                 "cooldown_time", self.cooldown_time
             )
@@ -4744,8 +4755,13 @@ class Router:
             )
 
         if len(healthy_deployments) == 0:
-            raise ValueError(
-                f"{RouterErrors.no_deployments_available.value}, Try again in {self.cooldown_time} seconds. Passed model={model}. pre-call-checks={self.enable_pre_call_checks}, cooldown_list={self._get_cooldown_deployments()}"
+            _cooldown_time = self.cooldown_time  # [TODO] Make dynamic
+            _cooldown_list = self._get_cooldown_deployments()
+            raise RouterRateLimitError(
+                model=model,
+                cooldown_time=_cooldown_time,
+                enable_pre_call_checks=self.enable_pre_call_checks,
+                cooldown_list=_cooldown_list,
             )
 
         if self.routing_strategy == "least-busy" and self.leastbusy_logger is not None:
