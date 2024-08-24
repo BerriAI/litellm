@@ -4699,7 +4699,7 @@ async def aspeech(*args, **kwargs) -> HttpxBinaryResponseContent:
 def speech(
     model: str,
     input: str,
-    voice: Optional[str] = None,
+    voice: Optional[Union[str, dict]] = None,
     api_key: Optional[str] = None,
     api_base: Optional[str] = None,
     api_version: Optional[str] = None,
@@ -4735,9 +4735,9 @@ def speech(
     logging_obj = kwargs.get("litellm_logging_obj", None)
     response: Optional[HttpxBinaryResponseContent] = None
     if custom_llm_provider == "openai":
-        if voice is None:
+        if voice is None or not (isinstance(voice, str)):
             raise litellm.BadRequestError(
-                message="'voice' is required for OpenAI TTS",
+                message="'voice' is required to be passed as a string for OpenAI TTS",
                 model=model,
                 llm_provider=custom_llm_provider,
             )
@@ -4787,9 +4787,9 @@ def speech(
         )
     elif custom_llm_provider == "azure":
         # azure configs
-        if voice is None:
+        if voice is None or not (isinstance(voice, str)):
             raise litellm.BadRequestError(
-                message="'voice' is required for Azure TTS",
+                message="'voice' is required to be passed as a string for Azure TTS",
                 model=model,
                 llm_provider=custom_llm_provider,
             )
@@ -4849,6 +4849,13 @@ def speech(
         vertex_credentials = generic_optional_params.vertex_credentials or get_secret(
             "VERTEXAI_CREDENTIALS"
         )
+
+        if voice is not None and not isinstance(voice, dict):
+            raise litellm.BadRequestError(
+                message=f"'voice' is required to be passed as a dict for Vertex AI TTS, passed in voice={voice}",
+                model=model,
+                llm_provider=custom_llm_provider,
+            )
         response = vertex_text_to_speech.audio_speech(
             _is_async=aspeech,
             vertex_credentials=vertex_credentials,
