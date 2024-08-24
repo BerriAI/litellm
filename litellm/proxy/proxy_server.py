@@ -4904,7 +4904,7 @@ async def run_thread(
 
 
 ######################################################################
-@router.get(
+@router.post(
     "/{provider}/v1/batches",
     dependencies=[Depends(user_api_key_auth)],
     tags=["batch"],
