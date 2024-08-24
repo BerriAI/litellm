@@ -1768,7 +1768,7 @@ def test_get_hf_task_for_model():
 # ################### Hugging Face TGI models ########################
 # # TGI model
 # # this is a TGI model https://huggingface.co/glaiveai/glaive-coder-7b
-def tgi_mock_post(url, data=None, json=None, headers=None):
+def tgi_mock_post(url, **kwargs):
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_response.headers = {"Content-Type": "application/json"}
@@ -1936,7 +1936,7 @@ async def test_openai_compatible_custom_api_base(provider):
 # hf_test_completion_none_task()
 
 
-def mock_post(url, data=None, json=None, headers=None):
+def mock_post(url, **kwargs):
     print(f"url={url}")
     if "text-classification" in url:
         raise Exception("Model not found")
