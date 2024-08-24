@@ -669,6 +669,7 @@ provider_list: List = [
     "azure_text",
     "azure_ai",
     "sagemaker",
+    "sagemaker_chat",
     "bedrock",
     "vllm",
     "nlp_cloud",
