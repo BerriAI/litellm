@@ -35,7 +35,7 @@ litellm_settings:
 
 #### [OPTIONAL] Step 1.5: Add redis namespaces, default ttl 
 
-## Namespace
+#### Namespace
 If you want to create some folder for your keys, you can set a namespace, like this:
 
 ```yaml
@@ -52,7 +52,7 @@ and keys will be stored like:
 litellm_caching:<hash>
 ```
 
-## Redis Cluster 
+#### Redis Cluster 
 
 ```yaml
 model_list:
@@ -68,7 +68,7 @@ litellm_settings:
     redis_startup_nodes: [{"host": "127.0.0.1", "port": "7001"}] 
 ```
 
-## TTL
+#### TTL
 
 ```yaml
 litellm_settings:
@@ -81,7 +81,7 @@ litellm_settings:
 ```
 
 
-## SSL
+#### SSL
 
 just set `REDIS_SSL="True"` in your .env, and LiteLLM will pick this up. 
 
@@ -397,7 +397,7 @@ litellm_settings:
                       # /chat/completions, /completions, /embeddings, /audio/transcriptions
 ```
 
-### Turn on / off caching per request.  
+### **Turn on / off caching per request. **
 
 The proxy support 4 cache-controls:
 
@@ -698,6 +698,73 @@ x-litellm-cache-key: 586bf3f3c1bf5aecb55bd9996494d3bbc69eb58397163add6d49537762a
 }
              
 ```
+
+### **Set Caching Default Off - Opt in only **
+
+1. **Set `mode: default_off` for caching**
+
+```yaml
+model_list:
+  - model_name: fake-openai-endpoint
+    litellm_params:
+      model: openai/fake
+      api_key: fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+
+# default off mode
+litellm_settings:
+  set_verbose: True
+  cache: True
+  cache_params:
+    mode: default_off # 👈 Key change cache is default_off
+```
+
+2. **Opting in to cache when cache is default off**
+
+
+<Tabs>
+<TabItem value="openai" label="OpenAI Python SDK">
+
+```python
+import os
+from openai import OpenAI
+
+client = OpenAI(api_key=<litellm-api-key>, base_url="http://0.0.0.0:4000")
+
+chat_completion = client.chat.completions.create(
+    messages=[
+        {
+            "role": "user",
+            "content": "Say this is a test",
+        }
+    ],
+    model="gpt-3.5-turbo",
+    extra_body = {        # OpenAI python accepts extra args in extra_body
+        "cache": {"use-cache": True}
+    }
+)
+```
+</TabItem>
+
+<TabItem value="curl" label="curl">
+
+```shell
+curl http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "gpt-3.5-turbo",
+    "cache": {"use-cache": True}
+    "messages": [
+      {"role": "user", "content": "Say this is a test"}
+    ]
+  }'
+```
+
+</TabItem>
+
+</Tabs>
+
 
 
 ### Turn on `batch_redis_requests` 
