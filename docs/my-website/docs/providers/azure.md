@@ -327,6 +327,39 @@ response = litellm.completion(
 print(response)
 ```
 
+## Azure Text to Speech (tts)
+
+**LiteLLM PROXY**
+
+```yaml
+ - model_name: azure/tts-1
+    litellm_params:
+      model: azure/tts-1
+      api_base: "os.environ/AZURE_API_BASE_TTS"
+      api_key: "os.environ/AZURE_API_KEY_TTS"
+      api_version: "os.environ/AZURE_API_VERSION" 
+```
+
+**LiteLLM SDK**
+
+```python 
+from litellm import completion
+
+## set ENV variables
+os.environ["AZURE_API_KEY"] = ""
+os.environ["AZURE_API_BASE"] = ""
+os.environ["AZURE_API_VERSION"] = ""
+
+# azure call
+speech_file_path = Path(__file__).parent / "speech.mp3"
+response = speech(
+        model="azure/<your-deployment-name",
+        voice="alloy",
+        input="the quick brown fox jumped over the lazy dogs",
+    )
+response.stream_to_file(speech_file_path)
+```
+
 ## Advanced
 ### Azure API Load-Balancing
 
