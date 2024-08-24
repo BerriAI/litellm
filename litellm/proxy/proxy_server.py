@@ -1604,7 +1604,7 @@ class ProxyConfig:
                     self._init_cache(cache_params=cache_params)
                     if litellm.cache is not None:
                         verbose_proxy_logger.debug(  # noqa
-                            f"{blue_color_code}Set Cache on LiteLLM Proxy: {vars(litellm.cache.cache)}{reset_color_code}"
+                            f"{blue_color_code}Set Cache on LiteLLM Proxy= {vars(litellm.cache.cache)}{vars(litellm.cache)}{reset_color_code}"
                         )
                 elif key == "cache" and value is False:
                     pass
