@@ -172,14 +172,6 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
           labelAlign="left"
         >
                 <>
-                <Form.Item 
-                label="Key Name" 
-                name="key_alias"
-                rules={[{ required: true, message: 'Please input a key name' }]}
-                help="required"
-              >
-                <Input />
-              </Form.Item>
 
               <Form.Item label="Models" name="models" rules={[
                 {
@@ -269,6 +261,43 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                     </SelectItem>
                   ))}
               </Select3>
+              </Form.Item>
+
+              <Form.Item 
+                className="mt-8"
+                label="TPM Limit (tokens per minute)" 
+                name="tpm_limit" 
+                help={`tpm_limit cannot exceed team tpm_limit ${keyTeam?.tpm_limit !== null && keyTeam?.tpm_limit !== undefined ? keyTeam?.tpm_limit : 'unlimited'}`}
+                rules={[
+                  {
+                      validator: async (_, value) => {
+                          if (value && keyTeam && keyTeam.tpm_limit !== null && value > keyTeam.tpm_limit) {
+                              console.log(`keyTeam.tpm_limit: ${keyTeam.tpm_limit}`)
+                              throw new Error(`tpm_limit cannot exceed team max tpm_limit: $${keyTeam.tpm_limit}`);
+                          }
+                      },
+                  },
+              ]}
+              >
+                <InputNumber step={1} precision={1} width={200} />
+              </Form.Item>
+              <Form.Item 
+                className="mt-8"
+                label="RPM Limit (requests per minute)" 
+                name="rpm_limit" 
+                help={`rpm_limit cannot exceed team max tpm_limit: ${keyTeam?.rpm_limit !== null && keyTeam?.rpm_limit !== undefined ? keyTeam?.rpm_limit : 'unlimited'}`}
+                rules={[
+                  {
+                      validator: async (_, value) => {
+                          if (value && keyTeam && keyTeam.rpm_limit !== null && value > keyTeam.rpm_limit) {
+                              console.log(`keyTeam.rpm_limit: ${keyTeam.rpm_limit}`)
+                              throw new Error(`rpm_limit cannot exceed team max rpm_limit: $${keyTeam.rpm_limit}`);
+                          }
+                      },
+                  },
+              ]}
+              >
+                <InputNumber step={1} precision={1} width={200} />
               </Form.Item>
             </>
           <div style={{ textAlign: "right", marginTop: "10px" }}>
