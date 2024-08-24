@@ -35,11 +35,18 @@ class AsyncHTTPHandler:
         self, timeout: Optional[Union[float, httpx.Timeout]], concurrent_limit: int
     ) -> httpx.AsyncClient:
 
-        # Check if the HTTP_PROXY and HTTPS_PROXY environment variables are set and use them accordingly.
-        ssl_verify = bool(os.getenv("SSL_VERIFY", litellm.ssl_verify))
+        # SSL certificates (a.k.a CA bundle) used to verify the identity of requested hosts.
+        # /path/to/certificate.pem
+        ssl_verify = os.getenv(
+            "SSL_VERIFY",
+            litellm.ssl_verify
+        )
+        # An SSL certificate used by the requested host to authenticate the client.
+        # /path/to/client.pem
         cert = os.getenv(
-            "SSL_CERTIFICATE", litellm.ssl_certificate
-        )  # /path/to/client.pem
+            "SSL_CERTIFICATE",
+            litellm.ssl_certificate
+        )
 
         if timeout is None:
             timeout = _DEFAULT_TIMEOUT
@@ -268,11 +275,18 @@ class HTTPHandler:
         if timeout is None:
             timeout = _DEFAULT_TIMEOUT
 
-        # Check if the HTTP_PROXY and HTTPS_PROXY environment variables are set and use them accordingly.
-        ssl_verify = bool(os.getenv("SSL_VERIFY", litellm.ssl_verify))
+        # SSL certificates (a.k.a CA bundle) used to verify the identity of requested hosts.
+        # /path/to/certificate.pem
+        ssl_verify = os.getenv(
+            "SSL_VERIFY",
+            litellm.ssl_verify
+        )
+        # An SSL certificate used by the requested host to authenticate the client.
+        # /path/to/client.pem
         cert = os.getenv(
-            "SSL_CERTIFICATE", litellm.ssl_certificate
-        )  # /path/to/client.pem
+            "SSL_CERTIFICATE",
+            litellm.ssl_certificate
+        )
 
         if client is None:
             # Create a client with a connection pool
