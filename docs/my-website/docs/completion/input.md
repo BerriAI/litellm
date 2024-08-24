@@ -53,7 +53,7 @@ Use `litellm.get_supported_openai_params()` for an updated list of params for ea
 |VertexAI| ✅ | ✅ |  | ✅ | ✅ |  |  |  |  |   | | | | ✅ | ✅ | | |
 |Bedrock| ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |  |   | | | | | ✅ (model dependent) | |
 |Sagemaker| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |
-|TogetherAI| ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |  |   | ✅ |
+|TogetherAI| ✅ | ✅ | ✅ | ✅ | ✅ |  |  |  |  |  | ✅ |  |  | ✅ |  | ✅ | ✅ |  |  |  |
 |AlephAlpha| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |   |  |   |
 |Palm| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |
 |NLP Cloud| ✅ | ✅ | ✅ | ✅ | ✅ | | |  |  |   |
