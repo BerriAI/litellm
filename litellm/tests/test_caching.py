@@ -1875,3 +1875,85 @@ async def test_qdrant_semantic_cache_acompletion_stream():
     except Exception as e:
         print(f"{str(e)}\n\n{traceback.format_exc()}")
         raise e
+
+
+@pytest.mark.asyncio()
+async def test_cache_default_off_acompletion():
+    litellm.set_verbose = True
+    import logging
+
+    from litellm._logging import verbose_logger
+
+    verbose_logger.setLevel(logging.DEBUG)
+
+    from litellm.caching import CacheMode
+
+    random_number = random.randint(
+        1, 100000
+    )  # add a random number to ensure it's always adding /reading from cache
+    litellm.cache = Cache(
+        type="local",
+        mode=CacheMode.default_off,
+    )
+
+    ### No Cache hits when it's default off
+
+    response1 = await litellm.acompletion(
+        model="gpt-3.5-turbo",
+        messages=[
+            {
+                "role": "user",
+                "content": f"write a one sentence poem about: {random_number}",
+            }
+        ],
+        mock_response="hello",
+        max_tokens=20,
+    )
+    print(f"Response1: {response1}")
+
+    response2 = await litellm.acompletion(
+        model="gpt-3.5-turbo",
+        messages=[
+            {
+                "role": "user",
+                "content": f"write a one sentence poem about: {random_number}",
+            }
+        ],
+        max_tokens=20,
+    )
+    print(f"Response2: {response2}")
+    assert response1.id != response2.id
+
+    ## Cache hits when it's default off and then opt in
+
+    response3 = await litellm.acompletion(
+        model="gpt-3.5-turbo",
+        messages=[
+            {
+                "role": "user",
+                "content": f"write a one sentence poem about: {random_number}",
+            }
+        ],
+        mock_response="hello",
+        cache={"use-cache": True},
+        metadata={"key": "value"},
+        max_tokens=20,
+    )
+    print(f"Response3: {response3}")
+
+    await asyncio.sleep(2)
+
+    response4 = await litellm.acompletion(
+        model="gpt-3.5-turbo",
+        messages=[
+            {
+                "role": "user",
+                "content": f"write a one sentence poem about: {random_number}",
+            }
+        ],
+        cache={"use-cache": True},
+        metadata={"key": "value"},
+        max_tokens=20,
+    )
+    print(f"Response4: {response4}")
+    assert response3.id == response4.id
