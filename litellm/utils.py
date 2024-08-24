@@ -8204,7 +8204,7 @@ def exception_type(
                             model=model,
                             request=original_exception.request,
                         )
-            elif custom_llm_provider == "azure":
+            elif custom_llm_provider == "azure" or custom_llm_provider == "azure_text":
                 message = get_error_message(error_obj=original_exception)
                 if message is None:
                     if hasattr(original_exception, "message"):

@@ -887,16 +887,19 @@ def _pre_call_utils(
     [True, False],
 )
 @pytest.mark.parametrize(
-    "model, call_type, streaming",
+    "provider, model, call_type, streaming",
     [
-        ("text-embedding-ada-002", "embedding", None),
-        ("gpt-3.5-turbo", "chat_completion", False),
-        ("gpt-3.5-turbo", "chat_completion", True),
-        ("gpt-3.5-turbo-instruct", "completion", True),
+        ("openai", "text-embedding-ada-002", "embedding", None),
+        ("openai", "gpt-3.5-turbo", "chat_completion", False),
+        ("openai", "gpt-3.5-turbo", "chat_completion", True),
+        ("openai", "gpt-3.5-turbo-instruct", "completion", True),
+        ("azure", "azure/chatgpt-v-2", "chat_completion", True),
+        ("azure", "azure/text-embedding-ada-002", "embedding", True),
+        ("azure", "azure_text/gpt-3.5-turbo-instruct", "completion", True),
     ],
 )
 @pytest.mark.asyncio
-async def test_exception_with_headers(sync_mode, model, call_type, streaming):
+async def test_exception_with_headers(sync_mode, provider, model, call_type, streaming):
     """
     User feedback: litellm says "No deployments available for selected model, Try again in 60 seconds"
     but Azure says to retry in at most 9s
@@ -908,9 +911,15 @@ async def test_exception_with_headers(sync_mode, model, call_type, streaming):
     import openai
 
     if sync_mode:
-        openai_client = openai.OpenAI(api_key="")
+        if provider == "openai":
+            openai_client = openai.OpenAI(api_key="")
+        elif provider == "azure":
+            openai_client = openai.AzureOpenAI(api_key="", base_url="")
     else:
-        openai_client = openai.AsyncOpenAI(api_key="")
+        if provider == "openai":
+            openai_client = openai.AsyncOpenAI(api_key="")
+        elif provider == "azure":
+            openai_client = openai.AsyncAzureOpenAI(api_key="", base_url="")
 
     data = {"model": model}
     data, original_function, mapped_target = _pre_call_utils(
