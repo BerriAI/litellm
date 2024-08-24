@@ -2,7 +2,7 @@
 import React, { useEffect, useState } from "react";
 import { keyDeleteCall, modelAvailableCall } from "./networking";
 import { InformationCircleIcon, StatusOnlineIcon, TrashIcon, PencilAltIcon } from "@heroicons/react/outline";
-import { keySpendLogsCall, PredictedSpendLogsCall, keyUpdateCall } from "./networking";
+import { keySpendLogsCall, PredictedSpendLogsCall, keyUpdateCall, modelInfoCall } from "./networking";
 import {
   Badge,
   Card,
@@ -45,6 +45,15 @@ interface EditKeyModalProps {
   onCancel: () => void;
   token: any; // Assuming TeamType is a type representing your team object
   onSubmit: (data: FormData) => void; // Assuming FormData is the type of data to be submitted
+}
+
+
+interface ModelLimitModalProps {
+  visible: boolean;
+  onCancel: () => void;
+  token: ItemData;
+  onSubmit: (updatedMetadata: any) => void;
+  accessToken: string;
 }
 
 // Define the props type
@@ -99,6 +108,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   const [selectedToken, setSelectedToken] = useState<ItemData | null>(null);
   const [userModels, setUserModels] = useState([]);
   const initialKnownTeamIDs: Set<string> = new Set();
+  const [modelLimitModalVisible, setModelLimitModalVisible] = useState(false);
 
   const [knownTeamIDs, setKnownTeamIDs] = useState(initialKnownTeamIDs);
 
@@ -124,6 +134,45 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   
     fetchUserModels();
   }, [accessToken, userID, userRole]);
+
+  const handleModelLimitClick = (token: ItemData) => {
+    setSelectedToken(token);
+    setModelLimitModalVisible(true);
+  };
+
+  const handleModelLimitSubmit = async (updatedMetadata: any) => {
+    if (accessToken == null || selectedToken == null) {
+      return;
+    }
+
+    const formValues = {
+      ...selectedToken,
+      metadata: updatedMetadata,
+      key: selectedToken.token,
+    };
+
+    try {
+      let newKeyValues = await keyUpdateCall(accessToken, formValues);
+      console.log("Model limits updated:", newKeyValues);
+
+      // Update the keys with the updated key
+      if (data) {
+        const updatedData = data.map((key) =>
+          key.token === selectedToken.token ? newKeyValues : key
+        );
+        setData(updatedData);
+      }
+      message.success("Model-specific limits updated successfully");
+    } catch (error) {
+      console.error("Error updating model-specific limits:", error);
+      message.error("Failed to update model-specific limits");
+    }
+
+    setModelLimitModalVisible(false);
+    setSelectedToken(null);
+  };
+
+
 
   useEffect(() => {
     if (teams) {
@@ -307,6 +356,165 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
       </Modal>
     );
   };
+
+  const ModelLimitModal: React.FC<ModelLimitModalProps> = ({ visible, onCancel, token, onSubmit, accessToken }) => {
+    const [modelLimits, setModelLimits] = useState<{ [key: string]: { tpm: number, rpm: number } }>({});
+    const [availableModels, setAvailableModels] = useState<string[]>([]);
+    const [newModelRow, setNewModelRow] = useState<string | null>(null);
+
+    useEffect(() => {
+      if (token.metadata) {
+        const tpmLimits = token.metadata.model_tpm_limit || {};
+        const rpmLimits = token.metadata.model_rpm_limit || {};
+        const combinedLimits: { [key: string]: { tpm: number, rpm: number } } = {};
+        
+        Object.keys({ ...tpmLimits, ...rpmLimits }).forEach(model => {
+          combinedLimits[model] = {
+            tpm: tpmLimits[model] || 0,
+            rpm: rpmLimits[model] || 0
+          };
+        });
+        
+        setModelLimits(combinedLimits);
+      }
+      
+      const fetchAvailableModels = async () => {
+        try {
+          const modelDataResponse = await modelInfoCall(accessToken, "", "");
+          const allModelGroups = Array.from(new Set(modelDataResponse.data.map((model: any) => model.model_name)));
+          setAvailableModels(allModelGroups);
+        } catch (error) {
+          console.error("Error fetching model data:", error);
+          message.error("Failed to fetch available models");
+        }
+      };
+
+      fetchAvailableModels();
+    }, [token, accessToken]);
+
+    const handleLimitChange = (model: string, type: 'tpm' | 'rpm', value: number | null) => {
+      setModelLimits(prev => ({
+        ...prev,
+        [model]: {
+          ...prev[model],
+          [type]: value || 0
+        }
+      }));
+    };
+
+    const handleAddLimit = () => {
+      setNewModelRow('');
+    };
+
+    const handleModelSelect = (model: string) => {
+      if (!modelLimits[model]) {
+        setModelLimits(prev => ({
+          ...prev,
+          [model]: { tpm: 0, rpm: 0 }
+        }));
+      }
+      setNewModelRow(null);
+    };
+
+    const handleRemoveModel = (model: string) => {
+      setModelLimits(prev => {
+        const { [model]: _, ...rest } = prev;
+        return rest;
+      });
+    };
+
+    const handleSubmit = () => {
+      const updatedMetadata = {
+        ...token.metadata,
+        model_tpm_limit: Object.fromEntries(Object.entries(modelLimits).map(([model, limits]) => [model, limits.tpm])),
+        model_rpm_limit: Object.fromEntries(Object.entries(modelLimits).map(([model, limits]) => [model, limits.rpm])),
+      };
+      onSubmit(updatedMetadata);
+    };
+
+    return (
+      <Modal
+        title="Edit Model-Specific Limits"
+        visible={visible}
+        onCancel={onCancel}
+        footer={null}
+        width={800}
+      >
+        <div className="space-y-4">
+          <Table>
+            <TableHead>
+              <TableRow>
+                <TableHeaderCell>Model</TableHeaderCell>
+                <TableHeaderCell>TPM Limit</TableHeaderCell>
+                <TableHeaderCell>RPM Limit</TableHeaderCell>
+                <TableHeaderCell>Actions</TableHeaderCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {Object.entries(modelLimits).map(([model, limits]) => (
+                <TableRow key={model}>
+                  <TableCell>{model}</TableCell>
+                  <TableCell>
+                    <InputNumber
+                      value={limits.tpm}
+                      onChange={(value) => handleLimitChange(model, 'tpm', value)}
+                    />
+                  </TableCell>
+                  <TableCell>
+                    <InputNumber
+                      value={limits.rpm}
+                      onChange={(value) => handleLimitChange(model, 'rpm', value)}
+                    />
+                  </TableCell>
+                  <TableCell>
+                    <Button onClick={() => handleRemoveModel(model)}>
+                      Remove
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              ))}
+              {newModelRow !== null && (
+                <TableRow>
+                  <TableCell>
+                    <Select
+                      style={{ width: 200 }}
+                      placeholder="Select a model"
+                      onChange={handleModelSelect}
+                      value={newModelRow || undefined}
+                    >
+                      {availableModels
+                        .filter(m => !modelLimits.hasOwnProperty(m))
+                        .map((m) => (
+                          <Option key={m} value={m}>
+                            {m}
+                          </Option>
+                        ))}
+                    </Select>
+                  </TableCell>
+                  <TableCell>-</TableCell>
+                  <TableCell>-</TableCell>
+                  <TableCell>
+                    <Button onClick={() => setNewModelRow(null)}>
+                      Cancel
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+          <Button onClick={handleAddLimit} disabled={newModelRow !== null}>Add Limit</Button>
+        </div>
+        <div className="flex justify-end space-x-4 mt-6">
+          <Button onClick={onCancel}>
+            Cancel
+          </Button>
+          <Button onClick={handleSubmit}>
+            Save
+          </Button>
+        </div>
+      </Modal>
+    );
+  };
   
 
   
@@ -419,7 +627,8 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
             <TableHeaderCell>Spend (USD)</TableHeaderCell>
             <TableHeaderCell>Budget (USD)</TableHeaderCell>
             <TableHeaderCell>Models</TableHeaderCell>
-            <TableHeaderCell>TPM / RPM Limits</TableHeaderCell>
+            <TableHeaderCell>Rate Limits</TableHeaderCell>
+            <TableHeaderCell>Rate Limits per model</TableHeaderCell>
           </TableRow>
         </TableHead>
         <TableBody>
@@ -545,6 +754,9 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                     <br></br> RPM:{" "}
                     {item.rpm_limit ? item.rpm_limit : "Unlimited"}
                   </Text>
+                </TableCell>
+                <TableCell>
+                <Button onClick={() => handleModelLimitClick(item)}>Edit Limits</Button>
                 </TableCell>
                 <TableCell>
                     <Icon
@@ -718,6 +930,16 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
           onCancel={handleEditCancel}
           token={selectedToken}
           onSubmit={handleEditSubmit}
+        />
+      )}
+
+{selectedToken && (
+        <ModelLimitModal
+          visible={modelLimitModalVisible}
+          onCancel={() => setModelLimitModalVisible(false)}
+          token={selectedToken}
+          onSubmit={handleModelLimitSubmit}
+          accessToken={accessToken}
         />
       )}
     </div>
