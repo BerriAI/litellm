@@ -415,7 +415,81 @@ response = completion(
 You can also pass in your own [custom prompt template](../completion/prompt_formatting.md#format-prompt-yourself)
 
 
-### Completion Models 
+## Sagemaker Messages API 
+
+Use route `sagemaker_chat/*` to route to Sagemaker Messages API
+
+```
+model: sagemaker_chat/<your-endpoint-name>
+```
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+import os
+import litellm
+from litellm import completion
+
+litellm.set_verbose = True # 👈 SEE RAW REQUEST
+
+os.environ["AWS_ACCESS_KEY_ID"] = ""
+os.environ["AWS_SECRET_ACCESS_KEY"] = ""
+os.environ["AWS_REGION_NAME"] = ""
+
+response = completion(
+            model="sagemaker_chat/<your-endpoint-name>", 
+            messages=[{ "content": "Hello, how are you?","role": "user"}],
+            temperature=0.2,
+            max_tokens=80
+        )
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+#### 1. Setup config.yaml 
+
+```yaml
+model_list:
+  - model_name: "sagemaker-model"
+    litellm_params:
+      model: "sagemaker_chat/jumpstart-dft-hf-textgeneration1-mp-20240815-185614"
+      aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
+      aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
+      aws_region_name: os.environ/AWS_REGION_NAME
+```
+
+#### 2. Start the proxy 
+
+```bash
+litellm --config /path/to/config.yaml
+```
+#### 3. Test it
+
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+--header 'Content-Type: application/json' \
+--data ' {
+      "model": "sagemaker-model",
+      "messages": [
+        {
+          "role": "user",
+          "content": "what llm are you"
+        }
+      ]
+    }
+'
+```
+
+[**👉 See OpenAI SDK/Langchain/Llamaindex/etc. examples**](../proxy/user_keys.md#chatcompletions)
+
+</TabItem>
+</Tabs>
+
+
+## Completion Models 
 
 
 :::tip
