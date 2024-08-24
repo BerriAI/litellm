@@ -503,7 +503,6 @@ def mock_completion(
         ):
             raise litellm.RateLimitError(
                 message="this is a mock rate limit error",
-                status_code=getattr(mock_response, "status_code", 429),  # type: ignore
                 llm_provider=getattr(mock_response, "llm_provider", custom_llm_provider or "openai"),  # type: ignore
                 model=model,
             )

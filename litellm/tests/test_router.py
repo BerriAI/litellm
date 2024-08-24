@@ -2110,18 +2110,18 @@ def test_router_context_window_pre_call_check(model, base_model, llm_provider):
 
 
 def test_router_cooldown_api_connection_error():
-    # try:
-    #     _ = litellm.completion(
-    #         model="vertex_ai/gemini-1.5-pro",
-    #         messages=[{"role": "admin", "content": "Fail on this!"}],
-    #     )
-    # except litellm.APIConnectionError as e:
-    #     assert (
-    #         Router()._is_cooldown_required(
-    #             exception_status=e.code, exception_str=str(e)
-    #         )
-    #         is False
-    #     )
+    try:
+        _ = litellm.completion(
+            model="vertex_ai/gemini-1.5-pro",
+            messages=[{"role": "admin", "content": "Fail on this!"}],
+        )
+    except litellm.APIConnectionError as e:
+        assert (
+            Router()._is_cooldown_required(
+                exception_status=e.code, exception_str=str(e)
+            )
+            is False
+        )
 
     router = Router(
         model_list=[
@@ -2154,4 +2154,33 @@ def test_router_cooldown_api_connection_error():
             messages=[{"role": "admin", "content": "Fail on this!"}],
         )
     except litellm.APIConnectionError:
+        pass
+
+
+def test_router_correctly_reraise_error():
+    """
+    User feedback: There is a problem with my messages array, but the error exception thrown is a Rate Limit error.
+    ```
+    Rate Limit: Error code: 429 - {'error': {'message': 'No deployments available for selected model, Try again in 60 seconds. Passed model=gemini-1.5-flash..
+    ```
+    What they want? Propagation of the real error.
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gemini-1.5-pro",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-1.5-pro",
+                    "mock_response": "litellm.RateLimitError",
+                },
+            }
+        ]
+    )
+
+    try:
+        router.completion(
+            model="gemini-1.5-pro",
+            messages=[{"role": "admin", "content": "Fail on this!"}],
+        )
+    except litellm.RateLimitError:
         pass
