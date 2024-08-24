@@ -54,7 +54,7 @@ class VertexTextToSpeechAPI(VertexLLM):
         timeout: Union[float, httpx.Timeout],
         model: str,
         input: str,
-        voice: Optional[str] = None,
+        voice: Optional[dict] = None,
         _is_async: Optional[bool] = False,
         optional_params: Optional[dict] = None,
         **kwargs,
@@ -87,7 +87,9 @@ class VertexTextToSpeechAPI(VertexLLM):
         vertex_input = VertexInput(text=input)
         # required param
         optional_params = optional_params or {}
-        if "voice" in optional_params:
+        if voice is not None:
+            vertex_voice = VertexVoice(**voice)
+        elif "voice" in optional_params:
             vertex_voice = VertexVoice(**optional_params["voice"])
         else:
             # use defaults to not fail the request
