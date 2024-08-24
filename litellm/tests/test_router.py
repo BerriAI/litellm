@@ -2189,7 +2189,7 @@ def test_router_correctly_reraise_error():
         pass
 
 
-def test_router_dynamic_cooldown_correct_retry_after_time():
+def test_router_dynamic_cooldown_correct_retry_after_time(sync_mode):
     """
     User feedback: litellm says "No deployments available for selected model, Try again in 60 seconds"
     but Azure says to retry in at most 9s
@@ -2219,7 +2219,7 @@ def test_router_dynamic_cooldown_correct_retry_after_time():
         raise HTTPException(
             status_code=429,
             detail="Rate Limited!",
-            headers={"retry-after": cooldown_time},
+            headers={"retry-after": cooldown_time},  # type: ignore
         )
 
     with patch.object(
