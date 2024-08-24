@@ -1268,6 +1268,8 @@ class OpenAIChatCompletion(BaseLLM):
             except (
                 Exception
             ) as e:  # need to exception handle here. async exceptions don't get caught in sync functions.
+                if isinstance(e, OpenAIError):
+                    raise e
                 if response is not None and hasattr(response, "text"):
                     raise OpenAIError(
                         status_code=500,
@@ -1975,7 +1977,7 @@ class OpenAITextCompletion(BaseLLM):
                     "complete_input_dict": data,
                 },
             )
-            if acompletion == True:
+            if acompletion is True:
                 if optional_params.get("stream", False):
                     return self.async_streaming(
                         logging_obj=logging_obj,
@@ -2019,7 +2021,7 @@ class OpenAITextCompletion(BaseLLM):
                 else:
                     openai_client = client
 
-                response = openai_client.completions.create(**data)  # type: ignore
+                response = openai_client.completions.with_raw_response.create(**data)  # type: ignore
 
                 response_json = response.model_dump()
 
@@ -2067,7 +2069,7 @@ class OpenAITextCompletion(BaseLLM):
             else:
                 openai_aclient = client
 
-            response = await openai_aclient.completions.create(**data)
+            response = await openai_aclient.completions.with_raw_response.create(**data)
             response_json = response.model_dump()
             ## LOGGING
             logging_obj.post_call(
@@ -2100,6 +2102,7 @@ class OpenAITextCompletion(BaseLLM):
         client=None,
         organization=None,
     ):
+
         if client is None:
             openai_client = OpenAI(
                 api_key=api_key,
@@ -2111,7 +2114,15 @@ class OpenAITextCompletion(BaseLLM):
             )
         else:
             openai_client = client
-        response = openai_client.completions.create(**data)
+
+        try:
+            response = openai_client.completions.with_raw_response.create(**data)
+        except Exception as e:
+            status_code = getattr(e, "status_code", 500)
+            error_headers = getattr(e, "headers", None)
+            raise OpenAIError(
+                status_code=status_code, message=str(e), headers=error_headers
+            )
         streamwrapper = CustomStreamWrapper(
             completion_stream=response,
             model=model,
@@ -2149,7 +2160,7 @@ class OpenAITextCompletion(BaseLLM):
         else:
             openai_client = client
 
-        response = await openai_client.completions.create(**data)
+        response = await openai_client.completions.with_raw_response.create(**data)
 
         streamwrapper = CustomStreamWrapper(
             completion_stream=response,
