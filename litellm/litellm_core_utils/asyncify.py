@@ -1,8 +1,9 @@
 import functools
-from typing import Awaitable, Callable, ParamSpec, TypeVar
+from typing import Awaitable, Callable
 
 import anyio
 from anyio import to_thread
+from typing_extensions import ParamSpec, TypeVar
 
 T_ParamSpec = ParamSpec("T_ParamSpec")
 T_Retval = TypeVar("T_Retval")
