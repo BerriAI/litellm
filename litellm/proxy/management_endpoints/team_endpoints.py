@@ -571,6 +571,11 @@ async def team_member_add(
 
         await asyncio.gather(*tasks)
 
+    # Check if updated_team is None
+    if updated_team is None:
+        raise HTTPException(
+            status_code=404, detail={"error": f"Team with id {data.team_id} not found"}
+        )
     return TeamAddMemberResponse(
         **updated_team.model_dump(),
         updated_users=updated_users,
