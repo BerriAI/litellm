@@ -295,7 +295,7 @@ async def test_completion_sagemaker_prompt_template_non_stream():
             ],
             temperature=0.2,
             max_tokens=80,
-            hf_model_name="mistralai/Mistral-7B-Instruct-v0.1",
+            hf_model_name="deepseek-ai/deepseek-coder-6.7b-instruct",
         )
 
         # Print what was called on the mock
