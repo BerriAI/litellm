@@ -1001,6 +1001,7 @@ class VertexLLM(BaseLLM):
         self, credentials: Optional[str], project_id: Optional[str]
     ) -> Tuple[Any, str]:
         import google.auth as google_auth
+        from google.auth import identity_pool
         from google.auth.credentials import Credentials  # type: ignore[import-untyped]
         from google.auth.transport.requests import (
             Request,  # type: ignore[import-untyped]
@@ -1024,10 +1025,16 @@ class VertexLLM(BaseLLM):
             else:
                 json_obj = json.loads(credentials)
 
-            creds = google.oauth2.service_account.Credentials.from_service_account_info(
-                json_obj,
-                scopes=["https://www.googleapis.com/auth/cloud-platform"],
-            )
+            # Check if the JSON object contains Workload Identity Federation configuration
+            if "type" in json_obj and json_obj["type"] == "external_account":
+                creds = identity_pool.Credentials.from_info(json_obj)
+            else:
+                creds = (
+                    google.oauth2.service_account.Credentials.from_service_account_info(
+                        json_obj,
+                        scopes=["https://www.googleapis.com/auth/cloud-platform"],
+                    )
+                )
 
             if project_id is None:
                 project_id = creds.project_id
