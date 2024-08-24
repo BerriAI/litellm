@@ -452,7 +452,12 @@ async def _async_streaming(response, model, custom_llm_provider, args):
             print_verbose(f"line in async streaming: {line}")
             yield line
     except Exception as e:
-        raise e
+        custom_llm_provider = custom_llm_provider or "openai"
+        raise exception_type(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            original_exception=e,
+        )
 
 
 def mock_completion(
@@ -3765,7 +3770,7 @@ async def atext_completion(
         else:
             # Call the synchronous function using run_in_executor
             response = await loop.run_in_executor(None, func_with_context)
-        if kwargs.get("stream", False) == True:  # return an async generator
+        if kwargs.get("stream", False) is True:  # return an async generator
             return TextCompletionStreamWrapper(
                 completion_stream=_async_streaming(
                     response=response,
@@ -3774,6 +3779,7 @@ async def atext_completion(
                     args=args,
                 ),
                 model=model,
+                custom_llm_provider=custom_llm_provider,
             )
         else:
             transformed_logprobs = None
@@ -4047,11 +4053,14 @@ def text_completion(
         **kwargs,
         **optional_params,
     )
-    if kwargs.get("acompletion", False) == True:
+    if kwargs.get("acompletion", False) is True:
         return response
-    if stream == True or kwargs.get("stream", False) == True:
+    if stream is True or kwargs.get("stream", False) is True:
         response = TextCompletionStreamWrapper(
-            completion_stream=response, model=model, stream_options=stream_options
+            completion_stream=response,
+            model=model,
+            stream_options=stream_options,
+            custom_llm_provider=custom_llm_provider,
         )
         return response
     transformed_logprobs = None

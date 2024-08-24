@@ -6880,7 +6880,7 @@ def exception_type(
                             message=f"{exception_provider} - {message}",
                             model=model,
                             llm_provider=custom_llm_provider,
-                            response=original_exception.response,
+                            response=getattr(original_exception, "response", None),
                             litellm_debug_info=extra_information,
                         )
                     elif original_exception.status_code == 429:
@@ -6889,7 +6889,7 @@ def exception_type(
                             message=f"RateLimitError: {exception_provider} - {message}",
                             model=model,
                             llm_provider=custom_llm_provider,
-                            response=original_exception.response,
+                            response=getattr(original_exception, "response", None),
                             litellm_debug_info=extra_information,
                         )
                     elif original_exception.status_code == 503:
@@ -6898,7 +6898,7 @@ def exception_type(
                             message=f"ServiceUnavailableError: {exception_provider} - {message}",
                             model=model,
                             llm_provider=custom_llm_provider,
-                            response=original_exception.response,
+                            response=getattr(original_exception, "response", None),
                             litellm_debug_info=extra_information,
                         )
                     elif original_exception.status_code == 504:  # gateway timeout error
@@ -6916,7 +6916,7 @@ def exception_type(
                             message=f"APIError: {exception_provider} - {message}",
                             llm_provider=custom_llm_provider,
                             model=model,
-                            request=original_exception.request,
+                            request=getattr(original_exception, "request", None),
                             litellm_debug_info=extra_information,
                         )
                 else:
@@ -10955,10 +10955,17 @@ class CustomStreamWrapper:
 
 
 class TextCompletionStreamWrapper:
-    def __init__(self, completion_stream, model, stream_options: Optional[dict] = None):
+    def __init__(
+        self,
+        completion_stream,
+        model,
+        stream_options: Optional[dict] = None,
+        custom_llm_provider: Optional[str] = None,
+    ):
         self.completion_stream = completion_stream
         self.model = model
         self.stream_options = stream_options
+        self.custom_llm_provider = custom_llm_provider
 
     def __iter__(self):
         return self
@@ -11009,7 +11016,13 @@ class TextCompletionStreamWrapper:
         except StopIteration:
             raise StopIteration
         except Exception as e:
-            print(f"got exception {e}")  # noqa
+            raise exception_type(
+                model=self.model,
+                custom_llm_provider=self.custom_llm_provider or "",
+                original_exception=e,
+                completion_kwargs={},
+                extra_kwargs={},
+            )
 
     async def __anext__(self):
         try:

@@ -869,6 +869,15 @@ def _pre_call_utils(
             original_function = litellm.completion
         else:
             original_function = litellm.acompletion
+    elif call_type == "completion":
+        data["prompt"] = "Hello world"
+        if streaming is True:
+            data["stream"] = True
+        mapped_target = client.completions.with_raw_response
+        if sync_mode:
+            original_function = litellm.text_completion
+        else:
+            original_function = litellm.atext_completion
 
     return data, original_function, mapped_target
 
@@ -883,6 +892,7 @@ def _pre_call_utils(
         ("text-embedding-ada-002", "embedding", None),
         ("gpt-3.5-turbo", "chat_completion", False),
         ("gpt-3.5-turbo", "chat_completion", True),
+        ("gpt-3.5-turbo-instruct", "completion", True),
     ],
 )
 @pytest.mark.asyncio
@@ -933,27 +943,25 @@ async def test_exception_with_headers(sync_mode, model, call_type, streaming):
             new_retry_after_mock_client
         )
 
+        exception_raised = False
         try:
             if sync_mode:
-                resp = original_function(
-                    model="text-embedding-ada-002",
-                    input="Hello world!",
-                    client=openai_client,
-                )
+                resp = original_function(**data, client=openai_client)
                 if streaming:
                     for chunk in resp:
                         continue
             else:
-                resp = await original_function(
-                    model="text-embedding-ada-002",
-                    input="Hello world!",
-                    client=openai_client,
-                )
+                resp = await original_function(**data, client=openai_client)
 
                 if streaming:
                     async for chunk in resp:
                         continue
 
         except litellm.RateLimitError as e:
+            exception_raised = True
             assert e.litellm_response_headers is not None
             assert e.litellm_response_headers["retry-after"] == cooldown_time
+
+        if exception_raised is False:
+            print(resp)
+        assert exception_raised
