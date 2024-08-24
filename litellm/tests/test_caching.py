@@ -1941,6 +1941,8 @@ async def test_cache_default_off_acompletion():
     )
     print(f"Response3: {response3}")
 
+    await asyncio.sleep(2)
+
     response4 = await litellm.acompletion(
         model="gpt-3.5-turbo",
         messages=[

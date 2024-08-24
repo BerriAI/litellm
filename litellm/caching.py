@@ -2584,18 +2584,22 @@ class Cache:
             verbose_logger.exception(f"LiteLLM Cache: Excepton add_cache: {str(e)}")
 
     def should_use_cache(self, *args, **kwargs):
+        """
+        Returns true if we should use the cache for LLM API calls
+
+        If cache is default_on then this is True
+        If cache is default_off then this is only true when user has opted in to use cache
+        """
         if self.mode == CacheMode.default_on:
             return True
-        else:
-            # when mode == default_off -> Cache is opt in only
-            _cache = kwargs.get("cache", None)
-            verbose_logger.debug(
-                f"should_use_cache: kwargs: {kwargs}; _cache: {_cache}"
-            )
-            if _cache and isinstance(_cache, dict):
-                if _cache.get("use-cache", True) is False:
-                    return True
-        return True
+
+        # when mode == default_off -> Cache is opt in only
+        _cache = kwargs.get("cache", None)
+        verbose_logger.debug("should_use_cache: kwargs: %s; _cache: %s", kwargs, _cache)
+        if _cache and isinstance(_cache, dict):
+            if _cache.get("use-cache", False) is True:
+                return True
+        return False
 
     async def batch_cache_write(self, result, *args, **kwargs):
         cache_key, cached_data, kwargs = self._add_cache_logic(
