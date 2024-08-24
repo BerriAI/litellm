@@ -292,6 +292,13 @@ class SagemakerLLM(BaseAWSLLM):
                 )
                 return response
             else:
+                prompt = self._transform_prompt(
+                    model=model,
+                    messages=messages,
+                    custom_prompt_dict=custom_prompt_dict,
+                    hf_model_name=hf_model_name,
+                )
+                data["inputs"] = prompt
                 prepared_request = self._prepare_request(
                     model=model,
                     data=data,
