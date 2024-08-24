@@ -710,7 +710,9 @@ def completion(
     except Exception as e:
         if isinstance(e, VertexAIError):
             raise e
-        raise VertexAIError(status_code=500, message=str(e))
+        raise litellm.APIConnectionError(
+            message=str(e), llm_provider="vertex_ai", model=model
+        )
 
 
 async def async_completion(
