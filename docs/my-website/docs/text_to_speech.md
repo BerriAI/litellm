@@ -82,42 +82,9 @@ litellm --config /path/to/config.yaml
 
 | Provider    | Link to Usage      |
 |-------------|--------------------|
-| OpenAI      |                    |
-| Azure OpenAI|                    |
+| OpenAI      |   [Usage](#quick-start)                 |
+| Azure OpenAI|   [Usage](../docs/providers/azure#azure-text-to-speech-tts)                 |
 | Vertex AI   |   [Usage](../docs/providers/vertex#text-to-speech-apis)                 |
-
-## Azure Usage 
-
-**PROXY**
-
-```yaml
- - model_name: azure/tts-1
-    litellm_params:
-      model: azure/tts-1
-      api_base: "os.environ/AZURE_API_BASE_TTS"
-      api_key: "os.environ/AZURE_API_KEY_TTS"
-      api_version: "os.environ/AZURE_API_VERSION" 
-```
-
-**SDK**
-
-```python 
-from litellm import completion
-
-## set ENV variables
-os.environ["AZURE_API_KEY"] = ""
-os.environ["AZURE_API_BASE"] = ""
-os.environ["AZURE_API_VERSION"] = ""
-
-# azure call
-speech_file_path = Path(__file__).parent / "speech.mp3"
-response = speech(
-        model="azure/<your-deployment-name",
-        voice="alloy",
-        input="the quick brown fox jumped over the lazy dogs",
-    )
-response.stream_to_file(speech_file_path)
-```
 
 ## ✨ Enterprise LiteLLM Proxy - Set Max Request File Size 
 
