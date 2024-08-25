@@ -105,7 +105,7 @@ async def add_new_member(
                 returned_user = LiteLLM_UserTable(**_returned_user.model_dump())
         elif len(existing_user_row) == 1:
             user_info = existing_user_row[0]
-            _returned_user = await prisma_client.db.litellm_usertable.update(
+            _returned_user = await prisma_client.db.litellm_usertable.update(  # type: ignore
                 where={"user_id": user_info.user_id},
                 data={"teams": {"push": [team_id]}},
             )
