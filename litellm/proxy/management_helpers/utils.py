@@ -82,7 +82,8 @@ async def add_new_member(
                 "create": {"teams": [team_id], **new_user_defaults},  # type: ignore
             },
         )
-        returned_user = LiteLLM_UserTable(**_returned_user.model_dump())
+        if _returned_user is not None:
+            returned_user = LiteLLM_UserTable(**_returned_user.model_dump())
     elif new_member.user_email is not None:
         new_user_defaults = get_new_internal_user_defaults(
             user_id=str(uuid.uuid4()), user_email=new_member.user_email
@@ -108,6 +109,7 @@ async def add_new_member(
                 where={"user_id": user_info.user_id},  # type: ignore
                 data={"teams": {"push": [team_id]}},
             )
+
             returned_user = LiteLLM_UserTable(**_returned_user.model_dump())
         elif len(existing_user_row) > 1:
             raise HTTPException(
