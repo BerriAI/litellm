@@ -24,7 +24,7 @@ class CooldownCache:
 
     def _common_add_cooldown_logic(
         self, model_id: str, original_exception, exception_status, cooldown_time: float
-    ) -> Tuple[str, dict]:
+    ) -> Tuple[str, CooldownCacheValue]:
         try:
             current_time = time.time()
             cooldown_key = f"deployment:{model_id}:cooldown"
@@ -76,27 +76,9 @@ class CooldownCache:
             )
             raise e
 
-    async def async_add_deployment_to_cooldown(
-        self,
-        model_id: str,
-        original_exception: Exception,
-        exception_status: int,
-        cooldown_time: Optional[float],
-    ):
-        cooldown_key, cooldown_data = self._common_add_cooldown_logic(
-            model_id=model_id, original_exception=original_exception
-        )
-
-        # Set the cache with a TTL equal to the cooldown time
-        self.cache.set_cache(
-            value=cooldown_data,
-            key=cooldown_key,
-            ttl=cooldown_time or self.default_cooldown_time,
-        )
-
     async def async_get_active_cooldowns(
         self, model_ids: List[str]
-    ) -> List[Tuple[str, dict]]:
+    ) -> List[Tuple[str, CooldownCacheValue]]:
         # Generate the keys for the deployments
         keys = [f"deployment:{model_id}:cooldown" for model_id in model_ids]
 
@@ -106,12 +88,15 @@ class CooldownCache:
         active_cooldowns = []
         # Process the results
         for model_id, result in zip(model_ids, results):
-            if result:
-                active_cooldowns.append((model_id, result))
+            if result and isinstance(result, dict):
+                cooldown_cache_value = CooldownCacheValue(**result)
+                active_cooldowns.append((model_id, cooldown_cache_value))
 
         return active_cooldowns
 
-    def get_active_cooldowns(self, model_ids: List[str]) -> List[Tuple[str, dict]]:
+    def get_active_cooldowns(
+        self, model_ids: List[str]
+    ) -> List[Tuple[str, CooldownCacheValue]]:
         # Generate the keys for the deployments
         keys = [f"deployment:{model_id}:cooldown" for model_id in model_ids]
 
@@ -121,8 +106,9 @@ class CooldownCache:
         active_cooldowns = []
         # Process the results
         for model_id, result in zip(model_ids, results):
-            if result:
-                active_cooldowns.append((model_id, result))
+            if result and isinstance(result, dict):
+                cooldown_cache_value = CooldownCacheValue(**result)
+                active_cooldowns.append((model_id, cooldown_cache_value))
 
         return active_cooldowns
 
