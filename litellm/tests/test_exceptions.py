@@ -864,7 +864,7 @@ def _pre_call_utils(
         data["messages"] = [{"role": "user", "content": "Hello world"}]
         if streaming is True:
             data["stream"] = True
-        mapped_target = client.chat.completions.with_raw_response
+        mapped_target = client.chat.completions.with_raw_response  # type: ignore
         if sync_mode:
             original_function = litellm.completion
         else:
@@ -873,7 +873,7 @@ def _pre_call_utils(
         data["prompt"] = "Hello world"
         if streaming is True:
             data["stream"] = True
-        mapped_target = client.completions.with_raw_response
+        mapped_target = client.completions.with_raw_response  # type: ignore
         if sync_mode:
             original_function = litellm.text_completion
         else:
