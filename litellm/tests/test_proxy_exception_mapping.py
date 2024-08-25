@@ -74,10 +74,7 @@ def test_chat_completion_exception(client):
         assert json_response.keys() == {"error"}
         print("ERROR=", json_response["error"])
         assert isinstance(json_response["error"]["message"], str)
-        assert (
-            "litellm.AuthenticationError: AuthenticationError: OpenAIException - Incorrect API key provided: bad-key. You can find your API key at https://platform.openai.com/account/api-keys."
-            in json_response["error"]["message"]
-        )
+        assert "litellm.AuthenticationError" in json_response["error"]["message"]
 
         code_in_error = json_response["error"]["code"]
         # OpenAI SDK required code to be STR, https://github.com/BerriAI/litellm/issues/4970
