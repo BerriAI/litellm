@@ -1071,8 +1071,11 @@ class VertexLLM(BaseLLM):
         """
         Returns auth token and project id
         """
-        if self.access_token is not None and self.project_id is not None:
-            return self.access_token, self.project_id
+        if self.access_token is not None:
+            if project_id is not None:
+                return self.access_token, project_id
+            elif self.project_id is not None:
+                return self.access_token, self.project_id
 
         if not self._credentials:
             self._credentials, cred_project_id = self.load_auth(
@@ -1151,6 +1154,7 @@ class VertexLLM(BaseLLM):
             ### SET RUNTIME ENDPOINT ###
             version = "v1beta1" if should_use_v1beta1_features is True else "v1"
             endpoint = "generateContent"
+            litellm.utils.print_verbose("vertex_project - {}".format(vertex_project))
             if stream is True:
                 endpoint = "streamGenerateContent"
                 url = f"https://{vertex_location}-aiplatform.googleapis.com/{version}/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}?alt=sse"
@@ -1288,6 +1292,8 @@ class VertexLLM(BaseLLM):
         should_use_v1beta1_features = self.is_using_v1beta1_features(
             optional_params=optional_params
         )
+
+        print_verbose("Incoming Vertex Args - {}".format(locals()))
         auth_header, url = self._get_token_and_url(
             model=model,
             gemini_api_key=gemini_api_key,
@@ -1299,6 +1305,7 @@ class VertexLLM(BaseLLM):
             api_base=api_base,
             should_use_v1beta1_features=should_use_v1beta1_features,
         )
+        print_verbose("Updated URL - {}".format(url))
 
         ## TRANSFORMATION ##
         try:
