@@ -1800,12 +1800,11 @@ class OpenAITextCompletion(BaseLLM):
         headers: Optional[dict] = None,
     ):
         super().completion()
-        exception_mapping_worked = False
         try:
             if headers is None:
                 headers = self.validate_environment(api_key=api_key)
             if model is None or messages is None:
-                raise OpenAIError(status_code=422, message=f"Missing model or messages")
+                raise OpenAIError(status_code=422, message="Missing model or messages")
 
             if (
                 len(messages) > 0
