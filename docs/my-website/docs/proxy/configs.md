@@ -55,7 +55,8 @@ model_list:
   - model_name: vllm-models
     litellm_params:
       model: openai/facebook/opt-125m # the `openai/` prefix tells litellm it's openai compatible
-      api_base: http://0.0.0.0:4000
+      api_base: http://0.0.0.0:4000/v1
+      api_key: none
       rpm: 1440
     model_info: 
       version: 2
@@ -284,52 +285,58 @@ curl --location 'http://0.0.0.0:4000/v1/model/info' \
 --data ''
 ```
 
-## Wildcard Model Name (Add ALL MODELS from env)
+ 
+## Provider specific wildcard routing 
+**Proxy all models from a provider**
 
-Dynamically call any model from any given provider without the need to predefine it in the config YAML file. As long as the relevant keys are in the environment (see [providers list](../providers/)), LiteLLM will make the call correctly.
+Use this if you want to **proxy all models from a specific provider without defining them on the config.yaml**
 
-
-
-1. Setup config.yaml
-```
+**Step 1** - define provider specific routing on config.yaml
+```yaml
 model_list:
-  - model_name: "*"             # all requests where model not in your config go to this deployment
+  # provider specific wildcard routing
+  - model_name: "anthropic/*"
     litellm_params:
-      model: "*"           # passes our validation check that a real provider is given
+      model: "anthropic/*"
+      api_key: os.environ/ANTHROPIC_API_KEY
+  - model_name: "groq/*"
+    litellm_params:
+      model: "groq/*"
+      api_key: os.environ/GROQ_API_KEY
 ```
 
-2. Start LiteLLM proxy 
+Step 2 - Run litellm proxy 
 
+```shell
+$ litellm --config /path/to/config.yaml
 ```
-litellm --config /path/to/config.yaml
-```
 
-3. Try claude 3-5 sonnet from anthropic 
+Step 3 Test it 
 
-```bash
-curl -X POST 'http://0.0.0.0:4000/chat/completions' \
--H 'Content-Type: application/json' \
--H 'Authorization: Bearer sk-1234' \
--D '{
-  "model": "claude-3-5-sonnet-20240620",
-  "messages": [
-        {"role": "user", "content": "Hey, how'\''s it going?"},
-        {
-            "role": "assistant",
-            "content": "I'\''m doing well. Would like to hear the rest of the story?"
-        },
-        {"role": "user", "content": "Na"},
-        {
-            "role": "assistant",
-            "content": "No problem, is there anything else i can help you with today?"
-        },
-        {
-            "role": "user",
-            "content": "I think you'\''re getting cut off sometimes"
-        }
+Test with `anthropic/` - all models with `anthropic/` prefix will get routed to `anthropic/*`
+```shell
+curl http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "anthropic/claude-3-sonnet-20240229",
+    "messages": [
+      {"role": "user", "content": "Hello, Claude!"}
     ]
-}
-'
+  }'
+```
+
+Test with `groq/` - all models with `groq/` prefix will get routed to `groq/*`
+```shell
+curl http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "groq/llama3-8b-8192",
+    "messages": [
+      {"role": "user", "content": "Hello, Claude!"}
+    ]
+  }'
 ```
 
 ## Load Balancing 
@@ -720,7 +727,9 @@ general_settings:
     "completion_model": "string",
     "disable_spend_logs": "boolean", # turn off writing each transaction to the db
     "disable_master_key_return": "boolean", # turn off returning master key on UI (checked on '/user/info' endpoint)
+    "disable_retry_on_max_parallel_request_limit_error": "boolean", # turn off retries when max parallel request limit is reached
     "disable_reset_budget": "boolean", # turn off reset budget scheduled task
+    "disable_adding_master_key_hash_to_db": "boolean", # turn off storing master key hash in db, for spend tracking
     "enable_jwt_auth": "boolean", # allow proxy admin to auth in via jwt tokens with 'litellm_proxy_admin' in claims
     "enforce_user_param": "boolean", # requires all openai endpoint requests to have a 'user' param
     "allowed_routes": "list", # list of allowed proxy API routes - a user can access. (currently JWT-Auth only)
@@ -743,7 +752,8 @@ general_settings:
     },
     "otel": true,
     "custom_auth": "string",
-    "max_parallel_requests": 0,
+    "max_parallel_requests": 0, # the max parallel requests allowed per deployment 
+    "global_max_parallel_requests": 0, # the max parallel requests allowed on the proxy all up 
     "infer_model_from_keys": true,
     "background_health_checks": true,
     "health_check_interval": 300,

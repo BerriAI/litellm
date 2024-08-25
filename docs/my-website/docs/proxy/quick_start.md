@@ -5,7 +5,7 @@ import TabItem from '@theme/TabItem';
 # Quick Start
 Quick start CLI, Config, Docker
 
-LiteLLM Server manages:
+LiteLLM Server (LLM Gateway) manages:
 
 * **Unified Interface**: Calling 100+ LLMs [Huggingface/Bedrock/TogetherAI/etc.](#other-supported-models) in the OpenAI `ChatCompletions` & `Completions` format
 * **Cost tracking**: Authentication, Spend Tracking & Budgets [Virtual Keys](https://docs.litellm.ai/docs/proxy/virtual_keys)
@@ -243,7 +243,8 @@ model_list:
   - model_name: vllm-model
     litellm_params:
       model: openai/<your-model-name>
-      api_base: <your-api-base> # e.g. http://0.0.0.0:3000
+      api_base: <your-vllm-api-base> # e.g. http://0.0.0.0:3000/v1
+      api_key: <your-vllm-api-key|none>
 ```
 
 ### Run proxy with config

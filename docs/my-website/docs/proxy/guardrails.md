@@ -1,19 +1,15 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# 🛡️ Guardrails
+# 🛡️ [Beta] Guardrails
 
-Setup Prompt Injection Detection, Secret Detection on LiteLLM Proxy
+Setup Prompt Injection Detection, Secret Detection using 
 
-:::info
+- Aporia AI
+- Lakera AI 
+- In Memory Prompt Injection Detection
 
-✨ Enterprise Only Feature
-
-Schedule a meeting with us to get an Enterprise License 👉 Talk to founders [here](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
-
-:::
-
-## Quick Start
+## Aporia AI
 
 ### 1. Setup guardrails on litellm proxy config.yaml
 
@@ -338,6 +334,7 @@ litellm_settings:
         - Full List: presidio, lakera_prompt_injection, hide_secrets, llmguard_moderations, llamaguard_moderations, google_text_moderation
     - `default_on`: bool,  will run on all llm requests when true
     - `logging_only`: Optional[bool], if true, run guardrail only on logged output, not on the actual LLM API call. Currently only supported for presidio pii masking. Requires `default_on` to be True as well.
+    - `callback_args`: Optional[Dict[str, Dict]]: If set, pass in init args for that specific guardrail
 
 Example: 
 
@@ -347,6 +344,7 @@ litellm_settings:
     - prompt_injection:  # your custom name for guardrail
         callbacks: [lakera_prompt_injection, hide_secrets, llmguard_moderations, llamaguard_moderations, google_text_moderation] # litellm callbacks to use
         default_on: true # will run on all llm requests when true
+        callback_args: {"lakera_prompt_injection": {"moderation_check": "pre_call"}}
     - hide_secrets:
         callbacks: [hide_secrets]
         default_on: true

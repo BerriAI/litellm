@@ -116,12 +116,14 @@ class CohereChatConfig:
         }
 
 
-def validate_environment(api_key):
-    headers = {
-        "Request-Source": "unspecified:litellm",
-        "accept": "application/json",
-        "content-type": "application/json",
-    }
+def validate_environment(api_key, headers: dict):
+    headers.update(
+        {
+            "Request-Source": "unspecified:litellm",
+            "accept": "application/json",
+            "content-type": "application/json",
+        }
+    )
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
     return headers
@@ -203,13 +205,14 @@ def completion(
     model_response: ModelResponse,
     print_verbose: Callable,
     optional_params: dict,
+    headers: dict,
     encoding,
     api_key,
     logging_obj,
     litellm_params=None,
     logger_fn=None,
 ):
-    headers = validate_environment(api_key)
+    headers = validate_environment(api_key, headers=headers)
     completion_url = api_base
     model = model
     most_recent_message, chat_history = cohere_messages_pt_v2(
@@ -233,8 +236,14 @@ def completion(
         optional_params["tool_results"] = [most_recent_message]
     elif isinstance(most_recent_message, str):
         optional_params["message"] = most_recent_message
+
+    ## check if chat history message is 'user' and 'tool_results' is given -> force_single_step=True, else cohere api fails
+    if len(chat_history) > 0 and chat_history[-1]["role"] == "USER":
+        optional_params["force_single_step"] = True
+
     data = {
         "model": model,
+        "chat_history": chat_history,
         **optional_params,
     }
 

@@ -66,9 +66,28 @@ class LangsmithLogger(CustomLogger):
 
     def _prepare_log_data(self, kwargs, response_obj, start_time, end_time):
         import datetime
+        from datetime import datetime as dt
         from datetime import timezone
 
         metadata = kwargs.get("litellm_params", {}).get("metadata", {}) or {}
+        new_metadata = {}
+        for key, value in metadata.items():
+            if (
+                isinstance(value, list)
+                or isinstance(value, str)
+                or isinstance(value, int)
+                or isinstance(value, float)
+            ):
+                new_metadata[key] = value
+            elif isinstance(value, BaseModel):
+                new_metadata[key] = value.model_dump_json()
+            elif isinstance(value, dict):
+                for k, v in value.items():
+                    if isinstance(v, dt):
+                        value[k] = v.isoformat()
+                new_metadata[key] = value
+
+        metadata = new_metadata
 
         kwargs["user_api_key"] = metadata.get("user_api_key", None)
         kwargs["user_api_key_user_id"] = metadata.get("user_api_key_user_id", None)
@@ -79,6 +98,10 @@ class LangsmithLogger(CustomLogger):
         project_name = metadata.get("project_name", self.langsmith_project)
         run_name = metadata.get("run_name", self.langsmith_default_run_name)
         run_id = metadata.get("id", None)
+        parent_run_id = metadata.get("parent_run_id", None)
+        trace_id = metadata.get("trace_id", None)
+        session_id = metadata.get("session_id", None)
+        dotted_order = metadata.get("dotted_order", None)
         tags = metadata.get("tags", []) or []
         verbose_logger.debug(
             f"Langsmith Logging - project_name: {project_name}, run_name {run_name}"
@@ -124,10 +147,23 @@ class LangsmithLogger(CustomLogger):
             "start_time": start_time,
             "end_time": end_time,
             "tags": tags,
+            "extra": metadata,
         }
 
         if run_id:
             data["id"] = run_id
+
+        if parent_run_id:
+            data["parent_run_id"] = parent_run_id
+
+        if trace_id:
+            data["trace_id"] = trace_id
+
+        if session_id:
+            data["session_id"] = session_id
+
+        if dotted_order:
+            data["dotted_order"] = dotted_order
 
         verbose_logger.debug("Langsmith Logging data on langsmith: %s", data)
 

@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import List, Optional
+from typing import Dict, List, Literal, Optional, TypedDict
 
 from pydantic import BaseModel, ConfigDict
 from typing_extensions import Required, TypedDict
@@ -33,6 +33,7 @@ class GuardrailItemSpec(TypedDict, total=False):
     default_on: bool
     logging_only: Optional[bool]
     enabled_roles: Optional[List[Role]]
+    callback_args: Dict[str, Dict]
 
 
 class GuardrailItem(BaseModel):
@@ -40,7 +41,9 @@ class GuardrailItem(BaseModel):
     default_on: bool
     logging_only: Optional[bool]
     guardrail_name: str
+    callback_args: Dict[str, Dict]
     enabled_roles: Optional[List[Role]]
+
     model_config = ConfigDict(use_enum_values=True)
 
     def __init__(
@@ -50,6 +53,7 @@ class GuardrailItem(BaseModel):
         default_on: bool = False,
         logging_only: Optional[bool] = None,
         enabled_roles: Optional[List[Role]] = default_roles,
+        callback_args: Dict[str, Dict] = {},
     ):
         super().__init__(
             callbacks=callbacks,
@@ -57,4 +61,53 @@ class GuardrailItem(BaseModel):
             logging_only=logging_only,
             guardrail_name=guardrail_name,
             enabled_roles=enabled_roles,
+            callback_args=callback_args,
         )
+
+
+# Define the TypedDicts
+class LakeraCategoryThresholds(TypedDict, total=False):
+    prompt_injection: float
+    jailbreak: float
+
+
+class LitellmParams(TypedDict, total=False):
+    guardrail: str
+    mode: str
+    api_key: str
+    api_base: Optional[str]
+
+    # Lakera specific params
+    category_thresholds: Optional[LakeraCategoryThresholds]
+
+    # Bedrock specific params
+    guardrailIdentifier: Optional[str]
+    guardrailVersion: Optional[str]
+
+
+class Guardrail(TypedDict):
+    guardrail_name: str
+    litellm_params: LitellmParams
+
+
+class guardrailConfig(TypedDict):
+    guardrails: List[Guardrail]
+
+
+class GuardrailEventHooks(str, Enum):
+    pre_call = "pre_call"
+    post_call = "post_call"
+    during_call = "during_call"
+
+
+class BedrockTextContent(TypedDict, total=False):
+    text: str
+
+
+class BedrockContentItem(TypedDict, total=False):
+    text: BedrockTextContent
+
+
+class BedrockRequest(TypedDict, total=False):
+    source: Literal["INPUT", "OUTPUT"]
+    content: List[BedrockContentItem]

@@ -36,7 +36,7 @@ response = completion(
 )
 ```
 
-## OpenAI Proxy Usage 
+## LiteLLM Proxy Usage 
 
 Here's how to call Anthropic with the LiteLLM Proxy Server
 
@@ -360,6 +360,120 @@ resp = litellm.completion(
 print(f"\nResponse: {resp}")
 ```
 
+
+## Usage - Bedrock Guardrails
+
+Example of using [Bedrock Guardrails with LiteLLM](https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-use-converse-api.html)
+
+<Tabs>
+<TabItem value="sdk" label="LiteLLM SDK">
+
+```python
+from litellm import completion
+
+# set env
+os.environ["AWS_ACCESS_KEY_ID"] = ""
+os.environ["AWS_SECRET_ACCESS_KEY"] = ""
+os.environ["AWS_REGION_NAME"] = ""
+
+response = completion(
+    model="anthropic.claude-v2",
+    messages=[
+        {
+            "content": "where do i buy coffee from? ",
+            "role": "user",
+        }
+    ],
+    max_tokens=10,
+    guardrailConfig={
+        "guardrailIdentifier": "ff6ujrregl1q", # The identifier (ID) for the guardrail.
+        "guardrailVersion": "DRAFT",           # The version of the guardrail.
+        "trace": "disabled",                   # The trace behavior for the guardrail. Can either be "disabled" or "enabled"
+    },
+)
+```
+</TabItem>
+<TabItem value="proxy" label="Proxy on request">
+
+```python
+
+import openai
+client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://0.0.0.0:4000"
+)
+
+# request sent to model set on litellm proxy, `litellm --model`
+response = client.chat.completions.create(model="anthropic.claude-v2", messages = [
+    {
+        "role": "user",
+        "content": "this is a test request, write a short poem"
+    }
+],
+temperature=0.7,
+extra_body={
+    "guardrailConfig": {
+        "guardrailIdentifier": "ff6ujrregl1q", # The identifier (ID) for the guardrail.
+        "guardrailVersion": "DRAFT",           # The version of the guardrail.
+        "trace": "disabled",                   # The trace behavior for the guardrail. Can either be "disabled" or "enabled"
+    },
+}
+)
+
+print(response)
+```
+</TabItem>
+<TabItem value="proxy-config" label="Proxy on config.yaml">
+
+1. Update config.yaml 
+
+```yaml
+model_list:
+  - model_name: bedrock-claude-v1
+    litellm_params:
+      model: bedrock/anthropic.claude-instant-v1
+      aws_access_key_id: os.environ/CUSTOM_AWS_ACCESS_KEY_ID
+      aws_secret_access_key: os.environ/CUSTOM_AWS_SECRET_ACCESS_KEY
+      aws_region_name: os.environ/CUSTOM_AWS_REGION_NAME
+      guardrailConfig: {
+        "guardrailIdentifier": "ff6ujrregl1q", # The identifier (ID) for the guardrail.
+        "guardrailVersion": "DRAFT",           # The version of the guardrail.
+        "trace": "disabled",                   # The trace behavior for the guardrail. Can either be "disabled" or "enabled"
+    }
+
+```
+
+2. Start proxy 
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+```python
+
+import openai
+client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://0.0.0.0:4000"
+)
+
+# request sent to model set on litellm proxy, `litellm --model`
+response = client.chat.completions.create(model="bedrock-claude-v1", messages = [
+    {
+        "role": "user",
+        "content": "this is a test request, write a short poem"
+    }
+],
+temperature=0.7
+)
+
+print(response)
+```
+</TabItem>
+</Tabs>
+
 ## Usage - "Assistant Pre-fill"
 
 If you're using Anthropic's Claude with Bedrock, you can "put words in Claude's mouth" by including an `assistant` role message as the last item in the `messages` array.
@@ -461,6 +575,45 @@ for chunk in response:
     "total_tokens": null
   }
 }
+```
+
+## Alternate user/assistant messages
+
+Use `user_continue_message` to add a default user message, for cases (e.g. Autogen) where the client might not follow alternating user/assistant messages starting and ending with a user message. 
+
+
+```yaml
+model_list:
+  - model_name: "bedrock-claude"
+    litellm_params:
+      model: "bedrock/anthropic.claude-instant-v1"
+      user_continue_message: {"role": "user", "content": "Please continue"}
+```
+
+OR 
+
+just set `litellm.modify_params=True` and LiteLLM will automatically handle this with a default user_continue_message.
+
+```yaml
+model_list:
+  - model_name: "bedrock-claude"
+    litellm_params:
+      model: "bedrock/anthropic.claude-instant-v1"
+
+litellm_settings:
+   modify_params: true
+```
+
+Test it! 
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-d '{
+    "model": "bedrock-claude",
+    "messages": [{"role": "assistant", "content": "Hey, how's it going?"}]
+}'
 ```
 
 ## Boto3 - Authentication

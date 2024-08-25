@@ -84,6 +84,20 @@ Set `export LITELLM_MODE="PRODUCTION"`
 
 This disables the load_dotenv() functionality, which will automatically load your environment credentials from the local `.env`. 
 
+## 5. Set LiteLLM Salt Key 
+
+If you plan on using the DB, set a salt key for encrypting/decrypting variables in the DB. 
+
+Do not change this after adding a model. It is used to encrypt / decrypt your LLM API Key credentials
+
+We recommned - https://1password.com/password-generator/ password generator to get a random hash for litellm salt key.
+
+```bash
+export LITELLM_SALT_KEY="sk-1234"
+```
+
+[**See Code**](https://github.com/BerriAI/litellm/blob/036a6821d588bd36d170713dcf5a72791a694178/litellm/proxy/common_utils/encrypt_decrypt_utils.py#L15)
+
 ## Extras
 ### Expected Performance in Production
 

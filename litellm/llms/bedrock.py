@@ -13,6 +13,7 @@ from enum import Enum
 from typing import Any, Callable, List, Optional, Union
 
 import httpx
+from openai.types.image import Image
 
 import litellm
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
@@ -604,6 +605,9 @@ def init_bedrock_client(
         aws_web_identity_token,
     ) = params_to_check
 
+    # SSL certificates (a.k.a CA bundle) used to verify the identity of requested hosts.
+    ssl_verify = os.getenv("SSL_VERIFY", litellm.ssl_verify)
+
     ### SET REGION NAME
     if region_name:
         pass
@@ -672,6 +676,7 @@ def init_bedrock_client(
             region_name=region_name,
             endpoint_url=endpoint_url,
             config=config,
+            verify=ssl_verify,
         )
     elif aws_role_name is not None and aws_session_name is not None:
         # use sts if role name passed in
@@ -693,6 +698,7 @@ def init_bedrock_client(
             region_name=region_name,
             endpoint_url=endpoint_url,
             config=config,
+            verify=ssl_verify,
         )
     elif aws_access_key_id is not None:
         # uses auth params passed to completion
@@ -705,6 +711,7 @@ def init_bedrock_client(
             region_name=region_name,
             endpoint_url=endpoint_url,
             config=config,
+            verify=ssl_verify,
         )
     elif aws_profile_name is not None:
         # uses auth values from AWS profile usually stored in ~/.aws/credentials
@@ -714,6 +721,7 @@ def init_bedrock_client(
             region_name=region_name,
             endpoint_url=endpoint_url,
             config=config,
+            verify=ssl_verify,
         )
     else:
         # aws_access_key_id is None, assume user is trying to auth using env variables
@@ -724,6 +732,7 @@ def init_bedrock_client(
             region_name=region_name,
             endpoint_url=endpoint_url,
             config=config,
+            verify=ssl_verify,
         )
     if extra_headers:
         client.meta.events.register(
@@ -1413,10 +1422,10 @@ def embedding(
 def image_generation(
     model: str,
     prompt: str,
+    model_response: ImageResponse,
+    optional_params: dict,
     timeout=None,
     logging_obj=None,
-    model_response=None,
-    optional_params=None,
     aimg_generation=False,
 ):
     """
@@ -1513,9 +1522,10 @@ def image_generation(
     if model_response is None:
         model_response = ImageResponse()
 
-    image_list: List = []
+    image_list: List[Image] = []
     for artifact in response_body["artifacts"]:
-        image_dict = {"url": artifact["base64"]}
+        _image = Image(b64_json=artifact["base64"])
+        image_list.append(_image)
 
-    model_response.data = image_dict
+    model_response.data = image_list
     return model_response

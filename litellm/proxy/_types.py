@@ -5,10 +5,10 @@ import sys
 import uuid
 from dataclasses import fields
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, TypedDict, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Extra, Field, Json, model_validator
-from typing_extensions import Annotated
+from typing_extensions import Annotated, TypedDict
 
 from litellm.types.router import UpdateRouterConfig
 from litellm.types.utils import ProviderField
@@ -19,6 +19,13 @@ if TYPE_CHECKING:
     Span = _Span
 else:
     Span = Any
+
+
+class LiteLLMTeamRoles(enum.Enum):
+    # team admin
+    TEAM_ADMIN = "admin"
+    # team member
+    TEAM_MEMBER = "user"
 
 
 class LitellmUserRoles(str, enum.Enum):
@@ -57,6 +64,9 @@ class LitellmUserRoles(str, enum.Enum):
 
     def __str__(self):
         return str(self.value)
+
+    def values(self) -> List[str]:
+        return list(self.__annotations__.keys())
 
     @property
     def description(self):
@@ -112,6 +122,7 @@ AlertType = Literal[
     "new_model_added",
     "outage_alerts",
     "region_outage_alerts",
+    "fallback_reports",
 ]
 
 
@@ -199,8 +210,8 @@ class LiteLLMRoutes(enum.Enum):
         # batches
         "/v1/batches",
         "/batches",
-        "/v1/batches{batch_id}",
-        "/batches{batch_id}",
+        "/v1/batches/{batch_id}",
+        "/batches/{batch_id}",
         # files
         "/v1/files",
         "/files",
@@ -208,6 +219,11 @@ class LiteLLMRoutes(enum.Enum):
         "/files/{file_id}",
         "/v1/files/{file_id}/content",
         "/files/{file_id}/content",
+        # fine_tuning
+        "/fine_tuning/jobs",
+        "/v1/fine_tuning/jobs",
+        "/fine_tuning/jobs/{fine_tuning_job_id}/cancel",
+        "/v1/fine_tuning/jobs/{fine_tuning_job_id}/cancel",
         # assistants-related routes
         "/assistants",
         "/v1/assistants",
@@ -325,6 +341,11 @@ class LiteLLMRoutes(enum.Enum):
         + spend_tracking_routes
         + sso_only_routes
     )
+
+    self_managed_routes: List = [
+        "/team/member_add",
+        "/team/member_delete",
+    ]  # routes that manage their own allowed/disallowed logic
 
 
 # class LiteLLMAllowedRoutes(LiteLLMBase):
@@ -576,6 +597,9 @@ class GenerateKeyRequest(GenerateRequestBase):
 
     model_config = ConfigDict(protected_namespaces=())
     send_invite_email: Optional[bool] = None
+    model_rpm_limit: Optional[dict] = None
+    model_tpm_limit: Optional[dict] = None
+    guardrails: Optional[List[str]] = None
 
 
 class GenerateKeyResponse(GenerateKeyRequest):
@@ -910,7 +934,6 @@ class LiteLLM_TeamTable(TeamBase):
     budget_duration: Optional[str] = None
     budget_reset_at: Optional[datetime] = None
     model_id: Optional[int] = None
-    last_refreshed_at: Optional[float] = None
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -934,6 +957,10 @@ class LiteLLM_TeamTable(TeamBase):
                     raise ValueError(f"Field {field} should be a valid dictionary")
 
         return values
+
+
+class LiteLLM_TeamTableCachedObj(LiteLLM_TeamTable):
+    last_refreshed_at: Optional[float] = None
 
 
 class TeamRequest(LiteLLMBase):
@@ -1070,6 +1097,20 @@ class DynamoDBArgs(LiteLLMBase):
     assume_role_aws_session_name: Optional[str] = None
 
 
+class PassThroughGenericEndpoint(LiteLLMBase):
+    path: str = Field(description="The route to be added to the LiteLLM Proxy Server.")
+    target: str = Field(
+        description="The URL to which requests for this path should be forwarded."
+    )
+    headers: dict = Field(
+        description="Key-value pairs of headers to be forwarded with the request. You can set any key value pair here and it will be forwarded to your target endpoint"
+    )
+
+
+class PassThroughEndpointResponse(LiteLLMBase):
+    endpoints: List[PassThroughGenericEndpoint]
+
+
 class ConfigFieldUpdate(LiteLLMBase):
     field_name: str
     field_value: Any
@@ -1081,6 +1122,14 @@ class ConfigFieldDelete(LiteLLMBase):
     field_name: str
 
 
+class FieldDetail(BaseModel):
+    field_name: str
+    field_type: str
+    field_description: str
+    field_default_value: Any = None
+    stored_in_db: Optional[bool]
+
+
 class ConfigList(LiteLLMBase):
     field_name: str
     field_type: str
@@ -1089,6 +1138,9 @@ class ConfigList(LiteLLMBase):
     stored_in_db: Optional[bool]
     field_default_value: Any
     premium_field: bool = False
+    nested_fields: Optional[List[FieldDetail]] = (
+        None  # For nested dictionary or Pydantic fields
+    )
 
 
 class ConfigGeneralSettings(LiteLLMBase):
@@ -1191,6 +1243,10 @@ class ConfigGeneralSettings(LiteLLMBase):
         default=False,
         description="Public model hub for users to see what models they have access to, supported openai params, etc.",
     )
+    pass_through_endpoints: Optional[List[PassThroughGenericEndpoint]] = Field(
+        default=None,
+        description="Set-up pass-through endpoints for provider-specific endpoints. Docs - https://docs.litellm.ai/docs/proxy/pass_through",
+    )
 
 
 class ConfigYAML(LiteLLMBase):
@@ -1264,6 +1320,7 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     soft_budget: Optional[float] = None
     team_model_aliases: Optional[Dict] = None
     team_member_spend: Optional[float] = None
+    team_member: Optional[Member] = None
     team_metadata: Optional[Dict] = None
 
     # End User Params
@@ -1296,6 +1353,8 @@ class UserAPIKeyAuth(
     ] = None
     allowed_model_region: Optional[Literal["eu"]] = None
     parent_otel_span: Optional[Span] = None
+    rpm_limit_per_model: Optional[Dict[str, int]] = None
+    tpm_limit_per_model: Optional[Dict[str, int]] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -1327,6 +1386,7 @@ class LiteLLM_UserTable(LiteLLMBase):
     models: list = []
     tpm_limit: Optional[int] = None
     rpm_limit: Optional[int] = None
+    user_role: Optional[str] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -1554,6 +1614,22 @@ class AllCallbacks(LiteLLMBase):
         ui_callback_name="Datadog",
     )
 
+    braintrust: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="braintrust",
+        litellm_callback_params=["BRAINTRUST_API_KEY"],
+        ui_callback_name="Braintrust",
+    )
+
+    langsmith: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="langsmith",
+        litellm_callback_params=[
+            "LANGSMITH_API_KEY",
+            "LANGSMITH_PROJECT",
+            "LANGSMITH_DEFAULT_RUN_NAME",
+        ],
+        ui_callback_name="Langsmith",
+    )
+
 
 class SpendLogsMetadata(TypedDict):
     """
@@ -1661,13 +1737,17 @@ class ProxyException(Exception):
         message: str,
         type: str,
         param: Optional[str],
-        code: Optional[int],
+        code: Optional[Union[int, str]] = None,
         headers: Optional[Dict[str, str]] = None,
     ):
         self.message = message
         self.type = type
         self.param = param
-        self.code = code
+
+        # If we look on official python OpenAI lib, the code should be a string:
+        # https://github.com/openai/openai-python/blob/195c05a64d39c87b2dfdf1eca2d339597f1fce03/src/openai/types/shared/error_object.py#L11
+        # Related LiteLLM issue: https://github.com/BerriAI/litellm/discussions/4834
+        self.code = str(code)
         if headers is not None:
             for k, v in headers.items():
                 if not isinstance(v, str):
@@ -1681,7 +1761,7 @@ class ProxyException(Exception):
             "No healthy deployment available" in self.message
             or "No deployments available" in self.message
         ):
-            self.code = 429
+            self.code = "429"
 
     def to_dict(self) -> dict:
         """Converts the ProxyException instance to a dictionary."""
@@ -1712,3 +1792,37 @@ class ProxyErrorTypes(str, enum.Enum):
     auth_error = "auth_error"
     internal_server_error = "internal_server_error"
     bad_request_error = "bad_request_error"
+
+
+class SSOUserDefinedValues(TypedDict):
+    models: List[str]
+    user_id: str
+    user_email: Optional[str]
+    user_role: Optional[str]
+    max_budget: Optional[float]
+    budget_duration: Optional[str]
+
+
+class VirtualKeyEvent(LiteLLMBase):
+    created_by_user_id: str
+    created_by_user_role: str
+    created_by_key_alias: Optional[str]
+    request_kwargs: dict
+
+
+class CreatePassThroughEndpoint(LiteLLMBase):
+    path: str
+    target: str
+    headers: dict
+
+
+class LiteLLM_TeamMembership(LiteLLMBase):
+    user_id: str
+    team_id: str
+    budget_id: str
+    litellm_budget_table: Optional[LiteLLM_BudgetTable]
+
+
+class TeamAddMemberResponse(LiteLLM_TeamTable):
+    updated_users: List[LiteLLM_UserTable]
+    updated_team_memberships: List[LiteLLM_TeamMembership]

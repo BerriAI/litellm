@@ -1,9 +1,15 @@
+import os
+import sys
 from typing import Dict
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.proxy_server import LiteLLM_TeamTable, UserAPIKeyAuth
 from litellm.types.guardrails import *
+
+sys.path.insert(
+    0, os.path.abspath("../..")
+)  # Adds the parent directory to the system path
 
 
 def can_modify_guardrails(team_obj: Optional[LiteLLM_TeamTable]) -> bool:
@@ -37,32 +43,35 @@ async def should_proceed_based_on_metadata(data: dict, guardrail_name: str) -> b
 
             requested_callback_names = []
 
-            # get guardrail configs from `init_guardrails.py`
-            # for all requested guardrails -> get their associated callbacks
-            for _guardrail_name, should_run in request_guardrails.items():
-                if should_run is False:
-                    verbose_proxy_logger.debug(
-                        "Guardrail %s skipped because request set to False",
-                        _guardrail_name,
-                    )
-                    continue
+            # v1 implementation of this
+            if isinstance(request_guardrails, dict):
 
-                # lookup the guardrail in guardrail_name_config_map
-                guardrail_item: GuardrailItem = litellm.guardrail_name_config_map[
-                    _guardrail_name
-                ]
+                # get guardrail configs from `init_guardrails.py`
+                # for all requested guardrails -> get their associated callbacks
+                for _guardrail_name, should_run in request_guardrails.items():
+                    if should_run is False:
+                        verbose_proxy_logger.debug(
+                            "Guardrail %s skipped because request set to False",
+                            _guardrail_name,
+                        )
+                        continue
 
-                guardrail_callbacks = guardrail_item.callbacks
-                requested_callback_names.extend(guardrail_callbacks)
+                    # lookup the guardrail in guardrail_name_config_map
+                    guardrail_item: GuardrailItem = litellm.guardrail_name_config_map[
+                        _guardrail_name
+                    ]
 
-            verbose_proxy_logger.debug(
-                "requested_callback_names %s", requested_callback_names
-            )
-            if guardrail_name in requested_callback_names:
-                return True
+                    guardrail_callbacks = guardrail_item.callbacks
+                    requested_callback_names.extend(guardrail_callbacks)
 
-            # Do no proceeed if - "metadata": { "guardrails": { "lakera_prompt_injection": false } }
-            return False
+                verbose_proxy_logger.debug(
+                    "requested_callback_names %s", requested_callback_names
+                )
+                if guardrail_name in requested_callback_names:
+                    return True
+
+                # Do no proceeed if - "metadata": { "guardrails": { "lakera_prompt_injection": false } }
+                return False
 
     return True
 
