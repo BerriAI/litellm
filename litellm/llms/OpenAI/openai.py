@@ -1160,18 +1160,11 @@ class OpenAIChatCompletion(BaseLLM):
                 "complete_input_dict": data,
             },
         )
-        try:
-            headers, response = self.make_sync_openai_chat_completion_request(
-                openai_client=openai_client,
-                data=data,
-                timeout=timeout,
-            )
-        except Exception as e:
-            status_code = getattr(e, "status_code", 500)
-            error_headers = getattr(e, "headers", None)
-            raise OpenAIError(
-                status_code=status_code, message=str(e), headers=error_headers
-            )
+        headers, response = self.make_sync_openai_chat_completion_request(
+            openai_client=openai_client,
+            data=data,
+            timeout=timeout,
+        )
 
         logging_obj.model_call_details["response_headers"] = headers
         streamwrapper = CustomStreamWrapper(
