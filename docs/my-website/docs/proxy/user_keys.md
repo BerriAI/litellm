@@ -13,6 +13,7 @@ LiteLLM Proxy is **OpenAI-Compatible**, and supports:
 * /audio/speech
 * [Assistants API endpoints](https://docs.litellm.ai/docs/assistants)
 * [Batches API endpoints](https://docs.litellm.ai/docs/batches)
+* [Fine-Tuning API endpoints](https://docs.litellm.ai/docs/fine_tuning)
 
 LiteLLM Proxy is **Azure OpenAI-compatible**:
 * /chat/completions
@@ -21,6 +22,9 @@ LiteLLM Proxy is **Azure OpenAI-compatible**:
 
 LiteLLM Proxy is **Anthropic-compatible**: 
 * /messages 
+
+LiteLLM Proxy is **Vertex AI compatible**:
+- [Supports ALL Vertex Endpoints](../vertex_ai)
 
 This doc covers:
 
@@ -321,11 +325,12 @@ from openai import OpenAI
 import instructor
 from pydantic import BaseModel
 
-my_proxy_api_key = "" # e.g. sk-1234
-my_proxy_base_url = "" # e.g. http://0.0.0.0:4000
+my_proxy_api_key = "" # e.g. sk-1234 - LITELLM KEY
+my_proxy_base_url = "" # e.g. http://0.0.0.0:4000 - LITELLM PROXY BASE URL
 
 # This enables response_model keyword
 # from client.chat.completions.create
+## WORKS ACROSS OPENAI/ANTHROPIC/VERTEXAI/ETC. - all LITELLM SUPPORTED MODELS!
 client = instructor.from_openai(OpenAI(api_key=my_proxy_api_key, base_url=my_proxy_base_url))
 
 class UserDetail(BaseModel):

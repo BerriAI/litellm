@@ -4,7 +4,8 @@ Call your custom torch-serve / internal LLM APIs via LiteLLM
 
 :::info
 
-For calling an openai-compatible endpoint, [go here](./openai_compatible.md)
+- For calling an openai-compatible endpoint, [go here](./openai_compatible.md)
+- For modifying incoming/outgoing calls on proxy, [go here](../proxy/call_hooks.md)
 :::
 
 ## Quick Start 
@@ -128,6 +129,56 @@ Expected Response
         "total_tokens": 30
     }
 }
+```
+
+## Add Streaming Support 
+
+Here's a simple example of returning unix epoch seconds for both completion + streaming use-cases. 
+
+s/o [@Eloy Lafuente](https://github.com/stronk7) for this code example.
+
+```python
+import time
+from typing import Iterator, AsyncIterator
+from litellm.types.utils import GenericStreamingChunk, ModelResponse
+from litellm import CustomLLM, completion, acompletion
+
+class UnixTimeLLM(CustomLLM):
+    def completion(self, *args, **kwargs) -> ModelResponse:
+        return completion(
+            model="test/unixtime",
+            mock_response=str(int(time.time())),
+        )  # type: ignore
+
+    async def acompletion(self, *args, **kwargs) -> ModelResponse:
+        return await acompletion(
+            model="test/unixtime",
+            mock_response=str(int(time.time())),
+        )  # type: ignore
+
+    def streaming(self, *args, **kwargs) -> Iterator[GenericStreamingChunk]:
+        generic_streaming_chunk: GenericStreamingChunk = {
+            "finish_reason": "stop",
+            "index": 0,
+            "is_finished": True,
+            "text": str(int(time.time())),
+            "tool_use": None,
+            "usage": {"completion_tokens": 0, "prompt_tokens": 0, "total_tokens": 0},
+        }
+        return generic_streaming_chunk # type: ignore
+
+    async def astreaming(self, *args, **kwargs) -> AsyncIterator[GenericStreamingChunk]:
+        generic_streaming_chunk: GenericStreamingChunk = {
+            "finish_reason": "stop",
+            "index": 0,
+            "is_finished": True,
+            "text": str(int(time.time())),
+            "tool_use": None,
+            "usage": {"completion_tokens": 0, "prompt_tokens": 0, "total_tokens": 0},
+        }
+        yield generic_streaming_chunk # type: ignore
+
+unixtime = UnixTimeLLM()
 ```
 
 ## Custom Handler Spec

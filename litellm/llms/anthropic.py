@@ -2,16 +2,20 @@ import copy
 import json
 import os
 import time
+import traceback
 import types
 from enum import Enum
 from functools import partial
-from typing import Callable, List, Optional, Union
+from typing import Callable, List, Literal, Optional, Tuple, Union
 
 import httpx  # type: ignore
 import requests  # type: ignore
+from openai.types.chat.chat_completion_chunk import Choice as OpenAIStreamingChoice
 
 import litellm
 import litellm.litellm_core_utils
+import litellm.types
+import litellm.types.utils
 from litellm import verbose_logger
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.custom_httpx.http_handler import (
@@ -31,10 +35,16 @@ from litellm.types.llms.anthropic import (
     AnthropicResponseContentBlockText,
     AnthropicResponseContentBlockToolUse,
     AnthropicResponseUsageBlock,
+    AnthropicSystemMessageContent,
     ContentBlockDelta,
     ContentBlockStart,
+    ContentBlockStop,
+    ContentJsonBlockDelta,
+    ContentTextBlockDelta,
     MessageBlockDelta,
+    MessageDelta,
     MessageStartBlock,
+    UsageDelta,
 )
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -72,7 +82,7 @@ class AnthropicConstants(Enum):
 
 
 class AnthropicError(Exception):
-    def __init__(self, status_code, message):
+    def __init__(self, status_code: int, message):
         self.status_code = status_code
         self.message: str = message
         self.request = httpx.Request(
@@ -214,6 +224,9 @@ class AnthropicConfig:
         for m in messages:
             user_message: Optional[ChatCompletionUserMessage] = None
             tool_message_list: List[ChatCompletionToolMessage] = []
+            new_user_content_list: List[
+                Union[ChatCompletionTextObject, ChatCompletionImageObject]
+            ] = []
             ## USER MESSAGE ##
             if m["role"] == "user":
                 ## translate user message
@@ -222,9 +235,6 @@ class AnthropicConfig:
                         role="user", content=m["content"]
                     )
                 elif isinstance(m["content"], list):
-                    new_user_content_list: List[
-                        Union[ChatCompletionTextObject, ChatCompletionImageObject]
-                    ] = []
                     for content in m["content"]:
                         if content["type"] == "text":
                             text_obj = ChatCompletionTextObject(
@@ -277,6 +287,9 @@ class AnthropicConfig:
 
             if user_message is not None:
                 new_messages.append(user_message)
+
+            if len(new_user_content_list) > 0:
+                new_messages.append({"role": "user", "content": new_user_content_list})
 
             if len(tool_message_list) > 0:
                 new_messages.extend(tool_message_list)
@@ -464,7 +477,8 @@ class AnthropicConfig:
         # extract usage
         usage: litellm.Usage = getattr(response, "usage")
         anthropic_usage = AnthropicResponseUsageBlock(
-            input_tokens=usage.prompt_tokens, output_tokens=usage.completion_tokens
+            input_tokens=usage.prompt_tokens or 0,
+            output_tokens=usage.completion_tokens or 0,
         )
         translated_obj = AnthropicResponse(
             id=response.id,
@@ -478,6 +492,74 @@ class AnthropicConfig:
         )
 
         return translated_obj
+
+    def _translate_streaming_openai_chunk_to_anthropic(
+        self, choices: List[OpenAIStreamingChoice]
+    ) -> Tuple[
+        Literal["text_delta", "input_json_delta"],
+        Union[ContentTextBlockDelta, ContentJsonBlockDelta],
+    ]:
+        text: str = ""
+        partial_json: Optional[str] = None
+        for choice in choices:
+            if choice.delta.content is not None:
+                text += choice.delta.content
+            elif choice.delta.tool_calls is not None:
+                partial_json = ""
+                for tool in choice.delta.tool_calls:
+                    if (
+                        tool.function is not None
+                        and tool.function.arguments is not None
+                    ):
+                        partial_json += tool.function.arguments
+
+        if partial_json is not None:
+            return "input_json_delta", ContentJsonBlockDelta(
+                type="input_json_delta", partial_json=partial_json
+            )
+        else:
+            return "text_delta", ContentTextBlockDelta(type="text_delta", text=text)
+
+    def translate_streaming_openai_response_to_anthropic(
+        self, response: litellm.ModelResponse
+    ) -> Union[ContentBlockDelta, MessageBlockDelta]:
+        ## base case - final chunk w/ finish reason
+        if response.choices[0].finish_reason is not None:
+            delta = MessageDelta(
+                stop_reason=self._translate_openai_finish_reason_to_anthropic(
+                    response.choices[0].finish_reason
+                ),
+            )
+            if getattr(response, "usage", None) is not None:
+                litellm_usage_chunk: Optional[litellm.Usage] = response.usage  # type: ignore
+            elif (
+                hasattr(response, "_hidden_params")
+                and "usage" in response._hidden_params
+            ):
+                litellm_usage_chunk = response._hidden_params["usage"]
+            else:
+                litellm_usage_chunk = None
+            if litellm_usage_chunk is not None:
+                usage_delta = UsageDelta(
+                    input_tokens=litellm_usage_chunk.prompt_tokens or 0,
+                    output_tokens=litellm_usage_chunk.completion_tokens or 0,
+                )
+            else:
+                usage_delta = UsageDelta(input_tokens=0, output_tokens=0)
+            return MessageBlockDelta(
+                type="message_delta", delta=delta, usage=usage_delta
+            )
+        (
+            type_of_content,
+            content_block_delta,
+        ) = self._translate_streaming_openai_chunk_to_anthropic(
+            choices=response.choices  # type: ignore
+        )
+        return ContentBlockDelta(
+            type="content_block_delta",
+            index=response.choices[0].index,
+            delta=content_block_delta,
+        )
 
 
 # makes headers for API call
@@ -507,17 +589,23 @@ async def make_call(
     model: str,
     messages: list,
     logging_obj,
+    timeout: Optional[Union[float, httpx.Timeout]],
 ):
     if client is None:
         client = _get_async_httpx_client()  # Create a new client if none provided
 
     try:
-        response = await client.post(api_base, headers=headers, data=data, stream=True)
+        response = await client.post(
+            api_base, headers=headers, data=data, stream=True, timeout=timeout
+        )
     except httpx.HTTPStatusError as e:
         raise AnthropicError(
             status_code=e.response.status_code, message=await e.response.aread()
         )
     except Exception as e:
+        for exception in litellm.LITELLM_EXCEPTION_TYPES:
+            if isinstance(e, exception):
+                raise e
         raise AnthropicError(status_code=500, message=str(e))
 
     if response.status_code != 200:
@@ -534,6 +622,51 @@ async def make_call(
         input=messages,
         api_key="",
         original_response=completion_stream,  # Pass the completion stream for logging
+        additional_args={"complete_input_dict": data},
+    )
+
+    return completion_stream
+
+
+def make_sync_call(
+    client: Optional[HTTPHandler],
+    api_base: str,
+    headers: dict,
+    data: str,
+    model: str,
+    messages: list,
+    logging_obj,
+    timeout: Optional[Union[float, httpx.Timeout]],
+):
+    if client is None:
+        client = HTTPHandler()  # Create a new client if none provided
+
+    try:
+        response = client.post(
+            api_base, headers=headers, data=data, stream=True, timeout=timeout
+        )
+    except httpx.HTTPStatusError as e:
+        raise AnthropicError(
+            status_code=e.response.status_code, message=e.response.read()
+        )
+    except Exception as e:
+        for exception in litellm.LITELLM_EXCEPTION_TYPES:
+            if isinstance(e, exception):
+                raise e
+        raise AnthropicError(status_code=500, message=str(e))
+
+    if response.status_code != 200:
+        raise AnthropicError(status_code=response.status_code, message=response.read())
+
+    completion_stream = ModelResponseIterator(
+        streaming_response=response.iter_lines(), sync_stream=True
+    )
+
+    # LOGGING
+    logging_obj.post_call(
+        input=messages,
+        api_key="",
+        original_response="first stream response received",
         additional_args={"complete_input_dict": data},
     )
 
@@ -627,6 +760,7 @@ class AnthropicChatCompletion(BaseLLM):
         ## CALCULATING USAGE
         prompt_tokens = completion_response["usage"]["input_tokens"]
         completion_tokens = completion_response["usage"]["output_tokens"]
+        _usage = completion_response["usage"]
         total_tokens = prompt_tokens + completion_tokens
 
         model_response.created = int(time.time())
@@ -636,6 +770,11 @@ class AnthropicChatCompletion(BaseLLM):
             completion_tokens=completion_tokens,
             total_tokens=total_tokens,
         )
+
+        if "cache_creation_input_tokens" in _usage:
+            usage["cache_creation_input_tokens"] = _usage["cache_creation_input_tokens"]
+        if "cache_read_input_tokens" in _usage:
+            usage["cache_read_input_tokens"] = _usage["cache_read_input_tokens"]
         setattr(model_response, "usage", usage)  # type: ignore
         return model_response
 
@@ -647,6 +786,7 @@ class AnthropicChatCompletion(BaseLLM):
         custom_prompt_dict: dict,
         model_response: ModelResponse,
         print_verbose: Callable,
+        timeout: Union[float, httpx.Timeout],
         encoding,
         api_key,
         logging_obj,
@@ -659,20 +799,6 @@ class AnthropicChatCompletion(BaseLLM):
         headers={},
     ):
         data["stream"] = True
-        # async_handler = AsyncHTTPHandler(
-        #     timeout=httpx.Timeout(timeout=600.0, connect=20.0)
-        # )
-
-        # response = await async_handler.post(
-        #     api_base, headers=headers, json=data, stream=True
-        # )
-
-        # if response.status_code != 200:
-        #     raise AnthropicError(
-        #         status_code=response.status_code, message=response.text
-        #     )
-
-        # completion_stream = response.aiter_lines()
 
         streamwrapper = CustomStreamWrapper(
             completion_stream=None,
@@ -685,6 +811,7 @@ class AnthropicChatCompletion(BaseLLM):
                 model=model,
                 messages=messages,
                 logging_obj=logging_obj,
+                timeout=timeout,
             ),
             model=model,
             custom_llm_provider="anthropic",
@@ -700,6 +827,7 @@ class AnthropicChatCompletion(BaseLLM):
         custom_prompt_dict: dict,
         model_response: ModelResponse,
         print_verbose: Callable,
+        timeout: Union[float, httpx.Timeout],
         encoding,
         api_key,
         logging_obj,
@@ -716,7 +844,9 @@ class AnthropicChatCompletion(BaseLLM):
         async_handler = _get_async_httpx_client()
 
         try:
-            response = await async_handler.post(api_base, headers=headers, json=data)
+            response = await async_handler.post(
+                api_base, headers=headers, json=data, timeout=timeout
+            )
         except Exception as e:
             ## LOGGING
             logging_obj.post_call(
@@ -778,6 +908,7 @@ class AnthropicChatCompletion(BaseLLM):
             # Separate system prompt from rest of message
             system_prompt_indices = []
             system_prompt = ""
+            anthropic_system_message_list = None
             for idx, message in enumerate(messages):
                 if message["role"] == "system":
                     valid_content: bool = False
@@ -785,8 +916,23 @@ class AnthropicChatCompletion(BaseLLM):
                         system_prompt += message["content"]
                         valid_content = True
                     elif isinstance(message["content"], list):
-                        for content in message["content"]:
-                            system_prompt += content.get("text", "")
+                        for _content in message["content"]:
+                            anthropic_system_message_content = (
+                                AnthropicSystemMessageContent(
+                                    type=_content.get("type"),
+                                    text=_content.get("text"),
+                                )
+                            )
+                            if "cache_control" in _content:
+                                anthropic_system_message_content["cache_control"] = (
+                                    _content["cache_control"]
+                                )
+
+                            if anthropic_system_message_list is None:
+                                anthropic_system_message_list = []
+                            anthropic_system_message_list.append(
+                                anthropic_system_message_content
+                            )
                         valid_content = True
 
                     if valid_content:
@@ -796,13 +942,25 @@ class AnthropicChatCompletion(BaseLLM):
                     messages.pop(idx)
             if len(system_prompt) > 0:
                 optional_params["system"] = system_prompt
+
+            # Handling anthropic API Prompt Caching
+            if anthropic_system_message_list is not None:
+                optional_params["system"] = anthropic_system_message_list
             # Format rest of message according to anthropic guidelines
             try:
                 messages = prompt_factory(
                     model=model, messages=messages, custom_llm_provider="anthropic"
                 )
             except Exception as e:
-                raise AnthropicError(status_code=400, message=str(e))
+                verbose_logger.exception(
+                    "litellm.llms.anthropic.py::completion() - Exception occurred - {}\nReceived Messages: {}".format(
+                        str(e), messages
+                    )
+                )
+                raise AnthropicError(
+                    status_code=400,
+                    message="{}\nReceived Messages={}".format(str(e), messages),
+                )
 
         ## Load Config
         config = litellm.AnthropicConfig.get_config()
@@ -826,6 +984,8 @@ class AnthropicChatCompletion(BaseLLM):
                 else:  # assume openai tool call
                     new_tool = tool["function"]
                     new_tool["input_schema"] = new_tool.pop("parameters")  # rename key
+                    if "cache_control" in tool:
+                        new_tool["cache_control"] = tool["cache_control"]
                     anthropic_tools.append(new_tool)
 
             optional_params["tools"] = anthropic_tools
@@ -876,6 +1036,7 @@ class AnthropicChatCompletion(BaseLLM):
                     litellm_params=litellm_params,
                     logger_fn=logger_fn,
                     headers=headers,
+                    timeout=timeout,
                 )
             else:
                 return self.acompletion_function(
@@ -897,43 +1058,40 @@ class AnthropicChatCompletion(BaseLLM):
                     headers=headers,
                     client=client,
                     json_mode=json_mode,
+                    timeout=timeout,
                 )
         else:
             ## COMPLETION CALL
-            if client is None or isinstance(client, AsyncHTTPHandler):
+            if client is None or not isinstance(client, HTTPHandler):
                 client = HTTPHandler(timeout=timeout)  # type: ignore
             else:
                 client = client
             if (
                 stream is True
             ):  # if function call - fake the streaming (need complete blocks for output parsing in openai format)
-                print_verbose("makes anthropic streaming POST request")
                 data["stream"] = stream
-                response = requests.post(
-                    api_base,
-                    headers=headers,
-                    data=json.dumps(data),
-                    stream=stream,
-                )
-
-                if response.status_code != 200:
-                    raise AnthropicError(
-                        status_code=response.status_code, message=response.text
-                    )
-
-                completion_stream = ModelResponseIterator(
-                    streaming_response=response.iter_lines(), sync_stream=True
-                )
-                streaming_response = CustomStreamWrapper(
-                    completion_stream=completion_stream,
+                return CustomStreamWrapper(
+                    completion_stream=None,
+                    make_call=partial(
+                        make_sync_call,
+                        client=None,
+                        api_base=api_base,
+                        headers=headers,  # type: ignore
+                        data=json.dumps(data),
+                        model=model,
+                        messages=messages,
+                        logging_obj=logging_obj,
+                        timeout=timeout,
+                    ),
                     model=model,
                     custom_llm_provider="anthropic",
                     logging_obj=logging_obj,
                 )
-                return streaming_response
 
             else:
-                response = client.post(api_base, headers=headers, data=json.dumps(data))
+                response = client.post(
+                    api_base, headers=headers, data=json.dumps(data), timeout=timeout
+                )
                 if response.status_code != 200:
                     raise AnthropicError(
                         status_code=response.status_code, message=response.text
@@ -963,10 +1121,31 @@ class ModelResponseIterator:
     def __init__(self, streaming_response, sync_stream: bool):
         self.streaming_response = streaming_response
         self.response_iterator = self.streaming_response
+        self.content_blocks: List[ContentBlockDelta] = []
+        self.tool_index = -1
+
+    def check_empty_tool_call_args(self) -> bool:
+        """
+        Check if the tool call block so far has been an empty string
+        """
+        args = ""
+        # if text content block -> skip
+        if len(self.content_blocks) == 0:
+            return False
+
+        if self.content_blocks[0]["delta"]["type"] == "text_delta":
+            return False
+
+        for block in self.content_blocks:
+            if block["delta"]["type"] == "input_json_delta":
+                args += block["delta"].get("partial_json", "")  # type: ignore
+
+        if len(args) == 0:
+            return True
+        return False
 
     def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
         try:
-            verbose_logger.debug(f"\n\nRaw chunk:\n{chunk}\n")
             type_chunk = chunk.get("type", "") or ""
 
             text = ""
@@ -982,6 +1161,7 @@ class ModelResponseIterator:
                 chunk = {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': 'Hello'}}
                 """
                 content_block = ContentBlockDelta(**chunk)  # type: ignore
+                self.content_blocks.append(content_block)
                 if "text" in content_block["delta"]:
                     text = content_block["delta"]["text"]
                 elif "partial_json" in content_block["delta"]:
@@ -992,7 +1172,7 @@ class ModelResponseIterator:
                             "name": None,
                             "arguments": content_block["delta"]["partial_json"],
                         },
-                        "index": content_block["index"],
+                        "index": self.tool_index,
                     }
             elif type_chunk == "content_block_start":
                 """
@@ -1000,9 +1180,11 @@ class ModelResponseIterator:
                 data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_01T1x1fJ34qAmk2tNTrN7Up6","name":"get_weather","input":{}}}
                 """
                 content_block_start = ContentBlockStart(**chunk)  # type: ignore
+                self.content_blocks = []  # reset content blocks when new block starts
                 if content_block_start["content_block"]["type"] == "text":
                     text = content_block_start["content_block"]["text"]
                 elif content_block_start["content_block"]["type"] == "tool_use":
+                    self.tool_index += 1
                     tool_use = {
                         "id": content_block_start["content_block"]["id"],
                         "type": "function",
@@ -1010,7 +1192,21 @@ class ModelResponseIterator:
                             "name": content_block_start["content_block"]["name"],
                             "arguments": "",
                         },
-                        "index": content_block_start["index"],
+                        "index": self.tool_index,
+                    }
+            elif type_chunk == "content_block_stop":
+                content_block_stop = ContentBlockStop(**chunk)  # type: ignore
+                # check if tool call content block
+                is_empty = self.check_empty_tool_call_args()
+                if is_empty:
+                    tool_use = {
+                        "id": None,
+                        "type": "function",
+                        "function": {
+                            "name": None,
+                            "arguments": "{}",
+                        },
+                        "index": self.tool_index,
                     }
             elif type_chunk == "message_delta":
                 """

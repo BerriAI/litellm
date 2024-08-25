@@ -1,4 +1,4 @@
-# 🪢 Logging
+# Logging
 
 Log Proxy input, output, and exceptions using:
 
@@ -8,7 +8,6 @@ Log Proxy input, output, and exceptions using:
 - Langsmith
 - DataDog
 - DynamoDB
-- s3 Bucket
 - etc.
 
 import Image from '@theme/IdealImage';
@@ -61,6 +60,51 @@ litellm_settings:
 ```
 
 Removes any field with `user_api_key_*` from metadata.
+
+## What gets logged?
+
+Found under `kwargs["standard_logging_payload"]`. This is a standard payload, logged for every response.
+
+```python
+class StandardLoggingPayload(TypedDict):
+    id: str
+    call_type: str
+    response_cost: float
+    total_tokens: int
+    prompt_tokens: int
+    completion_tokens: int
+    startTime: float
+    endTime: float
+    completionStartTime: float
+    model_map_information: StandardLoggingModelInformation
+    model: str
+    model_id: Optional[str]
+    model_group: Optional[str]
+    api_base: str
+    metadata: StandardLoggingMetadata
+    cache_hit: Optional[bool]
+    cache_key: Optional[str]
+    saved_cache_cost: Optional[float]
+    request_tags: list
+    end_user: Optional[str]
+    requester_ip_address: Optional[str]
+    messages: Optional[Union[str, list, dict]]
+    response: Optional[Union[str, list, dict]]
+    model_parameters: dict
+    hidden_params: StandardLoggingHiddenParams
+
+class StandardLoggingHiddenParams(TypedDict):
+    model_id: Optional[str]
+    cache_key: Optional[str]
+    api_base: Optional[str]
+    response_cost: Optional[str]
+    additional_headers: Optional[dict]
+
+
+class StandardLoggingModelInformation(TypedDict):
+    model_map_key: str
+    model_map_value: Optional[ModelInfo]
+```
 
 ## Logging Proxy Input/Output - Langfuse
 
@@ -277,6 +321,42 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
         }
     ]
 }'
+```
+
+
+### LiteLLM-specific Tags on Langfuse - `cache_hit`, `cache_key`
+
+Use this if you want to control which LiteLLM-specific fields are logged as tags by the LiteLLM proxy. By default LiteLLM Proxy logs no LiteLLM-specific fields
+
+| LiteLLM specific field               | Description                                           | Example Value                                       |
+|------------------------|-------------------------------------------------------|------------------------------------------------|
+| `cache_hit`            | Indicates whether a cache hit occured (True) or not (False)   | `true`, `false`                                |
+| `cache_key`            | The Cache key used for this request                | `d2b758c****`|
+| `proxy_base_url`       | The base URL for the proxy server, the value of env var `PROXY_BASE_URL` on your server                | `https://proxy.example.com`|
+| `user_api_key_alias`   | An alias for the LiteLLM Virtual Key.| `prod-app1`        |
+| `user_api_key_user_id` | The unique ID associated with a user's API key.       | `user_123`, `user_456`                         |
+| `user_api_key_user_email` | The email associated with a user's API key.        | `user@example.com`, `admin@example.com`        |
+| `user_api_key_team_alias` | An alias for a team associated with an API key.    | `team_alpha`, `dev_team`                       |
+
+
+**Usage**
+
+Specify `langfuse_default_tags` to control what litellm fields get logged on Langfuse
+
+Example config.yaml 
+```yaml
+model_list:
+  - model_name: gpt-4
+    litellm_params:
+      model: openai/fake
+      api_key: fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+
+litellm_settings:
+  success_callback: ["langfuse"]
+
+  # 👇 Key Change
+  langfuse_default_tags: ["cache_hit", "cache_key", "proxy_base_url", "user_api_key_alias", "user_api_key_user_id", "user_api_key_user_email", "user_api_key_team_alias", "semantic-similarity", "proxy_base_url"]
 ```
 
 ### 🔧 Debugging - Viewing RAW CURL sent from LiteLLM to provider
@@ -713,6 +793,23 @@ print(response)
 Search for Trace=`80e1afed08e019fc1110464cfa66635c` on your OTEL Collector
 
 <Image img={require('../../img/otel_parent.png')} />
+
+### Forwarding `Traceparent HTTP Header` to LLM APIs
+
+Use this if you want to forward the traceparent headers to your self hosted LLMs like vLLM
+
+Set `forward_traceparent_to_llm_provider: True` in your `config.yaml`. This will forward the `traceparent` header to your LLM API
+
+:::warning
+
+Only use this for self hosted LLMs, this can cause Bedrock, VertexAI calls to fail
+
+:::
+
+```yaml
+litellm_settings:
+  forward_traceparent_to_llm_provider: True
+```
 
 ## Custom Callback Class [Async]
 
@@ -1361,66 +1458,6 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 Expected output on Datadog
 
 <Image img={require('../../img/dd_small1.png')} />
-
-## Logging Proxy Input/Output - s3 Buckets
-
-We will use the `--config` to set 
-
-- `litellm.success_callback = ["s3"]` 
-
-This will log all successfull LLM calls to s3 Bucket
-
-**Step 1** Set AWS Credentials in .env
-
-```shell
-AWS_ACCESS_KEY_ID = ""
-AWS_SECRET_ACCESS_KEY = ""
-AWS_REGION_NAME = ""
-```
-
-**Step 2**: Create a `config.yaml` file and set `litellm_settings`: `success_callback`
-
-```yaml
-model_list:
- - model_name: gpt-3.5-turbo
-    litellm_params:
-      model: gpt-3.5-turbo
-litellm_settings:
-  success_callback: ["s3"]
-  s3_callback_params:
-    s3_bucket_name: logs-bucket-litellm   # AWS Bucket Name for S3
-    s3_region_name: us-west-2              # AWS Region Name for S3
-    s3_aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID  # us os.environ/<variable name> to pass environment variables. This is AWS Access Key ID for S3
-    s3_aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY  # AWS Secret Access Key for S3
-    s3_path: my-test-path # [OPTIONAL] set path in bucket you want to write logs to
-    s3_endpoint_url: https://s3.amazonaws.com  # [OPTIONAL] S3 endpoint URL, if you want to use Backblaze/cloudflare s3 buckets
-```
-
-**Step 3**: Start the proxy, make a test request
-
-Start proxy
-
-```shell
-litellm --config config.yaml --debug
-```
-
-Test Request
-
-```shell
-curl --location 'http://0.0.0.0:4000/chat/completions' \
-    --header 'Content-Type: application/json' \
-    --data ' {
-    "model": "Azure OpenAI GPT-4 East",
-    "messages": [
-        {
-        "role": "user",
-        "content": "what llm are you"
-        }
-    ]
-    }'
-```
-
-Your logs should be available on the specified s3 Bucket
 
 ## Logging Proxy Input/Output - DynamoDB
 

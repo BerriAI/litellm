@@ -48,7 +48,7 @@ def test_active_callbacks(client):
     _active_callbacks = json_response["litellm.callbacks"]
 
     expected_callback_names = [
-        "_ENTERPRISE_lakeraAI_Moderation",
+        "lakeraAI_Moderation",
         "_OPTIONAL_PromptInjectionDetectio",
         "_ENTERPRISE_SecretDetection",
     ]

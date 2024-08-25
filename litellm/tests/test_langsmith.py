@@ -22,6 +22,7 @@ litellm.set_verbose = True
 import time
 
 
+@pytest.mark.skip(reason="Flaky test. covered by unit tests on custom logger.")
 @pytest.mark.asyncio()
 async def test_async_langsmith_logging():
     try:
@@ -89,6 +90,7 @@ async def test_async_langsmith_logging():
 # test_langsmith_logging()
 
 
+@pytest.mark.skip(reason="Flaky test. covered by unit tests on custom logger.")
 def test_async_langsmith_logging_with_metadata():
     try:
         litellm.success_callback = ["langsmith"]
@@ -111,6 +113,7 @@ def test_async_langsmith_logging_with_metadata():
         print(e)
 
 
+@pytest.mark.skip(reason="Flaky test. covered by unit tests on custom logger.")
 @pytest.mark.parametrize("sync_mode", [False, True])
 @pytest.mark.asyncio
 async def test_async_langsmith_logging_with_streaming_and_metadata(sync_mode):

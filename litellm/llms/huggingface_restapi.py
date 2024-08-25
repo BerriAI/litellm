@@ -6,12 +6,13 @@ import os
 import time
 import types
 from enum import Enum
-from typing import Any, Callable, Dict, List, Literal, Optional, Tuple
+from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union, get_args
 
 import httpx
 import requests
 
 import litellm
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.types.completion import ChatCompletionMessageToolCallParam
 from litellm.utils import Choices, CustomStreamWrapper, Message, ModelResponse, Usage
 
@@ -58,6 +59,10 @@ hf_tasks = Literal[
     "conversational",
     "text-classification",
     "text-generation",
+]
+
+hf_tasks_embeddings = Literal[  # pipeline tags + hf tei endpoints - https://huggingface.github.io/text-embeddings-inference/#/
+    "sentence-similarity", "feature-extraction", "rerank", "embed", "similarity"
 ]
 
 
@@ -126,6 +131,9 @@ class HuggingfaceConfig:
             and v is not None
         }
 
+    def get_special_options_params(self):
+        return ["use_cache", "wait_for_model"]
+
     def get_supported_openai_params(self):
         return [
             "stream",
@@ -170,6 +178,9 @@ class HuggingfaceConfig:
                 #  Return the decoder input token logprobs and ids. You must set details=True as well for it to be taken into account. Defaults to False
                 optional_params["decoder_input_details"] = True
         return optional_params
+
+    def get_hf_api_key(self) -> Optional[str]:
+        return litellm.utils.get_secret("HUGGINGFACE_API_KEY")
 
 
 def output_parser(generated_text: str):
@@ -249,6 +260,55 @@ def get_hf_task_for_model(model: str) -> Tuple[hf_tasks, str]:
         return "text-generation-inference", model  # default to tgi
 
 
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+
+
+def get_hf_task_embedding_for_model(
+    model: str, task_type: Optional[str], api_base: str
+) -> Optional[str]:
+    if task_type is not None:
+        if task_type in get_args(hf_tasks_embeddings):
+            return task_type
+        else:
+            raise Exception(
+                "Invalid task_type={}. Expected one of={}".format(
+                    task_type, hf_tasks_embeddings
+                )
+            )
+    http_client = HTTPHandler(concurrent_limit=1)
+
+    model_info = http_client.get(url=api_base)
+
+    model_info_dict = model_info.json()
+
+    pipeline_tag: Optional[str] = model_info_dict.get("pipeline_tag", None)
+
+    return pipeline_tag
+
+
+async def async_get_hf_task_embedding_for_model(
+    model: str, task_type: Optional[str], api_base: str
+) -> Optional[str]:
+    if task_type is not None:
+        if task_type in get_args(hf_tasks_embeddings):
+            return task_type
+        else:
+            raise Exception(
+                "Invalid task_type={}. Expected one of={}".format(
+                    task_type, hf_tasks_embeddings
+                )
+            )
+    http_client = AsyncHTTPHandler(concurrent_limit=1)
+
+    model_info = await http_client.get(url=api_base)
+
+    model_info_dict = model_info.json()
+
+    pipeline_tag: Optional[str] = model_info_dict.get("pipeline_tag", None)
+
+    return pipeline_tag
+
+
 class Huggingface(BaseLLM):
     _client_session: Optional[httpx.Client] = None
     _aclient_session: Optional[httpx.AsyncClient] = None
@@ -256,7 +316,7 @@ class Huggingface(BaseLLM):
     def __init__(self) -> None:
         super().__init__()
 
-    def validate_environment(self, api_key, headers):
+    def _validate_environment(self, api_key, headers) -> dict:
         default_headers = {
             "content-type": "application/json",
         }
@@ -406,7 +466,7 @@ class Huggingface(BaseLLM):
         super().completion()
         exception_mapping_worked = False
         try:
-            headers = self.validate_environment(api_key, headers)
+            headers = self._validate_environment(api_key, headers)
             task, model = get_hf_task_for_model(model)
             ## VALIDATE API FORMAT
             if task is None or not isinstance(task, str) or task not in hf_task_list:
@@ -437,6 +497,20 @@ class Huggingface(BaseLLM):
                     optional_params[k] = v
 
             ### MAP INPUT PARAMS
+            #### HANDLE SPECIAL PARAMS
+            special_params = HuggingfaceConfig().get_special_options_params()
+            special_params_dict = {}
+            # Create a list of keys to pop after iteration
+            keys_to_pop = []
+
+            for k, v in optional_params.items():
+                if k in special_params:
+                    special_params_dict[k] = v
+                    keys_to_pop.append(k)
+
+            # Pop the keys from the dictionary after iteration
+            for k in keys_to_pop:
+                optional_params.pop(k)
             if task == "conversational":
                 inference_params = copy.deepcopy(optional_params)
                 inference_params.pop("details")
@@ -524,6 +598,11 @@ class Huggingface(BaseLLM):
                         else False
                     )
                 input_text = prompt
+
+            ### RE-ADD SPECIAL PARAMS
+            if len(special_params_dict.keys()) > 0:
+                data.update({"options": special_params_dict})
+
             ## LOGGING
             logging_obj.pre_call(
                 input=input_text,
@@ -537,6 +616,12 @@ class Huggingface(BaseLLM):
                 },
             )
             ## COMPLETION CALL
+
+            # SSL certificates (a.k.a CA bundle) used to verify the identity of requested hosts.
+            ssl_verify = os.getenv("SSL_VERIFY", litellm.ssl_verify)
+            if ssl_verify in ["True", "False"]:
+                ssl_verify = bool(ssl_verify)
+
             if acompletion is True:
                 ### ASYNC STREAMING
                 if optional_params.get("stream", False):
@@ -551,12 +636,16 @@ class Huggingface(BaseLLM):
                     headers=headers,
                     data=json.dumps(data),
                     stream=optional_params["stream"],
+                    verify=ssl_verify,
                 )
                 return response.iter_lines()
             ### SYNC COMPLETION
             else:
                 response = requests.post(
-                    completion_url, headers=headers, data=json.dumps(data)
+                    completion_url,
+                    headers=headers,
+                    data=json.dumps(data),
+                    verify=ssl_verify,
                 )
 
                 ## Some servers might return streaming responses even though stream was not set to true. (e.g. Baseten)
@@ -652,9 +741,12 @@ class Huggingface(BaseLLM):
         optional_params: dict,
         timeout: float,
     ):
+        # SSL certificates (a.k.a CA bundle) used to verify the identity of requested hosts.
+        ssl_verify = os.getenv("SSL_VERIFY", litellm.ssl_verify)
+
         response = None
         try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
+            async with httpx.AsyncClient(timeout=timeout, verify=ssl_verify) as client:
                 response = await client.post(url=api_base, json=data, headers=headers)
                 response_json = response.json()
                 if response.status_code != 200:
@@ -706,7 +798,10 @@ class Huggingface(BaseLLM):
         model: str,
         timeout: float,
     ):
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        # SSL certificates (a.k.a CA bundle) used to verify the identity of requested hosts.
+        ssl_verify = os.getenv("SSL_VERIFY", litellm.ssl_verify)
+
+        async with httpx.AsyncClient(timeout=timeout, verify=ssl_verify) as client:
             response = client.stream(
                 "POST", url=f"{api_base}", json=data, headers=headers
             )
@@ -762,76 +857,120 @@ class Huggingface(BaseLLM):
                 async for transformed_chunk in streamwrapper:
                     yield transformed_chunk
 
-    def embedding(
+    def _transform_input_on_pipeline_tag(
+        self, input: List, pipeline_tag: Optional[str]
+    ) -> dict:
+        if pipeline_tag is None:
+            return {"inputs": input}
+        if pipeline_tag == "sentence-similarity" or pipeline_tag == "similarity":
+            if len(input) < 2:
+                raise HuggingfaceError(
+                    status_code=400,
+                    message="sentence-similarity requires 2+ sentences",
+                )
+            return {"inputs": {"source_sentence": input[0], "sentences": input[1:]}}
+        elif pipeline_tag == "rerank":
+            if len(input) < 2:
+                raise HuggingfaceError(
+                    status_code=400,
+                    message="reranker requires 2+ sentences",
+                )
+            return {"inputs": {"query": input[0], "texts": input[1:]}}
+        return {"inputs": input}  # default to feature-extraction pipeline tag
+
+    async def _async_transform_input(
         self,
         model: str,
-        input: list,
-        model_response: litellm.EmbeddingResponse,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-        logging_obj=None,
-        encoding=None,
-    ):
-        super().embedding()
-        headers = self.validate_environment(api_key, headers=None)
-        # print_verbose(f"{model}, {task}")
-        embed_url = ""
-        if "https" in model:
-            embed_url = model
-        elif api_base:
-            embed_url = api_base
-        elif "HF_API_BASE" in os.environ:
-            embed_url = os.getenv("HF_API_BASE", "")
-        elif "HUGGINGFACE_API_BASE" in os.environ:
-            embed_url = os.getenv("HUGGINGFACE_API_BASE", "")
-        else:
-            embed_url = f"https://api-inference.huggingface.co/models/{model}"
+        task_type: Optional[str],
+        embed_url: str,
+        input: List,
+        optional_params: dict,
+    ) -> dict:
+        hf_task = await async_get_hf_task_embedding_for_model(
+            model=model, task_type=task_type, api_base=embed_url
+        )
 
+        data = self._transform_input_on_pipeline_tag(input=input, pipeline_tag=hf_task)
+
+        if len(optional_params.keys()) > 0:
+            data["options"] = optional_params
+
+        return data
+
+    def _process_optional_params(self, data: dict, optional_params: dict) -> dict:
+        special_options_keys = HuggingfaceConfig().get_special_options_params()
+        special_parameters_keys = [
+            "min_length",
+            "max_length",
+            "top_k",
+            "top_p",
+            "temperature",
+            "repetition_penalty",
+            "max_time",
+        ]
+
+        for k, v in optional_params.items():
+            if k in special_options_keys:
+                data.setdefault("options", {})
+                data["options"][k] = v
+            elif k in special_parameters_keys:
+                data.setdefault("parameters", {})
+                data["parameters"][k] = v
+            else:
+                data[k] = v
+
+        return data
+
+    def _transform_input(
+        self,
+        input: List,
+        model: str,
+        call_type: Literal["sync", "async"],
+        optional_params: dict,
+        embed_url: str,
+    ) -> dict:
+        data: Dict = {}
+        ## TRANSFORMATION ##
         if "sentence-transformers" in model:
             if len(input) == 0:
                 raise HuggingfaceError(
                     status_code=400,
                     message="sentence transformers requires 2+ sentences",
                 )
-            data = {
-                "inputs": {
-                    "source_sentence": input[0],
-                    "sentences": [
-                        "That is a happy dog",
-                        "That is a very happy person",
-                        "Today is a sunny day",
-                    ],
-                }
-            }
+            data = {"inputs": {"source_sentence": input[0], "sentences": input[1:]}}
         else:
-            data = {"inputs": input}  # type: ignore
+            data = {"inputs": input}
 
-        ## LOGGING
-        logging_obj.pre_call(
-            input=input,
-            api_key=api_key,
-            additional_args={
-                "complete_input_dict": data,
-                "headers": headers,
-                "api_base": embed_url,
-            },
-        )
-        ## COMPLETION CALL
-        response = requests.post(embed_url, headers=headers, data=json.dumps(data))
+            task_type = optional_params.pop("input_type", None)
 
-        ## LOGGING
-        logging_obj.post_call(
-            input=input,
-            api_key=api_key,
-            additional_args={"complete_input_dict": data},
-            original_response=response,
-        )
+            if call_type == "sync":
+                hf_task = get_hf_task_embedding_for_model(
+                    model=model, task_type=task_type, api_base=embed_url
+                )
+            elif call_type == "async":
+                return self._async_transform_input(
+                    model=model, task_type=task_type, embed_url=embed_url, input=input
+                )  # type: ignore
 
-        embeddings = response.json()
+            data = self._transform_input_on_pipeline_tag(
+                input=input, pipeline_tag=hf_task
+            )
 
-        if "error" in embeddings:
-            raise HuggingfaceError(status_code=500, message=embeddings["error"])
+        if len(optional_params.keys()) > 0:
+            data = self._process_optional_params(
+                data=data, optional_params=optional_params
+            )
 
+        return data
+
+    def _process_embedding_response(
+        self,
+        embeddings: dict,
+        model_response: litellm.EmbeddingResponse,
+        model: str,
+        input: List,
+        encoding: Any,
+    ) -> litellm.EmbeddingResponse:
         output_data = []
         if "similarities" in embeddings:
             for idx, embedding in embeddings["similarities"]:
@@ -888,3 +1027,156 @@ class Huggingface(BaseLLM):
             ),
         )
         return model_response
+
+    async def aembedding(
+        self,
+        model: str,
+        input: list,
+        model_response: litellm.utils.EmbeddingResponse,
+        timeout: Union[float, httpx.Timeout],
+        logging_obj: LiteLLMLoggingObj,
+        optional_params: dict,
+        api_base: str,
+        api_key: Optional[str],
+        headers: dict,
+        encoding: Callable,
+        client: Optional[AsyncHTTPHandler] = None,
+    ):
+        ## TRANSFORMATION ##
+        data = self._transform_input(
+            input=input,
+            model=model,
+            call_type="sync",
+            optional_params=optional_params,
+            embed_url=api_base,
+        )
+
+        ## LOGGING
+        logging_obj.pre_call(
+            input=input,
+            api_key=api_key,
+            additional_args={
+                "complete_input_dict": data,
+                "headers": headers,
+                "api_base": api_base,
+            },
+        )
+        ## COMPLETION CALL
+        if client is None:
+            client = AsyncHTTPHandler(concurrent_limit=1)
+
+        response = await client.post(api_base, headers=headers, data=json.dumps(data))
+
+        ## LOGGING
+        logging_obj.post_call(
+            input=input,
+            api_key=api_key,
+            additional_args={"complete_input_dict": data},
+            original_response=response,
+        )
+
+        embeddings = response.json()
+
+        if "error" in embeddings:
+            raise HuggingfaceError(status_code=500, message=embeddings["error"])
+
+        ## PROCESS RESPONSE ##
+        return self._process_embedding_response(
+            embeddings=embeddings,
+            model_response=model_response,
+            model=model,
+            input=input,
+            encoding=encoding,
+        )
+
+    def embedding(
+        self,
+        model: str,
+        input: list,
+        model_response: litellm.EmbeddingResponse,
+        optional_params: dict,
+        logging_obj: LiteLLMLoggingObj,
+        encoding: Callable,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+        timeout: Union[float, httpx.Timeout] = httpx.Timeout(None),
+        aembedding: Optional[bool] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+    ) -> litellm.EmbeddingResponse:
+        super().embedding()
+        headers = self._validate_environment(api_key, headers=None)
+        # print_verbose(f"{model}, {task}")
+        embed_url = ""
+        if "https" in model:
+            embed_url = model
+        elif api_base:
+            embed_url = api_base
+        elif "HF_API_BASE" in os.environ:
+            embed_url = os.getenv("HF_API_BASE", "")
+        elif "HUGGINGFACE_API_BASE" in os.environ:
+            embed_url = os.getenv("HUGGINGFACE_API_BASE", "")
+        else:
+            embed_url = f"https://api-inference.huggingface.co/models/{model}"
+
+        ## ROUTING ##
+        if aembedding is True:
+            return self.aembedding(
+                input=input,
+                model_response=model_response,
+                timeout=timeout,
+                logging_obj=logging_obj,
+                headers=headers,
+                api_base=embed_url,  # type: ignore
+                api_key=api_key,
+                client=client if isinstance(client, AsyncHTTPHandler) else None,
+                model=model,
+                optional_params=optional_params,
+                encoding=encoding,
+            )
+
+        ## TRANSFORMATION ##
+
+        data = self._transform_input(
+            input=input,
+            model=model,
+            call_type="sync",
+            optional_params=optional_params,
+            embed_url=embed_url,
+        )
+
+        ## LOGGING
+        logging_obj.pre_call(
+            input=input,
+            api_key=api_key,
+            additional_args={
+                "complete_input_dict": data,
+                "headers": headers,
+                "api_base": embed_url,
+            },
+        )
+        ## COMPLETION CALL
+        if client is None or not isinstance(client, HTTPHandler):
+            client = HTTPHandler(concurrent_limit=1)
+        response = client.post(embed_url, headers=headers, data=json.dumps(data))
+
+        ## LOGGING
+        logging_obj.post_call(
+            input=input,
+            api_key=api_key,
+            additional_args={"complete_input_dict": data},
+            original_response=response,
+        )
+
+        embeddings = response.json()
+
+        if "error" in embeddings:
+            raise HuggingfaceError(status_code=500, message=embeddings["error"])
+
+        ## PROCESS RESPONSE ##
+        return self._process_embedding_response(
+            embeddings=embeddings,
+            model_response=model_response,
+            model=model,
+            input=input,
+            encoding=encoding,
+        )
