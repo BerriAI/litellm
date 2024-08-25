@@ -485,7 +485,7 @@ async def test_async_vertexai_streaming_response():
             user_message = "Hello, how are you?"
             messages = [{"content": user_message, "role": "user"}]
             response = await acompletion(
-                model="gemini-pro",
+                model=model,
                 messages=messages,
                 temperature=0.7,
                 timeout=5,
@@ -1812,6 +1812,7 @@ async def test_gemini_pro_async_function_calling():
             model="gemini-pro", messages=messages, tools=tools, tool_choice="auto"
         )
         print(f"completion: {completion}")
+        print(f"message content: {completion.choices[0].message.content}")
         assert completion.choices[0].message.content is None
         assert len(completion.choices[0].message.tool_calls) == 1
 
