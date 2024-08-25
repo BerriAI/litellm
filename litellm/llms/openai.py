@@ -1947,12 +1947,11 @@ class OpenAITextCompletion(BaseLLM):
         headers: Optional[dict] = None,
     ):
         super().completion()
-        exception_mapping_worked = False
         try:
             if headers is None:
                 headers = self.validate_environment(api_key=api_key)
             if model is None or messages is None:
-                raise OpenAIError(status_code=422, message=f"Missing model or messages")
+                raise OpenAIError(status_code=422, message="Missing model or messages")
 
             if (
                 len(messages) > 0
@@ -2021,8 +2020,8 @@ class OpenAITextCompletion(BaseLLM):
                 else:
                     openai_client = client
 
-                response = openai_client.completions.with_raw_response.create(**data)  # type: ignore
-
+                raw_response = openai_client.completions.with_raw_response.create(**data)  # type: ignore
+                response = raw_response.parse()
                 response_json = response.model_dump()
 
                 ## LOGGING
@@ -2069,7 +2068,10 @@ class OpenAITextCompletion(BaseLLM):
             else:
                 openai_aclient = client
 
-            response = await openai_aclient.completions.with_raw_response.create(**data)
+            raw_response = await openai_aclient.completions.with_raw_response.create(
+                **data
+            )
+            response = raw_response.parse()
             response_json = response.model_dump()
             ## LOGGING
             logging_obj.post_call(
@@ -2116,7 +2118,8 @@ class OpenAITextCompletion(BaseLLM):
             openai_client = client
 
         try:
-            response = openai_client.completions.with_raw_response.create(**data)
+            raw_response = openai_client.completions.with_raw_response.create(**data)  # type: ignore
+            response = raw_response.parse()
         except Exception as e:
             status_code = getattr(e, "status_code", 500)
             error_headers = getattr(e, "headers", None)
@@ -2160,7 +2163,8 @@ class OpenAITextCompletion(BaseLLM):
         else:
             openai_client = client
 
-        response = await openai_client.completions.with_raw_response.create(**data)
+        raw_response = await openai_client.completions.with_raw_response.create(**data)
+        response = raw_response.parse()
 
         streamwrapper = CustomStreamWrapper(
             completion_stream=response,
