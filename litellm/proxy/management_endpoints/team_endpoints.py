@@ -571,6 +571,9 @@ async def team_member_add(
 
         await asyncio.gather(*tasks)
 
+    if updated_team is None:
+        raise Exception("Unable to update team table with new team information!")
+
     return TeamAddMemberResponse(
         **updated_team.model_dump(),
         updated_users=updated_users,
