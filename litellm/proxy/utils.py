@@ -30,6 +30,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm._service_logger import ServiceLogging, ServiceTypes
 from litellm.caching import DualCache, RedisCache
 from litellm.exceptions import RejectedRequestError
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.slack_alerting import SlackAlerting
 from litellm.litellm_core_utils.core_helpers import (
@@ -44,6 +45,7 @@ from litellm.proxy._types import (
     DynamoDBArgs,
     LiteLLM_VerificationTokenView,
     LitellmUserRoles,
+    Member,
     ResetTeamBudgetRequest,
     SpendLogsMetadata,
     SpendLogsPayload,
@@ -128,6 +130,11 @@ def log_to_opentelemetry(func):
                     duration=0.0,
                     start_time=start_time,
                     end_time=end_time,
+                    event_metadata={
+                        "function_name": func.__name__,
+                        "function_kwargs": kwargs,
+                        "function_args": args,
+                    },
                 )
             elif (
                 # in litellm custom callbacks kwargs is passed as arg[0]
@@ -167,9 +174,15 @@ def log_to_opentelemetry(func):
                     error=e,
                     service=ServiceTypes.DB,
                     call_type=func.__name__,
+                    parent_otel_span=kwargs["parent_otel_span"],
                     duration=0.0,
                     start_time=start_time,
                     end_time=end_time,
+                    event_metadata={
+                        "function_name": func.__name__,
+                        "function_kwargs": kwargs,
+                        "function_args": args,
+                    },
                 )
             raise e
 
@@ -211,6 +224,7 @@ class ProxyLogging:
             "db_exceptions",
             "daily_reports",
             "spend_reports",
+            "fallback_reports",
             "cooldown_deployment",
             "new_model_added",
             "outage_alerts",
@@ -331,6 +345,23 @@ class ProxyLogging:
             ttl=alerting_threshold,
         )
 
+    async def process_pre_call_hook_response(self, response, data, call_type):
+        if isinstance(response, Exception):
+            raise response
+        if isinstance(response, dict):
+            return response
+        if isinstance(response, str):
+            if call_type in ["completion", "text_completion"]:
+                raise RejectedRequestError(
+                    message=response,
+                    model=data.get("model", ""),
+                    llm_provider="",
+                    request_data=data,
+                )
+            else:
+                raise HTTPException(status_code=400, detail={"error": response})
+        return data
+
     # The actual implementation of the function
     async def pre_call_hook(
         self,
@@ -362,14 +393,36 @@ class ProxyLogging:
 
         try:
             for callback in litellm.callbacks:
-                _callback: Optional[CustomLogger] = None
+                _callback = None
                 if isinstance(callback, str):
                     _callback = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
                         callback
                     )
                 else:
                     _callback = callback  # type: ignore
-                if (
+
+                if _callback is not None and isinstance(_callback, CustomGuardrail):
+                    from litellm.types.guardrails import GuardrailEventHooks
+
+                    if (
+                        _callback.should_run_guardrail(
+                            data=data, event_type=GuardrailEventHooks.pre_call
+                        )
+                        is not True
+                    ):
+                        continue
+                    response = await _callback.async_pre_call_hook(
+                        user_api_key_dict=user_api_key_dict,
+                        cache=self.call_details["user_api_key_cache"],
+                        data=data,
+                        call_type=call_type,
+                    )
+                    if response is not None:
+                        data = await self.process_pre_call_hook_response(
+                            response=response, data=data, call_type=call_type
+                        )
+
+                elif (
                     _callback is not None
                     and isinstance(_callback, CustomLogger)
                     and "async_pre_call_hook" in vars(_callback.__class__)
@@ -381,25 +434,9 @@ class ProxyLogging:
                         call_type=call_type,
                     )
                     if response is not None:
-                        if isinstance(response, Exception):
-                            raise response
-                        elif isinstance(response, dict):
-                            data = response
-                        elif isinstance(response, str):
-                            if (
-                                call_type == "completion"
-                                or call_type == "text_completion"
-                            ):
-                                raise RejectedRequestError(
-                                    message=response,
-                                    model=data.get("model", ""),
-                                    llm_provider="",
-                                    request_data=data,
-                                )
-                            else:
-                                raise HTTPException(
-                                    status_code=400, detail={"error": response}
-                                )
+                        data = await self.process_pre_call_hook_response(
+                            response=response, data=data, call_type=call_type
+                        )
 
             return data
         except Exception as e:
@@ -418,14 +455,32 @@ class ProxyLogging:
         ],
     ):
         """
-        Runs the CustomLogger's async_moderation_hook()
+        Runs the CustomGuardrail's async_moderation_hook()
         """
-        new_data = safe_deep_copy(data)
         for callback in litellm.callbacks:
             try:
-                if isinstance(callback, CustomLogger):
+                if isinstance(callback, CustomGuardrail):
+                    ################################################################
+                    # Check if guardrail should be run for GuardrailEventHooks.during_call hook
+                    ################################################################
+
+                    # V1 implementation - backwards compatibility
+                    if callback.event_hook is None:
+                        if callback.moderation_check == "pre_call":
+                            return
+                    else:
+                        # Main - V2 Guardrails implementation
+                        from litellm.types.guardrails import GuardrailEventHooks
+
+                        if (
+                            callback.should_run_guardrail(
+                                data=data, event_type=GuardrailEventHooks.during_call
+                            )
+                            is not True
+                        ):
+                            continue
                     await callback.async_moderation_hook(
-                        data=new_data,
+                        data=data,
                         user_api_key_dict=user_api_key_dict,
                         call_type=call_type,
                     )
@@ -705,6 +760,7 @@ class ProxyLogging:
 
     async def post_call_success_hook(
         self,
+        data: dict,
         response: Union[ModelResponse, EmbeddingResponse, ImageResponse],
         user_api_key_dict: UserAPIKeyAuth,
     ):
@@ -724,10 +780,36 @@ class ProxyLogging:
                     )
                 else:
                     _callback = callback  # type: ignore
-                if _callback is not None and isinstance(_callback, CustomLogger):
-                    await _callback.async_post_call_success_hook(
-                        user_api_key_dict=user_api_key_dict, response=response
-                    )
+
+                if _callback is not None:
+                    ############## Handle Guardrails ########################################
+                    #############################################################################
+                    if isinstance(callback, CustomGuardrail):
+                        # Main - V2 Guardrails implementation
+                        from litellm.types.guardrails import GuardrailEventHooks
+
+                        if (
+                            callback.should_run_guardrail(
+                                data=data, event_type=GuardrailEventHooks.post_call
+                            )
+                            is not True
+                        ):
+                            continue
+
+                        await callback.async_post_call_success_hook(
+                            user_api_key_dict=user_api_key_dict,
+                            data=data,
+                            response=response,
+                        )
+
+                    ############ Handle CustomLogger ###############################
+                    #################################################################
+                    elif isinstance(_callback, CustomLogger):
+                        await _callback.async_post_call_success_hook(
+                            user_api_key_dict=user_api_key_dict,
+                            data=data,
+                            response=response,
+                        )
             except Exception as e:
                 raise e
         return response
@@ -804,7 +886,7 @@ class PrismaClient:
     spend_log_transactions: List = []
 
     def __init__(self, database_url: str, proxy_logging_obj: ProxyLogging):
-        print_verbose(
+        verbose_proxy_logger.debug(
             "LiteLLM: DATABASE_URL Set in config, trying to 'pip install prisma'"
         )
         ## init logging object
@@ -833,8 +915,9 @@ class PrismaClient:
                 os.chdir(original_dir)
             # Now you can import the Prisma Client
             from prisma import Prisma  # type: ignore
-
+        verbose_proxy_logger.debug("Connecting Prisma Client to DB..")
         self.db = Prisma()  # Client to connect to Prisma db
+        verbose_proxy_logger.debug("Success - Connected Prisma Client to DB")
 
     def hash_token(self, token: str):
         # Hash the string using SHA-256
@@ -1380,6 +1463,7 @@ class PrismaClient:
                     t.blocked AS team_blocked,
                     t.team_alias AS team_alias,
                     t.metadata AS team_metadata,
+                    t.members_with_roles AS team_members_with_roles,
                     tm.spend AS team_member_spend,
                     m.aliases as team_model_aliases
                     FROM "LiteLLM_VerificationToken" AS v
@@ -1389,6 +1473,7 @@ class PrismaClient:
                     WHERE v.token = '{token}'
                     """
 
+                    print_verbose("sql_query being made={}".format(sql_query))
                     response = await self.db.query_first(query=sql_query)
 
                     if response is not None:
@@ -1396,6 +1481,33 @@ class PrismaClient:
                             response["team_models"] = []
                         if response["team_blocked"] is None:
                             response["team_blocked"] = False
+
+                        team_member: Optional[Member] = None
+                        if (
+                            response["team_members_with_roles"] is not None
+                            and response["user_id"] is not None
+                        ):
+                            ## find the team member corresponding to user id
+                            """
+                            [
+                                {
+                                    "role": "admin",
+                                    "user_id": "default_user_id",
+                                    "user_email": null
+                                },
+                                {
+                                    "role": "user",
+                                    "user_id": null,
+                                    "user_email": "test@email.com"
+                                }
+                            ]
+                            """
+                            for tm in response["team_members_with_roles"]:
+                                if tm.get("user_id") is not None and response[
+                                    "user_id"
+                                ] == tm.get("user_id"):
+                                    team_member = Member(**tm)
+                        response["team_member"] = team_member
                         response = LiteLLM_VerificationTokenView(
                             **response, last_refreshed_at=time.time()
                         )

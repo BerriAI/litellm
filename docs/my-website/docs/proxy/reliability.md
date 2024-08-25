@@ -50,7 +50,7 @@ Detailed information about [routing strategies can be found here](../routing)
 $ litellm --config /path/to/config.yaml
 ```
 
-### Test - Load Balancing
+### Test - Simple Call
 
 Here requests with model=gpt-3.5-turbo will be routed across multiple instances of azure/gpt-3.5-turbo
 
@@ -137,6 +137,27 @@ print(response)
 
 </Tabs>
 
+
+### Test - Loadbalancing
+
+In this request, the following will occur:
+1. A rate limit exception will be raised 
+2. LiteLLM proxy will retry the request on the model group (default is 3).
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-d '{
+  "model": "gpt-3.5-turbo",
+  "messages": [
+        {"role": "user", "content": "Hi there!"}
+    ],
+    "mock_testing_rate_limit_error": true
+}'
+```
+
+[**See Code**](https://github.com/BerriAI/litellm/blob/6b8806b45f970cb2446654d2c379f8dcaa93ce3c/litellm/router.py#L2535)
 
 ### Test - Client Side Fallbacks
 In this request the following will occur:

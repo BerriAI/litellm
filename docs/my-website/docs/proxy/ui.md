@@ -53,6 +53,12 @@ UI_PASSWORD=langchain        # password to sign in on UI
 
 On accessing the LiteLLM UI, you will be prompted to enter your username, password
 
+## Invite-other users 
+
+Allow others to create/delete their own keys. 
+
+[**Go Here**](./self_serve.md)
+
 ## ✨ Enterprise Features
 
 Features here are behind a commercial license in our `/enterprise` folder. [**See Code**](https://github.com/BerriAI/litellm/tree/main/enterprise)
@@ -76,6 +82,13 @@ litellm_settings:
 - Key will be created with `max_budget=100` since 100 is the upper bound
 
 #### Step 2: Setup Oauth Client
+
+:::tip
+
+Looking for how to use Oauth 2.0 for /chat, /completions API requests to the proxy? [Follow this doc](oauth2)
+
+:::
+
 <Tabs>
 <TabItem value="okta" label="Okta SSO">
 
@@ -185,6 +198,16 @@ PROXY_BASE_URL=https://litellm-api.up.railway.app/
 
 #### Step 4. Test flow
 <Image img={require('../../img/litellm_ui_3.gif')} />
+
+### Restrict Email Subdomains w/ SSO
+
+If you're using SSO and want to only allow users with a specific subdomain - e.g. (@berri.ai email accounts) to access the UI, do this:
+
+```bash
+export ALLOWED_EMAIL_DOMAINS="berri.ai"
+```
+
+This will check if the user email we receive from SSO contains this domain, before allowing access.
 
 ### Set Admin view w/ SSO 
 

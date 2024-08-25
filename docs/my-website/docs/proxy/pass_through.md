@@ -35,6 +35,7 @@ general_settings:
         Authorization: "bearer os.environ/COHERE_API_KEY" # (Optional) Auth Header to forward to your Endpoint
         content-type: application/json                    # (Optional) Extra Headers to pass to this endpoint 
         accept: application/json
+      forward_headers: True                      # (Optional) Forward all headers from the incoming request to the target endpoint
 ```
 
 **Step 2** Start Proxy Server in detailed_debug mode
@@ -192,6 +193,53 @@ curl --request POST \
   }'
 ```
 
+### Use Langfuse client sdk w/ LiteLLM Key 
+
+**Usage** 
+
+1. Set-up yaml to pass-through langfuse /api/public/ingestion
+
+```yaml
+general_settings:
+  master_key: sk-1234
+  pass_through_endpoints:
+    - path: "/api/public/ingestion"                                # route you want to add to LiteLLM Proxy Server
+      target: "https://us.cloud.langfuse.com/api/public/ingestion" # URL this route should forward 
+      auth: true # 👈 KEY CHANGE
+      custom_auth_parser: "langfuse" # 👈 KEY CHANGE
+      headers:
+        LANGFUSE_PUBLIC_KEY: "os.environ/LANGFUSE_DEV_PUBLIC_KEY" # your langfuse account public key
+        LANGFUSE_SECRET_KEY: "os.environ/LANGFUSE_DEV_SK_KEY"     # your langfuse account secret key
+```
+
+2. Start proxy
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test with langfuse sdk
+
+
+```python
+
+from langfuse import Langfuse
+
+langfuse = Langfuse(
+    host="http://localhost:4000", # your litellm proxy endpoint
+    public_key="sk-1234",        # your litellm proxy api key 
+    secret_key="anything",        # no key required since this is a pass through
+)
+
+print("sending langfuse trace request")
+trace = langfuse.trace(name="test-trace-litellm-proxy-passthrough")
+print("flushing langfuse request")
+langfuse.flush()
+
+print("flushed langfuse request")
+```
+
+
 ## `pass_through_endpoints` Spec on config.yaml
 
 All possible values for `pass_through_endpoints` and what they mean 
@@ -220,6 +268,7 @@ general_settings:
     * `LANGFUSE_PUBLIC_KEY` *string*: Your Langfuse account public key - only set this when forwarding to Langfuse.
     * `LANGFUSE_SECRET_KEY` *string*: Your Langfuse account secret key - only set this when forwarding to Langfuse.
     * `<your-custom-header>` *string*: Pass any custom header key/value pair 
+  * `forward_headers` *Optional(boolean)*: If true, all headers from the incoming request will be forwarded to the target endpoint. Default is `False`.
 
 
 ## Custom Chat Endpoints (Anthropic/Bedrock/Vertex)

@@ -47,6 +47,7 @@ router = APIRouter()
 @management_endpoint_wrapper
 async def new_user(
     data: NewUserRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
     Use this to create a new INTERNAL user with a budget.
@@ -87,6 +88,18 @@ async def new_user(
             "user"  # only create a user, don't create key if 'auto_create_key' set to False
         )
 
+    is_internal_user = False
+    if data.user_role == LitellmUserRoles.INTERNAL_USER:
+        is_internal_user = True
+
+    if "max_budget" in data_json and data_json["max_budget"] is None:
+        if is_internal_user and litellm.max_internal_user_budget is not None:
+            data_json["max_budget"] = litellm.max_internal_user_budget
+
+    if "budget_duration" in data_json and data_json["budget_duration"] is None:
+        if is_internal_user and litellm.internal_user_budget_duration is not None:
+            data_json["budget_duration"] = litellm.internal_user_budget_duration
+
     response = await generate_key_helper_fn(request_type="user", **data_json)
 
     # Admin UI Logic
@@ -106,6 +119,7 @@ async def new_user(
             http_request=Request(
                 scope={"type": "http", "path": "/user/new"},
             ),
+            user_api_key_dict=user_api_key_dict,
         )
 
     if data.send_invite_email is True:
@@ -299,12 +313,12 @@ async def user_info(
     try:
         if prisma_client is None:
             raise Exception(
-                f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
+                "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
         ## GET USER ROW ##
         if user_id is not None:
             user_info = await prisma_client.get_data(user_id=user_id)
-        elif view_all == True:
+        elif view_all is True:
             if page is None:
                 page = 0
             if page_size is None:
@@ -352,10 +366,13 @@ async def user_info(
                 getattr(caller_user_info, "user_role", None)
                 == LitellmUserRoles.PROXY_ADMIN
             ):
-                teams_2 = await prisma_client.get_data(
-                    table_name="team",
-                    query_type="find_all",
-                    team_id_list=None,
+                from litellm.proxy.management_endpoints.team_endpoints import list_team
+
+                teams_2 = await list_team(
+                    http_request=Request(
+                        scope={"type": "http", "path": "/user/info"},
+                    ),
+                    user_api_key_dict=user_api_key_dict,
                 )
             else:
                 teams_2 = await prisma_client.get_data(
@@ -453,6 +470,7 @@ async def user_info(
 @management_endpoint_wrapper
 async def user_update(
     data: UpdateUserRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
     Example curl 
@@ -715,7 +733,7 @@ async def delete_user(
     delete user and associated user keys
 
     ```
-    curl --location 'http://0.0.0.0:8000/team/delete' \
+    curl --location 'http://0.0.0.0:8000/user/delete' \
 
     --header 'Authorization: Bearer sk-1234' \
 

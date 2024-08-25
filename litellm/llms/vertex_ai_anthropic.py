@@ -148,7 +148,12 @@ class VertexAIAnthropicConfig:
                 optional_params["temperature"] = value
             if param == "top_p":
                 optional_params["top_p"] = value
-            if param == "response_format" and "response_schema" in value:
+            if param == "response_format" and isinstance(value, dict):
+                json_schema: Optional[dict] = None
+                if "response_schema" in value:
+                    json_schema = value["response_schema"]
+                elif "json_schema" in value:
+                    json_schema = value["json_schema"]["schema"]
                 """
                 When using tools in this way: - https://docs.anthropic.com/en/docs/build-with-claude/tool-use#json-mode
                 - You usually want to provide a single tool
@@ -162,7 +167,7 @@ class VertexAIAnthropicConfig:
                     name="json_tool_call",
                     input_schema={
                         "type": "object",
-                        "properties": {"values": value["response_schema"]},  # type: ignore
+                        "properties": {"values": json_schema},  # type: ignore
                     },
                 )
 

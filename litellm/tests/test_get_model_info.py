@@ -46,3 +46,11 @@ def test_get_model_info_shows_correct_supports_vision():
     info = litellm.get_model_info("gemini/gemini-1.5-flash")
     print("info", info)
     assert info["supports_vision"] is True
+
+
+def test_get_model_info_shows_assistant_prefill():
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    info = litellm.get_model_info("deepseek/deepseek-chat")
+    print("info", info)
+    assert info.get("supports_assistant_prefill") is True

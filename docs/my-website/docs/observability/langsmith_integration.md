@@ -1,6 +1,6 @@
 import Image from '@theme/IdealImage';
 
-# 🦜 Langsmith - Logging LLM Input/Output
+# Langsmith - Logging LLM Input/Output
 
 
 :::tip
@@ -56,7 +56,7 @@ response = litellm.completion(
 ```
 
 ## Advanced
-### Set Langsmith fields - Custom Projec, Run names, tags
+### Set Langsmith fields
 
 ```python
 import litellm
@@ -75,9 +75,17 @@ response = litellm.completion(
         {"role": "user", "content": "Hi 👋 - i'm openai"}
     ],
     metadata={
-        "run_name": "litellmRUN",               # langsmith run name
-        "project_name": "litellm-completion",   # langsmith project name
-        "tags": ["model1", "prod-2"]            # tags to log on langsmith
+        "run_name": "litellmRUN",                                   # langsmith run name
+        "project_name": "litellm-completion",                       # langsmith project name
+        "run_id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",           # langsmith run id
+        "parent_run_id": "f8faf8c1-9778-49a4-9004-628cdb0047e5",    # langsmith run parent run id
+        "trace_id": "df570c03-5a03-4cea-8df0-c162d05127ac",         # langsmith run trace id
+        "session_id": "1ffd059c-17ea-40a8-8aef-70fd0307db82",       # langsmith run session id
+        "tags": ["model1", "prod-2"],                               # langsmith run tags
+        "metadata": {                                               # langsmith run metadata
+            "key1": "value1"
+        },
+        "dotted_order": "20240429T004912090000Z497f6eca-6276-4993-bfeb-53cbbbba6f08"
     }
 )
 print(response)
