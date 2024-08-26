@@ -193,7 +193,7 @@ response2 = completion(
     ],
     max_tokens=20,
 )
-print(f"response2: {response1}")
+print(f"response2: {response2}")
 assert response1.id == response2.id
 # response1 == response2, response 1 is cached
 ```
