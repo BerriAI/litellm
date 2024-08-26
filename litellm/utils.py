@@ -6642,9 +6642,14 @@ def exception_type(
                     else:
                         message = str(original_exception)
 
-                if message is not None and isinstance(message, str):
+                if message is not None and isinstance(
+                    message, str
+                ):  # done to prevent user-confusion. Relevant issue - https://github.com/BerriAI/litellm/issues/1414
                     message = message.replace("OPENAI", custom_llm_provider.upper())
-                    message = message.replace("OpenAI", custom_llm_provider)
+                    message = message.replace(
+                        "openai.OpenAIError",
+                        "{}.{}Error".format(custom_llm_provider, custom_llm_provider),
+                    )
                 if custom_llm_provider == "openai":
                     exception_provider = "OpenAI" + "Exception"
                 else:
