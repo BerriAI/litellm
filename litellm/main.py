@@ -118,7 +118,7 @@ from .llms.prompt_templates.factory import (
     prompt_factory,
     stringify_json_tool_call_content,
 )
-from .llms.sagemaker import SagemakerLLM
+from .llms.sagemaker.sagemaker import SagemakerLLM
 from .llms.text_completion_codestral import CodestralTextCompletion
 from .llms.text_to_speech.vertex_ai import VertexTextToSpeechAPI
 from .llms.triton import TritonChatCompletion
