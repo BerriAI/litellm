@@ -143,8 +143,11 @@ enum Providers {
   Anthropic = "Anthropic",
   Google_AI_Studio = "Google AI Studio",
   Bedrock = "Amazon Bedrock",
-  OpenAI_Compatible = "OpenAI-Compatible Endpoints (Groq, Together AI, Mistral AI, etc.)",
+  Groq = "Groq",
+  MistralAI = "Mistral AI",
+  OpenAI_Compatible = "OpenAI-Compatible Endpoints (Together AI, etc.)",
   Vertex_AI = "Vertex AI (Anthropic, Gemini, etc.)",
+  Cohere = "Cohere",
   Databricks = "Databricks",
   Ollama = "Ollama",
 }
@@ -156,6 +159,9 @@ const provider_map: Record<string, string> = {
   Anthropic: "anthropic",
   Google_AI_Studio: "gemini",
   Bedrock: "bedrock",
+  Groq: "groq",
+  MistralAI: "mistral",
+  Cohere: "cohere_chat",
   OpenAI_Compatible: "openai",
   Vertex_AI: "vertex_ai",
   Databricks: "databricks",
@@ -299,6 +305,9 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const [availableModelGroups, setAvailableModelGroups] = useState<
     Array<string>
   >([]);
+  const [availableProviders, setavailableProviders] = useState<
+  Array<string>
+>([]);
   const [selectedModelGroup, setSelectedModelGroup] = useState<string | null>(
     null
   );
@@ -615,7 +624,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
         setModelData(modelDataResponse);
 
         // loop through modelDataResponse and get all`model_name` values
-
         let all_model_groups: Set<string> = new Set();
         for (let i = 0; i < modelDataResponse.data.length; i++) {
           const model = modelDataResponse.data[i];
@@ -772,6 +780,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     return <div>Loading...</div>;
   }
   let all_models_on_proxy: any[] = [];
+  let all_providers: string[] = [];
 
   // loop through model data and edit each row
   for (let i = 0; i < modelData.data.length; i++) {
@@ -844,6 +853,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     modelData.data[i].provider = provider;
     modelData.data[i].input_cost = input_cost;
     modelData.data[i].output_cost = output_cost;
+    modelData.data[i].litellm_model_name = litellm_model_name;
+    all_providers.push(provider);
 
     // Convert Cost in terms of Cost per 1M tokens
     if (modelData.data[i].input_cost) {
@@ -868,6 +879,22 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     console.log(modelData.data[i]);
   }
   // when users click request access show pop up to allow them to request access
+
+  // sort modelData.data by provider alphabetically, check if provider exists and is not null / undefined
+  if (modelData.data && modelData.data.length > 0) {
+    modelData.data.sort((a: any, b: any) => {
+      if (a.provider && b.provider) {
+        return a.provider.localeCompare(b.provider);
+      } else if (a.provider && !b.provider) {
+        return -1;
+      } else if (!a.provider && b.provider) {
+        return 1;
+      } else {
+        return 0;
+      }
+    });
+  }
+
 
   if (userRole && userRole == "Admin Viewer") {
     const { Title, Paragraph } = Typography;
@@ -903,7 +930,26 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
             _providerModels.push(key);
           }
         });
+
+        // Special case for cohere_chat
+        // we need both cohere_chat and cohere models to show on dropdown
+        if (providerKey == Providers.Cohere) {
+          console.log("adding cohere chat model")
+          Object.entries(modelMap).forEach(([key, value]) => {
+            if (
+              value !== null &&
+              typeof value === "object" &&
+              "litellm_provider" in (value as object) &&
+              ((value as any)["litellm_provider"] === "cohere")
+            ) {
+              _providerModels.push(key);
+            }
+          });
+        }
       }
+
+      
+
       setProviderModels(_providerModels);
       console.log(`providerModels: ${providerModels}`);
     }
@@ -1381,6 +1427,16 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                       >
                         Provider
                       </TableHeaderCell>
+                      <TableHeaderCell
+                        style={{
+                          maxWidth: "150px",
+                          whiteSpace: "normal",
+                          wordBreak: "break-word",
+                          fontSize: "11px",
+                        }}
+                      >
+                        LiteLLM Model
+                      </TableHeaderCell>
                       {userRole === "Admin" && (
                         <TableHeaderCell
                           style={{
@@ -1507,6 +1563,34 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                             }}
                           >
                             <p className="text-xs">{model.provider || "-"}</p>
+                          </TableCell>
+                          <TableCell
+                            style={{
+                              maxWidth: "100px",
+                              whiteSpace: "normal",
+                              wordBreak: "break-word",
+                            }}
+                          >
+                            <Tooltip title={model && model.litellm_model_name}>
+                                <pre
+                                  style={{
+                                    maxWidth: "150px",
+                                    whiteSpace: "normal",
+                                    wordBreak: "break-word",
+                                  }}
+                                  className="text-xs"
+                                  title={
+                                    model && model.litellm_model_name
+                                      ? model.litellm_model_name
+                                      : ""
+                                  }
+                                >
+                                  {model && model.litellm_model_name
+                                    ? model.litellm_model_name.slice(0, 20) + (model.litellm_model_name.length > 20 ? "..." : "")
+                                    : "-"}
+                                </pre>
+                              </Tooltip>
+                            
                           </TableCell>
                           {userRole === "Admin" && (
                             <TableCell
@@ -1722,7 +1806,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                   </Row>
                   <Form.Item
                   label="LiteLLM Model Name(s)"
-                  tooltip="Actual model name used for making litellm.completion() call."
+                  tooltip="Actual model name used for making litellm.completion() / litellm.embedding() call."
                   className="mb-0"
                 >
                   <Form.Item
@@ -1866,9 +1950,9 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                   )}
                   {selectedProvider == Providers.Azure && (
                     <Form.Item
-                      rules={[{ required: true, message: "Required" }]}
                       label="API Version"
                       name="api_version"
+                      tooltip="By default litellm will use the latest version. If you want to use a different version, you can specify it here"
                     >
                       <TextInput placeholder="2023-07-01-preview" />
                     </Form.Item>

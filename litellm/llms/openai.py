@@ -84,6 +84,8 @@ class MistralConfig:
 
     - `tool_choice` (string - 'auto'/'any'/'none' or null): Specifies if/how functions are called. If set to none the model won't call a function and will generate a message instead. If set to auto the model can choose to either generate a message or call a function. If set to any the model is forced to call a function. Default - 'auto'.
 
+    - `stop` (string or array of strings): Stop generation if this token is detected. Or if one of these tokens is detected when providing an array
+
     - `random_seed` (integer or null): The seed to use for random sampling. If set, different calls will generate deterministic results.
 
     - `safe_prompt` (boolean): Whether to inject a safety prompt before all conversations. API Default - 'false'.
@@ -99,6 +101,7 @@ class MistralConfig:
     random_seed: Optional[int] = None
     safe_prompt: Optional[bool] = None
     response_format: Optional[dict] = None
+    stop: Optional[Union[str, list]] = None
 
     def __init__(
         self,
@@ -110,6 +113,7 @@ class MistralConfig:
         random_seed: Optional[int] = None,
         safe_prompt: Optional[bool] = None,
         response_format: Optional[dict] = None,
+        stop: Optional[Union[str, list]] = None
     ) -> None:
         locals_ = locals().copy()
         for key, value in locals_.items():
@@ -143,6 +147,7 @@ class MistralConfig:
             "tools",
             "tool_choice",
             "seed",
+            "stop",
             "response_format",
         ]
 
@@ -166,6 +171,8 @@ class MistralConfig:
                 optional_params["temperature"] = value
             if param == "top_p":
                 optional_params["top_p"] = value
+            if param == "stop":
+                optional_params["stop"] = value                
             if param == "tool_choice" and isinstance(value, str):
                 optional_params["tool_choice"] = self._map_tool_choice(
                     tool_choice=value
@@ -964,9 +971,9 @@ class OpenAIChatCompletion(BaseLLM):
                 except openai.UnprocessableEntityError as e:
                     ## check if body contains unprocessable params - related issue https://github.com/BerriAI/litellm/issues/4800
                     if litellm.drop_params is True or drop_params is True:
+                        invalid_params: List[str] = []
                         if e.body is not None and isinstance(e.body, dict) and e.body.get("detail"):  # type: ignore
                             detail = e.body.get("detail")  # type: ignore
-                            invalid_params: List[str] = []
                             if (
                                 isinstance(detail, List)
                                 and len(detail) > 0
@@ -1096,9 +1103,9 @@ class OpenAIChatCompletion(BaseLLM):
             except openai.UnprocessableEntityError as e:
                 ## check if body contains unprocessable params - related issue https://github.com/BerriAI/litellm/issues/4800
                 if litellm.drop_params is True or drop_params is True:
+                    invalid_params: List[str] = []
                     if e.body is not None and isinstance(e.body, dict) and e.body.get("detail"):  # type: ignore
                         detail = e.body.get("detail")  # type: ignore
-                        invalid_params: List[str] = []
                         if (
                             isinstance(detail, List)
                             and len(detail) > 0
@@ -1227,9 +1234,9 @@ class OpenAIChatCompletion(BaseLLM):
             except openai.UnprocessableEntityError as e:
                 ## check if body contains unprocessable params - related issue https://github.com/BerriAI/litellm/issues/4800
                 if litellm.drop_params is True or drop_params is True:
+                    invalid_params: List[str] = []
                     if e.body is not None and isinstance(e.body, dict) and e.body.get("detail"):  # type: ignore
                         detail = e.body.get("detail")  # type: ignore
-                        invalid_params: List[str] = []
                         if (
                             isinstance(detail, List)
                             and len(detail) > 0

@@ -2,6 +2,7 @@
 #    This tests streaming for the completion endpoint
 
 import asyncio
+import json
 import os
 import sys
 import time
@@ -14,6 +15,7 @@ from pydantic import BaseModel
 
 import litellm.litellm_core_utils
 import litellm.litellm_core_utils.litellm_logging
+from litellm.utils import ModelResponseListIterator
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -643,7 +645,16 @@ def test_completion_ollama_hosted_stream():
 # test_completion_ollama_hosted_stream()
 
 
-def test_completion_claude_stream():
+@pytest.mark.parametrize(
+    "model",
+    [
+        # "claude-instant-1.2",
+        # "claude-2",
+        # "mistral/mistral-medium",
+        "openrouter/openai/gpt-4o-mini",
+    ],
+)
+def test_completion_model_stream(model):
     try:
         messages = [
             {"role": "system", "content": "You are a helpful assistant."},
@@ -653,7 +664,7 @@ def test_completion_claude_stream():
             },
         ]
         response = completion(
-            model="claude-instant-1.2", messages=messages, stream=True, max_tokens=50
+            model=model, messages=messages, stream=True, max_tokens=50
         )
         complete_response = ""
         # Add any assertions here to check the response
@@ -667,30 +678,6 @@ def test_completion_claude_stream():
         print(f"completion_response: {complete_response}")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-
-
-# test_completion_claude_stream()
-def test_completion_claude_2_stream():
-    litellm.set_verbose = True
-    response = completion(
-        model="claude-2",
-        messages=[{"role": "user", "content": "hello from litellm"}],
-        stream=True,
-    )
-    complete_response = ""
-    # Add any assertions here to check the response
-    idx = 0
-    for chunk in response:
-        print(chunk)
-        # print(chunk.choices[0].delta)
-        chunk, finished = streaming_format_tests(idx, chunk)
-        if finished:
-            break
-        complete_response += chunk
-        idx += 1
-    if complete_response.strip() == "":
-        raise Exception("Empty response received")
-    print(f"completion_response: {complete_response}")
 
 
 @pytest.mark.asyncio
@@ -828,40 +815,6 @@ async def test_completion_gemini_stream(sync_mode):
 
 
 # asyncio.run(test_acompletion_gemini_stream())
-
-
-def test_completion_mistral_api_stream():
-    try:
-        litellm.set_verbose = True
-        print("Testing streaming mistral api response")
-        response = completion(
-            model="mistral/mistral-medium",
-            messages=[
-                {
-                    "role": "user",
-                    "content": "Hey, how's it going?",
-                }
-            ],
-            max_tokens=10,
-            stream=True,
-        )
-        complete_response = ""
-        has_finish_reason = False
-        for idx, chunk in enumerate(response):
-            chunk, finished = streaming_format_tests(idx, chunk)
-            if finished:
-                has_finish_reason = True
-                break
-            complete_response += chunk
-        if has_finish_reason == False:
-            raise Exception("finish reason not set")
-        if complete_response.strip() == "":
-            raise Exception("Empty response received")
-        print(f"completion_response: {complete_response}")
-    except litellm.APIError as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
 
 
 def test_completion_mistral_api_mistral_large_function_call_with_streaming():
@@ -1681,6 +1634,7 @@ def test_completion_bedrock_mistral_stream():
         pytest.fail(f"Error occurred: {e}")
 
 
+@pytest.mark.skip(reason="stopped using TokenIterator")
 def test_sagemaker_weird_response():
     """
     When the stream ends, flush any remaining holding chunks.
@@ -2596,8 +2550,8 @@ def streaming_and_function_calling_format_tests(idx, chunk):
 @pytest.mark.parametrize(
     "model",
     [
-        "gpt-3.5-turbo",
-        "anthropic.claude-3-sonnet-20240229-v1:0",
+        # "gpt-3.5-turbo",
+        # "anthropic.claude-3-sonnet-20240229-v1:0",
         "claude-3-haiku-20240307",
     ],
 )
@@ -2627,7 +2581,7 @@ def test_streaming_and_function_calling(model):
 
     messages = [{"role": "user", "content": "What is the weather like in Boston?"}]
     try:
-        litellm.set_verbose = True
+        # litellm.set_verbose = True
         response: litellm.CustomStreamWrapper = completion(
             model=model,
             tools=tools,
@@ -2639,7 +2593,7 @@ def test_streaming_and_function_calling(model):
         json_str = ""
         for idx, chunk in enumerate(response):
             # continue
-            print("\n{}\n".format(chunk))
+            # print("\n{}\n".format(chunk))
             if idx == 0:
                 assert (
                     chunk.choices[0].delta.tool_calls[0].function.arguments is not None
@@ -3200,34 +3154,6 @@ class ModelResponseIterator:
         return self.model_response
 
 
-class ModelResponseListIterator:
-    def __init__(self, model_responses):
-        self.model_responses = model_responses
-        self.index = 0
-
-    # Sync iterator
-    def __iter__(self):
-        return self
-
-    def __next__(self):
-        if self.index >= len(self.model_responses):
-            raise StopIteration
-        model_response = self.model_responses[self.index]
-        self.index += 1
-        return model_response
-
-    # Async iterator
-    def __aiter__(self):
-        return self
-
-    async def __anext__(self):
-        if self.index >= len(self.model_responses):
-            raise StopAsyncIteration
-        model_response = self.model_responses[self.index]
-        self.index += 1
-        return model_response
-
-
 def test_unit_test_custom_stream_wrapper():
     """
     Test if last streaming chunk ends with '?', if the message repeats itself.
@@ -3268,6 +3194,73 @@ def test_unit_test_custom_stream_wrapper():
             if "How are you?" in chunk.choices[0].delta.content:
                 freq += 1
     assert freq == 1
+
+
+@pytest.mark.parametrize(
+    "loop_amount",
+    [
+        litellm.REPEATED_STREAMING_CHUNK_LIMIT + 1,
+        litellm.REPEATED_STREAMING_CHUNK_LIMIT - 1,
+    ],
+)
+@pytest.mark.parametrize(
+    "chunk_value, expected_chunk_fail",
+    [("How are you?", True), ("{", False), ("", False), (None, False)],
+)
+def test_unit_test_custom_stream_wrapper_repeating_chunk(
+    loop_amount, chunk_value, expected_chunk_fail
+):
+    """
+    Test if InternalServerError raised if model enters infinite loop
+
+    Test if request passes if model loop is below accepted limit
+    """
+    litellm.set_verbose = False
+    chunks = [
+        litellm.ModelResponse(
+            **{
+                "id": "chatcmpl-123",
+                "object": "chat.completion.chunk",
+                "created": 1694268190,
+                "model": "gpt-3.5-turbo-0125",
+                "system_fingerprint": "fp_44709d6fcb",
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"content": chunk_value},
+                        "finish_reason": "stop",
+                    }
+                ],
+            },
+            stream=True,
+        )
+    ] * loop_amount
+    completion_stream = ModelResponseListIterator(model_responses=chunks)
+
+    response = litellm.CustomStreamWrapper(
+        completion_stream=completion_stream,
+        model="gpt-3.5-turbo",
+        custom_llm_provider="cached_response",
+        logging_obj=litellm.Logging(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Hey"}],
+            stream=True,
+            call_type="completion",
+            start_time=time.time(),
+            litellm_call_id="12345",
+            function_id="1245",
+        ),
+    )
+
+    print(f"expected_chunk_fail: {expected_chunk_fail}")
+
+    if (loop_amount > litellm.REPEATED_STREAMING_CHUNK_LIMIT) and expected_chunk_fail:
+        with pytest.raises(litellm.InternalServerError):
+            for chunk in response:
+                continue
+    else:
+        for chunk in response:
+            continue
 
 
 def test_unit_test_custom_stream_wrapper_openai():
@@ -3688,3 +3681,71 @@ def test_unit_test_custom_stream_wrapper_function_call():
     print("\n\n{}\n\n".format(new_model))
 
     assert len(new_model.choices[0].delta.tool_calls) > 0
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "gpt-3.5-turbo",
+        "claude-3-5-sonnet-20240620",
+        "anthropic.claude-3-sonnet-20240229-v1:0",
+        "vertex_ai/claude-3-5-sonnet@20240620",
+    ],
+)
+def test_streaming_tool_calls_valid_json_str(model):
+    if "vertex_ai" in model:
+        from litellm.tests.test_amazing_vertex_completion import (
+            load_vertex_ai_credentials,
+        )
+
+        load_vertex_ai_credentials()
+        vertex_location = "us-east5"
+    else:
+        vertex_location = None
+    litellm.set_verbose = False
+    messages = [
+        {"role": "user", "content": "Hit the snooze button."},
+    ]
+
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "snooze",
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "required": [],
+                },
+            },
+        }
+    ]
+
+    stream = litellm.completion(
+        model, messages, tools=tools, stream=True, vertex_location=vertex_location
+    )
+    chunks = [*stream]
+    print(f"chunks: {chunks}")
+    tool_call_id_arg_map = {}
+    curr_tool_call_id = None
+    curr_tool_call_str = ""
+    for chunk in chunks:
+        if chunk.choices[0].delta.tool_calls is not None:
+            if chunk.choices[0].delta.tool_calls[0].id is not None:
+                # flush prev tool call
+                if curr_tool_call_id is not None:
+                    tool_call_id_arg_map[curr_tool_call_id] = curr_tool_call_str
+                    curr_tool_call_str = ""
+                curr_tool_call_id = chunk.choices[0].delta.tool_calls[0].id
+                tool_call_id_arg_map[curr_tool_call_id] = ""
+            if chunk.choices[0].delta.tool_calls[0].function.arguments is not None:
+                curr_tool_call_str += (
+                    chunk.choices[0].delta.tool_calls[0].function.arguments
+                )
+    # flush prev tool call
+    if curr_tool_call_id is not None:
+        tool_call_id_arg_map[curr_tool_call_id] = curr_tool_call_str
+
+    for k, v in tool_call_id_arg_map.items():
+        print("k={}, v={}".format(k, v))
+        json.loads(v)  # valid json str

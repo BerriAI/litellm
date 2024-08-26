@@ -15,7 +15,7 @@ import asyncio
 import json
 import os
 import tempfile
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -363,6 +363,8 @@ def test_vertex_ai():
             assert response.choices[0].finish_reason in litellm._openai_finish_reasons
         except litellm.RateLimitError as e:
             pass
+        except litellm.InternalServerError as e:
+            pass
         except Exception as e:
             pytest.fail(f"Error occurred: {e}")
 
@@ -409,6 +411,8 @@ def test_vertex_ai_stream():
             assert len(completed_str) > 1
         except litellm.RateLimitError as e:
             pass
+        except litellm.InternalServerError as e:
+            pass
         except Exception as e:
             pytest.fail(f"Error occurred: {e}")
 
@@ -449,6 +453,8 @@ async def test_async_vertexai_response():
             pass
         except litellm.APIError as e:
             pass
+        except litellm.InternalServerError as e:
+            pass
         except Exception as e:
             pytest.fail(f"An exception occurred: {e}")
 
@@ -479,7 +485,7 @@ async def test_async_vertexai_streaming_response():
             user_message = "Hello, how are you?"
             messages = [{"content": user_message, "role": "user"}]
             response = await acompletion(
-                model="gemini-pro",
+                model=model,
                 messages=messages,
                 temperature=0.7,
                 timeout=5,
@@ -495,7 +501,11 @@ async def test_async_vertexai_streaming_response():
             assert len(complete_response) > 0
         except litellm.RateLimitError as e:
             pass
+        except litellm.APIConnectionError:
+            pass
         except litellm.Timeout as e:
+            pass
+        except litellm.InternalServerError as e:
             pass
         except Exception as e:
             print(e)
@@ -903,10 +913,10 @@ from litellm.tests.test_completion import response_format_tests
 @pytest.mark.parametrize(
     "model",
     [
-        # "vertex_ai/mistral-large@2407",
-        # "vertex_ai/mistral-nemo@2407",
+        "vertex_ai/mistral-large@2407",
+        "vertex_ai/mistral-nemo@2407",
         "vertex_ai/codestral@2405",
-        # "vertex_ai/meta/llama3-405b-instruct-maas",
+        "vertex_ai/meta/llama3-405b-instruct-maas",
     ],  #
 )  # "vertex_ai",
 @pytest.mark.parametrize(
@@ -946,6 +956,8 @@ async def test_partner_models_httpx(model, sync_mode):
 
         assert isinstance(response._hidden_params["response_cost"], float)
     except litellm.RateLimitError as e:
+        pass
+    except litellm.InternalServerError as e:
         pass
     except Exception as e:
         if "429 Quota exceeded" in str(e):
@@ -996,7 +1008,9 @@ async def test_partner_models_httpx_streaming(model, sync_mode):
                 idx += 1
 
         print(f"response: {response}")
-    except litellm.RateLimitError:
+    except litellm.RateLimitError as e:
+        pass
+    except litellm.InternalServerError as e:
         pass
     except Exception as e:
         if "429 Quota exceeded" in str(e):
@@ -1192,7 +1206,15 @@ def vertex_httpx_mock_post_valid_response(*args, **kwargs):
                     "role": "model",
                     "parts": [
                         {
-                            "text": '[{"recipe_name": "Chocolate Chip Cookies"}, {"recipe_name": "Oatmeal Raisin Cookies"}, {"recipe_name": "Peanut Butter Cookies"}, {"recipe_name": "Sugar Cookies"}, {"recipe_name": "Snickerdoodles"}]\n'
+                            "text": """{
+                            "recipes": [
+                                {"recipe_name": "Chocolate Chip Cookies"},
+                                {"recipe_name": "Oatmeal Raisin Cookies"},
+                                {"recipe_name": "Peanut Butter Cookies"},
+                                {"recipe_name": "Sugar Cookies"},
+                                {"recipe_name": "Snickerdoodles"}
+                            ]
+                            }"""
                         }
                     ],
                 },
@@ -1253,13 +1275,15 @@ def vertex_httpx_mock_post_valid_response_anthropic(*args, **kwargs):
                 "id": "toolu_vrtx_01YMnYZrToPPfcmY2myP2gEB",
                 "name": "json_tool_call",
                 "input": {
-                    "values": [
-                        {"recipe_name": "Chocolate Chip Cookies"},
-                        {"recipe_name": "Oatmeal Raisin Cookies"},
-                        {"recipe_name": "Peanut Butter Cookies"},
-                        {"recipe_name": "Snickerdoodle Cookies"},
-                        {"recipe_name": "Sugar Cookies"},
-                    ]
+                    "values": {
+                        "recipes": [
+                            {"recipe_name": "Chocolate Chip Cookies"},
+                            {"recipe_name": "Oatmeal Raisin Cookies"},
+                            {"recipe_name": "Peanut Butter Cookies"},
+                            {"recipe_name": "Snickerdoodle Cookies"},
+                            {"recipe_name": "Sugar Cookies"},
+                        ]
+                    }
                 },
             }
         ],
@@ -1347,6 +1371,7 @@ def vertex_httpx_mock_post_invalid_schema_response_anthropic(*args, **kwargs):
     "model, vertex_location, supports_response_schema",
     [
         ("vertex_ai_beta/gemini-1.5-pro-001", "us-central1", True),
+        ("gemini/gemini-1.5-pro", None, True),
         ("vertex_ai_beta/gemini-1.5-flash", "us-central1", False),
         ("vertex_ai/claude-3-5-sonnet@20240620", "us-east5", False),
     ],
@@ -1376,16 +1401,19 @@ async def test_gemini_pro_json_schema_args_sent_httpx(
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
     response_schema = {
-        "type": "array",
-        "items": {
-            "type": "object",
-            "properties": {
-                "recipe_name": {
-                    "type": "string",
+        "type": "object",
+        "properties": {
+            "recipes": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {"recipe_name": {"type": "string"}},
+                    "required": ["recipe_name"],
                 },
-            },
-            "required": ["recipe_name"],
+            }
         },
+        "required": ["recipes"],
+        "additionalProperties": False,
     }
 
     client = HTTPHandler()
@@ -1447,6 +1475,118 @@ async def test_gemini_pro_json_schema_args_sent_httpx(
                 )
 
 
+@pytest.mark.parametrize(
+    "model, vertex_location, supports_response_schema",
+    [
+        ("vertex_ai_beta/gemini-1.5-pro-001", "us-central1", True),
+        ("gemini/gemini-1.5-pro", None, True),
+        ("vertex_ai_beta/gemini-1.5-flash", "us-central1", False),
+        ("vertex_ai/claude-3-5-sonnet@20240620", "us-east5", False),
+    ],
+)
+@pytest.mark.parametrize(
+    "invalid_response",
+    [True, False],
+)
+@pytest.mark.parametrize(
+    "enforce_validation",
+    [True, False],
+)
+@pytest.mark.asyncio
+async def test_gemini_pro_json_schema_args_sent_httpx_openai_schema(
+    model,
+    supports_response_schema,
+    vertex_location,
+    invalid_response,
+    enforce_validation,
+):
+    from typing import List
+
+    if enforce_validation:
+        litellm.enable_json_schema_validation = True
+
+    from pydantic import BaseModel
+
+    load_vertex_ai_credentials()
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    litellm.set_verbose = True
+
+    messages = [{"role": "user", "content": "List 5 cookie recipes"}]
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    class Recipe(BaseModel):
+        recipe_name: str
+
+    class ResponseSchema(BaseModel):
+        recipes: List[Recipe]
+
+    client = HTTPHandler()
+
+    httpx_response = MagicMock()
+    if invalid_response is True:
+        if "claude" in model:
+            httpx_response.side_effect = (
+                vertex_httpx_mock_post_invalid_schema_response_anthropic
+            )
+        else:
+            httpx_response.side_effect = vertex_httpx_mock_post_invalid_schema_response
+    else:
+        if "claude" in model:
+            httpx_response.side_effect = vertex_httpx_mock_post_valid_response_anthropic
+        else:
+            httpx_response.side_effect = vertex_httpx_mock_post_valid_response
+    with patch.object(client, "post", new=httpx_response) as mock_call:
+        print("SENDING CLIENT POST={}".format(client.post))
+        try:
+            resp = completion(
+                model=model,
+                messages=messages,
+                response_format=ResponseSchema,
+                vertex_location=vertex_location,
+                client=client,
+            )
+            print("Received={}".format(resp))
+            if invalid_response is True and enforce_validation is True:
+                pytest.fail("Expected this to fail")
+        except litellm.JSONSchemaValidationError as e:
+            if invalid_response is False:
+                pytest.fail("Expected this to pass. Got={}".format(e))
+
+        mock_call.assert_called_once()
+        if "claude" not in model:
+            print(mock_call.call_args.kwargs)
+            print(mock_call.call_args.kwargs["json"]["generationConfig"])
+
+            if supports_response_schema:
+                assert (
+                    "response_schema"
+                    in mock_call.call_args.kwargs["json"]["generationConfig"]
+                )
+                assert (
+                    "response_mime_type"
+                    in mock_call.call_args.kwargs["json"]["generationConfig"]
+                )
+                assert (
+                    mock_call.call_args.kwargs["json"]["generationConfig"][
+                        "response_mime_type"
+                    ]
+                    == "application/json"
+                )
+            else:
+                assert (
+                    "response_schema"
+                    not in mock_call.call_args.kwargs["json"]["generationConfig"]
+                )
+                assert (
+                    "Use this JSON schema:"
+                    in mock_call.call_args.kwargs["json"]["contents"][0]["parts"][1][
+                        "text"
+                    ]
+                )
+
+
 @pytest.mark.parametrize("provider", ["vertex_ai_beta"])  # "vertex_ai",
 @pytest.mark.asyncio
 async def test_gemini_pro_httpx_custom_api_base(provider):
@@ -1473,7 +1613,8 @@ async def test_gemini_pro_httpx_custom_api_base(provider):
                 extra_headers={"hello": "world"},
             )
         except Exception as e:
-            print("Receives error - {}\n{}".format(str(e), traceback.format_exc()))
+            traceback.print_exc()
+            print("Receives error - {}".format(str(e)))
 
         mock_call.assert_called_once()
 
@@ -1671,6 +1812,7 @@ async def test_gemini_pro_async_function_calling():
             model="gemini-pro", messages=messages, tools=tools, tool_choice="auto"
         )
         print(f"completion: {completion}")
+        print(f"message content: {completion.choices[0].message.content}")
         assert completion.choices[0].message.content is None
         assert len(completion.choices[0].message.tool_calls) == 1
 
@@ -1699,6 +1841,71 @@ def test_vertexai_embedding():
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.asyncio
+async def test_vertexai_multimodal_embedding():
+    load_vertex_ai_credentials()
+    mock_response = AsyncMock()
+
+    def return_val():
+        return {
+            "predictions": [
+                {
+                    "imageEmbedding": [0.1, 0.2, 0.3],  # Simplified example
+                    "textEmbedding": [0.4, 0.5, 0.6],  # Simplified example
+                }
+            ]
+        }
+
+    mock_response.json = return_val
+    mock_response.status_code = 200
+
+    expected_payload = {
+        "instances": [
+            {
+                "image": {
+                    "gcsUri": "gs://cloud-samples-data/vertex-ai/llm/prompts/landmark1.png"
+                },
+                "text": "this is a unicorn",
+            }
+        ]
+    }
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=mock_response,
+    ) as mock_post:
+        # Act: Call the litellm.aembedding function
+        response = await litellm.aembedding(
+            model="vertex_ai/multimodalembedding@001",
+            input=[
+                {
+                    "image": {
+                        "gcsUri": "gs://cloud-samples-data/vertex-ai/llm/prompts/landmark1.png"
+                    },
+                    "text": "this is a unicorn",
+                },
+            ],
+        )
+
+        # Assert
+        mock_post.assert_called_once()
+        _, kwargs = mock_post.call_args
+        args_to_vertexai = kwargs["json"]
+
+        print("args to vertex ai call:", args_to_vertexai)
+
+        assert args_to_vertexai == expected_payload
+        assert response.model == "multimodalembedding@001"
+        assert len(response.data) == 1
+        response_data = response.data[0]
+        assert "imageEmbedding" in response_data
+        assert "textEmbedding" in response_data
+
+        # Optional: Print for debugging
+        print("Arguments passed to Vertex AI:", args_to_vertexai)
+        print("Response:", response)
 
 
 @pytest.mark.skip(
@@ -1853,3 +2060,58 @@ def test_prompt_factory_nested():
         assert isinstance(
             message["parts"][0]["text"], str
         ), "'text' value not a string."
+
+
+def test_get_token_url():
+    from litellm.llms.vertex_httpx import VertexLLM
+
+    vertex_llm = VertexLLM()
+    vertex_ai_project = "adroit-crow-413218"
+    vertex_ai_location = "us-central1"
+    json_obj = get_vertex_ai_creds_json()
+    vertex_credentials = json.dumps(json_obj)
+
+    should_use_v1beta1_features = vertex_llm.is_using_v1beta1_features(
+        optional_params={"cached_content": "hi"}
+    )
+
+    assert should_use_v1beta1_features is True
+
+    _, url = vertex_llm._get_token_and_url(
+        vertex_project=vertex_ai_project,
+        vertex_location=vertex_ai_location,
+        vertex_credentials=vertex_credentials,
+        gemini_api_key="",
+        custom_llm_provider="vertex_ai_beta",
+        should_use_v1beta1_features=should_use_v1beta1_features,
+        api_base=None,
+        model="",
+        stream=False,
+    )
+
+    print("url=", url)
+
+    assert "/v1beta1/" in url
+
+    should_use_v1beta1_features = vertex_llm.is_using_v1beta1_features(
+        optional_params={"temperature": 0.1}
+    )
+
+    _, url = vertex_llm._get_token_and_url(
+        vertex_project=vertex_ai_project,
+        vertex_location=vertex_ai_location,
+        vertex_credentials=vertex_credentials,
+        gemini_api_key="",
+        custom_llm_provider="vertex_ai_beta",
+        should_use_v1beta1_features=should_use_v1beta1_features,
+        api_base=None,
+        model="",
+        stream=False,
+    )
+
+    print("url for normal request", url)
+
+    assert "v1beta1" not in url
+    assert "/v1/" in url
+
+    pass

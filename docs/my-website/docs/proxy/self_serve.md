@@ -173,3 +173,24 @@ export PROXY_LOGOUT_URL="https://www.google.com"
 <Image img={require('../../img/ui_logout.png')}  style={{ width: '400px', height: 'auto' }} />
 
 
+### Set max budget for internal users 
+
+Automatically apply budget per internal user when they sign up
+
+```yaml
+litellm_settings:
+  max_internal_user_budget: 10
+  internal_user_budget_duration: "1mo" # reset every month
+```
+
+This sets a max budget of $10 USD for internal users when they sign up. 
+
+This budget only applies to personal keys created by that user - seen under `Default Team` on the UI. 
+
+<Image img={require('../../img/max_budget_for_internal_users.png')}  style={{ width: '500px', height: 'auto' }} />
+
+This budget does not apply to keys created under non-default teams.
+
+### Set max budget for teams
+
+[**Go Here**](./team_budgets.md)

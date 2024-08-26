@@ -406,6 +406,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
             accessToken={accessToken}
             userSpend={null}
             selectedTeam={null}
+            userMaxBudget={null}
           />
               <Col numColSpan={2}>
                 <Card>

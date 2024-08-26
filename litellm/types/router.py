@@ -143,6 +143,7 @@ class GenericLiteLLMParams(BaseModel):
     ## VERTEX AI ##
     vertex_project: Optional[str] = None
     vertex_location: Optional[str] = None
+    vertex_credentials: Optional[str] = None
     ## AWS BEDROCK / SAGEMAKER ##
     aws_access_key_id: Optional[str] = None
     aws_secret_access_key: Optional[str] = None
@@ -178,6 +179,7 @@ class GenericLiteLLMParams(BaseModel):
         ## VERTEX AI ##
         vertex_project: Optional[str] = None,
         vertex_location: Optional[str] = None,
+        vertex_credentials: Optional[str] = None,
         ## AWS BEDROCK / SAGEMAKER ##
         aws_access_key_id: Optional[str] = None,
         aws_secret_access_key: Optional[str] = None,
@@ -333,7 +335,6 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
 class DeploymentTypedDict(TypedDict):
     model_name: str
     litellm_params: LiteLLMParamsTypedDict
-    model_info: ModelInfo
 
 
 SPECIAL_MODEL_INFO_PARAMS = [
@@ -484,6 +485,11 @@ class ModelGroupInfo(BaseModel):
 class AssistantsTypedDict(TypedDict):
     custom_llm_provider: Literal["azure", "openai"]
     litellm_params: LiteLLMParamsTypedDict
+
+
+class FineTuningConfig(BaseModel):
+
+    custom_llm_provider: Literal["azure", "openai"]
 
 
 class CustomRoutingStrategyBase:

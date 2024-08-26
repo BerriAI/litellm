@@ -361,7 +361,7 @@ class ChatCompletionToolMessage(TypedDict):
 
 class ChatCompletionSystemMessage(TypedDict, total=False):
     role: Required[Literal["system"]]
-    content: Required[str]
+    content: Required[Union[str, List]]
     name: str
 
 
@@ -506,4 +506,4 @@ class FineTuningJobCreate(BaseModel):
 
 
 class LiteLLMFineTuningJobCreate(FineTuningJobCreate):
-    custom_llm_provider: Literal["openai", "azure"]
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai"]

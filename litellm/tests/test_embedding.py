@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 import traceback
@@ -11,7 +12,7 @@ load_dotenv()
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import litellm
 from litellm import completion, completion_cost, embedding
@@ -281,18 +282,18 @@ async def test_cohere_embedding(sync_mode):
 # test_cohere_embedding()
 
 
-def test_cohere_embedding3():
+@pytest.mark.parametrize("custom_llm_provider", ["cohere", "cohere_chat"])
+@pytest.mark.asyncio()
+async def test_cohere_embedding3(custom_llm_provider):
     try:
         litellm.set_verbose = True
-        response = embedding(
-            model="embed-english-v3.0",
+        response = await litellm.aembedding(
+            model=f"{custom_llm_provider}/embed-english-v3.0",
             input=["good morning from litellm", "this is another item"],
+            timeout=None,
+            max_retries=0,
         )
         print(f"response:", response)
-
-        custom_llm_provider = response._hidden_params["custom_llm_provider"]
-
-        assert custom_llm_provider == "cohere"
 
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
@@ -740,3 +741,49 @@ async def test_databricks_embeddings(sync_mode):
 #     print(response)
 
 # local_proxy_embeddings()
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_hf_embedddings_with_optional_params(sync_mode):
+    litellm.set_verbose = True
+
+    if sync_mode:
+        client = HTTPHandler(concurrent_limit=1)
+        mock_obj = MagicMock()
+    else:
+        client = AsyncHTTPHandler(concurrent_limit=1)
+        mock_obj = AsyncMock()
+
+    with patch.object(client, "post", new=mock_obj) as mock_client:
+        try:
+            if sync_mode:
+                response = embedding(
+                    model="huggingface/jinaai/jina-embeddings-v2-small-en",
+                    input=["good morning from litellm"],
+                    top_p=10,
+                    top_k=10,
+                    wait_for_model=True,
+                    client=client,
+                )
+            else:
+                response = await litellm.aembedding(
+                    model="huggingface/jinaai/jina-embeddings-v2-small-en",
+                    input=["good morning from litellm"],
+                    top_p=10,
+                    top_k=10,
+                    wait_for_model=True,
+                    client=client,
+                )
+        except Exception:
+            pass
+
+        mock_client.assert_called_once()
+
+        print(f"mock_client.call_args.kwargs: {mock_client.call_args.kwargs}")
+        assert "options" in mock_client.call_args.kwargs["data"]
+        json_data = json.loads(mock_client.call_args.kwargs["data"])
+        assert "wait_for_model" in json_data["options"]
+        assert json_data["options"]["wait_for_model"] is True
+        assert json_data["parameters"]["top_p"] == 10
+        assert json_data["parameters"]["top_k"] == 10

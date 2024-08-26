@@ -25,6 +25,7 @@ from litellm.llms.fine_tuning_apis.openai import (
     FineTuningJobCreate,
     OpenAIFineTuningAPI,
 )
+from litellm.llms.fine_tuning_apis.vertex_ai import VertexFineTuningAPI
 from litellm.types.llms.openai import Hyperparameters
 from litellm.types.router import *
 from litellm.utils import supports_httpx_timeout
@@ -32,6 +33,7 @@ from litellm.utils import supports_httpx_timeout
 ####### ENVIRONMENT VARIABLES ###################
 openai_fine_tuning_apis_instance = OpenAIFineTuningAPI()
 azure_fine_tuning_apis_instance = AzureOpenAIFineTuningAPI()
+vertex_fine_tuning_apis_instance = VertexFineTuningAPI()
 #################################################
 
 
@@ -43,7 +45,7 @@ async def acreate_fine_tuning_job(
     validation_file: Optional[str] = None,
     integrations: Optional[List[str]] = None,
     seed: Optional[int] = None,
-    custom_llm_provider: Literal["openai", "azure"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
@@ -96,7 +98,7 @@ def create_fine_tuning_job(
     validation_file: Optional[str] = None,
     integrations: Optional[List[str]] = None,
     seed: Optional[int] = None,
-    custom_llm_provider: Literal["openai", "azure"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
@@ -221,6 +223,40 @@ def create_fine_tuning_job(
                 max_retries=optional_params.max_retries,
                 _is_async=_is_async,
             )
+        elif custom_llm_provider == "vertex_ai":
+            api_base = optional_params.api_base or ""
+            vertex_ai_project = (
+                optional_params.vertex_project
+                or litellm.vertex_project
+                or get_secret("VERTEXAI_PROJECT")
+            )
+            vertex_ai_location = (
+                optional_params.vertex_location
+                or litellm.vertex_location
+                or get_secret("VERTEXAI_LOCATION")
+            )
+            vertex_credentials = optional_params.vertex_credentials or get_secret(
+                "VERTEXAI_CREDENTIALS"
+            )
+            create_fine_tuning_job_data = FineTuningJobCreate(
+                model=model,
+                training_file=training_file,
+                hyperparameters=hyperparameters,
+                suffix=suffix,
+                validation_file=validation_file,
+                integrations=integrations,
+                seed=seed,
+            )
+            response = vertex_fine_tuning_apis_instance.create_fine_tuning_job(
+                _is_async=_is_async,
+                create_fine_tuning_job_data=create_fine_tuning_job_data,
+                vertex_credentials=vertex_credentials,
+                vertex_project=vertex_ai_project,
+                vertex_location=vertex_ai_location,
+                timeout=timeout,
+                api_base=api_base,
+                kwargs=kwargs,
+            )
         else:
             raise litellm.exceptions.BadRequestError(
                 message="LiteLLM doesn't support {} for 'create_batch'. Only 'openai' is supported.".format(
@@ -236,6 +272,7 @@ def create_fine_tuning_job(
             )
         return response
     except Exception as e:
+        verbose_logger.error("got exception in create_fine_tuning_job=%s", str(e))
         raise e
 
 

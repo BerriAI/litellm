@@ -307,8 +307,9 @@ LiteLLM supports **ALL** azure ai models. Here's a few examples:
 
 | Model Name               | Function Call                                                                                                                                                      |
 |--------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Cohere command-r-plus | `completion(model="azure/command-r-plus", messages)` | 
-| Cohere command-r | `completion(model="azure/command-r", messages)` | 
-| mistral-large-latest | `completion(model="azure/mistral-large-latest", messages)` | 
+| Cohere command-r-plus | `completion(model="azure_ai/command-r-plus", messages)` | 
+| Cohere command-r | `completion(model="azure_ai/command-r", messages)` | 
+| mistral-large-latest | `completion(model="azure_ai/mistral-large-latest", messages)` | 
+| AI21-Jamba-Instruct | `completion(model="azure_ai/ai21-jamba-instruct", messages)` | 
 
 

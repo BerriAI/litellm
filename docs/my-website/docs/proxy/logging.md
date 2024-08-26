@@ -1,4 +1,4 @@
-# 🪢 Logging
+# Logging
 
 Log Proxy input, output, and exceptions using:
 
@@ -60,6 +60,51 @@ litellm_settings:
 ```
 
 Removes any field with `user_api_key_*` from metadata.
+
+## What gets logged?
+
+Found under `kwargs["standard_logging_payload"]`. This is a standard payload, logged for every response.
+
+```python
+class StandardLoggingPayload(TypedDict):
+    id: str
+    call_type: str
+    response_cost: float
+    total_tokens: int
+    prompt_tokens: int
+    completion_tokens: int
+    startTime: float
+    endTime: float
+    completionStartTime: float
+    model_map_information: StandardLoggingModelInformation
+    model: str
+    model_id: Optional[str]
+    model_group: Optional[str]
+    api_base: str
+    metadata: StandardLoggingMetadata
+    cache_hit: Optional[bool]
+    cache_key: Optional[str]
+    saved_cache_cost: Optional[float]
+    request_tags: list
+    end_user: Optional[str]
+    requester_ip_address: Optional[str]
+    messages: Optional[Union[str, list, dict]]
+    response: Optional[Union[str, list, dict]]
+    model_parameters: dict
+    hidden_params: StandardLoggingHiddenParams
+
+class StandardLoggingHiddenParams(TypedDict):
+    model_id: Optional[str]
+    cache_key: Optional[str]
+    api_base: Optional[str]
+    response_cost: Optional[str]
+    additional_headers: Optional[dict]
+
+
+class StandardLoggingModelInformation(TypedDict):
+    model_map_key: str
+    model_map_value: Optional[ModelInfo]
+```
 
 ## Logging Proxy Input/Output - Langfuse
 
@@ -276,6 +321,42 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
         }
     ]
 }'
+```
+
+
+### LiteLLM-specific Tags on Langfuse - `cache_hit`, `cache_key`
+
+Use this if you want to control which LiteLLM-specific fields are logged as tags by the LiteLLM proxy. By default LiteLLM Proxy logs no LiteLLM-specific fields
+
+| LiteLLM specific field               | Description                                           | Example Value                                       |
+|------------------------|-------------------------------------------------------|------------------------------------------------|
+| `cache_hit`            | Indicates whether a cache hit occured (True) or not (False)   | `true`, `false`                                |
+| `cache_key`            | The Cache key used for this request                | `d2b758c****`|
+| `proxy_base_url`       | The base URL for the proxy server, the value of env var `PROXY_BASE_URL` on your server                | `https://proxy.example.com`|
+| `user_api_key_alias`   | An alias for the LiteLLM Virtual Key.| `prod-app1`        |
+| `user_api_key_user_id` | The unique ID associated with a user's API key.       | `user_123`, `user_456`                         |
+| `user_api_key_user_email` | The email associated with a user's API key.        | `user@example.com`, `admin@example.com`        |
+| `user_api_key_team_alias` | An alias for a team associated with an API key.    | `team_alpha`, `dev_team`                       |
+
+
+**Usage**
+
+Specify `langfuse_default_tags` to control what litellm fields get logged on Langfuse
+
+Example config.yaml 
+```yaml
+model_list:
+  - model_name: gpt-4
+    litellm_params:
+      model: openai/fake
+      api_key: fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+
+litellm_settings:
+  success_callback: ["langfuse"]
+
+  # 👇 Key Change
+  langfuse_default_tags: ["cache_hit", "cache_key", "proxy_base_url", "user_api_key_alias", "user_api_key_user_id", "user_api_key_user_email", "user_api_key_team_alias", "semantic-similarity", "proxy_base_url"]
 ```
 
 ### 🔧 Debugging - Viewing RAW CURL sent from LiteLLM to provider

@@ -40,6 +40,7 @@ jobs:
             pip install "aioboto3==12.3.0"
             pip install langchain
             pip install lunary==0.2.5
+            pip install "azure-identity==1.16.1"
             pip install "langfuse==2.27.1"
             pip install "logfire==0.29.0"
             pip install numpydoc
@@ -47,10 +48,11 @@ jobs:
             pip install opentelemetry-api==1.25.0
             pip install opentelemetry-sdk==1.25.0
             pip install opentelemetry-exporter-otlp==1.25.0
-            pip install openai==1.34.0
-            pip install prisma   
+            pip install openai==1.40.0
+            pip install prisma==0.11.0   
             pip install "detect_secrets==1.5.0"         
             pip install "httpx==0.24.1"
+            pip install "respx==0.21.1"
             pip install fastapi
             pip install "gunicorn==21.2.0"
             pip install "anyio==3.7.1"
@@ -125,6 +127,7 @@ jobs:
             pip install tiktoken
             pip install aiohttp
             pip install click
+            pip install "boto3==1.34.34"
             pip install jinja2
             pip install tokenizers
             pip install openai
@@ -165,7 +168,6 @@ jobs:
             pip install "pytest==7.3.1"
             pip install "pytest-asyncio==0.21.1"
             pip install aiohttp
-            pip install openai
             python -m pip install --upgrade pip
             python -m pip install -r .circleci/requirements.txt
             pip install "pytest==7.3.1"
@@ -190,6 +192,7 @@ jobs:
             pip install "aiodynamo==23.10.1"
             pip install "asyncio==3.4.3"
             pip install "PyGithub==1.59.1"
+            pip install "openai==1.40.0"
             # Run pytest and generate JUnit XML report
       - run:
           name: Build Docker image
@@ -209,6 +212,8 @@ jobs:
               -e MISTRAL_API_KEY=$MISTRAL_API_KEY \
               -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
               -e GROQ_API_KEY=$GROQ_API_KEY \
+              -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
+              -e COHERE_API_KEY=$COHERE_API_KEY \
               -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
               -e AWS_REGION_NAME=$AWS_REGION_NAME \
               -e AUTO_INFER_REGION=True \
@@ -279,12 +284,13 @@ jobs:
             pip install "pytest==7.3.1"
             pip install "pytest-asyncio==0.21.1"
             pip install aiohttp
-            pip install openai
+            pip install "openai==1.40.0"
             python -m pip install --upgrade pip
-            python -m pip install -r .circleci/requirements.txt
+            pip install "pydantic==2.7.1"
             pip install "pytest==7.3.1"
             pip install "pytest-mock==3.12.0"
             pip install "pytest-asyncio==0.21.1"
+            pip install "boto3==1.34.34"
             pip install mypy
             pip install pyarrow
             pip install numpydoc
@@ -313,8 +319,16 @@ jobs:
               -e OPENAI_API_KEY=$OPENAI_API_KEY \
               -e LITELLM_LICENSE=$LITELLM_LICENSE \
               -e OTEL_EXPORTER="in_memory" \
+              -e APORIA_API_BASE_2=$APORIA_API_BASE_2 \
+              -e APORIA_API_KEY_2=$APORIA_API_KEY_2 \
+              -e APORIA_API_BASE_1=$APORIA_API_BASE_1 \
+              -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
+              -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
+              -e AWS_REGION_NAME=$AWS_REGION_NAME \
+              -e APORIA_API_KEY_1=$APORIA_API_KEY_1 \
               --name my-app \
               -v $(pwd)/litellm/proxy/example_config_yaml/otel_test_config.yaml:/app/config.yaml \
+              -v $(pwd)/litellm/proxy/example_config_yaml/custom_guardrail.py:/app/custom_guardrail.py \
               my-app:latest \
               --config /app/config.yaml \
               --port 4000 \

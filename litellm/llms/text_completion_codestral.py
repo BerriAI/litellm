@@ -15,6 +15,7 @@ import httpx  # type: ignore
 import requests  # type: ignore
 
 import litellm
+from litellm import verbose_logger
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.llms.databricks import GenericStreamingChunk
@@ -364,6 +365,7 @@ class CodestralTextCompletion(BaseLLM):
         stream = optional_params.pop("stream", False)
 
         data = {
+            "model": model,
             "prompt": prompt,
             **optional_params,
         }
@@ -489,8 +491,13 @@ class CodestralTextCompletion(BaseLLM):
                 message="HTTPStatusError - {}".format(e.response.text),
             )
         except Exception as e:
+            verbose_logger.exception(
+                "litellm.llms.text_completion_codestral.py::async_completion() - Exception occurred - {}".format(
+                    str(e)
+                )
+            )
             raise TextCompletionCodestralError(
-                status_code=500, message="{}\n{}".format(str(e), traceback.format_exc())
+                status_code=500, message="{}".format(str(e))
             )
         return self.process_text_completion_response(
             model=model,

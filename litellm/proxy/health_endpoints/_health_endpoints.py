@@ -241,10 +241,8 @@ async def health_services_endpoint(
             )
 
             # use create task - this can take 10 seconds. don't keep ui users waiting for notification to check their email
-            asyncio.create_task(
-                proxy_logging_obj.slack_alerting_instance.send_key_created_or_user_invited_email(
-                    webhook_event=webhook_event
-                )
+            await proxy_logging_obj.slack_alerting_instance.send_key_created_or_user_invited_email(
+                webhook_event=webhook_event
             )
 
             return {

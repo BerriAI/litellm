@@ -131,6 +131,9 @@ class HuggingfaceConfig:
             and v is not None
         }
 
+    def get_special_options_params(self):
+        return ["use_cache", "wait_for_model"]
+
     def get_supported_openai_params(self):
         return [
             "stream",
@@ -175,6 +178,9 @@ class HuggingfaceConfig:
                 #  Return the decoder input token logprobs and ids. You must set details=True as well for it to be taken into account. Defaults to False
                 optional_params["decoder_input_details"] = True
         return optional_params
+
+    def get_hf_api_key(self) -> Optional[str]:
+        return litellm.utils.get_secret("HUGGINGFACE_API_KEY")
 
 
 def output_parser(generated_text: str):
@@ -491,6 +497,20 @@ class Huggingface(BaseLLM):
                     optional_params[k] = v
 
             ### MAP INPUT PARAMS
+            #### HANDLE SPECIAL PARAMS
+            special_params = HuggingfaceConfig().get_special_options_params()
+            special_params_dict = {}
+            # Create a list of keys to pop after iteration
+            keys_to_pop = []
+
+            for k, v in optional_params.items():
+                if k in special_params:
+                    special_params_dict[k] = v
+                    keys_to_pop.append(k)
+
+            # Pop the keys from the dictionary after iteration
+            for k in keys_to_pop:
+                optional_params.pop(k)
             if task == "conversational":
                 inference_params = copy.deepcopy(optional_params)
                 inference_params.pop("details")
@@ -578,6 +598,11 @@ class Huggingface(BaseLLM):
                         else False
                     )
                 input_text = prompt
+
+            ### RE-ADD SPECIAL PARAMS
+            if len(special_params_dict.keys()) > 0:
+                data.update({"options": special_params_dict})
+
             ## LOGGING
             logging_obj.pre_call(
                 input=input_text,
@@ -591,6 +616,12 @@ class Huggingface(BaseLLM):
                 },
             )
             ## COMPLETION CALL
+
+            # SSL certificates (a.k.a CA bundle) used to verify the identity of requested hosts.
+            ssl_verify = os.getenv("SSL_VERIFY", litellm.ssl_verify)
+            if ssl_verify in ["True", "False"]:
+                ssl_verify = bool(ssl_verify)
+
             if acompletion is True:
                 ### ASYNC STREAMING
                 if optional_params.get("stream", False):
@@ -605,12 +636,16 @@ class Huggingface(BaseLLM):
                     headers=headers,
                     data=json.dumps(data),
                     stream=optional_params["stream"],
+                    verify=ssl_verify,
                 )
                 return response.iter_lines()
             ### SYNC COMPLETION
             else:
                 response = requests.post(
-                    completion_url, headers=headers, data=json.dumps(data)
+                    completion_url,
+                    headers=headers,
+                    data=json.dumps(data),
+                    verify=ssl_verify,
                 )
 
                 ## Some servers might return streaming responses even though stream was not set to true. (e.g. Baseten)
@@ -706,9 +741,12 @@ class Huggingface(BaseLLM):
         optional_params: dict,
         timeout: float,
     ):
+        # SSL certificates (a.k.a CA bundle) used to verify the identity of requested hosts.
+        ssl_verify = os.getenv("SSL_VERIFY", litellm.ssl_verify)
+
         response = None
         try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
+            async with httpx.AsyncClient(timeout=timeout, verify=ssl_verify) as client:
                 response = await client.post(url=api_base, json=data, headers=headers)
                 response_json = response.json()
                 if response.status_code != 200:
@@ -760,7 +798,10 @@ class Huggingface(BaseLLM):
         model: str,
         timeout: float,
     ):
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        # SSL certificates (a.k.a CA bundle) used to verify the identity of requested hosts.
+        ssl_verify = os.getenv("SSL_VERIFY", litellm.ssl_verify)
+
+        async with httpx.AsyncClient(timeout=timeout, verify=ssl_verify) as client:
             response = client.stream(
                 "POST", url=f"{api_base}", json=data, headers=headers
             )
@@ -838,13 +879,45 @@ class Huggingface(BaseLLM):
         return {"inputs": input}  # default to feature-extraction pipeline tag
 
     async def _async_transform_input(
-        self, model: str, task_type: Optional[str], embed_url: str, input: List
+        self,
+        model: str,
+        task_type: Optional[str],
+        embed_url: str,
+        input: List,
+        optional_params: dict,
     ) -> dict:
         hf_task = await async_get_hf_task_embedding_for_model(
             model=model, task_type=task_type, api_base=embed_url
         )
 
         data = self._transform_input_on_pipeline_tag(input=input, pipeline_tag=hf_task)
+
+        if len(optional_params.keys()) > 0:
+            data["options"] = optional_params
+
+        return data
+
+    def _process_optional_params(self, data: dict, optional_params: dict) -> dict:
+        special_options_keys = HuggingfaceConfig().get_special_options_params()
+        special_parameters_keys = [
+            "min_length",
+            "max_length",
+            "top_k",
+            "top_p",
+            "temperature",
+            "repetition_penalty",
+            "max_time",
+        ]
+
+        for k, v in optional_params.items():
+            if k in special_options_keys:
+                data.setdefault("options", {})
+                data["options"][k] = v
+            elif k in special_parameters_keys:
+                data.setdefault("parameters", {})
+                data["parameters"][k] = v
+            else:
+                data[k] = v
 
         return data
 
@@ -856,6 +929,7 @@ class Huggingface(BaseLLM):
         optional_params: dict,
         embed_url: str,
     ) -> dict:
+        data: Dict = {}
         ## TRANSFORMATION ##
         if "sentence-transformers" in model:
             if len(input) == 0:
@@ -865,7 +939,7 @@ class Huggingface(BaseLLM):
                 )
             data = {"inputs": {"source_sentence": input[0], "sentences": input[1:]}}
         else:
-            data = {"inputs": input}  # type: ignore
+            data = {"inputs": input}
 
             task_type = optional_params.pop("input_type", None)
 
@@ -880,6 +954,11 @@ class Huggingface(BaseLLM):
 
             data = self._transform_input_on_pipeline_tag(
                 input=input, pipeline_tag=hf_task
+            )
+
+        if len(optional_params.keys()) > 0:
+            data = self._process_optional_params(
+                data=data, optional_params=optional_params
             )
 
         return data

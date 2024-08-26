@@ -27,7 +27,8 @@ import httpx  # type: ignore
 import requests  # type: ignore
 
 import litellm
-from litellm.caching import DualCache
+from litellm import verbose_logger
+from litellm.caching import DualCache, InMemoryCache
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.custom_httpx.http_handler import (
@@ -56,6 +57,7 @@ from litellm.utils import (
 )
 
 from .base import BaseLLM
+from .base_aws_llm import BaseAWSLLM
 from .bedrock import BedrockError, ModelResponseIterator, convert_messages_to_prompt
 from .prompt_templates.factory import (
     _bedrock_converse_messages_pt,
@@ -82,12 +84,15 @@ BEDROCK_CONVERSE_MODELS = [
     "meta.llama3-1-8b-instruct-v1:0",
     "meta.llama3-1-70b-instruct-v1:0",
     "meta.llama3-1-405b-instruct-v1:0",
+    "meta.llama3-70b-instruct-v1:0",
     "mistral.mistral-large-2407-v1:0",
 ]
 
 
-iam_cache = DualCache()
 _response_stream_shape_cache = None
+bedrock_tool_name_mappings: InMemoryCache = InMemoryCache(
+    max_size_in_memory=50, default_ttl=600
+)
 
 
 class AmazonCohereChatConfig:
@@ -308,7 +313,7 @@ def make_sync_call(
     return completion_stream
 
 
-class BedrockLLM(BaseLLM):
+class BedrockLLM(BaseAWSLLM):
     """
     Example call
 
@@ -375,173 +380,6 @@ class BedrockLLM(BaseLLM):
                 else:
                     prompt += f"{message['content']}"
         return prompt, chat_history  # type: ignore
-
-    def get_credentials(
-        self,
-        aws_access_key_id: Optional[str] = None,
-        aws_secret_access_key: Optional[str] = None,
-        aws_session_token: Optional[str] = None,
-        aws_region_name: Optional[str] = None,
-        aws_session_name: Optional[str] = None,
-        aws_profile_name: Optional[str] = None,
-        aws_role_name: Optional[str] = None,
-        aws_web_identity_token: Optional[str] = None,
-    ):
-        """
-        Return a boto3.Credentials object
-        """
-        import boto3
-
-        print_verbose(
-            f"Boto3 get_credentials called variables passed to function {locals()}"
-        )
-
-        ## CHECK IS  'os.environ/' passed in
-        params_to_check: List[Optional[str]] = [
-            aws_access_key_id,
-            aws_secret_access_key,
-            aws_session_token,
-            aws_region_name,
-            aws_session_name,
-            aws_profile_name,
-            aws_role_name,
-            aws_web_identity_token,
-        ]
-
-        # Iterate over parameters and update if needed
-        for i, param in enumerate(params_to_check):
-            if param and param.startswith("os.environ/"):
-                _v = get_secret(param)
-                if _v is not None and isinstance(_v, str):
-                    params_to_check[i] = _v
-        # Assign updated values back to parameters
-        (
-            aws_access_key_id,
-            aws_secret_access_key,
-            aws_session_token,
-            aws_region_name,
-            aws_session_name,
-            aws_profile_name,
-            aws_role_name,
-            aws_web_identity_token,
-        ) = params_to_check
-
-        ### CHECK STS ###
-        if (
-            aws_web_identity_token is not None
-            and aws_role_name is not None
-            and aws_session_name is not None
-        ):
-            print_verbose(
-                f"IN Web Identity Token: {aws_web_identity_token} | Role Name: {aws_role_name} | Session Name: {aws_session_name}"
-            )
-            iam_creds_cache_key = json.dumps(
-                {
-                    "aws_web_identity_token": aws_web_identity_token,
-                    "aws_role_name": aws_role_name,
-                    "aws_session_name": aws_session_name,
-                    "aws_region_name": aws_region_name,
-                }
-            )
-
-            iam_creds_dict = iam_cache.get_cache(iam_creds_cache_key)
-            if iam_creds_dict is None:
-                oidc_token = get_secret(aws_web_identity_token)
-
-                if oidc_token is None:
-                    raise BedrockError(
-                        message="OIDC token could not be retrieved from secret manager.",
-                        status_code=401,
-                    )
-
-                sts_client = boto3.client(
-                    "sts",
-                    region_name=aws_region_name,
-                    endpoint_url=f"https://sts.{aws_region_name}.amazonaws.com",
-                )
-
-                # https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRoleWithWebIdentity.html
-                # https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/sts/client/assume_role_with_web_identity.html
-                sts_response = sts_client.assume_role_with_web_identity(
-                    RoleArn=aws_role_name,
-                    RoleSessionName=aws_session_name,
-                    WebIdentityToken=oidc_token,
-                    DurationSeconds=3600,
-                )
-
-                iam_creds_dict = {
-                    "aws_access_key_id": sts_response["Credentials"]["AccessKeyId"],
-                    "aws_secret_access_key": sts_response["Credentials"][
-                        "SecretAccessKey"
-                    ],
-                    "aws_session_token": sts_response["Credentials"]["SessionToken"],
-                    "region_name": aws_region_name,
-                }
-
-                iam_cache.set_cache(
-                    key=iam_creds_cache_key,
-                    value=json.dumps(iam_creds_dict),
-                    ttl=3600 - 60,
-                )
-
-            session = boto3.Session(**iam_creds_dict)
-
-            iam_creds = session.get_credentials()
-
-            return iam_creds
-        elif aws_role_name is not None and aws_session_name is not None:
-            print_verbose(
-                f"Using STS Client AWS aws_role_name: {aws_role_name} aws_session_name: {aws_session_name}"
-            )
-            sts_client = boto3.client(
-                "sts",
-                aws_access_key_id=aws_access_key_id,  # [OPTIONAL]
-                aws_secret_access_key=aws_secret_access_key,  # [OPTIONAL]
-            )
-
-            sts_response = sts_client.assume_role(
-                RoleArn=aws_role_name, RoleSessionName=aws_session_name
-            )
-
-            # Extract the credentials from the response and convert to Session Credentials
-            sts_credentials = sts_response["Credentials"]
-            from botocore.credentials import Credentials
-
-            credentials = Credentials(
-                access_key=sts_credentials["AccessKeyId"],
-                secret_key=sts_credentials["SecretAccessKey"],
-                token=sts_credentials["SessionToken"],
-            )
-            return credentials
-        elif aws_profile_name is not None:  ### CHECK SESSION ###
-            # uses auth values from AWS profile usually stored in ~/.aws/credentials
-            print_verbose(f"Using AWS profile: {aws_profile_name}")
-            client = boto3.Session(profile_name=aws_profile_name)
-
-            return client.get_credentials()
-        elif (
-            aws_access_key_id is not None
-            and aws_secret_access_key is not None
-            and aws_session_token is not None
-        ):  ### CHECK FOR AWS SESSION TOKEN ###
-            print_verbose(f"Using AWS Session Token: {aws_session_token}")
-            from botocore.credentials import Credentials
-
-            credentials = Credentials(
-                access_key=aws_access_key_id,
-                secret_key=aws_secret_access_key,
-                token=aws_session_token,
-            )
-            return credentials
-        else:
-            print_verbose("Using Default AWS Session")
-            session = boto3.Session(
-                aws_access_key_id=aws_access_key_id,
-                aws_secret_access_key=aws_secret_access_key,
-                region_name=aws_region_name,
-            )
-
-            return session.get_credentials()
 
     def process_response(
         self,
@@ -852,6 +690,7 @@ class BedrockLLM(BaseLLM):
             "aws_bedrock_runtime_endpoint", None
         )  # https://bedrock-runtime.{region_name}.amazonaws.com
         aws_web_identity_token = optional_params.pop("aws_web_identity_token", None)
+        aws_sts_endpoint = optional_params.pop("aws_sts_endpoint", None)
 
         ### SET REGION NAME ###
         if aws_region_name is None:
@@ -881,6 +720,7 @@ class BedrockLLM(BaseLLM):
             aws_profile_name=aws_profile_name,
             aws_role_name=aws_role_name,
             aws_web_identity_token=aws_web_identity_token,
+            aws_sts_endpoint=aws_sts_endpoint,
         )
 
         ### SET RUNTIME ENDPOINT ###
@@ -1038,10 +878,11 @@ class BedrockLLM(BaseLLM):
                     "complete_input_dict": inference_params,
                 },
             )
-            raise Exception(
-                "Bedrock HTTPX: Unsupported provider={}, model={}".format(
+            raise BedrockError(
+                status_code=404,
+                message="Bedrock HTTPX: Unknown provider={}, model={}".format(
                     provider, model
-                )
+                ),
             )
 
         ## COMPLETION CALL
@@ -1378,6 +1219,8 @@ class AmazonConverseConfig:
                 optional_params["stream"] = value
             if param == "stop":
                 if isinstance(value, str):
+                    if len(value) == 0:  # converse raises error for empty strings
+                        continue
                     value = [value]
                 optional_params["stop_sequences"] = value
             if param == "temperature":
@@ -1395,7 +1238,7 @@ class AmazonConverseConfig:
         return optional_params
 
 
-class BedrockConverseLLM(BaseLLM):
+class BedrockConverseLLM(BaseAWSLLM):
     def __init__(self) -> None:
         super().__init__()
 
@@ -1482,8 +1325,14 @@ class BedrockConverseLLM(BaseLLM):
                 if "text" in content:
                     content_str += content["text"]
                 if "toolUse" in content:
+
+                    ## check tool name was formatted by litellm
+                    _response_tool_name = content["toolUse"]["name"]
+                    response_tool_name = get_bedrock_tool_name(
+                        response_tool_name=_response_tool_name
+                    )
                     _function_chunk = ChatCompletionToolCallFunctionChunk(
-                        name=content["toolUse"]["name"],
+                        name=response_tool_name,
                         arguments=json.dumps(content["toolUse"]["input"]),
                     )
                     _tool_response_chunk = ChatCompletionToolCallChunk(
@@ -1517,6 +1366,10 @@ class BedrockConverseLLM(BaseLLM):
         )
         setattr(model_response, "usage", usage)
 
+        # Add "trace" from Bedrock guardrails - if user has opted in to returning it
+        if "trace" in completion_response:
+            setattr(model_response, "trace", completion_response["trace"])
+
         return model_response
 
     def encode_model_id(self, model_id: str) -> str:
@@ -1528,160 +1381,6 @@ class BedrockConverseLLM(BaseLLM):
             str: The double-encoded model ID.
         """
         return urllib.parse.quote(model_id, safe="")
-
-    def get_credentials(
-        self,
-        aws_access_key_id: Optional[str] = None,
-        aws_secret_access_key: Optional[str] = None,
-        aws_session_token: Optional[str] = None,
-        aws_region_name: Optional[str] = None,
-        aws_session_name: Optional[str] = None,
-        aws_profile_name: Optional[str] = None,
-        aws_role_name: Optional[str] = None,
-        aws_web_identity_token: Optional[str] = None,
-    ):
-        """
-        Return a boto3.Credentials object
-        """
-        import boto3
-
-        ## CHECK IS  'os.environ/' passed in
-        params_to_check: List[Optional[str]] = [
-            aws_access_key_id,
-            aws_secret_access_key,
-            aws_session_token,
-            aws_region_name,
-            aws_session_name,
-            aws_profile_name,
-            aws_role_name,
-            aws_web_identity_token,
-        ]
-
-        # Iterate over parameters and update if needed
-        for i, param in enumerate(params_to_check):
-            if param and param.startswith("os.environ/"):
-                _v = get_secret(param)
-                if _v is not None and isinstance(_v, str):
-                    params_to_check[i] = _v
-        # Assign updated values back to parameters
-        (
-            aws_access_key_id,
-            aws_secret_access_key,
-            aws_session_token,
-            aws_region_name,
-            aws_session_name,
-            aws_profile_name,
-            aws_role_name,
-            aws_web_identity_token,
-        ) = params_to_check
-
-        ### CHECK STS ###
-        if (
-            aws_web_identity_token is not None
-            and aws_role_name is not None
-            and aws_session_name is not None
-        ):
-            iam_creds_cache_key = json.dumps(
-                {
-                    "aws_web_identity_token": aws_web_identity_token,
-                    "aws_role_name": aws_role_name,
-                    "aws_session_name": aws_session_name,
-                    "aws_region_name": aws_region_name,
-                }
-            )
-
-            iam_creds_dict = iam_cache.get_cache(iam_creds_cache_key)
-            if iam_creds_dict is None:
-                oidc_token = get_secret(aws_web_identity_token)
-
-                if oidc_token is None:
-                    raise BedrockError(
-                        message="OIDC token could not be retrieved from secret manager.",
-                        status_code=401,
-                    )
-
-                sts_client = boto3.client(
-                    "sts",
-                    region_name=aws_region_name,
-                    endpoint_url=f"https://sts.{aws_region_name}.amazonaws.com",
-                )
-
-                # https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRoleWithWebIdentity.html
-                # https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/sts/client/assume_role_with_web_identity.html
-                sts_response = sts_client.assume_role_with_web_identity(
-                    RoleArn=aws_role_name,
-                    RoleSessionName=aws_session_name,
-                    WebIdentityToken=oidc_token,
-                    DurationSeconds=3600,
-                )
-
-                iam_creds_dict = {
-                    "aws_access_key_id": sts_response["Credentials"]["AccessKeyId"],
-                    "aws_secret_access_key": sts_response["Credentials"][
-                        "SecretAccessKey"
-                    ],
-                    "aws_session_token": sts_response["Credentials"]["SessionToken"],
-                    "region_name": aws_region_name,
-                }
-
-                iam_cache.set_cache(
-                    key=iam_creds_cache_key,
-                    value=json.dumps(iam_creds_dict),
-                    ttl=3600 - 60,
-                )
-
-            session = boto3.Session(**iam_creds_dict)
-
-            iam_creds = session.get_credentials()
-
-            return iam_creds
-        elif aws_role_name is not None and aws_session_name is not None:
-            sts_client = boto3.client(
-                "sts",
-                aws_access_key_id=aws_access_key_id,  # [OPTIONAL]
-                aws_secret_access_key=aws_secret_access_key,  # [OPTIONAL]
-            )
-
-            sts_response = sts_client.assume_role(
-                RoleArn=aws_role_name, RoleSessionName=aws_session_name
-            )
-
-            # Extract the credentials from the response and convert to Session Credentials
-            sts_credentials = sts_response["Credentials"]
-            from botocore.credentials import Credentials
-
-            credentials = Credentials(
-                access_key=sts_credentials["AccessKeyId"],
-                secret_key=sts_credentials["SecretAccessKey"],
-                token=sts_credentials["SessionToken"],
-            )
-            return credentials
-        elif aws_profile_name is not None:  ### CHECK SESSION ###
-            # uses auth values from AWS profile usually stored in ~/.aws/credentials
-            client = boto3.Session(profile_name=aws_profile_name)
-
-            return client.get_credentials()
-        elif (
-            aws_access_key_id is not None
-            and aws_secret_access_key is not None
-            and aws_session_token is not None
-        ):  ### CHECK FOR AWS SESSION TOKEN ###
-            from botocore.credentials import Credentials
-
-            credentials = Credentials(
-                access_key=aws_access_key_id,
-                secret_key=aws_secret_access_key,
-                token=aws_session_token,
-            )
-            return credentials
-        else:
-            session = boto3.Session(
-                aws_access_key_id=aws_access_key_id,
-                aws_secret_access_key=aws_secret_access_key,
-                region_name=aws_region_name,
-            )
-
-            return session.get_credentials()
 
     async def async_streaming(
         self,
@@ -1782,7 +1481,7 @@ class BedrockConverseLLM(BaseLLM):
         optional_params: dict,
         acompletion: bool,
         timeout: Optional[Union[float, httpx.Timeout]],
-        litellm_params=None,
+        litellm_params: dict,
         logger_fn=None,
         extra_headers: Optional[dict] = None,
         client: Optional[Union[AsyncHTTPHandler, HTTPHandler]] = None,
@@ -1818,6 +1517,7 @@ class BedrockConverseLLM(BaseLLM):
             "aws_bedrock_runtime_endpoint", None
         )  # https://bedrock-runtime.{region_name}.amazonaws.com
         aws_web_identity_token = optional_params.pop("aws_web_identity_token", None)
+        aws_sts_endpoint = optional_params.pop("aws_sts_endpoint", None)
 
         ### SET REGION NAME ###
         if aws_region_name is None:
@@ -1847,6 +1547,7 @@ class BedrockConverseLLM(BaseLLM):
             aws_profile_name=aws_profile_name,
             aws_role_name=aws_role_name,
             aws_web_identity_token=aws_web_identity_token,
+            aws_sts_endpoint=aws_sts_endpoint,
         )
 
         ### SET RUNTIME ENDPOINT ###
@@ -1875,13 +1576,15 @@ class BedrockConverseLLM(BaseLLM):
         system_content_blocks: List[SystemContentBlock] = []
         for idx, message in enumerate(messages):
             if message["role"] == "system":
-                if isinstance(message["content"], str):
+                _system_content_block: Optional[SystemContentBlock] = None
+                if isinstance(message["content"], str) and len(message["content"]) > 0:
                     _system_content_block = SystemContentBlock(text=message["content"])
                 elif isinstance(message["content"], list):
                     for m in message["content"]:
-                        if m.get("type", "") == "text":
+                        if m.get("type", "") == "text" and len(m["text"]) > 0:
                             _system_content_block = SystemContentBlock(text=m["text"])
-                system_content_blocks.append(_system_content_block)
+                if _system_content_block is not None:
+                    system_content_blocks.append(_system_content_block)
                 system_prompt_indices.append(idx)
         if len(system_prompt_indices) > 0:
             for idx in reversed(system_prompt_indices):
@@ -1894,6 +1597,14 @@ class BedrockConverseLLM(BaseLLM):
         supported_tool_call_params = ["tools", "tool_choice"]
         supported_guardrail_params = ["guardrailConfig"]
         ## TRANSFORMATION ##
+
+        bedrock_messages: List[MessageBlock] = _bedrock_converse_messages_pt(
+            messages=messages,
+            model=model,
+            llm_provider="bedrock_converse",
+            user_continue_message=litellm_params.pop("user_continue_message", None),
+        )
+
         # send all model-specific params in 'additional_request_params'
         for k, v in inference_params.items():
             if (
@@ -1906,11 +1617,6 @@ class BedrockConverseLLM(BaseLLM):
         for key in additional_request_keys:
             inference_params.pop(key, None)
 
-        bedrock_messages: List[MessageBlock] = _bedrock_converse_messages_pt(
-            messages=messages,
-            model=model,
-            llm_provider="bedrock_converse",
-        )
         bedrock_tools: List[ToolBlock] = _bedrock_tools_pt(
             inference_params.pop("tools", [])
         )
@@ -1942,6 +1648,7 @@ class BedrockConverseLLM(BaseLLM):
         # Tool Config
         if bedrock_tool_config is not None:
             _data["toolConfig"] = bedrock_tool_config
+
         data = json.dumps(_data)
         ## COMPLETION CALL
 
@@ -2076,15 +1783,55 @@ def get_response_stream_shape():
     return _response_stream_shape_cache
 
 
+def get_bedrock_tool_name(response_tool_name: str) -> str:
+    """
+    If litellm formatted the input tool name, we need to convert it back to the original name.
+
+    Args:
+        response_tool_name (str): The name of the tool as received from the response.
+
+    Returns:
+        str: The original name of the tool.
+    """
+
+    if response_tool_name in litellm.bedrock_tool_name_mappings.cache_dict:
+        response_tool_name = litellm.bedrock_tool_name_mappings.cache_dict[
+            response_tool_name
+        ]
+    return response_tool_name
+
+
 class AWSEventStreamDecoder:
     def __init__(self, model: str) -> None:
         from botocore.parsers import EventStreamJSONParser
 
         self.model = model
         self.parser = EventStreamJSONParser()
+        self.content_blocks: List[ContentBlockDeltaEvent] = []
+
+    def check_empty_tool_call_args(self) -> bool:
+        """
+        Check if the tool call block so far has been an empty string
+        """
+        args = ""
+        # if text content block -> skip
+        if len(self.content_blocks) == 0:
+            return False
+
+        if "text" in self.content_blocks[0]:
+            return False
+
+        for block in self.content_blocks:
+            if "toolUse" in block:
+                args += block["toolUse"]["input"]
+
+        if len(args) == 0:
+            return True
+        return False
 
     def converse_chunk_parser(self, chunk_data: dict) -> GChunk:
         try:
+            verbose_logger.debug("\n\nRaw Chunk: {}\n\n".format(chunk_data))
             text = ""
             tool_use: Optional[ChatCompletionToolCallChunk] = None
             is_finished = False
@@ -2094,22 +1841,29 @@ class AWSEventStreamDecoder:
             index = int(chunk_data.get("contentBlockIndex", 0))
             if "start" in chunk_data:
                 start_obj = ContentBlockStartEvent(**chunk_data["start"])
+                self.content_blocks = []  # reset
                 if (
                     start_obj is not None
                     and "toolUse" in start_obj
                     and start_obj["toolUse"] is not None
                 ):
+                    ## check tool name was formatted by litellm
+                    _response_tool_name = start_obj["toolUse"]["name"]
+                    response_tool_name = get_bedrock_tool_name(
+                        response_tool_name=_response_tool_name
+                    )
                     tool_use = {
                         "id": start_obj["toolUse"]["toolUseId"],
                         "type": "function",
                         "function": {
-                            "name": start_obj["toolUse"]["name"],
+                            "name": response_tool_name,
                             "arguments": "",
                         },
                         "index": index,
                     }
             elif "delta" in chunk_data:
                 delta_obj = ContentBlockDeltaEvent(**chunk_data["delta"])
+                self.content_blocks.append(delta_obj)
                 if "text" in delta_obj:
                     text = delta_obj["text"]
                 elif "toolUse" in delta_obj:
@@ -2121,6 +1875,20 @@ class AWSEventStreamDecoder:
                             "arguments": delta_obj["toolUse"]["input"],
                         },
                         "index": index,
+                    }
+            elif (
+                "contentBlockIndex" in chunk_data
+            ):  # stop block, no 'start' or 'delta' object
+                is_empty = self.check_empty_tool_call_args()
+                if is_empty:
+                    tool_use = {
+                        "id": None,
+                        "type": "function",
+                        "function": {
+                            "name": None,
+                            "arguments": "{}",
+                        },
+                        "index": chunk_data["contentBlockIndex"],
                     }
             elif "stopReason" in chunk_data:
                 finish_reason = map_finish_reason(chunk_data.get("stopReason", "stop"))
@@ -2140,6 +1908,10 @@ class AWSEventStreamDecoder:
                 usage=usage,
                 index=index,
             )
+
+            if "trace" in chunk_data:
+                trace = chunk_data.get("trace")
+                response["provider_specific_fields"] = {"trace": trace}
             return response
         except Exception as e:
             raise Exception("Received streaming error - {}".format(str(e)))
@@ -2160,6 +1932,7 @@ class AWSEventStreamDecoder:
             "contentBlockIndex" in chunk_data
             or "stopReason" in chunk_data
             or "metrics" in chunk_data
+            or "trace" in chunk_data
         ):
             return self.converse_chunk_parser(chunk_data=chunk_data)
         ######## bedrock.mistral mappings ###############
@@ -2228,6 +2001,7 @@ class AWSEventStreamDecoder:
     def _parse_message_from_event(self, event) -> Optional[str]:
         response_dict = event.to_response_dict()
         parsed_response = self.parser.parse(response_dict, get_response_stream_shape())
+
         if response_dict["status_code"] != 200:
             raise ValueError(f"Bad response code, expected 200: {response_dict}")
         if "chunk" in parsed_response:

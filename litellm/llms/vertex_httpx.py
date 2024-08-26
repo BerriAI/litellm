@@ -9,10 +9,11 @@ import types
 import uuid
 from enum import Enum
 from functools import partial
-from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
+from typing import Any, Callable, Coroutine, Dict, List, Literal, Optional, Tuple, Union
 
 import httpx  # type: ignore
 import requests  # type: ignore
+from openai.types.image import Image
 
 import litellm
 import litellm.litellm_core_utils
@@ -37,17 +38,186 @@ from litellm.types.llms.vertex_ai import (
     FunctionDeclaration,
     GenerateContentResponseBody,
     GenerationConfig,
+    Instance,
+    InstanceVideo,
     PartType,
     RequestBody,
     SafetSettingsConfig,
     SystemInstructions,
     ToolConfig,
     Tools,
+    VertexMultimodalEmbeddingRequest,
 )
 from litellm.types.utils import GenericStreamingChunk
 from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
 
 from .base import BaseLLM
+
+
+class VertexAIConfig:
+    """
+    Reference: https://cloud.google.com/vertex-ai/docs/generative-ai/chat/test-chat-prompts
+    Reference: https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/inference
+
+    The class `VertexAIConfig` provides configuration for the VertexAI's API interface. Below are the parameters:
+
+    - `temperature` (float): This controls the degree of randomness in token selection.
+
+    - `max_output_tokens` (integer): This sets the limitation for the maximum amount of token in the text output. In this case, the default value is 256.
+
+    - `top_p` (float): The tokens are selected from the most probable to the least probable until the sum of their probabilities equals the `top_p` value. Default is 0.95.
+
+    - `top_k` (integer): The value of `top_k` determines how many of the most probable tokens are considered in the selection. For example, a `top_k` of 1 means the selected token is the most probable among all tokens. The default value is 40.
+
+    - `response_mime_type` (str): The MIME type of the response. The default value is 'text/plain'.
+
+    - `candidate_count` (int): Number of generated responses to return.
+
+    - `stop_sequences` (List[str]): The set of character sequences (up to 5) that will stop output generation. If specified, the API will stop at the first appearance of a stop sequence. The stop sequence will not be included as part of the response.
+
+    - `frequency_penalty` (float): This parameter is used to penalize the model from repeating the same output. The default value is 0.0.
+
+    - `presence_penalty` (float): This parameter is used to penalize the model from generating the same output as the input. The default value is 0.0.
+
+    Note: Please make sure to modify the default parameters as required for your use case.
+    """
+
+    temperature: Optional[float] = None
+    max_output_tokens: Optional[int] = None
+    top_p: Optional[float] = None
+    top_k: Optional[int] = None
+    response_mime_type: Optional[str] = None
+    candidate_count: Optional[int] = None
+    stop_sequences: Optional[list] = None
+    frequency_penalty: Optional[float] = None
+    presence_penalty: Optional[float] = None
+
+    def __init__(
+        self,
+        temperature: Optional[float] = None,
+        max_output_tokens: Optional[int] = None,
+        top_p: Optional[float] = None,
+        top_k: Optional[int] = None,
+        response_mime_type: Optional[str] = None,
+        candidate_count: Optional[int] = None,
+        stop_sequences: Optional[list] = None,
+        frequency_penalty: Optional[float] = None,
+        presence_penalty: Optional[float] = None,
+    ) -> None:
+        locals_ = locals()
+        for key, value in locals_.items():
+            if key != "self" and value is not None:
+                setattr(self.__class__, key, value)
+
+    @classmethod
+    def get_config(cls):
+        return {
+            k: v
+            for k, v in cls.__dict__.items()
+            if not k.startswith("__")
+            and not isinstance(
+                v,
+                (
+                    types.FunctionType,
+                    types.BuiltinFunctionType,
+                    classmethod,
+                    staticmethod,
+                ),
+            )
+            and v is not None
+        }
+
+    def get_supported_openai_params(self):
+        return [
+            "temperature",
+            "top_p",
+            "max_tokens",
+            "stream",
+            "tools",
+            "tool_choice",
+            "response_format",
+            "n",
+            "stop",
+            "extra_headers",
+        ]
+
+    def map_openai_params(self, non_default_params: dict, optional_params: dict):
+        for param, value in non_default_params.items():
+            if param == "temperature":
+                optional_params["temperature"] = value
+            if param == "top_p":
+                optional_params["top_p"] = value
+            if (
+                param == "stream" and value == True
+            ):  # sending stream = False, can cause it to get passed unchecked and raise issues
+                optional_params["stream"] = value
+            if param == "n":
+                optional_params["candidate_count"] = value
+            if param == "stop":
+                if isinstance(value, str):
+                    optional_params["stop_sequences"] = [value]
+                elif isinstance(value, list):
+                    optional_params["stop_sequences"] = value
+            if param == "max_tokens":
+                optional_params["max_output_tokens"] = value
+            if param == "response_format" and value["type"] == "json_object":
+                optional_params["response_mime_type"] = "application/json"
+            if param == "frequency_penalty":
+                optional_params["frequency_penalty"] = value
+            if param == "presence_penalty":
+                optional_params["presence_penalty"] = value
+            if param == "tools" and isinstance(value, list):
+                from vertexai.preview import generative_models
+
+                gtool_func_declarations = []
+                for tool in value:
+                    gtool_func_declaration = generative_models.FunctionDeclaration(
+                        name=tool["function"]["name"],
+                        description=tool["function"].get("description", ""),
+                        parameters=tool["function"].get("parameters", {}),
+                    )
+                    gtool_func_declarations.append(gtool_func_declaration)
+                optional_params["tools"] = [
+                    generative_models.Tool(
+                        function_declarations=gtool_func_declarations
+                    )
+                ]
+            if param == "tool_choice" and (
+                isinstance(value, str) or isinstance(value, dict)
+            ):
+                pass
+        return optional_params
+
+    def get_mapped_special_auth_params(self) -> dict:
+        """
+        Common auth params across bedrock/vertex_ai/azure/watsonx
+        """
+        return {"project": "vertex_project", "region_name": "vertex_location"}
+
+    def map_special_auth_params(self, non_default_params: dict, optional_params: dict):
+        mapped_params = self.get_mapped_special_auth_params()
+
+        for param, value in non_default_params.items():
+            if param in mapped_params:
+                optional_params[mapped_params[param]] = value
+        return optional_params
+
+    def get_eu_regions(self) -> List[str]:
+        """
+        Source: https://cloud.google.com/vertex-ai/generative-ai/docs/learn/locations#available-regions
+        """
+        return [
+            "europe-central2",
+            "europe-north1",
+            "europe-southwest1",
+            "europe-west1",
+            "europe-west2",
+            "europe-west3",
+            "europe-west4",
+            "europe-west6",
+            "europe-west8",
+            "europe-west9",
+        ]
 
 
 class GoogleAIStudioGeminiConfig:  # key diff from VertexAI - 'frequency_penalty' and 'presence_penalty' not supported
@@ -180,8 +350,19 @@ class GoogleAIStudioGeminiConfig:  # key diff from VertexAI - 'frequency_penalty
                     optional_params["stop_sequences"] = value
             if param == "max_tokens":
                 optional_params["max_output_tokens"] = value
-            if param == "response_format" and value["type"] == "json_object":  # type: ignore
-                optional_params["response_mime_type"] = "application/json"
+            if param == "response_format":  # type: ignore
+                if value["type"] == "json_object":  # type: ignore
+                    if value["type"] == "json_object":  # type: ignore
+                        optional_params["response_mime_type"] = "application/json"
+                    elif value["type"] == "text":  # type: ignore
+                        optional_params["response_mime_type"] = "text/plain"
+                    if "response_schema" in value:  # type: ignore
+                        optional_params["response_mime_type"] = "application/json"
+                        optional_params["response_schema"] = value["response_schema"]  # type: ignore
+                elif value["type"] == "json_schema":  # type: ignore
+                    if "json_schema" in value and "schema" in value["json_schema"]:  # type: ignore
+                        optional_params["response_mime_type"] = "application/json"
+                        optional_params["response_schema"] = value["json_schema"]["schema"]  # type: ignore
             if param == "tools" and isinstance(value, list):
                 gtool_func_declarations = []
                 for tool in value:
@@ -195,8 +376,9 @@ class GoogleAIStudioGeminiConfig:  # key diff from VertexAI - 'frequency_penalty
                     gtool_func_declaration = FunctionDeclaration(
                         name=tool["function"]["name"],
                         description=tool["function"].get("description", ""),
-                        parameters=_parameters,
                     )
+                    if len(_parameters.keys()) > 0:
+                        gtool_func_declaration["parameters"] = _parameters
                     gtool_func_declarations.append(gtool_func_declaration)
                 optional_params["tools"] = [
                     Tools(function_declarations=gtool_func_declarations)
@@ -330,6 +512,7 @@ class VertexGeminiConfig:
             "stop",
             "frequency_penalty",
             "presence_penalty",
+            "extra_headers",
             "seed",
         ]
 
@@ -389,7 +572,12 @@ class VertexGeminiConfig:
                 elif value["type"] == "text":
                     optional_params["response_mime_type"] = "text/plain"
                 if "response_schema" in value:
+                    optional_params["response_mime_type"] = "application/json"
                     optional_params["response_schema"] = value["response_schema"]
+                elif value["type"] == "json_schema":  # type: ignore
+                    if "json_schema" in value and "schema" in value["json_schema"]:  # type: ignore
+                        optional_params["response_mime_type"] = "application/json"
+                        optional_params["response_schema"] = value["json_schema"]["schema"]  # type: ignore
             if param == "frequency_penalty":
                 optional_params["frequency_penalty"] = value
             if param == "presence_penalty":
@@ -408,12 +596,13 @@ class VertexGeminiConfig:
                         )
                         gtool_func_declarations.append(gtool_func_declaration)
                     except KeyError:
-                        # assume it's a provider-specific param
-                        verbose_logger.warning(
-                            "Got KeyError parsing tool={}. Assuming it's a provider-specific param. Use `litellm.set_verbose` or `litellm --detailed_debug` to see raw request."
-                        )
                         if tool.get("googleSearchRetrieval", None) is not None:
                             googleSearchRetrieval = tool["googleSearchRetrieval"]
+                        else:
+                            # assume it's a provider-specific param
+                            verbose_logger.warning(
+                                "Got KeyError parsing tool={}. Assuming it's a provider-specific param. Use `litellm.set_verbose` or `litellm --detailed_debug` to see raw request."
+                            )
                 _tools = Tools(
                     function_declarations=gtool_func_declarations,
                 )
@@ -477,6 +666,16 @@ class VertexGeminiConfig:
             "SPII": "The token generation was stopped as the response was flagged for Sensitive Personally Identifiable Information (SPII) contents.",
         }
 
+    def translate_exception_str(self, exception_string: str):
+        if (
+            "GenerateContentRequest.tools[0].function_declarations[0].parameters.properties: should be non-empty for OBJECT type"
+            in exception_string
+        ):
+            return "'properties' field in tools[0]['function']['parameters'] cannot be empty if 'type' == 'object'. Received error from provider - {}".format(
+                exception_string
+            )
+        return exception_string
+
 
 async def make_call(
     client: Optional[AsyncHTTPHandler],
@@ -490,8 +689,15 @@ async def make_call(
     if client is None:
         client = AsyncHTTPHandler()  # Create a new client if none provided
 
-    response = await client.post(api_base, headers=headers, data=data, stream=True)
-
+    try:
+        response = await client.post(api_base, headers=headers, data=data, stream=True)
+        response.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        exception_string = str(await e.response.aread())
+        raise VertexAIError(
+            status_code=e.response.status_code,
+            message=VertexGeminiConfig().translate_exception_str(exception_string),
+        )
     if response.status_code != 200:
         raise VertexAIError(status_code=response.status_code, message=response.text)
 
@@ -562,6 +768,10 @@ class VertexLLM(BaseLLM):
         self._credentials: Optional[Any] = None
         self.project_id: Optional[str] = None
         self.async_handler: Optional[AsyncHTTPHandler] = None
+        self.SUPPORTED_MULTIMODAL_EMBEDDING_MODELS = [
+            "multimodalembedding",
+            "multimodalembedding@001",
+        ]
 
     def _process_response(
         self,
@@ -724,7 +934,9 @@ class VertexLLM(BaseLLM):
                     )
                     tools.append(_tool_response_chunk)
 
-                chat_completion_message["content"] = content_str
+                chat_completion_message["content"] = (
+                    content_str if len(content_str) > 0 else None
+                )
                 chat_completion_message["tool_calls"] = tools
 
                 choice = litellm.Choices(
@@ -753,16 +965,23 @@ class VertexLLM(BaseLLM):
             setattr(model_response, "usage", usage)
 
             ## ADD GROUNDING METADATA ##
-            model_response._hidden_params["vertex_ai_grounding_metadata"] = (
+            setattr(model_response, "vertex_ai_grounding_metadata", grounding_metadata)
+            model_response._hidden_params[
+                "vertex_ai_grounding_metadata"
+            ] = (  # older approach - maintaining to prevent regressions
                 grounding_metadata
             )
 
             ## ADD SAFETY RATINGS ##
-            model_response._hidden_params["vertex_ai_safety_results"] = safety_ratings
+            setattr(model_response, "vertex_ai_safety_results", safety_ratings)
+            model_response._hidden_params["vertex_ai_safety_results"] = (
+                safety_ratings  # older approach - maintaining to prevent regressions
+            )
 
             ## ADD CITATION METADATA ##
+            setattr(model_response, "vertex_ai_citation_metadata", citation_metadata)
             model_response._hidden_params["vertex_ai_citation_metadata"] = (
-                citation_metadata
+                citation_metadata  # older approach - maintaining to prevent regressions
             )
 
         except Exception as e:
@@ -782,6 +1001,7 @@ class VertexLLM(BaseLLM):
         self, credentials: Optional[str], project_id: Optional[str]
     ) -> Tuple[Any, str]:
         import google.auth as google_auth
+        from google.auth import identity_pool
         from google.auth.credentials import Credentials  # type: ignore[import-untyped]
         from google.auth.transport.requests import (
             Request,  # type: ignore[import-untyped]
@@ -805,10 +1025,16 @@ class VertexLLM(BaseLLM):
             else:
                 json_obj = json.loads(credentials)
 
-            creds = google.oauth2.service_account.Credentials.from_service_account_info(
-                json_obj,
-                scopes=["https://www.googleapis.com/auth/cloud-platform"],
-            )
+            # Check if the JSON object contains Workload Identity Federation configuration
+            if "type" in json_obj and json_obj["type"] == "external_account":
+                creds = identity_pool.Credentials.from_info(json_obj)
+            else:
+                creds = (
+                    google.oauth2.service_account.Credentials.from_service_account_info(
+                        json_obj,
+                        scopes=["https://www.googleapis.com/auth/cloud-platform"],
+                    )
+                )
 
             if project_id is None:
                 project_id = creds.project_id
@@ -845,8 +1071,11 @@ class VertexLLM(BaseLLM):
         """
         Returns auth token and project id
         """
-        if self.access_token is not None and self.project_id is not None:
-            return self.access_token, self.project_id
+        if self.access_token is not None:
+            if project_id is not None:
+                return self.access_token, project_id
+            elif self.project_id is not None:
+                return self.access_token, self.project_id
 
         if not self._credentials:
             self._credentials, cred_project_id = self.load_auth(
@@ -868,6 +1097,21 @@ class VertexLLM(BaseLLM):
 
         return self._credentials.token, self.project_id
 
+    def is_using_v1beta1_features(self, optional_params: dict) -> bool:
+        """
+        VertexAI only supports ContextCaching on v1beta1
+
+        use this helper to decide if request should be sent to v1 or v1beta1
+
+        Returns v1beta1 if context caching is enabled
+        Returns v1 in all other cases
+        """
+        if "cached_content" in optional_params:
+            return True
+        if "CachedContent" in optional_params:
+            return True
+        return False
+
     def _get_token_and_url(
         self,
         model: str,
@@ -878,6 +1122,7 @@ class VertexLLM(BaseLLM):
         stream: Optional[bool],
         custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
         api_base: Optional[str],
+        should_use_v1beta1_features: Optional[bool] = False,
     ) -> Tuple[Optional[str], str]:
         """
         Internal function. Returns the token and url for the call.
@@ -907,12 +1152,14 @@ class VertexLLM(BaseLLM):
             vertex_location = self.get_vertex_region(vertex_region=vertex_location)
 
             ### SET RUNTIME ENDPOINT ###
+            version = "v1beta1" if should_use_v1beta1_features is True else "v1"
             endpoint = "generateContent"
+            litellm.utils.print_verbose("vertex_project - {}".format(vertex_project))
             if stream is True:
                 endpoint = "streamGenerateContent"
-                url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}?alt=sse"
+                url = f"https://{vertex_location}-aiplatform.googleapis.com/{version}/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}?alt=sse"
             else:
-                url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}"
+                url = f"https://{vertex_location}-aiplatform.googleapis.com/{version}/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}"
 
         if (
             api_base is not None
@@ -1042,6 +1289,11 @@ class VertexLLM(BaseLLM):
     ) -> Union[ModelResponse, CustomStreamWrapper]:
         stream: Optional[bool] = optional_params.pop("stream", None)  # type: ignore
 
+        should_use_v1beta1_features = self.is_using_v1beta1_features(
+            optional_params=optional_params
+        )
+
+        print_verbose("Incoming Vertex Args - {}".format(locals()))
         auth_header, url = self._get_token_and_url(
             model=model,
             gemini_api_key=gemini_api_key,
@@ -1051,7 +1303,9 @@ class VertexLLM(BaseLLM):
             stream=stream,
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
+            should_use_v1beta1_features=should_use_v1beta1_features,
         )
+        print_verbose("Updated URL - {}".format(url))
 
         ## TRANSFORMATION ##
         try:
@@ -1339,12 +1593,18 @@ class VertexLLM(BaseLLM):
         """
 
         _json_response = response.json()
+        if "predictions" not in _json_response:
+            raise litellm.InternalServerError(
+                message=f"image generation response does not contain 'predictions', got {_json_response}",
+                llm_provider="vertex_ai",
+                model=model,
+            )
         _predictions = _json_response["predictions"]
 
-        _response_data: List[litellm.ImageObject] = []
+        _response_data: List[Image] = []
         for _prediction in _predictions:
             _bytes_base64_encoded = _prediction["bytesBase64Encoded"]
-            image_object = litellm.ImageObject(b64_json=_bytes_base64_encoded)
+            image_object = Image(b64_json=_bytes_base64_encoded)
             _response_data.append(image_object)
 
         model_response.data = _response_data
@@ -1451,15 +1711,177 @@ class VertexLLM(BaseLLM):
         """
 
         _json_response = response.json()
+
+        if "predictions" not in _json_response:
+            raise litellm.InternalServerError(
+                message=f"image generation response does not contain 'predictions', got {_json_response}",
+                llm_provider="vertex_ai",
+                model=model,
+            )
+
         _predictions = _json_response["predictions"]
 
-        _response_data: List[litellm.ImageObject] = []
+        _response_data: List[Image] = []
         for _prediction in _predictions:
             _bytes_base64_encoded = _prediction["bytesBase64Encoded"]
-            image_object = litellm.ImageObject(b64_json=_bytes_base64_encoded)
+            image_object = Image(b64_json=_bytes_base64_encoded)
             _response_data.append(image_object)
 
         model_response.data = _response_data
+
+        return model_response
+
+    def multimodal_embedding(
+        self,
+        model: str,
+        input: Union[list, str],
+        print_verbose,
+        model_response: litellm.EmbeddingResponse,
+        optional_params: dict,
+        api_key: Optional[str] = None,
+        logging_obj=None,
+        encoding=None,
+        vertex_project=None,
+        vertex_location=None,
+        vertex_credentials=None,
+        aembedding=False,
+        timeout=300,
+        client=None,
+    ):
+
+        if client is None:
+            _params = {}
+            if timeout is not None:
+                if isinstance(timeout, float) or isinstance(timeout, int):
+                    _httpx_timeout = httpx.Timeout(timeout)
+                    _params["timeout"] = _httpx_timeout
+            else:
+                _params["timeout"] = httpx.Timeout(timeout=600.0, connect=5.0)
+
+            sync_handler: HTTPHandler = HTTPHandler(**_params)  # type: ignore
+        else:
+            sync_handler = client  # type: ignore
+
+        url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:predict"
+
+        auth_header, _ = self._ensure_access_token(
+            credentials=vertex_credentials, project_id=vertex_project
+        )
+        optional_params = optional_params or {}
+
+        request_data = VertexMultimodalEmbeddingRequest()
+
+        if "instances" in optional_params:
+            request_data["instances"] = optional_params["instances"]
+        elif isinstance(input, list):
+            request_data["instances"] = input
+        else:
+            # construct instances
+            vertex_request_instance = Instance(**optional_params)
+
+            if isinstance(input, str):
+                vertex_request_instance["text"] = input
+
+            request_data["instances"] = [vertex_request_instance]
+
+        request_str = f"\n curl -X POST \\\n -H \"Authorization: Bearer {auth_header[:10] + 'XXXXXXXXXX'}\" \\\n -H \"Content-Type: application/json; charset=utf-8\" \\\n -d {request_data} \\\n \"{url}\""
+        logging_obj.pre_call(
+            input=[],
+            api_key=None,
+            additional_args={
+                "complete_input_dict": optional_params,
+                "request_str": request_str,
+            },
+        )
+
+        logging_obj.pre_call(
+            input=[],
+            api_key=None,
+            additional_args={
+                "complete_input_dict": optional_params,
+                "request_str": request_str,
+            },
+        )
+
+        headers = {
+            "Content-Type": "application/json; charset=utf-8",
+            "Authorization": f"Bearer {auth_header}",
+        }
+
+        if aembedding is True:
+            return self.async_multimodal_embedding(
+                model=model,
+                api_base=url,
+                data=request_data,
+                timeout=timeout,
+                headers=headers,
+                client=client,
+                model_response=model_response,
+            )
+
+        response = sync_handler.post(
+            url=url,
+            headers=headers,
+            data=json.dumps(request_data),
+        )
+
+        if response.status_code != 200:
+            raise Exception(f"Error: {response.status_code} {response.text}")
+
+        _json_response = response.json()
+        if "predictions" not in _json_response:
+            raise litellm.InternalServerError(
+                message=f"embedding response does not contain 'predictions', got {_json_response}",
+                llm_provider="vertex_ai",
+                model=model,
+            )
+        _predictions = _json_response["predictions"]
+
+        model_response.data = _predictions
+        model_response.model = model
+
+        return model_response
+
+    async def async_multimodal_embedding(
+        self,
+        model: str,
+        api_base: str,
+        data: VertexMultimodalEmbeddingRequest,
+        model_response: litellm.EmbeddingResponse,
+        timeout: Optional[Union[float, httpx.Timeout]],
+        headers={},
+        client: Optional[AsyncHTTPHandler] = None,
+    ) -> litellm.EmbeddingResponse:
+        if client is None:
+            _params = {}
+            if timeout is not None:
+                if isinstance(timeout, float) or isinstance(timeout, int):
+                    timeout = httpx.Timeout(timeout)
+                _params["timeout"] = timeout
+            client = AsyncHTTPHandler(**_params)  # type: ignore
+        else:
+            client = client  # type: ignore
+
+        try:
+            response = await client.post(api_base, headers=headers, json=data)  # type: ignore
+            response.raise_for_status()
+        except httpx.HTTPStatusError as err:
+            error_code = err.response.status_code
+            raise VertexAIError(status_code=error_code, message=err.response.text)
+        except httpx.TimeoutException:
+            raise VertexAIError(status_code=408, message="Timeout error occurred.")
+
+        _json_response = response.json()
+        if "predictions" not in _json_response:
+            raise litellm.InternalServerError(
+                message=f"embedding response does not contain 'predictions', got {_json_response}",
+                llm_provider="vertex_ai",
+                model=model,
+            )
+        _predictions = _json_response["predictions"]
+
+        model_response.data = _predictions
+        model_response.model = model
 
         return model_response
 

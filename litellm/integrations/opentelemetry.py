@@ -153,6 +153,11 @@ class OpenTelemetry(CustomLogger):
 
             if event_metadata:
                 for key, value in event_metadata.items():
+                    if isinstance(value, dict):
+                        try:
+                            value = str(value)
+                        except Exception:
+                            value = "litllm logging error - could_not_json_serialize"
                     service_logging_span.set_attribute(key, value)
             service_logging_span.set_status(Status(StatusCode.OK))
             service_logging_span.end(end_time=_end_time_ns)
@@ -160,9 +165,11 @@ class OpenTelemetry(CustomLogger):
     async def async_service_failure_hook(
         self,
         payload: ServiceLoggerPayload,
+        error: Optional[str] = "",
         parent_otel_span: Optional[Span] = None,
         start_time: Optional[Union[datetime, float]] = None,
         end_time: Optional[Union[float, datetime]] = None,
+        event_metadata: Optional[dict] = None,
     ):
         from datetime import datetime
 
@@ -193,6 +200,17 @@ class OpenTelemetry(CustomLogger):
             service_logging_span.set_attribute(
                 key="service", value=payload.service.value
             )
+            if error:
+                service_logging_span.set_attribute(key="error", value=error)
+            if event_metadata:
+                for key, value in event_metadata.items():
+                    if isinstance(value, dict):
+                        try:
+                            value = str(value)
+                        except Exception:
+                            value = "litllm logging error - could_not_json_serialize"
+                    service_logging_span.set_attribute(key, value)
+
             service_logging_span.set_status(Status(StatusCode.ERROR))
             service_logging_span.end(end_time=_end_time_ns)
 
