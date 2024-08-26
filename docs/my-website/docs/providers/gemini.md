@@ -552,7 +552,7 @@ print(content)
 
 ## Fine Tuned Models
 
-- Ensure you pass model = `tunedModels/<your-model-id>"`
+- Ensure you pass model = `tunedModels/<your-model-id>`
 - `gemini_project` your gemini_project
 - `api_key` this is the Access token generated. [See relevant google ai studio docs for getting your access token](https://ai.google.dev/gemini-api/docs/model-tuning/tutorial?lang=rest)
 
