@@ -2008,7 +2008,7 @@ def completion(
                 model_response=model_response,
                 print_verbose=print_verbose,
                 optional_params=new_params,
-                litellm_params=litellm_params,
+                litellm_params=litellm_params,  # type: ignore
                 logger_fn=logger_fn,
                 encoding=encoding,
                 vertex_location=vertex_ai_location,
@@ -2095,7 +2095,7 @@ def completion(
                     model_response=model_response,
                     print_verbose=print_verbose,
                     optional_params=new_params,
-                    litellm_params=litellm_params,
+                    litellm_params=litellm_params,  # type: ignore
                     logger_fn=logger_fn,
                     encoding=encoding,
                     vertex_location=vertex_ai_location,
