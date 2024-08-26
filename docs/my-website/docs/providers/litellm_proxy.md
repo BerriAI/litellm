@@ -3,14 +3,13 @@ import TabItem from '@theme/TabItem';
 
 # LiteLLM Proxy (LLM Gateway)
 
-
-**[LiteLLM Proxy](../simple_proxy) is OpenAI compatible**, you just need the `openai/` prefix before the model
-
 :::tip
 
 [LiteLLM Providers a **self hosted** proxy server (AI Gateway)](../simple_proxy) to call all the LLMs in the OpenAI format
 
 :::
+
+**[LiteLLM Proxy](../simple_proxy) is OpenAI compatible**, you just need the `openai/` prefix before the model
 
 ## Required Variables
 
@@ -87,4 +86,4 @@ for chunk in response:
 
 ## **Usage with Langchain, LLamaindex, OpenAI Js, Anthropic SDK, Instructor**
 
-[Follow this doc to see how to use litellm proxy with langchain, llamaindex, anthropic etc](../proxy/user_keys)
+#### [Follow this doc to see how to use litellm proxy with langchain, llamaindex, anthropic etc](../proxy/user_keys)
