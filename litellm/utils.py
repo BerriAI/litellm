@@ -8828,7 +8828,7 @@ class CustomStreamWrapper:
             if (
                 "litellm_param_is_function_call" in logging_obj.optional_params
                 and logging_obj.optional_params["litellm_param_is_function_call"]
-                is not None
+                is True
             ):
                 return True
 
