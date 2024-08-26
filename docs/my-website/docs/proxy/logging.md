@@ -740,6 +740,52 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 
 </TabItem>
 
+<TabItem value="langtrace" label="Log to Langtrace Cloud">
+
+#### Quick Start - Log to Langtrace
+
+**Step 1:** Install the `langtrace-sdk` SDK
+
+```shell
+pip install langtrace-python-sdk
+```
+
+**Step 2:** Add `langtrace` as a success_callback
+
+```shell
+litellm_settings:
+  success_callback: ["langtrace"]
+
+environment_variables:
+  LANGTRACE_API_KEY: "XXXXX"
+```
+
+**Step 3**: Start the proxy, make a test request
+
+Start proxy
+
+```shell
+litellm --config config.yaml --detailed_debug
+```
+
+Test Request
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --data ' {
+    "model": "gpt-3.5-turbo",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what llm are you"
+        }
+    ]
+    }'
+```
+
+</TabItem>
+
 </Tabs>
 
 ** 🎉 Expect to see this trace logged in your OTEL collector**
