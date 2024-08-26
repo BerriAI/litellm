@@ -19,7 +19,7 @@ import litellm
 import os
 from langtrace_python_sdk import langtrace
 
-
+# Langtrace API Keys
 os.environ["LANGTRACE_API_KEY"] = "<your-api-key>"
 
 # LLM API Keys
