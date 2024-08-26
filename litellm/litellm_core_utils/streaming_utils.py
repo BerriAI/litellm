@@ -13,4 +13,6 @@ def generic_chunk_has_all_required_fields(chunk: dict) -> bool:
     # this is an optional field in GenericStreamingChunk, it's not required to be present
     _all_fields.pop("provider_specific_fields", None)
 
-    return all(key in chunk for key in _all_fields)
+    decision = all(key in _all_fields for key in chunk)
+
+    return decision
