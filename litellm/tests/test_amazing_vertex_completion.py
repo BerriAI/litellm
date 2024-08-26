@@ -2272,3 +2272,85 @@ async def test_gemini_context_caching_anthropic_format():
 
         check_cache_mock.assert_called_once()
         assert mock_client.call_count == 3
+@pytest.mark.asyncio
+async def test_completion_fine_tuned_model():
+    # load_vertex_ai_credentials()
+    mock_response = AsyncMock()
+
+    def return_val():
+        return {
+            "candidates": [
+                {
+                    "content": {
+                        "role": "model",
+                        "parts": [
+                            {
+                                "text": "A canvas vast, a boundless blue,\nWhere clouds paint tales and winds imbue.\nThe sun descends in fiery hue,\nStars shimmer bright, a gentle few.\n\nThe moon ascends, a pearl of light,\nGuiding travelers through the night.\nThe sky embraces, holds all tight,\nA tapestry of wonder, bright."
+                            }
+                        ],
+                    },
+                    "finishReason": "STOP",
+                    "safetyRatings": [
+                        {
+                            "category": "HARM_CATEGORY_HATE_SPEECH",
+                            "probability": "NEGLIGIBLE",
+                            "probabilityScore": 0.028930664,
+                            "severity": "HARM_SEVERITY_NEGLIGIBLE",
+                            "severityScore": 0.041992188,
+                        },
+                        # ... other safety ratings ...
+                    ],
+                    "avgLogprobs": -0.95772853367765187,
+                }
+            ],
+            "usageMetadata": {
+                "promptTokenCount": 7,
+                "candidatesTokenCount": 71,
+                "totalTokenCount": 78,
+            },
+        }
+
+    mock_response.json = return_val
+    mock_response.status_code = 200
+
+    expected_payload = {
+        "contents": [
+            {"role": "user", "parts": [{"text": "Write a short poem about the sky"}]}
+        ],
+        "generationConfig": {},
+    }
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=mock_response,
+    ) as mock_post:
+        # Act: Call the litellm.completion function
+        response = await litellm.acompletion(
+            model="vertex_ai_beta/4965075652664360960",
+            messages=[{"role": "user", "content": "Write a short poem about the sky"}],
+        )
+
+        # Assert
+        mock_post.assert_called_once()
+        url, kwargs = mock_post.call_args
+        print("url = ", url)
+
+        # this is the fine-tuned model endpoint
+        assert (
+            url[0]
+            == "https://us-central1-aiplatform.googleapis.com/v1/projects/adroit-crow-413218/locations/us-central1/endpoints/4965075652664360960:generateContent"
+        )
+
+        print("call args = ", kwargs)
+        args_to_vertexai = kwargs["json"]
+
+        print("args to vertex ai call:", args_to_vertexai)
+
+        assert args_to_vertexai == expected_payload
+        assert response.choices[0].message.content.startswith("A canvas vast")
+        assert response.choices[0].finish_reason == "stop"
+        assert response.usage.total_tokens == 78
+
+        # Optional: Print for debugging
+        print("Arguments passed to Vertex AI:", args_to_vertexai)
+        print("Response:", response)
