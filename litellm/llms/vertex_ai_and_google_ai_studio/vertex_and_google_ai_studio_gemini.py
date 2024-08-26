@@ -655,7 +655,7 @@ class VertexGeminiConfig:
                 optional_params["presence_penalty"] = value
             if (param == "tools" or param == "functions") and isinstance(value, list):
                 optional_params["tools"] = self._map_function(value=value)
-                optional_params["is_function_call"] = (
+                optional_params["litellm_param_is_function_call"] = (
                     True if param == "functions" else False
                 )
             if param == "tool_choice" and (
