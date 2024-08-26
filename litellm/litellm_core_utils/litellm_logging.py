@@ -77,7 +77,6 @@ from ..integrations.prompt_layer import PromptLayerLogger
 from ..integrations.s3 import S3Logger
 from ..integrations.supabase import Supabase
 from ..integrations.traceloop import TraceloopLogger
-from ..integrations.langtrace import LangtraceLogger
 from ..integrations.weights_biases import WeightsBiasesLogger
 
 _in_memory_loggers: List[Any] = []
@@ -1091,7 +1090,7 @@ class Logging:
                             end_time=end_time,
                             print_verbose=print_verbose,
                         )
-                    if callback == "langtrace":
+
                         kwargs = {}
                         for k, v in self.model_call_details.items():
                             if (
@@ -1896,7 +1895,7 @@ def set_callbacks(callback_list, function_id=None):
     """
     Globally sets the callback client
     """
-    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, athinaLogger, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, lunaryLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, logfireLogger, dynamoLogger, s3Logger, dataDogLogger, prometheusLogger, greenscaleLogger, openMeterLogger, langtraceLogger
+    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, athinaLogger, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, lunaryLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, logfireLogger, dynamoLogger, s3Logger, dataDogLogger, prometheusLogger, greenscaleLogger, openMeterLogger
 
     try:
         for callback in callback_list:
@@ -1951,8 +1950,6 @@ def set_callbacks(callback_list, function_id=None):
                 print_verbose(f"Initialized Slack App: {slack_app}")
             elif callback == "traceloop":
                 traceloopLogger = TraceloopLogger()
-            elif callback == "langtrace":
-                langtraceLogger = LangtraceLogger()
             elif callback == "athina":
                 athinaLogger = AthinaLogger()
                 print_verbose("Initialized Athina Logger")
@@ -2014,6 +2011,7 @@ def _init_custom_logger_compatible_class(
         Any
     ],  # expect litellm.Router, but typing errors due to circular import
 ) -> CustomLogger:
+    print(f"logging_integration={logging_integration}")
     if logging_integration == "lago":
         for callback in _in_memory_loggers:
             if isinstance(callback, LagoLogger):
@@ -2143,6 +2141,31 @@ def _init_custom_logger_compatible_class(
             dynamic_rate_limiter_obj.update_variables(llm_router=llm_router)
         _in_memory_loggers.append(dynamic_rate_limiter_obj)
         return dynamic_rate_limiter_obj  # type: ignore
+    elif logging_integration == "langtrace":
+        if "LANGTRACE_API_KEY" not in os.environ:
+            raise ValueError("LANGTRACE_API_KEY not found in environment variables")
+
+        from litellm.integrations.opentelemetry import (
+            OpenTelemetry,
+            OpenTelemetryConfig,
+        )
+
+        otel_config = OpenTelemetryConfig(
+            exporter="otlp_http",
+            endpoint="https://langtrace.ai/api/trace",
+        )
+        os.environ["OTEL_EXPORTER_OTLP_TRACES_HEADERS"] = (
+            f"api_key={os.getenv('LANGTRACE_API_KEY')}"
+        )
+        for callback in _in_memory_loggers:
+            if (
+                isinstance(callback, OpenTelemetry)
+                and callback.callback_name == "langtrace"
+            ):
+                return callback  # type: ignore
+        _otel_logger = OpenTelemetry(config=otel_config, callback_name="langtrace")
+        _in_memory_loggers.append(_otel_logger)
+        return _otel_logger  # type: ignore
 
 
 def get_custom_logger_compatible_class(
@@ -2208,6 +2231,19 @@ def get_custom_logger_compatible_class(
         for callback in _in_memory_loggers:
             if isinstance(callback, _PROXY_DynamicRateLimitHandler):
                 return callback  # type: ignore
+
+    elif logging_integration == "langtrace":
+        from litellm.integrations.opentelemetry import OpenTelemetry
+
+        if "LANGTRACE_API_KEY" not in os.environ:
+            raise ValueError("LANGTRACE_API_KEY not found in environment variables")
+
+        for callback in _in_memory_loggers:
+            if (
+                isinstance(callback, OpenTelemetry)
+                and callback.callback_name == "langtrace"
+            ):
+                return callback
     return None
 
 

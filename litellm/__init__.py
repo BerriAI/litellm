@@ -46,6 +46,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "galileo",
     "braintrust",
     "arize",
+    "langtrace",
     "gcs_bucket",
 ]
 _known_custom_logger_compatible_callbacks: List = list(

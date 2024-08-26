@@ -3,69 +3,34 @@ import json
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import SpanAttributes
 
+from typing import TYPE_CHECKING, Any, Optional, Union
 
-class LangtraceLogger(CustomLogger):
+if TYPE_CHECKING:
+    from opentelemetry.trace import Span as _Span
+
+    Span = _Span
+else:
+    Span = Any
+
+
+class LangtraceAttributes:
     """
-    This class is used to log traces to Langtrace
+    This class is used to save trace attributes to Langtrace's spans
     """
 
-    def __init__(self) -> None:
-        try:
-            from langtrace_python_sdk import langtrace
-            from opentelemetry.trace import get_tracer
-
-        except ModuleNotFoundError as e:
-            raise Exception(
-                f"\033[91mLangtrace not installed, try running 'pip install langtrace-python-sdk' to fix this error: {e}\n{traceback.format_exc()}\033[0m"
-            )
-
-        self.tracer = get_tracer(__name__)
-
-    def get_timestamps_ns(self, start_time, end_time):
-        """
-        This function is used to get the timestamps in nanoseconds
-        """
-        _start_time_ns = 0
-        _end_time_ns = 0
-
-        if isinstance(start_time, float):
-            _start_time_ns = int(int(start_time) * 1e9)
-        else:
-            _start_time_ns = int(start_time.timestamp() * 1e9)
-
-        if isinstance(end_time, float):
-            _end_time_ns = int(int(end_time) * 1e9)
-        else:
-            _end_time_ns = int(end_time.timestamp() * 1e9)
-
-        return _start_time_ns, _end_time_ns
-
-    def log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
+    def set_langtrace_attributes(self, span: Span, kwargs, response_obj):
         """
         This function is used to log the event to Langtrace
         """
-        try:
-            from opentelemetry.trace import SpanKind
 
-            _start_time_ns, _end_time_ns = self.get_timestamps_ns(start_time, end_time)
-            vendor = kwargs.get("litellm_params").get("custom_llm_provider")
-            span = self.tracer.start_span(
-                name=f"chat {kwargs.get('model')}",
-                kind=SpanKind.CLIENT,
-                start_time=_start_time_ns,
-            )
+        vendor = kwargs.get("litellm_params").get("custom_llm_provider")
+        optional_params = kwargs.get("optional_params", {})
+        options = {**kwargs, **optional_params}
+        self.set_request_attributes(span, options, vendor)
+        self.set_response_attributes(span, response_obj)
+        self.set_usage_attributes(span, response_obj)
 
-            optional_params = kwargs.get("optional_params", {})
-            options = {**kwargs, **optional_params}
-            self.set_request_attributes(span, options, vendor)
-            self.set_response_attributes(span, response_obj)
-            self.set_usage_attributes(span, response_obj)
-
-            span.end(end_time=_end_time_ns)
-        except Exception as e:
-            print_verbose(f"LangtraceLogger Error - {traceback.format_exc()}")
-
-    def set_request_attributes(self, span, kwargs, vendor):
+    def set_request_attributes(self, span: Span, kwargs, vendor):
         """
         This function is used to get span attributes for the LLM request
         """
@@ -94,7 +59,7 @@ class LangtraceLogger(CustomLogger):
 
         self.set_span_attributes(span, span_attributes)
 
-    def set_response_attributes(self, span, response_obj):
+    def set_response_attributes(self, span: Span, response_obj):
         """
         This function is used to get span attributes for the LLM response
         """
@@ -116,7 +81,7 @@ class LangtraceLogger(CustomLogger):
 
         self.set_span_attributes(span, response_attributes)
 
-    def set_usage_attributes(self, span, response_obj):
+    def set_usage_attributes(self, span: Span, response_obj):
         """
         This function is used to get span attributes for the LLM usage
         """
@@ -133,7 +98,7 @@ class LangtraceLogger(CustomLogger):
             }
             self.set_span_attributes(span, usage_attributes)
 
-    def set_span_attributes(self, span, attributes):
+    def set_span_attributes(self, span: Span, attributes):
         """
         This function is used to set span attributes
         """
