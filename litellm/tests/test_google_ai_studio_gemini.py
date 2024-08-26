@@ -42,11 +42,13 @@ def generate_text():
 # generate_text()
 
 
-# def test_fine_tuned_model():
-#     litellm.set_verbose = True
-#     response = litellm.completion(
-#         model="gemini/tunedModels/raynarev1short-gefpulfdjpqj",
-#         messages=[{"content": "Hello, how are you?", "role": "user"}],
-#     )
-#     print(response)
-#     pass
+def test_fine_tuned_model():
+    litellm.set_verbose = True
+    response = litellm.completion(
+        model="gemini/tunedModels/test-hkx8uhx16ylg",
+        messages=[{"content": "Hello, how are you?", "role": "user"}],
+        gemini_project="gen-lang-client-0594097422",
+        api_key="anything",
+    )
+    print(response)
+    pass

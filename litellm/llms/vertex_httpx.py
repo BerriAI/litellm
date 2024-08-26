@@ -1122,72 +1122,106 @@ class VertexLLM(BaseLLM):
         stream: Optional[bool],
         custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
         api_base: Optional[str],
+        gemini_project: Optional[str] = None,
         should_use_v1beta1_features: Optional[bool] = False,
-    ) -> Tuple[Optional[str], str]:
+    ) -> Tuple[Optional[Dict[str, Any]], str]:
         """
-        Internal function. Returns the token and url for the call.
-
-        Handles logic if it's google ai studio vs. vertex ai.
-
-        Returns
-            token, url
+        Returns the token and url for the API call.
+        Handles logic for Google AI Studio vs. Vertex AI.
         """
+        auth_header: Dict[str, Any] = {
+            "Content-Type": "application/json",
+        }
+        url = ""
+
         if custom_llm_provider == "gemini":
-            if "tunedModels" in model:
-                _gemini_model_name = model
-            else:
-                _gemini_model_name = "models/{}".format(model)
-            auth_header = None
-            endpoint = "generateContent"
-            if stream is True:
-                endpoint = "streamGenerateContent"
-                url = "https://generativelanguage.googleapis.com/v1beta/{}:{}?key={}&alt=sse".format(
-                    _gemini_model_name, endpoint, gemini_api_key
-                )
-            else:
-                url = "https://generativelanguage.googleapis.com/v1beta/{}:{}?key={}".format(
-                    _gemini_model_name, endpoint, gemini_api_key
-                )
-        else:
-            auth_header, vertex_project = self._ensure_access_token(
-                credentials=vertex_credentials, project_id=vertex_project
+            auth_header, url = self._get_gemini_url(
+                model, gemini_api_key or "", stream or False, gemini_project
             )
-            vertex_location = self.get_vertex_region(vertex_region=vertex_location)
-
-            ### SET RUNTIME ENDPOINT ###
-            version = "v1beta1" if should_use_v1beta1_features is True else "v1"
-            endpoint = "generateContent"
-            litellm.utils.print_verbose("vertex_project - {}".format(vertex_project))
-            if stream is True:
-                endpoint = "streamGenerateContent"
-                url = f"https://{vertex_location}-aiplatform.googleapis.com/{version}/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}?alt=sse"
-            else:
-                url = f"https://{vertex_location}-aiplatform.googleapis.com/{version}/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}"
-
-            # if model is only numeric chars then it's a fine tuned gemini model
-            # model = 4965075652664360960
-            # send to this url: url = f"https://{vertex_location}-aiplatform.googleapis.com/{version}/projects/{vertex_project}/locations/{vertex_location}/endpoints/{model}:{endpoint}"
-            if model.isdigit():
-                # It's a fine-tuned Gemini model
-                url = f"https://{vertex_location}-aiplatform.googleapis.com/{version}/projects/{vertex_project}/locations/{vertex_location}/endpoints/{model}:{endpoint}"
-                if stream is True:
-                    url += "?alt=sse"
-
-        if (
-            api_base is not None
-        ):  # for cloudflare ai gateway - https://github.com/BerriAI/litellm/issues/4317
-            if custom_llm_provider == "gemini":
-                url = "{}/{}".format(api_base, endpoint)
-                auth_header = (
-                    gemini_api_key  # cloudflare expects api key as bearer token
-                )
-            else:
-                url = "{}:{}".format(api_base, endpoint)
-
-            if stream is True:
-                url = url + "?alt=sse"
+        else:
+            access_token, vertex_project = self._ensure_access_token(
+                vertex_credentials, vertex_project
+            )
+            url = self._get_vertex_ai_url(
+                model,
+                vertex_project or "",
+                vertex_location or "",
+                stream or False,
+                should_use_v1beta1_features or False,
+            )
+            auth_header = {
+                "Authorization": f"Bearer {access_token}",
+            }
+        if api_base:
+            url = self._adjust_url_for_cloudflare(
+                api_base, custom_llm_provider, stream or False, gemini_api_key
+            )
 
         return auth_header, url
+
+    def _get_gemini_url(
+        self,
+        model: str,
+        gemini_api_key: str,
+        stream: bool,
+        gemini_project: Optional[str],
+    ) -> Tuple[Dict[str, Any], str]:
+        if "tunedModels" in model:
+            if gemini_project is None:
+                raise ValueError(
+                    "'gemini_project' is required for tuned models, please pass 'gemini_project' as a param or set 'GEMINI_PROJECT' in the environment"
+                )
+            endpoint = "streamGenerateContent" if stream else "generateContent"
+
+            auth_header = {
+                "Authorization": f"Bearer {gemini_api_key}",
+                "x-goog-user-project": gemini_project,
+            }
+            return (
+                auth_header,
+                f"https://generativelanguage.googleapis.com/v1beta/{model}:{endpoint}",
+            )
+        else:
+            _gemini_model_name = f"models/{model}"
+            endpoint = "streamGenerateContent" if stream else "generateContent"
+            url = f"https://generativelanguage.googleapis.com/v1beta/{_gemini_model_name}:{endpoint}?key={gemini_api_key}"
+            if stream:
+                url += "&alt=sse"
+            return {}, url
+
+    def _get_vertex_ai_url(
+        self,
+        model: str,
+        vertex_project: str,
+        vertex_location: str,
+        stream: bool,
+        should_use_v1beta1_features: bool,
+    ) -> str:
+        version = "v1beta1" if should_use_v1beta1_features else "v1"
+        endpoint = "streamGenerateContent" if stream else "generateContent"
+        vertex_location = self.get_vertex_region(vertex_location)
+
+        if model.isdigit():  # It's a fine-tuned Gemini model
+            url = f"https://{vertex_location}-aiplatform.googleapis.com/{version}/projects/{vertex_project}/locations/{vertex_location}/endpoints/{model}:{endpoint}"
+        else:
+            url = f"https://{vertex_location}-aiplatform.googleapis.com/{version}/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}"
+
+        if stream:
+            url += "?alt=sse"
+        return url
+
+    def _adjust_url_for_cloudflare(
+        self,
+        api_base: str,
+        custom_llm_provider: str,
+        stream: bool,
+        gemini_api_key: Optional[str],
+    ) -> str:
+        endpoint = "streamGenerateContent" if stream else "generateContent"
+        url = f"{api_base}/{endpoint}"
+        if stream:
+            url += "?alt=sse"
+        return url
 
     async def async_streaming(
         self,
@@ -1293,6 +1327,7 @@ class VertexLLM(BaseLLM):
         vertex_location: Optional[str],
         vertex_credentials: Optional[str],
         gemini_api_key: Optional[str],
+        gemini_project: Optional[str],
         litellm_params=None,
         logger_fn=None,
         extra_headers: Optional[dict] = None,
@@ -1309,6 +1344,7 @@ class VertexLLM(BaseLLM):
         auth_header, url = self._get_token_and_url(
             model=model,
             gemini_api_key=gemini_api_key,
+            gemini_project=gemini_project,
             vertex_project=vertex_project,
             vertex_location=vertex_location,
             vertex_credentials=vertex_credentials,
@@ -1387,11 +1423,7 @@ class VertexLLM(BaseLLM):
             if cached_content is not None:
                 data["cachedContent"] = cached_content
 
-            headers = {
-                "Content-Type": "application/json",
-            }
-            if auth_header is not None:
-                headers["Authorization"] = f"Bearer {auth_header}"
+            headers = auth_header or {}
             if extra_headers is not None:
                 headers.update(extra_headers)
         except Exception as e:

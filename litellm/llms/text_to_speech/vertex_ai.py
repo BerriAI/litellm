@@ -72,14 +72,15 @@ class VertexTextToSpeechAPI(VertexLLM):
             custom_llm_provider="vertex_ai_beta",
             api_base=api_base,
         )
+        headers = auth_header or {}
 
-        headers = {
-            "Authorization": f"Bearer {auth_header}",
-            "x-goog-user-project": vertex_project,
-            "Content-Type": "application/json",
-            "charset": "UTF-8",
-        }
-
+        headers.update(
+            {
+                "x-goog-user-project": vertex_project,
+                "Content-Type": "application/json",
+                "charset": "UTF-8",
+            }
+        )
         ######### End of Authentication ###########
 
         ####### Build the request ################

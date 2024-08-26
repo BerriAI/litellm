@@ -194,11 +194,8 @@ class VertexFineTuningAPI(VertexLLM):
             api_base=api_base,
         )
 
-        headers = {
-            "Authorization": f"Bearer {auth_header}",
-            "Content-Type": "application/json",
-        }
-
+        auth_header = auth_header or {}
+        headers = auth_header
         fine_tune_job = self.convert_openai_request_to_vertex(
             create_fine_tuning_job_data=create_fine_tuning_job_data, **kwargs
         )
@@ -260,10 +257,7 @@ class VertexFineTuningAPI(VertexLLM):
             api_base="",
         )
 
-        headers = {
-            "Authorization": f"Bearer {auth_header}",
-            "Content-Type": "application/json",
-        }
+        headers = auth_header
 
         url = None
         if request_route == "/tuningJobs":
