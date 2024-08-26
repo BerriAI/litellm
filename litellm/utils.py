@@ -10784,10 +10784,6 @@ class CustomStreamWrapper:
                     if complete_streaming_response is not None:
                         response.usage = complete_streaming_response.usage
 
-                    if self.custom_llm_provider != "anthropic":
-                        response.usage.cache_creation_input_tokens = None
-                        response.usage.cache_read_input_tokens = None
-
                     ## LOGGING
                     threading.Thread(
                         target=self.logging_obj.success_handler,
