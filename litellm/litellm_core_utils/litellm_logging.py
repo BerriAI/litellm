@@ -1104,13 +1104,6 @@ class Logging:
                             else:
                                 result = kwargs["complete_streaming_response"]
 
-                        langtraceLogger.log_event(
-                            kwargs=kwargs,
-                            response_obj=result,
-                            start_time=start_time,
-                            end_time=end_time,
-                            print_verbose=print_verbose,
-                        )
                     if callback == "traceloop":
                         deep_copy = {}
                         for k, v in self.model_call_details.items():
