@@ -1155,6 +1155,15 @@ class VertexLLM(BaseLLM):
             else:
                 url = f"https://{vertex_location}-aiplatform.googleapis.com/{version}/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}"
 
+            # if model is only numeric chars then it's a fine tuned gemini model
+            # model = 4965075652664360960
+            # send to this url: url = f"https://{vertex_location}-aiplatform.googleapis.com/{version}/projects/{vertex_project}/locations/{vertex_location}/endpoints/{model}:{endpoint}"
+            if model.isdigit():
+                # It's a fine-tuned Gemini model
+                url = f"https://{vertex_location}-aiplatform.googleapis.com/{version}/projects/{vertex_project}/locations/{vertex_location}/endpoints/{model}:{endpoint}"
+                if stream is True:
+                    url += "?alt=sse"
+
         if (
             api_base is not None
         ):  # for cloudflare ai gateway - https://github.com/BerriAI/litellm/issues/4317
