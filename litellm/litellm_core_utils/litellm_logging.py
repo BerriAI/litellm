@@ -2004,7 +2004,6 @@ def _init_custom_logger_compatible_class(
         Any
     ],  # expect litellm.Router, but typing errors due to circular import
 ) -> CustomLogger:
-    print(f"logging_integration={logging_integration}")
     if logging_integration == "lago":
         for callback in _in_memory_loggers:
             if isinstance(callback, LagoLogger):
