@@ -1220,6 +1220,8 @@ class ModelResponseIterator:
                     or "stop"
                 )
                 usage = ChatCompletionUsageBlock(
+                    cache_creation_input_tokens=message_delta["usage"].get("cache_creation_input_tokens", None),
+                    cache_read_input_tokens=message_delta["usage"].get("cache_read_input_tokens", None),
                     prompt_tokens=message_delta["usage"].get("input_tokens", 0),
                     completion_tokens=message_delta["usage"].get("output_tokens", 0),
                     total_tokens=message_delta["usage"].get("input_tokens", 0)
@@ -1248,6 +1250,12 @@ class ModelResponseIterator:
                 """
                 message_start_block = MessageStartBlock(**chunk)  # type: ignore
                 usage = ChatCompletionUsageBlock(
+                    cache_creation_input_tokens=message_start_block["message"]
+                    .get("usage", {})
+                    .get("cache_creation_input_tokens", None),
+                    cache_read_input_tokens=message_start_block["message"]
+                    .get("usage", {})
+                    .get("cache_read_input_tokens", None),
                     prompt_tokens=message_start_block["message"]
                     .get("usage", {})
                     .get("input_tokens", 0),

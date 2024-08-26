@@ -457,12 +457,16 @@ class Usage(CompletionUsage):
         prompt_tokens: Optional[int] = None,
         completion_tokens: Optional[int] = None,
         total_tokens: Optional[int] = None,
+        cache_creation_input_tokens: Optional[int] = None,
+        cache_read_input_tokens: Optional[int] = None,
         **params,
     ):
         data = {
             "prompt_tokens": prompt_tokens or 0,
             "completion_tokens": completion_tokens or 0,
             "total_tokens": total_tokens or 0,
+            "cache_creation_input_tokens": cache_creation_input_tokens,
+            "cache_read_input_tokens": cache_read_input_tokens,
         }
 
         super().__init__(**data)

@@ -5349,6 +5349,8 @@ def stream_chunk_builder(
         # # Update usage information if needed
         prompt_tokens = 0
         completion_tokens = 0
+        cache_creation_input_tokens = None
+        cache_read_input_tokens = None
         for chunk in chunks:
             usage_chunk: Optional[Usage] = None
             if "usage" in chunk:
@@ -5360,6 +5362,17 @@ def stream_chunk_builder(
                     prompt_tokens = usage_chunk.get("prompt_tokens", 0) or 0
                 if "completion_tokens" in usage_chunk:
                     completion_tokens = usage_chunk.get("completion_tokens", 0) or 0
+                if usage_chunk.get("cache_creation_input_tokens") is not None:
+                    if cache_creation_input_tokens is None:
+                        cache_creation_input_tokens = usage_chunk["cache_creation_input_tokens"]
+                    else:
+                        cache_creation_input_tokens = cache_creation_input_tokens + usage_chunk["cache_creation_input_tokens"]
+                if usage_chunk.get("cache_read_input_tokens") is not None:
+                    if cache_read_input_tokens is None:
+                        cache_read_input_tokens = usage_chunk["cache_read_input_tokens"]
+                    else:
+                        cache_read_input_tokens = cache_read_input_tokens + usage_chunk["cache_read_input_tokens"]
+
         try:
             response["usage"]["prompt_tokens"] = prompt_tokens or token_counter(
                 model=model, messages=messages
@@ -5377,6 +5390,12 @@ def stream_chunk_builder(
         response["usage"]["total_tokens"] = (
             response["usage"]["prompt_tokens"] + response["usage"]["completion_tokens"]
         )
+
+        if cache_creation_input_tokens is not None:
+            response["usage"]["cache_creation_input_tokens"] = cache_creation_input_tokens
+        if cache_read_input_tokens is not None:
+            response["usage"]["cache_read_input_tokens"] = cache_read_input_tokens
+
 
         return convert_to_model_response_object(
             response_object=response,

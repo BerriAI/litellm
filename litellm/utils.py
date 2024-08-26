@@ -9724,6 +9724,8 @@ class CustomStreamWrapper:
                             "completion_tokens"
                         ],
                         total_tokens=anthropic_response_obj["usage"]["total_tokens"],
+                        cache_read_input_tokens=anthropic_response_obj['usage']['cache_read_input_tokens'],
+                        cache_creation_input_tokens=anthropic_response_obj['usage']['cache_creation_input_tokens']
                     )
 
                 if (
@@ -10781,6 +10783,11 @@ class CustomStreamWrapper:
                     response = self.model_response_creator()
                     if complete_streaming_response is not None:
                         response.usage = complete_streaming_response.usage
+
+                    if self.custom_llm_provider != "anthropic":
+                        response.usage.cache_creation_input_tokens = None
+                        response.usage.cache_read_input_tokens = None
+
                     ## LOGGING
                     threading.Thread(
                         target=self.logging_obj.success_handler,
