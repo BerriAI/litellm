@@ -1194,6 +1194,14 @@ response = completion(
 |------------------|--------------------------------------|
 | gemini-pro   | `completion('gemini-pro', messages)`, `completion('vertex_ai/gemini-pro', messages)` |
 
+## Fine-tuned Models
+
+Fine tuned models on vertex have a numerical model/endpoint id. 
+
+| Model Name       | Function Call                        |
+|------------------|--------------------------------------|
+| your fine tuned model   | `completion(model='vertex_ai/4965075652664360960', messages)`|
+
 ## Gemini Pro Vision
 | Model Name       | Function Call                        |
 |------------------|--------------------------------------|
