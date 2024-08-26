@@ -2691,8 +2691,61 @@ def test_completion_hf_model_no_provider():
 # test_completion_hf_model_no_provider()
 
 
-@pytest.mark.skip(reason="anyscale stopped serving public api endpoints")
-def test_completion_anyscale_with_functions():
+def gemini_mock_post(*args, **kwargs):
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {"Content-Type": "application/json"}
+    mock_response.json = MagicMock(
+        return_value={
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {
+                                "functionCall": {
+                                    "name": "get_current_weather",
+                                    "args": {"location": "Boston, MA"},
+                                }
+                            }
+                        ],
+                        "role": "model",
+                    },
+                    "finishReason": "STOP",
+                    "index": 0,
+                    "safetyRatings": [
+                        {
+                            "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                            "probability": "NEGLIGIBLE",
+                        },
+                        {
+                            "category": "HARM_CATEGORY_HARASSMENT",
+                            "probability": "NEGLIGIBLE",
+                        },
+                        {
+                            "category": "HARM_CATEGORY_HATE_SPEECH",
+                            "probability": "NEGLIGIBLE",
+                        },
+                        {
+                            "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                            "probability": "NEGLIGIBLE",
+                        },
+                    ],
+                }
+            ],
+            "usageMetadata": {
+                "promptTokenCount": 86,
+                "candidatesTokenCount": 19,
+                "totalTokenCount": 105,
+            },
+        }
+    )
+
+    return mock_response
+
+
+@pytest.mark.asyncio
+async def test_completion_functions_param():
+    litellm.set_verbose = True
     function1 = [
         {
             "name": "get_current_weather",
@@ -2711,18 +2764,33 @@ def test_completion_anyscale_with_functions():
         }
     ]
     try:
-        messages = [{"role": "user", "content": "What is the weather like in Boston?"}]
-        response = completion(
-            model="anyscale/mistralai/Mistral-7B-Instruct-v0.1",
-            messages=messages,
-            functions=function1,
-        )
-        # Add any assertions here to check the response
-        print(response)
+        from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
-        cost = litellm.completion_cost(completion_response=response)
-        print("cost to make anyscale completion=", cost)
-        assert cost > 0.0
+        messages = [{"role": "user", "content": "What is the weather like in Boston?"}]
+
+        client = AsyncHTTPHandler(concurrent_limit=1)
+
+        with patch.object(client, "post", side_effect=gemini_mock_post) as mock_client:
+            response: litellm.ModelResponse = await litellm.acompletion(
+                model="gemini/gemini-1.5-pro",
+                messages=messages,
+                functions=function1,
+                client=client,
+            )
+            print(response)
+            # Add any assertions here to check the response
+            mock_client.assert_called()
+            print(f"mock_client.call_args.kwargs: {mock_client.call_args.kwargs}")
+            assert "tools" in mock_client.call_args.kwargs["json"]
+            assert (
+                "litellm_param_is_function_call"
+                not in mock_client.call_args.kwargs["json"]
+            )
+            assert (
+                "litellm_param_is_function_call"
+                not in mock_client.call_args.kwargs["json"]["generationConfig"]
+            )
+            assert response.choices[0].message.function_call is not None
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 

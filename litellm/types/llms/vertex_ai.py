@@ -90,7 +90,7 @@ class Schema(TypedDict, total=False):
 class FunctionDeclaration(TypedDict, total=False):
     name: Required[str]
     description: str
-    parameters: Schema
+    parameters: Union[Schema, dict]
     response: Schema
 
 
