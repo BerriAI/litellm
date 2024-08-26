@@ -1,10 +1,13 @@
-import os, sys, traceback
+import os
+import sys
+import traceback
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-import litellm
 from dotenv import load_dotenv
+
+import litellm
 
 
 def generate_text():
@@ -37,3 +40,13 @@ def generate_text():
 
 
 # generate_text()
+
+
+# def test_fine_tuned_model():
+#     litellm.set_verbose = True
+#     response = litellm.completion(
+#         model="gemini/tunedModels/raynarev1short-gefpulfdjpqj",
+#         messages=[{"content": "Hello, how are you?", "role": "user"}],
+#     )
+#     print(response)
+#     pass

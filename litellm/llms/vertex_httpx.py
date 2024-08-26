@@ -1133,7 +1133,10 @@ class VertexLLM(BaseLLM):
             token, url
         """
         if custom_llm_provider == "gemini":
-            _gemini_model_name = "models/{}".format(model)
+            if "tunedModels" in model:
+                _gemini_model_name = model
+            else:
+                _gemini_model_name = "models/{}".format(model)
             auth_header = None
             endpoint = "generateContent"
             if stream is True:
