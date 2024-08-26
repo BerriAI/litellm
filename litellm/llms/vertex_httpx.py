@@ -1095,7 +1095,7 @@ class VertexLLM(BaseLLM):
         if not self._credentials or not self._credentials.token:
             raise RuntimeError("Could not resolve API token from the environment")
 
-        return self._credentials.token, self.project_id
+        return self._credentials.token, project_id or self.project_id
 
     def is_using_v1beta1_features(self, optional_params: dict) -> bool:
         """
