@@ -7,6 +7,7 @@ import httpx
 from httpx import USE_CLIENT_DEFAULT
 
 import litellm
+from litellm.utils import get_ssl_verify, get_ssl_certificate
 
 from .types import httpxSpecialProvider
 
@@ -45,10 +46,10 @@ class AsyncHTTPHandler:
 
         # SSL certificates (a.k.a CA bundle) used to verify the identity of requested hosts.
         # /path/to/certificate.pem
-        ssl_verify = os.getenv("SSL_VERIFY", litellm.ssl_verify)
+        ssl_verify = get_ssl_verify()
         # An SSL certificate used by the requested host to authenticate the client.
         # /path/to/client.pem
-        cert = os.getenv("SSL_CERTIFICATE", litellm.ssl_certificate)
+        cert = get_ssl_certificate()
 
         if timeout is None:
             timeout = _DEFAULT_TIMEOUT
@@ -292,10 +293,10 @@ class HTTPHandler:
 
         # SSL certificates (a.k.a CA bundle) used to verify the identity of requested hosts.
         # /path/to/certificate.pem
-        ssl_verify = os.getenv("SSL_VERIFY", litellm.ssl_verify)
+        ssl_verify = get_ssl_verify()
         # An SSL certificate used by the requested host to authenticate the client.
         # /path/to/client.pem
-        cert = os.getenv("SSL_CERTIFICATE", litellm.ssl_certificate)
+        cert = get_ssl_certificate()
 
         if client is None:
             # Create a client with a connection pool
