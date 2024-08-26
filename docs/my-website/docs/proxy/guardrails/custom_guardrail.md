@@ -202,7 +202,7 @@ litellm --config config.yaml --detailed_debug
 #### Test `"custom-pre-guard"`
 
 
-**[Langchain, OpenAI SDK Usage Examples](../proxy/user_keys##request-format)**
+**[Langchain, OpenAI SDK Usage Examples](../proxy/user_keys#request-format)**
 
 <Tabs>
 <TabItem label="Modify input" value = "not-allowed">
@@ -282,7 +282,7 @@ curl -i http://localhost:4000/v1/chat/completions \
 #### Test `"custom-during-guard"`
 
 
-**[Langchain, OpenAI SDK Usage Examples](../proxy/user_keys##request-format)**
+**[Langchain, OpenAI SDK Usage Examples](../proxy/user_keys#request-format)**
 
 <Tabs>
 <TabItem label="Unsuccessful call" value = "not-allowed">
@@ -346,7 +346,7 @@ curl -i http://localhost:4000/v1/chat/completions \
 
 
 
-**[Langchain, OpenAI SDK Usage Examples](../proxy/user_keys##request-format)**
+**[Langchain, OpenAI SDK Usage Examples](../proxy/user_keys#request-format)**
 
 <Tabs>
 <TabItem label="Unsuccessful call" value = "not-allowed">
