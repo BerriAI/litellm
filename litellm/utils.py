@@ -4610,7 +4610,11 @@ def get_llm_provider(
             if custom_llm_provider == "perplexity":
                 # perplexity is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.perplexity.ai
                 api_base = api_base or get_secret("PERPLEXITY_API_BASE") or "https://api.perplexity.ai"  # type: ignore
-                dynamic_api_key = api_key or get_secret("PERPLEXITYAI_API_KEY")
+                dynamic_api_key = (
+                    api_key
+                    or get_secret("PERPLEXITYAI_API_KEY")
+                    or get_secret("PERPLEXITY_API_KEY")
+                )
             elif custom_llm_provider == "anyscale":
                 # anyscale is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.endpoints.anyscale.com/v1
                 api_base = api_base or get_secret("ANYSCALE_API_BASE") or "https://api.endpoints.anyscale.com/v1"  # type: ignore
@@ -6647,7 +6651,6 @@ def exception_type(
 
                 if message is not None and isinstance(message, str):
                     message = message.replace("OPENAI", custom_llm_provider.upper())
-                    message = message.replace("openai", custom_llm_provider)
                     message = message.replace("OpenAI", custom_llm_provider)
                 if custom_llm_provider == "openai":
                     exception_provider = "OpenAI" + "Exception"
