@@ -5,7 +5,6 @@ import TabItem from '@theme/TabItem';
 # Gemini - Google AI Studio
 
 ## Pre-requisites
-* `pip install -q google-generativeai`
 * Get API Key - https://aistudio.google.com/
 
 # Gemini-Pro
@@ -550,3 +549,18 @@ print(content)
 | gemini-pro            | `completion(model='gemini/gemini-pro', messages)`            | `os.environ['GEMINI_API_KEY']` |
 | gemini-1.5-pro-latest | `completion(model='gemini/gemini-1.5-pro-latest', messages)` | `os.environ['GEMINI_API_KEY']` |
 | gemini-pro-vision     | `completion(model='gemini/gemini-pro-vision', messages)`     | `os.environ['GEMINI_API_KEY']` |
+
+## Fine Tuned Models
+
+- Ensure you pass model = `tunedModels/<your-model-id>"`
+- `gemini_project` your gemini_project
+- `api_key` this is the Access token generated. [See relevant google ai studio docs for getting your access token](https://ai.google.dev/gemini-api/docs/model-tuning/tutorial?lang=rest)
+
+```python
+response = await litellm.acompletion(
+    model="gemini/tunedModels/test-hkx8uhx16ylg",
+    messages=[{"role": "user", "content": "Hello, how are you?"}],
+    gemini_project="gen-lang-client-0594097422",
+    api_key="anything",
+)
+```
