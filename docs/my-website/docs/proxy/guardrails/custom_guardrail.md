@@ -163,11 +163,39 @@ guardrails:
 
 ### 3. Start LiteLLM Gateway 
 
+<Tabs>
+<TabItem value="docker" label="Docker Run">
+
+Mount your `custom_guardrail.py` on the LiteLLM Docker container
+
+This mounts your `custom_guardrail.py` file from your local directory to the `/app` directory in the Docker container, making it accessible to the LiteLLM Gateway.
+
+
+```shell
+docker run -d \
+  -p 4000:4000 \
+  -e OPENAI_API_KEY=$OPENAI_API_KEY \
+  --name my-app \
+  -v $(pwd)/my_config.yaml:/app/config.yaml \
+  -v $(pwd)/custom_guardrail.py:/app/custom_guardrail.py \
+  my-app:latest \
+  --config /app/config.yaml \
+  --port 4000 \
+  --detailed_debug \
+```
+
+</TabItem>
+
+<TabItem value="py" label="litellm pip">
+
 
 ```shell
 litellm --config config.yaml --detailed_debug
 ```
 
+</TabItem>
+
+</Tabs>
 
 ### 4. Test it 
 
