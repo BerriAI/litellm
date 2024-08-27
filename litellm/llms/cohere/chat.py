@@ -13,7 +13,7 @@ import litellm
 from litellm.types.llms.cohere import ToolResultObject
 from litellm.utils import Choices, Message, ModelResponse, Usage
 
-from .prompt_templates.factory import cohere_message_pt, cohere_messages_pt_v2
+from ..prompt_templates.factory import cohere_message_pt, cohere_messages_pt_v2
 
 
 class CohereError(Exception):

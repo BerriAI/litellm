@@ -83,7 +83,6 @@ from .llms import (
     clarifai,
     cloudflare,
     cohere,
-    cohere_chat,
     gemini,
     huggingface_restapi,
     maritalk,
@@ -107,6 +106,9 @@ from .llms.anthropic_text import AnthropicTextCompletion
 from .llms.azure import AzureChatCompletion, _check_dynamic_azure_params
 from .llms.azure_text import AzureTextCompletion
 from .llms.bedrock_httpx import BedrockConverseLLM, BedrockLLM
+from .llms.cohere import chat as cohere_chat
+from .llms.cohere import completion as cohere_completion
+from .llms.cohere import embed as cohere_embed
 from .llms.custom_llm import CustomLLM, custom_chat_llm_router
 from .llms.databricks import DatabricksChatCompletion
 from .llms.huggingface_restapi import Huggingface
@@ -1645,7 +1647,7 @@ def completion(
             if extra_headers is not None:
                 headers.update(extra_headers)
 
-            model_response = cohere.completion(
+            model_response = cohere_completion.completion(
                 model=model,
                 messages=messages,
                 api_base=api_base,
@@ -3457,7 +3459,7 @@ def embedding(
                 headers = extra_headers
             else:
                 headers = {}
-            response = cohere.embedding(
+            response = cohere_embed.embedding(
                 model=model,
                 input=input,
                 optional_params=optional_params,
