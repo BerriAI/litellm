@@ -1930,7 +1930,7 @@ class Router:
         input: Union[str, List],
         is_async: Optional[bool] = False,
         **kwargs,
-    ) -> Union[List[float], None]:
+    ) -> litellm.EmbeddingResponse:
         try:
             kwargs["model"] = model
             kwargs["input"] = input
@@ -2018,7 +2018,7 @@ class Router:
         input: Union[str, List],
         is_async: Optional[bool] = True,
         **kwargs,
-    ) -> Union[List[float], None]:
+    ) -> litellm.EmbeddingResponse:
         try:
             kwargs["model"] = model
             kwargs["input"] = input
