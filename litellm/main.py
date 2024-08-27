@@ -95,8 +95,6 @@ from .llms import (
     replicate,
     together_ai,
     triton,
-    vertex_ai,
-    vertex_ai_anthropic,
     vllm,
     watsonx,
 )
@@ -124,8 +122,16 @@ from .llms.sagemaker.sagemaker import SagemakerLLM
 from .llms.text_completion_codestral import CodestralTextCompletion
 from .llms.text_to_speech.vertex_ai import VertexTextToSpeechAPI
 from .llms.triton import TritonChatCompletion
-from .llms.vertex_ai_partner import VertexAIPartnerModels
-from .llms.vertex_httpx import VertexLLM
+from .llms.vertex_ai_and_google_ai_studio import (
+    vertex_ai_anthropic,
+    vertex_ai_non_gemini,
+)
+from .llms.vertex_ai_and_google_ai_studio.vertex_ai_partner_models import (
+    VertexAIPartnerModels,
+)
+from .llms.vertex_ai_and_google_ai_studio.vertex_and_google_ai_studio_gemini import (
+    VertexLLM,
+)
 from .llms.watsonx import IBMWatsonXAI
 from .types.llms.openai import HttpxBinaryResponseContent
 from .types.utils import (
@@ -2112,7 +2118,7 @@ def completion(
                     extra_headers=extra_headers,
                 )
             else:
-                model_response = vertex_ai.completion(
+                model_response = vertex_ai_non_gemini.completion(
                     model=model,
                     messages=messages,
                     model_response=model_response,
@@ -3558,7 +3564,7 @@ def embedding(
                     print_verbose=print_verbose,
                 )
             else:
-                response = vertex_ai.embedding(
+                response = vertex_ai_non_gemini.embedding(
                     model=model,
                     input=input,
                     encoding=encoding,
