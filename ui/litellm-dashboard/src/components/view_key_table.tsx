@@ -626,6 +626,17 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
       }
       const response = await regenerateKeyCall(accessToken, selectedToken.token);
       setRegeneratedKey(response.key);
+
+      // Update the data state with the new key_name
+      if (data) {
+        const updatedData = data.map(item => 
+          item.token === selectedToken.token 
+            ? { ...item, key_name: response.key_name } 
+            : item
+        );
+        setData(updatedData);
+      }
+
       setRegenerateDialogVisible(false);
       message.success("API Key regenerated successfully");
     } catch (error) {
