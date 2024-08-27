@@ -126,7 +126,7 @@ from .llms.vertex_ai_and_google_ai_studio import (
     vertex_ai_anthropic,
     vertex_ai_non_gemini,
 )
-from .llms.vertex_ai_and_google_ai_studio.vertex_ai_partner_models import (
+from .llms.vertex_ai_and_google_ai_studio.vertex_ai_partner_models.main import (
     VertexAIPartnerModels,
 )
 from .llms.vertex_ai_and_google_ai_studio.vertex_and_google_ai_studio_gemini import (
@@ -2080,6 +2080,7 @@ def completion(
                 model.startswith("meta/")
                 or model.startswith("mistral")
                 or model.startswith("codestral")
+                or model.startswith("jamba")
             ):
                 model_response = vertex_partner_models_chat_completion.completion(
                     model=model,
