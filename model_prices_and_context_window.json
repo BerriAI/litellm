@@ -3090,6 +3090,15 @@
         "litellm_provider": "ai21",
         "mode": "chat"
     },
+    "jamba-1.5": {
+        "max_tokens": 256000,
+        "max_input_tokens": 256000,
+        "max_output_tokens": 256000,
+        "input_cost_per_token": 0.0000002,
+        "output_cost_per_token": 0.0000004,
+        "litellm_provider": "ai21",
+        "mode": "chat"
+    },
     "jamba-1.5-mini": {
         "max_tokens": 256000,
         "max_input_tokens": 256000,
