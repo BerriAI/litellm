@@ -633,6 +633,77 @@ response = completion(
 )
 ```
 
+### Passing extra headers + Custom API Endpoints
+
+This can be used to override existing headers (e.g. `Authorization`) when calling custom api endpoints
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+import os
+import litellm
+from litellm import completion
+
+litellm.set_verbose = True # 👈 SEE RAW REQUEST
+
+response = completion(
+            model="bedrock/anthropic.claude-instant-v1",
+            messages=[{ "content": "Hello, how are you?","role": "user"}],
+            aws_access_key_id="",
+            aws_secret_access_key="",
+            aws_region_name="",
+            aws_bedrock_runtime_endpoint="https://my-fake-endpoint.com",
+            extra_headers={"key": "value"}
+)
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml 
+
+```yaml
+model_list:
+    - model_name: bedrock-model
+      litellm_params:
+        model: bedrock/anthropic.claude-instant-v1
+        aws_access_key_id: "",
+        aws_secret_access_key: "",
+        aws_region_name: "",
+        aws_bedrock_runtime_endpoint: "https://my-fake-endpoint.com",
+        extra_headers: {"key": "value"}
+```
+
+2. Start proxy 
+
+```bash
+litellm --config /path/to/config.yaml --detailed_debug
+```
+
+3. Test it! 
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-d '{
+    "model": "bedrock-model",
+    "messages": [
+      {
+        "role": "system",
+        "content": "You are a helpful math tutor. Guide the user through the solution step by step."
+      },
+      {
+        "role": "user",
+        "content": "how can I solve 8x + 7 = -23"
+      }
+    ]
+}'
+```
+
+</TabItem>
+</Tabs>
+
 ### SSO Login (AWS Profile)
 - Set `AWS_PROFILE` environment variable
 - Make bedrock completion call
