@@ -2,6 +2,7 @@ import copy
 import sys
 import time
 from datetime import datetime
+from typing import Any
 from unittest import mock
 
 from dotenv import load_dotenv
@@ -33,6 +34,7 @@ from litellm.utils import (
     token_counter,
     trim_messages,
     validate_environment,
+    get_ssl_verify, get_ssl_certificate,
 )
 
 # Assuming your trim_messages, shorten_message_to_fit_limit, and get_token_count functions are all in a module named 'message_utils'
@@ -792,3 +794,69 @@ def test_is_base64_encoded():
     from litellm.utils import is_base64_encoded
 
     assert is_base64_encoded(s=base64_image) is True
+
+
+@pytest.fixture
+def reset_litellm_sessions():
+    # Setup: Reset the global settings before each test
+    litellm.aclient_session = None
+    litellm.client_session = None
+
+    yield
+
+    # Teardown: Reset the global settings after each test
+    litellm.aclient_session = None
+    litellm.client_session = None
+
+
+@pytest.mark.parametrize(
+    "env_value, expected",
+    [
+        # SSL_VERIFY is not set
+        (None, True),
+        # SSL_VERIFY is set to "true"
+        ("true", True),
+        ("True", True),
+        # SSL_VERIFY is set to "false"
+        ("false", False),
+        ("False", False),
+        ("path/to/custom/certificate.pem", "path/to/custom/certificate.pem"),  # SSL_VERIFY is set to a custom string
+    ]
+)
+def test_get_ssl_verify_with_env_var_set(env_value: str, expected: Any, monkeypatch):
+    if env_value is not None:
+        monkeypatch.setenv("SSL_VERIFY", env_value)
+    else:
+        monkeypatch.delenv("SSL_VERIFY", raising=False)
+
+    assert get_ssl_verify() == expected
+
+
+@pytest.mark.usefixtures("reset_litellm_sessions")
+def test_get_ssl_verify_set_through_global_var():
+    litellm.ssl_verify = "path/to/certificate.pem"
+    assert get_ssl_verify() == "path/to/certificate.pem"
+
+
+@pytest.mark.parametrize(
+    "env_value, expected",
+    [
+        # SSL_CERTIFICATE is not set
+        (None, True),
+        # SSL_CERTIFICATE is set to a custom string
+        ("path/to/custom/certificate.pem", "path/to/custom/certificate.pem"),
+    ]
+)
+def test_get_ssl_certificate_with_env_var_set(monkeypatch, env_value: str, expected: Any):
+    if env_value is not None:
+        monkeypatch.setenv("SSL_CERTIFICATE", env_value)
+    else:
+        monkeypatch.delenv("SSL_CERTIFICATE", raising=False)
+
+    assert get_ssl_certificate() == expected
+
+
+@pytest.mark.usefixtures("reset_litellm_sessions")
+def test_get_ssl_certificate_set_through_global_var():
+    litellm.ssl_certificate = "path/to/certificate.pem"
+    assert get_ssl_certificate() == "path/to/certificate.pem"
