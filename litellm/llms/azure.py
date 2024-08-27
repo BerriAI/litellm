@@ -854,7 +854,6 @@ class AzureChatCompletion(BaseLLM):
                 additional_args={"complete_input_dict": data},
                 original_response=str(e),
             )
-            exception_mapping_worked = True
             raise e
         except asyncio.CancelledError as e:
             ## LOGGING
@@ -1029,9 +1028,10 @@ class AzureChatCompletion(BaseLLM):
                 openai_aclient = AsyncAzureOpenAI(**azure_client_params)
             else:
                 openai_aclient = client
-            response = await openai_aclient.embeddings.with_raw_response.create(
+            raw_response = await openai_aclient.embeddings.with_raw_response.create(
                 **data, timeout=timeout
             )
+            response = raw_response.parse()
             stringified_response = response.model_dump()
             ## LOGGING
             logging_obj.post_call(

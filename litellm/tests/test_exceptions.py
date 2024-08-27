@@ -855,7 +855,7 @@ def _pre_call_utils(
 ):
     if call_type == "embedding":
         data["input"] = "Hello world!"
-        mapped_target = client.embeddings.with_raw_response
+        mapped_target: Any = client.embeddings.with_raw_response
         if sync_mode:
             original_function = litellm.embedding
         else:
