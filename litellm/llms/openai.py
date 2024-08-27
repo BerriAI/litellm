@@ -1376,8 +1376,22 @@ class OpenAIChatCompletion(BaseLLM):
                 _response_headers=headers,
             )  # type: ignore
         except OpenAIError as e:
+            ## LOGGING
+            logging_obj.post_call(
+                input=input,
+                api_key=api_key,
+                additional_args={"complete_input_dict": data},
+                original_response=str(e),
+            )
             raise e
         except Exception as e:
+            ## LOGGING
+            logging_obj.post_call(
+                input=input,
+                api_key=api_key,
+                additional_args={"complete_input_dict": data},
+                original_response=str(e),
+            )
             status_code = getattr(e, "status_code", 500)
             error_headers = getattr(e, "headers", None)
             raise OpenAIError(
