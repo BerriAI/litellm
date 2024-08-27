@@ -501,7 +501,7 @@ class StreamingChoices(OpenAIObject):
     ):
         super(StreamingChoices, self).__init__(**params)
         if finish_reason:
-            self.finish_reason = finish_reason
+            self.finish_reason = map_finish_reason(finish_reason)
         else:
             self.finish_reason = None
         self.index = index
