@@ -3035,4 +3035,6 @@ async def test_regenerate_api_key(prisma_client):
         new_key.models == models
     ), f"Expected models {models} but got {new_key.models}"
 
+    assert new_key.key_name == f"sk-...{new_key.key[-4:]}"
+
     pass
