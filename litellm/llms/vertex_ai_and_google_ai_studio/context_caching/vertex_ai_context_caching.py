@@ -4,6 +4,7 @@ from typing import Callable, List, Literal, Optional, Tuple, Union
 import httpx
 
 import litellm
+from litellm.caching import Cache
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.openai import AllMessageValues
@@ -19,6 +20,8 @@ from .transformation import (
     transform_openai_messages_to_gemini_context_caching,
 )
 
+local_cache_obj = Cache(type="local")  # only used for calling 'get_cache_key' function
+
 
 class ContextCachingEndpoints:
     """
@@ -32,10 +35,10 @@ class ContextCachingEndpoints:
 
     def _get_token_and_url(
         self,
-        model: str,
         gemini_api_key: Optional[str],
         custom_llm_provider: Literal["gemini"],
         api_base: Optional[str],
+        cached_key: Optional[str],
     ) -> Tuple[Optional[str], str]:
         """
         Internal function. Returns the token and url for the call.
@@ -46,12 +49,18 @@ class ContextCachingEndpoints:
             token, url
         """
         if custom_llm_provider == "gemini":
-            _gemini_model_name = "models/{}".format(model)
             auth_header = None
             endpoint = "cachedContents"
-            url = "https://generativelanguage.googleapis.com/v1beta/{}?key={}".format(
-                endpoint, gemini_api_key
-            )
+            if cached_key is not None:
+                url = "https://generativelanguage.googleapis.com/v1beta/{}/{}?key={}".format(
+                    endpoint, cached_key, gemini_api_key
+                )
+            else:
+                url = (
+                    "https://generativelanguage.googleapis.com/v1beta/{}?key={}".format(
+                        endpoint, gemini_api_key
+                    )
+                )
 
         else:
             raise NotImplementedError
@@ -68,7 +77,48 @@ class ContextCachingEndpoints:
 
         return auth_header, url
 
-    def create_cache(
+    def check_cache(
+        self,
+        cache_key: str,
+        client: HTTPHandler,
+        headers: dict,
+        api_key: str,
+        api_base: Optional[str],
+        logging_obj: Logging,
+    ) -> bool:
+        """Checks if content already cached."""
+
+        _, url = self._get_token_and_url(
+            gemini_api_key=api_key,
+            custom_llm_provider="gemini",
+            api_base=api_base,
+            cached_key=cache_key,
+        )
+        try:
+            ## LOGGING
+            logging_obj.pre_call(
+                input="",
+                api_key="",
+                additional_args={
+                    "complete_input_dict": {},
+                    "api_base": url,
+                    "headers": headers,
+                },
+            )
+
+            resp = client.get(url=url, headers=headers)
+            resp.raise_for_status()
+            return True
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 403:
+                return False
+            raise VertexAIError(
+                status_code=e.response.status_code, message=e.response.text
+            )
+        except Exception as e:
+            raise VertexAIError(status_code=500, message=str(e))
+
+    def check_and_create_cache(
         self,
         messages: List[AllMessageValues],  # receives openai format messages
         api_key: str,
@@ -95,10 +145,10 @@ class ContextCachingEndpoints:
 
         ## AUTHORIZATION ##
         token, url = self._get_token_and_url(
-            model=model,
             gemini_api_key=api_key,
             custom_llm_provider="gemini",
             api_base=api_base,
+            cached_key=None,
         )
 
         headers = {
@@ -126,9 +176,23 @@ class ContextCachingEndpoints:
         if len(cached_messages) == 0:
             return messages, None
 
+        ## CHECK IF CACHED ALREADY
+        generated_cache_key = local_cache_obj.get_cache_key(messages=cached_messages)
+        cache_exists = self.check_cache(
+            cache_key=generated_cache_key,
+            client=client,
+            headers=headers,
+            api_key=api_key,
+            api_base=api_base,
+            logging_obj=logging_obj,
+        )
+        if cache_exists:
+            return non_cached_messages, generated_cache_key
+
+        ## TRANSFORM REQUEST
         cached_content_request_body = (
             transform_openai_messages_to_gemini_context_caching(
-                model=model, messages=cached_messages
+                model=model, messages=cached_messages, cache_key=generated_cache_key
             )
         )
 
