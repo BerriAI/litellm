@@ -8779,12 +8779,26 @@ class CustomStreamWrapper:
         self.chunks: List = (
             []
         )  # keep track of the returned chunks - used for calculating the input/output tokens for stream options
+        self.is_function_call = self.check_is_function_call(logging_obj=logging_obj)
 
     def __iter__(self):
         return self
 
     def __aiter__(self):
         return self
+
+    def check_is_function_call(self, logging_obj) -> bool:
+        if hasattr(logging_obj, "optional_params") and isinstance(
+            logging_obj.optional_params, dict
+        ):
+            if (
+                "litellm_param_is_function_call" in logging_obj.optional_params
+                and logging_obj.optional_params["litellm_param_is_function_call"]
+                is True
+            ):
+                return True
+
+        return False
 
     def process_chunk(self, chunk: str):
         """
@@ -10283,6 +10297,12 @@ class CustomStreamWrapper:
 
             ## CHECK FOR TOOL USE
             if "tool_calls" in completion_obj and len(completion_obj["tool_calls"]) > 0:
+                if self.is_function_call is True:  # user passed in 'functions' param
+                    completion_obj["function_call"] = completion_obj["tool_calls"][0][
+                        "function"
+                    ]
+                    completion_obj["tool_calls"] = None
+
                 self.tool_call = True
 
             ## RETURN ARG
@@ -10294,7 +10314,12 @@ class CustomStreamWrapper:
                 )
                 or (
                     "tool_calls" in completion_obj
+                    and completion_obj["tool_calls"] is not None
                     and len(completion_obj["tool_calls"]) > 0
+                )
+                or (
+                    "function_call" in completion_obj
+                    and completion_obj["function_call"] is not None
                 )
             ):  # cannot set content of an OpenAI Object to be an empty string
                 self.safety_checker()
@@ -10355,6 +10380,7 @@ class CustomStreamWrapper:
                         if self.sent_first_chunk is False:
                             completion_obj["role"] = "assistant"
                             self.sent_first_chunk = True
+
                         model_response.choices[0].delta = Delta(**completion_obj)
                         if completion_obj.get("index") is not None:
                             model_response.choices[0].index = completion_obj.get(
