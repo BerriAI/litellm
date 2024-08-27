@@ -856,7 +856,7 @@ from .llms.vertex_httpx import (
 from .llms.vertex_ai import VertexAITextEmbeddingConfig
 from .llms.vertex_ai_anthropic import VertexAIAnthropicConfig
 from .llms.vertex_ai_partner import VertexAILlama3Config
-from .llms.sagemaker import SagemakerConfig
+from .llms.sagemaker.sagemaker import SagemakerConfig
 from .llms.ollama import OllamaConfig
 from .llms.ollama_chat import OllamaChatConfig
 from .llms.maritalk import MaritTalkConfig
