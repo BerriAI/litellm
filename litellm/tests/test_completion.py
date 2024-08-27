@@ -917,9 +917,7 @@ def test_completion_claude_3_base64():
             pytest.fail(f"An exception occurred - {str(e)}")
 
 
-@pytest.mark.parametrize(
-    "model", ["gemini/gemini-1.5-flash"]  # "claude-3-sonnet-20240229",
-)
+@pytest.mark.parametrize("model", ["claude-3-sonnet-20240229"])
 def test_completion_function_plus_image(model):
     litellm.set_verbose = True
 
