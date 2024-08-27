@@ -7,7 +7,7 @@ import httpx
 from httpx import USE_CLIENT_DEFAULT
 
 import litellm
-from litellm.utils import get_ssl_verify, get_ssl_certificate
+from litellm.litellm_core_utils.ssl_utils import get_ssl_certificate, get_ssl_verify
 
 from .types import httpxSpecialProvider
 

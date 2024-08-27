@@ -13,8 +13,9 @@ import requests
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.ssl_utils import get_ssl_verify
 from litellm.types.completion import ChatCompletionMessageToolCallParam
-from litellm.utils import Choices, CustomStreamWrapper, Message, ModelResponse, Usage, get_ssl_verify
+from litellm.utils import Choices, CustomStreamWrapper, Message, ModelResponse, Usage
 
 from .base import BaseLLM
 from .prompt_templates.factory import custom_prompt, prompt_factory
