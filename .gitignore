@@ -64,3 +64,4 @@ litellm/proxy/_experimental/out/onboarding/index.html
 litellm/tests/log.txt
 litellm/tests/langfuse.log
 litellm/tests/langfuse.log
+litellm_venv/*
