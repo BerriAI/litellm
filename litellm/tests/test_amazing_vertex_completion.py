@@ -2416,6 +2416,46 @@ def mock_gemini_request(*args, **kwargs):
     return mock_response
 
 
+gemini_context_caching_messages = [
+    # System Message
+    {
+        "role": "system",
+        "content": [
+            {
+                "type": "text",
+                "text": "Here is the full text of a complex legal agreement" * 4000,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ],
+    },
+    # marked for caching with the cache_control parameter, so that this checkpoint can read from the previous cache.
+    {
+        "role": "user",
+        "content": [
+            {
+                "type": "text",
+                "text": "What are the key terms and conditions in this agreement?",
+                "cache_control": {"type": "ephemeral"},
+            }
+        ],
+    },
+    {
+        "role": "assistant",
+        "content": "Certainly! the key terms and conditions are the following: the contract is 1 year long for $10/mo",
+    },
+    # The final turn is marked with cache-control, for continuing in followups.
+    {
+        "role": "user",
+        "content": [
+            {
+                "type": "text",
+                "text": "What are the key terms and conditions in this agreement?",
+            }
+        ],
+    },
+]
+
+
 @pytest.mark.asyncio
 async def test_gemini_context_caching_anthropic_format():
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
@@ -2426,45 +2466,7 @@ async def test_gemini_context_caching_anthropic_format():
         try:
             response = litellm.completion(
                 model="gemini/gemini-1.5-flash-001",
-                messages=[
-                    # System Message
-                    {
-                        "role": "system",
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": "Here is the full text of a complex legal agreement"
-                                * 4000,
-                                "cache_control": {"type": "ephemeral"},
-                            }
-                        ],
-                    },
-                    # marked for caching with the cache_control parameter, so that this checkpoint can read from the previous cache.
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": "What are the key terms and conditions in this agreement?",
-                                "cache_control": {"type": "ephemeral"},
-                            }
-                        ],
-                    },
-                    {
-                        "role": "assistant",
-                        "content": "Certainly! the key terms and conditions are the following: the contract is 1 year long for $10/mo",
-                    },
-                    # The final turn is marked with cache-control, for continuing in followups.
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": "What are the key terms and conditions in this agreement?",
-                            }
-                        ],
-                    },
-                ],
+                messages=gemini_context_caching_messages,
                 temperature=0.2,
                 max_tokens=10,
                 client=client,
@@ -2488,3 +2490,20 @@ async def test_gemini_context_caching_anthropic_format():
         # assert (response.usage.cache_read_input_tokens > 0) or (
         #     response.usage.cache_creation_input_tokens > 0
         # )
+
+        check_cache_mock = MagicMock()
+        client.get = check_cache_mock
+        try:
+            response = litellm.completion(
+                model="gemini/gemini-1.5-flash-001",
+                messages=gemini_context_caching_messages,
+                temperature=0.2,
+                max_tokens=10,
+                client=client,
+            )
+
+        except Exception as e:
+            print(e)
+
+        check_cache_mock.assert_called_once()
+        assert mock_client.call_count == 3
