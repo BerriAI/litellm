@@ -2507,3 +2507,56 @@ async def test_gemini_context_caching_anthropic_format():
 
         check_cache_mock.assert_called_once()
         assert mock_client.call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_partner_models_httpx_ai21():
+    litellm.set_verbose = True
+    model = "vertex_ai/jamba-1.5-mini@001"
+
+    messages = [
+        {
+            "role": "system",
+            "content": "Your name is Litellm Bot, you are a helpful assistant",
+        },
+        # User asks for their name and weather in San Francisco
+        {
+            "role": "user",
+            "content": "Hello, can you tell me the weather in San Francisco?",
+        },
+    ]
+
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        }
+                    },
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+
+    data = {
+        "model": model,
+        "messages": messages,
+        "tools": tools,
+        "top_p": 0.5,
+    }
+
+    response = await litellm.acompletion(**data)
+
+    response_format_tests(response=response)
+
+    print(f"response: {response}")
+
+    # assert isinstance(response._hidden_params["response_cost"], float)
