@@ -9,7 +9,7 @@ import types
 import uuid
 from enum import Enum
 from functools import partial
-from typing import Any, Callable, Coroutine, Dict, List, Literal, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
 import httpx  # type: ignore
 import requests  # type: ignore
@@ -25,7 +25,9 @@ from litellm.llms.prompt_templates.factory import (
     convert_url_to_base64,
     response_schema_prompt,
 )
-from litellm.llms.vertex_ai import _gemini_convert_messages_with_history
+from litellm.llms.vertex_ai_and_google_ai_studio.vertex_ai_non_gemini import (
+    _gemini_convert_messages_with_history,
+)
 from litellm.types.llms.openai import (
     ChatCompletionResponseMessage,
     ChatCompletionToolCallChunk,
@@ -52,7 +54,12 @@ from litellm.types.llms.vertex_ai import (
 from litellm.types.utils import GenericStreamingChunk
 from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
 
-from .base import BaseLLM
+from ..base import BaseLLM
+from .common_utils import VertexAIError, get_supports_system_message
+from .context_caching.vertex_ai_context_caching import ContextCachingEndpoints
+from .gemini_transformation import transform_system_message
+
+context_caching_endpoints = ContextCachingEndpoints()
 
 
 class VertexAIConfig:
@@ -789,19 +796,6 @@ def make_sync_call(
     return completion_stream
 
 
-class VertexAIError(Exception):
-    def __init__(self, status_code, message):
-        self.status_code = status_code
-        self.message = message
-        self.request = httpx.Request(
-            method="POST", url=" https://cloud.google.com/vertex-ai/"
-        )
-        self.response = httpx.Response(status_code=status_code, request=self.request)
-        super().__init__(
-            self.message
-        )  # Call the base class constructor with the parameters it needs
-
-
 class VertexLLM(BaseLLM):
     def __init__(self) -> None:
         super().__init__()
@@ -1366,33 +1360,27 @@ class VertexLLM(BaseLLM):
         )
 
         ## TRANSFORMATION ##
-        try:
-            _custom_llm_provider = custom_llm_provider
-            if custom_llm_provider == "vertex_ai_beta":
-                _custom_llm_provider = "vertex_ai"
-            supports_system_message = litellm.supports_system_messages(
-                model=model, custom_llm_provider=_custom_llm_provider
+        ### CHECK CONTEXT CACHING ###
+        if gemini_api_key is not None:
+            messages, cached_content = context_caching_endpoints.create_cache(
+                messages=messages,
+                api_key=gemini_api_key,
+                api_base=api_base,
+                model=model,
+                client=client,
+                timeout=timeout,
+                extra_headers=extra_headers,
+                cached_content=optional_params.pop("cached_content", None),
+                logging_obj=logging_obj,
             )
-        except Exception as e:
-            verbose_logger.warning(
-                "Unable to identify if system message supported. Defaulting to 'False'. Received error message - {}\nAdd it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json".format(
-                    str(e)
-                )
-            )
-            supports_system_message = False
-        # Separate system prompt from rest of message
-        system_prompt_indices = []
-        system_content_blocks: List[PartType] = []
-        if supports_system_message is True:
-            for idx, message in enumerate(messages):
-                if message["role"] == "system":
-                    _system_content_block = PartType(text=message["content"])
-                    system_content_blocks.append(_system_content_block)
-                    system_prompt_indices.append(idx)
-            if len(system_prompt_indices) > 0:
-                for idx in reversed(system_prompt_indices):
-                    messages.pop(idx)
 
+        # Separate system prompt from rest of message
+        supports_system_message = get_supports_system_message(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+        system_instructions, messages = transform_system_message(
+            supports_system_message=supports_system_message, messages=messages
+        )
         # Checks for 'response_schema' support - if passed in
         if "response_schema" in optional_params:
             supports_response_schema = litellm.supports_response_schema(
@@ -1426,13 +1414,11 @@ class VertexLLM(BaseLLM):
             safety_settings: Optional[List[SafetSettingsConfig]] = optional_params.pop(
                 "safety_settings", None
             )  # type: ignore
-            cached_content: Optional[str] = optional_params.pop("cached_content", None)
             generation_config: Optional[GenerationConfig] = GenerationConfig(
                 **optional_params
             )
             data = RequestBody(contents=content)
-            if len(system_content_blocks) > 0:
-                system_instructions = SystemInstructions(parts=system_content_blocks)
+            if system_instructions is not None:
                 data["system_instruction"] = system_instructions
             if tools is not None:
                 data["tools"] = tools
