@@ -8,7 +8,9 @@ from openai.types.fine_tuning.fine_tuning_job import FineTuningJob, Hyperparamet
 from litellm._logging import verbose_logger
 from litellm.llms.base import BaseLLM
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.llms.vertex_httpx import VertexLLM
+from litellm.llms.vertex_ai_and_google_ai_studio.vertex_and_google_ai_studio_gemini import (
+    VertexLLM,
+)
 from litellm.types.llms.openai import FineTuningJobCreate
 from litellm.types.llms.vertex_ai import (
     FineTuneJobCreate,

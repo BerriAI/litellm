@@ -128,6 +128,7 @@ const sidebars = {
         "providers/anthropic", 
         "providers/aws_sagemaker",
         "providers/bedrock", 
+        "providers/litellm_proxy", 
         "providers/mistral", 
         "providers/codestral",
         "providers/cohere", 

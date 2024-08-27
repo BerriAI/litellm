@@ -26,7 +26,7 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import ResponseFormatChunk
 from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
 
-from .prompt_templates.factory import (
+from ..prompt_templates.factory import (
     construct_tool_use_system_prompt,
     contains_tag,
     custom_prompt,
@@ -205,7 +205,9 @@ def get_vertex_client(
     vertex_credentials: Optional[str],
 ) -> Tuple[Any, Optional[str]]:
     args = locals()
-    from litellm.llms.vertex_httpx import VertexLLM
+    from litellm.llms.vertex_ai_and_google_ai_studio.vertex_and_google_ai_studio_gemini import (
+        VertexLLM,
+    )
 
     try:
         from anthropic import AnthropicVertex
@@ -268,7 +270,9 @@ def completion(
         from anthropic import AnthropicVertex
 
         from litellm.llms.anthropic import AnthropicChatCompletion
-        from litellm.llms.vertex_httpx import VertexLLM
+        from litellm.llms.vertex_ai_and_google_ai_studio.vertex_and_google_ai_studio_gemini import (
+            VertexLLM,
+        )
     except:
         raise VertexAIError(
             status_code=400,

@@ -69,6 +69,7 @@ from litellm.litellm_core_utils.redact_messages import (
 from litellm.litellm_core_utils.token_counter import get_modified_max_tokens
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.llms.openai import (
+    AllMessageValues,
     ChatCompletionNamedToolChoiceParam,
     ChatCompletionToolParam,
 )
@@ -4130,7 +4131,9 @@ def get_api_base(
         _optional_params.vertex_location is not None
         and _optional_params.vertex_project is not None
     ):
-        from litellm.llms.vertex_ai_anthropic import create_vertex_anthropic_url
+        from litellm.llms.vertex_ai_and_google_ai_studio.vertex_ai_anthropic import (
+            create_vertex_anthropic_url,
+        )
 
         if "claude" in model:
             _api_base = create_vertex_anthropic_url(
@@ -4610,7 +4613,11 @@ def get_llm_provider(
             if custom_llm_provider == "perplexity":
                 # perplexity is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.perplexity.ai
                 api_base = api_base or get_secret("PERPLEXITY_API_BASE") or "https://api.perplexity.ai"  # type: ignore
-                dynamic_api_key = api_key or get_secret("PERPLEXITYAI_API_KEY")
+                dynamic_api_key = (
+                    api_key
+                    or get_secret("PERPLEXITYAI_API_KEY")
+                    or get_secret("PERPLEXITY_API_KEY")
+                )
             elif custom_llm_provider == "anyscale":
                 # anyscale is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.endpoints.anyscale.com/v1
                 api_base = api_base or get_secret("ANYSCALE_API_BASE") or "https://api.endpoints.anyscale.com/v1"  # type: ignore
@@ -5065,6 +5072,10 @@ def get_max_tokens(model: str) -> Optional[int]:
         )
 
 
+def _strip_stable_vertex_version(model_name) -> str:
+    return re.sub(r"-\d+$", "", model_name)
+
+
 def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> ModelInfo:
     """
     Get a dict for the maximum tokens (context window), input_cost_per_token, output_cost_per_token  for a given model.
@@ -5166,9 +5177,15 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
             except:
                 pass
             combined_model_name = model
+            combined_stripped_model_name = _strip_stable_vertex_version(
+                model_name=model
+            )
         else:
             split_model = model
             combined_model_name = "{}/{}".format(custom_llm_provider, model)
+            combined_stripped_model_name = "{}/{}".format(
+                custom_llm_provider, _strip_stable_vertex_version(model_name=model)
+            )
         #########################
 
         supported_openai_params = litellm.get_supported_openai_params(
@@ -5195,8 +5212,9 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
             """
             Check if: (in order of specificity)
             1. 'custom_llm_provider/model' in litellm.model_cost. Checks "groq/llama3-8b-8192" if model="llama3-8b-8192" and custom_llm_provider="groq"
-            2. 'model' in litellm.model_cost. Checks "groq/llama3-8b-8192" in  litellm.model_cost if model="groq/llama3-8b-8192" and custom_llm_provider=None
-            3. 'split_model' in litellm.model_cost. Checks "llama3-8b-8192" in litellm.model_cost if model="groq/llama3-8b-8192"
+            2. 'combined_stripped_model_name' in litellm.model_cost. Checks if 'gemini/gemini-1.5-flash' in model map, if 'gemini/gemini-1.5-flash-001' given.
+            3. 'model' in litellm.model_cost. Checks "groq/llama3-8b-8192" in  litellm.model_cost if model="groq/llama3-8b-8192" and custom_llm_provider=None
+            4. 'split_model' in litellm.model_cost. Checks "llama3-8b-8192" in litellm.model_cost if model="groq/llama3-8b-8192"
             """
             if combined_model_name in litellm.model_cost:
                 key = combined_model_name
@@ -5212,6 +5230,26 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
                         pass
                     else:
                         raise Exception
+            elif combined_stripped_model_name in litellm.model_cost:
+                key = model
+                _model_info = litellm.model_cost[combined_stripped_model_name]
+                _model_info["supported_openai_params"] = supported_openai_params
+                if (
+                    "litellm_provider" in _model_info
+                    and _model_info["litellm_provider"] != custom_llm_provider
+                ):
+                    if custom_llm_provider == "vertex_ai" and _model_info[
+                        "litellm_provider"
+                    ].startswith("vertex_ai"):
+                        pass
+                    else:
+                        raise Exception(
+                            "Got provider={}, Expected provider={}, for model={}".format(
+                                _model_info["litellm_provider"],
+                                custom_llm_provider,
+                                model,
+                            )
+                        )
             elif model in litellm.model_cost:
                 key = model
                 _model_info = litellm.model_cost[model]
@@ -5315,9 +5353,9 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
                     "supports_assistant_prefill", False
                 ),
             )
-    except Exception:
+    except Exception as e:
         raise Exception(
-            "This model isn't mapped yet. model={}, custom_llm_provider={}. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json".format(
+            "This model isn't mapped yet. model={}, custom_llm_provider={}. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json.".format(
                 model, custom_llm_provider
             )
         )
@@ -6645,10 +6683,14 @@ def exception_type(
                     else:
                         message = str(original_exception)
 
-                if message is not None and isinstance(message, str):
+                if message is not None and isinstance(
+                    message, str
+                ):  # done to prevent user-confusion. Relevant issue - https://github.com/BerriAI/litellm/issues/1414
                     message = message.replace("OPENAI", custom_llm_provider.upper())
-                    message = message.replace("openai", custom_llm_provider)
-                    message = message.replace("OpenAI", custom_llm_provider)
+                    message = message.replace(
+                        "openai.OpenAIError",
+                        "{}.{}Error".format(custom_llm_provider, custom_llm_provider),
+                    )
                 if custom_llm_provider == "openai":
                     exception_provider = "OpenAI" + "Exception"
                 else:
@@ -8771,12 +8813,26 @@ class CustomStreamWrapper:
         self.chunks: List = (
             []
         )  # keep track of the returned chunks - used for calculating the input/output tokens for stream options
+        self.is_function_call = self.check_is_function_call(logging_obj=logging_obj)
 
     def __iter__(self):
         return self
 
     def __aiter__(self):
         return self
+
+    def check_is_function_call(self, logging_obj) -> bool:
+        if hasattr(logging_obj, "optional_params") and isinstance(
+            logging_obj.optional_params, dict
+        ):
+            if (
+                "litellm_param_is_function_call" in logging_obj.optional_params
+                and logging_obj.optional_params["litellm_param_is_function_call"]
+                is True
+            ):
+                return True
+
+        return False
 
     def process_chunk(self, chunk: str):
         """
@@ -10277,6 +10333,12 @@ class CustomStreamWrapper:
 
             ## CHECK FOR TOOL USE
             if "tool_calls" in completion_obj and len(completion_obj["tool_calls"]) > 0:
+                if self.is_function_call is True:  # user passed in 'functions' param
+                    completion_obj["function_call"] = completion_obj["tool_calls"][0][
+                        "function"
+                    ]
+                    completion_obj["tool_calls"] = None
+
                 self.tool_call = True
 
             ## RETURN ARG
@@ -10288,7 +10350,12 @@ class CustomStreamWrapper:
                 )
                 or (
                     "tool_calls" in completion_obj
+                    and completion_obj["tool_calls"] is not None
                     and len(completion_obj["tool_calls"]) > 0
+                )
+                or (
+                    "function_call" in completion_obj
+                    and completion_obj["function_call"] is not None
                 )
             ):  # cannot set content of an OpenAI Object to be an empty string
                 self.safety_checker()
@@ -10349,6 +10416,7 @@ class CustomStreamWrapper:
                         if self.sent_first_chunk is False:
                             completion_obj["role"] = "assistant"
                             self.sent_first_chunk = True
+
                         model_response.choices[0].delta = Delta(**completion_obj)
                         if completion_obj.get("index") is not None:
                             model_response.choices[0].index = completion_obj.get(
@@ -11518,3 +11586,25 @@ class ModelResponseListIterator:
 class CustomModelResponseIterator(Iterable):
     def __init__(self) -> None:
         super().__init__()
+
+
+def is_cached_message(message: AllMessageValues) -> bool:
+    """
+    Returns true, if message is marked as needing to be cached.
+
+    Used for anthropic/gemini context caching.
+
+    Follows the anthropic format {"cache_control": {"type": "ephemeral"}}
+    """
+    if message["content"] is None or isinstance(message["content"], str):
+        return False
+
+    for content in message["content"]:
+        if (
+            content["type"] == "text"
+            and content.get("cache_control") is not None
+            and content["cache_control"]["type"] == "ephemeral"  # type: ignore
+        ):
+            return True
+
+    return False

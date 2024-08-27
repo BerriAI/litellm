@@ -14,7 +14,7 @@ https://github.com/BerriAI/litellm
 
 ## How to use LiteLLM
 You can use litellm through either:
-1. [LiteLLM Proxy Server](#openai-proxy) - Server (LLM Gateway) to call 100+ LLMs, load balance, cost tracking across projects
+1. [LiteLLM Proxy Server](#litellm-proxy-server-llm-gateway) - Server (LLM Gateway) to call 100+ LLMs, load balance, cost tracking across projects
 2. [LiteLLM python SDK](#basic-usage) - Python Client to call 100+ LLMs, load balance, cost tracking
 
 ### **When to use LiteLLM Proxy Server (LLM Gateway)**
