@@ -1635,18 +1635,19 @@ def test_completion_perplexity_api():
         pydantic_obj = ChatCompletion(**response_object)
 
         def _return_pydantic_obj(*args, **kwargs):
-            return pydantic_obj
+            new_response = MagicMock()
+            new_response.headers = {"hello": "world"}
 
-        print(f"pydantic_obj: {pydantic_obj}")
+            new_response.parse.return_value = pydantic_obj
+            return new_response
 
         openai_client = OpenAI()
 
-        openai_client.chat.completions.create = MagicMock()
-
         with patch.object(
-            openai_client.chat.completions, "create", side_effect=_return_pydantic_obj
+            openai_client.chat.completions.with_raw_response,
+            "create",
+            side_effect=_return_pydantic_obj,
         ) as mock_client:
-            pass
             # litellm.set_verbose= True
             messages = [
                 {"role": "system", "content": "You're a good bot"},
