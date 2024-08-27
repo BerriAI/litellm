@@ -141,6 +141,7 @@ const CreateKeyPage = () => {
           <UserDashboard
               userID={userID}
               userRole={userRole}
+              premiumUser={premiumUser}
               teams={teams}
               keys={keys}
               setUserRole={setUserRole}
@@ -175,6 +176,7 @@ const CreateKeyPage = () => {
             <UserDashboard
               userID={userID}
               userRole={userRole}
+              premiumUser={premiumUser}
               teams={teams}
               keys={keys}
               setUserRole={setUserRole}
