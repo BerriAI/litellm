@@ -862,7 +862,7 @@ from .llms.vertex_ai_and_google_ai_studio.vertex_ai_anthropic import (
 from .llms.vertex_ai_and_google_ai_studio.vertex_ai_partner_models import (
     VertexAILlama3Config,
 )
-from .llms.sagemaker import SagemakerConfig
+from .llms.sagemaker.sagemaker import SagemakerConfig
 from .llms.ollama import OllamaConfig
 from .llms.ollama_chat import OllamaChatConfig
 from .llms.maritalk import MaritTalkConfig
