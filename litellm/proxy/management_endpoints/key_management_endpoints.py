@@ -993,6 +993,11 @@ async def regenerate_key_fn(
     Endpoint for regenerating a key
     """
 
+    if premium_user is not True:
+        raise ValueError(
+            f"Regenerating Virtual Keys is an Enterprise feature, {CommonProxyErrors.not_premium_user.value}"
+        )
+
     # Check if key exists, raise exception if key is not in the DB
 
     ### 1. Create New copy that is duplicate of existing key
