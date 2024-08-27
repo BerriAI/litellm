@@ -1005,10 +1005,10 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
         ]}
       >
         <Grid numItems={1} className="gap-2 w-full">
-          <Title>Save your New Key</Title>
+          <Title>Regenerated Key</Title>
           <Col numColSpan={1}>
             <p>
-              Please save this new secret key somewhere safe and accessible. For
+              Please replace your old key with the new key generated.For
               security reasons, <b>you will not be able to view it again</b> through
               your LiteLLM account. If you lose this secret key, you will need to
               generate a new one.
