@@ -69,6 +69,7 @@ from litellm.litellm_core_utils.redact_messages import (
 from litellm.litellm_core_utils.token_counter import get_modified_max_tokens
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.llms.openai import (
+    AllMessageValues,
     ChatCompletionNamedToolChoiceParam,
     ChatCompletionToolParam,
 )
@@ -11515,3 +11516,25 @@ class ModelResponseListIterator:
 class CustomModelResponseIterator(Iterable):
     def __init__(self) -> None:
         super().__init__()
+
+
+def is_cached_message(message: AllMessageValues) -> bool:
+    """
+    Returns true, if message is marked as needing to be cached.
+
+    Used for anthropic/gemini context caching.
+
+    Follows the anthropic format {"cache_control": {"type": "ephemeral"}}
+    """
+    if message["content"] is None or isinstance(message["content"], str):
+        return False
+
+    for content in message["content"]:
+        if (
+            content["type"] == "text"
+            and content.get("cache_control") is not None
+            and content["cache_control"]["type"] == "ephemeral"  # type: ignore
+        ):
+            return True
+
+    return False
