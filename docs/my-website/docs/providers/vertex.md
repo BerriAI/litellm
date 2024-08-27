@@ -8,15 +8,18 @@ import TabItem from '@theme/TabItem';
   <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
 </a>
 
-## 🆕 `vertex_ai_beta/` route 
+## `vertex_ai/` route 
 
-New `vertex_ai_beta/` route. Adds support for system messages, tool_choice params, etc. by moving to httpx client (instead of vertex sdk). This implementation uses [VertexAI's REST API](https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/inference#syntax).
+The `vertex_ai/` route uses uses [VertexAI's REST API](https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/inference#syntax).
 
 ```python
 from litellm import completion
 import json 
 
 ## GET CREDENTIALS 
+## RUN ## 
+# !gcloud auth application-default login - run this to add vertex credentials to your env
+## OR ## 
 file_path = 'path/to/vertex_ai_service_account.json'
 
 # Load the JSON file
@@ -28,7 +31,7 @@ vertex_credentials_json = json.dumps(vertex_credentials)
 
 ## COMPLETION CALL 
 response = completion(
-  model="vertex_ai_beta/gemini-pro",
+  model="vertex_ai/gemini-pro",
   messages=[{ "content": "Hello, how are you?","role": "user"}],
   vertex_credentials=vertex_credentials_json
 )
@@ -52,7 +55,7 @@ vertex_credentials_json = json.dumps(vertex_credentials)
 
 
 response = completion(
-  model="vertex_ai_beta/gemini-pro",
+  model="vertex_ai/gemini-pro",
   messages=[{"content": "You are a good bot.","role": "system"}, {"content": "Hello, how are you?","role": "user"}], 
   vertex_credentials=vertex_credentials_json
 )
@@ -110,7 +113,7 @@ tools = [
 ]
 
 data = {
-    "model": "vertex_ai_beta/gemini-1.5-pro-preview-0514"),
+    "model": "vertex_ai/gemini-1.5-pro-preview-0514"),
     "messages": messages,
     "tools": tools,
     "tool_choice": "required",
@@ -158,7 +161,7 @@ response_schema = {
 
 
 completion(
-    model="vertex_ai_beta/gemini-1.5-pro", 
+    model="vertex_ai/gemini-1.5-pro", 
     messages=messages, 
     response_format={"type": "json_object", "response_schema": response_schema} # 👈 KEY CHANGE
     )
@@ -174,7 +177,7 @@ print(json.loads(completion.choices[0].message.content))
 model_list:
   - model_name: gemini-pro
     litellm_params:
-      model: vertex_ai_beta/gemini-1.5-pro
+      model: vertex_ai/gemini-1.5-pro
       vertex_project: "project-id"
       vertex_location: "us-central1"
       vertex_credentials: "/path/to/service_account.json" # [OPTIONAL] Do this OR `!gcloud auth application-default login` - run this to add vertex credentials to your env
@@ -227,7 +230,7 @@ To validate the response_schema, set `enforce_validation: true`.
 from litellm import completion, JSONSchemaValidationError
 try: 
 	completion(
-    model="vertex_ai_beta/gemini-1.5-pro", 
+    model="vertex_ai/gemini-1.5-pro", 
     messages=messages, 
     response_format={
         "type": "json_object", 
@@ -247,7 +250,7 @@ except JSONSchemaValidationError as e:
 model_list:
   - model_name: gemini-pro
     litellm_params:
-      model: vertex_ai_beta/gemini-1.5-pro
+      model: vertex_ai/gemini-1.5-pro
       vertex_project: "project-id"
       vertex_location: "us-central1"
       vertex_credentials: "/path/to/service_account.json" # [OPTIONAL] Do this OR `!gcloud auth application-default login` - run this to add vertex credentials to your env
@@ -327,7 +330,7 @@ Return a `list[Recipe]`
     }
 ]
 
-completion(model="vertex_ai_beta/gemini-1.5-flash-preview-0514", messages=messages, response_format={ "type": "json_object" })
+completion(model="vertex_ai/gemini-1.5-flash-preview-0514", messages=messages, response_format={ "type": "json_object" })
 ```
 
 ### **Grounding**
@@ -350,7 +353,7 @@ from litellm import completion
 tools = [{"googleSearchRetrieval": {}}] # 👈 ADD GOOGLE SEARCH
 
 resp = litellm.completion(
-                    model="vertex_ai_beta/gemini-1.0-pro-001",
+                    model="vertex_ai/gemini-1.0-pro-001",
                     messages=[{"role": "user", "content": "Who won the world cup?"}],
                     tools=tools,
                 )
@@ -419,7 +422,7 @@ from litellm import completion
 tools = [{"googleSearchRetrieval": {"disable_attributon": False}}] # 👈 ADD GOOGLE SEARCH
 
 resp = litellm.completion(
-                    model="vertex_ai_beta/gemini-1.0-pro-001",
+                    model="vertex_ai/gemini-1.0-pro-001",
                     messages=[{"role": "user", "content": "Who won the world cup?"}],
                     tools=tools,
                     vertex_project="project-id"
@@ -431,109 +434,9 @@ print(resp)
 
 ### **Context Caching**
 
-Use Vertex AI Context Caching
+Use Vertex AI context caching is supported by calling provider api directly. (Unified Endpoint support comin soon.).
 
-[**Relevant VertexAI Docs**](https://cloud.google.com/vertex-ai/generative-ai/docs/context-cache/context-cache-overview)
-
-<Tabs>
-
-<TabItem value="proxy" label="LiteLLM PROXY">
-
-1. Add model to config.yaml
-```yaml
-model_list:
-  # used for /chat/completions, /completions, /embeddings endpoints
-  - model_name: gemini-1.5-pro-001
-    litellm_params:
-      model: vertex_ai_beta/gemini-1.5-pro-001
-      vertex_project: "project-id"
-      vertex_location: "us-central1"
-      vertex_credentials: "adroit-crow-413218-a956eef1a2a8.json" # Add path to service account.json
-
-# used for the /cachedContent and vertexAI native endpoints
-default_vertex_config:
-  vertex_project: "adroit-crow-413218"
-  vertex_location: "us-central1"
-  vertex_credentials: "adroit-crow-413218-a956eef1a2a8.json" # Add path to service account.json
-
-```
-
-2. Start Proxy 
-
-```
-$ litellm --config /path/to/config.yaml
-```
-
-3. Make Request!
-We make the request in two steps:
-- Create a cachedContents object
-- Use the cachedContents object in your /chat/completions 
-
-**Create a cachedContents object**
-
-First, create a cachedContents object by calling the Vertex `cachedContents` endpoint. The LiteLLM proxy forwards the `/cachedContents` request to the VertexAI API.
-
-```python
-import httpx
-
-# Set Litellm proxy variables
-LITELLM_BASE_URL = "http://0.0.0.0:4000"
-LITELLM_PROXY_API_KEY = "sk-1234"
-
-httpx_client = httpx.Client(timeout=30)
-
-print("Creating cached content")
-create_cache = httpx_client.post(
-    url=f"{LITELLM_BASE_URL}/vertex-ai/cachedContents",
-    headers={"Authorization": f"Bearer {LITELLM_PROXY_API_KEY}"},
-    json={
-        "model": "gemini-1.5-pro-001",
-        "contents": [
-            {
-                "role": "user",
-                "parts": [{
-                    "text": "This is sample text to demonstrate explicit caching." * 4000
-                }]
-            }
-        ],
-    }
-)
-
-print("Response from create_cache:", create_cache)
-create_cache_response = create_cache.json()
-print("JSON from create_cache:", create_cache_response)
-cached_content_name = create_cache_response["name"]
-```
-
-**Use the cachedContents object in your /chat/completions request to VertexAI**
-
-```python
-import openai
-
-# Set Litellm proxy variables
-LITELLM_BASE_URL = "http://0.0.0.0:4000"
-LITELLM_PROXY_API_KEY = "sk-1234"
-
-client = openai.OpenAI(api_key=LITELLM_PROXY_API_KEY, base_url=LITELLM_BASE_URL)
-
-response = client.chat.completions.create(
-    model="gemini-1.5-pro-001",
-    max_tokens=8192,
-    messages=[
-        {
-            "role": "user",
-            "content": "What is the sample text about?",
-        },
-    ],
-    temperature=0.7,
-    extra_body={"cached_content": cached_content_name},  # Use the cached content
-)
-
-print("Response from proxy:", response)
-```
-
-</TabItem>
-</Tabs>
+[**Go straight to provider**](../pass_through/vertex_ai.md#context-caching)
 
 
 ## Pre-requisites
