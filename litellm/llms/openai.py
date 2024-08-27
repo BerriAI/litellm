@@ -2027,8 +2027,8 @@ class OpenAITextCompletion(BaseLLM):
                 else:
                     openai_client = client
 
-                response = openai_client.completions.with_raw_response.create(**data)  # type: ignore
-
+                raw_response = openai_client.completions.with_raw_response.create(**data)  # type: ignore
+                response = raw_response.parse()
                 response_json = response.model_dump()
 
                 ## LOGGING
@@ -2075,8 +2075,12 @@ class OpenAITextCompletion(BaseLLM):
             else:
                 openai_aclient = client
 
-            response = await openai_aclient.completions.with_raw_response.create(**data)
+            raw_response = await openai_aclient.completions.with_raw_response.create(
+                **data
+            )
+            response = raw_response.parse()
             response_json = response.model_dump()
+
             ## LOGGING
             logging_obj.post_call(
                 input=prompt,
