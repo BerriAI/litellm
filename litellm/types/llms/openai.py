@@ -324,9 +324,19 @@ class ChatCompletionDeltaToolCallChunk(TypedDict, total=False):
     index: int
 
 
-class ChatCompletionTextObject(TypedDict):
+class ChatCompletionCachedContent(TypedDict):
+    type: Literal["ephemeral"]
+
+
+class OpenAIChatCompletionTextObject(TypedDict):
     type: Literal["text"]
     text: str
+
+
+class ChatCompletionTextObject(
+    OpenAIChatCompletionTextObject, total=False
+):  # litellm wrapper on top of openai object for handling cached content
+    cache_control: ChatCompletionCachedContent
 
 
 class ChatCompletionImageUrlObject(TypedDict, total=False):

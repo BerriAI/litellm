@@ -26,7 +26,7 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import ResponseFormatChunk
 from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
 
-from .prompt_templates.factory import (
+from ..prompt_templates.factory import (
     construct_tool_use_system_prompt,
     contains_tag,
     custom_prompt,
