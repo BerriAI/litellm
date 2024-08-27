@@ -1300,7 +1300,6 @@ class LiteLLM_VerificationToken(LiteLLMBase):
     soft_budget_cooldown: bool = False
     litellm_budget_table: Optional[dict] = None
     org_id: Optional[str] = None  # org id for a given key
-    key_state: Optional[str] = None  # can be "active", "inactive"
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
