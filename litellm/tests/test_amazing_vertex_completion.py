@@ -2065,7 +2065,9 @@ def test_prompt_factory_nested():
 
 
 def test_get_token_url():
-    from litellm.llms.vertex_httpx import VertexLLM
+    from litellm.llms.vertex_ai_and_google_ai_studio.vertex_and_google_ai_studio_gemini import (
+        VertexLLM,
+    )
 
     vertex_llm = VertexLLM()
     vertex_ai_project = "adroit-crow-413218"
