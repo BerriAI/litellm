@@ -620,6 +620,10 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
 
   const handleRegenerateKey = async () => {
     try {
+      if (selectedToken == null) {
+        message.error("Please select a key to regenerate");
+        return;
+      }
       const response = await regenerateKeyCall(accessToken, selectedToken.token);
       setRegeneratedKey(response.key);
       setRegenerateDialogVisible(false);
@@ -974,8 +978,15 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
     <Modal
       title="Regenerate API Key"
       visible={regenerateDialogVisible}
-      onOk={handleRegenerateKey}
       onCancel={() => setRegenerateDialogVisible(false)}
+      footer={[
+        <Button key="cancel" onClick={() => setRegenerateDialogVisible(false)} className="mr-2">
+          Cancel
+        </Button>,
+        <Button key="regenerate" onClick={handleRegenerateKey}>
+          Regenerate
+        </Button>
+      ]}
     >
       <p>Are you sure you want to regenerate this key?</p>
       <p>Key Alias:</p>
@@ -986,9 +997,12 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
     {regeneratedKey && (
       <Modal
         visible={!!regeneratedKey}
-        onOk={() => setRegeneratedKey(null)}
         onCancel={() => setRegeneratedKey(null)}
-        footer={null}
+        footer={[
+          <Button key="close" onClick={() => setRegeneratedKey(null)}>
+            Close
+          </Button>
+        ]}
       >
         <Grid numItems={1} className="gap-2 w-full">
           <Title>Save your New Key</Title>
