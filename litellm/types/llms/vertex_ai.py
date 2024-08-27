@@ -186,6 +186,17 @@ class RequestBody(TypedDict, total=False):
     cachedContent: str
 
 
+class CachedContentRequestBody(TypedDict, total=False):
+    contents: Required[List[ContentType]]
+    system_instruction: SystemInstructions
+    tools: Tools
+    toolConfig: ToolConfig
+    model: Required[str]  # Format: models/{model}
+    ttl: str  # ending in 's' - Example: "3.5s".
+    name: str  # Format: cachedContents/{id}
+    displayName: str
+
+
 class SafetyRatings(TypedDict):
     category: HarmCategory
     probability: HarmProbability
@@ -320,3 +331,8 @@ class Instance(TypedDict, total=False):
 
 class VertexMultimodalEmbeddingRequest(TypedDict, total=False):
     instances: List[Instance]
+
+
+class VertexAICachedContentResponseObject(TypedDict):
+    name: str
+    model: str
