@@ -2368,7 +2368,6 @@ async def test_partner_models_httpx_ai21():
             "role": "system",
             "content": "Your name is Litellm Bot, you are a helpful assistant",
         },
-        # User asks for their name and weather in San Francisco
         {
             "role": "user",
             "content": "Hello, can you tell me the weather in San Francisco?",
@@ -2402,10 +2401,112 @@ async def test_partner_models_httpx_ai21():
         "top_p": 0.5,
     }
 
-    response = await litellm.acompletion(**data)
+    mock_response = AsyncMock()
 
-    response_format_tests(response=response)
+    def return_val():
+        return {
+            "id": "chat-3d11cf95eb224966937b216d9494fe73",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": " Sure, let me check that for you.",
+                        "tool_calls": [
+                            {
+                                "id": "b5cef16b-5946-4937-b9d5-beeaea871e77",
+                                "type": "function",
+                                "function": {
+                                    "name": "get_weather",
+                                    "arguments": '{"location": "San Francisco"}',
+                                },
+                            }
+                        ],
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 158,
+                "completion_tokens": 36,
+                "total_tokens": 194,
+            },
+            "meta": {"requestDurationMillis": 501},
+            "model": "jamba-1.5",
+        }
 
-    print(f"response: {response}")
+    mock_response.json = return_val
+    mock_response.status_code = 200
 
-    # assert isinstance(response._hidden_params["response_cost"], float)
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=mock_response,
+    ) as mock_post:
+        response = await litellm.acompletion(**data)
+
+        # Assert
+        mock_post.assert_called_once()
+        url, kwargs = mock_post.call_args
+        print("url = ", url)
+        print("call args = ", kwargs)
+
+        print(kwargs["data"])
+
+        assert (
+            url[0]
+            == "https://us-central1-aiplatform.googleapis.com/v1beta1/projects/adroit-crow-413218/locations/us-central1/publishers/ai21/models/jamba-1.5-mini@001:rawPredict"
+        )
+
+        # json loads kwargs
+        kwargs["data"] = json.loads(kwargs["data"])
+
+        assert kwargs["data"] == {
+            "model": "jamba-1.5-mini",
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "Your name is Litellm Bot, you are a helpful assistant",
+                },
+                {
+                    "role": "user",
+                    "content": "Hello, can you tell me the weather in San Francisco?",
+                },
+            ],
+            "top_p": 0.5,
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "description": "Get the current weather in a given location",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "location": {
+                                    "type": "string",
+                                    "description": "The city and state, e.g. San Francisco, CA",
+                                }
+                            },
+                            "required": ["location"],
+                        },
+                    },
+                }
+            ],
+            "stream": False,
+        }
+
+        assert response.id == "chat-3d11cf95eb224966937b216d9494fe73"
+        assert len(response.choices) == 1
+        assert (
+            response.choices[0].message.content == " Sure, let me check that for you."
+        )
+        assert response.choices[0].message.tool_calls[0].function.name == "get_weather"
+        assert (
+            response.choices[0].message.tool_calls[0].function.arguments
+            == '{"location": "San Francisco"}'
+        )
+        assert response.usage.prompt_tokens == 158
+        assert response.usage.completion_tokens == 36
+        assert response.usage.total_tokens == 194
+
+        print(f"response: {response}")
