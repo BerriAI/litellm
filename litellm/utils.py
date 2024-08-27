@@ -4613,7 +4613,11 @@ def get_llm_provider(
             if custom_llm_provider == "perplexity":
                 # perplexity is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.perplexity.ai
                 api_base = api_base or get_secret("PERPLEXITY_API_BASE") or "https://api.perplexity.ai"  # type: ignore
-                dynamic_api_key = api_key or get_secret("PERPLEXITYAI_API_KEY")
+                dynamic_api_key = (
+                    api_key
+                    or get_secret("PERPLEXITYAI_API_KEY")
+                    or get_secret("PERPLEXITY_API_KEY")
+                )
             elif custom_llm_provider == "anyscale":
                 # anyscale is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.endpoints.anyscale.com/v1
                 api_base = api_base or get_secret("ANYSCALE_API_BASE") or "https://api.endpoints.anyscale.com/v1"  # type: ignore
@@ -6679,10 +6683,14 @@ def exception_type(
                     else:
                         message = str(original_exception)
 
-                if message is not None and isinstance(message, str):
+                if message is not None and isinstance(
+                    message, str
+                ):  # done to prevent user-confusion. Relevant issue - https://github.com/BerriAI/litellm/issues/1414
                     message = message.replace("OPENAI", custom_llm_provider.upper())
-                    message = message.replace("openai", custom_llm_provider)
-                    message = message.replace("OpenAI", custom_llm_provider)
+                    message = message.replace(
+                        "openai.OpenAIError",
+                        "{}.{}Error".format(custom_llm_provider, custom_llm_provider),
+                    )
                 if custom_llm_provider == "openai":
                     exception_provider = "OpenAI" + "Exception"
                 else:
@@ -8805,12 +8813,26 @@ class CustomStreamWrapper:
         self.chunks: List = (
             []
         )  # keep track of the returned chunks - used for calculating the input/output tokens for stream options
+        self.is_function_call = self.check_is_function_call(logging_obj=logging_obj)
 
     def __iter__(self):
         return self
 
     def __aiter__(self):
         return self
+
+    def check_is_function_call(self, logging_obj) -> bool:
+        if hasattr(logging_obj, "optional_params") and isinstance(
+            logging_obj.optional_params, dict
+        ):
+            if (
+                "litellm_param_is_function_call" in logging_obj.optional_params
+                and logging_obj.optional_params["litellm_param_is_function_call"]
+                is True
+            ):
+                return True
+
+        return False
 
     def process_chunk(self, chunk: str):
         """
@@ -10309,6 +10331,12 @@ class CustomStreamWrapper:
 
             ## CHECK FOR TOOL USE
             if "tool_calls" in completion_obj and len(completion_obj["tool_calls"]) > 0:
+                if self.is_function_call is True:  # user passed in 'functions' param
+                    completion_obj["function_call"] = completion_obj["tool_calls"][0][
+                        "function"
+                    ]
+                    completion_obj["tool_calls"] = None
+
                 self.tool_call = True
 
             ## RETURN ARG
@@ -10320,7 +10348,12 @@ class CustomStreamWrapper:
                 )
                 or (
                     "tool_calls" in completion_obj
+                    and completion_obj["tool_calls"] is not None
                     and len(completion_obj["tool_calls"]) > 0
+                )
+                or (
+                    "function_call" in completion_obj
+                    and completion_obj["function_call"] is not None
                 )
             ):  # cannot set content of an OpenAI Object to be an empty string
                 self.safety_checker()
@@ -10381,6 +10414,7 @@ class CustomStreamWrapper:
                         if self.sent_first_chunk is False:
                             completion_obj["role"] = "assistant"
                             self.sent_first_chunk = True
+
                         model_response.choices[0].delta = Delta(**completion_obj)
                         if completion_obj.get("index") is not None:
                             model_response.choices[0].index = completion_obj.get(

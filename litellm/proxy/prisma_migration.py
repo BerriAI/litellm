@@ -51,6 +51,10 @@ while retry_count < max_retries and exit_code != 0:
     retry_count += 1
     print(f"Attempt {retry_count}...")  # noqa
 
+    # run prisma generate
+    result = subprocess.run(["prisma", "generate"], capture_output=True)
+    exit_code = result.returncode
+
     # Run the Prisma db push command
     result = subprocess.run(
         ["prisma", "db", "push", "--accept-data-loss"], capture_output=True

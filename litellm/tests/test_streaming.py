@@ -755,27 +755,40 @@ async def test_completion_gemini_stream(sync_mode):
     try:
         litellm.set_verbose = True
         print("Streaming gemini response")
-        messages = [
-            {"role": "system", "content": "You are a helpful assistant."},
+        function1 = [
             {
-                "role": "user",
-                "content": "Who was Alexander?",
-            },
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                    },
+                    "required": ["location"],
+                },
+            }
         ]
+        messages = [{"role": "user", "content": "What is the weather like in Boston?"}]
         print("testing gemini streaming")
         complete_response = ""
         # Add any assertions here to check the response
         non_empty_chunks = 0
-
+        chunks = []
         if sync_mode:
             response = completion(
                 model="gemini/gemini-1.5-flash",
                 messages=messages,
                 stream=True,
+                functions=function1,
             )
 
             for idx, chunk in enumerate(response):
                 print(chunk)
+                chunks.append(chunk)
                 # print(chunk.choices[0].delta)
                 chunk, finished = streaming_format_tests(idx, chunk)
                 if finished:
@@ -787,11 +800,13 @@ async def test_completion_gemini_stream(sync_mode):
                 model="gemini/gemini-1.5-flash",
                 messages=messages,
                 stream=True,
+                functions=function1,
             )
 
             idx = 0
             async for chunk in response:
                 print(chunk)
+                chunks.append(chunk)
                 # print(chunk.choices[0].delta)
                 chunk, finished = streaming_format_tests(idx, chunk)
                 if finished:
@@ -800,10 +815,17 @@ async def test_completion_gemini_stream(sync_mode):
                 complete_response += chunk
                 idx += 1
 
-        if complete_response.strip() == "":
-            raise Exception("Empty response received")
+        # if complete_response.strip() == "":
+        #     raise Exception("Empty response received")
         print(f"completion_response: {complete_response}")
-        assert non_empty_chunks > 1
+
+        complete_response = litellm.stream_chunk_builder(
+            chunks=chunks, messages=messages
+        )
+
+        assert complete_response.choices[0].message.function_call is not None
+
+        # assert non_empty_chunks > 1
     except litellm.InternalServerError as e:
         pass
     except litellm.RateLimitError as e:

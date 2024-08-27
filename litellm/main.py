@@ -82,8 +82,6 @@ from .llms import (
     bedrock,
     clarifai,
     cloudflare,
-    cohere,
-    cohere_chat,
     gemini,
     huggingface_restapi,
     maritalk,
@@ -105,6 +103,9 @@ from .llms.anthropic_text import AnthropicTextCompletion
 from .llms.azure import AzureChatCompletion, _check_dynamic_azure_params
 from .llms.azure_text import AzureTextCompletion
 from .llms.bedrock_httpx import BedrockConverseLLM, BedrockLLM
+from .llms.cohere import chat as cohere_chat
+from .llms.cohere import completion as cohere_completion  # type: ignore
+from .llms.cohere import embed as cohere_embed
 from .llms.custom_llm import CustomLLM, custom_chat_llm_router
 from .llms.databricks import DatabricksChatCompletion
 from .llms.huggingface_restapi import Huggingface
@@ -117,7 +118,7 @@ from .llms.prompt_templates.factory import (
     prompt_factory,
     stringify_json_tool_call_content,
 )
-from .llms.sagemaker import SagemakerLLM
+from .llms.sagemaker.sagemaker import SagemakerLLM
 from .llms.text_completion_codestral import CodestralTextCompletion
 from .llms.text_to_speech.vertex_ai import VertexTextToSpeechAPI
 from .llms.triton import TritonChatCompletion
@@ -1651,7 +1652,7 @@ def completion(
             if extra_headers is not None:
                 headers.update(extra_headers)
 
-            model_response = cohere.completion(
+            model_response = cohere_completion.completion(
                 model=model,
                 messages=messages,
                 api_base=api_base,
@@ -2014,7 +2015,7 @@ def completion(
                 model_response=model_response,
                 print_verbose=print_verbose,
                 optional_params=new_params,
-                litellm_params=litellm_params,
+                litellm_params=litellm_params,  # type: ignore
                 logger_fn=logger_fn,
                 encoding=encoding,
                 vertex_location=vertex_ai_location,
@@ -2101,7 +2102,7 @@ def completion(
                     model_response=model_response,
                     print_verbose=print_verbose,
                     optional_params=new_params,
-                    litellm_params=litellm_params,
+                    litellm_params=litellm_params,  # type: ignore
                     logger_fn=logger_fn,
                     encoding=encoding,
                     vertex_location=vertex_ai_location,
@@ -3463,7 +3464,7 @@ def embedding(
                 headers = extra_headers
             else:
                 headers = {}
-            response = cohere.embedding(
+            response = cohere_embed.embedding(
                 model=model,
                 input=input,
                 optional_params=optional_params,
