@@ -1304,7 +1304,7 @@ class VertexLLM(BaseLLM):
         ## TRANSFORMATION ##
         ### CHECK CONTEXT CACHING ###
         if gemini_api_key is not None:
-            messages, cached_content = context_caching_endpoints.create_cache(
+            messages, cached_content = context_caching_endpoints.check_and_create_cache(
                 messages=messages,
                 api_key=gemini_api_key,
                 api_base=api_base,

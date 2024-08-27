@@ -2236,7 +2236,7 @@ class Cache:
         if self.namespace is not None and isinstance(self.cache, RedisCache):
             self.cache.namespace = self.namespace
 
-    def get_cache_key(self, *args, **kwargs):
+    def get_cache_key(self, *args, **kwargs) -> str:
         """
         Get the cache key for the given arguments.
 

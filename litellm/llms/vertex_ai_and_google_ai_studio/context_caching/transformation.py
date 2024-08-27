@@ -67,8 +67,7 @@ def separate_cached_messages(
 
 
 def transform_openai_messages_to_gemini_context_caching(
-    model: str,
-    messages: List[AllMessageValues],
+    model: str, messages: List[AllMessageValues], cache_key: str
 ) -> CachedContentRequestBody:
     supports_system_message = get_supports_system_message(
         model=model, custom_llm_provider="gemini"
@@ -80,7 +79,9 @@ def transform_openai_messages_to_gemini_context_caching(
 
     transformed_messages = _gemini_convert_messages_with_history(messages=new_messages)
     data = CachedContentRequestBody(
-        contents=transformed_messages, model="models/{}".format(model)
+        contents=transformed_messages,
+        model="models/{}".format(model),
+        name="cachedContents/{}".format(cache_key),
     )
     if transformed_system_messages is not None:
         data["system_instruction"] = transformed_system_messages
