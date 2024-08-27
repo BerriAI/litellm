@@ -82,33 +82,74 @@ def test_completion_bedrock_claude_completion_auth():
 # test_completion_bedrock_claude_completion_auth()
 
 
-def test_completion_bedrock_guardrails():
+@pytest.mark.parametrize("streaming", [True, False])
+def test_completion_bedrock_guardrails(streaming):
     import os
 
     litellm.set_verbose = True
+    import logging
 
+    from litellm._logging import verbose_logger
+
+    # verbose_logger.setLevel(logging.DEBUG)
     try:
-        response = completion(
-            model="anthropic.claude-v2",
-            messages=[
-                {
-                    "content": "where do i buy coffee from? ",
-                    "role": "user",
-                }
-            ],
-            max_tokens=10,
-            guardrailConfig={
-                "guardrailIdentifier": "ff6ujrregl1q",
-                "guardrailVersion": "DRAFT",
-                "trace": "disabled",
-            },
-        )
-        # Add any assertions here to check the response
-        print(response)
-        assert (
-            "Sorry, the model cannot answer this question. coffee guardrail applied"
-            in response.choices[0].message.content
-        )
+        if streaming is False:
+            response = completion(
+                model="anthropic.claude-v2",
+                messages=[
+                    {
+                        "content": "where do i buy coffee from? ",
+                        "role": "user",
+                    }
+                ],
+                max_tokens=10,
+                guardrailConfig={
+                    "guardrailIdentifier": "ff6ujrregl1q",
+                    "guardrailVersion": "DRAFT",
+                    "trace": "enabled",
+                },
+            )
+            # Add any assertions here to check the response
+            print(response)
+            assert (
+                "Sorry, the model cannot answer this question. coffee guardrail applied"
+                in response.choices[0].message.content
+            )
+
+            assert "trace" in response
+            assert response.trace is not None
+
+            print("TRACE=", response.trace)
+        else:
+
+            response = completion(
+                model="anthropic.claude-v2",
+                messages=[
+                    {
+                        "content": "where do i buy coffee from? ",
+                        "role": "user",
+                    }
+                ],
+                stream=True,
+                max_tokens=10,
+                guardrailConfig={
+                    "guardrailIdentifier": "ff6ujrregl1q",
+                    "guardrailVersion": "DRAFT",
+                    "trace": "enabled",
+                },
+            )
+
+            saw_trace = False
+
+            for chunk in response:
+                if "trace" in chunk:
+                    saw_trace = True
+                print(chunk)
+
+            assert (
+                saw_trace is True
+            ), "Did not see trace in response even when trace=enabled sent in the guardrailConfig"
+
     except RateLimitError:
         pass
     except Exception as e:
@@ -697,8 +738,9 @@ def test_bedrock_system_prompt(system, model):
             "temperature": 0.3,
             "messages": [
                 {"role": "system", "content": system},
-                {"role": "user", "content": "hey, how's it going?"},
+                {"role": "assistant", "content": "hey, how's it going?"},
             ],
+            "user_continue_message": {"role": "user", "content": "Be a good bot!"},
         }
         response: ModelResponse = completion(
             model="bedrock/{}".format(model),

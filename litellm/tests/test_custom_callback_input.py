@@ -1166,3 +1166,134 @@ def test_turn_off_message_logging():
 
     time.sleep(2)
     assert len(customHandler.errors) == 0
+
+
+##### VALID JSON ######
+
+
+@pytest.mark.parametrize("model", ["gpt-3.5-turbo", "azure/chatgpt-v-2"])
+@pytest.mark.parametrize(
+    "turn_off_message_logging",
+    [
+        True,
+    ],
+)  # False
+def test_standard_logging_payload(model, turn_off_message_logging):
+    """
+    Ensure valid standard_logging_payload is passed for logging calls to s3
+
+    Motivation: provide a standard set of things that are logged to s3/gcs/future integrations across all llm calls
+    """
+    from litellm.types.utils import StandardLoggingPayload
+
+    # sync completion
+    customHandler = CompletionCustomHandler()
+    litellm.callbacks = [customHandler]
+
+    litellm.turn_off_message_logging = turn_off_message_logging
+
+    with patch.object(
+        customHandler, "log_success_event", new=MagicMock()
+    ) as mock_client:
+        _ = litellm.completion(
+            model=model,
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+            # mock_response="Going well!",
+        )
+
+        time.sleep(2)
+        mock_client.assert_called_once()
+
+        print(
+            f"mock_client_post.call_args: {mock_client.call_args.kwargs['kwargs'].keys()}"
+        )
+        assert "standard_logging_object" in mock_client.call_args.kwargs["kwargs"]
+        assert (
+            mock_client.call_args.kwargs["kwargs"]["standard_logging_object"]
+            is not None
+        )
+
+        print(
+            "Standard Logging Object - {}".format(
+                mock_client.call_args.kwargs["kwargs"]["standard_logging_object"]
+            )
+        )
+
+        keys_list = list(StandardLoggingPayload.__annotations__.keys())
+
+        for k in keys_list:
+            assert (
+                k in mock_client.call_args.kwargs["kwargs"]["standard_logging_object"]
+            )
+
+        ## json serializable
+        json_str_payload = json.dumps(
+            mock_client.call_args.kwargs["kwargs"]["standard_logging_object"]
+        )
+        json.loads(json_str_payload)
+
+        ## response cost
+        assert (
+            mock_client.call_args.kwargs["kwargs"]["standard_logging_object"][
+                "response_cost"
+            ]
+            > 0
+        )
+        assert (
+            mock_client.call_args.kwargs["kwargs"]["standard_logging_object"][
+                "model_map_information"
+            ]["model_map_value"]
+            is not None
+        )
+
+        ## turn off message logging
+        slobject: StandardLoggingPayload = mock_client.call_args.kwargs["kwargs"][
+            "standard_logging_object"
+        ]
+        if turn_off_message_logging:
+            assert "redacted-by-litellm" == slobject["messages"][0]["content"]
+
+
+@pytest.mark.skip(reason="Works locally. Flaky on ci/cd")
+def test_aaastandard_logging_payload_cache_hit():
+    from litellm.types.utils import StandardLoggingPayload
+
+    # sync completion
+
+    litellm.cache = Cache()
+
+    _ = litellm.completion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "Hey, how's it going?"}],
+        caching=True,
+    )
+
+    customHandler = CompletionCustomHandler()
+    litellm.callbacks = [customHandler]
+    litellm.success_callback = []
+
+    with patch.object(
+        customHandler, "log_success_event", new=MagicMock()
+    ) as mock_client:
+        _ = litellm.completion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+            caching=True,
+        )
+
+        time.sleep(2)
+        mock_client.assert_called_once()
+
+        assert "standard_logging_object" in mock_client.call_args.kwargs["kwargs"]
+        assert (
+            mock_client.call_args.kwargs["kwargs"]["standard_logging_object"]
+            is not None
+        )
+
+        standard_logging_object: StandardLoggingPayload = mock_client.call_args.kwargs[
+            "kwargs"
+        ]["standard_logging_object"]
+
+        assert standard_logging_object["cache_hit"] is True
+        assert standard_logging_object["response_cost"] == 0
+        assert standard_logging_object["saved_cache_cost"] > 0

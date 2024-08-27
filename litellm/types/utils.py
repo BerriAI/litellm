@@ -5,11 +5,16 @@ from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 from openai._models import BaseModel as OpenAIObject
+from openai.types.completion_usage import CompletionUsage
 from pydantic import ConfigDict, Field, PrivateAttr
 from typing_extensions import Callable, Dict, Required, TypedDict, override
 
 from ..litellm_core_utils.core_helpers import map_finish_reason
-from .llms.openai import ChatCompletionToolCallChunk, ChatCompletionUsageBlock
+from .llms.openai import (
+    ChatCompletionToolCallChunk,
+    ChatCompletionUsageBlock,
+    OpenAIChatCompletionChunk,
+)
 
 
 def _generate_id():  # private helper function
@@ -85,8 +90,11 @@ class GenericStreamingChunk(TypedDict, total=False):
     tool_use: Optional[ChatCompletionToolCallChunk]
     is_finished: Required[bool]
     finish_reason: Required[str]
-    usage: Optional[ChatCompletionUsageBlock]
+    usage: Required[Optional[ChatCompletionUsageBlock]]
     index: int
+
+    # use this dict if you want to return any provider specific fields in the response
+    provider_specific_fields: Optional[Dict[str, Any]]
 
 
 from enum import Enum
@@ -445,9 +453,6 @@ class Choices(OpenAIObject):
         setattr(self, key, value)
 
 
-from openai.types.completion_usage import CompletionUsage
-
-
 class Usage(CompletionUsage):
     def __init__(
         self,
@@ -496,7 +501,7 @@ class StreamingChoices(OpenAIObject):
     ):
         super(StreamingChoices, self).__init__(**params)
         if finish_reason:
-            self.finish_reason = finish_reason
+            self.finish_reason = map_finish_reason(finish_reason)
         else:
             self.finish_reason = None
         self.index = index
@@ -530,6 +535,17 @@ class StreamingChoices(OpenAIObject):
     def __setitem__(self, key, value):
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
+
+
+class StreamingChatCompletionChunk(OpenAIChatCompletionChunk):
+    def __init__(self, **kwargs):
+
+        new_choices = []
+        for choice in kwargs["choices"]:
+            new_choice = StreamingChoices(**choice).model_dump()
+            new_choices.append(new_choice)
+        kwargs["choices"] = new_choices
+        super().__init__(**kwargs)
 
 
 class ModelResponse(OpenAIObject):
@@ -1113,6 +1129,11 @@ all_litellm_params = [
     "cooldown_time",
     "cache_key",
     "max_retries",
+    "azure_ad_token_provider",
+    "tenant_id",
+    "client_id",
+    "client_secret",
+    "user_continue_message",
 ]
 
 
@@ -1166,3 +1187,77 @@ class AdapterCompletionStreamWrapper:
             raise StopIteration
         except StopIteration:
             raise StopAsyncIteration
+
+
+class StandardLoggingMetadata(TypedDict):
+    """
+    Specific metadata k,v pairs logged to integration for easier cost tracking
+    """
+
+    user_api_key_hash: Optional[str]  # hash of the litellm virtual key used
+    user_api_key_alias: Optional[str]
+    user_api_key_team_id: Optional[str]
+    user_api_key_user_id: Optional[str]
+    user_api_key_team_alias: Optional[str]
+    spend_logs_metadata: Optional[
+        dict
+    ]  # special param to log k,v pairs to spendlogs for a call
+    requester_ip_address: Optional[str]
+
+
+class StandardLoggingHiddenParams(TypedDict):
+    model_id: Optional[str]
+    cache_key: Optional[str]
+    api_base: Optional[str]
+    response_cost: Optional[str]
+    additional_headers: Optional[dict]
+
+
+class StandardLoggingModelInformation(TypedDict):
+    model_map_key: str
+    model_map_value: Optional[ModelInfo]
+
+
+class StandardLoggingPayload(TypedDict):
+    id: str
+    call_type: str
+    response_cost: float
+    total_tokens: int
+    prompt_tokens: int
+    completion_tokens: int
+    startTime: float
+    endTime: float
+    completionStartTime: float
+    model_map_information: StandardLoggingModelInformation
+    model: str
+    model_id: Optional[str]
+    model_group: Optional[str]
+    api_base: str
+    metadata: StandardLoggingMetadata
+    cache_hit: Optional[bool]
+    cache_key: Optional[str]
+    saved_cache_cost: Optional[float]
+    request_tags: list
+    end_user: Optional[str]
+    requester_ip_address: Optional[str]
+    messages: Optional[Union[str, list, dict]]
+    response: Optional[Union[str, list, dict]]
+    model_parameters: dict
+    hidden_params: StandardLoggingHiddenParams
+
+
+from typing import AsyncIterator, Iterator
+
+
+class CustomStreamingDecoder:
+    async def aiter_bytes(
+        self, iterator: AsyncIterator[bytes]
+    ) -> AsyncIterator[
+        Optional[Union[GenericStreamingChunk, StreamingChatCompletionChunk]]
+    ]:
+        raise NotImplementedError
+
+    def iter_bytes(
+        self, iterator: Iterator[bytes]
+    ) -> Iterator[Optional[Union[GenericStreamingChunk, StreamingChatCompletionChunk]]]:
+        raise NotImplementedError

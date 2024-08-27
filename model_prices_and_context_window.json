@@ -2189,6 +2189,18 @@
         "mode": "image_generation",
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"
     },
+    "vertex_ai/imagen-3.0-generate-001": {
+        "cost_per_image": 0.04,
+        "litellm_provider": "vertex_ai-image-models",
+        "mode": "image_generation",
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"
+    },
+    "vertex_ai/imagen-3.0-fast-generate-001": {
+        "cost_per_image": 0.02,
+        "litellm_provider": "vertex_ai-image-models",
+        "mode": "image_generation",
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"
+    },
     "text-embedding-004": {
         "max_tokens": 3072,
         "max_input_tokens": 3072,
@@ -2784,6 +2796,19 @@
         "tool_use_system_prompt_tokens": 264
     },
     "openrouter/anthropic/claude-3.5-sonnet": {
+        "max_tokens": 4096,
+        "max_input_tokens": 200000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.000003,
+        "output_cost_per_token": 0.000015,
+        "litellm_provider": "openrouter",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "tool_use_system_prompt_tokens": 159,
+        "supports_assistant_prefill": true
+    },
+    "openrouter/anthropic/claude-3.5-sonnet:beta": {
         "max_tokens": 4096,
         "max_input_tokens": 200000,
         "max_output_tokens": 4096,
@@ -4201,6 +4226,15 @@
         "litellm_provider": "ollama",
         "mode": "completion"
     },
+    "ollama/llama2:7b": {
+        "max_tokens": 4096, 
+        "max_input_tokens": 4096, 
+        "max_output_tokens": 4096, 
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "ollama",
+        "mode": "completion"
+    },
     "ollama/llama2:13b": {
         "max_tokens": 4096, 
         "max_input_tokens": 4096, 
@@ -4229,6 +4263,15 @@
         "mode": "completion"
     },
     "ollama/llama3": {
+        "max_tokens": 8192,
+        "max_input_tokens": 8192,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "ollama",
+        "mode": "chat"
+    },
+    "ollama/llama3:8b": {
         "max_tokens": 8192,
         "max_input_tokens": 8192,
         "max_output_tokens": 8192,

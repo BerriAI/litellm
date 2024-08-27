@@ -1,4 +1,4 @@
-# 💸 Tag Based Routing
+# Tag Based Routing
 
 Route requests based on tags. 
 This is useful for implementing free / paid tiers for users

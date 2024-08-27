@@ -11,7 +11,7 @@ Need to use Caching on LiteLLM Proxy Server? Doc here: [Caching Proxy Server](ht
 
 :::
 
-## Initialize Cache - In Memory, Redis, s3 Bucket, Redis Semantic, Disk Cache
+## Initialize Cache - In Memory, Redis, s3 Bucket, Redis Semantic, Disk Cache, Qdrant Semantic
 
 
 <Tabs>
@@ -144,7 +144,61 @@ assert response1.id == response2.id
 
 </TabItem>
 
+<TabItem value="qdrant-sem" label="qdrant-semantic cache">
 
+You can set up your own cloud Qdrant cluster by following this: https://qdrant.tech/documentation/quickstart-cloud/
+
+To set up a Qdrant cluster locally follow: https://qdrant.tech/documentation/quickstart/
+```python
+import litellm
+from litellm import completion
+from litellm.caching import Cache
+
+random_number = random.randint(
+    1, 100000
+)  # add a random number to ensure it's always adding / reading from cache
+
+print("testing semantic caching")
+litellm.cache = Cache(
+    type="qdrant-semantic",
+    qdrant_api_base=os.environ["QDRANT_API_BASE"], 
+    qdrant_api_key=os.environ["QDRANT_API_KEY"],
+    qdrant_collection_name="your_collection_name", # any name of your collection
+    similarity_threshold=0.7, # similarity threshold for cache hits, 0 == no similarity, 1 = exact matches, 0.5 == 50% similarity
+    qdrant_quantization_config ="binary", # can be one of 'binary', 'product' or 'scalar' quantizations that is supported by qdrant
+    qdrant_semantic_cache_embedding_model="text-embedding-ada-002", # this model is passed to litellm.embedding(), any litellm.embedding() model is supported here
+)
+
+response1 = completion(
+    model="gpt-3.5-turbo",
+    messages=[
+        {
+            "role": "user",
+            "content": f"write a one sentence poem about: {random_number}",
+        }
+    ],
+    max_tokens=20,
+)
+print(f"response1: {response1}")
+
+random_number = random.randint(1, 100000)
+
+response2 = completion(
+    model="gpt-3.5-turbo",
+    messages=[
+        {
+            "role": "user",
+            "content": f"write a one sentence poem about: {random_number}",
+        }
+    ],
+    max_tokens=20,
+)
+print(f"response2: {response2}")
+assert response1.id == response2.id
+# response1 == response2, response 1 is cached
+```
+
+</TabItem>
 
 <TabItem value="in-mem" label="in memory cache">
 
@@ -434,6 +488,13 @@ def __init__(
 
     # disk cache params
     disk_cache_dir=None,
+
+    # qdrant cache params
+    qdrant_api_base: Optional[str] = None,
+    qdrant_api_key: Optional[str] = None,
+    qdrant_collection_name: Optional[str] = None,
+    qdrant_quantization_config: Optional[str] = None,
+    qdrant_semantic_cache_embedding_model="text-embedding-ada-002",
 
     **kwargs
 ):

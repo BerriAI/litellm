@@ -770,6 +770,37 @@ export const claimOnboardingToken = async (
     throw error;
   }
 };
+
+export const regenerateKeyCall = async (accessToken: string, keyToRegenerate: string) => {
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/key/${keyToRegenerate}/regenerate`
+      : `/key/${keyToRegenerate}/regenerate`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({}),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log("Regenerate key Response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to regenerate key:", error);
+    throw error;
+  }
+};
+
 let ModelListerrorShown = false;
 let errorTimer: NodeJS.Timeout | null = null;
 
@@ -2388,6 +2419,38 @@ export const getGeneralSettingsCall = async (accessToken: String) => {
   }
 };
 
+
+export const getPassThroughEndpointsCall = async (accessToken: String) => {
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/config/pass_through_endpoint`
+      : `/config/pass_through_endpoint`;
+
+    //message.info("Requesting model data");
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    //message.info("Received model data");
+    return data;
+    // Handle success - you might want to update some state or UI based on the created key
+  } catch (error) {
+    console.error("Failed to get callbacks:", error);
+    throw error;
+  }
+};
+
 export const getConfigFieldSetting = async (
   accessToken: String,
   fieldName: string
@@ -2412,6 +2475,85 @@ export const getConfigFieldSetting = async (
     }
 
     const data = await response.json();
+    return data;
+    // Handle success - you might want to update some state or UI based on the created key
+  } catch (error) {
+    console.error("Failed to set callbacks:", error);
+    throw error;
+  }
+};
+
+export const updatePassThroughFieldSetting = async (
+  accessToken: String,
+  fieldName: string,
+  fieldValue: any
+) => {
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/config/pass_through_endpoint`
+      : `/config/pass_through_endpoint`;
+
+    let formData = {
+      field_name: fieldName,
+      field_value: fieldValue,
+    };
+    //message.info("Requesting model data");
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(formData),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    //message.info("Received model data");
+    message.success("Successfully updated value!");
+    return data;
+    // Handle success - you might want to update some state or UI based on the created key
+  } catch (error) {
+    console.error("Failed to set callbacks:", error);
+    throw error;
+  }
+};
+
+export const createPassThroughEndpoint = async (
+  accessToken: String,
+  formValues: Record<string, any>
+) => {
+  /**
+   * Set callbacks on proxy
+   */
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/config/pass_through_endpoint` : `/config/pass_through_endpoint`;
+
+    //message.info("Requesting model data");
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        ...formValues, // Include formValues in the request body
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    //message.info("Received model data");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -2500,6 +2642,38 @@ export const deleteConfigFieldSetting = async (
     throw error;
   }
 };
+
+export const deletePassThroughEndpointsCall = async (accessToken: String, endpointId: string) => {
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/config/pass_through_endpoint?endpoint_id=${endpointId}`
+      : `/config/pass_through_endpoint${endpointId}`;
+
+    //message.info("Requesting model data");
+    const response = await fetch(url, {
+      method: "DELETE",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    //message.info("Received model data");
+    return data;
+    // Handle success - you might want to update some state or UI based on the created key
+  } catch (error) {
+    console.error("Failed to get callbacks:", error);
+    throw error;
+  }
+};
+
 export const setCallbacksCall = async (
   accessToken: String,
   formValues: Record<string, any>

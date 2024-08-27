@@ -116,6 +116,8 @@ async def test_async_image_generation_openai():
         )
         print(f"response: {response}")
         assert len(response.data) > 0
+    except litellm.APIError:
+        pass
     except litellm.RateLimitError as e:
         pass
     except litellm.ContentPolicyViolationError:

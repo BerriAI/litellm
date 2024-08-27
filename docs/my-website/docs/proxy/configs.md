@@ -727,7 +727,9 @@ general_settings:
     "completion_model": "string",
     "disable_spend_logs": "boolean", # turn off writing each transaction to the db
     "disable_master_key_return": "boolean", # turn off returning master key on UI (checked on '/user/info' endpoint)
+    "disable_retry_on_max_parallel_request_limit_error": "boolean", # turn off retries when max parallel request limit is reached
     "disable_reset_budget": "boolean", # turn off reset budget scheduled task
+    "disable_adding_master_key_hash_to_db": "boolean", # turn off storing master key hash in db, for spend tracking
     "enable_jwt_auth": "boolean", # allow proxy admin to auth in via jwt tokens with 'litellm_proxy_admin' in claims
     "enforce_user_param": "boolean", # requires all openai endpoint requests to have a 'user' param
     "allowed_routes": "list", # list of allowed proxy API routes - a user can access. (currently JWT-Auth only)
@@ -750,7 +752,8 @@ general_settings:
     },
     "otel": true,
     "custom_auth": "string",
-    "max_parallel_requests": 0,
+    "max_parallel_requests": 0, # the max parallel requests allowed per deployment 
+    "global_max_parallel_requests": 0, # the max parallel requests allowed on the proxy all up 
     "infer_model_from_keys": true,
     "background_health_checks": true,
     "health_check_interval": 300,

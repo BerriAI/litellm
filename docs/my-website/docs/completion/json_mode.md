@@ -71,6 +71,7 @@ response_format: { "type": "json_schema", "json_schema": … , "strict": true }
 
 Works for:
 - OpenAI models 
+- Azure OpenAI models
 - Google AI Studio - Gemini models
 - Vertex AI models (Gemini + Anthropic)
 
@@ -80,6 +81,7 @@ Works for:
 ```python
 import os
 from litellm import completion 
+from pydantic import BaseModel
 
 # add to env var 
 os.environ["OPENAI_API_KEY"] = ""

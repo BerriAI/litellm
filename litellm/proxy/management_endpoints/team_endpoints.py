@@ -17,26 +17,39 @@ from litellm.proxy._types import (
     DeleteTeamRequest,
     LiteLLM_AuditLogs,
     LiteLLM_ModelTable,
+    LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
     LiteLLM_TeamTableCachedObj,
+    LiteLLM_UserTable,
     LitellmTableNames,
     LitellmUserRoles,
     Member,
     NewTeamRequest,
     ProxyErrorTypes,
     ProxyException,
+    TeamAddMemberResponse,
     TeamMemberAddRequest,
     TeamMemberDeleteRequest,
     UpdateTeamRequest,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.auth.user_api_key_auth import _is_user_proxy_admin, user_api_key_auth
 from litellm.proxy.management_helpers.utils import (
     add_new_member,
     management_endpoint_wrapper,
 )
 
 router = APIRouter()
+
+
+def _is_user_team_admin(
+    user_api_key_dict: UserAPIKeyAuth, team_obj: LiteLLM_TeamTable
+) -> bool:
+    for member in team_obj.members_with_roles:
+        if member.user_id is not None and member.user_id == user_api_key_dict.user_id:
+            return True
+
+    return False
 
 
 #### TEAM MANAGEMENT ####
@@ -403,6 +416,7 @@ async def update_team(
     "/team/member_add",
     tags=["team management"],
     dependencies=[Depends(user_api_key_auth)],
+    response_model=TeamAddMemberResponse,
 )
 @management_endpoint_wrapper
 async def team_member_add(
@@ -417,6 +431,7 @@ async def team_member_add(
 
     If user doesn't exist, new user row will also be added to User Table
 
+    Only proxy_admin or admin of team, allowed to access this endpoint.
     ```
 
     curl -X POST 'http://0.0.0.0:4000/team/member_add' \
@@ -465,6 +480,25 @@ async def team_member_add(
 
     complete_team_data = LiteLLM_TeamTable(**existing_team_row.model_dump())
 
+    ## CHECK IF USER IS PROXY ADMIN OR TEAM ADMIN
+
+    if (
+        hasattr(user_api_key_dict, "user_role")
+        and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
+        and not _is_user_team_admin(
+            user_api_key_dict=user_api_key_dict, team_obj=complete_team_data
+        )
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "Call not allowed. User not proxy admin OR team admin. route={}, team_id={}".format(
+                    "/team/member_add",
+                    complete_team_data.team_id,
+                )
+            },
+        )
+
     if isinstance(data.member, Member):
         # add to team db
         new_member = data.member
@@ -484,29 +518,69 @@ async def team_member_add(
         data={"members_with_roles": json.dumps(_db_team_members)},  # type: ignore
     )
 
+    updated_users: List[LiteLLM_UserTable] = []
+    updated_team_memberships: List[LiteLLM_TeamMembership] = []
+
     if isinstance(data.member, Member):
-        await add_new_member(
-            new_member=data.member,
-            max_budget_in_team=data.max_budget_in_team,
-            prisma_client=prisma_client,
-            user_api_key_dict=user_api_key_dict,
-            litellm_proxy_admin_name=litellm_proxy_admin_name,
-            team_id=data.team_id,
-        )
-    elif isinstance(data.member, List):
-        tasks: List = []
-        for m in data.member:
-            await add_new_member(
-                new_member=m,
+        try:
+            updated_user, updated_tm = await add_new_member(
+                new_member=data.member,
                 max_budget_in_team=data.max_budget_in_team,
                 prisma_client=prisma_client,
                 user_api_key_dict=user_api_key_dict,
                 litellm_proxy_admin_name=litellm_proxy_admin_name,
                 team_id=data.team_id,
             )
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "error": "Unable to add user - {}, to team - {}, for reason - {}".format(
+                        data.member, data.team_id, str(e)
+                    )
+                },
+            )
+
+        updated_users.append(updated_user)
+        if updated_tm is not None:
+            updated_team_memberships.append(updated_tm)
+    elif isinstance(data.member, List):
+        tasks: List = []
+        for m in data.member:
+            try:
+                updated_user, updated_tm = await add_new_member(
+                    new_member=m,
+                    max_budget_in_team=data.max_budget_in_team,
+                    prisma_client=prisma_client,
+                    user_api_key_dict=user_api_key_dict,
+                    litellm_proxy_admin_name=litellm_proxy_admin_name,
+                    team_id=data.team_id,
+                )
+            except Exception as e:
+                raise HTTPException(
+                    status_code=500,
+                    detail={
+                        "error": "Unable to add user - {}, to team - {}, for reason - {}".format(
+                            data.member, data.team_id, str(e)
+                        )
+                    },
+                )
+            updated_users.append(updated_user)
+            if updated_tm is not None:
+                updated_team_memberships.append(updated_tm)
+
         await asyncio.gather(*tasks)
 
-    return updated_team
+    # Check if updated_team is None
+    if updated_team is None:
+        raise HTTPException(
+            status_code=404, detail={"error": f"Team with id {data.team_id} not found"}
+        )
+    return TeamAddMemberResponse(
+        **updated_team.model_dump(),
+        updated_users=updated_users,
+        updated_team_memberships=updated_team_memberships,
+    )
 
 
 @router.post(
@@ -568,6 +642,23 @@ async def team_member_delete(
             detail={"error": "Team id={} does not exist in db".format(data.team_id)},
         )
     existing_team_row = LiteLLM_TeamTable(**_existing_team_row.model_dump())
+
+    ## CHECK IF USER IS PROXY ADMIN OR TEAM ADMIN
+
+    if (
+        user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
+        and not _is_user_team_admin(
+            user_api_key_dict=user_api_key_dict, team_obj=existing_team_row
+        )
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "Call not allowed. User not proxy admin OR team admin. route={}, team_id={}".format(
+                    "/team/member_delete", existing_team_row.team_id
+                )
+            },
+        )
 
     ## DELETE MEMBER FROM TEAM
     new_team_members: List[Member] = []

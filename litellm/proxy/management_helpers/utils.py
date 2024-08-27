@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime
 from functools import wraps
-from typing import Optional
+from typing import Optional, Tuple
 
 from fastapi import HTTPException, Request
 
@@ -14,7 +14,9 @@ from litellm.proxy._types import (  # key request types; user request types; tea
     DeleteTeamRequest,
     DeleteUserRequest,
     KeyRequest,
+    LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
+    LiteLLM_UserTable,
     ManagementEndpointLoggingPayload,
     Member,
     SSOUserDefinedValues,
@@ -59,23 +61,29 @@ async def add_new_member(
     team_id: str,
     user_api_key_dict: UserAPIKeyAuth,
     litellm_proxy_admin_name: str,
-):
+) -> Tuple[LiteLLM_UserTable, Optional[LiteLLM_TeamMembership]]:
     """
     Add a new member to a team
 
     - add team id to user table
     - add team member w/ budget to team member table
+
+    Returns created/existing user + team membership w/ budget id
     """
+    returned_user: Optional[LiteLLM_UserTable] = None
+    returned_team_membership: Optional[LiteLLM_TeamMembership] = None
     ## ADD TEAM ID, to USER TABLE IF NEW ##
     if new_member.user_id is not None:
         new_user_defaults = get_new_internal_user_defaults(user_id=new_member.user_id)
-        await prisma_client.db.litellm_usertable.upsert(
+        _returned_user = await prisma_client.db.litellm_usertable.upsert(
             where={"user_id": new_member.user_id},
             data={
                 "update": {"teams": {"push": [team_id]}},
                 "create": {"teams": [team_id], **new_user_defaults},  # type: ignore
             },
         )
+        if _returned_user is not None:
+            returned_user = LiteLLM_UserTable(**_returned_user.model_dump())
     elif new_member.user_email is not None:
         new_user_defaults = get_new_internal_user_defaults(
             user_id=str(uuid.uuid4()), user_email=new_member.user_email
@@ -91,13 +99,18 @@ async def add_new_member(
             isinstance(existing_user_row, list) and len(existing_user_row) == 0
         ):
             new_user_defaults["teams"] = [team_id]
-            await prisma_client.insert_data(data=new_user_defaults, table_name="user")  # type: ignore
+            _returned_user = await prisma_client.insert_data(data=new_user_defaults, table_name="user")  # type: ignore
+
+            if _returned_user is not None:
+                returned_user = LiteLLM_UserTable(**_returned_user.model_dump())
         elif len(existing_user_row) == 1:
             user_info = existing_user_row[0]
-            await prisma_client.db.litellm_usertable.update(
-                where={"user_id": user_info.user_id},
+            _returned_user = await prisma_client.db.litellm_usertable.update(
+                where={"user_id": user_info.user_id},  # type: ignore
                 data={"teams": {"push": [team_id]}},
             )
+
+            returned_user = LiteLLM_UserTable(**_returned_user.model_dump())
         elif len(existing_user_row) > 1:
             raise HTTPException(
                 status_code=400,
@@ -118,13 +131,25 @@ async def add_new_member(
         )
 
         _budget_id = response.budget_id
-        await prisma_client.db.litellm_teammembership.create(
-            data={
-                "team_id": team_id,
-                "user_id": new_member.user_id,
-                "budget_id": _budget_id,
-            }
+        _returned_team_membership = (
+            await prisma_client.db.litellm_teammembership.create(
+                data={
+                    "team_id": team_id,
+                    "user_id": new_member.user_id,
+                    "budget_id": _budget_id,
+                },
+                include={"litellm_budget_table": True},
+            )
         )
+
+        returned_team_membership = LiteLLM_TeamMembership(
+            **_returned_team_membership.model_dump()
+        )
+
+    if returned_user is None:
+        raise Exception("Unable to update user table with membership information!")
+
+    return returned_user, returned_team_membership
 
 
 def _delete_user_id_from_cache(kwargs):
@@ -266,7 +291,7 @@ def management_endpoint_wrapper(func):
                 )
 
                 _http_request: Request = kwargs.get("http_request")
-                parent_otel_span = user_api_key_dict.parent_otel_span
+                parent_otel_span = getattr(user_api_key_dict, "parent_otel_span", None)
                 if parent_otel_span is not None:
                     from litellm.proxy.proxy_server import open_telemetry_logger
 
@@ -310,7 +335,7 @@ def management_endpoint_wrapper(func):
             user_api_key_dict: UserAPIKeyAuth = (
                 kwargs.get("user_api_key_dict") or UserAPIKeyAuth()
             )
-            parent_otel_span = user_api_key_dict.parent_otel_span
+            parent_otel_span = getattr(user_api_key_dict, "parent_otel_span", None)
             if parent_otel_span is not None:
                 from litellm.proxy.proxy_server import open_telemetry_logger
 

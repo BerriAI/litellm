@@ -2,8 +2,8 @@ apiVersion: v1
 entries:
   litellm-helm:
   - apiVersion: v2
-    appVersion: v1.42.7
-    created: "2024-08-01T12:25:58.808699+08:00"
+    appVersion: v1.43.18
+    created: "2024-08-19T23:58:25.331689+08:00"
     dependencies:
     - condition: db.deployStandalone
       name: postgresql
@@ -14,12 +14,12 @@ entries:
       repository: oci://registry-1.docker.io/bitnamicharts
       version: '>=18.0.0'
     description: Call all LLM APIs using the OpenAI format
-    digest: b1de8fa444a37410e223a3d1bd3cc2120f3f22204005fcb61e701c0c7db95d86
+    digest: 0411df3dc42868be8af3ad3e00cb252790e6bd7ad15f5b77f1ca5214573a8531
     name: litellm-helm
     type: application
     urls:
-    - https://berriai.github.io/litellm/litellm-helm-0.2.2.tgz
-    version: 0.2.2
+    - https://berriai.github.io/litellm/litellm-helm-0.2.3.tgz
+    version: 0.2.3
   postgresql:
   - annotations:
       category: Database
@@ -33,7 +33,7 @@ entries:
       licenses: Apache-2.0
     apiVersion: v2
     appVersion: 16.2.0
-    created: "2024-08-01T12:25:58.812033+08:00"
+    created: "2024-08-19T23:58:25.335716+08:00"
     dependencies:
     - name: common
       repository: oci://registry-1.docker.io/bitnamicharts
@@ -79,7 +79,7 @@ entries:
       licenses: Apache-2.0
     apiVersion: v2
     appVersion: 7.2.4
-    created: "2024-08-01T12:25:58.816784+08:00"
+    created: "2024-08-19T23:58:25.339392+08:00"
     dependencies:
     - name: common
       repository: oci://registry-1.docker.io/bitnamicharts
@@ -105,4 +105,4 @@ entries:
     urls:
     - https://berriai.github.io/litellm/charts/redis-18.19.1.tgz
     version: 18.19.1
-generated: "2024-08-01T12:25:58.800261+08:00"
+generated: "2024-08-19T23:58:25.322532+08:00"

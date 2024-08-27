@@ -36,7 +36,7 @@ response = completion(
 )
 ```
 
-## OpenAI Proxy Usage 
+## LiteLLM Proxy Usage 
 
 Here's how to call Anthropic with the LiteLLM Proxy Server
 
@@ -575,6 +575,45 @@ for chunk in response:
     "total_tokens": null
   }
 }
+```
+
+## Alternate user/assistant messages
+
+Use `user_continue_message` to add a default user message, for cases (e.g. Autogen) where the client might not follow alternating user/assistant messages starting and ending with a user message. 
+
+
+```yaml
+model_list:
+  - model_name: "bedrock-claude"
+    litellm_params:
+      model: "bedrock/anthropic.claude-instant-v1"
+      user_continue_message: {"role": "user", "content": "Please continue"}
+```
+
+OR 
+
+just set `litellm.modify_params=True` and LiteLLM will automatically handle this with a default user_continue_message.
+
+```yaml
+model_list:
+  - model_name: "bedrock-claude"
+    litellm_params:
+      model: "bedrock/anthropic.claude-instant-v1"
+
+litellm_settings:
+   modify_params: true
+```
+
+Test it! 
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-d '{
+    "model": "bedrock-claude",
+    "messages": [{"role": "assistant", "content": "Hey, how's it going?"}]
+}'
 ```
 
 ## Boto3 - Authentication

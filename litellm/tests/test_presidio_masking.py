@@ -88,7 +88,11 @@ async def test_output_parsing():
         mock_response="Hello <PERSON>! How can I assist you today?",
     )
     new_response = await pii_masking.async_post_call_success_hook(
-        user_api_key_dict=UserAPIKeyAuth(), response=response
+        user_api_key_dict=UserAPIKeyAuth(),
+        data={
+            "messages": [{"role": "system", "content": "You are an helpfull assistant"}]
+        },
+        response=response,
     )
 
     assert (

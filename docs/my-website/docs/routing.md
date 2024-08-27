@@ -88,8 +88,8 @@ print(response)
 ### Available Endpoints
 - `router.completion()` - chat completions endpoint to call 100+ LLMs
 - `router.acompletion()` - async chat completion calls
-- `router.embeddings()` - embedding endpoint for Azure, OpenAI, Huggingface endpoints
-- `router.aembeddings()` - async embeddings calls
+- `router.embedding()` - embedding endpoint for Azure, OpenAI, Huggingface endpoints
+- `router.aembedding()` - async embeddings calls
 - `router.text_completion()` - completion calls in the old OpenAI `/v1/completions` endpoint format
 - `router.atext_completion()` - async text completion calls
 - `router.image_generation()` - completion calls in OpenAI `/v1/images/generations` endpoint format

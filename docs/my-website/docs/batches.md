@@ -5,6 +5,9 @@ import TabItem from '@theme/TabItem';
 
 Covers Batches, Files
 
+Supported Providers:
+- Azure OpenAI
+- OpenAI
 
 ## Quick Start 
 
@@ -139,3 +142,84 @@ print("list_batches_response=", list_batches_response)
 </Tabs>
 
 ## [👉 Proxy API Reference](https://litellm-api.up.railway.app/#/batch)
+
+## Azure Batches API 
+
+Just add the azure env vars to your environment. 
+
+```bash
+export AZURE_API_KEY=""
+export AZURE_API_BASE=""
+```
+
+AND use `/azure/*` for the Batches API calls
+
+```bash
+http://0.0.0.0:4000/azure/v1/batches
+```
+### Usage
+
+**Setup**
+
+- Add Azure API Keys to your environment
+
+#### 1. Upload a File
+
+```bash
+curl http://localhost:4000/azure/v1/files \
+    -H "Authorization: Bearer sk-1234" \
+    -F purpose="batch" \
+    -F file="@mydata.jsonl"
+```
+
+**Example File**
+
+Note: `model` should be your azure deployment name.
+
+```json
+{"custom_id": "task-0", "method": "POST", "url": "/chat/completions", "body": {"model": "REPLACE-WITH-MODEL-DEPLOYMENT-NAME", "messages": [{"role": "system", "content": "You are an AI assistant that helps people find information."}, {"role": "user", "content": "When was Microsoft founded?"}]}}
+{"custom_id": "task-1", "method": "POST", "url": "/chat/completions", "body": {"model": "REPLACE-WITH-MODEL-DEPLOYMENT-NAME", "messages": [{"role": "system", "content": "You are an AI assistant that helps people find information."}, {"role": "user", "content": "When was the first XBOX released?"}]}}
+{"custom_id": "task-2", "method": "POST", "url": "/chat/completions", "body": {"model": "REPLACE-WITH-MODEL-DEPLOYMENT-NAME", "messages": [{"role": "system", "content": "You are an AI assistant that helps people find information."}, {"role": "user", "content": "What is Altair Basic?"}]}}
+```
+
+#### 2. Create a batch 
+
+```bash
+curl http://0.0.0.0:4000/azure/v1/batches \
+  -H "Authorization: Bearer $LITELLM_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "input_file_id": "file-abc123",
+    "endpoint": "/v1/chat/completions",
+    "completion_window": "24h"
+  }'
+
+```
+
+#### 3. Retrieve batch
+
+
+```bash
+curl http://0.0.0.0:4000/azure/v1/batches/batch_abc123 \
+  -H "Authorization: Bearer $LITELLM_API_KEY" \
+  -H "Content-Type: application/json" \
+```
+
+#### 4. Cancel batch 
+
+```bash
+curl http://0.0.0.0:4000/azure/v1/batches/batch_abc123/cancel \
+  -H "Authorization: Bearer $LITELLM_API_KEY" \
+  -H "Content-Type: application/json" \
+  -X POST
+```
+
+#### 5. List Batch
+
+```bash
+curl http://0.0.0.0:4000/v1/batches?limit=2 \
+  -H "Authorization: Bearer $LITELLM_API_KEY" \
+  -H "Content-Type: application/json"
+```
+
+### [👉 Health Check Azure Batch models](./proxy/health.md#batch-models-azure-only)

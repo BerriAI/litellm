@@ -14,6 +14,7 @@ import litellm
 import litellm.types
 import litellm.types.llms
 import litellm.types.llms.vertex_ai
+from litellm import verbose_logger
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.types.completion import (
     ChatCompletionFunctionMessageParam,
@@ -37,6 +38,18 @@ def prompt_injection_detection_default_pt():
 
 
 BAD_MESSAGE_ERROR_STR = "Invalid Message "
+
+# used to interweave user messages, to ensure user/assistant alternating
+DEFAULT_USER_CONTINUE_MESSAGE = {
+    "role": "user",
+    "content": "Please continue.",
+}  # similar to autogen. Only used if `litellm.modify_params=True`.
+
+# used to interweave assistant messages, to ensure user/assistant alternating
+DEFAULT_ASSISTANT_CONTINUE_MESSAGE = {
+    "role": "assistant",
+    "content": "Please continue.",
+}  # similar to autogen. Only used if `litellm.modify_params=True`.
 
 
 def map_system_message_pt(messages: list) -> list:
@@ -368,12 +381,14 @@ def hf_chat_template(model: str, messages: list, chat_template: Optional[Any] = 
     if chat_template is None:
 
         def _get_tokenizer_config(hf_model_name):
-            url = (
-                f"https://huggingface.co/{hf_model_name}/raw/main/tokenizer_config.json"
-            )
-            # Make a GET request to fetch the JSON data
-            client = HTTPHandler(concurrent_limit=1)
-            response = client.get(url)
+            try:
+                url = f"https://huggingface.co/{hf_model_name}/raw/main/tokenizer_config.json"
+                # Make a GET request to fetch the JSON data
+                client = HTTPHandler(concurrent_limit=1)
+
+                response = client.get(url)
+            except Exception as e:
+                raise e
             if response.status_code == 200:
                 # Parse the JSON data
                 tokenizer_config = json.loads(response.content)
@@ -385,6 +400,7 @@ def hf_chat_template(model: str, messages: list, chat_template: Optional[Any] = 
             tokenizer_config = known_tokenizer_config[model]
         else:
             tokenizer_config = _get_tokenizer_config(model)
+
         if (
             tokenizer_config["status"] == "failure"
             or "chat_template" not in tokenizer_config["tokenizer"]
@@ -394,7 +410,13 @@ def hf_chat_template(model: str, messages: list, chat_template: Optional[Any] = 
         tokenizer_config = tokenizer_config["tokenizer"]  # type: ignore
 
         bos_token = tokenizer_config["bos_token"]  # type: ignore
+        if bos_token is not None and not isinstance(bos_token, str):
+            if isinstance(bos_token, dict):
+                bos_token = bos_token.get("content", None)
         eos_token = tokenizer_config["eos_token"]  # type: ignore
+        if eos_token is not None and not isinstance(eos_token, str):
+            if isinstance(eos_token, dict):
+                eos_token = eos_token.get("content", None)
         chat_template = tokenizer_config["chat_template"]  # type: ignore
     try:
         template = env.from_string(chat_template)  # type: ignore
@@ -419,7 +441,10 @@ def hf_chat_template(model: str, messages: list, chat_template: Optional[Any] = 
         # Render the template with the provided values
         if _is_system_in_template():
             rendered_text = template.render(
-                bos_token=bos_token, eos_token=eos_token, messages=messages
+                bos_token=bos_token,
+                eos_token=eos_token,
+                messages=messages,
+                add_generation_prompt=True,
             )
         else:
             # treat a system message as a user message, if system not in template
@@ -436,6 +461,7 @@ def hf_chat_template(model: str, messages: list, chat_template: Optional[Any] = 
                     bos_token=bos_token,
                     eos_token=eos_token,
                     messages=reformatted_messages,
+                    add_generation_prompt=True,
                 )
             except Exception as e:
                 if "Conversation roles must alternate user/assistant" in str(e):
@@ -457,8 +483,12 @@ def hf_chat_template(model: str, messages: list, chat_template: Optional[Any] = 
                     rendered_text = template.render(
                         bos_token=bos_token, eos_token=eos_token, messages=new_messages
                     )
+
         return rendered_text
     except Exception as e:
+        verbose_logger.exception(
+            "Error rendering huggingface chat template - {}".format(str(e))
+        )
         raise Exception(f"Error rendering template - {str(e)}")
 
 
@@ -1010,6 +1040,9 @@ def convert_to_gemini_tool_call_invoke(
                 name = tool["function"].get("name", "")
                 arguments = tool["function"].get("arguments", "")
                 arguments_dict = json.loads(arguments)
+                function_call: Optional[litellm.types.llms.vertex_ai.FunctionCall] = (
+                    None
+                )
                 for k, v in arguments_dict.items():
                     inferred_protocol_value = infer_protocol_value(value=v)
                     _field = litellm.types.llms.vertex_ai.Field(
@@ -1022,9 +1055,18 @@ def convert_to_gemini_tool_call_invoke(
                         name=name,
                         args=_fields,
                     )
-                _parts_list.append(
-                    litellm.types.llms.vertex_ai.PartType(function_call=function_call)
-                )
+                if function_call is not None:
+                    _parts_list.append(
+                        litellm.types.llms.vertex_ai.PartType(
+                            function_call=function_call
+                        )
+                    )
+                else:  # don't silently drop params. Make it clear to user what's happening.
+                    raise Exception(
+                        "function_call missing. Received tool call with 'type': 'function'. No function call in argument - {}".format(
+                            tool
+                        )
+                    )
         return _parts_list
     except Exception as e:
         raise Exception(
@@ -2183,7 +2225,7 @@ def _convert_to_bedrock_tool_call_invoke(
 
 def _convert_to_bedrock_tool_call_result(
     message: dict,
-) -> BedrockMessageBlock:
+) -> BedrockContentBlock:
     """
     OpenAI message with a tool result looks like:
     {
@@ -2235,13 +2277,14 @@ def _convert_to_bedrock_tool_call_result(
     )
     content_block = BedrockContentBlock(toolResult=tool_result)
 
-    return BedrockMessageBlock(role="user", content=[content_block])
+    return content_block
 
 
 def _bedrock_converse_messages_pt(
     messages: List,
     model: str,
     llm_provider: str,
+    user_continue_message: Optional[dict] = None,
 ) -> List[BedrockMessageBlock]:
     """
     Converts given messages from OpenAI format to Bedrock format
@@ -2252,6 +2295,21 @@ def _bedrock_converse_messages_pt(
 
     contents: List[BedrockMessageBlock] = []
     msg_i = 0
+
+    # if initial message is assistant message
+    if messages[0].get("role") is not None and messages[0]["role"] == "assistant":
+        if user_continue_message is not None:
+            messages.insert(0, user_continue_message)
+        elif litellm.modify_params:
+            messages.insert(0, DEFAULT_USER_CONTINUE_MESSAGE)
+
+    # if final message is assistant message
+    if messages[-1].get("role") is not None and messages[-1]["role"] == "assistant":
+        if user_continue_message is not None:
+            messages.append(user_continue_message)
+        elif litellm.modify_params:
+            messages.append(DEFAULT_USER_CONTINUE_MESSAGE)
+
     while msg_i < len(messages):
         user_content: List[BedrockContentBlock] = []
         init_msg_i = msg_i
@@ -2277,6 +2335,12 @@ def _bedrock_converse_messages_pt(
 
             msg_i += 1
 
+        ## MERGE CONSECUTIVE TOOL CALL MESSAGES ##
+        while msg_i < len(messages) and messages[msg_i]["role"] == "tool":
+            tool_call_result = _convert_to_bedrock_tool_call_result(messages[msg_i])
+
+            user_content.append(tool_call_result)
+            msg_i += 1
         if user_content:
             contents.append(BedrockMessageBlock(role="user", content=user_content))
         assistant_content: List[BedrockContentBlock] = []
@@ -2320,17 +2384,13 @@ def _bedrock_converse_messages_pt(
                 BedrockMessageBlock(role="assistant", content=assistant_content)
             )
 
-        ## APPEND TOOL CALL MESSAGES ##
-        if msg_i < len(messages) and messages[msg_i]["role"] == "tool":
-            tool_call_result = _convert_to_bedrock_tool_call_result(messages[msg_i])
-            contents.append(tool_call_result)
-            msg_i += 1
         if msg_i == init_msg_i:  # prevent infinite loops
             raise litellm.BadRequestError(
                 message=BAD_MESSAGE_ERROR_STR + f"passed in {messages[msg_i]}",
                 model=model,
                 llm_provider=llm_provider,
             )
+
     return contents
 
 

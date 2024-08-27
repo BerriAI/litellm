@@ -1,48 +1,13 @@
 model_list:
-  - model_name: gpt-4
+  - model_name: fake-openai-endpoint
     litellm_params:
       model: openai/fake
       api_key: fake-key
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
-  - model_name: fireworks-llama-v3-70b-instruct
-    litellm_params:
-      model: fireworks_ai/accounts/fireworks/models/llama-v3-70b-instruct
-      api_key: "os.environ/FIREWORKS"
-  - model_name: "*"
-    litellm_params:
-      model: "*"
-  - model_name: "*"
-    litellm_params:
-      model: openai/*
-      api_key: os.environ/OPENAI_API_KEY
-  - model_name: mistral-small-latest
-    litellm_params:
-      model: mistral/mistral-small-latest
-      api_key: "os.environ/MISTRAL_API_KEY"
-  - model_name: bedrock-anthropic
-    litellm_params:
-      model: bedrock/anthropic.claude-3-sonnet-20240229-v1:0
-  - model_name: gemini-1.5-pro-001
-    litellm_params:
-      model: vertex_ai_beta/gemini-1.5-pro-001
-      vertex_project: "adroit-crow-413218"
-      vertex_location: "us-central1"
-      vertex_credentials: "adroit-crow-413218-a956eef1a2a8.json"
- # Add path to service account.json
 
-default_vertex_config:
-  vertex_project: "adroit-crow-413218"
-  vertex_location: "us-central1"
-  vertex_credentials: "adroit-crow-413218-a956eef1a2a8.json" # Add path to service account.json
-
-
-general_settings: 
-  master_key: sk-1234
-  alerting: ["slack"]
-
+# default off mode
 litellm_settings:
-  fallbacks: [{"gemini-1.5-pro-001": ["gpt-4o"]}]
-  callbacks: ["gcs_bucket"]
-  success_callback: ["langfuse"]
-  langfuse_default_tags: ["cache_hit", "cache_key", "user_api_key_alias", "user_api_key_team_alias"]
+  set_verbose: True
   cache: True
+  cache_params:
+    mode: default_off

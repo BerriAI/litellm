@@ -207,7 +207,7 @@ curl -X POST 'http://0.0.0.0:4000/key/generate' \
 -H 'Content-Type: application/json' \
 -d '{
     "metadata": {
-        "logging": {
+        "logging": [{
             "callback_name": "langfuse", # 'otel', 'langfuse', 'lunary'
             "callback_type": "success" # set, if required by integration - future improvement, have logging tools work for success + failure by default 
             "callback_vars": {
@@ -215,7 +215,7 @@ curl -X POST 'http://0.0.0.0:4000/key/generate' \
                 "langfuse_secret_key": "os.environ/LANGFUSE_SECRET_KEY", # [RECOMMENDED] reference key in proxy environment
                 "langfuse_host": "https://cloud.langfuse.com"
             }
-        }
+        }]
     }
 }'
 

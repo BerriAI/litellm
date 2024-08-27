@@ -11,6 +11,7 @@ sys.path.insert(
 )  # Adds-the parent directory to the system path
 
 import asyncio
+from unittest.mock import Mock
 
 import httpx
 
@@ -19,7 +20,9 @@ from litellm.proxy.proxy_server import app, initialize_pass_through_endpoints
 
 # Mock the async_client used in the pass_through_request function
 async def mock_request(*args, **kwargs):
-    return httpx.Response(200, json={"message": "Mocked response"})
+    mock_response = httpx.Response(200, json={"message": "Mocked response"})
+    mock_response.request = Mock(spec=httpx.Request)
+    return mock_response
 
 
 @pytest.fixture

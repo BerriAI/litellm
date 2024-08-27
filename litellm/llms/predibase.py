@@ -17,6 +17,7 @@ import requests  # type: ignore
 import litellm
 import litellm.litellm_core_utils
 import litellm.litellm_core_utils.litellm_logging
+from litellm import verbose_logger
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.utils import Choices, CustomStreamWrapper, Message, ModelResponse, Usage
@@ -563,9 +564,12 @@ class PredibaseChatCompletion(BaseLLM):
             for exception in litellm.LITELLM_EXCEPTION_TYPES:
                 if isinstance(e, exception):
                     raise e
-            raise PredibaseError(
-                status_code=500, message="{}\n{}".format(str(e), traceback.format_exc())
+            verbose_logger.exception(
+                "litellm.llms.predibase.py::async_completion() - Exception occurred - {}".format(
+                    str(e)
+                )
             )
+            raise PredibaseError(status_code=500, message="{}".format(str(e)))
         return self.process_response(
             model=model,
             response=response,

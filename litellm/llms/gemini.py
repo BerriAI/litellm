@@ -274,7 +274,6 @@ class GeminiConfig:
 #         model_response.choices = choices_list
 #     except Exception as e:
 #         verbose_logger.error("LiteLLM.gemini.py: Exception occured - {}".format(str(e)))
-#         verbose_logger.debug(traceback.format_exc())
 #         raise GeminiError(
 #             message=traceback.format_exc(), status_code=response.status_code
 #         )
@@ -367,7 +366,6 @@ class GeminiConfig:
 #         model_response["choices"] = choices_list
 #     except Exception as e:
 #         verbose_logger.error("LiteLLM.gemini.py: Exception occured - {}".format(str(e)))
-#         verbose_logger.debug(traceback.format_exc())
 #         raise GeminiError(
 #             message=traceback.format_exc(), status_code=response.status_code
 #         )

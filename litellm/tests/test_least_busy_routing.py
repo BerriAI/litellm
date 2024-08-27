@@ -1,8 +1,13 @@
 #### What this tests ####
 #    This tests the router's ability to identify the least busy deployment
 
-import sys, os, asyncio, time, random
+import asyncio
+import os
+import random
+import sys
+import time
 import traceback
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -12,10 +17,11 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import pytest
-from litellm import Router
+
 import litellm
-from litellm.router_strategy.least_busy import LeastBusyLoggingHandler
+from litellm import Router
 from litellm.caching import DualCache
+from litellm.router_strategy.least_busy import LeastBusyLoggingHandler
 
 ### UNIT TESTS FOR LEAST BUSY LOGGING ###
 
@@ -122,6 +128,9 @@ def test_router_get_available_deployments():
     )
 
     return_dict = router.cache.get_cache(key=cache_key)
+
+    # wait 2 seconds
+    time.sleep(2)
 
     assert router.leastbusy_logger.logged_success == 1
     assert return_dict[1] == 10

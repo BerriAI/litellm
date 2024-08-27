@@ -1,19 +1,15 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# 🛡️ Guardrails
+# 🛡️ [Beta] Guardrails
 
-Setup Prompt Injection Detection, Secret Detection on LiteLLM Proxy
+Setup Prompt Injection Detection, Secret Detection using 
 
-:::info
+- Aporia AI
+- Lakera AI 
+- In Memory Prompt Injection Detection
 
-✨ Enterprise Only Feature
-
-Schedule a meeting with us to get an Enterprise License 👉 Talk to founders [here](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
-
-:::
-
-## Quick Start
+## Aporia AI
 
 ### 1. Setup guardrails on litellm proxy config.yaml
 

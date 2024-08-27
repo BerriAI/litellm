@@ -19,7 +19,11 @@ from litellm.types.completion import (
     ChatCompletionSystemMessageParam,
     ChatCompletionUserMessageParam,
 )
-from litellm.utils import get_optional_params, get_optional_params_embeddings
+from litellm.utils import (
+    get_optional_params,
+    get_optional_params_embeddings,
+    get_optional_params_image_gen,
+)
 
 ## get_optional_params_embeddings
 ### Models: OpenAI, Azure, Bedrock
@@ -287,7 +291,7 @@ def test_azure_tool_choice(api_version):
     else:
         assert (
             "tool_choice" not in optional_params
-        ), "tool_choice={} for api version={}".format(
+        ), "tool choice should not be present. Got - tool_choice={} for api version={}".format(
             optional_params["tool_choice"], api_version
         )
 
@@ -430,7 +434,6 @@ def test_get_optional_params_image_gen():
     print(response)
 
     assert "aws_region_name" not in response
-
     response = litellm.utils.get_optional_params_image_gen(
         aws_region_name="us-east-1", custom_llm_provider="bedrock"
     )
@@ -463,3 +466,82 @@ def test_get_optional_params_num_retries():
 
         print(f"mock_client.call_args: {mock_client.call_args}")
         assert mock_client.call_args.kwargs["max_retries"] == 10
+
+
+@pytest.mark.parametrize(
+    "provider",
+    [
+        "vertex_ai",
+        "vertex_ai_beta",
+    ],
+)
+def test_vertex_safety_settings(provider):
+    litellm.vertex_ai_safety_settings = [
+        {
+            "category": "HARM_CATEGORY_HARASSMENT",
+            "threshold": "BLOCK_NONE",
+        },
+        {
+            "category": "HARM_CATEGORY_HATE_SPEECH",
+            "threshold": "BLOCK_NONE",
+        },
+        {
+            "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+            "threshold": "BLOCK_NONE",
+        },
+        {
+            "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+            "threshold": "BLOCK_NONE",
+        },
+    ]
+
+    optional_params = get_optional_params(
+        model="gemini-1.5-pro", custom_llm_provider=provider
+    )
+    assert len(optional_params) == 1
+
+
+@pytest.mark.parametrize(
+    "model, provider, expectedAddProp",
+    [("gemini-1.5-pro", "vertex_ai_beta", False), ("gpt-3.5-turbo", "openai", True)],
+)
+def test_parse_additional_properties_json_schema(model, provider, expectedAddProp):
+    optional_params = get_optional_params(
+        model=model,
+        custom_llm_provider=provider,
+        response_format={
+            "type": "json_schema",
+            "json_schema": {
+                "name": "math_reasoning",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "steps": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "explanation": {"type": "string"},
+                                    "output": {"type": "string"},
+                                },
+                                "required": ["explanation", "output"],
+                                "additionalProperties": False,
+                            },
+                        },
+                        "final_answer": {"type": "string"},
+                    },
+                    "required": ["steps", "final_answer"],
+                    "additionalProperties": False,
+                },
+                "strict": True,
+            },
+        },
+    )
+
+    print(optional_params)
+
+    if provider == "vertex_ai_beta":
+        schema = optional_params["response_schema"]
+    elif provider == "openai":
+        schema = optional_params["response_format"]["json_schema"]["schema"]
+    assert ("additionalProperties" in schema) == expectedAddProp

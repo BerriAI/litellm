@@ -9,3 +9,34 @@ litellm_settings:
   cache: true
   callbacks: ["otel"]
 
+guardrails:
+  - guardrail_name: "aporia-pre-guard"
+    litellm_params:
+      guardrail: aporia  # supported values: "aporia", "bedrock", "lakera"
+      mode: "post_call"
+      api_key: os.environ/APORIA_API_KEY_1
+      api_base: os.environ/APORIA_API_BASE_1
+  - guardrail_name: "aporia-post-guard"
+    litellm_params:
+      guardrail: aporia  # supported values: "aporia", "bedrock", "lakera"
+      mode: "post_call"
+      api_key: os.environ/APORIA_API_KEY_2
+      api_base: os.environ/APORIA_API_BASE_2
+  - guardrail_name: "bedrock-pre-guard"
+    litellm_params:
+      guardrail: bedrock  # supported values: "aporia", "bedrock", "lakera"
+      mode: "pre_call"
+      guardrailIdentifier: ff6ujrregl1q
+      guardrailVersion: "DRAFT"
+  - guardrail_name: "custom-pre-guard"
+    litellm_params:
+      guardrail: custom_guardrail.myCustomGuardrail  
+      mode: "pre_call"
+  - guardrail_name: "custom-during-guard"
+    litellm_params:
+      guardrail: custom_guardrail.myCustomGuardrail  
+      mode: "during_call"
+  - guardrail_name: "custom-post-guard"
+    litellm_params:
+      guardrail: custom_guardrail.myCustomGuardrail
+      mode: "post_call"

@@ -60,6 +60,23 @@ class PrometheusLogger(CustomLogger):
                 ],
             )
 
+            # request latency metrics
+            self.litellm_request_total_latency_metric = Histogram(
+                "litellm_request_total_latency_metric",
+                "Total latency (seconds) for a request to LiteLLM",
+                labelnames=[
+                    "model",
+                ],
+            )
+
+            self.litellm_llm_api_latency_metric = Histogram(
+                "litellm_llm_api_latency_metric",
+                "Total latency (seconds) for a models LLM API call",
+                labelnames=[
+                    "model",
+                ],
+            )
+
             # Counter for spend
             self.litellm_spend_metric = Counter(
                 "litellm_spend_metric",
@@ -105,11 +122,29 @@ class PrometheusLogger(CustomLogger):
             )
 
             ########################################
-            # LLM API Deployment Metrics / analytics
+            # LiteLLM Virtual API KEY metrics
             ########################################
+            # Remaining MODEL RPM limit for API Key
+            self.litellm_remaining_api_key_requests_for_model = Gauge(
+                "litellm_remaining_api_key_requests_for_model",
+                "Remaining Requests API Key can make for model (model based rpm limit on key)",
+                labelnames=["hashed_api_key", "api_key_alias", "model"],
+            )
+
+            # Remaining MODEL TPM limit for API Key
+            self.litellm_remaining_api_key_tokens_for_model = Gauge(
+                "litellm_remaining_api_key_tokens_for_model",
+                "Remaining Tokens API Key can make for model (model based tpm limit on key)",
+                labelnames=["hashed_api_key", "api_key_alias", "model"],
+            )
 
             # Litellm-Enterprise Metrics
             if premium_user is True:
+
+                ########################################
+                # LLM API Deployment Metrics / analytics
+                ########################################
+
                 # Remaining Rate Limit for model
                 self.litellm_remaining_requests_metric = Gauge(
                     "litellm_remaining_requests",
@@ -187,6 +222,9 @@ class PrometheusLogger(CustomLogger):
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         # Define prometheus client
+        from litellm.proxy.common_utils.callback_utils import (
+            get_model_group_from_litellm_kwargs,
+        )
         from litellm.proxy.proxy_server import premium_user
 
         verbose_logger.debug(
@@ -197,6 +235,7 @@ class PrometheusLogger(CustomLogger):
         model = kwargs.get("model", "")
         response_cost = kwargs.get("response_cost", 0.0) or 0
         litellm_params = kwargs.get("litellm_params", {}) or {}
+        _metadata = litellm_params.get("metadata", {})
         proxy_server_request = litellm_params.get("proxy_server_request") or {}
         end_user_id = proxy_server_request.get("body", {}).get("user", None)
         user_id = litellm_params.get("metadata", {}).get("user_api_key_user_id", None)
@@ -286,6 +325,44 @@ class PrometheusLogger(CustomLogger):
             user_api_key, user_api_key_alias
         ).set(_remaining_api_key_budget)
 
+        # Set remaining rpm/tpm for API Key + model
+        # see parallel_request_limiter.py - variables are set there
+        model_group = get_model_group_from_litellm_kwargs(kwargs)
+        remaining_requests_variable_name = (
+            f"litellm-key-remaining-requests-{model_group}"
+        )
+        remaining_tokens_variable_name = f"litellm-key-remaining-tokens-{model_group}"
+
+        remaining_requests = _metadata.get(
+            remaining_requests_variable_name, sys.maxsize
+        )
+        remaining_tokens = _metadata.get(remaining_tokens_variable_name, sys.maxsize)
+
+        self.litellm_remaining_api_key_requests_for_model.labels(
+            user_api_key, user_api_key_alias, model_group
+        ).set(remaining_requests)
+
+        self.litellm_remaining_api_key_tokens_for_model.labels(
+            user_api_key, user_api_key_alias, model_group
+        ).set(remaining_tokens)
+
+        # latency metrics
+        total_time: timedelta = kwargs.get("end_time") - kwargs.get("start_time")
+        total_time_seconds = total_time.total_seconds()
+        api_call_total_time: timedelta = kwargs.get("end_time") - kwargs.get(
+            "api_call_start_time"
+        )
+
+        api_call_total_time_seconds = api_call_total_time.total_seconds()
+
+        # log metrics
+        self.litellm_request_total_latency_metric.labels(model).observe(
+            total_time_seconds
+        )
+        self.litellm_llm_api_latency_metric.labels(model).observe(
+            api_call_total_time_seconds
+        )
+
         # set x-ratelimit headers
         if premium_user is True:
             self.set_llm_deployment_success_metrics(
@@ -329,10 +406,9 @@ class PrometheusLogger(CustomLogger):
             ).inc()
             self.set_llm_deployment_failure_metrics(kwargs)
         except Exception as e:
-            verbose_logger.error(
+            verbose_logger.exception(
                 "prometheus Layer Error(): Exception occured - {}".format(str(e))
             )
-            verbose_logger.debug(traceback.format_exc())
             pass
         pass
 

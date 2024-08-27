@@ -952,11 +952,14 @@ class AnthropicChatCompletion(BaseLLM):
                     model=model, messages=messages, custom_llm_provider="anthropic"
                 )
             except Exception as e:
+                verbose_logger.exception(
+                    "litellm.llms.anthropic.py::completion() - Exception occurred - {}\nReceived Messages: {}".format(
+                        str(e), messages
+                    )
+                )
                 raise AnthropicError(
                     status_code=400,
-                    message="{}\n{}\nReceived Messages={}".format(
-                        str(e), traceback.format_exc(), messages
-                    ),
+                    message="{}\nReceived Messages={}".format(str(e), messages),
                 )
 
         ## Load Config
@@ -1119,6 +1122,7 @@ class ModelResponseIterator:
         self.streaming_response = streaming_response
         self.response_iterator = self.streaming_response
         self.content_blocks: List[ContentBlockDelta] = []
+        self.tool_index = -1
 
     def check_empty_tool_call_args(self) -> bool:
         """
@@ -1168,7 +1172,7 @@ class ModelResponseIterator:
                             "name": None,
                             "arguments": content_block["delta"]["partial_json"],
                         },
-                        "index": content_block["index"],
+                        "index": self.tool_index,
                     }
             elif type_chunk == "content_block_start":
                 """
@@ -1180,6 +1184,7 @@ class ModelResponseIterator:
                 if content_block_start["content_block"]["type"] == "text":
                     text = content_block_start["content_block"]["text"]
                 elif content_block_start["content_block"]["type"] == "tool_use":
+                    self.tool_index += 1
                     tool_use = {
                         "id": content_block_start["content_block"]["id"],
                         "type": "function",
@@ -1187,7 +1192,7 @@ class ModelResponseIterator:
                             "name": content_block_start["content_block"]["name"],
                             "arguments": "",
                         },
-                        "index": content_block_start["index"],
+                        "index": self.tool_index,
                     }
             elif type_chunk == "content_block_stop":
                 content_block_stop = ContentBlockStop(**chunk)  # type: ignore
@@ -1201,7 +1206,7 @@ class ModelResponseIterator:
                             "name": None,
                             "arguments": "{}",
                         },
-                        "index": content_block_stop["index"],
+                        "index": self.tool_index,
                     }
             elif type_chunk == "message_delta":
                 """

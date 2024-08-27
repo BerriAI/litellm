@@ -32,6 +32,7 @@ This covers:
     - **Customize Logging, Guardrails, Caching per project**
         - ✅ [Team Based Logging](./proxy/team_logging.md) - Allow each team to use their own Langfuse Project / custom callbacks
         - ✅ [Disable Logging for a Team](./proxy/team_logging.md#disable-logging-for-a-team) - Switch off all logging for a team/project (GDPR Compliance)
+    - **Controlling Guardrails by Virtual Keys**
     - **Spend Tracking & Data Exports**
         - ✅ [Tracking Spend for Custom Tags](./proxy/enterprise#tracking-spend-for-custom-tags)
         - ✅ [Exporting LLM Logs to GCS Bucket](./proxy/bucket#🪣-logging-gcs-s3-buckets)
@@ -39,11 +40,6 @@ This covers:
     - **Prometheus Metrics**
         - ✅ [Prometheus Metrics - Num Requests, failures, LLM Provider Outages](./proxy/prometheus)
         - ✅ [`x-ratelimit-remaining-requests`, `x-ratelimit-remaining-tokens` for LLM APIs on Prometheus](./proxy/prometheus#✨-enterprise-llm-remaining-requests-and-remaining-tokens)
-    - **Guardrails, PII Masking, Content Moderation**
-        - ✅ [Content Moderation with LLM Guard, LlamaGuard, Secret Detection, Google Text Moderations](./proxy/enterprise#content-moderation)
-        - ✅ [Prompt Injection Detection (with LakeraAI API)](./proxy/enterprise#prompt-injection-detection---lakeraai)
-        - ✅ Reject calls from Blocked User list 
-        - ✅ Reject calls (incoming / outgoing) with Banned Keywords (e.g. competitors)
     - **Custom Branding**
         - ✅ [Custom Branding + Routes on Swagger Docs](./proxy/enterprise#swagger-docs---custom-routes--branding)
         - ✅ [Public Model Hub](../docs/proxy/enterprise.md#public-model-hub)

@@ -1,3 +1,8 @@
+
+import Image from '@theme/IdealImage';
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
 # Azure OpenAI
 ## API Keys, Params
 api_key, api_base, api_version etc can be passed directly to `litellm.completion` - see here or set as `litellm.api_key` params see here
@@ -12,7 +17,7 @@ os.environ["AZURE_AD_TOKEN"] = ""
 os.environ["AZURE_API_TYPE"] = ""
 ```
 
-## Usage
+## **Usage - LiteLLM Python SDK**
 <a target="_blank" href="https://colab.research.google.com/github/BerriAI/litellm/blob/main/cookbook/LiteLLM_Azure_OpenAI.ipynb">
   <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
 </a>
@@ -63,6 +68,125 @@ response = litellm.completion(
     messages = [{"role": "user", "content": "good morning"}],
 )
 ```
+
+
+## **Usage - LiteLLM Proxy Server**
+
+Here's how to call Azure OpenAI models with the LiteLLM Proxy Server
+
+### 1. Save key in your environment
+
+```bash
+export AZURE_API_KEY=""
+```
+
+### 2. Start the proxy 
+
+<Tabs>
+<TabItem value="config" label="config.yaml">
+
+```yaml
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: azure/chatgpt-v-2
+      api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
+      api_version: "2023-05-15"
+      api_key: os.environ/AZURE_API_KEY # The `os.environ/` prefix tells litellm to read this from the env.
+```
+</TabItem>
+<TabItem value="config-*" label="config.yaml (Entrata ID) use tenant_id, client_id, client_secret">
+
+
+```yaml
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: azure/chatgpt-v-2
+      api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
+      api_version: "2023-05-15"
+      tenant_id: os.environ/AZURE_TENANT_ID
+      client_id: os.environ/AZURE_CLIENT_ID
+      client_secret: os.environ/AZURE_CLIENT_SECRET
+```
+</TabItem>
+
+</Tabs>
+
+### 3. Test it
+
+
+<Tabs>
+<TabItem value="Curl" label="Curl Request">
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+--header 'Content-Type: application/json' \
+--data ' {
+      "model": "gpt-3.5-turbo",
+      "messages": [
+        {
+          "role": "user",
+          "content": "what llm are you"
+        }
+      ]
+    }
+'
+```
+</TabItem>
+<TabItem value="openai" label="OpenAI v1.0.0+">
+
+```python
+import openai
+client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://0.0.0.0:4000"
+)
+
+response = client.chat.completions.create(model="gpt-3.5-turbo", messages = [
+    {
+        "role": "user",
+        "content": "this is a test request, write a short poem"
+    }
+])
+
+print(response)
+
+```
+</TabItem>
+<TabItem value="langchain" label="Langchain">
+
+```python
+from langchain.chat_models import ChatOpenAI
+from langchain.prompts.chat import (
+    ChatPromptTemplate,
+    HumanMessagePromptTemplate,
+    SystemMessagePromptTemplate,
+)
+from langchain.schema import HumanMessage, SystemMessage
+
+chat = ChatOpenAI(
+    openai_api_base="http://0.0.0.0:4000", # set openai_api_base to the LiteLLM Proxy
+    model = "gpt-3.5-turbo",
+    temperature=0.1
+)
+
+messages = [
+    SystemMessage(
+        content="You are a helpful assistant that im using to make a test request to."
+    ),
+    HumanMessage(
+        content="test from litellm. tell me why it's amazing in 1 sentence"
+    ),
+]
+response = chat(messages)
+
+print(response)
+```
+</TabItem>
+</Tabs>
+
+
 
 ## Azure OpenAI Chat Completion Models
 
@@ -201,6 +325,39 @@ response = litellm.completion(
 )
 
 print(response)
+```
+
+## Azure Text to Speech (tts)
+
+**LiteLLM PROXY**
+
+```yaml
+ - model_name: azure/tts-1
+    litellm_params:
+      model: azure/tts-1
+      api_base: "os.environ/AZURE_API_BASE_TTS"
+      api_key: "os.environ/AZURE_API_KEY_TTS"
+      api_version: "os.environ/AZURE_API_VERSION" 
+```
+
+**LiteLLM SDK**
+
+```python 
+from litellm import completion
+
+## set ENV variables
+os.environ["AZURE_API_KEY"] = ""
+os.environ["AZURE_API_BASE"] = ""
+os.environ["AZURE_API_VERSION"] = ""
+
+# azure call
+speech_file_path = Path(__file__).parent / "speech.mp3"
+response = speech(
+        model="azure/<your-deployment-name",
+        voice="alloy",
+        input="the quick brown fox jumped over the lazy dogs",
+    )
+response.stream_to_file(speech_file_path)
 ```
 
 ## Advanced

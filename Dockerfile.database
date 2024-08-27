@@ -62,11 +62,6 @@ RUN pip install PyJWT --no-cache-dir
 RUN chmod +x build_admin_ui.sh && ./build_admin_ui.sh
 
 # Generate prisma client
-ENV PRISMA_BINARY_CACHE_DIR=/app/prisma
-RUN mkdir -p /.cache
-RUN chmod -R 777 /.cache
-RUN pip install nodejs-bin
-RUN pip install prisma
 RUN prisma generate
 RUN chmod +x entrypoint.sh
 

@@ -7,9 +7,11 @@ import subprocess
 import sys
 import traceback
 import uuid
+from typing import Optional
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
+from litellm.types.utils import StandardLoggingPayload
 
 
 class S3Logger:
@@ -123,29 +125,13 @@ class S3Logger:
                     else:
                         clean_metadata[key] = value
 
-            # Build the initial payload
-            payload = {
-                "id": id,
-                "call_type": call_type,
-                "cache_hit": cache_hit,
-                "startTime": start_time,
-                "endTime": end_time,
-                "model": kwargs.get("model", ""),
-                "user": kwargs.get("user", ""),
-                "modelParameters": optional_params,
-                "messages": messages,
-                "response": response_obj,
-                "usage": usage,
-                "metadata": clean_metadata,
-            }
-
             # Ensure everything in the payload is converted to str
-            for key, value in payload.items():
-                try:
-                    payload[key] = str(value)
-                except:
-                    # non blocking if it can't cast to a str
-                    pass
+            payload: Optional[StandardLoggingPayload] = kwargs.get(
+                "standard_logging_object", None
+            )
+
+            if payload is None:
+                return
 
             s3_file_name = litellm.utils.get_logging_id(start_time, payload) or ""
             s3_object_key = (

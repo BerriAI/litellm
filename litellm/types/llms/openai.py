@@ -29,6 +29,7 @@ from openai.types.beta.thread_create_params import (
 from openai.types.beta.threads.message import Message as OpenAIMessage
 from openai.types.beta.threads.message_content import MessageContent
 from openai.types.beta.threads.run import Run
+from openai.types.chat import ChatCompletionChunk
 from pydantic import BaseModel, Field
 from typing_extensions import Dict, Required, TypedDict, override
 
@@ -324,9 +325,19 @@ class ChatCompletionDeltaToolCallChunk(TypedDict, total=False):
     index: int
 
 
-class ChatCompletionTextObject(TypedDict):
+class ChatCompletionCachedContent(TypedDict):
+    type: Literal["ephemeral"]
+
+
+class OpenAIChatCompletionTextObject(TypedDict):
     type: Literal["text"]
     text: str
+
+
+class ChatCompletionTextObject(
+    OpenAIChatCompletionTextObject, total=False
+):  # litellm wrapper on top of openai object for handling cached content
+    cache_control: ChatCompletionCachedContent
 
 
 class ChatCompletionImageUrlObject(TypedDict, total=False):
@@ -448,12 +459,20 @@ class ChatCompletionResponseMessage(TypedDict, total=False):
     content: Optional[str]
     tool_calls: List[ChatCompletionToolCallChunk]
     role: Literal["assistant"]
+    function_call: ChatCompletionToolCallFunctionChunk
 
 
 class ChatCompletionUsageBlock(TypedDict):
     prompt_tokens: int
     completion_tokens: int
     total_tokens: int
+
+
+class OpenAIChatCompletionChunk(ChatCompletionChunk):
+    def __init__(self, **kwargs):
+        # Set the 'object' kwarg to 'chat.completion.chunk'
+        kwargs["object"] = "chat.completion.chunk"
+        super().__init__(**kwargs)
 
 
 class Hyperparameters(BaseModel):

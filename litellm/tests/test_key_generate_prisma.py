@@ -56,6 +56,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     generate_key_fn,
     generate_key_helper_fn,
     info_key_fn,
+    regenerate_key_fn,
     update_key_fn,
 )
 from litellm.proxy.management_endpoints.team_endpoints import (
@@ -2328,6 +2329,11 @@ async def test_master_key_hashing(prisma_client):
         from litellm.proxy.proxy_server import user_api_key_cache
 
         _team_id = "ishaans-special-team_{}".format(uuid.uuid4())
+        user_api_key_dict = UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-1234",
+            user_id="1234",
+        )
         await new_team(
             NewTeamRequest(team_id=_team_id),
             user_api_key_dict=UserAPIKeyAuth(
@@ -2343,7 +2349,8 @@ async def test_master_key_hashing(prisma_client):
                 models=["azure-gpt-3.5"],
                 team_id=_team_id,
                 tpm_limit=20,
-            )
+            ),
+            user_api_key_dict=user_api_key_dict,
         )
         print(_response)
         assert _response.models == ["azure-gpt-3.5"]
@@ -2710,3 +2717,324 @@ async def test_custom_api_key_header_name(prisma_client):
         pass
 
     # this should pass because X-Litellm-Key is valid
+
+
+@pytest.mark.asyncio()
+async def test_generate_key_with_model_tpm_limit(prisma_client):
+    print("prisma client=", prisma_client)
+
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    await litellm.proxy.proxy_server.prisma_client.connect()
+    request = GenerateKeyRequest(
+        metadata={
+            "team": "litellm-team3",
+            "model_tpm_limit": {"gpt-4": 100},
+            "model_rpm_limit": {"gpt-4": 2},
+        }
+    )
+    key = await generate_key_fn(
+        data=request,
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-1234",
+            user_id="1234",
+        ),
+    )
+    print(key)
+
+    generated_key = key.key
+
+    # use generated key to auth in
+    result = await info_key_fn(key=generated_key)
+    print("result from info_key_fn", result)
+    assert result["key"] == generated_key
+    print("\n info for key=", result["info"])
+    assert result["info"]["metadata"] == {
+        "team": "litellm-team3",
+        "model_tpm_limit": {"gpt-4": 100},
+        "model_rpm_limit": {"gpt-4": 2},
+    }
+
+    # Update model tpm_limit and rpm_limit
+    request = UpdateKeyRequest(
+        key=generated_key,
+        model_tpm_limit={"gpt-4": 200},
+        model_rpm_limit={"gpt-4": 3},
+    )
+    _request = Request(scope={"type": "http"})
+    _request._url = URL(url="/update/key")
+
+    await update_key_fn(data=request, request=_request)
+    result = await info_key_fn(key=generated_key)
+    print("result from info_key_fn", result)
+    assert result["key"] == generated_key
+    print("\n info for key=", result["info"])
+    assert result["info"]["metadata"] == {
+        "team": "litellm-team3",
+        "model_tpm_limit": {"gpt-4": 200},
+        "model_rpm_limit": {"gpt-4": 3},
+    }
+
+
+@pytest.mark.asyncio()
+async def test_generate_key_with_guardrails(prisma_client):
+    print("prisma client=", prisma_client)
+
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    await litellm.proxy.proxy_server.prisma_client.connect()
+    request = GenerateKeyRequest(
+        guardrails=["aporia-pre-call"],
+        metadata={
+            "team": "litellm-team3",
+        },
+    )
+    key = await generate_key_fn(
+        data=request,
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-1234",
+            user_id="1234",
+        ),
+    )
+    print("generated key=", key)
+
+    generated_key = key.key
+
+    # use generated key to auth in
+    result = await info_key_fn(key=generated_key)
+    print("result from info_key_fn", result)
+    assert result["key"] == generated_key
+    print("\n info for key=", result["info"])
+    assert result["info"]["metadata"] == {
+        "team": "litellm-team3",
+        "guardrails": ["aporia-pre-call"],
+    }
+
+    # Update model tpm_limit and rpm_limit
+    request = UpdateKeyRequest(
+        key=generated_key,
+        guardrails=["aporia-pre-call", "aporia-post-call"],
+    )
+    _request = Request(scope={"type": "http"})
+    _request._url = URL(url="/update/key")
+
+    await update_key_fn(data=request, request=_request)
+    result = await info_key_fn(key=generated_key)
+    print("result from info_key_fn", result)
+    assert result["key"] == generated_key
+    print("\n info for key=", result["info"])
+    assert result["info"]["metadata"] == {
+        "team": "litellm-team3",
+        "guardrails": ["aporia-pre-call", "aporia-post-call"],
+    }
+
+
+@pytest.mark.asyncio()
+async def test_team_access_groups(prisma_client):
+    """
+    Test team based model access groups
+
+    - Test calling a model in the access group  -> pass
+    - Test calling a model not in the access group -> fail
+    """
+    litellm.set_verbose = True
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    await litellm.proxy.proxy_server.prisma_client.connect()
+    # create router with access groups
+    litellm_router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gemini-pro-vision",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-1.0-pro-vision-001",
+                },
+                "model_info": {"access_groups": ["beta-models"]},
+            },
+            {
+                "model_name": "gpt-4o",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                },
+                "model_info": {"access_groups": ["beta-models"]},
+            },
+        ]
+    )
+    setattr(litellm.proxy.proxy_server, "llm_router", litellm_router)
+
+    # Create team with models=["beta-models"]
+    team_request = NewTeamRequest(
+        team_alias="testing-team",
+        models=["beta-models"],
+    )
+
+    new_team_response = await new_team(
+        data=team_request,
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        http_request=Request(scope={"type": "http"}),
+    )
+    print("new_team_response", new_team_response)
+    created_team_id = new_team_response["team_id"]
+
+    # create key with team_id=created_team_id
+    request = GenerateKeyRequest(
+        team_id=created_team_id,
+    )
+
+    key = await generate_key_fn(
+        data=request,
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-1234",
+            user_id="1234",
+        ),
+    )
+    print(key)
+
+    generated_key = key.key
+    bearer_token = "Bearer " + generated_key
+
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+
+    for model in ["gpt-4o", "gemini-pro-vision"]:
+        # Expect these to pass
+        async def return_body():
+            return_string = f'{{"model": "{model}"}}'
+            # return string as bytes
+            return return_string.encode()
+
+        request.body = return_body
+
+        # use generated key to auth in
+        print(
+            "Bearer token being sent to user_api_key_auth() - {}".format(bearer_token)
+        )
+        result = await user_api_key_auth(request=request, api_key=bearer_token)
+
+    for model in ["gpt-4", "gpt-4o-mini", "gemini-experimental"]:
+        # Expect these to fail
+        async def return_body_2():
+            return_string = f'{{"model": "{model}"}}'
+            # return string as bytes
+            return return_string.encode()
+
+        request.body = return_body_2
+
+        # use generated key to auth in
+        print(
+            "Bearer token being sent to user_api_key_auth() - {}".format(bearer_token)
+        )
+        try:
+            result = await user_api_key_auth(request=request, api_key=bearer_token)
+            pytest.fail(f"This should have failed!. IT's an invalid model")
+        except Exception as e:
+            print("got exception", e)
+            assert (
+                "not allowed to call model" in e.message
+                and "Allowed team models" in e.message
+            )
+
+
+################ Unit Tests for testing regeneration of keys ###########
+@pytest.mark.asyncio()
+async def test_regenerate_api_key(prisma_client):
+    litellm.set_verbose = True
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    await litellm.proxy.proxy_server.prisma_client.connect()
+    import uuid
+
+    # generate new key
+    key_alias = f"test_alias_regenerate_key-{uuid.uuid4()}"
+    spend = 100
+    max_budget = 400
+    models = ["fake-openai-endpoint"]
+    new_key = await generate_key_fn(
+        data=GenerateKeyRequest(
+            key_alias=key_alias, spend=spend, max_budget=max_budget, models=models
+        ),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-1234",
+            user_id="1234",
+        ),
+    )
+
+    generated_key = new_key.key
+    print(generated_key)
+
+    # assert the new key works as expected
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+
+    async def return_body():
+        return_string = f'{{"model": "fake-openai-endpoint"}}'
+        # return string as bytes
+        return return_string.encode()
+
+    request.body = return_body
+    result = await user_api_key_auth(request=request, api_key=f"Bearer {generated_key}")
+    print(result)
+
+    # regenerate the key
+    new_key = await regenerate_key_fn(
+        key=generated_key,
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-1234",
+            user_id="1234",
+        ),
+    )
+    print("response from regenerate_key_fn", new_key)
+
+    # assert the new key works as expected
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+
+    async def return_body_2():
+        return_string = f'{{"model": "fake-openai-endpoint"}}'
+        # return string as bytes
+        return return_string.encode()
+
+    request.body = return_body_2
+    result = await user_api_key_auth(request=request, api_key=f"Bearer {new_key.key}")
+    print(result)
+
+    # assert the old key stops working
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+
+    async def return_body_3():
+        return_string = f'{{"model": "fake-openai-endpoint"}}'
+        # return string as bytes
+        return return_string.encode()
+
+    request.body = return_body_3
+    try:
+        result = await user_api_key_auth(
+            request=request, api_key=f"Bearer {generated_key}"
+        )
+        print(result)
+        pytest.fail(f"This should have failed!. the key has been regenerated")
+    except Exception as e:
+        print("got expected exception", e)
+        assert "Invalid proxy server token passed" in e.message
+
+    # Check that the regenerated key has the same spend, max_budget, models and key_alias
+    assert new_key.spend == spend, f"Expected spend {spend} but got {new_key.spend}"
+    assert (
+        new_key.max_budget == max_budget
+    ), f"Expected max_budget {max_budget} but got {new_key.max_budget}"
+    assert (
+        new_key.key_alias == key_alias
+    ), f"Expected key_alias {key_alias} but got {new_key.key_alias}"
+    assert (
+        new_key.models == models
+    ), f"Expected models {models} but got {new_key.models}"
+
+    assert new_key.key_name == f"sk-...{new_key.key[-4:]}"
+
+    pass

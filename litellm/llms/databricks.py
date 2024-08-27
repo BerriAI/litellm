@@ -7,7 +7,7 @@ import time
 import types
 from enum import Enum
 from functools import partial
-from typing import Callable, List, Literal, Optional, Tuple, Union
+from typing import Any, Callable, List, Literal, Optional, Tuple, Union
 
 import httpx  # type: ignore
 import requests  # type: ignore
@@ -22,7 +22,11 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionUsageBlock,
 )
-from litellm.types.utils import GenericStreamingChunk, ProviderField
+from litellm.types.utils import (
+    CustomStreamingDecoder,
+    GenericStreamingChunk,
+    ProviderField,
+)
 from litellm.utils import CustomStreamWrapper, EmbeddingResponse, ModelResponse, Usage
 
 from .base import BaseLLM
@@ -171,15 +175,21 @@ async def make_call(
     model: str,
     messages: list,
     logging_obj,
+    streaming_decoder: Optional[CustomStreamingDecoder] = None,
 ):
     response = await client.post(api_base, headers=headers, data=data, stream=True)
 
     if response.status_code != 200:
         raise DatabricksError(status_code=response.status_code, message=response.text)
 
-    completion_stream = ModelResponseIterator(
-        streaming_response=response.aiter_lines(), sync_stream=False
-    )
+    if streaming_decoder is not None:
+        completion_stream: Any = streaming_decoder.aiter_bytes(
+            response.aiter_bytes(chunk_size=1024)
+        )
+    else:
+        completion_stream = ModelResponseIterator(
+            streaming_response=response.aiter_lines(), sync_stream=False
+        )
     # LOGGING
     logging_obj.post_call(
         input=messages,
@@ -199,6 +209,7 @@ def make_sync_call(
     model: str,
     messages: list,
     logging_obj,
+    streaming_decoder: Optional[CustomStreamingDecoder] = None,
 ):
     if client is None:
         client = HTTPHandler()  # Create a new client if none provided
@@ -208,9 +219,14 @@ def make_sync_call(
     if response.status_code != 200:
         raise DatabricksError(status_code=response.status_code, message=response.read())
 
-    completion_stream = ModelResponseIterator(
-        streaming_response=response.iter_lines(), sync_stream=True
-    )
+    if streaming_decoder is not None:
+        completion_stream = streaming_decoder.iter_bytes(
+            response.iter_bytes(chunk_size=1024)
+        )
+    else:
+        completion_stream = ModelResponseIterator(
+            streaming_response=response.iter_lines(), sync_stream=True
+        )
 
     # LOGGING
     logging_obj.post_call(
@@ -235,23 +251,28 @@ class DatabricksChatCompletion(BaseLLM):
         api_base: Optional[str],
         endpoint_type: Literal["chat_completions", "embeddings"],
         custom_endpoint: Optional[bool],
+        headers: Optional[dict],
     ) -> Tuple[str, dict]:
-        if api_key is None:
+        if api_key is None and headers is None:
             raise DatabricksError(
                 status_code=400,
-                message="Missing Databricks API Key - A call is being made to Databricks but no key is set either in the environment variables (DATABRICKS_API_KEY) or via params",
+                message="Missing API Key - A call is being made to LLM Provider but no key is set either in the environment variables ({LLM_PROVIDER}_API_KEY) or via params",
             )
 
         if api_base is None:
             raise DatabricksError(
                 status_code=400,
-                message="Missing Databricks API Base - A call is being made to Databricks but no api base is set either in the environment variables (DATABRICKS_API_BASE) or via params",
+                message="Missing API Base - A call is being made to LLM Provider but no api base is set either in the environment variables ({LLM_PROVIDER}_API_KEY) or via params",
             )
 
-        headers = {
-            "Authorization": "Bearer {}".format(api_key),
-            "Content-Type": "application/json",
-        }
+        if headers is None:
+            headers = {
+                "Authorization": "Bearer {}".format(api_key),
+                "Content-Type": "application/json",
+            }
+        else:
+            if api_key is not None:
+                headers.update({"Authorization": "Bearer {}".format(api_key)})
 
         if endpoint_type == "chat_completions" and custom_endpoint is not True:
             api_base = "{}/chat/completions".format(api_base)
@@ -278,6 +299,7 @@ class DatabricksChatCompletion(BaseLLM):
         logger_fn=None,
         headers={},
         client: Optional[AsyncHTTPHandler] = None,
+        streaming_decoder: Optional[CustomStreamingDecoder] = None,
     ) -> CustomStreamWrapper:
 
         data["stream"] = True
@@ -291,6 +313,7 @@ class DatabricksChatCompletion(BaseLLM):
                 model=model,
                 messages=messages,
                 logging_obj=logging_obj,
+                streaming_decoder=streaming_decoder,
             ),
             model=model,
             custom_llm_provider=custom_llm_provider,
@@ -356,23 +379,30 @@ class DatabricksChatCompletion(BaseLLM):
         model_response: ModelResponse,
         print_verbose: Callable,
         encoding,
-        api_key,
+        api_key: Optional[str],
         logging_obj,
         optional_params: dict,
         acompletion=None,
         litellm_params=None,
         logger_fn=None,
-        headers={},
+        headers: Optional[dict] = None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        custom_endpoint: Optional[bool] = None,
+        streaming_decoder: Optional[
+            CustomStreamingDecoder
+        ] = None,  # if openai-compatible api needs custom stream decoder - e.g. sagemaker
     ):
-        custom_endpoint: Optional[bool] = optional_params.pop("custom_endpoint", None)
+        custom_endpoint = custom_endpoint or optional_params.pop(
+            "custom_endpoint", None
+        )
         base_model: Optional[str] = optional_params.pop("base_model", None)
         api_base, headers = self._validate_environment(
             api_base=api_base,
             api_key=api_key,
             endpoint_type="chat_completions",
             custom_endpoint=custom_endpoint,
+            headers=headers,
         )
         ## Load Config
         config = litellm.DatabricksConfig().get_config()
@@ -382,7 +412,7 @@ class DatabricksChatCompletion(BaseLLM):
             ):  # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
                 optional_params[k] = v
 
-        stream: bool = optional_params.pop("stream", None) or False
+        stream: bool = optional_params.get("stream", None) or False
         optional_params["stream"] = stream
 
         data = {
@@ -427,6 +457,7 @@ class DatabricksChatCompletion(BaseLLM):
                     headers=headers,
                     client=client,
                     custom_llm_provider=custom_llm_provider,
+                    streaming_decoder=streaming_decoder,
                 )
             else:
                 return self.acompletion_function(
@@ -464,6 +495,7 @@ class DatabricksChatCompletion(BaseLLM):
                         model=model,
                         messages=messages,
                         logging_obj=logging_obj,
+                        streaming_decoder=streaming_decoder,
                     ),
                     model=model,
                     custom_llm_provider=custom_llm_provider,
@@ -565,12 +597,14 @@ class DatabricksChatCompletion(BaseLLM):
         model_response: Optional[litellm.utils.EmbeddingResponse] = None,
         client=None,
         aembedding=None,
+        headers: Optional[dict] = None,
     ) -> EmbeddingResponse:
         api_base, headers = self._validate_environment(
             api_base=api_base,
             api_key=api_key,
             endpoint_type="embeddings",
             custom_endpoint=False,
+            headers=headers,
         )
         model = model
         data = {"model": model, "input": input, **optional_params}

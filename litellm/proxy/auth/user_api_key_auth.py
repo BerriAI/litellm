@@ -62,6 +62,7 @@ from litellm.proxy.auth.auth_utils import (
     is_llm_api_route,
     route_in_additonal_public_routes,
 )
+from litellm.proxy.auth.oauth2_check import check_oauth2_token
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.proxy.utils import _to_ns
 
@@ -196,6 +197,19 @@ async def user_api_key_auth(
         ):
             # check if public endpoint
             return UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY)
+
+        if general_settings.get("enable_oauth2_auth", False) is True:
+            # return UserAPIKeyAuth object
+            # helper to check if the api_key is a valid oauth2 token
+            from litellm.proxy.proxy_server import premium_user
+
+            if premium_user is not True:
+                raise ValueError(
+                    "Oauth2 token validation is only available for premium users"
+                    + CommonProxyErrors.not_premium_user.value
+                )
+
+            return await check_oauth2_token(token=api_key)
 
         if general_settings.get("enable_jwt_auth", False) is True:
             is_jwt = jwt_handler.is_jwt(token=api_key)
@@ -961,8 +975,6 @@ async def user_api_key_auth(
             if not _is_user_proxy_admin(user_obj=user_obj):  # if non-admin
                 if is_llm_api_route(route=route):
                     pass
-                elif is_llm_api_route(route=request["route"].name):
-                    pass
                 elif (
                     route in LiteLLMRoutes.info_routes.value
                 ):  # check if user allowed to call an info route
@@ -1032,10 +1044,15 @@ async def user_api_key_auth(
                                 status_code=status.HTTP_403_FORBIDDEN,
                                 detail=f"user not allowed to access this route, role= {_user_role}. Trying to access: {route}",
                             )
+
                 elif (
                     _user_role == LitellmUserRoles.INTERNAL_USER.value
                     and route in LiteLLMRoutes.internal_user_routes.value
                 ):
+                    pass
+                elif (
+                    route in LiteLLMRoutes.self_managed_routes.value
+                ):  # routes that manage their own allowed/disallowed logic
                     pass
                 else:
                     user_role = "unknown"
@@ -1123,10 +1140,16 @@ async def user_api_key_auth(
         else:
             raise Exception()
     except Exception as e:
-        verbose_proxy_logger.error(
-            "litellm.proxy.proxy_server.user_api_key_auth(): Exception occured - {}\n{}".format(
-                str(e), traceback.format_exc()
-            )
+        requester_ip = _get_request_ip_address(
+            request=request,
+            use_x_forwarded_for=general_settings.get("use_x_forwarded_for", False),
+        )
+        verbose_proxy_logger.exception(
+            "litellm.proxy.proxy_server.user_api_key_auth(): Exception occured - {}\nRequester IP Address:{}".format(
+                str(e),
+                requester_ip,
+            ),
+            extra={"requester_ip": requester_ip},
         )
 
         # Log this exception to OTEL
@@ -1247,6 +1270,21 @@ def _get_user_role(
     return role
 
 
+def _get_request_ip_address(
+    request: Request, use_x_forwarded_for: Optional[bool] = False
+) -> Optional[str]:
+
+    client_ip = None
+    if use_x_forwarded_for is True and "x-forwarded-for" in request.headers:
+        client_ip = request.headers["x-forwarded-for"]
+    elif request.client is not None:
+        client_ip = request.client.host
+    else:
+        client_ip = ""
+
+    return client_ip
+
+
 def _check_valid_ip(
     allowed_ips: Optional[List[str]],
     request: Request,
@@ -1259,11 +1297,9 @@ def _check_valid_ip(
         return True, None
 
     # if general_settings.get("use_x_forwarded_for") is True then use x-forwarded-for
-    client_ip = None
-    if use_x_forwarded_for is True and "x-forwarded-for" in request.headers:
-        client_ip = request.headers["x-forwarded-for"]
-    elif request.client is not None:
-        client_ip = request.client.host
+    client_ip = _get_request_ip_address(
+        request=request, use_x_forwarded_for=use_x_forwarded_for
+    )
 
     # Check if IP address is allowed
     if client_ip not in allowed_ips:

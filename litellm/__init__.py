@@ -111,13 +111,13 @@ common_cloud_provider_auth_params: dict = {
     "providers": ["vertex_ai", "bedrock", "watsonx", "azure", "vertex_ai_beta"],
 }
 use_client: bool = False
-ssl_verify: bool = True
+ssl_verify: Union[str, bool] = True
 ssl_certificate: Optional[str] = None
 disable_streaming_logging: bool = False
 in_memory_llm_clients_cache: dict = {}
 safe_memory_mode: bool = False
 ### DEFAULT AZURE API VERSION ###
-AZURE_DEFAULT_API_VERSION = "2024-02-01"  # this is updated to the latest
+AZURE_DEFAULT_API_VERSION = "2024-07-01-preview"  # this is updated to the latest
 ### GUARDRAILS ###
 llamaguard_model_name: Optional[str] = None
 openai_moderations_model_name: Optional[str] = None
@@ -339,6 +339,7 @@ api_version = None
 organization = None
 project = None
 config_path = None
+vertex_ai_safety_settings: Optional[dict] = None
 ####### COMPLETION MODELS ###################
 open_ai_chat_completion_models: List = []
 open_ai_text_completion_models: List = []
@@ -668,6 +669,7 @@ provider_list: List = [
     "azure_text",
     "azure_ai",
     "sagemaker",
+    "sagemaker_chat",
     "bedrock",
     "vllm",
     "nlp_cloud",
@@ -702,7 +704,7 @@ provider_list: List = [
 
 models_by_provider: dict = {
     "openai": open_ai_chat_completion_models + open_ai_text_completion_models,
-    "cohere": cohere_models,
+    "cohere": cohere_models + cohere_chat_models,
     "cohere_chat": cohere_chat_models,
     "anthropic": anthropic_models,
     "replicate": replicate_models,
@@ -836,7 +838,7 @@ from .llms.databricks import DatabricksConfig, DatabricksEmbeddingConfig
 from .llms.predibase import PredibaseConfig
 from .llms.anthropic_text import AnthropicTextConfig
 from .llms.replicate import ReplicateConfig
-from .llms.cohere import CohereConfig
+from .llms.cohere.completion import CohereConfig
 from .llms.clarifai import ClarifaiConfig
 from .llms.ai21 import AI21Config
 from .llms.together_ai import TogetherAIConfig
@@ -846,11 +848,21 @@ from .llms.gemini import GeminiConfig
 from .llms.nlp_cloud import NLPCloudConfig
 from .llms.aleph_alpha import AlephAlphaConfig
 from .llms.petals import PetalsConfig
-from .llms.vertex_httpx import VertexGeminiConfig, GoogleAIStudioGeminiConfig
-from .llms.vertex_ai import VertexAIConfig, VertexAITextEmbeddingConfig
-from .llms.vertex_ai_anthropic import VertexAIAnthropicConfig
-from .llms.vertex_ai_partner import VertexAILlama3Config
-from .llms.sagemaker import SagemakerConfig
+from .llms.vertex_ai_and_google_ai_studio.vertex_and_google_ai_studio_gemini import (
+    VertexGeminiConfig,
+    GoogleAIStudioGeminiConfig,
+    VertexAIConfig,
+)
+from .llms.vertex_ai_and_google_ai_studio.vertex_ai_non_gemini import (
+    VertexAITextEmbeddingConfig,
+)
+from .llms.vertex_ai_and_google_ai_studio.vertex_ai_anthropic import (
+    VertexAIAnthropicConfig,
+)
+from .llms.vertex_ai_and_google_ai_studio.vertex_ai_partner_models import (
+    VertexAILlama3Config,
+)
+from .llms.sagemaker.sagemaker import SagemakerConfig
 from .llms.ollama import OllamaConfig
 from .llms.ollama_chat import OllamaChatConfig
 from .llms.maritalk import MaritTalkConfig

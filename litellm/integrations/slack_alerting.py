@@ -1668,7 +1668,9 @@ Model Info:
     async def send_weekly_spend_report(self):
         """ """
         try:
-            from litellm.proxy.proxy_server import _get_spend_report_for_time_range
+            from litellm.proxy.spend_tracking.spend_management_endpoints import (
+                _get_spend_report_for_time_range,
+            )
 
             todays_date = datetime.datetime.now().date()
             week_before = todays_date - datetime.timedelta(days=7)

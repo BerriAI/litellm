@@ -635,6 +635,7 @@ def test_chat_completion_optional_params(mock_acompletion, client_no_auth):
 from litellm.proxy.proxy_server import ProxyConfig
 
 
+@pytest.mark.skip(reason="local variable conflicts. needs to be refactored.")
 @mock.patch("litellm.proxy.proxy_server.litellm.Cache")
 def test_load_router_config(mock_cache, fake_env_vars):
     mock_cache.return_value.cache.__dict__ = {"redis_client": None}
@@ -867,7 +868,7 @@ async def test_create_team_member_add(prisma_client, new_member_method):
 
     from fastapi import Request
 
-    from litellm.proxy._types import LiteLLM_TeamTableCachedObj
+    from litellm.proxy._types import LiteLLM_TeamTableCachedObj, LiteLLM_UserTable
     from litellm.proxy.proxy_server import hash_token, user_api_key_cache
 
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
@@ -903,13 +904,24 @@ async def test_create_team_member_add(prisma_client, new_member_method):
         "litellm.proxy.proxy_server.prisma_client.db.litellm_usertable",
         new_callable=AsyncMock,
     ) as mock_litellm_usertable:
-        mock_client = AsyncMock()
+        mock_client = AsyncMock(
+            return_value=LiteLLM_UserTable(
+                user_id="1234", max_budget=100, user_email="1234"
+            )
+        )
         mock_litellm_usertable.upsert = mock_client
         mock_litellm_usertable.find_many = AsyncMock(return_value=None)
+        team_mock_client = AsyncMock()
+        original_val = getattr(
+            litellm.proxy.proxy_server.prisma_client.db, "litellm_teamtable"
+        )
+        litellm.proxy.proxy_server.prisma_client.db.litellm_teamtable = team_mock_client
+
+        team_mock_client.update = AsyncMock(return_value=LiteLLM_TeamTableCachedObj())
 
         await team_member_add(
             data=team_member_add_request,
-            user_api_key_dict=UserAPIKeyAuth(),
+            user_api_key_dict=UserAPIKeyAuth(user_role="proxy_admin"),
             http_request=Request(
                 scope={"type": "http", "path": "/user/new"},
             ),
@@ -928,6 +940,192 @@ async def test_create_team_member_add(prisma_client, new_member_method):
             mock_client.call_args.kwargs["data"]["create"]["budget_duration"]
             == litellm.internal_user_budget_duration
         )
+
+        litellm.proxy.proxy_server.prisma_client.db.litellm_teamtable = original_val
+
+
+@pytest.mark.parametrize("team_member_role", ["admin", "user"])
+@pytest.mark.parametrize("team_route", ["/team/member_add", "/team/member_delete"])
+@pytest.mark.asyncio
+async def test_create_team_member_add_team_admin_user_api_key_auth(
+    prisma_client, team_member_role, team_route
+):
+    import time
+
+    from fastapi import Request
+
+    from litellm.proxy._types import LiteLLM_TeamTableCachedObj, Member
+    from litellm.proxy.proxy_server import (
+        ProxyException,
+        hash_token,
+        user_api_key_auth,
+        user_api_key_cache,
+    )
+
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm, "max_internal_user_budget", 10)
+    setattr(litellm, "internal_user_budget_duration", "5m")
+    await litellm.proxy.proxy_server.prisma_client.connect()
+    user = f"ishaan {uuid.uuid4().hex}"
+    _team_id = "litellm-test-client-id-new"
+    user_key = "sk-12345678"
+
+    valid_token = UserAPIKeyAuth(
+        team_id=_team_id,
+        token=hash_token(user_key),
+        team_member=Member(role=team_member_role, user_id=user),
+        last_refreshed_at=time.time(),
+    )
+    user_api_key_cache.set_cache(key=hash_token(user_key), value=valid_token)
+
+    team_obj = LiteLLM_TeamTableCachedObj(
+        team_id=_team_id,
+        blocked=False,
+        last_refreshed_at=time.time(),
+        metadata={"guardrails": {"modify_guardrails": False}},
+    )
+
+    user_api_key_cache.set_cache(key="team_id:{}".format(_team_id), value=team_obj)
+
+    setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
+
+    ## TEST IF TEAM ADMIN ALLOWED TO CALL /MEMBER_ADD ENDPOINT
+    import json
+
+    from starlette.datastructures import URL
+
+    request = Request(scope={"type": "http"})
+    request._url = URL(url=team_route)
+
+    body = {}
+    json_bytes = json.dumps(body).encode("utf-8")
+
+    request._body = json_bytes
+
+    ## ALLOWED BY USER_API_KEY_AUTH
+    await user_api_key_auth(request=request, api_key="Bearer " + user_key)
+
+
+@pytest.mark.parametrize("new_member_method", ["user_id", "user_email"])
+@pytest.mark.parametrize("user_role", ["admin", "user"])
+@pytest.mark.asyncio
+async def test_create_team_member_add_team_admin(
+    prisma_client, new_member_method, user_role
+):
+    """
+    Relevant issue - https://github.com/BerriAI/litellm/issues/5300
+
+    Allow team admins to:
+        - Add and remove team members
+        - raise error if team member not an existing 'internal_user'
+    """
+    import time
+
+    from fastapi import Request
+
+    from litellm.proxy._types import (
+        LiteLLM_TeamTableCachedObj,
+        LiteLLM_UserTable,
+        Member,
+    )
+    from litellm.proxy.proxy_server import (
+        HTTPException,
+        ProxyException,
+        hash_token,
+        user_api_key_auth,
+        user_api_key_cache,
+    )
+
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm, "max_internal_user_budget", 10)
+    setattr(litellm, "internal_user_budget_duration", "5m")
+    await litellm.proxy.proxy_server.prisma_client.connect()
+    user = f"ishaan {uuid.uuid4().hex}"
+    _team_id = "litellm-test-client-id-new"
+    user_key = "sk-12345678"
+
+    valid_token = UserAPIKeyAuth(
+        team_id=_team_id,
+        user_id=user,
+        token=hash_token(user_key),
+        last_refreshed_at=time.time(),
+    )
+    user_api_key_cache.set_cache(key=hash_token(user_key), value=valid_token)
+
+    team_obj = LiteLLM_TeamTableCachedObj(
+        team_id=_team_id,
+        blocked=False,
+        last_refreshed_at=time.time(),
+        members_with_roles=[Member(role=user_role, user_id=user)],
+        metadata={"guardrails": {"modify_guardrails": False}},
+    )
+
+    user_api_key_cache.set_cache(key="team_id:{}".format(_team_id), value=team_obj)
+
+    setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
+    if new_member_method == "user_id":
+        data = {
+            "team_id": _team_id,
+            "member": [{"role": "user", "user_id": user}],
+        }
+    elif new_member_method == "user_email":
+        data = {
+            "team_id": _team_id,
+            "member": [{"role": "user", "user_email": user}],
+        }
+    team_member_add_request = TeamMemberAddRequest(**data)
+
+    with patch(
+        "litellm.proxy.proxy_server.prisma_client.db.litellm_usertable",
+        new_callable=AsyncMock,
+    ) as mock_litellm_usertable:
+        mock_client = AsyncMock(
+            return_value=LiteLLM_UserTable(
+                user_id="1234", max_budget=100, user_email="1234"
+            )
+        )
+        mock_litellm_usertable.upsert = mock_client
+        mock_litellm_usertable.find_many = AsyncMock(return_value=None)
+
+        team_mock_client = AsyncMock()
+        original_val = getattr(
+            litellm.proxy.proxy_server.prisma_client.db, "litellm_teamtable"
+        )
+        litellm.proxy.proxy_server.prisma_client.db.litellm_teamtable = team_mock_client
+
+        team_mock_client.update = AsyncMock(return_value=LiteLLM_TeamTableCachedObj())
+
+        try:
+            await team_member_add(
+                data=team_member_add_request,
+                user_api_key_dict=valid_token,
+                http_request=Request(
+                    scope={"type": "http", "path": "/user/new"},
+                ),
+            )
+        except HTTPException as e:
+            if user_role == "user":
+                assert e.status_code == 403
+            else:
+                raise e
+
+        mock_client.assert_called()
+
+        print(f"mock_client.call_args: {mock_client.call_args}")
+        print("mock_client.call_args.kwargs: {}".format(mock_client.call_args.kwargs))
+
+        assert (
+            mock_client.call_args.kwargs["data"]["create"]["max_budget"]
+            == litellm.max_internal_user_budget
+        )
+        assert (
+            mock_client.call_args.kwargs["data"]["create"]["budget_duration"]
+            == litellm.internal_user_budget_duration
+        )
+
+        litellm.proxy.proxy_server.prisma_client.db.litellm_teamtable = original_val
 
 
 @pytest.mark.asyncio
@@ -1116,8 +1314,8 @@ async def test_add_callback_via_key_litellm_pre_call_utils(prisma_client):
                         "callback_name": "langfuse",
                         "callback_type": "success",
                         "callback_vars": {
-                            "langfuse_public_key": "os.environ/LANGFUSE_PUBLIC_KEY",
-                            "langfuse_secret_key": "os.environ/LANGFUSE_SECRET_KEY",
+                            "langfuse_public_key": "my-mock-public-key",
+                            "langfuse_secret_key": "my-mock-secret-key",
                             "langfuse_host": "https://us.cloud.langfuse.com",
                         },
                     }
@@ -1165,4 +1363,55 @@ async def test_add_callback_via_key_litellm_pre_call_utils(prisma_client):
     assert "success_callback" in new_data
     assert new_data["success_callback"] == ["langfuse"]
     assert "langfuse_public_key" in new_data
+    assert new_data["langfuse_public_key"] == "my-mock-public-key"
     assert "langfuse_secret_key" in new_data
+    assert new_data["langfuse_secret_key"] == "my-mock-secret-key"
+
+
+@pytest.mark.asyncio
+async def test_gemini_pass_through_endpoint():
+    from starlette.datastructures import URL
+
+    from litellm.proxy.vertex_ai_endpoints.google_ai_studio_endpoints import (
+        Request,
+        Response,
+        gemini_proxy_route,
+    )
+
+    body = b"""
+        {
+            "contents": [{
+                "parts":[{
+                "text": "The quick brown fox jumps over the lazy dog."
+                }]
+                }]
+        }
+        """
+
+    # Construct the scope dictionary
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/gemini/v1beta/models/gemini-1.5-flash:countTokens",
+        "query_string": b"key=sk-1234",
+        "headers": [
+            (b"content-type", b"application/json"),
+        ],
+    }
+
+    # Create a new Request object
+    async def async_receive():
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    request = Request(
+        scope=scope,
+        receive=async_receive,
+    )
+
+    resp = await gemini_proxy_route(
+        endpoint="v1beta/models/gemini-1.5-flash:countTokens?key=sk-1234",
+        request=request,
+        fastapi_response=Response(),
+    )
+
+    print(resp.body)

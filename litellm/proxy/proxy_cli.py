@@ -78,7 +78,7 @@ def is_port_in_use(port):
 @click.option("--api_base", default=None, help="API base URL.")
 @click.option(
     "--api_version",
-    default="2024-02-01",
+    default="2024-07-01-preview",
     help="For azure - pass in the api version.",
 )
 @click.option(
@@ -556,6 +556,22 @@ def run_server(
                     **key_management_settings
                 )
             database_url = general_settings.get("database_url", None)
+            if database_url is None:
+                # Check if all required variables are provided
+                database_host = os.getenv("DATABASE_HOST")
+                database_username = os.getenv("DATABASE_USERNAME")
+                database_password = os.getenv("DATABASE_PASSWORD")
+                database_name = os.getenv("DATABASE_NAME")
+
+                if (
+                    database_host
+                    and database_username
+                    and database_password
+                    and database_name
+                ):
+                    # Construct DATABASE_URL from the provided variables
+                    database_url = f"postgresql://{database_username}:{database_password}@{database_host}/{database_name}"
+                    os.environ["DATABASE_URL"] = database_url
             db_connection_pool_limit = general_settings.get(
                 "database_connection_pool_limit",
                 LiteLLMDatabaseConnectionPool.database_connection_pool_limit.value,

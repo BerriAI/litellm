@@ -95,9 +95,44 @@ def convert_key_logging_metadata_to_callback(
     for var, value in data.callback_vars.items():
         if team_callback_settings_obj.callback_vars is None:
             team_callback_settings_obj.callback_vars = {}
-        team_callback_settings_obj.callback_vars[var] = litellm.get_secret(value)
+        team_callback_settings_obj.callback_vars[var] = (
+            litellm.utils.get_secret(value, default_value=value) or value
+        )
 
     return team_callback_settings_obj
+
+
+def _get_dynamic_logging_metadata(
+    user_api_key_dict: UserAPIKeyAuth,
+) -> Optional[TeamCallbackMetadata]:
+    callback_settings_obj: Optional[TeamCallbackMetadata] = None
+    if user_api_key_dict.team_metadata is not None:
+        team_metadata = user_api_key_dict.team_metadata
+        if "callback_settings" in team_metadata:
+            callback_settings = team_metadata.get("callback_settings", None) or {}
+            callback_settings_obj = TeamCallbackMetadata(**callback_settings)
+            verbose_proxy_logger.debug(
+                "Team callback settings activated: %s", callback_settings_obj
+            )
+            """
+            callback_settings = {
+              {
+                'callback_vars': {'langfuse_public_key': 'pk', 'langfuse_secret_key': 'sk_'}, 
+                'failure_callback': [], 
+                'success_callback': ['langfuse', 'langfuse']
+            }
+            }
+            """
+    elif (
+        user_api_key_dict.metadata is not None
+        and "logging" in user_api_key_dict.metadata
+    ):
+        for item in user_api_key_dict.metadata["logging"]:
+            callback_settings_obj = convert_key_logging_metadata_to_callback(
+                data=AddTeamCallback(**item),
+                team_callback_settings_obj=callback_settings_obj,
+            )
+    return callback_settings_obj
 
 
 async def add_litellm_data_to_request(
@@ -135,6 +170,20 @@ async def add_litellm_data_to_request(
         "headers": _headers,
         "body": copy.copy(data),  # use copy instead of deepcopy
     }
+
+    ## Dynamic api version (Azure OpenAI endpoints) ##
+    try:
+        query_params = request.query_params
+        # Convert query parameters to a dictionary (optional)
+        query_dict = dict(query_params)
+    except KeyError:
+        query_dict = {}
+
+    ## check for api version in query params
+    dynamic_api_version: Optional[str] = query_dict.get("api-version")
+
+    if dynamic_api_version is not None:  # only pass, if set
+        data["api_version"] = dynamic_api_version
 
     ## Forward any LLM API Provider specific headers in extra_headers
     add_provider_specific_headers_to_request(data=data, headers=_headers)
@@ -176,7 +225,7 @@ async def add_litellm_data_to_request(
         user_api_key_dict, "team_alias", None
     )
 
-    ### KEY-LEVEL Contorls
+    ### KEY-LEVEL Controls
     key_metadata = user_api_key_dict.metadata
     if "cache" in key_metadata:
         data["cache"] = {}
@@ -184,6 +233,55 @@ async def add_litellm_data_to_request(
             for k, v in key_metadata["cache"].items():
                 if k in SupportedCacheControls:
                     data["cache"][k] = v
+
+    ## KEY-LEVEL SPEND LOGS / TAGS
+    if "tags" in key_metadata and key_metadata["tags"] is not None:
+        if "tags" in data[_metadata_variable_name] and isinstance(
+            data[_metadata_variable_name]["tags"], list
+        ):
+            data[_metadata_variable_name]["tags"].extend(key_metadata["tags"])
+        else:
+            data[_metadata_variable_name]["tags"] = key_metadata["tags"]
+    if "spend_logs_metadata" in key_metadata and isinstance(
+        key_metadata["spend_logs_metadata"], dict
+    ):
+        if "spend_logs_metadata" in data[_metadata_variable_name] and isinstance(
+            data[_metadata_variable_name]["spend_logs_metadata"], dict
+        ):
+            for key, value in key_metadata["spend_logs_metadata"].items():
+                if (
+                    key not in data[_metadata_variable_name]["spend_logs_metadata"]
+                ):  # don't override k-v pair sent by request (user request)
+                    data[_metadata_variable_name]["spend_logs_metadata"][key] = value
+        else:
+            data[_metadata_variable_name]["spend_logs_metadata"] = key_metadata[
+                "spend_logs_metadata"
+            ]
+
+    ## TEAM-LEVEL SPEND LOGS/TAGS
+    team_metadata = user_api_key_dict.team_metadata or {}
+    if "tags" in team_metadata and team_metadata["tags"] is not None:
+        if "tags" in data[_metadata_variable_name] and isinstance(
+            data[_metadata_variable_name]["tags"], list
+        ):
+            data[_metadata_variable_name]["tags"].extend(team_metadata["tags"])
+        else:
+            data[_metadata_variable_name]["tags"] = team_metadata["tags"]
+    if "spend_logs_metadata" in team_metadata and isinstance(
+        team_metadata["spend_logs_metadata"], dict
+    ):
+        if "spend_logs_metadata" in data[_metadata_variable_name] and isinstance(
+            data[_metadata_variable_name]["spend_logs_metadata"], dict
+        ):
+            for key, value in team_metadata["spend_logs_metadata"].items():
+                if (
+                    key not in data[_metadata_variable_name]["spend_logs_metadata"]
+                ):  # don't override k-v pair sent by request (user request)
+                    data[_metadata_variable_name]["spend_logs_metadata"][key] = value
+        else:
+            data[_metadata_variable_name]["spend_logs_metadata"] = team_metadata[
+                "spend_logs_metadata"
+            ]
 
     # Team spend, budget - used by prometheus.py
     data[_metadata_variable_name][
@@ -270,35 +368,9 @@ async def add_litellm_data_to_request(
             }  # add the team-specific configs to the completion call
 
     # Team Callbacks controls
-    callback_settings_obj: Optional[TeamCallbackMetadata] = None
-    if user_api_key_dict.team_metadata is not None:
-        team_metadata = user_api_key_dict.team_metadata
-        if "callback_settings" in team_metadata:
-            callback_settings = team_metadata.get("callback_settings", None) or {}
-            callback_settings_obj = TeamCallbackMetadata(**callback_settings)
-            verbose_proxy_logger.debug(
-                "Team callback settings activated: %s", callback_settings_obj
-            )
-            """
-            callback_settings = {
-              {
-                'callback_vars': {'langfuse_public_key': 'pk', 'langfuse_secret_key': 'sk_'}, 
-                'failure_callback': [], 
-                'success_callback': ['langfuse', 'langfuse']
-            }
-            }
-            """
-    elif (
-        user_api_key_dict.metadata is not None
-        and "logging" in user_api_key_dict.metadata
-    ):
-        for item in user_api_key_dict.metadata["logging"]:
-
-            callback_settings_obj = convert_key_logging_metadata_to_callback(
-                data=AddTeamCallback(**item),
-                team_callback_settings_obj=callback_settings_obj,
-            )
-
+    callback_settings_obj = _get_dynamic_logging_metadata(
+        user_api_key_dict=user_api_key_dict
+    )
     if callback_settings_obj is not None:
         data["success_callback"] = callback_settings_obj.success_callback
         data["failure_callback"] = callback_settings_obj.failure_callback
@@ -308,7 +380,45 @@ async def add_litellm_data_to_request(
             for k, v in callback_settings_obj.callback_vars.items():
                 data[k] = v
 
+    # Guardrails
+    move_guardrails_to_metadata(
+        data=data,
+        _metadata_variable_name=_metadata_variable_name,
+        user_api_key_dict=user_api_key_dict,
+    )
+
     return data
+
+
+def move_guardrails_to_metadata(
+    data: dict,
+    _metadata_variable_name: str,
+    user_api_key_dict: UserAPIKeyAuth,
+):
+    """
+    Heper to add guardrails from request to metadata
+
+    - If guardrails set on API Key metadata then sets guardrails on request metadata
+    - If guardrails not set on API key, then checks request metadata
+
+    """
+    if user_api_key_dict.metadata:
+        if "guardrails" in user_api_key_dict.metadata:
+            from litellm.proxy.proxy_server import premium_user
+
+            if premium_user is not True:
+                raise ValueError(
+                    f"Using Guardrails on API Key {CommonProxyErrors.not_premium_user}"
+                )
+
+            data[_metadata_variable_name]["guardrails"] = user_api_key_dict.metadata[
+                "guardrails"
+            ]
+            return
+
+    if "guardrails" in data:
+        data[_metadata_variable_name]["guardrails"] = data["guardrails"]
+        del data["guardrails"]
 
 
 def add_provider_specific_headers_to_request(

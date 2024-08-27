@@ -19,9 +19,17 @@ LiteLLM supports the following OIDC identity providers:
 | CircleCI v2              | `circleci_v2`| No               |
 | GitHub Actions           | `github`     | Yes              |
 | Azure Kubernetes Service | `azure`      | No               |
+| File                     | `file`       | No               |
+| Environment Variable     | `env`        | No               |
+| Environment Path         | `env_path`   | No               |
 
 If you would like to use a different OIDC provider, please open an issue on GitHub.
 
+:::tip
+
+Do not use the `file`, `env`, or `env_path` providers unless you know what you're doing, and you are sure none of the other providers will work for your use-case. Hint: they probably will.
+
+:::
 
 ## OIDC Connect Relying Party (RP)
 
@@ -45,6 +53,32 @@ For providers that do not use the `audience` parameter, you can (and should) omi
 ```
 oidc/config_name_here/
 ```
+
+#### Unofficial Providers (not recommended)
+
+For the unofficial `file` provider, you can use the following format:
+
+```
+oidc/file/home/user/dave/this_is_a_file_with_a_token.txt
+```
+
+For the unofficial `env`, use the following format, where `SECRET_TOKEN` is the name of the environment variable that contains the token:
+
+```
+oidc/env/SECRET_TOKEN
+```
+
+For the unofficial `env_path`, use the following format, where `SECRET_TOKEN` is the name of the environment variable that contains the path to the file with the token:
+
+```
+oidc/env_path/SECRET_TOKEN
+```
+
+:::tip
+
+If you are tempted to use oidc/env_path/AZURE_FEDERATED_TOKEN_FILE, don't do that. Instead, use `oidc/azure/`, as this will ensure continued support from LiteLLM if Azure changes their OIDC configuration and/or adds new features.
+
+:::
 
 ## Examples
 

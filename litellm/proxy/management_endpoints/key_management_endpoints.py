@@ -66,9 +66,11 @@ async def generate_key_fn(
     - budget_duration: Optional[str] - Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
     - max_parallel_requests: Optional[int] - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x.
     - metadata: Optional[dict] - Metadata for key, store information for key. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
+    - guardrails: Optional[List[str]] - List of active guardrails for the key
     - permissions: Optional[dict] - key-specific permissions. Currently just used for turning off pii masking (if connected). Example - {"pii": false}
     - model_max_budget: Optional[dict] - key-specific model budget in USD. Example - {"text-davinci-002": 0.5, "gpt-3.5-turbo": 0.5}. IF null or {} then no model specific budget.
-
+    - model_rpm_limit: Optional[dict] - key-specific model rpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific rpm limit.
+    - model_tpm_limit: Optional[dict] - key-specific model tpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific tpm limit.
     Examples:
 
     1. Allow users to turn on/off pii masking
@@ -320,9 +322,13 @@ async def update_key_fn(
                 detail={"error": f"Team not found, passed team_id={data.team_id}"},
             )
 
+        _metadata_fields = ["model_rpm_limit", "model_tpm_limit", "guardrails"]
         # get non default values for key
         non_default_values = {}
         for k, v in data_json.items():
+            # this field gets stored in metadata
+            if key in _metadata_fields:
+                continue
             if v is not None and v not in (
                 [],
                 {},
@@ -342,6 +348,33 @@ async def update_key_fn(
             )
             key_reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
             non_default_values["budget_reset_at"] = key_reset_at
+
+        # Update metadata for virtual Key
+        if data.model_tpm_limit:
+            _metadata = existing_key_row.metadata or {}
+            if "model_tpm_limit" not in _metadata:
+                _metadata["model_tpm_limit"] = {}
+
+            _metadata["model_tpm_limit"].update(data.model_tpm_limit)
+            non_default_values["metadata"] = _metadata
+            non_default_values.pop("model_tpm_limit", None)
+
+        if data.model_rpm_limit:
+            _metadata = existing_key_row.metadata or {}
+            if "model_rpm_limit" not in _metadata:
+                _metadata["model_rpm_limit"] = {}
+
+            _metadata["model_rpm_limit"].update(data.model_rpm_limit)
+            non_default_values["metadata"] = _metadata
+            non_default_values.pop("model_rpm_limit", None)
+
+        if data.guardrails:
+            _metadata = existing_key_row.metadata or {}
+            _metadata["guardrails"] = data.guardrails
+
+            # update values that will be written to the DB
+            non_default_values["metadata"] = _metadata
+            non_default_values.pop("guardrails", None)
 
         response = await prisma_client.update_data(
             token=key, data={**non_default_values, "token": key}
@@ -709,6 +742,9 @@ async def generate_key_helper_fn(
     allowed_cache_controls: Optional[list] = [],
     permissions: Optional[dict] = {},
     model_max_budget: Optional[dict] = {},
+    model_rpm_limit: Optional[dict] = {},
+    model_tpm_limit: Optional[dict] = {},
+    guardrails: Optional[list] = None,
     teams: Optional[list] = None,
     organization_id: Optional[str] = None,
     table_name: Optional[Literal["key", "user"]] = None,
@@ -750,6 +786,18 @@ async def generate_key_helper_fn(
     aliases_json = json.dumps(aliases)
     config_json = json.dumps(config)
     permissions_json = json.dumps(permissions)
+
+    # Add model_rpm_limit and model_tpm_limit to metadata
+    if model_rpm_limit is not None:
+        metadata = metadata or {}
+        metadata["model_rpm_limit"] = model_rpm_limit
+    if model_tpm_limit is not None:
+        metadata = metadata or {}
+        metadata["model_tpm_limit"] = model_tpm_limit
+    if guardrails is not None:
+        metadata = metadata or {}
+        metadata["guardrails"] = guardrails
+
     metadata_json = json.dumps(metadata)
     model_max_budget_json = json.dumps(model_max_budget)
     user_role = user_role
@@ -801,7 +849,7 @@ async def generate_key_helper_fn(
         }
 
         if (
-            litellm.get_secret("DISABLE_KEY_NAME", False) == True
+            litellm.get_secret("DISABLE_KEY_NAME", False) is True
         ):  # allow user to disable storing abbreviated key name (shown in UI, to help figure out which key spent how much)
             pass
         else:
@@ -918,3 +966,96 @@ async def delete_verification_token(tokens: List, user_id: Optional[str] = None)
         verbose_proxy_logger.debug(traceback.format_exc())
         raise e
     return deleted_tokens
+
+
+@router.post(
+    "/key/{key:path}/regenerate",
+    tags=["key management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+@management_endpoint_wrapper
+async def regenerate_key_fn(
+    key: str,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    litellm_changed_by: Optional[str] = Header(
+        None,
+        description="The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
+    ),
+) -> GenerateKeyResponse:
+    from litellm.proxy.proxy_server import (
+        hash_token,
+        premium_user,
+        prisma_client,
+        user_api_key_cache,
+    )
+
+    """
+    Endpoint for regenerating a key
+    """
+
+    if premium_user is not True:
+        raise ValueError(
+            f"Regenerating Virtual Keys is an Enterprise feature, {CommonProxyErrors.not_premium_user.value}"
+        )
+
+    # Check if key exists, raise exception if key is not in the DB
+
+    ### 1. Create New copy that is duplicate of existing key
+    ######################################################################
+
+    # create duplicate of existing key
+    # set token = new token generated
+    # insert new token in DB
+
+    # create hash of token
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": "DB not connected. prisma_client is None"},
+        )
+
+    if "sk" not in key:
+        hashed_api_key = key
+    else:
+        hashed_api_key = hash_token(key)
+
+    _key_in_db = await prisma_client.db.litellm_verificationtoken.find_unique(
+        where={"token": hashed_api_key},
+    )
+    if _key_in_db is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"error": f"Key {key} not found."},
+        )
+
+    verbose_proxy_logger.debug("key_in_db: %s", _key_in_db)
+
+    new_token = f"sk-{secrets.token_urlsafe(16)}"
+    new_token_hash = hash_token(new_token)
+    new_token_key_name = f"sk-...{new_token[-4:]}"
+
+    # update new token in DB
+    updated_token = await prisma_client.db.litellm_verificationtoken.update(
+        where={"token": hashed_api_key},
+        data={
+            "token": new_token_hash,
+            "key_name": new_token_key_name,
+        },
+    )
+    updated_token_dict = {}
+    if updated_token is not None:
+        updated_token_dict = dict(updated_token)
+
+    updated_token_dict["token"] = new_token
+
+    ### 3. remove existing key entry from cache
+    ######################################################################
+    if key:
+        user_api_key_cache.delete_cache(key)
+
+    if hashed_api_key:
+        user_api_key_cache.delete_cache(hashed_api_key)
+
+    return GenerateKeyResponse(
+        **updated_token_dict,
+    )

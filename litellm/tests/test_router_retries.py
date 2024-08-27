@@ -1,18 +1,24 @@
 #### What this tests ####
 #    This tests calling router with fallback models
 
-import sys, os, time
-import traceback, asyncio
+import asyncio
+import os
+import sys
+import time
+import traceback
+
 import pytest
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 
+import httpx
+import openai
+
 import litellm
 from litellm import Router
 from litellm.integrations.custom_logger import CustomLogger
-import openai, httpx
 
 
 class MyCustomHandler(CustomLogger):
@@ -127,7 +133,7 @@ async def test_router_retries_errors(sync_mode, error_type):
     ["AuthenticationErrorRetries", "ContentPolicyViolationErrorRetries"],  #
 )
 async def test_router_retry_policy(error_type):
-    from litellm.router import RetryPolicy, AllowedFailsPolicy
+    from litellm.router import AllowedFailsPolicy, RetryPolicy
 
     retry_policy = RetryPolicy(
         ContentPolicyViolationErrorRetries=3, AuthenticationErrorRetries=0
@@ -386,7 +392,7 @@ def test_retry_rate_limit_error_with_healthy_deployments():
 
 def test_do_retry_rate_limit_error_with_no_fallbacks_and_no_healthy_deployments():
     """
-    Test 2. It SHOULD Retry, when healthy_deployments is [] and fallbacks is None
+    Test 2. It SHOULD NOT Retry, when healthy_deployments is [] and fallbacks is None
     """
     healthy_deployments = []
 
@@ -409,9 +415,10 @@ def test_do_retry_rate_limit_error_with_no_fallbacks_and_no_healthy_deployments(
         response = router.should_retry_this_error(
             error=rate_limit_error, healthy_deployments=healthy_deployments
         )
-        assert response == True
+        pytest.fail("Should have raised an error")
     except Exception as e:
-        pytest.fail("Should not have failed this error - {}".format(str(e)))
+        print("got an exception", e)
+        pass
 
 
 def test_raise_context_window_exceeded_error():
@@ -582,3 +589,96 @@ def test_timeout_for_rate_limit_error_with_no_healthy_deployments():
     )
 
     assert _timeout > 0.0
+
+
+def test_no_retry_for_not_found_error_404():
+    healthy_deployments = []
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "azure/chatgpt-v-2",
+                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "api_base": os.getenv("AZURE_API_BASE"),
+                },
+            }
+        ]
+    )
+
+    # Act & Assert
+    error = litellm.NotFoundError(
+        message="404 model not found",
+        model="gpt-12",
+        llm_provider="azure",
+    )
+    try:
+        response = router.should_retry_this_error(
+            error=error, healthy_deployments=healthy_deployments
+        )
+        pytest.fail(
+            "Should have raised an exception 404 NotFoundError should never be retried, it's typically model_not_found error"
+        )
+    except Exception as e:
+        print("got exception", e)
+
+
+internal_server_error = litellm.InternalServerError(
+    message="internal server error",
+    model="gpt-12",
+    llm_provider="azure",
+)
+
+rate_limit_error = litellm.RateLimitError(
+    message="rate limit error",
+    model="gpt-12",
+    llm_provider="azure",
+)
+
+service_unavailable_error = litellm.ServiceUnavailableError(
+    message="service unavailable error",
+    model="gpt-12",
+    llm_provider="azure",
+)
+
+timeout_error = litellm.Timeout(
+    message="timeout error",
+    model="gpt-12",
+    llm_provider="azure",
+)
+
+
+def test_no_retry_when_no_healthy_deployments():
+    healthy_deployments = []
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "azure/chatgpt-v-2",
+                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "api_base": os.getenv("AZURE_API_BASE"),
+                },
+            }
+        ]
+    )
+
+    for error in [
+        internal_server_error,
+        rate_limit_error,
+        service_unavailable_error,
+        timeout_error,
+    ]:
+        try:
+            response = router.should_retry_this_error(
+                error=error, healthy_deployments=healthy_deployments
+            )
+            pytest.fail(
+                "Should have raised an exception,  there's no point retrying an error when there are 0 healthy deployments"
+            )
+        except Exception as e:
+            print("got exception", e)

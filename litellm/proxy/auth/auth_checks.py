@@ -10,7 +10,7 @@ Run checks for:
 """
 import time
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Literal, Optional
+from typing import TYPE_CHECKING, Any, List, Literal, Optional
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -66,7 +66,7 @@ def common_checks(
         raise Exception(
             f"Team={team_object.team_id} is blocked. Update via `/team/unblock` if your admin."
         )
-    # 2. If user can call model
+    # 2. If team can call model
     if (
         _model is not None
         and team_object is not None
@@ -74,8 +74,17 @@ def common_checks(
         and _model not in team_object.models
     ):
         # this means the team has access to all models on the proxy
-        if "all-proxy-models" in team_object.models:
+        if (
+            "all-proxy-models" in team_object.models
+            or "*" in team_object.models
+            or "openai/*" in team_object.models
+        ):
             # this means the team has access to all models on the proxy
+            pass
+        # check if the team model is an access_group
+        elif model_in_access_group(_model, team_object.models) is True:
+            pass
+        elif _model and "*" in _model:
             pass
         else:
             raise Exception(
@@ -327,6 +336,39 @@ async def get_end_user_object(
         return None
 
 
+def model_in_access_group(model: str, team_models: Optional[List[str]]) -> bool:
+    from collections import defaultdict
+
+    from litellm.proxy.proxy_server import llm_router
+
+    if team_models is None:
+        return True
+    if model in team_models:
+        return True
+
+    access_groups = defaultdict(list)
+    if llm_router:
+        access_groups = llm_router.get_model_access_groups()
+
+    models_in_current_access_groups = []
+    if len(access_groups) > 0:  # check if token contains any model access groups
+        for idx, m in enumerate(
+            team_models
+        ):  # loop token models, if any of them are an access group add the access group
+            if m in access_groups:
+                # if it is an access group we need to remove it from valid_token.models
+                models_in_group = access_groups[m]
+                models_in_current_access_groups.extend(models_in_group)
+
+    # Filter out models that are access_groups
+    filtered_models = [m for m in team_models if m not in access_groups]
+    filtered_models += models_in_current_access_groups
+
+    if model in filtered_models:
+        return True
+    return False
+
+
 @log_to_opentelemetry
 async def get_user_object(
     user_id: str,
@@ -543,12 +585,11 @@ async def can_key_call_model(
     )
     from collections import defaultdict
 
+    from litellm.proxy.proxy_server import llm_router
+
     access_groups = defaultdict(list)
-    if llm_model_list is not None:
-        for m in llm_model_list:
-            for group in m.get("model_info", {}).get("access_groups", []):
-                model_name = m["model_name"]
-                access_groups[group].append(model_name)
+    if llm_router:
+        access_groups = llm_router.get_model_access_groups()
 
     models_in_current_access_groups = []
     if len(access_groups) > 0:  # check if token contains any model access groups

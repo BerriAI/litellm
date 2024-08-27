@@ -62,11 +62,6 @@ COPY --from=builder /wheels/ /wheels/
 RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ && rm -f *.whl && rm -rf /wheels
 
 # Generate prisma client
-ENV PRISMA_BINARY_CACHE_DIR=/app/prisma
-RUN mkdir -p /.cache
-RUN chmod -R 777 /.cache
-RUN pip install nodejs-bin
-RUN pip install prisma
 RUN prisma generate
 RUN chmod +x entrypoint.sh
 

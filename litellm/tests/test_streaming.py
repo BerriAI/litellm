@@ -645,7 +645,16 @@ def test_completion_ollama_hosted_stream():
 # test_completion_ollama_hosted_stream()
 
 
-def test_completion_claude_stream():
+@pytest.mark.parametrize(
+    "model",
+    [
+        # "claude-instant-1.2",
+        # "claude-2",
+        # "mistral/mistral-medium",
+        "openrouter/openai/gpt-4o-mini",
+    ],
+)
+def test_completion_model_stream(model):
     try:
         messages = [
             {"role": "system", "content": "You are a helpful assistant."},
@@ -655,7 +664,7 @@ def test_completion_claude_stream():
             },
         ]
         response = completion(
-            model="claude-instant-1.2", messages=messages, stream=True, max_tokens=50
+            model=model, messages=messages, stream=True, max_tokens=50
         )
         complete_response = ""
         # Add any assertions here to check the response
@@ -669,30 +678,6 @@ def test_completion_claude_stream():
         print(f"completion_response: {complete_response}")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-
-
-# test_completion_claude_stream()
-def test_completion_claude_2_stream():
-    litellm.set_verbose = True
-    response = completion(
-        model="claude-2",
-        messages=[{"role": "user", "content": "hello from litellm"}],
-        stream=True,
-    )
-    complete_response = ""
-    # Add any assertions here to check the response
-    idx = 0
-    for chunk in response:
-        print(chunk)
-        # print(chunk.choices[0].delta)
-        chunk, finished = streaming_format_tests(idx, chunk)
-        if finished:
-            break
-        complete_response += chunk
-        idx += 1
-    if complete_response.strip() == "":
-        raise Exception("Empty response received")
-    print(f"completion_response: {complete_response}")
 
 
 @pytest.mark.asyncio
@@ -770,27 +755,40 @@ async def test_completion_gemini_stream(sync_mode):
     try:
         litellm.set_verbose = True
         print("Streaming gemini response")
-        messages = [
-            {"role": "system", "content": "You are a helpful assistant."},
+        function1 = [
             {
-                "role": "user",
-                "content": "Who was Alexander?",
-            },
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                    },
+                    "required": ["location"],
+                },
+            }
         ]
+        messages = [{"role": "user", "content": "What is the weather like in Boston?"}]
         print("testing gemini streaming")
         complete_response = ""
         # Add any assertions here to check the response
         non_empty_chunks = 0
-
+        chunks = []
         if sync_mode:
             response = completion(
                 model="gemini/gemini-1.5-flash",
                 messages=messages,
                 stream=True,
+                functions=function1,
             )
 
             for idx, chunk in enumerate(response):
                 print(chunk)
+                chunks.append(chunk)
                 # print(chunk.choices[0].delta)
                 chunk, finished = streaming_format_tests(idx, chunk)
                 if finished:
@@ -802,11 +800,13 @@ async def test_completion_gemini_stream(sync_mode):
                 model="gemini/gemini-1.5-flash",
                 messages=messages,
                 stream=True,
+                functions=function1,
             )
 
             idx = 0
             async for chunk in response:
                 print(chunk)
+                chunks.append(chunk)
                 # print(chunk.choices[0].delta)
                 chunk, finished = streaming_format_tests(idx, chunk)
                 if finished:
@@ -815,10 +815,17 @@ async def test_completion_gemini_stream(sync_mode):
                 complete_response += chunk
                 idx += 1
 
-        if complete_response.strip() == "":
-            raise Exception("Empty response received")
+        # if complete_response.strip() == "":
+        #     raise Exception("Empty response received")
         print(f"completion_response: {complete_response}")
-        assert non_empty_chunks > 1
+
+        complete_response = litellm.stream_chunk_builder(
+            chunks=chunks, messages=messages
+        )
+
+        assert complete_response.choices[0].message.function_call is not None
+
+        # assert non_empty_chunks > 1
     except litellm.InternalServerError as e:
         pass
     except litellm.RateLimitError as e:
@@ -830,40 +837,6 @@ async def test_completion_gemini_stream(sync_mode):
 
 
 # asyncio.run(test_acompletion_gemini_stream())
-
-
-def test_completion_mistral_api_stream():
-    try:
-        litellm.set_verbose = True
-        print("Testing streaming mistral api response")
-        response = completion(
-            model="mistral/mistral-medium",
-            messages=[
-                {
-                    "role": "user",
-                    "content": "Hey, how's it going?",
-                }
-            ],
-            max_tokens=10,
-            stream=True,
-        )
-        complete_response = ""
-        has_finish_reason = False
-        for idx, chunk in enumerate(response):
-            chunk, finished = streaming_format_tests(idx, chunk)
-            if finished:
-                has_finish_reason = True
-                break
-            complete_response += chunk
-        if has_finish_reason == False:
-            raise Exception("finish reason not set")
-        if complete_response.strip() == "":
-            raise Exception("Empty response received")
-        print(f"completion_response: {complete_response}")
-    except litellm.APIError as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
 
 
 def test_completion_mistral_api_mistral_large_function_call_with_streaming():
@@ -1683,6 +1656,7 @@ def test_completion_bedrock_mistral_stream():
         pytest.fail(f"Error occurred: {e}")
 
 
+@pytest.mark.skip(reason="stopped using TokenIterator")
 def test_sagemaker_weird_response():
     """
     When the stream ends, flush any remaining holding chunks.
@@ -1690,7 +1664,7 @@ def test_sagemaker_weird_response():
     try:
         import json
 
-        from litellm.llms.sagemaker import TokenIterator
+        from litellm.llms.sagemaker.sagemaker import TokenIterator
 
         chunk = """<s>[INST] Hey, how's it going? [/INST],
         I'm doing well, thanks for asking! How about you? Is there anything you'd like to chat about or ask? I'm here to help with any questions you might have."""
