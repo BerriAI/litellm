@@ -69,6 +69,7 @@ interface ViewKeyTableProps {
   data: any[] | null;
   setData: React.Dispatch<React.SetStateAction<any[] | null>>;
   teams: any[] | null;
+  premiumUser: boolean;
 }
 
 interface ItemData {
@@ -96,7 +97,8 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   selectedTeam,
   data,
   setData,
-  teams
+  teams,
+  premiumUser
 }) => {
   const [isButtonClicked, setIsButtonClicked] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -619,6 +621,11 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   };
 
   const handleRegenerateKey = async () => {
+    if (!premiumUser) {
+      message.error("Regenerate API Key is an Enterprise feature. Please upgrade to use this feature.");
+      return;
+    }
+
     try {
       if (selectedToken == null) {
         message.error("Please select a key to regenerate");
@@ -994,14 +1001,31 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
         <Button key="cancel" onClick={() => setRegenerateDialogVisible(false)} className="mr-2">
           Cancel
         </Button>,
-        <Button key="regenerate" onClick={handleRegenerateKey}>
-          Regenerate
+        <Button
+          key="regenerate"
+          onClick={handleRegenerateKey}
+          disabled={!premiumUser}
+        >
+          {premiumUser ? "Regenerate" : "Upgrade to Regenerate"}
         </Button>
       ]}
     >
-      <p>Are you sure you want to regenerate this key?</p>
-      <p>Key Alias:</p>
-      <pre>{selectedToken?.key_alias || 'No alias set'}</pre>
+      {premiumUser ? (
+        <>
+          <p>Are you sure you want to regenerate this key?</p>
+          <p>Key Alias:</p>
+          <pre>{selectedToken?.key_alias || 'No alias set'}</pre>
+        </>
+      ) : (
+        <div>
+          <p className="mb-2 text-gray-500 italic text-[12px]">Upgrade to use this feature</p>
+          <Button variant="primary" className="mb-2">
+            <a href="https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat" target="_blank">
+              Get Free Trial
+            </a>
+          </Button>
+        </div>
+      )}
     </Modal>
 
     {/* Regenerated Key Display Modal */}
