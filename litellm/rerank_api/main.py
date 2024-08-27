@@ -55,9 +55,12 @@ async def arerank(
 def rerank(
     model: str,
     query: str,
-    documents: List[str],
+    documents: List[Union[str, Dict[str, Any]]],
     custom_llm_provider: Optional[Literal["cohere", "together_ai"]] = None,
-    top_n: int = 3,
+    top_n: Optional[int] = None,
+    rank_fields: Optional[List[str]] = None,
+    return_documents: Optional[bool] = True,
+    max_chunks_per_doc: Optional[int] = None,
     **kwargs,
 ) -> Union[RerankResponse, Coroutine[Any, Any, RerankResponse]]:
     """
@@ -107,6 +110,9 @@ def rerank(
                 query=query,
                 documents=documents,
                 top_n=top_n,
+                rank_fields=rank_fields,
+                return_documents=return_documents,
+                max_chunks_per_doc=max_chunks_per_doc,
                 api_key=cohere_key,
             )
             pass
@@ -130,6 +136,9 @@ def rerank(
                 query=query,
                 documents=documents,
                 top_n=top_n,
+                rank_fields=rank_fields,
+                return_documents=return_documents,
+                max_chunks_per_doc=max_chunks_per_doc,
                 api_key=together_key,
             )
 
