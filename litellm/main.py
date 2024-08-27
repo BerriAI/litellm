@@ -82,7 +82,6 @@ from .llms import (
     bedrock,
     clarifai,
     cloudflare,
-    cohere,
     gemini,
     huggingface_restapi,
     maritalk,
@@ -107,7 +106,7 @@ from .llms.azure import AzureChatCompletion, _check_dynamic_azure_params
 from .llms.azure_text import AzureTextCompletion
 from .llms.bedrock_httpx import BedrockConverseLLM, BedrockLLM
 from .llms.cohere import chat as cohere_chat
-from .llms.cohere import completion as cohere_completion
+from .llms.cohere import completion as cohere_completion  # type: ignore
 from .llms.cohere import embed as cohere_embed
 from .llms.custom_llm import CustomLLM, custom_chat_llm_router
 from .llms.databricks import DatabricksChatCompletion
