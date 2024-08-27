@@ -1,41 +1,14 @@
 # What is this?
 ## Handler for calling llama 3.1 API on Vertex AI
-import copy
-import json
-import os
-import time
 import types
-import uuid
-from enum import Enum
-from typing import Any, Callable, List, Literal, Optional, Tuple, Union
+from typing import Callable, Literal, Optional, Union
 
 import httpx  # type: ignore
-import requests  # type: ignore
 
 import litellm
-from litellm.litellm_core_utils.core_helpers import map_finish_reason
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.types.llms.anthropic import (
-    AnthropicMessagesTool,
-    AnthropicMessagesToolChoice,
-)
-from litellm.types.llms.openai import (
-    ChatCompletionToolParam,
-    ChatCompletionToolParamFunctionChunk,
-)
-from litellm.types.utils import ResponseFormatChunk
-from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
+from litellm.utils import ModelResponse
 
-from .base import BaseLLM
-from .prompt_templates.factory import (
-    construct_tool_use_system_prompt,
-    contains_tag,
-    custom_prompt,
-    extract_between_tags,
-    parse_xml_params,
-    prompt_factory,
-    response_schema_prompt,
-)
+from ..base import BaseLLM
 
 
 class VertexAIError(Exception):
