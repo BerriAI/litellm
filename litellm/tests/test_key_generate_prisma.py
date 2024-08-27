@@ -56,6 +56,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     generate_key_fn,
     generate_key_helper_fn,
     info_key_fn,
+    regenerate_key_fn,
     update_key_fn,
 )
 from litellm.proxy.management_endpoints.team_endpoints import (
@@ -2935,3 +2936,103 @@ async def test_team_access_groups(prisma_client):
                 "not allowed to call model" in e.message
                 and "Allowed team models" in e.message
             )
+
+
+################ Unit Tests for testing regeneration of keys ###########
+@pytest.mark.asyncio()
+async def test_regenerate_api_key(prisma_client):
+    litellm.set_verbose = True
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    await litellm.proxy.proxy_server.prisma_client.connect()
+    import uuid
+
+    # generate new key
+    key_alias = f"test_alias_regenerate_key-{uuid.uuid4()}"
+    spend = 100
+    max_budget = 400
+    models = ["fake-openai-endpoint"]
+    new_key = await generate_key_fn(
+        data=GenerateKeyRequest(
+            key_alias=key_alias, spend=spend, max_budget=max_budget, models=models
+        ),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-1234",
+            user_id="1234",
+        ),
+    )
+
+    generated_key = new_key.key
+    print(generated_key)
+
+    # assert the new key works as expected
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+
+    async def return_body():
+        return_string = f'{{"model": "fake-openai-endpoint"}}'
+        # return string as bytes
+        return return_string.encode()
+
+    request.body = return_body
+    result = await user_api_key_auth(request=request, api_key=f"Bearer {generated_key}")
+    print(result)
+
+    # regenerate the key
+    new_key = await regenerate_key_fn(
+        key=generated_key,
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-1234",
+            user_id="1234",
+        ),
+    )
+    print("response from regenerate_key_fn", new_key)
+
+    # assert the new key works as expected
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+
+    async def return_body_2():
+        return_string = f'{{"model": "fake-openai-endpoint"}}'
+        # return string as bytes
+        return return_string.encode()
+
+    request.body = return_body_2
+    result = await user_api_key_auth(request=request, api_key=f"Bearer {new_key.key}")
+    print(result)
+
+    # assert the old key stops working
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+
+    async def return_body_3():
+        return_string = f'{{"model": "fake-openai-endpoint"}}'
+        # return string as bytes
+        return return_string.encode()
+
+    request.body = return_body_3
+    try:
+        result = await user_api_key_auth(
+            request=request, api_key=f"Bearer {generated_key}"
+        )
+        print(result)
+        pytest.fail(f"This should have failed!. the key has been regenerated")
+    except Exception as e:
+        print("got expected exception", e)
+        assert "Invalid proxy server token passed" in e.message
+
+    # Check that the regenerated key has the same spend, max_budget, models and key_alias
+    assert new_key.spend == spend, f"Expected spend {spend} but got {new_key.spend}"
+    assert (
+        new_key.max_budget == max_budget
+    ), f"Expected max_budget {max_budget} but got {new_key.max_budget}"
+    assert (
+        new_key.key_alias == key_alias
+    ), f"Expected key_alias {key_alias} but got {new_key.key_alias}"
+    assert (
+        new_key.models == models
+    ), f"Expected models {models} but got {new_key.models}"
+
+    pass
