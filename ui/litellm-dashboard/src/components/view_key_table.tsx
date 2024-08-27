@@ -1043,13 +1043,26 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
           <Title>Regenerated Key</Title>
           <Col numColSpan={1}>
             <p>
-              Please replace your old key with the new key generated.For
+              Please replace your old key with the new key generated. For
               security reasons, <b>you will not be able to view it again</b> through
               your LiteLLM account. If you lose this secret key, you will need to
               generate a new one.
             </p>
           </Col>
           <Col numColSpan={1}>
+            <Text className="mt-3">Key Alias:</Text>
+            <div
+              style={{
+                background: "#f8f8f8",
+                padding: "10px",
+                borderRadius: "5px",
+                marginBottom: "10px",
+              }}
+            >
+              <pre style={{ wordWrap: "break-word", whiteSpace: "normal" }}>
+                {selectedToken?.key_alias || 'No alias set'}
+              </pre>
+            </div>
             <Text className="mt-3">New API Key:</Text>
             <div
               style={{
