@@ -3267,6 +3267,16 @@ def get_optional_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,
             )
+    elif custom_llm_provider == "vertex_ai" and model in litellm.ai21_models:
+        supported_params = get_supported_openai_params(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+        _check_valid_arg(supported_params=supported_params)
+        optional_params = litellm.VertexAIAi21Config().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+        )
     elif custom_llm_provider == "sagemaker":
         ## check if unsupported param passed in
         supported_params = get_supported_openai_params(
