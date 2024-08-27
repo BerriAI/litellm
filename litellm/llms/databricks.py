@@ -363,6 +363,12 @@ class DatabricksChatCompletion(BaseLLM):
         except Exception as e:
             raise DatabricksError(status_code=500, message=str(e))
 
+        logging_obj.post_call(
+            input=messages,
+            api_key="",
+            original_response=response_json,
+            additional_args={"complete_input_dict": data},
+        )
         response = ModelResponse(**response_json)
 
         if base_model is not None:
