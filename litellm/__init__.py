@@ -859,8 +859,11 @@ from .llms.vertex_ai_and_google_ai_studio.vertex_ai_non_gemini import (
 from .llms.vertex_ai_and_google_ai_studio.vertex_ai_anthropic import (
     VertexAIAnthropicConfig,
 )
-from .llms.vertex_ai_and_google_ai_studio.vertex_ai_partner_models import (
+from .llms.vertex_ai_and_google_ai_studio.vertex_ai_partner_models.llama3.transformation import (
     VertexAILlama3Config,
+)
+from .llms.vertex_ai_and_google_ai_studio.vertex_ai_partner_models.ai21.transformation import (
+    VertexAIAi21Config,
 )
 from .llms.sagemaker.sagemaker import SagemakerConfig
 from .llms.ollama import OllamaConfig
