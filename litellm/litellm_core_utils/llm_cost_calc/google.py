@@ -48,6 +48,7 @@ def cost_router(
         "claude" in model
         or "llama" in model
         or "mistral" in model
+        or "jamba" in model
         or "codestral" in model
     ):
         return "cost_per_token"
