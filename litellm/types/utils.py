@@ -5,11 +5,16 @@ from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 from openai._models import BaseModel as OpenAIObject
+from openai.types.completion_usage import CompletionUsage
 from pydantic import ConfigDict, Field, PrivateAttr
 from typing_extensions import Callable, Dict, Required, TypedDict, override
 
 from ..litellm_core_utils.core_helpers import map_finish_reason
-from .llms.openai import ChatCompletionToolCallChunk, ChatCompletionUsageBlock
+from .llms.openai import (
+    ChatCompletionToolCallChunk,
+    ChatCompletionUsageBlock,
+    OpenAIChatCompletionChunk,
+)
 
 
 def _generate_id():  # private helper function
@@ -85,7 +90,7 @@ class GenericStreamingChunk(TypedDict, total=False):
     tool_use: Optional[ChatCompletionToolCallChunk]
     is_finished: Required[bool]
     finish_reason: Required[str]
-    usage: Optional[ChatCompletionUsageBlock]
+    usage: Required[Optional[ChatCompletionUsageBlock]]
     index: int
 
     # use this dict if you want to return any provider specific fields in the response
@@ -448,9 +453,6 @@ class Choices(OpenAIObject):
         setattr(self, key, value)
 
 
-from openai.types.completion_usage import CompletionUsage
-
-
 class Usage(CompletionUsage):
     def __init__(
         self,
@@ -499,7 +501,7 @@ class StreamingChoices(OpenAIObject):
     ):
         super(StreamingChoices, self).__init__(**params)
         if finish_reason:
-            self.finish_reason = finish_reason
+            self.finish_reason = map_finish_reason(finish_reason)
         else:
             self.finish_reason = None
         self.index = index
@@ -533,6 +535,17 @@ class StreamingChoices(OpenAIObject):
     def __setitem__(self, key, value):
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
+
+
+class StreamingChatCompletionChunk(OpenAIChatCompletionChunk):
+    def __init__(self, **kwargs):
+
+        new_choices = []
+        for choice in kwargs["choices"]:
+            new_choice = StreamingChoices(**choice).model_dump()
+            new_choices.append(new_choice)
+        kwargs["choices"] = new_choices
+        super().__init__(**kwargs)
 
 
 class ModelResponse(OpenAIObject):
@@ -1231,3 +1244,20 @@ class StandardLoggingPayload(TypedDict):
     response: Optional[Union[str, list, dict]]
     model_parameters: dict
     hidden_params: StandardLoggingHiddenParams
+
+
+from typing import AsyncIterator, Iterator
+
+
+class CustomStreamingDecoder:
+    async def aiter_bytes(
+        self, iterator: AsyncIterator[bytes]
+    ) -> AsyncIterator[
+        Optional[Union[GenericStreamingChunk, StreamingChatCompletionChunk]]
+    ]:
+        raise NotImplementedError
+
+    def iter_bytes(
+        self, iterator: Iterator[bytes]
+    ) -> Iterator[Optional[Union[GenericStreamingChunk, StreamingChatCompletionChunk]]]:
+        raise NotImplementedError

@@ -16,6 +16,7 @@ import logging
 import time
 import traceback
 from datetime import timedelta
+from enum import Enum
 from typing import Any, BinaryIO, List, Literal, Optional, Union
 
 from openai._models import BaseModel as OpenAIObject
@@ -34,6 +35,11 @@ def print_verbose(print_statement):
             print(print_statement)  # noqa
     except:
         pass
+
+
+class CacheMode(str, Enum):
+    default_on = "default_on"
+    default_off = "default_off"
 
 
 class BaseCache:
@@ -2079,6 +2085,9 @@ class Cache:
         type: Optional[
             Literal["local", "redis", "redis-semantic", "s3", "disk", "qdrant-semantic"]
         ] = "local",
+        mode: Optional[
+            CacheMode
+        ] = CacheMode.default_on,  # when default_on cache is always on, when default_off cache is opt in
         host: Optional[str] = None,
         port: Optional[str] = None,
         password: Optional[str] = None,
@@ -2214,6 +2223,7 @@ class Cache:
         self.namespace = namespace
         self.redis_flush_size = redis_flush_size
         self.ttl = ttl
+        self.mode: CacheMode = mode or CacheMode.default_on
 
         if self.type == "local" and default_in_memory_ttl is not None:
             self.ttl = default_in_memory_ttl
@@ -2226,7 +2236,7 @@ class Cache:
         if self.namespace is not None and isinstance(self.cache, RedisCache):
             self.cache.namespace = self.namespace
 
-    def get_cache_key(self, *args, **kwargs):
+    def get_cache_key(self, *args, **kwargs) -> str:
         """
         Get the cache key for the given arguments.
 
@@ -2420,6 +2430,8 @@ class Cache:
             The cached result if it exists, otherwise None.
         """
         try:  # never block execution
+            if self.should_use_cache(*args, **kwargs) is not True:
+                return
             messages = kwargs.get("messages", [])
             if "cache_key" in kwargs:
                 cache_key = kwargs["cache_key"]
@@ -2445,6 +2457,9 @@ class Cache:
         Used for embedding calls in async wrapper
         """
         try:  # never block execution
+            if self.should_use_cache(*args, **kwargs) is not True:
+                return
+
             messages = kwargs.get("messages", [])
             if "cache_key" in kwargs:
                 cache_key = kwargs["cache_key"]
@@ -2508,6 +2523,8 @@ class Cache:
             None
         """
         try:
+            if self.should_use_cache(*args, **kwargs) is not True:
+                return
             cache_key, cached_data, kwargs = self._add_cache_logic(
                 result=result, *args, **kwargs
             )
@@ -2521,6 +2538,8 @@ class Cache:
         Async implementation of add_cache
         """
         try:
+            if self.should_use_cache(*args, **kwargs) is not True:
+                return
             if self.type == "redis" and self.redis_flush_size is not None:
                 # high traffic - fill in results in memory and then flush
                 await self.batch_cache_write(result, *args, **kwargs)
@@ -2539,6 +2558,8 @@ class Cache:
         Does a bulk write, to prevent using too many clients
         """
         try:
+            if self.should_use_cache(*args, **kwargs) is not True:
+                return
             cache_list = []
             for idx, i in enumerate(kwargs["input"]):
                 preset_cache_key = self.get_cache_key(*args, **{**kwargs, "input": i})
@@ -2561,6 +2582,24 @@ class Cache:
                 await asyncio.gather(*tasks)
         except Exception as e:
             verbose_logger.exception(f"LiteLLM Cache: Excepton add_cache: {str(e)}")
+
+    def should_use_cache(self, *args, **kwargs):
+        """
+        Returns true if we should use the cache for LLM API calls
+
+        If cache is default_on then this is True
+        If cache is default_off then this is only true when user has opted in to use cache
+        """
+        if self.mode == CacheMode.default_on:
+            return True
+
+        # when mode == default_off -> Cache is opt in only
+        _cache = kwargs.get("cache", None)
+        verbose_logger.debug("should_use_cache: kwargs: %s; _cache: %s", kwargs, _cache)
+        if _cache and isinstance(_cache, dict):
+            if _cache.get("use-cache", False) is True:
+                return True
+        return False
 
     async def batch_cache_write(self, result, *args, **kwargs):
         cache_key, cached_data, kwargs = self._add_cache_logic(

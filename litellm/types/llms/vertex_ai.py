@@ -90,7 +90,7 @@ class Schema(TypedDict, total=False):
 class FunctionDeclaration(TypedDict, total=False):
     name: Required[str]
     description: str
-    parameters: Schema
+    parameters: Union[Schema, dict]
     response: Schema
 
 
@@ -184,6 +184,17 @@ class RequestBody(TypedDict, total=False):
     safetySettings: List[SafetSettingsConfig]
     generationConfig: GenerationConfig
     cachedContent: str
+
+
+class CachedContentRequestBody(TypedDict, total=False):
+    contents: Required[List[ContentType]]
+    system_instruction: SystemInstructions
+    tools: Tools
+    toolConfig: ToolConfig
+    model: Required[str]  # Format: models/{model}
+    ttl: str  # ending in 's' - Example: "3.5s".
+    name: str  # Format: cachedContents/{id}
+    displayName: str
 
 
 class SafetyRatings(TypedDict):
@@ -320,3 +331,8 @@ class Instance(TypedDict, total=False):
 
 class VertexMultimodalEmbeddingRequest(TypedDict, total=False):
     instances: List[Instance]
+
+
+class VertexAICachedContentResponseObject(TypedDict):
+    name: str
+    model: str

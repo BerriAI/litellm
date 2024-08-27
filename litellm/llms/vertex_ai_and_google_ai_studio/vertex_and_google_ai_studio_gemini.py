@@ -9,7 +9,7 @@ import types
 import uuid
 from enum import Enum
 from functools import partial
-from typing import Any, Callable, Coroutine, Dict, List, Literal, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
 import httpx  # type: ignore
 import requests  # type: ignore
@@ -25,11 +25,14 @@ from litellm.llms.prompt_templates.factory import (
     convert_url_to_base64,
     response_schema_prompt,
 )
-from litellm.llms.vertex_ai import _gemini_convert_messages_with_history
+from litellm.llms.vertex_ai_and_google_ai_studio.vertex_ai_non_gemini import (
+    _gemini_convert_messages_with_history,
+)
 from litellm.types.llms.openai import (
     ChatCompletionResponseMessage,
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
+    ChatCompletionToolParamFunctionChunk,
     ChatCompletionUsageBlock,
 )
 from litellm.types.llms.vertex_ai import (
@@ -51,7 +54,178 @@ from litellm.types.llms.vertex_ai import (
 from litellm.types.utils import GenericStreamingChunk
 from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
 
-from .base import BaseLLM
+from ..base import BaseLLM
+from .common_utils import VertexAIError, get_supports_system_message
+from .context_caching.vertex_ai_context_caching import ContextCachingEndpoints
+from .gemini_transformation import transform_system_message
+
+context_caching_endpoints = ContextCachingEndpoints()
+
+
+class VertexAIConfig:
+    """
+    Reference: https://cloud.google.com/vertex-ai/docs/generative-ai/chat/test-chat-prompts
+    Reference: https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/inference
+
+    The class `VertexAIConfig` provides configuration for the VertexAI's API interface. Below are the parameters:
+
+    - `temperature` (float): This controls the degree of randomness in token selection.
+
+    - `max_output_tokens` (integer): This sets the limitation for the maximum amount of token in the text output. In this case, the default value is 256.
+
+    - `top_p` (float): The tokens are selected from the most probable to the least probable until the sum of their probabilities equals the `top_p` value. Default is 0.95.
+
+    - `top_k` (integer): The value of `top_k` determines how many of the most probable tokens are considered in the selection. For example, a `top_k` of 1 means the selected token is the most probable among all tokens. The default value is 40.
+
+    - `response_mime_type` (str): The MIME type of the response. The default value is 'text/plain'.
+
+    - `candidate_count` (int): Number of generated responses to return.
+
+    - `stop_sequences` (List[str]): The set of character sequences (up to 5) that will stop output generation. If specified, the API will stop at the first appearance of a stop sequence. The stop sequence will not be included as part of the response.
+
+    - `frequency_penalty` (float): This parameter is used to penalize the model from repeating the same output. The default value is 0.0.
+
+    - `presence_penalty` (float): This parameter is used to penalize the model from generating the same output as the input. The default value is 0.0.
+
+    Note: Please make sure to modify the default parameters as required for your use case.
+    """
+
+    temperature: Optional[float] = None
+    max_output_tokens: Optional[int] = None
+    top_p: Optional[float] = None
+    top_k: Optional[int] = None
+    response_mime_type: Optional[str] = None
+    candidate_count: Optional[int] = None
+    stop_sequences: Optional[list] = None
+    frequency_penalty: Optional[float] = None
+    presence_penalty: Optional[float] = None
+
+    def __init__(
+        self,
+        temperature: Optional[float] = None,
+        max_output_tokens: Optional[int] = None,
+        top_p: Optional[float] = None,
+        top_k: Optional[int] = None,
+        response_mime_type: Optional[str] = None,
+        candidate_count: Optional[int] = None,
+        stop_sequences: Optional[list] = None,
+        frequency_penalty: Optional[float] = None,
+        presence_penalty: Optional[float] = None,
+    ) -> None:
+        locals_ = locals()
+        for key, value in locals_.items():
+            if key != "self" and value is not None:
+                setattr(self.__class__, key, value)
+
+    @classmethod
+    def get_config(cls):
+        return {
+            k: v
+            for k, v in cls.__dict__.items()
+            if not k.startswith("__")
+            and not isinstance(
+                v,
+                (
+                    types.FunctionType,
+                    types.BuiltinFunctionType,
+                    classmethod,
+                    staticmethod,
+                ),
+            )
+            and v is not None
+        }
+
+    def get_supported_openai_params(self):
+        return [
+            "temperature",
+            "top_p",
+            "max_tokens",
+            "stream",
+            "tools",
+            "tool_choice",
+            "response_format",
+            "n",
+            "stop",
+            "extra_headers",
+        ]
+
+    def map_openai_params(self, non_default_params: dict, optional_params: dict):
+        for param, value in non_default_params.items():
+            if param == "temperature":
+                optional_params["temperature"] = value
+            if param == "top_p":
+                optional_params["top_p"] = value
+            if (
+                param == "stream" and value == True
+            ):  # sending stream = False, can cause it to get passed unchecked and raise issues
+                optional_params["stream"] = value
+            if param == "n":
+                optional_params["candidate_count"] = value
+            if param == "stop":
+                if isinstance(value, str):
+                    optional_params["stop_sequences"] = [value]
+                elif isinstance(value, list):
+                    optional_params["stop_sequences"] = value
+            if param == "max_tokens":
+                optional_params["max_output_tokens"] = value
+            if param == "response_format" and value["type"] == "json_object":
+                optional_params["response_mime_type"] = "application/json"
+            if param == "frequency_penalty":
+                optional_params["frequency_penalty"] = value
+            if param == "presence_penalty":
+                optional_params["presence_penalty"] = value
+            if param == "tools" and isinstance(value, list):
+                from vertexai.preview import generative_models
+
+                gtool_func_declarations = []
+                for tool in value:
+                    gtool_func_declaration = generative_models.FunctionDeclaration(
+                        name=tool["function"]["name"],
+                        description=tool["function"].get("description", ""),
+                        parameters=tool["function"].get("parameters", {}),
+                    )
+                    gtool_func_declarations.append(gtool_func_declaration)
+                optional_params["tools"] = [
+                    generative_models.Tool(
+                        function_declarations=gtool_func_declarations
+                    )
+                ]
+            if param == "tool_choice" and (
+                isinstance(value, str) or isinstance(value, dict)
+            ):
+                pass
+        return optional_params
+
+    def get_mapped_special_auth_params(self) -> dict:
+        """
+        Common auth params across bedrock/vertex_ai/azure/watsonx
+        """
+        return {"project": "vertex_project", "region_name": "vertex_location"}
+
+    def map_special_auth_params(self, non_default_params: dict, optional_params: dict):
+        mapped_params = self.get_mapped_special_auth_params()
+
+        for param, value in non_default_params.items():
+            if param in mapped_params:
+                optional_params[mapped_params[param]] = value
+        return optional_params
+
+    def get_eu_regions(self) -> List[str]:
+        """
+        Source: https://cloud.google.com/vertex-ai/generative-ai/docs/learn/locations#available-regions
+        """
+        return [
+            "europe-central2",
+            "europe-north1",
+            "europe-southwest1",
+            "europe-west1",
+            "europe-west2",
+            "europe-west3",
+            "europe-west4",
+            "europe-west6",
+            "europe-west8",
+            "europe-west9",
+        ]
 
 
 class GoogleAIStudioGeminiConfig:  # key diff from VertexAI - 'frequency_penalty' and 'presence_penalty' not supported
@@ -130,10 +304,48 @@ class GoogleAIStudioGeminiConfig:  # key diff from VertexAI - 'frequency_penalty
             "stream",
             "tools",
             "tool_choice",
+            "functions",
             "response_format",
             "n",
             "stop",
         ]
+    def _map_function(self, value: List[dict]) -> List[Tools]:
+        gtool_func_declarations = []
+        googleSearchRetrieval: Optional[dict] = None
+
+        for tool in value:
+            openai_function_object: Optional[ChatCompletionToolParamFunctionChunk] = (
+                None
+            )
+            if "function" in tool:  # tools list
+                openai_function_object = ChatCompletionToolParamFunctionChunk(  # type: ignore
+                    **tool["function"]
+                )
+            elif "name" in tool:  # functions list
+                openai_function_object = ChatCompletionToolParamFunctionChunk(**tool)  # type: ignore
+
+            # check if grounding
+            if tool.get("googleSearchRetrieval", None) is not None:
+                googleSearchRetrieval = tool["googleSearchRetrieval"]
+            elif openai_function_object is not None:
+                gtool_func_declaration = FunctionDeclaration(
+                    name=openai_function_object["name"],
+                    description=openai_function_object.get("description", ""),
+                    parameters=openai_function_object.get("parameters", {}),
+                )
+                gtool_func_declarations.append(gtool_func_declaration)
+            else:
+                # assume it's a provider-specific param
+                verbose_logger.warning(
+                    "Invalid tool={}. Use `litellm.set_verbose` or `litellm --detailed_debug` to see raw request."
+                )
+
+        _tools = Tools(
+            function_declarations=gtool_func_declarations,
+        )
+        if googleSearchRetrieval is not None:
+            _tools["googleSearchRetrieval"] = googleSearchRetrieval
+        return [_tools]
 
     def map_tool_choice_values(
         self, model: str, tool_choice: Union[str, dict]
@@ -197,26 +409,11 @@ class GoogleAIStudioGeminiConfig:  # key diff from VertexAI - 'frequency_penalty
                     if "json_schema" in value and "schema" in value["json_schema"]:  # type: ignore
                         optional_params["response_mime_type"] = "application/json"
                         optional_params["response_schema"] = value["json_schema"]["schema"]  # type: ignore
-            if param == "tools" and isinstance(value, list):
-                gtool_func_declarations = []
-                for tool in value:
-                    _parameters = tool.get("function", {}).get("parameters", {})
-                    _properties = _parameters.get("properties", {})
-                    if isinstance(_properties, dict):
-                        for _, _property in _properties.items():
-                            if "enum" in _property and "format" not in _property:
-                                _property["format"] = "enum"
-
-                    gtool_func_declaration = FunctionDeclaration(
-                        name=tool["function"]["name"],
-                        description=tool["function"].get("description", ""),
-                    )
-                    if len(_parameters.keys()) > 0:
-                        gtool_func_declaration["parameters"] = _parameters
-                    gtool_func_declarations.append(gtool_func_declaration)
-                optional_params["tools"] = [
-                    Tools(function_declarations=gtool_func_declarations)
-                ]
+            if (param == "tools" or param == "functions") and isinstance(value, list):
+                optional_params["tools"] = self._map_function(value=value)
+                optional_params["litellm_param_is_function_call"] = (
+                    True if param == "functions" else False
+                )
             if param == "tool_choice" and (
                 isinstance(value, str) or isinstance(value, dict)
             ):
@@ -340,12 +537,14 @@ class VertexGeminiConfig:
             "max_tokens",
             "stream",
             "tools",
+            "functions",
             "tool_choice",
             "response_format",
             "n",
             "stop",
             "frequency_penalty",
             "presence_penalty",
+            "extra_headers",
             "seed",
         ]
 
@@ -373,6 +572,44 @@ class VertexGeminiConfig:
                 ),
                 status_code=400,
             )
+
+    def _map_function(self, value: List[dict]) -> List[Tools]:
+        gtool_func_declarations = []
+        googleSearchRetrieval: Optional[dict] = None
+
+        for tool in value:
+            openai_function_object: Optional[ChatCompletionToolParamFunctionChunk] = (
+                None
+            )
+            if "function" in tool:  # tools list
+                openai_function_object = ChatCompletionToolParamFunctionChunk(  # type: ignore
+                    **tool["function"]
+                )
+            elif "name" in tool:  # functions list
+                openai_function_object = ChatCompletionToolParamFunctionChunk(**tool)  # type: ignore
+
+            # check if grounding
+            if tool.get("googleSearchRetrieval", None) is not None:
+                googleSearchRetrieval = tool["googleSearchRetrieval"]
+            elif openai_function_object is not None:
+                gtool_func_declaration = FunctionDeclaration(
+                    name=openai_function_object["name"],
+                    description=openai_function_object.get("description", ""),
+                    parameters=openai_function_object.get("parameters", {}),
+                )
+                gtool_func_declarations.append(gtool_func_declaration)
+            else:
+                # assume it's a provider-specific param
+                verbose_logger.warning(
+                    "Invalid tool={}. Use `litellm.set_verbose` or `litellm --detailed_debug` to see raw request."
+                )
+
+        _tools = Tools(
+            function_declarations=gtool_func_declarations,
+        )
+        if googleSearchRetrieval is not None:
+            _tools["googleSearchRetrieval"] = googleSearchRetrieval
+        return [_tools]
 
     def map_openai_params(
         self,
@@ -415,33 +652,11 @@ class VertexGeminiConfig:
                 optional_params["frequency_penalty"] = value
             if param == "presence_penalty":
                 optional_params["presence_penalty"] = value
-            if param == "tools" and isinstance(value, list):
-                gtool_func_declarations = []
-                googleSearchRetrieval: Optional[dict] = None
-                provider_specific_tools: List[dict] = []
-                for tool in value:
-                    # check if grounding
-                    try:
-                        gtool_func_declaration = FunctionDeclaration(
-                            name=tool["function"]["name"],
-                            description=tool["function"].get("description", ""),
-                            parameters=tool["function"].get("parameters", {}),
-                        )
-                        gtool_func_declarations.append(gtool_func_declaration)
-                    except KeyError:
-                        if tool.get("googleSearchRetrieval", None) is not None:
-                            googleSearchRetrieval = tool["googleSearchRetrieval"]
-                        else:
-                            # assume it's a provider-specific param
-                            verbose_logger.warning(
-                                "Got KeyError parsing tool={}. Assuming it's a provider-specific param. Use `litellm.set_verbose` or `litellm --detailed_debug` to see raw request."
-                            )
-                _tools = Tools(
-                    function_declarations=gtool_func_declarations,
+            if (param == "tools" or param == "functions") and isinstance(value, list):
+                optional_params["tools"] = self._map_function(value=value)
+                optional_params["litellm_param_is_function_call"] = (
+                    True if param == "functions" else False
                 )
-                if googleSearchRetrieval is not None:
-                    _tools["googleSearchRetrieval"] = googleSearchRetrieval
-                optional_params["tools"] = [_tools] + provider_specific_tools
             if param == "tool_choice" and (
                 isinstance(value, str) or isinstance(value, dict)
             ):
@@ -580,19 +795,6 @@ def make_sync_call(
     return completion_stream
 
 
-class VertexAIError(Exception):
-    def __init__(self, status_code, message):
-        self.status_code = status_code
-        self.message = message
-        self.request = httpx.Request(
-            method="POST", url=" https://cloud.google.com/vertex-ai/"
-        )
-        self.response = httpx.Response(status_code=status_code, request=self.request)
-        super().__init__(
-            self.message
-        )  # Call the base class constructor with the parameters it needs
-
-
 class VertexLLM(BaseLLM):
     def __init__(self) -> None:
         super().__init__()
@@ -613,6 +815,7 @@ class VertexLLM(BaseLLM):
         model_response: ModelResponse,
         logging_obj: litellm.litellm_core_utils.litellm_logging.Logging,
         optional_params: dict,
+        litellm_params: dict,
         api_key: str,
         data: Union[dict, str],
         messages: List,
@@ -629,7 +832,6 @@ class VertexLLM(BaseLLM):
         )
 
         print_verbose(f"raw model_response: {response.text}")
-
         ## RESPONSE OBJECT
         try:
             completion_response = GenerateContentResponseBody(**response.json())  # type: ignore
@@ -737,6 +939,7 @@ class VertexLLM(BaseLLM):
             chat_completion_message = {"role": "assistant"}
             content_str = ""
             tools: List[ChatCompletionToolCallChunk] = []
+            functions: Optional[ChatCompletionToolCallFunctionChunk] = None
             for idx, candidate in enumerate(completion_response["candidates"]):
                 if "content" not in candidate:
                     continue
@@ -759,17 +962,24 @@ class VertexLLM(BaseLLM):
                             candidate["content"]["parts"][0]["functionCall"]["args"]
                         ),
                     )
-                    _tool_response_chunk = ChatCompletionToolCallChunk(
-                        id=f"call_{str(uuid.uuid4())}",
-                        type="function",
-                        function=_function_chunk,
-                        index=candidate.get("index", idx),
-                    )
-                    tools.append(_tool_response_chunk)
+                    if litellm_params.get("litellm_param_is_function_call") is True:
+                        functions = _function_chunk
+                    else:
+                        _tool_response_chunk = ChatCompletionToolCallChunk(
+                            id=f"call_{str(uuid.uuid4())}",
+                            type="function",
+                            function=_function_chunk,
+                            index=candidate.get("index", idx),
+                        )
+                        tools.append(_tool_response_chunk)
+                chat_completion_message["content"] = (
+                    content_str if len(content_str) > 0 else None
+                )
+                if len(tools) > 0:
+                    chat_completion_message["tool_calls"] = tools
 
-                chat_completion_message["content"] = content_str
-                chat_completion_message["tool_calls"] = tools
-
+                if functions is not None:
+                    chat_completion_message["function_call"] = functions
                 choice = litellm.Choices(
                     finish_reason=candidate.get("finishReason", "stop"),
                     index=candidate.get("index", idx),
@@ -832,6 +1042,7 @@ class VertexLLM(BaseLLM):
         self, credentials: Optional[str], project_id: Optional[str]
     ) -> Tuple[Any, str]:
         import google.auth as google_auth
+        from google.auth import identity_pool
         from google.auth.credentials import Credentials  # type: ignore[import-untyped]
         from google.auth.transport.requests import (
             Request,  # type: ignore[import-untyped]
@@ -855,10 +1066,16 @@ class VertexLLM(BaseLLM):
             else:
                 json_obj = json.loads(credentials)
 
-            creds = google.oauth2.service_account.Credentials.from_service_account_info(
-                json_obj,
-                scopes=["https://www.googleapis.com/auth/cloud-platform"],
-            )
+            # Check if the JSON object contains Workload Identity Federation configuration
+            if "type" in json_obj and json_obj["type"] == "external_account":
+                creds = identity_pool.Credentials.from_info(json_obj)
+            else:
+                creds = (
+                    google.oauth2.service_account.Credentials.from_service_account_info(
+                        json_obj,
+                        scopes=["https://www.googleapis.com/auth/cloud-platform"],
+                    )
+                )
 
             if project_id is None:
                 project_id = creds.project_id
@@ -895,8 +1112,11 @@ class VertexLLM(BaseLLM):
         """
         Returns auth token and project id
         """
-        if self.access_token is not None and self.project_id is not None:
-            return self.access_token, self.project_id
+        if self.access_token is not None:
+            if project_id is not None:
+                return self.access_token, project_id
+            elif self.project_id is not None:
+                return self.access_token, self.project_id
 
         if not self._credentials:
             self._credentials, cred_project_id = self.load_auth(
@@ -916,7 +1136,7 @@ class VertexLLM(BaseLLM):
         if not self._credentials or not self._credentials.token:
             raise RuntimeError("Could not resolve API token from the environment")
 
-        return self._credentials.token, self.project_id
+        return self._credentials.token, project_id or self.project_id
 
     def is_using_v1beta1_features(self, optional_params: dict) -> bool:
         """
@@ -975,11 +1195,21 @@ class VertexLLM(BaseLLM):
             ### SET RUNTIME ENDPOINT ###
             version = "v1beta1" if should_use_v1beta1_features is True else "v1"
             endpoint = "generateContent"
+            litellm.utils.print_verbose("vertex_project - {}".format(vertex_project))
             if stream is True:
                 endpoint = "streamGenerateContent"
                 url = f"https://{vertex_location}-aiplatform.googleapis.com/{version}/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}?alt=sse"
             else:
                 url = f"https://{vertex_location}-aiplatform.googleapis.com/{version}/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}"
+
+            # if model is only numeric chars then it's a fine tuned gemini model
+            # model = 4965075652664360960
+            # send to this url: url = f"https://{vertex_location}-aiplatform.googleapis.com/{version}/projects/{vertex_project}/locations/{vertex_location}/endpoints/{model}:{endpoint}"
+            if model.isdigit():
+                # It's a fine-tuned Gemini model
+                url = f"https://{vertex_location}-aiplatform.googleapis.com/{version}/projects/{vertex_project}/locations/{vertex_location}/endpoints/{model}:{endpoint}"
+                if stream is True:
+                    url += "?alt=sse"
 
         if (
             api_base is not None
@@ -1046,7 +1276,7 @@ class VertexLLM(BaseLLM):
         logging_obj,
         stream,
         optional_params: dict,
-        litellm_params=None,
+        litellm_params: dict,
         logger_fn=None,
         headers={},
         client: Optional[AsyncHTTPHandler] = None,
@@ -1080,6 +1310,7 @@ class VertexLLM(BaseLLM):
             messages=messages,
             print_verbose=print_verbose,
             optional_params=optional_params,
+            litellm_params=litellm_params,
             encoding=encoding,
         )
 
@@ -1101,7 +1332,7 @@ class VertexLLM(BaseLLM):
         vertex_location: Optional[str],
         vertex_credentials: Optional[str],
         gemini_api_key: Optional[str],
-        litellm_params=None,
+        litellm_params: dict,
         logger_fn=None,
         extra_headers: Optional[dict] = None,
         client: Optional[Union[AsyncHTTPHandler, HTTPHandler]] = None,
@@ -1112,6 +1343,7 @@ class VertexLLM(BaseLLM):
         should_use_v1beta1_features = self.is_using_v1beta1_features(
             optional_params=optional_params
         )
+
         auth_header, url = self._get_token_and_url(
             model=model,
             gemini_api_key=gemini_api_key,
@@ -1125,33 +1357,29 @@ class VertexLLM(BaseLLM):
         )
 
         ## TRANSFORMATION ##
-        try:
-            _custom_llm_provider = custom_llm_provider
-            if custom_llm_provider == "vertex_ai_beta":
-                _custom_llm_provider = "vertex_ai"
-            supports_system_message = litellm.supports_system_messages(
-                model=model, custom_llm_provider=_custom_llm_provider
+        ### CHECK CONTEXT CACHING ###
+        if gemini_api_key is not None:
+            messages, cached_content = context_caching_endpoints.check_and_create_cache(
+                messages=messages,
+                api_key=gemini_api_key,
+                api_base=api_base,
+                model=model,
+                client=client,
+                timeout=timeout,
+                extra_headers=extra_headers,
+                cached_content=optional_params.pop("cached_content", None),
+                logging_obj=logging_obj,
             )
-        except Exception as e:
-            verbose_logger.warning(
-                "Unable to identify if system message supported. Defaulting to 'False'. Received error message - {}\nAdd it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json".format(
-                    str(e)
-                )
-            )
-            supports_system_message = False
-        # Separate system prompt from rest of message
-        system_prompt_indices = []
-        system_content_blocks: List[PartType] = []
-        if supports_system_message is True:
-            for idx, message in enumerate(messages):
-                if message["role"] == "system":
-                    _system_content_block = PartType(text=message["content"])
-                    system_content_blocks.append(_system_content_block)
-                    system_prompt_indices.append(idx)
-            if len(system_prompt_indices) > 0:
-                for idx in reversed(system_prompt_indices):
-                    messages.pop(idx)
+        else:  # [TODO] implement context caching for gemini as well
+            cached_content = optional_params.pop("cached_content", None)
 
+        # Separate system prompt from rest of message
+        supports_system_message = get_supports_system_message(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+        system_instructions, messages = transform_system_message(
+            supports_system_message=supports_system_message, messages=messages
+        )
         # Checks for 'response_schema' support - if passed in
         if "response_schema" in optional_params:
             supports_response_schema = litellm.supports_response_schema(
@@ -1166,6 +1394,18 @@ class VertexLLM(BaseLLM):
                 )
                 optional_params.pop("response_schema")
 
+        # Check for any 'litellm_param_*' set during optional param mapping
+
+        remove_keys = []
+        for k, v in optional_params.items():
+            if k.startswith("litellm_param_"):
+                litellm_params.update({k: v})
+                remove_keys.append(k)
+
+        optional_params = {
+            k: v for k, v in optional_params.items() if k not in remove_keys
+        }
+
         try:
             content = _gemini_convert_messages_with_history(messages=messages)
             tools: Optional[Tools] = optional_params.pop("tools", None)
@@ -1173,13 +1413,11 @@ class VertexLLM(BaseLLM):
             safety_settings: Optional[List[SafetSettingsConfig]] = optional_params.pop(
                 "safety_settings", None
             )  # type: ignore
-            cached_content: Optional[str] = optional_params.pop("cached_content", None)
             generation_config: Optional[GenerationConfig] = GenerationConfig(
                 **optional_params
             )
             data = RequestBody(contents=content)
-            if len(system_content_blocks) > 0:
-                system_instructions = SystemInstructions(parts=system_content_blocks)
+            if system_instructions is not None:
                 data["system_instruction"] = system_instructions
             if tools is not None:
                 data["tools"] = tools
@@ -1299,6 +1537,7 @@ class VertexLLM(BaseLLM):
             model_response=model_response,
             logging_obj=logging_obj,
             optional_params=optional_params,
+            litellm_params=litellm_params,
             api_key="",
             data=data,  # type: ignore
             messages=messages,

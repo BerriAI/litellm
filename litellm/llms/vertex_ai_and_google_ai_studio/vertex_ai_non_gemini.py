@@ -42,201 +42,6 @@ class VertexAIError(Exception):
         )  # Call the base class constructor with the parameters it needs
 
 
-class ExtendedGenerationConfig(dict):
-    """Extended parameters for the generation."""
-
-    def __init__(
-        self,
-        *,
-        temperature: Optional[float] = None,
-        top_p: Optional[float] = None,
-        top_k: Optional[int] = None,
-        candidate_count: Optional[int] = None,
-        max_output_tokens: Optional[int] = None,
-        stop_sequences: Optional[List[str]] = None,
-        response_mime_type: Optional[str] = None,
-        frequency_penalty: Optional[float] = None,
-        presence_penalty: Optional[float] = None,
-    ):
-        super().__init__(
-            temperature=temperature,
-            top_p=top_p,
-            top_k=top_k,
-            candidate_count=candidate_count,
-            max_output_tokens=max_output_tokens,
-            stop_sequences=stop_sequences,
-            response_mime_type=response_mime_type,
-            frequency_penalty=frequency_penalty,
-            presence_penalty=presence_penalty,
-        )
-
-
-class VertexAIConfig:
-    """
-    Reference: https://cloud.google.com/vertex-ai/docs/generative-ai/chat/test-chat-prompts
-    Reference: https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/inference
-
-    The class `VertexAIConfig` provides configuration for the VertexAI's API interface. Below are the parameters:
-
-    - `temperature` (float): This controls the degree of randomness in token selection.
-
-    - `max_output_tokens` (integer): This sets the limitation for the maximum amount of token in the text output. In this case, the default value is 256.
-
-    - `top_p` (float): The tokens are selected from the most probable to the least probable until the sum of their probabilities equals the `top_p` value. Default is 0.95.
-
-    - `top_k` (integer): The value of `top_k` determines how many of the most probable tokens are considered in the selection. For example, a `top_k` of 1 means the selected token is the most probable among all tokens. The default value is 40.
-
-    - `response_mime_type` (str): The MIME type of the response. The default value is 'text/plain'.
-
-    - `candidate_count` (int): Number of generated responses to return.
-
-    - `stop_sequences` (List[str]): The set of character sequences (up to 5) that will stop output generation. If specified, the API will stop at the first appearance of a stop sequence. The stop sequence will not be included as part of the response.
-
-    - `frequency_penalty` (float): This parameter is used to penalize the model from repeating the same output. The default value is 0.0.
-
-    - `presence_penalty` (float): This parameter is used to penalize the model from generating the same output as the input. The default value is 0.0.
-
-    Note: Please make sure to modify the default parameters as required for your use case.
-    """
-
-    temperature: Optional[float] = None
-    max_output_tokens: Optional[int] = None
-    top_p: Optional[float] = None
-    top_k: Optional[int] = None
-    response_mime_type: Optional[str] = None
-    candidate_count: Optional[int] = None
-    stop_sequences: Optional[list] = None
-    frequency_penalty: Optional[float] = None
-    presence_penalty: Optional[float] = None
-
-    def __init__(
-        self,
-        temperature: Optional[float] = None,
-        max_output_tokens: Optional[int] = None,
-        top_p: Optional[float] = None,
-        top_k: Optional[int] = None,
-        response_mime_type: Optional[str] = None,
-        candidate_count: Optional[int] = None,
-        stop_sequences: Optional[list] = None,
-        frequency_penalty: Optional[float] = None,
-        presence_penalty: Optional[float] = None,
-    ) -> None:
-        locals_ = locals()
-        for key, value in locals_.items():
-            if key != "self" and value is not None:
-                setattr(self.__class__, key, value)
-
-    @classmethod
-    def get_config(cls):
-        return {
-            k: v
-            for k, v in cls.__dict__.items()
-            if not k.startswith("__")
-            and not isinstance(
-                v,
-                (
-                    types.FunctionType,
-                    types.BuiltinFunctionType,
-                    classmethod,
-                    staticmethod,
-                ),
-            )
-            and v is not None
-        }
-
-    def get_supported_openai_params(self):
-        return [
-            "temperature",
-            "top_p",
-            "max_tokens",
-            "stream",
-            "tools",
-            "tool_choice",
-            "response_format",
-            "n",
-            "stop",
-            "extra_headers",
-        ]
-
-    def map_openai_params(self, non_default_params: dict, optional_params: dict):
-        for param, value in non_default_params.items():
-            if param == "temperature":
-                optional_params["temperature"] = value
-            if param == "top_p":
-                optional_params["top_p"] = value
-            if (
-                param == "stream" and value == True
-            ):  # sending stream = False, can cause it to get passed unchecked and raise issues
-                optional_params["stream"] = value
-            if param == "n":
-                optional_params["candidate_count"] = value
-            if param == "stop":
-                if isinstance(value, str):
-                    optional_params["stop_sequences"] = [value]
-                elif isinstance(value, list):
-                    optional_params["stop_sequences"] = value
-            if param == "max_tokens":
-                optional_params["max_output_tokens"] = value
-            if param == "response_format" and value["type"] == "json_object":
-                optional_params["response_mime_type"] = "application/json"
-            if param == "frequency_penalty":
-                optional_params["frequency_penalty"] = value
-            if param == "presence_penalty":
-                optional_params["presence_penalty"] = value
-            if param == "tools" and isinstance(value, list):
-                from vertexai.preview import generative_models
-
-                gtool_func_declarations = []
-                for tool in value:
-                    gtool_func_declaration = generative_models.FunctionDeclaration(
-                        name=tool["function"]["name"],
-                        description=tool["function"].get("description", ""),
-                        parameters=tool["function"].get("parameters", {}),
-                    )
-                    gtool_func_declarations.append(gtool_func_declaration)
-                optional_params["tools"] = [
-                    generative_models.Tool(
-                        function_declarations=gtool_func_declarations
-                    )
-                ]
-            if param == "tool_choice" and (
-                isinstance(value, str) or isinstance(value, dict)
-            ):
-                pass
-        return optional_params
-
-    def get_mapped_special_auth_params(self) -> dict:
-        """
-        Common auth params across bedrock/vertex_ai/azure/watsonx
-        """
-        return {"project": "vertex_project", "region_name": "vertex_location"}
-
-    def map_special_auth_params(self, non_default_params: dict, optional_params: dict):
-        mapped_params = self.get_mapped_special_auth_params()
-
-        for param, value in non_default_params.items():
-            if param in mapped_params:
-                optional_params[mapped_params[param]] = value
-        return optional_params
-
-    def get_eu_regions(self) -> List[str]:
-        """
-        Source: https://cloud.google.com/vertex-ai/generative-ai/docs/learn/locations#available-regions
-        """
-        return [
-            "europe-central2",
-            "europe-north1",
-            "europe-southwest1",
-            "europe-west1",
-            "europe-west2",
-            "europe-west3",
-            "europe-west4",
-            "europe-west6",
-            "europe-west8",
-            "europe-west9",
-        ]
-
-
 import asyncio
 
 
@@ -447,6 +252,14 @@ def completion(
     logger_fn=None,
     acompletion: bool = False,
 ):
+    """
+    NON-GEMINI/ANTHROPIC CALLS.
+
+    This is the handler for OLDER PALM MODELS and VERTEX AI MODEL GARDEN
+
+    For Vertex AI Anthropic: `vertex_anthropic.py`
+    For Gemini: `vertex_httpx.py`
+    """
     try:
         import vertexai
     except:

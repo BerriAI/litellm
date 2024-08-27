@@ -400,6 +400,7 @@ def hf_chat_template(model: str, messages: list, chat_template: Optional[Any] = 
             tokenizer_config = known_tokenizer_config[model]
         else:
             tokenizer_config = _get_tokenizer_config(model)
+            known_tokenizer_config.update({model: tokenizer_config})
 
         if (
             tokenizer_config["status"] == "failure"
@@ -1781,7 +1782,7 @@ def cohere_messages_pt_v2(
         assistant_tool_calls: List[ToolCallObject] = []
         ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
         while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
-            if isinstance(messages[msg_i]["content"], list):
+            if messages[msg_i].get("content", None) is not None and  isinstance(messages[msg_i]["content"], list):
                 for m in messages[msg_i]["content"]:
                     if m.get("type", "") == "text":
                         assistant_content += m["text"]

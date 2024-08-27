@@ -28,7 +28,9 @@ from litellm import (
     completion_cost,
     embedding,
 )
-from litellm.llms.vertex_ai import _gemini_convert_messages_with_history
+from litellm.llms.vertex_ai_and_google_ai_studio.vertex_and_google_ai_studio_gemini import (
+    _gemini_convert_messages_with_history,
+)
 from litellm.tests.test_streaming import streaming_format_tests
 
 litellm.num_retries = 3
@@ -485,7 +487,7 @@ async def test_async_vertexai_streaming_response():
             user_message = "Hello, how are you?"
             messages = [{"content": user_message, "role": "user"}]
             response = await acompletion(
-                model="gemini-pro",
+                model=model,
                 messages=messages,
                 temperature=0.7,
                 timeout=5,
@@ -1812,6 +1814,7 @@ async def test_gemini_pro_async_function_calling():
             model="gemini-pro", messages=messages, tools=tools, tool_choice="auto"
         )
         print(f"completion: {completion}")
+        print(f"message content: {completion.choices[0].message.content}")
         assert completion.choices[0].message.content is None
         assert len(completion.choices[0].message.tool_calls) == 1
 
@@ -2062,7 +2065,9 @@ def test_prompt_factory_nested():
 
 
 def test_get_token_url():
-    from litellm.llms.vertex_httpx import VertexLLM
+    from litellm.llms.vertex_ai_and_google_ai_studio.vertex_and_google_ai_studio_gemini import (
+        VertexLLM,
+    )
 
     vertex_llm = VertexLLM()
     vertex_ai_project = "adroit-crow-413218"
@@ -2114,3 +2119,240 @@ def test_get_token_url():
     assert "/v1/" in url
 
     pass
+
+
+@pytest.mark.asyncio
+async def test_completion_fine_tuned_model():
+    # load_vertex_ai_credentials()
+    mock_response = AsyncMock()
+
+    def return_val():
+        return {
+            "candidates": [
+                {
+                    "content": {
+                        "role": "model",
+                        "parts": [
+                            {
+                                "text": "A canvas vast, a boundless blue,\nWhere clouds paint tales and winds imbue.\nThe sun descends in fiery hue,\nStars shimmer bright, a gentle few.\n\nThe moon ascends, a pearl of light,\nGuiding travelers through the night.\nThe sky embraces, holds all tight,\nA tapestry of wonder, bright."
+                            }
+                        ],
+                    },
+                    "finishReason": "STOP",
+                    "safetyRatings": [
+                        {
+                            "category": "HARM_CATEGORY_HATE_SPEECH",
+                            "probability": "NEGLIGIBLE",
+                            "probabilityScore": 0.028930664,
+                            "severity": "HARM_SEVERITY_NEGLIGIBLE",
+                            "severityScore": 0.041992188,
+                        },
+                        # ... other safety ratings ...
+                    ],
+                    "avgLogprobs": -0.95772853367765187,
+                }
+            ],
+            "usageMetadata": {
+                "promptTokenCount": 7,
+                "candidatesTokenCount": 71,
+                "totalTokenCount": 78,
+            },
+        }
+
+    mock_response.json = return_val
+    mock_response.status_code = 200
+
+    expected_payload = {
+        "contents": [
+            {"role": "user", "parts": [{"text": "Write a short poem about the sky"}]}
+        ],
+        "generationConfig": {},
+    }
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=mock_response,
+    ) as mock_post:
+        # Act: Call the litellm.completion function
+        response = await litellm.acompletion(
+            model="vertex_ai_beta/4965075652664360960",
+            messages=[{"role": "user", "content": "Write a short poem about the sky"}],
+        )
+
+        # Assert
+        mock_post.assert_called_once()
+        url, kwargs = mock_post.call_args
+        print("url = ", url)
+
+        # this is the fine-tuned model endpoint
+        assert (
+            url[0]
+            == "https://us-central1-aiplatform.googleapis.com/v1/projects/adroit-crow-413218/locations/us-central1/endpoints/4965075652664360960:generateContent"
+        )
+
+        print("call args = ", kwargs)
+        args_to_vertexai = kwargs["json"]
+
+        print("args to vertex ai call:", args_to_vertexai)
+
+        assert args_to_vertexai == expected_payload
+        assert response.choices[0].message.content.startswith("A canvas vast")
+        assert response.choices[0].finish_reason == "stop"
+        assert response.usage.total_tokens == 78
+
+        # Optional: Print for debugging
+        print("Arguments passed to Vertex AI:", args_to_vertexai)
+        print("Response:", response)
+
+
+def mock_gemini_request(*args, **kwargs):
+    print(f"kwargs: {kwargs}")
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {"Content-Type": "application/json"}
+    if "cachedContents" in kwargs["url"]:
+        mock_response.json.return_value = {
+            "name": "cachedContents/4d2kd477o3pg",
+            "model": "models/gemini-1.5-flash-001",
+            "createTime": "2024-08-26T22:31:16.147190Z",
+            "updateTime": "2024-08-26T22:31:16.147190Z",
+            "expireTime": "2024-08-26T22:36:15.548934784Z",
+            "displayName": "",
+            "usageMetadata": {"totalTokenCount": 323383},
+        }
+    else:
+        mock_response.json.return_value = {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {
+                                "text": "Please provide me with the text of the legal agreement"
+                            }
+                        ],
+                        "role": "model",
+                    },
+                    "finishReason": "MAX_TOKENS",
+                    "index": 0,
+                    "safetyRatings": [
+                        {
+                            "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                            "probability": "NEGLIGIBLE",
+                        },
+                        {
+                            "category": "HARM_CATEGORY_HATE_SPEECH",
+                            "probability": "NEGLIGIBLE",
+                        },
+                        {
+                            "category": "HARM_CATEGORY_HARASSMENT",
+                            "probability": "NEGLIGIBLE",
+                        },
+                        {
+                            "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                            "probability": "NEGLIGIBLE",
+                        },
+                    ],
+                }
+            ],
+            "usageMetadata": {
+                "promptTokenCount": 40049,
+                "candidatesTokenCount": 10,
+                "totalTokenCount": 40059,
+                "cachedContentTokenCount": 40012,
+            },
+        }
+
+    return mock_response
+
+
+gemini_context_caching_messages = [
+    # System Message
+    {
+        "role": "system",
+        "content": [
+            {
+                "type": "text",
+                "text": "Here is the full text of a complex legal agreement" * 4000,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ],
+    },
+    # marked for caching with the cache_control parameter, so that this checkpoint can read from the previous cache.
+    {
+        "role": "user",
+        "content": [
+            {
+                "type": "text",
+                "text": "What are the key terms and conditions in this agreement?",
+                "cache_control": {"type": "ephemeral"},
+            }
+        ],
+    },
+    {
+        "role": "assistant",
+        "content": "Certainly! the key terms and conditions are the following: the contract is 1 year long for $10/mo",
+    },
+    # The final turn is marked with cache-control, for continuing in followups.
+    {
+        "role": "user",
+        "content": [
+            {
+                "type": "text",
+                "text": "What are the key terms and conditions in this agreement?",
+            }
+        ],
+    },
+]
+
+
+@pytest.mark.asyncio
+async def test_gemini_context_caching_anthropic_format():
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    litellm.set_verbose = True
+    client = HTTPHandler(concurrent_limit=1)
+    with patch.object(client, "post", side_effect=mock_gemini_request) as mock_client:
+        try:
+            response = litellm.completion(
+                model="gemini/gemini-1.5-flash-001",
+                messages=gemini_context_caching_messages,
+                temperature=0.2,
+                max_tokens=10,
+                client=client,
+            )
+
+        except Exception as e:
+            print(e)
+
+        assert mock_client.call_count == 2
+
+        first_call_args = mock_client.call_args_list[0].kwargs
+
+        print(f"first_call_args: {first_call_args}")
+
+        assert "cachedContents" in first_call_args["url"]
+
+        # assert "cache_read_input_tokens" in response.usage
+        # assert "cache_creation_input_tokens" in response.usage
+
+        # # Assert either a cache entry was created or cache was read - changes depending on the anthropic api ttl
+        # assert (response.usage.cache_read_input_tokens > 0) or (
+        #     response.usage.cache_creation_input_tokens > 0
+        # )
+
+        check_cache_mock = MagicMock()
+        client.get = check_cache_mock
+        try:
+            response = litellm.completion(
+                model="gemini/gemini-1.5-flash-001",
+                messages=gemini_context_caching_messages,
+                temperature=0.2,
+                max_tokens=10,
+                client=client,
+            )
+
+        except Exception as e:
+            print(e)
+
+        check_cache_mock.assert_called_once()
+        assert mock_client.call_count == 3
