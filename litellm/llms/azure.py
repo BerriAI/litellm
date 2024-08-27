@@ -1130,7 +1130,8 @@ class AzureChatCompletion(BaseLLM):
             else:
                 azure_client = client
             ## COMPLETION CALL
-            response = azure_client.embeddings.with_raw_response.create(**data, timeout=timeout)  # type: ignore
+            raw_response = azure_client.embeddings.with_raw_response.create(**data, timeout=timeout)  # type: ignore
+            response = raw_response.parse()
             ## LOGGING
             logging_obj.post_call(
                 input=input,

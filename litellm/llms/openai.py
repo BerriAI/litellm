@@ -2126,7 +2126,8 @@ class OpenAITextCompletion(BaseLLM):
             openai_client = client
 
         try:
-            response = openai_client.completions.with_raw_response.create(**data)
+            raw_response = openai_client.completions.with_raw_response.create(**data)
+            response = raw_response.parse()
         except Exception as e:
             status_code = getattr(e, "status_code", 500)
             error_headers = getattr(e, "headers", None)
@@ -2170,8 +2171,8 @@ class OpenAITextCompletion(BaseLLM):
         else:
             openai_client = client
 
-        response = await openai_client.completions.with_raw_response.create(**data)
-
+        raw_response = await openai_client.completions.with_raw_response.create(**data)
+        response = raw_response.parse()
         streamwrapper = CustomStreamWrapper(
             completion_stream=response,
             model=model,
