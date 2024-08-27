@@ -446,9 +446,10 @@ class AzureTextCompletion(BaseLLM):
                 "complete_input_dict": data,
             },
         )
-        response = azure_client.completions.with_raw_response.create(
+        raw_response = azure_client.completions.with_raw_response.create(
             **data, timeout=timeout
         )
+        response = raw_response.parse()
         streamwrapper = CustomStreamWrapper(
             completion_stream=response,
             model=model,
@@ -506,9 +507,10 @@ class AzureTextCompletion(BaseLLM):
                     "complete_input_dict": data,
                 },
             )
-            response = await azure_client.completions.with_raw_response.create(
+            raw_response = await azure_client.completions.with_raw_response.create(
                 **data, timeout=timeout
             )
+            response = raw_response.parse()
             # return response
             streamwrapper = CustomStreamWrapper(
                 completion_stream=response,
