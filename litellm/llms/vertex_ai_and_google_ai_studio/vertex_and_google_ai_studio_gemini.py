@@ -32,6 +32,7 @@ from litellm.types.llms.openai import (
     ChatCompletionResponseMessage,
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
+    ChatCompletionToolParamFunctionChunk,
     ChatCompletionUsageBlock,
 )
 from litellm.types.llms.vertex_ai import (
@@ -303,10 +304,48 @@ class GoogleAIStudioGeminiConfig:  # key diff from VertexAI - 'frequency_penalty
             "stream",
             "tools",
             "tool_choice",
+            "functions",
             "response_format",
             "n",
             "stop",
         ]
+    def _map_function(self, value: List[dict]) -> List[Tools]:
+        gtool_func_declarations = []
+        googleSearchRetrieval: Optional[dict] = None
+
+        for tool in value:
+            openai_function_object: Optional[ChatCompletionToolParamFunctionChunk] = (
+                None
+            )
+            if "function" in tool:  # tools list
+                openai_function_object = ChatCompletionToolParamFunctionChunk(  # type: ignore
+                    **tool["function"]
+                )
+            elif "name" in tool:  # functions list
+                openai_function_object = ChatCompletionToolParamFunctionChunk(**tool)  # type: ignore
+
+            # check if grounding
+            if tool.get("googleSearchRetrieval", None) is not None:
+                googleSearchRetrieval = tool["googleSearchRetrieval"]
+            elif openai_function_object is not None:
+                gtool_func_declaration = FunctionDeclaration(
+                    name=openai_function_object["name"],
+                    description=openai_function_object.get("description", ""),
+                    parameters=openai_function_object.get("parameters", {}),
+                )
+                gtool_func_declarations.append(gtool_func_declaration)
+            else:
+                # assume it's a provider-specific param
+                verbose_logger.warning(
+                    "Invalid tool={}. Use `litellm.set_verbose` or `litellm --detailed_debug` to see raw request."
+                )
+
+        _tools = Tools(
+            function_declarations=gtool_func_declarations,
+        )
+        if googleSearchRetrieval is not None:
+            _tools["googleSearchRetrieval"] = googleSearchRetrieval
+        return [_tools]
 
     def map_tool_choice_values(
         self, model: str, tool_choice: Union[str, dict]
@@ -370,26 +409,11 @@ class GoogleAIStudioGeminiConfig:  # key diff from VertexAI - 'frequency_penalty
                     if "json_schema" in value and "schema" in value["json_schema"]:  # type: ignore
                         optional_params["response_mime_type"] = "application/json"
                         optional_params["response_schema"] = value["json_schema"]["schema"]  # type: ignore
-            if param == "tools" and isinstance(value, list):
-                gtool_func_declarations = []
-                for tool in value:
-                    _parameters = tool.get("function", {}).get("parameters", {})
-                    _properties = _parameters.get("properties", {})
-                    if isinstance(_properties, dict):
-                        for _, _property in _properties.items():
-                            if "enum" in _property and "format" not in _property:
-                                _property["format"] = "enum"
-
-                    gtool_func_declaration = FunctionDeclaration(
-                        name=tool["function"]["name"],
-                        description=tool["function"].get("description", ""),
-                    )
-                    if len(_parameters.keys()) > 0:
-                        gtool_func_declaration["parameters"] = _parameters
-                    gtool_func_declarations.append(gtool_func_declaration)
-                optional_params["tools"] = [
-                    Tools(function_declarations=gtool_func_declarations)
-                ]
+            if (param == "tools" or param == "functions") and isinstance(value, list):
+                optional_params["tools"] = self._map_function(value=value)
+                optional_params["litellm_param_is_function_call"] = (
+                    True if param == "functions" else False
+                )
             if param == "tool_choice" and (
                 isinstance(value, str) or isinstance(value, dict)
             ):
@@ -513,6 +537,7 @@ class VertexGeminiConfig:
             "max_tokens",
             "stream",
             "tools",
+            "functions",
             "tool_choice",
             "response_format",
             "n",
@@ -547,6 +572,44 @@ class VertexGeminiConfig:
                 ),
                 status_code=400,
             )
+
+    def _map_function(self, value: List[dict]) -> List[Tools]:
+        gtool_func_declarations = []
+        googleSearchRetrieval: Optional[dict] = None
+
+        for tool in value:
+            openai_function_object: Optional[ChatCompletionToolParamFunctionChunk] = (
+                None
+            )
+            if "function" in tool:  # tools list
+                openai_function_object = ChatCompletionToolParamFunctionChunk(  # type: ignore
+                    **tool["function"]
+                )
+            elif "name" in tool:  # functions list
+                openai_function_object = ChatCompletionToolParamFunctionChunk(**tool)  # type: ignore
+
+            # check if grounding
+            if tool.get("googleSearchRetrieval", None) is not None:
+                googleSearchRetrieval = tool["googleSearchRetrieval"]
+            elif openai_function_object is not None:
+                gtool_func_declaration = FunctionDeclaration(
+                    name=openai_function_object["name"],
+                    description=openai_function_object.get("description", ""),
+                    parameters=openai_function_object.get("parameters", {}),
+                )
+                gtool_func_declarations.append(gtool_func_declaration)
+            else:
+                # assume it's a provider-specific param
+                verbose_logger.warning(
+                    "Invalid tool={}. Use `litellm.set_verbose` or `litellm --detailed_debug` to see raw request."
+                )
+
+        _tools = Tools(
+            function_declarations=gtool_func_declarations,
+        )
+        if googleSearchRetrieval is not None:
+            _tools["googleSearchRetrieval"] = googleSearchRetrieval
+        return [_tools]
 
     def map_openai_params(
         self,
@@ -589,33 +652,11 @@ class VertexGeminiConfig:
                 optional_params["frequency_penalty"] = value
             if param == "presence_penalty":
                 optional_params["presence_penalty"] = value
-            if param == "tools" and isinstance(value, list):
-                gtool_func_declarations = []
-                googleSearchRetrieval: Optional[dict] = None
-                provider_specific_tools: List[dict] = []
-                for tool in value:
-                    # check if grounding
-                    try:
-                        gtool_func_declaration = FunctionDeclaration(
-                            name=tool["function"]["name"],
-                            description=tool["function"].get("description", ""),
-                            parameters=tool["function"].get("parameters", {}),
-                        )
-                        gtool_func_declarations.append(gtool_func_declaration)
-                    except KeyError:
-                        if tool.get("googleSearchRetrieval", None) is not None:
-                            googleSearchRetrieval = tool["googleSearchRetrieval"]
-                        else:
-                            # assume it's a provider-specific param
-                            verbose_logger.warning(
-                                "Got KeyError parsing tool={}. Assuming it's a provider-specific param. Use `litellm.set_verbose` or `litellm --detailed_debug` to see raw request."
-                            )
-                _tools = Tools(
-                    function_declarations=gtool_func_declarations,
+            if (param == "tools" or param == "functions") and isinstance(value, list):
+                optional_params["tools"] = self._map_function(value=value)
+                optional_params["litellm_param_is_function_call"] = (
+                    True if param == "functions" else False
                 )
-                if googleSearchRetrieval is not None:
-                    _tools["googleSearchRetrieval"] = googleSearchRetrieval
-                optional_params["tools"] = [_tools] + provider_specific_tools
             if param == "tool_choice" and (
                 isinstance(value, str) or isinstance(value, dict)
             ):
@@ -774,6 +815,7 @@ class VertexLLM(BaseLLM):
         model_response: ModelResponse,
         logging_obj: litellm.litellm_core_utils.litellm_logging.Logging,
         optional_params: dict,
+        litellm_params: dict,
         api_key: str,
         data: Union[dict, str],
         messages: List,
@@ -790,7 +832,6 @@ class VertexLLM(BaseLLM):
         )
 
         print_verbose(f"raw model_response: {response.text}")
-
         ## RESPONSE OBJECT
         try:
             completion_response = GenerateContentResponseBody(**response.json())  # type: ignore
@@ -898,6 +939,7 @@ class VertexLLM(BaseLLM):
             chat_completion_message = {"role": "assistant"}
             content_str = ""
             tools: List[ChatCompletionToolCallChunk] = []
+            functions: Optional[ChatCompletionToolCallFunctionChunk] = None
             for idx, candidate in enumerate(completion_response["candidates"]):
                 if "content" not in candidate:
                     continue
@@ -920,19 +962,24 @@ class VertexLLM(BaseLLM):
                             candidate["content"]["parts"][0]["functionCall"]["args"]
                         ),
                     )
-                    _tool_response_chunk = ChatCompletionToolCallChunk(
-                        id=f"call_{str(uuid.uuid4())}",
-                        type="function",
-                        function=_function_chunk,
-                        index=candidate.get("index", idx),
-                    )
-                    tools.append(_tool_response_chunk)
-
+                    if litellm_params.get("litellm_param_is_function_call") is True:
+                        functions = _function_chunk
+                    else:
+                        _tool_response_chunk = ChatCompletionToolCallChunk(
+                            id=f"call_{str(uuid.uuid4())}",
+                            type="function",
+                            function=_function_chunk,
+                            index=candidate.get("index", idx),
+                        )
+                        tools.append(_tool_response_chunk)
                 chat_completion_message["content"] = (
                     content_str if len(content_str) > 0 else None
                 )
-                chat_completion_message["tool_calls"] = tools
+                if len(tools) > 0:
+                    chat_completion_message["tool_calls"] = tools
 
+                if functions is not None:
+                    chat_completion_message["function_call"] = functions
                 choice = litellm.Choices(
                     finish_reason=candidate.get("finishReason", "stop"),
                     index=candidate.get("index", idx),
@@ -1155,6 +1202,15 @@ class VertexLLM(BaseLLM):
             else:
                 url = f"https://{vertex_location}-aiplatform.googleapis.com/{version}/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}"
 
+            # if model is only numeric chars then it's a fine tuned gemini model
+            # model = 4965075652664360960
+            # send to this url: url = f"https://{vertex_location}-aiplatform.googleapis.com/{version}/projects/{vertex_project}/locations/{vertex_location}/endpoints/{model}:{endpoint}"
+            if model.isdigit():
+                # It's a fine-tuned Gemini model
+                url = f"https://{vertex_location}-aiplatform.googleapis.com/{version}/projects/{vertex_project}/locations/{vertex_location}/endpoints/{model}:{endpoint}"
+                if stream is True:
+                    url += "?alt=sse"
+
         if (
             api_base is not None
         ):  # for cloudflare ai gateway - https://github.com/BerriAI/litellm/issues/4317
@@ -1220,7 +1276,7 @@ class VertexLLM(BaseLLM):
         logging_obj,
         stream,
         optional_params: dict,
-        litellm_params=None,
+        litellm_params: dict,
         logger_fn=None,
         headers={},
         client: Optional[AsyncHTTPHandler] = None,
@@ -1254,6 +1310,7 @@ class VertexLLM(BaseLLM):
             messages=messages,
             print_verbose=print_verbose,
             optional_params=optional_params,
+            litellm_params=litellm_params,
             encoding=encoding,
         )
 
@@ -1275,7 +1332,7 @@ class VertexLLM(BaseLLM):
         vertex_location: Optional[str],
         vertex_credentials: Optional[str],
         gemini_api_key: Optional[str],
-        litellm_params=None,
+        litellm_params: dict,
         logger_fn=None,
         extra_headers: Optional[dict] = None,
         client: Optional[Union[AsyncHTTPHandler, HTTPHandler]] = None,
@@ -1287,7 +1344,6 @@ class VertexLLM(BaseLLM):
             optional_params=optional_params
         )
 
-        print_verbose("Incoming Vertex Args - {}".format(locals()))
         auth_header, url = self._get_token_and_url(
             model=model,
             gemini_api_key=gemini_api_key,
@@ -1299,7 +1355,6 @@ class VertexLLM(BaseLLM):
             api_base=api_base,
             should_use_v1beta1_features=should_use_v1beta1_features,
         )
-        print_verbose("Updated URL - {}".format(url))
 
         ## TRANSFORMATION ##
         ### CHECK CONTEXT CACHING ###
@@ -1338,6 +1393,18 @@ class VertexLLM(BaseLLM):
                     {"role": "user", "content": user_response_schema_message}
                 )
                 optional_params.pop("response_schema")
+
+        # Check for any 'litellm_param_*' set during optional param mapping
+
+        remove_keys = []
+        for k, v in optional_params.items():
+            if k.startswith("litellm_param_"):
+                litellm_params.update({k: v})
+                remove_keys.append(k)
+
+        optional_params = {
+            k: v for k, v in optional_params.items() if k not in remove_keys
+        }
 
         try:
             content = _gemini_convert_messages_with_history(messages=messages)
@@ -1470,6 +1537,7 @@ class VertexLLM(BaseLLM):
             model_response=model_response,
             logging_obj=logging_obj,
             optional_params=optional_params,
+            litellm_params=litellm_params,
             api_key="",
             data=data,  # type: ignore
             messages=messages,

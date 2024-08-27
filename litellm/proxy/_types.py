@@ -1299,7 +1299,6 @@ class LiteLLM_VerificationToken(LiteLLMBase):
     model_max_budget: Dict = {}
     soft_budget_cooldown: bool = False
     litellm_budget_table: Optional[dict] = None
-
     org_id: Optional[str] = None  # org id for a given key
 
     model_config = ConfigDict(protected_namespaces=())

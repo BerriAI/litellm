@@ -2189,6 +2189,18 @@
         "mode": "image_generation",
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"
     },
+    "vertex_ai/imagen-3.0-generate-001": {
+        "cost_per_image": 0.04,
+        "litellm_provider": "vertex_ai-image-models",
+        "mode": "image_generation",
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"
+    },
+    "vertex_ai/imagen-3.0-fast-generate-001": {
+        "cost_per_image": 0.02,
+        "litellm_provider": "vertex_ai-image-models",
+        "mode": "image_generation",
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"
+    },
     "text-embedding-004": {
         "max_tokens": 3072,
         "max_input_tokens": 3072,
