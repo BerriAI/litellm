@@ -1008,7 +1008,11 @@ async def regenerate_key_fn(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"error": "DB not connected. prisma_client is None"},
         )
-    hashed_api_key = hash_token(key)
+
+    if "sk" not in key:
+        hashed_api_key = key
+    else:
+        hashed_api_key = hash_token(key)
 
     _key_in_db = await prisma_client.db.litellm_verificationtoken.find_unique(
         where={"token": hashed_api_key},
