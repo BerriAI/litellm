@@ -1300,8 +1300,6 @@ class LiteLLM_VerificationToken(LiteLLMBase):
     soft_budget_cooldown: bool = False
     litellm_budget_table: Optional[dict] = None
     org_id: Optional[str] = None  # org id for a given key
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
 
     model_config = ConfigDict(protected_namespaces=())
 
