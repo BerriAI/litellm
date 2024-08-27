@@ -945,7 +945,8 @@ async def test_bedrock_extra_headers():
     """
     Check if a url with 'modelId' passed in, is created correctly
 
-    Reference: https://github.com/BerriAI/litellm/issues/3805
+    Reference: https://github.com/BerriAI/litellm/issues/3805, https://github.com/BerriAI/litellm/issues/5389#issuecomment-2313677977
+
     """
     client = AsyncHTTPHandler()
 
@@ -958,7 +959,7 @@ async def test_bedrock_extra_headers():
                 model="anthropic.claude-3-sonnet-20240229-v1:0",
                 messages=[{"role": "user", "content": "What's AWS?"}],
                 client=client,
-                extra_headers={"test": "hello world"},
+                extra_headers={"test": "hello world", "Authorization": "my-test-key"},
             )
         except Exception as e:
             pass
@@ -966,6 +967,10 @@ async def test_bedrock_extra_headers():
         print(f"mock_client_post.call_args: {mock_client_post.call_args}")
         assert "test" in mock_client_post.call_args.kwargs["headers"]
         assert mock_client_post.call_args.kwargs["headers"]["test"] == "hello world"
+        assert (
+            mock_client_post.call_args.kwargs["headers"]["Authorization"]
+            == "my-test-key"
+        )
         mock_client_post.assert_called_once()
 
 

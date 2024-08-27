@@ -894,6 +894,10 @@ class BedrockLLM(BaseAWSLLM):
             method="POST", url=endpoint_url, data=data, headers=headers
         )
         sigv4.add_auth(request)
+        if (
+            extra_headers is not None and "Authorization" in extra_headers
+        ):  # prevent sigv4 from overwriting the auth header
+            request.headers["Authorization"] = extra_headers["Authorization"]
         prepped = request.prepare()
 
         ## LOGGING
@@ -1659,6 +1663,10 @@ class BedrockConverseLLM(BaseAWSLLM):
             method="POST", url=endpoint_url, data=data, headers=headers
         )
         sigv4.add_auth(request)
+        if (
+            extra_headers is not None and "Authorization" in extra_headers
+        ):  # prevent sigv4 from overwriting the auth header
+            request.headers["Authorization"] = extra_headers["Authorization"]
         prepped = request.prepare()
 
         ## LOGGING
