@@ -196,6 +196,11 @@ class SagemakerLLM(BaseAWSLLM):
             method="POST", url=api_base, data=encoded_data, headers=headers
         )
         sigv4.add_auth(request)
+        if (
+            extra_headers is not None and "Authorization" in extra_headers
+        ):  # prevent sigv4 from overwriting the auth header
+            request.headers["Authorization"] = extra_headers["Authorization"]
+
         prepped_request = request.prepare()
 
         return prepped_request
