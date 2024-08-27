@@ -1,12 +1,14 @@
 "use client";
 import React, { useEffect, useState } from "react";
 import { keyDeleteCall, modelAvailableCall } from "./networking";
-import { InformationCircleIcon, StatusOnlineIcon, TrashIcon, PencilAltIcon } from "@heroicons/react/outline";
-import { keySpendLogsCall, PredictedSpendLogsCall, keyUpdateCall, modelInfoCall } from "./networking";
+import { InformationCircleIcon, StatusOnlineIcon, TrashIcon, PencilAltIcon, RefreshIcon } from "@heroicons/react/outline";
+import { keySpendLogsCall, PredictedSpendLogsCall, keyUpdateCall, modelInfoCall, regenerateKeyCall } from "./networking";
 import {
   Badge,
   Card,
   Table,
+  Grid,
+  Col,
   Button,
   TableBody,
   TableCell,
@@ -32,6 +34,8 @@ import {
   message,
   Select,
 } from "antd";
+
+import { CopyToClipboard } from "react-copy-to-clipboard";
 
 const { Option } = Select;
 const isLocal = process.env.NODE_ENV === "development";
@@ -109,6 +113,8 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   const [userModels, setUserModels] = useState([]);
   const initialKnownTeamIDs: Set<string> = new Set();
   const [modelLimitModalVisible, setModelLimitModalVisible] = useState(false);
+  const [regenerateDialogVisible, setRegenerateDialogVisible] = useState(false);
+  const [regeneratedKey, setRegeneratedKey] = useState<string | null>(null);
 
   const [knownTeamIDs, setKnownTeamIDs] = useState(initialKnownTeamIDs);
 
@@ -612,6 +618,18 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
     setKeyToDelete(null);
   };
 
+  const handleRegenerateKey = async () => {
+    try {
+      const response = await regenerateKeyCall(accessToken, selectedToken.token);
+      setRegeneratedKey(response.key);
+      setRegenerateDialogVisible(false);
+      message.success("API Key regenerated successfully");
+    } catch (error) {
+      console.error("Error regenerating key:", error);
+      message.error("Failed to regenerate API Key");
+    }
+  };
+
   if (data == null) {
     return;
   }
@@ -768,6 +786,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                       size="sm"
                     />
                     
+                    
                 
     <Modal
       open={infoDialogVisible}
@@ -868,6 +887,14 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                     onClick={() => handleEditClick(item)}
                   />
                   <Icon
+                      onClick={() => {
+                        setSelectedToken(item);
+                        setRegenerateDialogVisible(true);
+                      }}
+                      icon={RefreshIcon}
+                      size="sm"
+                    />
+                  <Icon
                     onClick={() => handleDelete(item)}
                     icon={TrashIcon}
                     size="sm"
@@ -942,6 +969,58 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
           accessToken={accessToken}
         />
       )}
+
+    {/* Regenerate Key Confirmation Dialog */}
+    <Modal
+      title="Regenerate API Key"
+      visible={regenerateDialogVisible}
+      onOk={handleRegenerateKey}
+      onCancel={() => setRegenerateDialogVisible(false)}
+    >
+      <p>Are you sure you want to regenerate this key?</p>
+      <p>Key Alias:</p>
+      <pre>{selectedToken?.key_alias || 'No alias set'}</pre>
+    </Modal>
+
+    {/* Regenerated Key Display Modal */}
+    {regeneratedKey && (
+      <Modal
+        visible={!!regeneratedKey}
+        onOk={() => setRegeneratedKey(null)}
+        onCancel={() => setRegeneratedKey(null)}
+        footer={null}
+      >
+        <Grid numItems={1} className="gap-2 w-full">
+          <Title>Save your New Key</Title>
+          <Col numColSpan={1}>
+            <p>
+              Please save this new secret key somewhere safe and accessible. For
+              security reasons, <b>you will not be able to view it again</b> through
+              your LiteLLM account. If you lose this secret key, you will need to
+              generate a new one.
+            </p>
+          </Col>
+          <Col numColSpan={1}>
+            <Text className="mt-3">New API Key:</Text>
+            <div
+              style={{
+                background: "#f8f8f8",
+                padding: "10px",
+                borderRadius: "5px",
+                marginBottom: "10px",
+              }}
+            >
+              <pre style={{ wordWrap: "break-word", whiteSpace: "normal" }}>
+                {regeneratedKey}
+              </pre>
+            </div>
+            <CopyToClipboard text={regeneratedKey} onCopy={() => message.success("API Key copied to clipboard")}>
+              <Button className="mt-3">Copy API Key</Button>
+            </CopyToClipboard>
+          </Col>
+        </Grid>
+      </Modal>
+    )}
     </div>
   );
 };
