@@ -3072,6 +3072,42 @@
         "litellm_provider": "ai21",
         "mode": "completion"
     },
+    "jamba-1.5-mini@001": {
+        "max_tokens": 256000,
+        "max_input_tokens": 256000,
+        "max_output_tokens": 256000,
+        "input_cost_per_token": 0.0000002,
+        "output_cost_per_token": 0.0000004,
+        "litellm_provider": "ai21",
+        "mode": "chat"
+    },
+    "jamba-1.5-large@001": {
+        "max_tokens": 256000,
+        "max_input_tokens": 256000,
+        "max_output_tokens": 256000,
+        "input_cost_per_token": 0.000002,
+        "output_cost_per_token": 0.000008,
+        "litellm_provider": "ai21",
+        "mode": "chat"
+    },
+    "jamba-1.5-mini": {
+        "max_tokens": 256000,
+        "max_input_tokens": 256000,
+        "max_output_tokens": 256000,
+        "input_cost_per_token": 0.0000002,
+        "output_cost_per_token": 0.0000004,
+        "litellm_provider": "ai21",
+        "mode": "chat"
+    },
+    "jamba-1.5-large": {
+        "max_tokens": 256000,
+        "max_input_tokens": 256000,
+        "max_output_tokens": 256000,
+        "input_cost_per_token": 0.000002,
+        "output_cost_per_token": 0.000008,
+        "litellm_provider": "ai21",
+        "mode": "chat"
+    },
     "j2-mid": {
         "max_tokens": 8192,
         "max_input_tokens": 8192,
