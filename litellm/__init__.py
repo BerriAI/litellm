@@ -934,6 +934,7 @@ from .proxy.proxy_cli import run_server
 from .router import Router
 from .assistants.main import *
 from .batches.main import *
+from .rerank_api.main import *
 from .fine_tuning.main import *
 from .files.main import *
 from .scheduler import *
