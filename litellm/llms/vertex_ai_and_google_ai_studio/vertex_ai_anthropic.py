@@ -205,7 +205,9 @@ def get_vertex_client(
     vertex_credentials: Optional[str],
 ) -> Tuple[Any, Optional[str]]:
     args = locals()
-    from litellm.llms.vertex_httpx import VertexLLM
+    from litellm.llms.vertex_ai_and_google_ai_studio.vertex_and_google_ai_studio_gemini import (
+        VertexLLM,
+    )
 
     try:
         from anthropic import AnthropicVertex
@@ -268,7 +270,9 @@ def completion(
         from anthropic import AnthropicVertex
 
         from litellm.llms.anthropic import AnthropicChatCompletion
-        from litellm.llms.vertex_httpx import VertexLLM
+        from litellm.llms.vertex_ai_and_google_ai_studio.vertex_and_google_ai_studio_gemini import (
+            VertexLLM,
+        )
     except:
         raise VertexAIError(
             status_code=400,

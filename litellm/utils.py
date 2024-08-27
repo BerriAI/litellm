@@ -4131,7 +4131,9 @@ def get_api_base(
         _optional_params.vertex_location is not None
         and _optional_params.vertex_project is not None
     ):
-        from litellm.llms.vertex_ai_anthropic import create_vertex_anthropic_url
+        from litellm.llms.vertex_ai_and_google_ai_studio.vertex_ai_anthropic import (
+            create_vertex_anthropic_url,
+        )
 
         if "claude" in model:
             _api_base = create_vertex_anthropic_url(
