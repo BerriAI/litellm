@@ -638,7 +638,10 @@ def client(original_function):
                     if is_coroutine is True:
                         pass
                     else:
-                        if isinstance(original_response, ModelResponse):
+                        if (
+                            isinstance(original_response, ModelResponse)
+                            and len(original_response.choices) > 0
+                        ):
                             model_response: Optional[str] = original_response.choices[
                                 0
                             ].message.content  # type: ignore

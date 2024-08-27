@@ -770,7 +770,7 @@ class OpenAIChatCompletion(BaseLLM):
         openai_aclient: AsyncOpenAI,
         data: dict,
         timeout: Union[float, httpx.Timeout],
-    ):
+    ) -> Tuple[dict, BaseModel]:
         """
         Helper to:
         - call chat.completions.create.with_raw_response when litellm.return_response_headers is True
@@ -783,7 +783,10 @@ class OpenAIChatCompletion(BaseLLM):
                 )
             )
 
-            headers = dict(raw_response.headers)
+            if hasattr(raw_response, "headers"):
+                headers = dict(raw_response.headers)
+            else:
+                headers = {}
             response = raw_response.parse()
             return headers, response
         except OpenAIError as e:
@@ -800,7 +803,7 @@ class OpenAIChatCompletion(BaseLLM):
         openai_client: OpenAI,
         data: dict,
         timeout: Union[float, httpx.Timeout],
-    ):
+    ) -> Tuple[dict, BaseModel]:
         """
         Helper to:
         - call chat.completions.create.with_raw_response when litellm.return_response_headers is True
@@ -811,7 +814,10 @@ class OpenAIChatCompletion(BaseLLM):
                 **data, timeout=timeout
             )
 
-            headers = dict(raw_response.headers)
+            if hasattr(raw_response, "headers"):
+                headers = dict(raw_response.headers)
+            else:
+                headers = {}
             response = raw_response.parse()
             return headers, response
         except OpenAIError as e:
