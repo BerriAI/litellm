@@ -126,11 +126,11 @@ from .llms.vertex_ai_and_google_ai_studio import (
     vertex_ai_anthropic,
     vertex_ai_non_gemini,
 )
+from .llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
+    VertexLLM,
+)
 from .llms.vertex_ai_and_google_ai_studio.vertex_ai_partner_models.main import (
     VertexAIPartnerModels,
-)
-from .llms.vertex_ai_and_google_ai_studio.vertex_and_google_ai_studio_gemini import (
-    VertexLLM,
 )
 from .llms.watsonx import IBMWatsonXAI
 from .types.llms.openai import HttpxBinaryResponseContent
@@ -3568,6 +3568,7 @@ def embedding(
                     vertex_credentials=vertex_credentials,
                     aembedding=aembedding,
                     print_verbose=print_verbose,
+                    custom_llm_provider="vertex_ai",
                 )
             else:
                 response = vertex_ai_non_gemini.embedding(
