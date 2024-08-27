@@ -2354,3 +2354,137 @@ async def test_completion_fine_tuned_model():
         # Optional: Print for debugging
         print("Arguments passed to Vertex AI:", args_to_vertexai)
         print("Response:", response)
+
+
+def mock_gemini_request(*args, **kwargs):
+    print(f"kwargs: {kwargs}")
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {"Content-Type": "application/json"}
+    if "cachedContents" in kwargs["url"]:
+        mock_response.json.return_value = {
+            "name": "cachedContents/4d2kd477o3pg",
+            "model": "models/gemini-1.5-flash-001",
+            "createTime": "2024-08-26T22:31:16.147190Z",
+            "updateTime": "2024-08-26T22:31:16.147190Z",
+            "expireTime": "2024-08-26T22:36:15.548934784Z",
+            "displayName": "",
+            "usageMetadata": {"totalTokenCount": 323383},
+        }
+    else:
+        mock_response.json.return_value = {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {
+                                "text": "Please provide me with the text of the legal agreement"
+                            }
+                        ],
+                        "role": "model",
+                    },
+                    "finishReason": "MAX_TOKENS",
+                    "index": 0,
+                    "safetyRatings": [
+                        {
+                            "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                            "probability": "NEGLIGIBLE",
+                        },
+                        {
+                            "category": "HARM_CATEGORY_HATE_SPEECH",
+                            "probability": "NEGLIGIBLE",
+                        },
+                        {
+                            "category": "HARM_CATEGORY_HARASSMENT",
+                            "probability": "NEGLIGIBLE",
+                        },
+                        {
+                            "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                            "probability": "NEGLIGIBLE",
+                        },
+                    ],
+                }
+            ],
+            "usageMetadata": {
+                "promptTokenCount": 40049,
+                "candidatesTokenCount": 10,
+                "totalTokenCount": 40059,
+                "cachedContentTokenCount": 40012,
+            },
+        }
+
+    return mock_response
+
+
+@pytest.mark.asyncio
+async def test_gemini_context_caching_anthropic_format():
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    litellm.set_verbose = True
+    client = HTTPHandler(concurrent_limit=1)
+    with patch.object(client, "post", side_effect=mock_gemini_request) as mock_client:
+        try:
+            response = litellm.completion(
+                model="gemini/gemini-1.5-flash-001",
+                messages=[
+                    # System Message
+                    {
+                        "role": "system",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "Here is the full text of a complex legal agreement"
+                                * 4000,
+                                "cache_control": {"type": "ephemeral"},
+                            }
+                        ],
+                    },
+                    # marked for caching with the cache_control parameter, so that this checkpoint can read from the previous cache.
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "What are the key terms and conditions in this agreement?",
+                                "cache_control": {"type": "ephemeral"},
+                            }
+                        ],
+                    },
+                    {
+                        "role": "assistant",
+                        "content": "Certainly! the key terms and conditions are the following: the contract is 1 year long for $10/mo",
+                    },
+                    # The final turn is marked with cache-control, for continuing in followups.
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "What are the key terms and conditions in this agreement?",
+                            }
+                        ],
+                    },
+                ],
+                temperature=0.2,
+                max_tokens=10,
+                client=client,
+            )
+
+        except Exception as e:
+            print(e)
+
+        assert mock_client.call_count == 2
+
+        first_call_args = mock_client.call_args_list[0].kwargs
+
+        print(f"first_call_args: {first_call_args}")
+
+        assert "cachedContents" in first_call_args["url"]
+
+        # assert "cache_read_input_tokens" in response.usage
+        # assert "cache_creation_input_tokens" in response.usage
+
+        # # Assert either a cache entry was created or cache was read - changes depending on the anthropic api ttl
+        # assert (response.usage.cache_read_input_tokens > 0) or (
+        #     response.usage.cache_creation_input_tokens > 0
+        # )
