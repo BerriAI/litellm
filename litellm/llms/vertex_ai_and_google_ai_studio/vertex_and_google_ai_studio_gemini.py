@@ -309,7 +309,6 @@ class GoogleAIStudioGeminiConfig:  # key diff from VertexAI - 'frequency_penalty
             "n",
             "stop",
         ]
-
     def _map_function(self, value: List[dict]) -> List[Tools]:
         gtool_func_declarations = []
         googleSearchRetrieval: Optional[dict] = None
@@ -973,7 +972,6 @@ class VertexLLM(BaseLLM):
                             index=candidate.get("index", idx),
                         )
                         tools.append(_tool_response_chunk)
-
                 chat_completion_message["content"] = (
                     content_str if len(content_str) > 0 else None
                 )
@@ -982,7 +980,6 @@ class VertexLLM(BaseLLM):
 
                 if functions is not None:
                     chat_completion_message["function_call"] = functions
-
                 choice = litellm.Choices(
                     finish_reason=candidate.get("finishReason", "stop"),
                     index=candidate.get("index", idx),
