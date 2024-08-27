@@ -172,11 +172,7 @@ class GCSBucketLogger(CustomLogger):
             api_base=None,
         )
         verbose_logger.debug("constructed auth_header %s", auth_header)
-        headers = {
-            "Authorization": f"Bearer {auth_header}",  # auth_header
-            "Content-Type": "application/json",
-        }
-
+        headers = auth_header or {}
         return headers
 
     async def get_gcs_payload(
