@@ -1373,6 +1373,8 @@ class VertexLLM(BaseLLM):
                 cached_content=optional_params.pop("cached_content", None),
                 logging_obj=logging_obj,
             )
+        else:  # [TODO] implement context caching for gemini as well
+            cached_content = optional_params.pop("cached_content", None)
 
         # Separate system prompt from rest of message
         supports_system_message = get_supports_system_message(
