@@ -33,6 +33,7 @@ import {
   InputNumber,
   message,
   Select,
+  Tooltip
 } from "antd";
 
 import { CopyToClipboard } from "react-copy-to-clipboard";
@@ -722,7 +723,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
             <TableHeaderCell>Secret Key</TableHeaderCell>
             <TableHeaderCell>Spend (USD)</TableHeaderCell>
             <TableHeaderCell>Budget (USD)</TableHeaderCell>
-            <TableHeaderCell>Budget Reset Date</TableHeaderCell>
+            <TableHeaderCell>Budget Reset</TableHeaderCell>
             <TableHeaderCell>Models</TableHeaderCell>
             <TableHeaderCell>Rate Limits</TableHeaderCell>
             <TableHeaderCell>Rate Limits per model</TableHeaderCell>
@@ -779,13 +780,17 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                     <Text>Unlimited</Text>
                   )}
                 </TableCell>
-                {/* <TableCell>
+                <TableCell>
                   {item.budget_reset_at != null ? (
-                    <Text>{new Date(item.budget_reset_at).toLocaleString()}</Text>
+                    <div>
+                      <p style={{ fontSize: '0.70rem' }}>{new Date(item.budget_reset_at).toLocaleString()}</p>
+
+                    </div>
+                    
                   ) : (
-                    <Text>Never</Text>
+                    <p style={{ fontSize: '0.70rem' }}>Never</p>
                   )}
-                </TableCell> */}
+                </TableCell>
                 {/* <TableCell style={{ maxWidth: '2px' }}>
                   <ViewKeySpendReport
                     token={item.token}
