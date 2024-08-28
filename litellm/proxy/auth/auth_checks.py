@@ -40,6 +40,22 @@ else:
 all_routes = LiteLLMRoutes.openai_routes.value + LiteLLMRoutes.management_routes.value
 
 
+def is_request_body_safe(request_body: dict) -> bool:
+    """
+    Check if the request body is safe.
+
+    A malicious user can set the ﻿api_base to their own domain and invoke POST /chat/completions to intercept and steal the OpenAI API key.
+    Relevant issue: https://huntr.com/bounties/4001e1a2-7b7a-4776-a3ae-e6692ec3d997
+    """
+    banned_params = ["api_base", "base_url"]
+
+    for param in banned_params:
+        if param in request_body:
+            raise ValueError(f"BadRequest: {param} is not allowed in request body")
+
+    return True
+
+
 def common_checks(
     request_body: dict,
     team_object: Optional[LiteLLM_TeamTable],
@@ -60,6 +76,7 @@ def common_checks(
     6. [OPTIONAL] If 'enforce_end_user' enabled - did developer pass in 'user' param for openai endpoints
     7. [OPTIONAL] If 'litellm.max_budget' is set (>0), is proxy under budget
     8. [OPTIONAL] If guardrails modified - is request allowed to change this
+    9. Check if request body is safe
     """
     _model = request_body.get("model", None)
     if team_object is not None and team_object.blocked is True:
