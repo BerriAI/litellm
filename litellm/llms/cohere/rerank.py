@@ -28,9 +28,8 @@ class CohereRerank(BaseLLM):
         rank_fields: Optional[List[str]] = None,
         return_documents: Optional[bool] = True,
         max_chunks_per_doc: Optional[int] = None,
+        _is_async: Optional[bool] = False,  # New parameter
     ) -> RerankResponse:
-        client = _get_httpx_client()
-
         request_data = RerankRequest(
             model=model,
             query=query,
@@ -43,6 +42,10 @@ class CohereRerank(BaseLLM):
 
         request_data_dict = request_data.dict(exclude_none=True)
 
+        if _is_async:
+            return self.async_rerank(request_data_dict, api_key)  # type: ignore # Call async method
+
+        client = _get_httpx_client()
         response = client.post(
             "https://api.cohere.com/v1/rerank",
             headers={
@@ -55,4 +58,21 @@ class CohereRerank(BaseLLM):
 
         return RerankResponse(**response.json())
 
-    pass
+    async def async_rerank(
+        self,
+        request_data_dict: Dict[str, Any],
+        api_key: str,
+    ) -> RerankResponse:
+        client = _get_async_httpx_client()
+
+        response = await client.post(
+            "https://api.cohere.com/v1/rerank",
+            headers={
+                "accept": "application/json",
+                "content-type": "application/json",
+                "Authorization": f"bearer {api_key}",
+            },
+            json=request_data_dict,
+        )
+
+        return RerankResponse(**response.json())

@@ -61,33 +61,67 @@ def assert_response_shape(response, custom_llm_provider):
         )
 
 
-def test_basic_rerank():
-    response = litellm.rerank(
-        model="cohere/rerank-english-v3.0",
-        query="hello",
-        documents=["hello", "world"],
-        top_n=3,
-    )
+@pytest.mark.asyncio()
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_basic_rerank(sync_mode):
+    if sync_mode is True:
+        response = litellm.rerank(
+            model="cohere/rerank-english-v3.0",
+            query="hello",
+            documents=["hello", "world"],
+            top_n=3,
+        )
 
-    print("re rank response: ", response)
+        print("re rank response: ", response)
 
-    assert response.id is not None
-    assert response.results is not None
+        assert response.id is not None
+        assert response.results is not None
 
-    assert_response_shape(response, custom_llm_provider="cohere")
+        assert_response_shape(response, custom_llm_provider="cohere")
+    else:
+        response = await litellm.arerank(
+            model="cohere/rerank-english-v3.0",
+            query="hello",
+            documents=["hello", "world"],
+            top_n=3,
+        )
+
+        print("async re rank response: ", response)
+
+        assert response.id is not None
+        assert response.results is not None
+
+        assert_response_shape(response, custom_llm_provider="cohere")
 
 
-def test_basic_rerank_together_ai():
-    response = litellm.rerank(
-        model="together_ai/Salesforce/Llama-Rank-V1",
-        query="hello",
-        documents=["hello", "world"],
-        top_n=3,
-    )
+@pytest.mark.asyncio()
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_basic_rerank_together_ai(sync_mode):
+    if sync_mode is True:
+        response = litellm.rerank(
+            model="together_ai/Salesforce/Llama-Rank-V1",
+            query="hello",
+            documents=["hello", "world"],
+            top_n=3,
+        )
 
-    print("re rank response: ", response)
+        print("re rank response: ", response)
 
-    assert response.id is not None
-    assert response.results is not None
+        assert response.id is not None
+        assert response.results is not None
 
-    assert_response_shape(response, custom_llm_provider="together_ai")
+        assert_response_shape(response, custom_llm_provider="together_ai")
+    else:
+        response = await litellm.arerank(
+            model="together_ai/Salesforce/Llama-Rank-V1",
+            query="hello",
+            documents=["hello", "world"],
+            top_n=3,
+        )
+
+        print("async re rank response: ", response)
+
+        assert response.id is not None
+        assert response.results is not None
+
+        assert_response_shape(response, custom_llm_provider="together_ai")
