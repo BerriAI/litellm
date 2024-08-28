@@ -846,6 +846,7 @@ def test_gemini_pro_grounding(value_in_dict):
 )  # "vertex_ai",
 @pytest.mark.parametrize("sync_mode", [True])  # "vertex_ai",
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=1)
 async def test_gemini_pro_function_calling_httpx(model, sync_mode):
     try:
         load_vertex_ai_credentials()
