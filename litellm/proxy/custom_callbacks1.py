@@ -29,6 +29,7 @@ class MyCustomHandler(
             "moderation",
             "audio_transcription",
             "pass_through_endpoint",
+            "rerank",
         ],
     ):
         return data
