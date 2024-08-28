@@ -1988,17 +1988,33 @@
         "supports_vision": true,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
-    "gemini-experimental": {
+    "gemini-pro-experimental": {
         "max_tokens": 8192,
         "max_input_tokens": 1000000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 0,
         "output_cost_per_token": 0,
+        "input_cost_per_character": 0,
+        "output_cost_per_character": 0,
         "litellm_provider": "vertex_ai-language-models",
         "mode": "chat",
         "supports_function_calling": false,
         "supports_tool_choice": true, 
-        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/gemini-experimental"
+    },
+    "gemini-flash-experimental": {
+        "max_tokens": 8192,
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 0,
+        "output_cost_per_token": 0,
+        "input_cost_per_character": 0,
+        "output_cost_per_character": 0,
+        "litellm_provider": "vertex_ai-language-models",
+        "mode": "chat",
+        "supports_function_calling": false,
+        "supports_tool_choice": true, 
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/gemini-experimental"
     },
     "gemini-pro-vision": {
         "max_tokens": 2048,
