@@ -866,7 +866,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                   </Text>
                 </TableCell>
                 <TableCell>
-                <Button onClick={() => handleModelLimitClick(item)}>Edit Limits</Button>
+                <Button size="sm" onClick={() => handleModelLimitClick(item)}>Edit Limits</Button>
                 </TableCell>
                 <TableCell>
                     <Icon
