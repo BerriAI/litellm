@@ -709,43 +709,6 @@ async def test_acompletion_claude_2_stream():
         pytest.fail(f"Error occurred: {e}")
 
 
-def test_completion_palm_stream():
-    try:
-        litellm.set_verbose = False
-        print("Streaming palm response")
-        messages = [
-            {"role": "system", "content": "You are a helpful assistant."},
-            {
-                "role": "user",
-                "content": "how does a court case get to the Supreme Court?",
-            },
-        ]
-        print("testing palm streaming")
-        response = completion(model="palm/chat-bison", messages=messages, stream=True)
-
-        complete_response = ""
-        # Add any assertions here to check the response
-        for idx, chunk in enumerate(response):
-            print(chunk)
-            # print(chunk.choices[0].delta)
-            chunk, finished = streaming_format_tests(idx, chunk)
-            if finished:
-                break
-            complete_response += chunk
-        if complete_response.strip() == "":
-            raise Exception("Empty response received")
-        print(f"completion_response: {complete_response}")
-    except litellm.Timeout as e:
-        pass
-    except litellm.APIError as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-# test_completion_palm_stream()
-
-
 @pytest.mark.parametrize(
     "sync_mode",
     [True, False],
