@@ -56,7 +56,7 @@ jobs:
             pip install "respx==0.21.1"
             pip install fastapi
             pip install "gunicorn==21.2.0"
-            pip install "anyio==3.7.1"
+            pip install "anyio==4.2.0"
             pip install "aiodynamo==23.10.1"
             pip install "asyncio==3.4.3"
             pip install "apscheduler==3.10.4"
