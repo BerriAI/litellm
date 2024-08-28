@@ -55,7 +55,7 @@ jobs:
             pip install "respx==0.21.1"
             pip install fastapi
             pip install "gunicorn==21.2.0"
-            pip install "anyio==4.2.0"
+            pip install "anyio==3.7.1"
             pip install "aiodynamo==23.10.1"
             pip install "asyncio==3.4.3"
             pip install "apscheduler==3.10.4"
@@ -437,29 +437,9 @@ workflows:
   build_and_test:
     jobs:
       - local_testing:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
       - build_and_test:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
       - proxy_log_to_otel_tests:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
       - installing_litellm_on_python:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
       - publish_to_pypi:
           requires:
             - local_testing
