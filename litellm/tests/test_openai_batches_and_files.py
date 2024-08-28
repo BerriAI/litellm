@@ -114,7 +114,7 @@ async def test_async_create_batch(provider):
     )
     print("Response from creating file=", file_obj)
 
-    await asyncio.sleep(5)
+    await asyncio.sleep(10)
     batch_input_file_id = file_obj.id
     assert (
         batch_input_file_id is not None
