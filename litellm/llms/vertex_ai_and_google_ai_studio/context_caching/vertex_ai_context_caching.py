@@ -9,6 +9,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.openai import AllMessageValues
 from litellm.types.llms.vertex_ai import (
+    CachedContentListAllResponseBody,
     RequestBody,
     VertexAICachedContentResponseObject,
 )
@@ -38,7 +39,6 @@ class ContextCachingEndpoints:
         gemini_api_key: Optional[str],
         custom_llm_provider: Literal["gemini"],
         api_base: Optional[str],
-        cached_key: Optional[str],
     ) -> Tuple[Optional[str], str]:
         """
         Internal function. Returns the token and url for the call.
@@ -51,16 +51,9 @@ class ContextCachingEndpoints:
         if custom_llm_provider == "gemini":
             auth_header = None
             endpoint = "cachedContents"
-            if cached_key is not None:
-                url = "https://generativelanguage.googleapis.com/v1beta/{}/{}?key={}".format(
-                    endpoint, cached_key, gemini_api_key
-                )
-            else:
-                url = (
-                    "https://generativelanguage.googleapis.com/v1beta/{}?key={}".format(
-                        endpoint, gemini_api_key
-                    )
-                )
+            url = "https://generativelanguage.googleapis.com/v1beta/{}?key={}".format(
+                endpoint, gemini_api_key
+            )
 
         else:
             raise NotImplementedError
@@ -85,14 +78,22 @@ class ContextCachingEndpoints:
         api_key: str,
         api_base: Optional[str],
         logging_obj: Logging,
-    ) -> bool:
-        """Checks if content already cached."""
+    ) -> Optional[str]:
+        """
+        Checks if content already cached.
+
+        Currently, checks cache list, for cache key == displayName, since Google doesn't let us set the name of the cache (their API docs are out of sync with actual implementation).
+
+        Returns
+        - cached_content_name - str - cached content name stored on google. (if found.)
+        OR
+        - None
+        """
 
         _, url = self._get_token_and_url(
             gemini_api_key=api_key,
             custom_llm_provider="gemini",
             api_base=api_base,
-            cached_key=cache_key,
         )
         try:
             ## LOGGING
@@ -108,15 +109,30 @@ class ContextCachingEndpoints:
 
             resp = client.get(url=url, headers=headers)
             resp.raise_for_status()
-            return True
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 403:
-                return False
+                return None
             raise VertexAIError(
                 status_code=e.response.status_code, message=e.response.text
             )
         except Exception as e:
             raise VertexAIError(status_code=500, message=str(e))
+        raw_response = resp.json()
+        logging_obj.post_call(original_response=raw_response)
+
+        if "cachedContents" not in raw_response:
+            return None
+
+        all_cached_items = CachedContentListAllResponseBody(**raw_response)
+
+        for cached_item in all_cached_items["cachedContents"]:
+            if (
+                cached_item.get("displayName") is not None
+                and cached_item["displayName"] == cache_key
+            ):
+                return cached_item.get("name")
+
+        return None
 
     def check_and_create_cache(
         self,
@@ -148,7 +164,6 @@ class ContextCachingEndpoints:
             gemini_api_key=api_key,
             custom_llm_provider="gemini",
             api_base=api_base,
-            cached_key=None,
         )
 
         headers = {
@@ -178,7 +193,7 @@ class ContextCachingEndpoints:
 
         ## CHECK IF CACHED ALREADY
         generated_cache_key = local_cache_obj.get_cache_key(messages=cached_messages)
-        cache_exists = self.check_cache(
+        google_cache_name = self.check_cache(
             cache_key=generated_cache_key,
             client=client,
             headers=headers,
@@ -186,8 +201,8 @@ class ContextCachingEndpoints:
             api_base=api_base,
             logging_obj=logging_obj,
         )
-        if cache_exists:
-            return non_cached_messages, generated_cache_key
+        if google_cache_name:
+            return non_cached_messages, google_cache_name
 
         ## TRANSFORM REQUEST
         cached_content_request_body = (

@@ -83,7 +83,7 @@ def transform_openai_messages_to_gemini_context_caching(
     data = CachedContentRequestBody(
         contents=transformed_messages,
         model="models/{}".format(model),
-        name="cachedContents/{}".format(cache_key),
+        displayName=cache_key,
     )
     if transformed_system_messages is not None:
         data["system_instruction"] = transformed_system_messages
