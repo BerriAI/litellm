@@ -349,18 +349,22 @@ class PrometheusLogger(CustomLogger):
         # latency metrics
         total_time: timedelta = kwargs.get("end_time") - kwargs.get("start_time")
         total_time_seconds = total_time.total_seconds()
-        api_call_total_time: timedelta = kwargs.get("end_time") - kwargs.get(
-            "api_call_start_time"
-        )
+        api_call_start_time = kwargs.get("api_call_start_time", None)
 
-        api_call_total_time_seconds = api_call_total_time.total_seconds()
+        if api_call_start_time is not None and isinstance(
+            api_call_start_time, datetime
+        ):
+            api_call_total_time: timedelta = (
+                kwargs.get("end_time") - api_call_start_time
+            )
+            api_call_total_time_seconds = api_call_total_time.total_seconds()
+            self.litellm_llm_api_latency_metric.labels(model).observe(
+                api_call_total_time_seconds
+            )
 
         # log metrics
         self.litellm_request_total_latency_metric.labels(model).observe(
             total_time_seconds
-        )
-        self.litellm_llm_api_latency_metric.labels(model).observe(
-            api_call_total_time_seconds
         )
 
         # set x-ratelimit headers
