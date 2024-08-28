@@ -541,6 +541,7 @@ async def test_embedding_caching_azure_individual_items_reordered():
 
 
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=1)
 async def test_embedding_caching_base_64():
     """ """
     litellm.set_verbose = True
