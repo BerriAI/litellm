@@ -3134,6 +3134,7 @@ async def aembedding(*args, **kwargs) -> EmbeddingResponse:
             or custom_llm_provider == "fireworks_ai"
             or custom_llm_provider == "ollama"
             or custom_llm_provider == "vertex_ai"
+            or custom_llm_provider == "gemini"
             or custom_llm_provider == "databricks"
             or custom_llm_provider == "watsonx"
             or custom_llm_provider == "cohere"
@@ -3528,6 +3529,26 @@ def embedding(
                 client=client,
                 aembedding=aembedding,
             )
+        elif custom_llm_provider == "gemini":
+
+            gemini_api_key = api_key or get_secret("GEMINI_API_KEY") or litellm.api_key
+
+            response = vertex_chat_completion.multimodal_embedding(  # type: ignore
+                model=model,
+                input=input,
+                encoding=encoding,
+                logging_obj=logging,
+                optional_params=optional_params,
+                model_response=EmbeddingResponse(),
+                vertex_project=None,
+                vertex_location=None,
+                vertex_credentials=None,
+                aembedding=aembedding,
+                print_verbose=print_verbose,
+                custom_llm_provider="gemini",
+                api_key=gemini_api_key,
+            )
+
         elif custom_llm_provider == "vertex_ai":
             vertex_ai_project = (
                 optional_params.pop("vertex_project", None)
