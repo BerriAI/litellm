@@ -30,6 +30,7 @@ from openai.types.beta.threads.message import Message as OpenAIMessage
 from openai.types.beta.threads.message_content import MessageContent
 from openai.types.beta.threads.run import Run
 from openai.types.chat import ChatCompletionChunk
+from openai.types.embedding import Embedding as OpenAIEmbedding
 from pydantic import BaseModel, Field
 from typing_extensions import Dict, Required, TypedDict, override
 
@@ -45,6 +46,9 @@ FileTypes = Union[
     # (filename, file (or bytes), content_type, headers)
     Tuple[Optional[str], FileContent, Optional[str], Mapping[str, str]],
 ]
+
+
+EmbeddingInput = Union[str, List[str]]
 
 
 class NotGiven:

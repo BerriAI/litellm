@@ -126,6 +126,9 @@ from .llms.vertex_ai_and_google_ai_studio import (
     vertex_ai_anthropic,
     vertex_ai_non_gemini,
 )
+from .llms.vertex_ai_and_google_ai_studio.gemini.embeddings_handler import (
+    GoogleEmbeddings,
+)
 from .llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
     VertexLLM,
 )
@@ -172,6 +175,7 @@ triton_chat_completions = TritonChatCompletion()
 bedrock_chat_completion = BedrockLLM()
 bedrock_converse_chat_completion = BedrockConverseLLM()
 vertex_chat_completion = VertexLLM()
+google_embeddings = GoogleEmbeddings()
 vertex_partner_models_chat_completion = VertexAIPartnerModels()
 vertex_text_to_speech = VertexTextToSpeechAPI()
 watsonxai = IBMWatsonXAI()
@@ -3533,7 +3537,7 @@ def embedding(
 
             gemini_api_key = api_key or get_secret("GEMINI_API_KEY") or litellm.api_key
 
-            response = vertex_chat_completion.multimodal_embedding(  # type: ignore
+            response = google_embeddings.text_embeddings(  # type: ignore
                 model=model,
                 input=input,
                 encoding=encoding,
