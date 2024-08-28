@@ -69,6 +69,9 @@ def _get_vertex_url(
             url = f"https://{vertex_location}-aiplatform.googleapis.com/{vertex_api_version}/projects/{vertex_project}/locations/{vertex_location}/endpoints/{model}:{endpoint}"
             if stream is True:
                 url += "?alt=sse"
+    elif mode == "embedding":
+        endpoint = "predict"
+        url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}"
 
     return url, endpoint
 
@@ -79,8 +82,8 @@ def _get_gemini_url(
     stream: Optional[bool],
     gemini_api_key: Optional[str],
 ) -> Tuple[str, str]:
+    _gemini_model_name = "models/{}".format(model)
     if mode == "chat":
-        _gemini_model_name = "models/{}".format(model)
         endpoint = "generateContent"
         if stream is True:
             endpoint = "streamGenerateContent"
@@ -94,5 +97,8 @@ def _get_gemini_url(
                 )
             )
     elif mode == "embedding":
-        pass
+        endpoint = "embedContent"
+        url = "https://generativelanguage.googleapis.com/v1beta/{}:{}?key={}".format(
+            _gemini_model_name, endpoint, gemini_api_key
+        )
     return url, endpoint

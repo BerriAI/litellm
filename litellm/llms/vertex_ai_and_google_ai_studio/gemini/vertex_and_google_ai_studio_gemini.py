@@ -1815,6 +1815,7 @@ class VertexLLM(BaseLLM):
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
             should_use_v1beta1_features=False,
+            mode="embedding",
         )
 
         if client is None:
@@ -1830,11 +1831,6 @@ class VertexLLM(BaseLLM):
         else:
             sync_handler = client  # type: ignore
 
-        url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:predict"
-
-        auth_header, _ = self._ensure_access_token(
-            credentials=vertex_credentials, project_id=vertex_project
-        )
         optional_params = optional_params or {}
 
         request_data = VertexMultimodalEmbeddingRequest()
@@ -1852,29 +1848,21 @@ class VertexLLM(BaseLLM):
 
             request_data["instances"] = [vertex_request_instance]
 
-        request_str = f"\n curl -X POST \\\n -H \"Authorization: Bearer {auth_header[:10] + 'XXXXXXXXXX'}\" \\\n -H \"Content-Type: application/json; charset=utf-8\" \\\n -d {request_data} \\\n \"{url}\""
-        logging_obj.pre_call(
-            input=[],
-            api_key=None,
-            additional_args={
-                "complete_input_dict": optional_params,
-                "request_str": request_str,
-            },
-        )
-
-        logging_obj.pre_call(
-            input=[],
-            api_key=None,
-            additional_args={
-                "complete_input_dict": optional_params,
-                "request_str": request_str,
-            },
-        )
-
         headers = {
             "Content-Type": "application/json; charset=utf-8",
             "Authorization": f"Bearer {auth_header}",
         }
+
+        ## LOGGING
+        logging_obj.pre_call(
+            input=input,
+            api_key="",
+            additional_args={
+                "complete_input_dict": request_data,
+                "api_base": url,
+                "headers": headers,
+            },
+        )
 
         if aembedding is True:
             return self.async_multimodal_embedding(
