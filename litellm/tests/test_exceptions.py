@@ -914,12 +914,16 @@ async def test_exception_with_headers(sync_mode, provider, model, call_type, str
         if provider == "openai":
             openai_client = openai.OpenAI(api_key="")
         elif provider == "azure":
-            openai_client = openai.AzureOpenAI(api_key="", base_url="")
+            openai_client = openai.AzureOpenAI(
+                api_key="", base_url="", api_version=litellm.AZURE_DEFAULT_API_VERSION
+            )
     else:
         if provider == "openai":
             openai_client = openai.AsyncOpenAI(api_key="")
         elif provider == "azure":
-            openai_client = openai.AsyncAzureOpenAI(api_key="", base_url="")
+            openai_client = openai.AsyncAzureOpenAI(
+                api_key="", base_url="", api_version=litellm.AZURE_DEFAULT_API_VERSION
+            )
 
     data = {"model": model}
     data, original_function, mapped_target = _pre_call_utils(
