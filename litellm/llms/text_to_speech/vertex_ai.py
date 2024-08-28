@@ -19,7 +19,8 @@ from litellm.llms.vertex_ai_and_google_ai_studio.vertex_and_google_ai_studio_gem
 
 
 class VertexInput(TypedDict, total=False):
-    text: str
+    text: Optional[str]
+    ssml: Optional[str]
 
 
 class VertexVoice(TypedDict, total=False):
@@ -86,10 +87,11 @@ class VertexTextToSpeechAPI(VertexLLM):
 
         ####### Build the request ################
         # API Ref: https://cloud.google.com/text-to-speech/docs/reference/rest/v1/text/synthesize
-        vertex_input = VertexInput(text=input)
+        kwargs = kwargs or {}
+        vertex_input = VertexInput(text=input, ssml=kwargs.get("ssml", None))
+        validate_vertex_input(vertex_input)
         # required param
         optional_params = optional_params or {}
-        kwargs = kwargs or {}
         if voice is not None:
             vertex_voice = VertexVoice(**voice)
         elif "voice" in kwargs:
@@ -203,3 +205,12 @@ class VertexTextToSpeechAPI(VertexLLM):
         # Initialize the HttpxBinaryResponseContent instance
         http_binary_response = HttpxBinaryResponseContent(response)
         return http_binary_response
+
+
+def validate_vertex_input(input_data: VertexInput) -> None:
+    if input_data.get("text", None) is None:
+        input_data.pop("text")
+    if "text" not in input_data and "ssml" not in input_data:
+        raise ValueError("Either 'text' or 'ssml' must be provided.")
+    if "text" in input_data and "ssml" in input_data:
+        raise ValueError("Only one of 'text' or 'ssml' should be provided, not both.")
