@@ -375,6 +375,7 @@ class ProxyLogging:
             "moderation",
             "audio_transcription",
             "pass_through_endpoint",
+            "rerank",
         ],
     ) -> dict:
         """
@@ -1852,7 +1853,9 @@ class PrismaClient:
                 batcher = self.db.batch_()
                 for idx, user in enumerate(data_list):
                     try:
-                        data_json = self.jsonify_object(data=user.model_dump())
+                        data_json = self.jsonify_object(
+                            data=user.model_dump(exclude_none=True)
+                        )
                     except:
                         data_json = self.jsonify_object(data=user.dict())
                     batcher.litellm_usertable.upsert(

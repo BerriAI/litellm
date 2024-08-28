@@ -1988,17 +1988,33 @@
         "supports_vision": true,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
-    "gemini-experimental": {
+    "gemini-pro-experimental": {
         "max_tokens": 8192,
         "max_input_tokens": 1000000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 0,
         "output_cost_per_token": 0,
+        "input_cost_per_character": 0,
+        "output_cost_per_character": 0,
         "litellm_provider": "vertex_ai-language-models",
         "mode": "chat",
         "supports_function_calling": false,
         "supports_tool_choice": true, 
-        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/gemini-experimental"
+    },
+    "gemini-flash-experimental": {
+        "max_tokens": 8192,
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 0,
+        "output_cost_per_token": 0,
+        "input_cost_per_character": 0,
+        "output_cost_per_character": 0,
+        "litellm_provider": "vertex_ai-language-models",
+        "mode": "chat",
+        "supports_function_calling": false,
+        "supports_tool_choice": true, 
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/gemini-experimental"
     },
     "gemini-pro-vision": {
         "max_tokens": 2048,
@@ -3072,6 +3088,51 @@
         "litellm_provider": "ai21",
         "mode": "completion"
     },
+    "jamba-1.5-mini@001": {
+        "max_tokens": 256000,
+        "max_input_tokens": 256000,
+        "max_output_tokens": 256000,
+        "input_cost_per_token": 0.0000002,
+        "output_cost_per_token": 0.0000004,
+        "litellm_provider": "ai21",
+        "mode": "chat"
+    },
+    "jamba-1.5-large@001": {
+        "max_tokens": 256000,
+        "max_input_tokens": 256000,
+        "max_output_tokens": 256000,
+        "input_cost_per_token": 0.000002,
+        "output_cost_per_token": 0.000008,
+        "litellm_provider": "ai21",
+        "mode": "chat"
+    },
+    "jamba-1.5": {
+        "max_tokens": 256000,
+        "max_input_tokens": 256000,
+        "max_output_tokens": 256000,
+        "input_cost_per_token": 0.0000002,
+        "output_cost_per_token": 0.0000004,
+        "litellm_provider": "ai21",
+        "mode": "chat"
+    },
+    "jamba-1.5-mini": {
+        "max_tokens": 256000,
+        "max_input_tokens": 256000,
+        "max_output_tokens": 256000,
+        "input_cost_per_token": 0.0000002,
+        "output_cost_per_token": 0.0000004,
+        "litellm_provider": "ai21",
+        "mode": "chat"
+    },
+    "jamba-1.5-large": {
+        "max_tokens": 256000,
+        "max_input_tokens": 256000,
+        "max_output_tokens": 256000,
+        "input_cost_per_token": 0.000002,
+        "output_cost_per_token": 0.000008,
+        "litellm_provider": "ai21",
+        "mode": "chat"
+    },
     "j2-mid": {
         "max_tokens": 8192,
         "max_input_tokens": 8192,
@@ -3248,6 +3309,16 @@
         "max_output_tokens": 8191,
         "input_cost_per_token": 0.000003,
         "output_cost_per_token": 0.000009,
+        "litellm_provider": "bedrock",
+        "mode": "chat",
+        "supports_function_calling": true
+    },
+    "mistral.mistral-small-2402-v1:0": {
+        "max_tokens": 8191,
+        "max_input_tokens": 32000,
+        "max_output_tokens": 8191,
+        "input_cost_per_token": 0.000001,
+        "output_cost_per_token": 0.000003,
         "litellm_provider": "bedrock",
         "mode": "chat",
         "supports_function_calling": true

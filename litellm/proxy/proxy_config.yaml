@@ -4,10 +4,15 @@ model_list:
       model: openai/fake
       api_key: fake-key
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
+  - model_name: Salesforce/Llama-Rank-V1
+    litellm_params:
+      model: together_ai/Salesforce/Llama-Rank-V1
+      api_key: os.environ/TOGETHERAI_API_KEY
+  - model_name: rerank-english-v3.0
+    litellm_params:
+      model: cohere/rerank-english-v3.0
+      api_key: os.environ/COHERE_API_KEY
 
 # default off mode
 litellm_settings:
   set_verbose: True
-  cache: True
-  cache_params:
-    mode: default_off

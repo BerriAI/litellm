@@ -33,6 +33,7 @@ ROUTE_ENDPOINT_MAPPING = {
     "aspeech": "/audio/speech",
     "atranscription": "/audio/transcriptions",
     "amoderation": "/moderations",
+    "arerank": "/rerank",
 }
 
 
@@ -48,6 +49,7 @@ async def route_request(
         "aspeech",
         "atranscription",
         "amoderation",
+        "arerank",
     ],
 ):
     """

@@ -31,6 +31,7 @@ jobs:
             python -m pip install --upgrade pip
             python -m pip install -r .circleci/requirements.txt
             pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
             pip install "pytest-asyncio==0.21.1"
             pip install mypy
             pip install "google-generativeai==0.3.2"
@@ -55,7 +56,7 @@ jobs:
             pip install "respx==0.21.1"
             pip install fastapi
             pip install "gunicorn==21.2.0"
-            pip install "anyio==3.7.1"
+            pip install "anyio==4.2.0"
             pip install "aiodynamo==23.10.1"
             pip install "asyncio==3.4.3"
             pip install "apscheduler==3.10.4"
@@ -171,6 +172,7 @@ jobs:
             python -m pip install --upgrade pip
             python -m pip install -r .circleci/requirements.txt
             pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
             pip install "pytest-mock==3.12.0"
             pip install "pytest-asyncio==0.21.1"
             pip install mypy
@@ -282,6 +284,7 @@ jobs:
           name: Install Dependencies
           command: |
             pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
             pip install "pytest-asyncio==0.21.1"
             pip install aiohttp
             pip install "openai==1.40.0"

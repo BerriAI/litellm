@@ -51,8 +51,10 @@ LiteLLM can cache your streamed responses for you
 ### Usage
 ```python
 import litellm
+import time
 from litellm import completion
 from litellm.caching import Cache
+
 litellm.cache = Cache(type="hosted")
 
 # Make completion calls
@@ -64,6 +66,7 @@ response1 = completion(
 for chunk in response1:
     print(chunk)
 
+time.sleep(1) # cache is updated asynchronously
 
 response2 = completion(
     model="gpt-3.5-turbo", 

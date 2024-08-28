@@ -608,7 +608,7 @@ def test_completion_perplexity_exception_on_openai_client():
         os.environ["OPENAI_API_KEY"] = original_openai_key
         print("exception: ", e)
         assert (
-            "perplexity.perplexityError: The api_key client option must be set either by passing api_key to the client or by setting the PERPLEXITY_API_KEY environment variable"
+            "The api_key client option must be set either by passing api_key to the client or by setting the PERPLEXITY_API_KEY environment variable"
             in str(e)
         )
     except Exception as e:
@@ -839,3 +839,142 @@ def test_anthropic_tool_calling_exception():
         )
     except litellm.BadRequestError:
         pass
+
+
+from typing import Optional, Union
+
+from openai import AsyncOpenAI, OpenAI
+
+
+def _pre_call_utils(
+    call_type: str,
+    data: dict,
+    client: Union[OpenAI, AsyncOpenAI],
+    sync_mode: bool,
+    streaming: Optional[bool],
+):
+    if call_type == "embedding":
+        data["input"] = "Hello world!"
+        mapped_target: Any = client.embeddings.with_raw_response
+        if sync_mode:
+            original_function = litellm.embedding
+        else:
+            original_function = litellm.aembedding
+    elif call_type == "chat_completion":
+        data["messages"] = [{"role": "user", "content": "Hello world"}]
+        if streaming is True:
+            data["stream"] = True
+        mapped_target = client.chat.completions.with_raw_response
+        if sync_mode:
+            original_function = litellm.completion
+        else:
+            original_function = litellm.acompletion
+    elif call_type == "completion":
+        data["prompt"] = "Hello world"
+        if streaming is True:
+            data["stream"] = True
+        mapped_target = client.completions.with_raw_response
+        if sync_mode:
+            original_function = litellm.text_completion
+        else:
+            original_function = litellm.atext_completion
+
+    return data, original_function, mapped_target
+
+
+@pytest.mark.parametrize(
+    "sync_mode",
+    [True, False],
+)
+@pytest.mark.parametrize(
+    "provider, model, call_type, streaming",
+    [
+        ("openai", "text-embedding-ada-002", "embedding", None),
+        ("openai", "gpt-3.5-turbo", "chat_completion", False),
+        ("openai", "gpt-3.5-turbo", "chat_completion", True),
+        ("openai", "gpt-3.5-turbo-instruct", "completion", True),
+        ("azure", "azure/chatgpt-v-2", "chat_completion", True),
+        ("azure", "azure/text-embedding-ada-002", "embedding", True),
+        ("azure", "azure_text/gpt-3.5-turbo-instruct", "completion", True),
+    ],
+)
+@pytest.mark.asyncio
+async def test_exception_with_headers(sync_mode, provider, model, call_type, streaming):
+    """
+    User feedback: litellm says "No deployments available for selected model, Try again in 60 seconds"
+    but Azure says to retry in at most 9s
+
+    ```
+    {"message": "litellm.proxy.proxy_server.embeddings(): Exception occured - No deployments available for selected model, Try again in 60 seconds. Passed model=text-embedding-ada-002. pre-call-checks=False, allowed_model_region=n/a, cooldown_list=[('b49cbc9314273db7181fe69b1b19993f04efb88f2c1819947c538bac08097e4c', {'Exception Received': 'litellm.RateLimitError: AzureException RateLimitError - Requests to the Embeddings_Create Operation under Azure OpenAI API version 2023-09-01-preview have exceeded call rate limit of your current OpenAI S0 pricing tier. Please retry after 9 seconds. Please go here: https://aka.ms/oai/quotaincrease if you would like to further increase the default rate limit.', 'Status Code': '429'})]", "level": "ERROR", "timestamp": "2024-08-22T03:25:36.900476"}
+    ```
+    """
+    import openai
+
+    if sync_mode:
+        if provider == "openai":
+            openai_client = openai.OpenAI(api_key="")
+        elif provider == "azure":
+            openai_client = openai.AzureOpenAI(
+                api_key="", base_url="", api_version=litellm.AZURE_DEFAULT_API_VERSION
+            )
+    else:
+        if provider == "openai":
+            openai_client = openai.AsyncOpenAI(api_key="")
+        elif provider == "azure":
+            openai_client = openai.AsyncAzureOpenAI(
+                api_key="", base_url="", api_version=litellm.AZURE_DEFAULT_API_VERSION
+            )
+
+    data = {"model": model}
+    data, original_function, mapped_target = _pre_call_utils(
+        call_type=call_type,
+        data=data,
+        client=openai_client,
+        sync_mode=sync_mode,
+        streaming=streaming,
+    )
+
+    cooldown_time = 30.0
+
+    def _return_exception(*args, **kwargs):
+        from fastapi import HTTPException
+
+        raise HTTPException(
+            status_code=429,
+            detail="Rate Limited!",
+            headers={"retry-after": cooldown_time},  # type: ignore
+        )
+
+    with patch.object(
+        mapped_target,
+        "create",
+        side_effect=_return_exception,
+    ):
+        new_retry_after_mock_client = MagicMock(return_value=-1)
+
+        litellm.utils._get_retry_after_from_exception_header = (
+            new_retry_after_mock_client
+        )
+
+        exception_raised = False
+        try:
+            if sync_mode:
+                resp = original_function(**data, client=openai_client)
+                if streaming:
+                    for chunk in resp:
+                        continue
+            else:
+                resp = await original_function(**data, client=openai_client)
+
+                if streaming:
+                    async for chunk in resp:
+                        continue
+
+        except litellm.RateLimitError as e:
+            exception_raised = True
+            assert e.litellm_response_headers is not None
+            assert e.litellm_response_headers["retry-after"] == cooldown_time
+
+        if exception_raised is False:
+            print(resp)
+        assert exception_raised

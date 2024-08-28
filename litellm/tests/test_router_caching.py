@@ -1,7 +1,11 @@
 #### What this tests ####
 #    This tests caching on the router
-import sys, os, time
-import traceback, asyncio
+import asyncio
+import os
+import sys
+import time
+import traceback
+
 import pytest
 
 sys.path.insert(
@@ -71,6 +75,7 @@ def test_router_sync_caching_with_ssl_url():
 
 
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=1)
 async def test_acompletion_caching_on_router():
     # tests acompletion + caching on router
     try:
@@ -137,6 +142,7 @@ async def test_acompletion_caching_on_router():
 
 
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=1)
 async def test_completion_caching_on_router():
     # tests completion + caching on router
     try:

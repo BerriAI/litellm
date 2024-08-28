@@ -33,9 +33,11 @@ class AzureOpenAIError(Exception):
         message,
         request: Optional[httpx.Request] = None,
         response: Optional[httpx.Response] = None,
+        headers: Optional[httpx.Headers] = None,
     ):
         self.status_code = status_code
         self.message = message
+        self.headers = headers
         if request:
             self.request = request
         else:
@@ -311,13 +313,13 @@ class AzureTextCompletion(BaseLLM):
                     )
                 )
         except AzureOpenAIError as e:
-            exception_mapping_worked = True
             raise e
         except Exception as e:
-            if hasattr(e, "status_code"):
-                raise AzureOpenAIError(status_code=e.status_code, message=str(e))
-            else:
-                raise AzureOpenAIError(status_code=500, message=str(e))
+            status_code = getattr(e, "status_code", 500)
+            error_headers = getattr(e, "headers", None)
+            raise AzureOpenAIError(
+                status_code=status_code, message=str(e), headers=error_headers
+            )
 
     async def acompletion(
         self,
@@ -387,10 +389,11 @@ class AzureTextCompletion(BaseLLM):
             exception_mapping_worked = True
             raise e
         except Exception as e:
-            if hasattr(e, "status_code"):
-                raise e
-            else:
-                raise AzureOpenAIError(status_code=500, message=str(e))
+            status_code = getattr(e, "status_code", 500)
+            error_headers = getattr(e, "headers", None)
+            raise AzureOpenAIError(
+                status_code=status_code, message=str(e), headers=error_headers
+            )
 
     def streaming(
         self,
@@ -443,7 +446,10 @@ class AzureTextCompletion(BaseLLM):
                 "complete_input_dict": data,
             },
         )
-        response = azure_client.completions.create(**data, timeout=timeout)
+        raw_response = azure_client.completions.with_raw_response.create(
+            **data, timeout=timeout
+        )
+        response = raw_response.parse()
         streamwrapper = CustomStreamWrapper(
             completion_stream=response,
             model=model,
@@ -501,7 +507,10 @@ class AzureTextCompletion(BaseLLM):
                     "complete_input_dict": data,
                 },
             )
-            response = await azure_client.completions.create(**data, timeout=timeout)
+            raw_response = await azure_client.completions.with_raw_response.create(
+                **data, timeout=timeout
+            )
+            response = raw_response.parse()
             # return response
             streamwrapper = CustomStreamWrapper(
                 completion_stream=response,
@@ -511,7 +520,8 @@ class AzureTextCompletion(BaseLLM):
             )
             return streamwrapper  ## DO NOT make this into an async for ... loop, it will yield an async generator, which won't raise errors if the response fails
         except Exception as e:
-            if hasattr(e, "status_code"):
-                raise AzureOpenAIError(status_code=e.status_code, message=str(e))
-            else:
-                raise AzureOpenAIError(status_code=500, message=str(e))
+            status_code = getattr(e, "status_code", 500)
+            error_headers = getattr(e, "headers", None)
+            raise AzureOpenAIError(
+                status_code=status_code, message=str(e), headers=error_headers
+            )
