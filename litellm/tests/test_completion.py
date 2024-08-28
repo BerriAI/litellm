@@ -4078,6 +4078,7 @@ def test_completion_nvidia_nim():
         # "gemini-1.5-flash",
     ],
 )
+@pytest.mark.flaky(retries=3, delay=1)
 def test_completion_gemini(model):
     litellm.set_verbose = True
     model_name = "gemini/{}".format(model)

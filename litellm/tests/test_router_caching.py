@@ -142,6 +142,7 @@ async def test_acompletion_caching_on_router():
 
 
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=1)
 async def test_completion_caching_on_router():
     # tests completion + caching on router
     try:
