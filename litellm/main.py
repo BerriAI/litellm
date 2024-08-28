@@ -126,7 +126,10 @@ from .llms.vertex_ai_and_google_ai_studio import (
     vertex_ai_anthropic,
     vertex_ai_non_gemini,
 )
-from .llms.vertex_ai_and_google_ai_studio.gemini.embeddings_handler import (
+from .llms.vertex_ai_and_google_ai_studio.embeddings.batch_embed_content_handler import (
+    GoogleBatchEmbeddings,
+)
+from .llms.vertex_ai_and_google_ai_studio.embeddings.embed_content_handler import (
     GoogleEmbeddings,
 )
 from .llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
@@ -176,6 +179,7 @@ bedrock_chat_completion = BedrockLLM()
 bedrock_converse_chat_completion = BedrockConverseLLM()
 vertex_chat_completion = VertexLLM()
 google_embeddings = GoogleEmbeddings()
+google_batch_embeddings = GoogleBatchEmbeddings()
 vertex_partner_models_chat_completion = VertexAIPartnerModels()
 vertex_text_to_speech = VertexTextToSpeechAPI()
 watsonxai = IBMWatsonXAI()
@@ -3537,21 +3541,38 @@ def embedding(
 
             gemini_api_key = api_key or get_secret("GEMINI_API_KEY") or litellm.api_key
 
-            response = google_embeddings.text_embeddings(  # type: ignore
-                model=model,
-                input=input,
-                encoding=encoding,
-                logging_obj=logging,
-                optional_params=optional_params,
-                model_response=EmbeddingResponse(),
-                vertex_project=None,
-                vertex_location=None,
-                vertex_credentials=None,
-                aembedding=aembedding,
-                print_verbose=print_verbose,
-                custom_llm_provider="gemini",
-                api_key=gemini_api_key,
-            )
+            if isinstance(input, str):
+                response = google_embeddings.text_embeddings(  # type: ignore
+                    model=model,
+                    input=input,
+                    encoding=encoding,
+                    logging_obj=logging,
+                    optional_params=optional_params,
+                    model_response=EmbeddingResponse(),
+                    vertex_project=None,
+                    vertex_location=None,
+                    vertex_credentials=None,
+                    aembedding=aembedding,
+                    print_verbose=print_verbose,
+                    custom_llm_provider="gemini",
+                    api_key=gemini_api_key,
+                )
+            else:
+                response = google_batch_embeddings.batch_embeddings(  # type: ignore
+                    model=model,
+                    input=input,
+                    encoding=encoding,
+                    logging_obj=logging,
+                    optional_params=optional_params,
+                    model_response=EmbeddingResponse(),
+                    vertex_project=None,
+                    vertex_location=None,
+                    vertex_credentials=None,
+                    aembedding=aembedding,
+                    print_verbose=print_verbose,
+                    custom_llm_provider="gemini",
+                    api_key=gemini_api_key,
+                )
 
         elif custom_llm_provider == "vertex_ai":
             vertex_ai_project = (

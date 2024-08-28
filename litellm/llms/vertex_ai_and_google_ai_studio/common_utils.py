@@ -41,7 +41,7 @@ def get_supports_system_message(
 
 from typing import Literal, Optional
 
-all_gemini_url_modes = Literal["chat", "embedding"]
+all_gemini_url_modes = Literal["chat", "embedding", "batch_embedding"]
 
 
 def _get_vertex_url(
@@ -101,4 +101,10 @@ def _get_gemini_url(
         url = "https://generativelanguage.googleapis.com/v1beta/{}:{}?key={}".format(
             _gemini_model_name, endpoint, gemini_api_key
         )
+    elif mode == "batch_embedding":
+        endpoint = "batchEmbedContents"
+        url = "https://generativelanguage.googleapis.com/v1beta/{}:{}?key={}".format(
+            _gemini_model_name, endpoint, gemini_api_key
+        )
+
     return url, endpoint
