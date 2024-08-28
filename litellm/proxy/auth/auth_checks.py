@@ -216,7 +216,6 @@ def common_checks(
                     "error": "Your team does not have permission to modify guardrails."
                 },
             )
-    is_request_body_safe(request_body=request_body)
     return True
 
 
