@@ -33,6 +33,7 @@ import {
   InputNumber,
   message,
   Select,
+  Tooltip
 } from "antd";
 
 import { CopyToClipboard } from "react-copy-to-clipboard";
@@ -87,6 +88,8 @@ interface ItemData {
   metadata: any;
   user_id: string | null;
   expires: any;
+  budget_duration: string | null;
+  budget_reset_at: string | null;
   // Add any other properties that exist in the item data
 }
 
@@ -223,7 +226,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
         <Form
           form={form}
           onFinish={handleEditSubmit}
-          initialValues={token} // Pass initial values here
+          initialValues={{...token, budget_duration: token.budget_duration}} // Pass initial values here
           labelCol={{ span: 8 }}
           wrapperCol={{ span: 16 }}
           labelAlign="left"
@@ -297,6 +300,22 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
               >
                 <InputNumber step={0.01} precision={2} width={200} />
               </Form.Item>
+
+              <Form.Item 
+                className="mt-8"
+                label="Reset Budget"
+                name="budget_duration"
+                help={`Current Reset Budget: ${
+                  token.budget_duration
+                }, budget will be reset: ${token.budget_reset_at ? new Date(token.budget_reset_at).toLocaleString() : 'Never'}`}
+              >
+                <Select placeholder="n/a">
+                  <Select.Option value="daily">daily</Select.Option>
+                  <Select.Option value="weekly">weekly</Select.Option>
+                  <Select.Option value="monthly">monthly</Select.Option>
+                </Select>
+              </Form.Item>
+              
               <Form.Item
                   label="token"
                   name="token"
@@ -305,6 +324,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
               <Form.Item 
                 label="Team" 
                 name="team_id"
+                className="mt-8"
                 help="the team this key belongs to"
               >
                 <Select3 value={token.team_alias}>
@@ -536,7 +556,30 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
       }
     }
 
-    setSelectedToken(token);
+    // Convert the budget_duration to the corresponding select option
+    let budgetDuration = null;
+    if (token.budget_duration) {
+      switch (token.budget_duration) {
+        case "24h":
+          budgetDuration = "daily";
+          break;
+        case "7d":
+          budgetDuration = "weekly";
+          break;
+        case "30d":
+          budgetDuration = "monthly";
+          break;
+        default:
+          budgetDuration = "None";
+      }
+    }
+
+    setSelectedToken({
+      ...token,
+      budget_duration: budgetDuration
+    });
+
+    //setSelectedToken(token);
     setEditModalVisible(true);
   };
 
@@ -557,6 +600,21 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
 
   const currentKey = formValues.token; 
   formValues.key = currentKey;
+
+  // Convert the budget_duration back to the API expected format
+  if (formValues.budget_duration) {
+    switch (formValues.budget_duration) {
+      case "daily":
+        formValues.budget_duration = "24h";
+        break;
+      case "weekly":
+        formValues.budget_duration = "7d";
+        break;
+      case "monthly":
+        formValues.budget_duration = "30d";
+        break;
+    }
+  }
 
   console.log("handleEditSubmit:", formValues);
 
@@ -666,6 +724,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
             <TableHeaderCell>Secret Key</TableHeaderCell>
             <TableHeaderCell>Spend (USD)</TableHeaderCell>
             <TableHeaderCell>Budget (USD)</TableHeaderCell>
+            <TableHeaderCell>Budget Reset</TableHeaderCell>
             <TableHeaderCell>Models</TableHeaderCell>
             <TableHeaderCell>Rate Limits</TableHeaderCell>
             <TableHeaderCell>Rate Limits per model</TableHeaderCell>
@@ -720,6 +779,17 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                     <Text>{item.max_budget}</Text>
                   ) : (
                     <Text>Unlimited</Text>
+                  )}
+                </TableCell>
+                <TableCell>
+                  {item.budget_reset_at != null ? (
+                    <div>
+                      <p style={{ fontSize: '0.70rem' }}>{new Date(item.budget_reset_at).toLocaleString()}</p>
+
+                    </div>
+                    
+                  ) : (
+                    <p style={{ fontSize: '0.70rem' }}>Never</p>
                   )}
                 </TableCell>
                 {/* <TableCell style={{ maxWidth: '2px' }}>
@@ -796,7 +866,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                   </Text>
                 </TableCell>
                 <TableCell>
-                <Button onClick={() => handleModelLimitClick(item)}>Edit Limits</Button>
+                <Button size="xs" onClick={() => handleModelLimitClick(item)}>Edit Limits</Button>
                 </TableCell>
                 <TableCell>
                     <Icon
@@ -847,7 +917,15 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
             <div className="mt-2 flex items-baseline space-x-2.5">
               <p className="text-tremor font-semibold text-tremor-content-strong dark:text-dark-tremor-content-strong">
               {selectedToken.max_budget != null ? (
-                  <>{selectedToken.max_budget}</>
+                  <>
+                    {selectedToken.max_budget}
+                    {selectedToken.budget_duration && (
+                      <>
+                        <br />
+                        Budget will be reset at {selectedToken.budget_reset_at ? new Date(selectedToken.budget_reset_at).toLocaleString() : 'Never'}
+                      </>
+                    )}
+                  </>
                 ) : (
                   <>Unlimited</>
                 )}
