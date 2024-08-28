@@ -223,7 +223,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
         <Form
           form={form}
           onFinish={handleEditSubmit}
-          initialValues={token} // Pass initial values here
+          initialValues={{...token, budget_duration: token.budget_duration}} // Pass initial values here
           labelCol={{ span: 8 }}
           wrapperCol={{ span: 16 }}
           labelAlign="left"
@@ -297,6 +297,20 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
               >
                 <InputNumber step={0.01} precision={2} width={200} />
               </Form.Item>
+
+              <Form.Item 
+                className="mt-8"
+                label="Reset Budget"
+                name="budget_duration"
+                help={`Team Reset Budget: ${keyTeam?.budget_duration !== null && keyTeam?.budget_duration !== undefined ? keyTeam?.budget_duration : "None"}`}
+              >
+                <Select placeholder="n/a">
+                  <Select.Option value="daily">daily</Select.Option>
+                  <Select.Option value="weekly">weekly</Select.Option>
+                  <Select.Option value="monthly">monthly</Select.Option>
+                </Select>
+              </Form.Item>
+              
               <Form.Item
                   label="token"
                   name="token"
@@ -536,7 +550,28 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
       }
     }
 
-    setSelectedToken(token);
+    // Convert the budget_duration to the corresponding select option
+    let budgetDuration = null;
+    if (token.budget_duration) {
+      switch (token.budget_duration) {
+        case "24h":
+          budgetDuration = "daily";
+          break;
+        case "7d":
+          budgetDuration = "weekly";
+          break;
+        case "30d":
+          budgetDuration = "monthly";
+          break;
+      }
+    }
+
+    setSelectedToken({
+      ...token,
+      budget_duration: budgetDuration
+    });
+
+    //setSelectedToken(token);
     setEditModalVisible(true);
   };
 
@@ -557,6 +592,21 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
 
   const currentKey = formValues.token; 
   formValues.key = currentKey;
+
+  // Convert the budget_duration back to the API expected format
+  if (formValues.budget_duration) {
+    switch (formValues.budget_duration) {
+      case "daily":
+        formValues.budget_duration = "24h";
+        break;
+      case "weekly":
+        formValues.budget_duration = "7d";
+        break;
+      case "monthly":
+        formValues.budget_duration = "30d";
+        break;
+    }
+  }
 
   console.log("handleEditSubmit:", formValues);
 
