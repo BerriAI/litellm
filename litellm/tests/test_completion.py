@@ -4170,45 +4170,6 @@ def test_completion_deepseek():
         pytest.fail(f"Error occurred: {e}")
 
 
-# Palm tests
-def test_completion_palm():
-    litellm.set_verbose = True
-    model_name = "palm/chat-bison"
-    messages = [{"role": "user", "content": "Hey, how's it going?"}]
-    try:
-        response = completion(model=model_name, messages=messages)
-        # Add any assertions here to check the response
-        print(response)
-    except litellm.APIError as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-# test_completion_palm()
-
-
-# test palm with streaming
-def test_completion_palm_stream():
-    # litellm.set_verbose = True
-    model_name = "palm/chat-bison"
-    try:
-        response = completion(
-            model=model_name,
-            messages=messages,
-            stop=["stop"],
-            stream=True,
-            max_tokens=20,
-        )
-        # Add any assertions here to check the response
-        for chunk in response:
-            print(chunk)
-    except litellm.APIError as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
 @pytest.mark.skip(reason="Account deleted by IBM.")
 def test_completion_watsonx():
     litellm.set_verbose = True
