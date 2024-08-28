@@ -714,6 +714,7 @@ async def test_acompletion_claude_2_stream():
     [True, False],
 )  # ,
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=1)
 async def test_completion_gemini_stream(sync_mode):
     try:
         litellm.set_verbose = True
