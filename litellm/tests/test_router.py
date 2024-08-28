@@ -2256,7 +2256,7 @@ def test_router_dynamic_cooldown_correct_retry_after_time():
 
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
-async def test_router_dynamic_cooldown_message_retry_time(sync_mode):
+async def test_aaarouter_dynamic_cooldown_message_retry_time(sync_mode):
     """
     User feedback: litellm says "No deployments available for selected model, Try again in 60 seconds"
     but Azure says to retry in at most 9s
