@@ -323,7 +323,7 @@ for chunk in response:
 
 ## Embedding
 
-LiteLLM supports Huggingface's [text-embedding-inference](https://github.com/huggingface/text-embeddings-inference) format.
+LiteLLM supports Hugging Face's [text-embedding-inference](https://github.com/huggingface/text-embeddings-inference) format.
 
 ```python
 from litellm import embedding
@@ -523,10 +523,10 @@ Same as the OpenAI format, but also includes logprobs. [See the code](https://gi
 
 **Does this support stop sequences?**
 
-Yes, we support stop sequences - and you can pass as many as allowed by Huggingface (or any provider!)
+Yes, we support stop sequences - and you can pass as many as allowed by Hugging Face (or any provider!)
 
 **How do you deal with repetition penalty?**
 
-We map the presence penalty parameter in openai to the repetition penalty parameter on Huggingface. [See code](https://github.com/BerriAI/litellm/blob/b4b2dbf005142e0a483d46a07a88a19814899403/litellm/utils.py#L757).
+We map the presence penalty parameter in openai to the repetition penalty parameter on Hugging Face. [See code](https://github.com/BerriAI/litellm/blob/b4b2dbf005142e0a483d46a07a88a19814899403/litellm/utils.py#L757).
 
-We welcome any suggestions for improving our Huggingface integration - Create an [issue](https://github.com/BerriAI/litellm/issues/new/choose)/[Join the Discord](https://discord.com/invite/wuPM9dRgDw)!
+We welcome any suggestions for improving our Hugging Face integration - Create an [issue](https://github.com/BerriAI/litellm/issues/new/choose)/[Join the Discord](https://discord.com/invite/wuPM9dRgDw)!
