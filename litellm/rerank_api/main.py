@@ -27,7 +27,7 @@ async def arerank(
     custom_llm_provider: Optional[Literal["cohere", "together_ai"]] = None,
     top_n: Optional[int] = None,
     rank_fields: Optional[List[str]] = None,
-    return_documents: Optional[bool] = True,
+    return_documents: Optional[bool] = None,
     max_chunks_per_doc: Optional[int] = None,
     **kwargs,
 ) -> Union[RerankResponse, Coroutine[Any, Any, RerankResponse]]:
@@ -112,7 +112,7 @@ def rerank(
                 optional_params.api_base
                 or litellm.api_base
                 or get_secret("COHERE_API_BASE")
-                or "https://api.cohere.ai/v1/generate"
+                or "https://api.cohere.com/v1/rerank"
             )
 
             headers: Dict = litellm.headers or {}
@@ -126,6 +126,7 @@ def rerank(
                 return_documents=return_documents,
                 max_chunks_per_doc=max_chunks_per_doc,
                 api_key=cohere_key,
+                api_base=api_base,
                 _is_async=_is_async,
             )
             pass

@@ -125,3 +125,55 @@ async def test_basic_rerank_together_ai(sync_mode):
         assert response.results is not None
 
         assert_response_shape(response, custom_llm_provider="together_ai")
+
+
+@pytest.mark.asyncio()
+async def test_rerank_custom_api_base():
+    mock_response = AsyncMock()
+
+    def return_val():
+        return {
+            "id": "cmpl-mockid",
+            "results": [{"index": 0, "relevance_score": 0.95}],
+            "meta": {
+                "api_version": {"version": "1.0"},
+                "billed_units": {"search_units": 1},
+            },
+        }
+
+    mock_response.json = return_val
+    mock_response.status_code = 200
+
+    expected_payload = {
+        "model": "Salesforce/Llama-Rank-V1",
+        "query": "hello",
+        "documents": ["hello", "world"],
+        "top_n": 3,
+    }
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=mock_response,
+    ) as mock_post:
+        response = await litellm.arerank(
+            model="cohere/Salesforce/Llama-Rank-V1",
+            query="hello",
+            documents=["hello", "world"],
+            top_n=3,
+            api_base="https://exampleopenaiendpoint-production.up.railway.app/",
+        )
+
+        print("async re rank response: ", response)
+
+        # Assert
+        mock_post.assert_called_once()
+        _url, kwargs = mock_post.call_args
+        args_to_api = kwargs["json"]
+        print("Arguments passed to API=", args_to_api)
+        print("url = ", _url)
+        assert _url[0] == "https://exampleopenaiendpoint-production.up.railway.app/"
+        assert args_to_api == expected_payload
+        assert response.id is not None
+        assert response.results is not None
+
+        assert_response_shape(response, custom_llm_provider="cohere")
