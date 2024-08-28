@@ -149,7 +149,7 @@ def init_rds_client(
         # boto3 automatically reads env variables
 
         client = boto3.client(
-            service_name="bedrock-runtime",
+            service_name="rds",
             region_name=region_name,
             config=config,
         )
