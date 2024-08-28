@@ -848,7 +848,7 @@ from .llms.gemini import GeminiConfig
 from .llms.nlp_cloud import NLPCloudConfig
 from .llms.aleph_alpha import AlephAlphaConfig
 from .llms.petals import PetalsConfig
-from .llms.vertex_ai_and_google_ai_studio.vertex_and_google_ai_studio_gemini import (
+from .llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
     GoogleAIStudioGeminiConfig,
     VertexAIConfig,
@@ -861,9 +861,6 @@ from .llms.vertex_ai_and_google_ai_studio.vertex_ai_anthropic import (
 )
 from .llms.vertex_ai_and_google_ai_studio.vertex_ai_partner_models.llama3.transformation import (
     VertexAILlama3Config,
-)
-from .llms.vertex_ai_and_google_ai_studio.vertex_ai_partner_models.ai21.transformation import (
-    VertexAIAi21Config,
 )
 from .llms.sagemaker.sagemaker import SagemakerConfig
 from .llms.ollama import OllamaConfig
