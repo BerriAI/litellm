@@ -109,6 +109,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
             "moderation",
             "audio_transcription",
             "pass_through_endpoint",
+            "rerank",
         ],
     ) -> Optional[
         Union[Exception, str, dict]
