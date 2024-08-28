@@ -1,6 +1,6 @@
 # LITELLM PROXY DEPENDENCIES #
 anyio==4.2.0 # openai + http req.
-openai==1.40.0 # openai req. 
+openai==1.40.0 # openai req.
 fastapi==0.111.0 # server dep
 backoff==2.2.1 # server dep
 pyyaml==6.0.0 # server dep
@@ -8,6 +8,7 @@ uvicorn==0.29.0 # server dep
 gunicorn==22.0.0 # server dep
 boto3==1.34.34 # aws bedrock/sagemaker calls
 redis==5.0.0 # caching
+redisvl==0.3.2 # semantic caching in redis
 numpy==1.24.3 # semantic caching
 pandas==2.1.1 # for viewing clickhouse spend analytics
 prisma==0.11.0 # for db

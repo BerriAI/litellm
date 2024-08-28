@@ -90,7 +90,7 @@ response2 = completion(
 
 Install redis
 ```shell
-pip install redisvl==0.0.7
+pip install redisvl==0.3.2
 ```
 
 For the hosted version you can setup your own Redis DB here: https://app.redislabs.com/
