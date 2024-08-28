@@ -50,8 +50,9 @@ VERTEX_MODELS_TO_NOT_TEST = [
     "text-bison@001",
     "gemini-1.5-pro",
     "gemini-1.5-pro-preview-0215",
-    "gemini-pro-flash",
     "gemini-pro-experimental",
+    "gemini-flash-experimental",
+    "gemini-pro-flash",
 ]
 
 
