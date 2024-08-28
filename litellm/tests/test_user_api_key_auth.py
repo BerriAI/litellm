@@ -11,8 +11,10 @@ from typing import Dict, List, Optional
 from unittest.mock import MagicMock
 
 import pytest
+from starlette.datastructures import URL
 
 import litellm
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 
 class Request:
@@ -209,3 +211,38 @@ async def test_user_personal_budgets(key_ownership):
     except Exception:
         if key_ownership == "team_key":
             pytest.fail("Expected this call to work. Key is below team budget.")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("prohibited_param", ["api_base", "base_url"])
+async def test_user_api_key_auth_fails_with_prohibited_params(prohibited_param):
+    """
+    Relevant issue: https://huntr.com/bounties/4001e1a2-7b7a-4776-a3ae-e6692ec3d997
+    """
+    import json
+
+    from fastapi import Request
+
+    # Setup
+    user_key = "sk-1234"
+
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+
+    # Create request with prohibited parameter in body
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+
+    async def return_body():
+        body = {prohibited_param: "https://custom-api.com"}
+        return bytes(json.dumps(body), "utf-8")
+
+    request.body = return_body
+    try:
+        response = await user_api_key_auth(
+            request=request, api_key="Bearer " + user_key
+        )
+    except Exception as e:
+        print("error str=", str(e))
+        error_message = str(e.message)
+        print("error message=", error_message)
+        assert "is not allowed in request body" in error_message
