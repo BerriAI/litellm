@@ -10,7 +10,14 @@ import httpx
 import litellm
 from litellm import EmbeddingResponse
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.types.llms.vertex_ai import (
+    VertexAITextEmbeddingsRequestBody,
+    VertexAITextEmbeddingsResponseObject,
+)
+from litellm.types.utils import Embedding
+from litellm.utils import get_formatted_prompt
 
+from .embeddings_transformation import transform_openai_input_gemini_content
 from .vertex_and_google_ai_studio_gemini import VertexLLM
 
 
@@ -34,7 +41,7 @@ class GoogleEmbeddings(VertexLLM):
         timeout=300,
         client=None,
     ) -> EmbeddingResponse:
-        return model_response
+
         auth_header, url = self._get_token_and_url(
             model=model,
             gemini_api_key=api_key,
@@ -63,59 +70,58 @@ class GoogleEmbeddings(VertexLLM):
 
         optional_params = optional_params or {}
 
-        # request_data = VertexMultimodalEmbeddingRequest()
+        ### TRANSFORMATION ###
+        content = transform_openai_input_gemini_content(input=input)
 
-        # if "instances" in optional_params:
-        #     request_data["instances"] = optional_params["instances"]
-        # elif isinstance(input, list):
-        #     request_data["instances"] = input
-        # else:
-        #     # construct instances
-        #     vertex_request_instance = Instance(**optional_params)
+        request_data: VertexAITextEmbeddingsRequestBody = {
+            "content": content,
+            **optional_params,
+        }
 
-        #     if isinstance(input, str):
-        #         vertex_request_instance["text"] = input
+        headers = {
+            "Content-Type": "application/json; charset=utf-8",
+        }
 
-        #     request_data["instances"] = [vertex_request_instance]
+        ## LOGGING
+        logging_obj.pre_call(
+            input=input,
+            api_key="",
+            additional_args={
+                "complete_input_dict": request_data,
+                "api_base": url,
+                "headers": headers,
+            },
+        )
 
-        # headers = {
-        #     "Content-Type": "application/json; charset=utf-8",
-        #     "Authorization": f"Bearer {auth_header}",
-        # }
+        if aembedding is True:
+            pass
 
-        # ## LOGGING
-        # logging_obj.pre_call(
-        #     input=input,
-        #     api_key="",
-        #     additional_args={
-        #         "complete_input_dict": request_data,
-        #         "api_base": url,
-        #         "headers": headers,
-        #     },
-        # )
+        response = sync_handler.post(
+            url=url,
+            headers=headers,
+            data=json.dumps(request_data),
+        )
 
-        # if aembedding is True:
-        #     pass
+        if response.status_code != 200:
+            raise Exception(f"Error: {response.status_code} {response.text}")
 
-        # response = sync_handler.post(
-        #     url=url,
-        #     headers=headers,
-        #     data=json.dumps(request_data),
-        # )
+        _json_response = response.json()
+        _predictions = VertexAITextEmbeddingsResponseObject(**_json_response)  # type: ignore
 
-        # if response.status_code != 200:
-        #     raise Exception(f"Error: {response.status_code} {response.text}")
+        model_response.data = [
+            Embedding(
+                embedding=_predictions["embedding"]["values"],
+                index=0,
+                object="embedding",
+            )
+        ]
 
-        # _json_response = response.json()
-        # if "predictions" not in _json_response:
-        #     raise litellm.InternalServerError(
-        #         message=f"embedding response does not contain 'predictions', got {_json_response}",
-        #         llm_provider="vertex_ai",
-        #         model=model,
-        #     )
-        # _predictions = _json_response["predictions"]
+        model_response.model = model
 
-        # model_response.data = _predictions
-        # model_response.model = model
+        input_text = get_formatted_prompt(data={"input": input}, call_type="embedding")
+        prompt_tokens = litellm.token_counter(model=model, text=input_text)
+        model_response.usage = litellm.Usage(
+            prompt_tokens=prompt_tokens, total_tokens=prompt_tokens
+        )
 
-        # return model_response
+        return model_response
