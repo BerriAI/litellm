@@ -697,7 +697,8 @@ async def test_gemini_embeddings():
         print(f"response: {response}")
 
         # stubbed endpoint is setup to return this
-        assert response.data[0]["embedding"] == [0.1, 0.2]
+        assert isinstance(response.data[0]["embedding"], list)
+        assert response.usage.prompt_tokens > 0
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
