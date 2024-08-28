@@ -258,6 +258,13 @@ async def test_speech_litellm_vertex_async_with_voice_ssml():
     mock_response.json = return_val
     mock_response.status_code = 200
 
+    ssml = """
+    <speak>
+        <p>Hello, world!</p>
+        <p>This is a test of the <break strength="medium" /> text-to-speech API.</p>
+    </speak>
+    """
+
     # Set up the mock for asynchronous calls
     with patch(
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
@@ -267,9 +274,8 @@ async def test_speech_litellm_vertex_async_with_voice_ssml():
         model = "vertex_ai/test"
 
         response = await litellm.aspeech(
-            input=None,
+            input=ssml,
             model=model,
-            ssml="async hello what llm guardrail do you have",
             voice={
                 "languageCode": "en-UK",
                 "name": "en-UK-Studio-O",
@@ -291,7 +297,7 @@ async def test_speech_litellm_vertex_async_with_voice_ssml():
         assert kwargs["headers"]["Authorization"] is not None
 
         assert kwargs["json"] == {
-            "input": {"ssml": "async hello what llm guardrail do you have"},
+            "input": {"ssml": ssml},
             "voice": {"languageCode": "en-UK", "name": "en-UK-Studio-O"},
             "audioConfig": {"audioEncoding": "LINEAR22", "speakingRate": "10"},
         }
