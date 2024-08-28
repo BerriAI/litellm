@@ -199,6 +199,7 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
             "moderation",
             "audio_transcription",
             "pass_through_endpoint",
+            "rerank",
         ],
     ) -> Optional[
         Union[Exception, str, dict]
