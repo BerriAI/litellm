@@ -88,10 +88,12 @@ class VertexTextToSpeechAPI(VertexLLM):
         ####### Build the request ################
         # API Ref: https://cloud.google.com/text-to-speech/docs/reference/rest/v1/text/synthesize
         kwargs = kwargs or {}
-        vertex_input = VertexInput(text=input, ssml=kwargs.get("ssml", None))
-        validate_vertex_input(vertex_input)
-        # required param
         optional_params = optional_params or {}
+
+        vertex_input = VertexInput(text=input)
+        validate_vertex_input(vertex_input, kwargs, optional_params)
+
+        # required param
         if voice is not None:
             vertex_voice = VertexVoice(**voice)
         elif "voice" in kwargs:
@@ -207,10 +209,32 @@ class VertexTextToSpeechAPI(VertexLLM):
         return http_binary_response
 
 
-def validate_vertex_input(input_data: VertexInput) -> None:
-    if input_data.get("text", None) is None:
-        input_data.pop("text")
-    if "text" not in input_data and "ssml" not in input_data:
+def validate_vertex_input(
+    input_data: VertexInput, kwargs: dict, optional_params: dict
+) -> None:
+    # Remove None values
+    if input_data.get("text") is None:
+        input_data.pop("text", None)
+    if input_data.get("ssml") is None:
+        input_data.pop("ssml", None)
+
+    # Check if use_ssml is set
+    use_ssml = kwargs.get("use_ssml", optional_params.get("use_ssml", False))
+
+    if use_ssml:
+        if "text" in input_data:
+            input_data["ssml"] = input_data.pop("text")
+        elif "ssml" not in input_data:
+            raise ValueError("SSML input is required when use_ssml is True.")
+    else:
+        # LiteLLM will auto-detect if text is in ssml format
+        # check if "text" is an ssml - in this case we should pass it as ssml instead of text
+        if input_data:
+            _text = input_data.get("text", None) or ""
+            if "<speak>" in _text:
+                input_data["ssml"] = input_data.pop("text")
+
+    if not input_data:
         raise ValueError("Either 'text' or 'ssml' must be provided.")
     if "text" in input_data and "ssml" in input_data:
         raise ValueError("Only one of 'text' or 'ssml' should be provided, not both.")
