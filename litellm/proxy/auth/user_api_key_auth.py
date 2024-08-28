@@ -64,6 +64,7 @@ from litellm.proxy.auth.auth_utils import (
     route_in_additonal_public_routes,
 )
 from litellm.proxy.auth.oauth2_check import check_oauth2_token
+from litellm.proxy.auth.oauth2_proxy_hook import handle_oauth2_proxy_request
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.proxy.utils import _to_ns
 
@@ -216,6 +217,9 @@ async def user_api_key_auth(
                 )
 
             return await check_oauth2_token(token=api_key)
+
+        if general_settings.get("enable_oauth2_proxy_auth", False) is True:
+            return await handle_oauth2_proxy_request(request=request)
 
         if general_settings.get("enable_jwt_auth", False) is True:
             is_jwt = jwt_handler.is_jwt(token=api_key)
