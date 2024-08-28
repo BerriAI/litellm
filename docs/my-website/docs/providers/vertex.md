@@ -1853,10 +1853,19 @@ Vertex AI does not support passing a `model` param - so passing `model=vertex_ai
 
 ```python
 speech_file_path = Path(__file__).parent / "speech_vertex.mp3"
+
+
+ssml = """
+<speak>
+    <p>Hello, world!</p>
+    <p>This is a test of the <break strength="medium" /> text-to-speech API.</p>
+</speak>
+"""
+
 response = litellm.speech(
     input=None,
     model="vertex_ai/test",
-    ssml="async hello what llm guardrail do you have",
+    ssml=ssml,
     voice={
         "languageCode": "en-UK",
         "name": "en-UK-Studio-O",
@@ -1878,6 +1887,13 @@ import openai
 
 client = openai.OpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
 
+ssml = """
+<speak>
+    <p>Hello, world!</p>
+    <p>This is a test of the <break strength="medium" /> text-to-speech API.</p>
+</speak>
+"""
+
 # see supported values for "voice" on vertex here: 
 # https://console.cloud.google.com/vertex-ai/generative/speech/text-to-speech
 response = client.audio.speech.create(
@@ -1885,7 +1901,7 @@ response = client.audio.speech.create(
     input=None, # pass as None since OpenAI SDK requires this param
     voice={'languageCode': 'en-US', 'name': 'en-US-Studio-O'},
     extra_body={
-        "ssml": "async hello what llm guardrail do you have"
+        "ssml": ssml
     }
 )
 print("response from proxy", response)
