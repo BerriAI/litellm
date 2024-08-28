@@ -50,6 +50,8 @@ VERTEX_MODELS_TO_NOT_TEST = [
     "text-bison@001",
     "gemini-1.5-pro",
     "gemini-1.5-pro-preview-0215",
+    "gemini-pro-flash",
+    "gemini-pro-experimental",
 ]
 
 
@@ -444,7 +446,9 @@ async def test_async_vertexai_response():
     test_models = random.sample(test_models, 1)
     test_models += litellm.vertex_language_models  # always test gemini-pro
     for model in test_models:
-        print(f"model being tested in async call: {model}")
+        print(
+            f"model being tested in async call: {model}, litellm.vertex_language_models: {litellm.vertex_language_models}"
+        )
         if model in VERTEX_MODELS_TO_NOT_TEST or (
             "gecko" in model or "32k" in model or "ultra" in model or "002" in model
         ):
