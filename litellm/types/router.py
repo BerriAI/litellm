@@ -551,6 +551,20 @@ class RouterGeneralSettings(BaseModel):
     )  # if passed a model not llm_router model list, pass through the request to litellm.acompletion/embedding
 
 
+class RouterRateLimitErrorBasic(ValueError):
+    """
+    Raise a basic error inside helper functions.
+    """
+
+    def __init__(
+        self,
+        model: str,
+    ):
+        self.model = model
+        _message = f"{RouterErrors.no_deployments_available.value}."
+        super().__init__(_message)
+
+
 class RouterRateLimitError(ValueError):
     def __init__(
         self,
