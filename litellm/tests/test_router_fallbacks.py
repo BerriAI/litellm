@@ -1225,7 +1225,9 @@ async def test_using_default_fallback(sync_mode):
         pytest.fail(f"Expected call to fail we passed model=openai/foo")
     except Exception as e:
         print("got exception = ", e)
-        assert "No healthy deployment available, passed model=very-bad-model" in str(e)
+        from litellm.types.router import RouterErrors
+
+        assert RouterErrors.no_deployments_available.value in str(e)
 
 
 @pytest.mark.parametrize("sync_mode", [False])
