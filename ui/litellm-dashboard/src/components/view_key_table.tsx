@@ -87,6 +87,7 @@ interface ItemData {
   metadata: any;
   user_id: string | null;
   expires: any;
+  budget_reset_at?: string | null;
   // Add any other properties that exist in the item data
 }
 
@@ -302,7 +303,9 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                 className="mt-8"
                 label="Reset Budget"
                 name="budget_duration"
-                help={`Team Reset Budget: ${keyTeam?.budget_duration !== null && keyTeam?.budget_duration !== undefined ? keyTeam?.budget_duration : "None"}`}
+                help={`Current Reset Budget: ${
+                  token.budget_duration
+                }, budget will be reset at ${new Date(token.budget_reset_at).toLocaleString()}`}
               >
                 <Select placeholder="n/a">
                   <Select.Option value="daily">daily</Select.Option>
@@ -319,6 +322,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
               <Form.Item 
                 label="Team" 
                 name="team_id"
+                className="mt-8"
                 help="the team this key belongs to"
               >
                 <Select3 value={token.team_alias}>
@@ -563,6 +567,8 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
         case "30d":
           budgetDuration = "monthly";
           break;
+        default:
+          budgetDuration = "None";
       }
     }
 
@@ -716,6 +722,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
             <TableHeaderCell>Secret Key</TableHeaderCell>
             <TableHeaderCell>Spend (USD)</TableHeaderCell>
             <TableHeaderCell>Budget (USD)</TableHeaderCell>
+            <TableHeaderCell>Budget Reset Date</TableHeaderCell>
             <TableHeaderCell>Models</TableHeaderCell>
             <TableHeaderCell>Rate Limits</TableHeaderCell>
             <TableHeaderCell>Rate Limits per model</TableHeaderCell>
@@ -772,6 +779,13 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                     <Text>Unlimited</Text>
                   )}
                 </TableCell>
+                {/* <TableCell>
+                  {item.budget_reset_at != null ? (
+                    <Text>{new Date(item.budget_reset_at).toLocaleString()}</Text>
+                  ) : (
+                    <Text>Never</Text>
+                  )}
+                </TableCell> */}
                 {/* <TableCell style={{ maxWidth: '2px' }}>
                   <ViewKeySpendReport
                     token={item.token}
@@ -897,7 +911,15 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
             <div className="mt-2 flex items-baseline space-x-2.5">
               <p className="text-tremor font-semibold text-tremor-content-strong dark:text-dark-tremor-content-strong">
               {selectedToken.max_budget != null ? (
-                  <>{selectedToken.max_budget}</>
+                  <>
+                    {selectedToken.max_budget}
+                    {selectedToken.budget_duration && (
+                      <>
+                        <br />
+                        Budget will be reset at {new Date(selectedToken.budget_reset_at).toLocaleString()}
+                      </>
+                    )}
+                  </>
                 ) : (
                   <>Unlimited</>
                 )}
