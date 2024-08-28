@@ -2189,7 +2189,7 @@ def test_router_correctly_reraise_error():
         pass
 
 
-def test_router_dynamic_cooldown_correct_retry_after_time(sync_mode):
+def test_router_dynamic_cooldown_correct_retry_after_time():
     """
     User feedback: litellm says "No deployments available for selected model, Try again in 60 seconds"
     but Azure says to retry in at most 9s
