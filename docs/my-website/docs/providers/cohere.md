@@ -1,3 +1,7 @@
+
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
 # Cohere
 
 ## API KEYS
@@ -101,3 +105,85 @@ response = embedding(
 | embed-english-light-v2.0 | `embedding(model="embed-english-light-v2.0", input=["good morning from litellm", "this is another item"])` |
 | embed-multilingual-v2.0  | `embedding(model="embed-multilingual-v2.0", input=["good morning from litellm", "this is another item"])` |
 
+## Rerank 
+
+### Usage
+
+
+
+<Tabs>
+<TabItem value="sdk" label="LiteLLM SDK Usage">
+
+```python
+from litellm import rerank
+import os
+
+os.environ["COHERE_API_KEY"] = "sk-.."
+
+query = "What is the capital of the United States?"
+documents = [
+    "Carson City is the capital city of the American state of Nevada.",
+    "The Commonwealth of the Northern Mariana Islands is a group of islands in the Pacific Ocean. Its capital is Saipan.",
+    "Washington, D.C. is the capital of the United States.",
+    "Capital punishment has existed in the United States since before it was a country.",
+]
+
+response = rerank(
+    model="cohere/rerank-english-v3.0",
+    query=query,
+    documents=documents,
+    top_n=3,
+)
+print(response)
+```
+</TabItem>
+
+<TabItem value="proxy" label="LiteLLM Proxy Usage">
+
+LiteLLM provides an cohere api compatible `/rerank` endpoint for Rerank calls.
+
+**Setup**
+
+Add this to your litellm proxy config.yaml
+
+```yaml
+model_list:
+  - model_name: Salesforce/Llama-Rank-V1
+    litellm_params:
+      model: together_ai/Salesforce/Llama-Rank-V1
+      api_key: os.environ/TOGETHERAI_API_KEY
+  - model_name: rerank-english-v3.0
+    litellm_params:
+      model: cohere/rerank-english-v3.0
+      api_key: os.environ/COHERE_API_KEY
+```
+
+Start litellm
+
+```bash
+litellm --config /path/to/config.yaml
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+Test request
+
+```bash
+curl http://0.0.0.0:4000/rerank \
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "rerank-english-v3.0",
+    "query": "What is the capital of the United States?",
+    "documents": [
+        "Carson City is the capital city of the American state of Nevada.",
+        "The Commonwealth of the Northern Mariana Islands is a group of islands in the Pacific Ocean. Its capital is Saipan.",
+        "Washington, D.C. is the capital of the United States.",
+        "Capital punishment has existed in the United States since before it was a country."
+    ],
+    "top_n": 3
+  }'
+```
+
+</TabItem>
+</Tabs>
