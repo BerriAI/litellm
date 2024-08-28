@@ -19,7 +19,8 @@ from litellm.llms.vertex_ai_and_google_ai_studio.vertex_and_google_ai_studio_gem
 
 
 class VertexInput(TypedDict, total=False):
-    text: str
+    text: Optional[str]
+    ssml: Optional[str]
 
 
 class VertexVoice(TypedDict, total=False):
@@ -86,10 +87,13 @@ class VertexTextToSpeechAPI(VertexLLM):
 
         ####### Build the request ################
         # API Ref: https://cloud.google.com/text-to-speech/docs/reference/rest/v1/text/synthesize
-        vertex_input = VertexInput(text=input)
-        # required param
-        optional_params = optional_params or {}
         kwargs = kwargs or {}
+        optional_params = optional_params or {}
+
+        vertex_input = VertexInput(text=input)
+        validate_vertex_input(vertex_input, kwargs, optional_params)
+
+        # required param
         if voice is not None:
             vertex_voice = VertexVoice(**voice)
         elif "voice" in kwargs:
@@ -203,3 +207,34 @@ class VertexTextToSpeechAPI(VertexLLM):
         # Initialize the HttpxBinaryResponseContent instance
         http_binary_response = HttpxBinaryResponseContent(response)
         return http_binary_response
+
+
+def validate_vertex_input(
+    input_data: VertexInput, kwargs: dict, optional_params: dict
+) -> None:
+    # Remove None values
+    if input_data.get("text") is None:
+        input_data.pop("text", None)
+    if input_data.get("ssml") is None:
+        input_data.pop("ssml", None)
+
+    # Check if use_ssml is set
+    use_ssml = kwargs.get("use_ssml", optional_params.get("use_ssml", False))
+
+    if use_ssml:
+        if "text" in input_data:
+            input_data["ssml"] = input_data.pop("text")
+        elif "ssml" not in input_data:
+            raise ValueError("SSML input is required when use_ssml is True.")
+    else:
+        # LiteLLM will auto-detect if text is in ssml format
+        # check if "text" is an ssml - in this case we should pass it as ssml instead of text
+        if input_data:
+            _text = input_data.get("text", None) or ""
+            if "<speak>" in _text:
+                input_data["ssml"] = input_data.pop("text")
+
+    if not input_data:
+        raise ValueError("Either 'text' or 'ssml' must be provided.")
+    if "text" in input_data and "ssml" in input_data:
+        raise ValueError("Only one of 'text' or 'ssml' should be provided, not both.")
