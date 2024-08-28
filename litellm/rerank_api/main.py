@@ -23,11 +23,14 @@ together_rerank = TogetherAIRerank()
 async def arerank(
     model: str,
     query: str,
-    documents: List[str],
-    custom_llm_provider: Literal["cohere", "together_ai"] = "cohere",
-    top_n: int = 3,
+    documents: List[Union[str, Dict[str, Any]]],
+    custom_llm_provider: Optional[Literal["cohere", "together_ai"]] = None,
+    top_n: Optional[int] = None,
+    rank_fields: Optional[List[str]] = None,
+    return_documents: Optional[bool] = True,
+    max_chunks_per_doc: Optional[int] = None,
     **kwargs,
-) -> Dict[str, Any]:
+) -> Union[RerankResponse, Coroutine[Any, Any, RerankResponse]]:
     """
     Async: Reranks a list of documents based on their relevance to the query
     """
@@ -36,7 +39,16 @@ async def arerank(
         kwargs["arerank"] = True
 
         func = partial(
-            rerank, model, query, documents, custom_llm_provider, top_n, **kwargs
+            rerank,
+            model,
+            query,
+            documents,
+            custom_llm_provider,
+            top_n,
+            rank_fields,
+            return_documents,
+            max_chunks_per_doc,
+            **kwargs,
         )
 
         ctx = contextvars.copy_context()
@@ -114,6 +126,7 @@ def rerank(
                 return_documents=return_documents,
                 max_chunks_per_doc=max_chunks_per_doc,
                 api_key=cohere_key,
+                _is_async=_is_async,
             )
             pass
         elif _custom_llm_provider == "together_ai":
@@ -140,6 +153,7 @@ def rerank(
                 return_documents=return_documents,
                 max_chunks_per_doc=max_chunks_per_doc,
                 api_key=together_key,
+                _is_async=_is_async,
             )
 
         else:
