@@ -362,3 +362,15 @@ class ContentEmbeddings(TypedDict):
 
 class VertexAITextEmbeddingsResponseObject(TypedDict):
     embedding: ContentEmbeddings
+
+
+class EmbedContentRequest(VertexAITextEmbeddingsRequestBody):
+    model: Required[str]
+
+
+class VertexAIBatchEmbeddingsRequestBody(TypedDict, total=False):
+    requests: List[EmbedContentRequest]
+
+
+class VertexAIBatchEmbeddingsResponseObject(TypedDict):
+    embeddings: List[ContentEmbeddings]
