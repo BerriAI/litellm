@@ -274,6 +274,17 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 ## Advanced
 ### Fallbacks + Retries + Timeouts + Cooldowns
 
+To set fallbacks, just do: 
+
+```
+litellm_settings:
+  fallbacks: [{"zephyr-beta": ["gpt-3.5-turbo"]}] 
+```
+
+**Covers all errors (429, 500, etc.)**
+
+[**See Code**]()
+
 **Set via config**
 ```yaml
 model_list:
@@ -302,10 +313,70 @@ litellm_settings:
   num_retries: 3 # retry call 3 times on each model_name (e.g. zephyr-beta)
   request_timeout: 10 # raise Timeout error if call takes longer than 10s. Sets litellm.request_timeout 
   fallbacks: [{"zephyr-beta": ["gpt-3.5-turbo"]}] # fallback to gpt-3.5-turbo if call fails num_retries 
-  context_window_fallbacks: [{"zephyr-beta": ["gpt-3.5-turbo-16k"]}, {"gpt-3.5-turbo": ["gpt-3.5-turbo-16k"]}] # fallback to gpt-3.5-turbo-16k if context window error
   allowed_fails: 3 # cooldown model if it fails > 1 call in a minute. 
   cooldown_time: 30 # how long to cooldown model if fails/min > allowed_fails
 ```
+
+### Test Fallbacks! 
+
+Check if your fallbacks are working as expected. 
+
+#### **Regular Fallbacks**
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-D '{
+  "model": "my-bad-model",
+  "messages": [
+    {
+      "role": "user",
+      "content": "ping"
+    }
+  ],
+  "mock_testing_fallbacks": true # 👈 KEY CHANGE
+}
+'
+```
+
+#### **Content Policy Fallbacks**
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-D '{
+  "model": "my-bad-model",
+  "messages": [
+    {
+      "role": "user",
+      "content": "ping"
+    }
+  ],
+  "mock_testing_content_policy_fallbacks": true # 👈 KEY CHANGE
+}
+'
+```
+
+#### **Context Window Fallbacks**
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-D '{
+  "model": "my-bad-model",
+  "messages": [
+    {
+      "role": "user",
+      "content": "ping"
+    }
+  ],
+  "mock_testing_context_window_fallbacks": true # 👈 KEY CHANGE
+}
+'
+```
+
+
 ### Context Window Fallbacks (Pre-Call Checks + Fallbacks)
 
 **Before call is made** check if a call is within model context window with  **`enable_pre_call_checks: true`**.
@@ -492,65 +563,6 @@ litellm_settings:
 This will default to claude-opus in case any model fails.
 
 A model-specific fallbacks (e.g. {"gpt-3.5-turbo-small": ["claude-opus"]}) overrides default fallback.
-
-### Test Fallbacks! 
-
-Check if your fallbacks are working as expected. 
-
-#### **Regular Fallbacks**
-```bash
-curl -X POST 'http://0.0.0.0:4000/chat/completions' \
--H 'Content-Type: application/json' \
--H 'Authorization: Bearer sk-1234' \
--D '{
-  "model": "my-bad-model",
-  "messages": [
-    {
-      "role": "user",
-      "content": "ping"
-    }
-  ],
-  "mock_testing_fallbacks": true # 👈 KEY CHANGE
-}
-'
-```
-
-#### **Content Policy Fallbacks**
-```bash
-curl -X POST 'http://0.0.0.0:4000/chat/completions' \
--H 'Content-Type: application/json' \
--H 'Authorization: Bearer sk-1234' \
--D '{
-  "model": "my-bad-model",
-  "messages": [
-    {
-      "role": "user",
-      "content": "ping"
-    }
-  ],
-  "mock_testing_content_policy_fallbacks": true # 👈 KEY CHANGE
-}
-'
-```
-
-#### **Context Window Fallbacks**
-
-```bash
-curl -X POST 'http://0.0.0.0:4000/chat/completions' \
--H 'Content-Type: application/json' \
--H 'Authorization: Bearer sk-1234' \
--D '{
-  "model": "my-bad-model",
-  "messages": [
-    {
-      "role": "user",
-      "content": "ping"
-    }
-  ],
-  "mock_testing_context_window_fallbacks": true # 👈 KEY CHANGE
-}
-'
-```
 
 ### EU-Region Filtering (Pre-Call Checks)
 
