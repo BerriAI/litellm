@@ -175,7 +175,7 @@ export PROXY_LOGOUT_URL="https://www.google.com"
 
 ### Set max budget for internal users 
 
-Automatically apply budget per internal user when they sign up
+Automatically apply budget per internal user when they sign up. By default the table will be checked every 10 minutes, for users to reset. To modify this, [see this](./users.md#reset-budgets)
 
 ```yaml
 litellm_settings:
