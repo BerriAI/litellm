@@ -269,49 +269,6 @@ def togetherai_test_completion():
 #  Palm
 
 
-def palm_test_completion():
-    litellm.PalmConfig(max_output_tokens=10, temperature=0.9)
-    # litellm.set_verbose=True
-    try:
-        # OVERRIDE WITH DYNAMIC MAX TOKENS
-        response_1 = litellm.completion(
-            model="palm/chat-bison",
-            messages=[
-                {
-                    "content": "Hello, how are you? Be as verbose as possible",
-                    "role": "user",
-                }
-            ],
-            max_tokens=100,
-        )
-        response_1_text = response_1.choices[0].message.content
-        print(f"response_1_text: {response_1_text}")
-
-        # USE CONFIG TOKENS
-        response_2 = litellm.completion(
-            model="palm/chat-bison",
-            messages=[
-                {
-                    "content": "Hello, how are you? Be as verbose as possible",
-                    "role": "user",
-                }
-            ],
-        )
-        response_2_text = response_2.choices[0].message.content
-        print(f"response_2_text: {response_2_text}")
-
-        assert len(response_2_text) < len(response_1_text)
-
-        response_3 = litellm.completion(
-            model="palm/chat-bison",
-            messages=[{"content": "Hello, how are you?", "role": "user"}],
-            n=2,
-        )
-        assert len(response_3.choices) > 1
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
 # palm_test_completion()
 
 #  NLP Cloud
