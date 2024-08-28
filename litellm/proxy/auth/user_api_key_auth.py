@@ -54,6 +54,7 @@ from litellm.proxy.auth.auth_checks import (
     get_org_object,
     get_team_object,
     get_user_object,
+    is_request_body_safe,
     log_to_opentelemetry,
 )
 from litellm.proxy.auth.auth_utils import (
@@ -122,6 +123,9 @@ async def user_api_key_auth(
 
     try:
         route: str = get_request_route(request=request)
+        # get the request body
+        request_data = await _read_request_body(request=request)
+        is_request_body_safe(request_body=request_data)
 
         ### LiteLLM Enterprise Security Checks
         # Check 1. Check if request size is under max_request_size_mb
@@ -353,9 +357,6 @@ async def user_api_key_auth(
                                 user_info=user_info,
                             )
                         )
-                # get the request body
-                request_data = await _read_request_body(request=request)
-
                 # run through common checks
                 _ = common_checks(
                     request_body=request_data,
@@ -448,7 +449,6 @@ async def user_api_key_auth(
                 )
 
         ## Check END-USER OBJECT
-        request_data = await _read_request_body(request=request)
         _end_user_object = None
         end_user_params = {}
         if "user" in request_data:
