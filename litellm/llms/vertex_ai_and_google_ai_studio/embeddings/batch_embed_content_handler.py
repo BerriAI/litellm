@@ -26,7 +26,7 @@ class GoogleBatchEmbeddings(VertexLLM):
     def batch_embeddings(
         self,
         model: str,
-        input: List[str],
+        input: EmbeddingInput,
         print_verbose,
         model_response: EmbeddingResponse,
         custom_llm_provider: Literal["gemini", "vertex_ai"],
