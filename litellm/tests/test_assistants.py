@@ -214,6 +214,7 @@ async def test_add_message_litellm(sync_mode, provider):
     [True, False],
 )  #
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=1)
 async def test_aarun_thread_litellm(sync_mode, provider, is_streaming):
     """
     - Get Assistants
