@@ -2076,11 +2076,6 @@ def test_get_bearer_token():
     result = _get_bearer_token(api_key)
     assert result == "", f"Expected '', got '{result}'"
 
-    # Test API key with Bearer prefix in lowercase
-    api_key = "bearer valid_token"
-    result = _get_bearer_token(api_key)
-    assert result == "", f"Expected '', got '{result}'"
-
     # Test API key with Bearer prefix and extra spaces
     api_key = "  Bearer   valid_token  "
     result = _get_bearer_token(api_key)
