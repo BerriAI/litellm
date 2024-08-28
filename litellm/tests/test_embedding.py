@@ -696,6 +696,33 @@ async def test_triton_embeddings():
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize(
+    "input", ["good morning from litellm", ["good morning from litellm"]]  #
+)
+@pytest.mark.asyncio
+async def test_gemini_embeddings(sync_mode, input):
+    try:
+        litellm.set_verbose = True
+        if sync_mode:
+            response = litellm.embedding(
+                model="gemini/text-embedding-004",
+                input=input,
+            )
+        else:
+            response = await litellm.aembedding(
+                model="gemini/text-embedding-004",
+                input=input,
+            )
+        print(f"response: {response}")
+
+        # stubbed endpoint is setup to return this
+        assert isinstance(response.data[0]["embedding"], list)
+        assert response.usage.prompt_tokens > 0
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_databricks_embeddings(sync_mode):
     try:
