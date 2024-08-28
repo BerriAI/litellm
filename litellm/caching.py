@@ -927,6 +927,7 @@ class RedisSemanticCache(BaseCache):
         index_name=None,
         **kwargs,
     ):
+        import os
         from redisvl.extensions.llmcache import SemanticCache
         from redisvl.utils.vectorize import CustomTextVectorizer
 
@@ -945,18 +946,17 @@ class RedisSemanticCache(BaseCache):
         self.embedding_model = embedding_model
 
         if redis_url is None:
-            # if no url passed, check if host, port and password are passed, if not raise an Exception
-            if host is None or port is None or password is None:
-                # try checking env for host, port and password
-                import os
+            try:
+                # Attempt to use provided parameters or fallback to environment variables
+                host = host or os.environ['REDIS_HOST']
+                port = port or os.environ['REDIS_PORT']
+                password = password or os.environ['REDIS_PASSWORD']
+            except KeyError as e:
+                # Raise a more informative exception if any of the required keys are missing
+                missing_var = e.args[0]
+                raise ValueError(f"Missing required configuration for Redis: {missing_var}") from e
 
-                host = os.getenv("REDIS_HOST")
-                port = os.getenv("REDIS_PORT")
-                password = os.getenv("REDIS_PASSWORD")
-                if host is None or port is None or password is None:
-                    raise Exception("Redis host, port, and password must be provided")
-
-            redis_url = "redis://:" + password + "@" + host + ":" + port
+            redis_url = f"redis://:{password}@{host}:{port}"
 
         print_verbose(f"redis semantic-cache redis_url: {redis_url}")
 
@@ -1003,6 +1003,12 @@ class RedisSemanticCache(BaseCache):
     def set_cache(self, key, value, **kwargs):
         print_verbose(f"redis semantic-cache set_cache, kwargs: {kwargs}")
 
+        # parse TTL policy - workaround until you can configure TTL per write
+        ttl = kwargs.get("ttl")
+        _ttl = self.llmcache.ttl
+        if (ttl is not None) and (_ttl != ttl):
+            self.llmcache.set_ttl(ttl)
+
         # get the prompt and value
         messages = kwargs["messages"]
         prompt = "".join(message["content"] for message in messages)
@@ -1014,6 +1020,8 @@ class RedisSemanticCache(BaseCache):
             prompt=prompt,
             response=value
         )
+
+        self.llmcache.set_ttl(_ttl)
 
         return
 
@@ -1054,6 +1062,12 @@ class RedisSemanticCache(BaseCache):
             print_verbose(f"Got exception creating semantic cache index: {str(e)}")
 
         print_verbose(f"async redis semantic-cache set_cache, kwargs: {kwargs}")
+
+        # parse TTL policy - workaround until you can configure TTL per write
+        ttl = kwargs.get("ttl")
+        _ttl = self.llmcache.ttl
+        if (ttl is not None) and (_ttl != ttl):
+            self.llmcache.set_ttl(ttl)
 
         # get the prompt and value
         messages = kwargs["messages"]
@@ -1096,6 +1110,9 @@ class RedisSemanticCache(BaseCache):
             response=value,
             vector=embedding # pass through custom embedding here
         )
+
+        # reset TTL
+        self.llmcache.set_ttl(_ttl)
 
         return
 
@@ -1656,7 +1673,7 @@ class S3Cache(BaseCache):
         try:
             key = self.key_prefix + key
 
-            print_verbose(f"Get S3 Cache: key: {key}")
+            print_verbose(f"Get S3  key: {key}")
             # Download the data from S3
             cached_response = self.s3_client.get_object(
                 Bucket=self.bucket_name, Key=key
@@ -2074,6 +2091,7 @@ class Cache:
         s3_path: Optional[str] = None,
         redis_semantic_cache_use_async=False,
         redis_semantic_cache_embedding_model="text-embedding-ada-002",
+        redis_semantic_cache_index_name: Optional[str] = None,
         redis_flush_size=None,
         redis_startup_nodes: Optional[List] = None,
         disk_cache_dir=None,
@@ -2123,6 +2141,7 @@ class Cache:
                 similarity_threshold=similarity_threshold,
                 use_async=redis_semantic_cache_use_async,
                 embedding_model=redis_semantic_cache_embedding_model,
+                index_name=redis_semantic_cache_index_name,
                 **kwargs,
             )
         elif type == "qdrant-semantic":

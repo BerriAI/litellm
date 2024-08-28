@@ -1634,6 +1634,8 @@ def test_redis_semantic_cache_completion():
         password=os.environ["REDIS_PASSWORD"],
         similarity_threshold=0.8, # converted to vector distance threshold 0.2
         redis_semantic_cache_embedding_model="text-embedding-ada-002",
+        redis_semantic_cache_index_name="lite_llm_index",
+        ttl=30
     )
     response1 = completion(
         model="gpt-3.5-turbo",
@@ -1685,6 +1687,8 @@ async def test_redis_semantic_cache_acompletion():
         password=os.environ["REDIS_PASSWORD"],
         similarity_threshold=0.8,
         redis_semantic_cache_use_async=True,
+        redis_semantic_cache_index_name="lite_llm_async_index",
+        ttl=30
     )
     response1 = await litellm.acompletion(
         model="gpt-3.5-turbo",
