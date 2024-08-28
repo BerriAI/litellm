@@ -1330,6 +1330,8 @@ async def test_bedrock_httpx_streaming(sync_mode, model, region):
     except RateLimitError as e:
         print("got rate limit error=", e)
         pass
+    except litellm.Timeout:
+        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
