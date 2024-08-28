@@ -687,19 +687,22 @@ async def test_triton_embeddings():
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize(
+    "input", ["good morning from litellm", ["good morning from litellm"]]  #
+)
 @pytest.mark.asyncio
-async def test_gemini_embeddings(sync_mode):
+async def test_gemini_embeddings(sync_mode, input):
     try:
         litellm.set_verbose = True
         if sync_mode:
             response = litellm.embedding(
                 model="gemini/text-embedding-004",
-                input=["good morning from litellm"],
+                input=input,
             )
         else:
             response = await litellm.aembedding(
                 model="gemini/text-embedding-004",
-                input=["good morning from litellm"],
+                input=input,
             )
         print(f"response: {response}")
 
