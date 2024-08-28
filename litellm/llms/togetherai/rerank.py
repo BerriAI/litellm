@@ -28,6 +28,7 @@ class TogetherAIRerank(BaseLLM):
         rank_fields: Optional[List[str]] = None,
         return_documents: Optional[bool] = True,
         max_chunks_per_doc: Optional[int] = None,
+        _is_async: Optional[bool] = False,
     ) -> RerankResponse:
         client = _get_httpx_client()
 
@@ -44,6 +45,9 @@ class TogetherAIRerank(BaseLLM):
         request_data_dict = request_data.dict(exclude_none=True)
         if max_chunks_per_doc is not None:
             raise ValueError("TogetherAI does not support max_chunks_per_doc")
+
+        if _is_async:
+            return self.async_rerank(request_data_dict, api_key)  # type: ignore # Call async method
 
         response = client.post(
             "https://api.together.xyz/v1/rerank",
@@ -67,5 +71,33 @@ class TogetherAIRerank(BaseLLM):
         )
 
         return response
+
+    async def async_rerank(  # New async method
+        self,
+        request_data_dict: Dict[str, Any],
+        api_key: str,
+    ) -> RerankResponse:
+        client = _get_async_httpx_client()  # Use async client
+
+        response = await client.post(
+            "https://api.together.xyz/v1/rerank",
+            headers={
+                "accept": "application/json",
+                "content-type": "application/json",
+                "authorization": f"Bearer {api_key}",
+            },
+            json=request_data_dict,
+        )
+
+        if response.status_code != 200:
+            raise Exception(response.text)
+
+        _json_response = response.json()
+
+        return RerankResponse(
+            id=_json_response.get("id"),
+            results=_json_response.get("results"),
+            meta=_json_response.get("meta") or {},
+        )  # Return response
 
     pass
