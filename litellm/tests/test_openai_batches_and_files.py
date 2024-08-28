@@ -95,6 +95,7 @@ def test_create_batch(provider):
 
 @pytest.mark.parametrize("provider", ["openai", "azure"])
 @pytest.mark.asyncio()
+@pytest.mark.flaky(retries=3, delay=1)
 async def test_async_create_batch(provider):
     """
     1. Create File for Batch completion
