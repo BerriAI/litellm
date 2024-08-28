@@ -28,7 +28,7 @@ from litellm import (
     completion_cost,
     embedding,
 )
-from litellm.llms.vertex_ai_and_google_ai_studio.vertex_and_google_ai_studio_gemini import (
+from litellm.llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
     _gemini_convert_messages_with_history,
 )
 from litellm.tests.test_streaming import streaming_format_tests
@@ -2085,7 +2085,7 @@ def test_prompt_factory_nested():
 
 
 def test_get_token_url():
-    from litellm.llms.vertex_ai_and_google_ai_studio.vertex_and_google_ai_studio_gemini import (
+    from litellm.llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
         VertexLLM,
     )
 
@@ -2107,7 +2107,7 @@ def test_get_token_url():
         vertex_credentials=vertex_credentials,
         gemini_api_key="",
         custom_llm_provider="vertex_ai_beta",
-        should_use_v1beta1_features=should_use_v1beta1_features,
+        should_use_vertex_v1beta1_features=should_use_v1beta1_features,
         api_base=None,
         model="",
         stream=False,
@@ -2127,7 +2127,7 @@ def test_get_token_url():
         vertex_credentials=vertex_credentials,
         gemini_api_key="",
         custom_llm_provider="vertex_ai_beta",
-        should_use_v1beta1_features=should_use_v1beta1_features,
+        should_use_vertex_v1beta1_features=should_use_v1beta1_features,
         api_base=None,
         model="",
         stream=False,

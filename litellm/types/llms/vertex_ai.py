@@ -336,3 +336,41 @@ class VertexMultimodalEmbeddingRequest(TypedDict, total=False):
 class VertexAICachedContentResponseObject(TypedDict):
     name: str
     model: str
+
+
+class TaskTypeEnum(Enum):
+    TASK_TYPE_UNSPECIFIED = "TASK_TYPE_UNSPECIFIED"
+    RETRIEVAL_QUERY = "RETRIEVAL_QUERY"
+    RETRIEVAL_DOCUMENT = "RETRIEVAL_DOCUMENT"
+    SEMANTIC_SIMILARITY = "SEMANTIC_SIMILARITY"
+    CLASSIFICATION = "CLASSIFICATION"
+    CLUSTERING = "CLUSTERING"
+    QUESTION_ANSWERING = "QUESTION_ANSWERING"
+    FACT_VERIFICATION = "FACT_VERIFICATION"
+
+
+class VertexAITextEmbeddingsRequestBody(TypedDict, total=False):
+    content: Required[ContentType]
+    taskType: TaskTypeEnum
+    title: str
+    outputDimensionality: int
+
+
+class ContentEmbeddings(TypedDict):
+    values: List[int]
+
+
+class VertexAITextEmbeddingsResponseObject(TypedDict):
+    embedding: ContentEmbeddings
+
+
+class EmbedContentRequest(VertexAITextEmbeddingsRequestBody):
+    model: Required[str]
+
+
+class VertexAIBatchEmbeddingsRequestBody(TypedDict, total=False):
+    requests: List[EmbedContentRequest]
+
+
+class VertexAIBatchEmbeddingsResponseObject(TypedDict):
+    embeddings: List[ContentEmbeddings]
