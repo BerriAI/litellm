@@ -8,7 +8,7 @@ Use VertexAI SDK to call endpoints on LiteLLM Gateway (native provider format)
 
 :::tip
 
-Looking for the Unified API (OpenAI format) for VertexAI ? [Go here - using vertexAI with LiteLLM SDK or LiteLLM Proxy Server](../docs/providers/vertex.md)
+Looking for the Unified API (OpenAI format) for VertexAI ? [Go here - using vertexAI with LiteLLM SDK or LiteLLM Proxy Server](../providers/vertex.md)
 
 :::
 
