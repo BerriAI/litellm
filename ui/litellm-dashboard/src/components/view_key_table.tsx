@@ -88,7 +88,8 @@ interface ItemData {
   metadata: any;
   user_id: string | null;
   expires: any;
-  budget_reset_at?: string | null;
+  budget_duration: string | null;
+  budget_reset_at: string | null;
   // Add any other properties that exist in the item data
 }
 
@@ -306,7 +307,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                 name="budget_duration"
                 help={`Current Reset Budget: ${
                   token.budget_duration
-                }, budget will be reset at ${new Date(token.budget_reset_at).toLocaleString()}`}
+                }, budget will be reset: ${token.budget_reset_at ? new Date(token.budget_reset_at).toLocaleString() : 'Never'}`}
               >
                 <Select placeholder="n/a">
                   <Select.Option value="daily">daily</Select.Option>
@@ -921,7 +922,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                     {selectedToken.budget_duration && (
                       <>
                         <br />
-                        Budget will be reset at {new Date(selectedToken.budget_reset_at).toLocaleString()}
+                        Budget will be reset at {selectedToken.budget_reset_at ? new Date(selectedToken.budget_reset_at).toLocaleString() : 'Never'}
                       </>
                     )}
                   </>
