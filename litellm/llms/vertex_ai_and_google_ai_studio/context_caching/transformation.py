@@ -11,8 +11,10 @@ from litellm.types.llms.vertex_ai import CachedContentRequestBody, SystemInstruc
 from litellm.utils import is_cached_message
 
 from ..common_utils import VertexAIError, get_supports_system_message
-from ..gemini_transformation import transform_system_message
-from ..vertex_and_google_ai_studio_gemini import _gemini_convert_messages_with_history
+from ..gemini.transformation import transform_system_message
+from ..gemini.vertex_and_google_ai_studio_gemini import (
+    _gemini_convert_messages_with_history,
+)
 
 
 def separate_cached_messages(
