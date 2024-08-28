@@ -1,5 +1,5 @@
 """
-Google AI Studio Embeddings Endpoint
+Google AI Studio /embedContent Embeddings Endpoint
 """
 
 import json
@@ -7,7 +7,6 @@ from typing import Literal, Optional, Union
 
 import httpx
 
-import litellm
 from litellm import EmbeddingResponse
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.llms.openai import EmbeddingInput
@@ -15,21 +14,19 @@ from litellm.types.llms.vertex_ai import (
     VertexAITextEmbeddingsRequestBody,
     VertexAITextEmbeddingsResponseObject,
 )
-from litellm.types.utils import Embedding
-from litellm.utils import get_formatted_prompt
 
-from .embeddings_transformation import (
+from ..gemini.vertex_and_google_ai_studio_gemini import VertexLLM
+from .embed_content_transformation import (
     process_response,
     transform_openai_input_gemini_content,
 )
-from .vertex_and_google_ai_studio_gemini import VertexLLM
 
 
 class GoogleEmbeddings(VertexLLM):
     def text_embeddings(
         self,
         model: str,
-        input: Union[list, str],
+        input: str,
         print_verbose,
         model_response: EmbeddingResponse,
         custom_llm_provider: Literal["gemini", "vertex_ai"],
