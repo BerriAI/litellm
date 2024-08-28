@@ -23,7 +23,7 @@ class CohereRerank(BaseLLM):
         model: str,
         api_key: str,
         query: str,
-        documents: list[Union[str, Dict[str, Any]]],
+        documents: List[Union[str, Dict[str, Any]]],
         top_n: Optional[int] = None,
         rank_fields: Optional[List[str]] = None,
         return_documents: Optional[bool] = True,
