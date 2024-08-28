@@ -3297,6 +3297,16 @@
         "mode": "chat",
         "supports_function_calling": true
     },
+    "mistral.mistral-small-2402-v1:0": {
+        "max_tokens": 8191,
+        "max_input_tokens": 32000,
+        "max_output_tokens": 8191,
+        "input_cost_per_token": 0.000001,
+        "output_cost_per_token": 0.000003,
+        "litellm_provider": "bedrock",
+        "mode": "chat",
+        "supports_function_calling": true
+    },
     "bedrock/us-west-2/mistral.mixtral-8x7b-instruct-v0:1": {
         "max_tokens": 8191,
         "max_input_tokens": 32000,
