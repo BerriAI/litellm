@@ -789,14 +789,8 @@ class OpenAIChatCompletion(BaseLLM):
                 headers = {}
             response = raw_response.parse()
             return headers, response
-        except OpenAIError as e:
-            raise e
         except Exception as e:
-            status_code = getattr(e, "status_code", 500)
-            error_headers = getattr(e, "headers", None)
-            raise OpenAIError(
-                status_code=status_code, message=str(e), headers=error_headers
-            )
+            raise e
 
     def make_sync_openai_chat_completion_request(
         self,
@@ -820,14 +814,8 @@ class OpenAIChatCompletion(BaseLLM):
                 headers = {}
             response = raw_response.parse()
             return headers, response
-        except OpenAIError as e:
-            raise e
         except Exception as e:
-            status_code = getattr(e, "status_code", 500)
-            error_headers = getattr(e, "headers", None)
-            raise OpenAIError(
-                status_code=status_code, message=str(e), headers=error_headers
-            )
+            raise e
 
     def completion(
         self,
@@ -1046,13 +1034,14 @@ class OpenAIChatCompletion(BaseLLM):
                     else:
                         raise e
         except OpenAIError as e:
-            exception_mapping_worked = True
             raise e
         except Exception as e:
-            if hasattr(e, "status_code"):
-                raise OpenAIError(status_code=e.status_code, message=str(e))
-            else:
-                raise OpenAIError(status_code=500, message=traceback.format_exc())
+            status_code = getattr(e, "status_code", 500)
+            error_headers = getattr(e, "headers", None)
+            error_text = getattr(e, "text", str(e))
+            raise OpenAIError(
+                status_code=status_code, message=error_text, headers=error_headers
+            )
 
     async def acompletion(
         self,
@@ -1142,7 +1131,11 @@ class OpenAIChatCompletion(BaseLLM):
                     raise e
                 # e.message
             except Exception as e:
-                raise e
+                status_code = getattr(e, "status_code", 500)
+                error_headers = getattr(e, "headers", None)
+                raise OpenAIError(
+                    status_code=status_code, message=str(e), headers=error_headers
+                )
 
     def streaming(
         self,
@@ -1274,22 +1267,34 @@ class OpenAIChatCompletion(BaseLLM):
             except (
                 Exception
             ) as e:  # need to exception handle here. async exceptions don't get caught in sync functions.
+
                 if isinstance(e, OpenAIError):
                     raise e
+
+                error_headers = getattr(e, "headers", None)
                 if response is not None and hasattr(response, "text"):
                     raise OpenAIError(
                         status_code=500,
                         message=f"{str(e)}\n\nOriginal Response: {response.text}",
+                        headers=error_headers,
                     )
                 else:
                     if type(e).__name__ == "ReadTimeout":
                         raise OpenAIError(
-                            status_code=408, message=f"{type(e).__name__}"
+                            status_code=408,
+                            message=f"{type(e).__name__}",
+                            headers=error_headers,
                         )
                     elif hasattr(e, "status_code"):
-                        raise OpenAIError(status_code=e.status_code, message=str(e))
+                        raise OpenAIError(
+                            status_code=e.status_code,
+                            message=str(e),
+                            headers=error_headers,
+                        )
                     else:
-                        raise OpenAIError(status_code=500, message=f"{str(e)}")
+                        raise OpenAIError(
+                            status_code=500, message=f"{str(e)}", headers=error_headers
+                        )
 
     # Embedding
     async def make_openai_embedding_request(
