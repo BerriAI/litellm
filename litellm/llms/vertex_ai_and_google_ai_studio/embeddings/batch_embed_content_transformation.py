@@ -22,20 +22,28 @@ from ..common_utils import VertexAIError
 
 
 def transform_openai_input_gemini_content(
-    input: List[str], model: str, optional_params: dict
+    input: EmbeddingInput, model: str, optional_params: dict
 ) -> VertexAIBatchEmbeddingsRequestBody:
     """
     The content to embed. Only the parts.text fields will be counted.
     """
     gemini_model_name = "models/{}".format(model)
     requests: List[EmbedContentRequest] = []
-    for i in input:
+    if isinstance(input, str):
         request = EmbedContentRequest(
             model=gemini_model_name,
-            content=ContentType(parts=[PartType(text=i)]),
+            content=ContentType(parts=[PartType(text=input)]),
             **optional_params
         )
         requests.append(request)
+    else:
+        for i in input:
+            request = EmbedContentRequest(
+                model=gemini_model_name,
+                content=ContentType(parts=[PartType(text=i)]),
+                **optional_params
+            )
+            requests.append(request)
 
     return VertexAIBatchEmbeddingsRequestBody(requests=requests)
 
