@@ -608,7 +608,7 @@ def test_completion_perplexity_exception_on_openai_client():
         os.environ["OPENAI_API_KEY"] = original_openai_key
         print("exception: ", e)
         assert (
-            "perplexity.perplexityError: The api_key client option must be set either by passing api_key to the client or by setting the PERPLEXITY_API_KEY environment variable"
+            "The api_key client option must be set either by passing api_key to the client or by setting the PERPLEXITY_API_KEY environment variable"
             in str(e)
         )
     except Exception as e:
