@@ -202,6 +202,7 @@ const sidebars = {
         "image_generation",
         "audio_transcription",
         "text_to_speech",
+        "rerank",
         "assistants",
         "batches",
         "fine_tuning",
