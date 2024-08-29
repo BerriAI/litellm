@@ -2,6 +2,7 @@ import json
 import os
 import sys
 import traceback
+from random import random
 
 from dotenv import load_dotenv
 
@@ -861,6 +862,77 @@ def test_completion_claude_3_multi_turn_conversations():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+
+def test_completion_claude_3_stream_cache():
+    try:
+        litellm.num_retries = 3
+        litellm.set_verbose = False
+
+        # We're using this to ensure we don't hit the cache the first time
+        # Because of the tokenizer I think in theory this could tokenize differently every time
+        cache_buster = str(random())
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_current_weather",
+                    "description": "Get the current weather in a given location"+ cache_buster,
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "location": {
+                                "type": "string",
+                                "description": "The city and state, e.g. San Francisco, CA"*100,
+                            },
+                            "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                        },
+                        "required": ["location"],
+                    },
+                }, "cache_control": {"type": "ephemeral"}
+            }
+        ]
+        # We have to hit 1024 tokens to be eligible for cache
+        messages = [
+            {"role": "system", "content": "This is a test" * 300 , "cache_control": {"type": "ephemeral"}},
+            {"role": "user", "content": "What is this?", "cache_control": {"type": "ephemeral"}},
+        ]
+        last_chunks = []
+        for i in [0, 1]:
+            response = completion(
+                model="anthropic/claude-3-5-sonnet-20240620",
+                messages=messages,
+                tools=tools,
+                stream=True,
+                max_tokens=10,
+                stream_options=dict(include_usage=True),
+                extra_headers={
+                    "anthropic-version": "2023-06-01",
+                    "anthropic-beta": "prompt-caching-2024-07-31"
+                }
+            )
+            last_chunk = None
+            for chunk in response:
+                last_chunk = chunk
+            last_chunks.append(last_chunk)
+        print(cache_buster)
+        print(last_chunks)
+
+        # Interestingly I'm always seeing cache_creation_input_tokens=1529
+        # Its normal for the template llm's use to add extra tokens for formatting the tools/conversation
+        # And the cache buster will tokenize differently every time
+        # But I don't know why it sticks to 1529 here.
+        assert last_chunks[0].usage.cache_creation_input_tokens != 0
+        assert last_chunks[0].usage.cache_read_input_tokens == 0
+        assert last_chunks[1].usage.cache_creation_input_tokens == 0
+        assert last_chunks[1].usage.cache_read_input_tokens == last_chunks[0].usage.cache_creation_input_tokens
+
+    except litellm.RateLimitError:
+        pass
+    except litellm.InternalServerError as e:
+        pytest.fail(f"error occurred: {str(e)}")
+        pass
+    except Exception as e:
+        pytest.fail(f"error occurred: {str(e)}")
 
 def test_completion_claude_3_stream():
     litellm.set_verbose = False
