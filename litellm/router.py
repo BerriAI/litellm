@@ -92,6 +92,7 @@ from litellm.types.router import (
     RouterErrors,
     RouterGeneralSettings,
     RouterRateLimitError,
+    RouterRateLimitErrorBasic,
     updateDeployment,
     updateLiteLLMParams,
 )
@@ -4459,16 +4460,8 @@ class Router:
             """
 
             if _rate_limit_error is True:  # allow generic fallback logic to take place
-                model_ids = self.get_model_ids(model_name=model)
-                cooldown_time = self.cooldown_cache.get_min_cooldown(
-                    model_ids=model_ids
-                )
-                cooldown_list = self._get_cooldown_deployments()
-                raise RouterRateLimitError(
+                raise RouterRateLimitErrorBasic(
                     model=model,
-                    cooldown_time=cooldown_time,
-                    enable_pre_call_checks=True,
-                    cooldown_list=cooldown_list,
                 )
 
             elif _context_window_error is True:
@@ -4579,14 +4572,10 @@ class Router:
         litellm.print_verbose(f"initial list of deployments: {healthy_deployments}")
 
         if len(healthy_deployments) == 0:
-            model_ids = self.get_model_ids(model_name=model)
-            _cooldown_time = self.cooldown_cache.get_min_cooldown(model_ids=model_ids)
-            _cooldown_list = self._get_cooldown_deployments()
-            raise RouterRateLimitError(
-                model=model,
-                cooldown_time=_cooldown_time,
-                enable_pre_call_checks=self.enable_pre_call_checks,
-                cooldown_list=_cooldown_list,
+            raise ValueError(
+                "{}. You passed in model={}. There is no 'model_name' with this string ".format(
+                    RouterErrors.no_deployments_available.value, model
+                )
             )
 
         if litellm.model_alias_map and model in litellm.model_alias_map:
