@@ -216,3 +216,15 @@ def _transform_system_message(
         return SystemInstructions(parts=system_content_blocks), messages
 
     return None, messages
+
+
+def set_headers(auth_header: Optional[str], extra_headers: Optional[dict]) -> dict:
+    headers = {
+        "Content-Type": "application/json",
+    }
+    if auth_header is not None:
+        headers["Authorization"] = f"Bearer {auth_header}"
+    if extra_headers is not None:
+        headers.update(extra_headers)
+
+    return headers

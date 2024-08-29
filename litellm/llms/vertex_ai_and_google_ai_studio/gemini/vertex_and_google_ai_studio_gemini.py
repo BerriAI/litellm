@@ -62,7 +62,11 @@ from ..common_utils import (
     all_gemini_url_modes,
     get_supports_system_message,
 )
-from .transformation import async_transform_request_body, sync_transform_request_body
+from .transformation import (
+    async_transform_request_body,
+    set_headers,
+    sync_transform_request_body,
+)
 
 
 class VertexAIConfig:
@@ -1274,13 +1278,12 @@ class VertexLLM(BaseLLM):
         stream,
         optional_params: dict,
         litellm_params: dict,
+        headers: dict,
         logger_fn=None,
-        headers={},
         client: Optional[AsyncHTTPHandler] = None,
     ) -> Union[ModelResponse, CustomStreamWrapper]:
 
         request_body = await async_transform_request_body(**data)  # type: ignore
-
         if client is None:
             _params = {}
             if timeout is not None:
@@ -1370,6 +1373,8 @@ class VertexLLM(BaseLLM):
             "litellm_params": litellm_params,
         }
 
+        headers = set_headers(auth_header=auth_header, extra_headers=extra_headers)
+
         ### ROUTING (ASYNC, STREAMING, SYNC)
         if acompletion:
             ### ASYNC STREAMING
@@ -1389,6 +1394,7 @@ class VertexLLM(BaseLLM):
                     timeout=timeout,
                     client=client,  # type: ignore
                     data=transform_request_params,
+                    headers=headers,
                 )
             ### ASYNC COMPLETION
             return self.async_completion(
@@ -1406,20 +1412,13 @@ class VertexLLM(BaseLLM):
                 logger_fn=logger_fn,
                 timeout=timeout,
                 client=client,  # type: ignore
+                headers=headers,
             )
 
         ## SYNC STREAMING CALL ##
         ## TRANSFORMATION ##
         request_data = sync_transform_request_body(**transform_request_params)
         data = json.dumps(request_data)
-
-        headers = {
-            "Content-Type": "application/json",
-        }
-        if auth_header is not None:
-            headers["Authorization"] = f"Bearer {auth_header}"
-        if extra_headers is not None:
-            headers.update(extra_headers)
 
         ## LOGGING
         logging_obj.pre_call(
