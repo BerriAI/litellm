@@ -62,7 +62,7 @@ from ..common_utils import (
     all_gemini_url_modes,
     get_supports_system_message,
 )
-from .transformation import sync_transform_request_body
+from .transformation import async_transform_request_body, sync_transform_request_body
 
 
 class VertexAIConfig:
@@ -821,7 +821,7 @@ class VertexLLM(BaseLLM):
         optional_params: dict,
         litellm_params: dict,
         api_key: str,
-        data: Union[dict, str],
+        data: Union[dict, str, RequestBody],
         messages: List,
         print_verbose,
         encoding,
@@ -1228,7 +1228,7 @@ class VertexLLM(BaseLLM):
         api_base: str,
         model_response: ModelResponse,
         print_verbose: Callable,
-        data: str,
+        data: dict,
         timeout: Optional[Union[float, httpx.Timeout]],
         encoding,
         logging_obj,
@@ -1239,6 +1239,9 @@ class VertexLLM(BaseLLM):
         headers={},
         client: Optional[AsyncHTTPHandler] = None,
     ) -> CustomStreamWrapper:
+        request_body = await async_transform_request_body(**data)  # type: ignore
+
+        request_body_str = json.dumps(request_body)
         streaming_response = CustomStreamWrapper(
             completion_stream=None,
             make_call=partial(
@@ -1246,7 +1249,7 @@ class VertexLLM(BaseLLM):
                 client=client,
                 api_base=api_base,
                 headers=headers,
-                data=data,
+                data=request_body_str,
                 model=model,
                 messages=messages,
                 logging_obj=logging_obj,
@@ -1264,7 +1267,7 @@ class VertexLLM(BaseLLM):
         api_base: str,
         model_response: ModelResponse,
         print_verbose: Callable,
-        data: str,
+        data: dict,
         timeout: Optional[Union[float, httpx.Timeout]],
         encoding,
         logging_obj,
@@ -1275,6 +1278,9 @@ class VertexLLM(BaseLLM):
         headers={},
         client: Optional[AsyncHTTPHandler] = None,
     ) -> Union[ModelResponse, CustomStreamWrapper]:
+
+        request_body = await async_transform_request_body(**data)  # type: ignore
+
         if client is None:
             _params = {}
             if timeout is not None:
@@ -1286,7 +1292,7 @@ class VertexLLM(BaseLLM):
             client = client  # type: ignore
 
         try:
-            response = await client.post(api_base, headers=headers, json=data)  # type: ignore
+            response = await client.post(api_base, headers=headers, json=request_body)  # type: ignore
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code = err.response.status_code
@@ -1300,7 +1306,7 @@ class VertexLLM(BaseLLM):
             model_response=model_response,
             logging_obj=logging_obj,
             api_key="",
-            data=data,
+            data=request_body,
             messages=messages,
             print_verbose=print_verbose,
             optional_params=optional_params,
@@ -1350,24 +1356,62 @@ class VertexLLM(BaseLLM):
             should_use_v1beta1_features=should_use_v1beta1_features,
         )
 
+        transform_request_params = {
+            "gemini_api_key": gemini_api_key,
+            "messages": messages,
+            "api_base": api_base,
+            "model": model,
+            "client": client,
+            "timeout": timeout,
+            "extra_headers": extra_headers,
+            "optional_params": optional_params,
+            "logging_obj": logging_obj,
+            "custom_llm_provider": custom_llm_provider,
+            "litellm_params": litellm_params,
+        }
+
+        ### ROUTING (ASYNC, STREAMING, SYNC)
+        if acompletion:
+            ### ASYNC STREAMING
+            if stream is True:
+                return self.async_streaming(
+                    model=model,
+                    messages=messages,
+                    api_base=url,
+                    model_response=model_response,
+                    print_verbose=print_verbose,
+                    encoding=encoding,
+                    logging_obj=logging_obj,
+                    optional_params=optional_params,
+                    stream=stream,
+                    litellm_params=litellm_params,
+                    logger_fn=logger_fn,
+                    timeout=timeout,
+                    client=client,  # type: ignore
+                    data=transform_request_params,
+                )
+            ### ASYNC COMPLETION
+            return self.async_completion(
+                model=model,
+                messages=messages,
+                data=transform_request_params,  # type: ignore
+                api_base=url,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                encoding=encoding,
+                logging_obj=logging_obj,
+                optional_params=optional_params,
+                stream=stream,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                timeout=timeout,
+                client=client,  # type: ignore
+            )
+
+        ## SYNC STREAMING CALL ##
         ## TRANSFORMATION ##
-        data = sync_transform_request_body(
-            gemini_api_key=gemini_api_key,
-            messages=messages,
-            api_base=api_base,
-            model=model,
-            client=(
-                client
-                if client is not None and isinstance(client, HTTPHandler)
-                else None
-            ),
-            timeout=timeout,
-            extra_headers=extra_headers,
-            optional_params=optional_params,
-            logging_obj=logging_obj,
-            custom_llm_provider=custom_llm_provider,
-            litellm_params=litellm_params,
-        )
+        request_data = sync_transform_request_body(**transform_request_params)
+        data = json.dumps(request_data)
 
         headers = {
             "Content-Type": "application/json",
@@ -1388,47 +1432,6 @@ class VertexLLM(BaseLLM):
             },
         )
 
-        ### ROUTING (ASYNC, STREAMING, SYNC)
-        if acompletion:
-            ### ASYNC STREAMING
-            if stream is True:
-                return self.async_streaming(
-                    model=model,
-                    messages=messages,
-                    data=json.dumps(data),  # type: ignore
-                    api_base=url,
-                    model_response=model_response,
-                    print_verbose=print_verbose,
-                    encoding=encoding,
-                    logging_obj=logging_obj,
-                    optional_params=optional_params,
-                    stream=stream,
-                    litellm_params=litellm_params,
-                    logger_fn=logger_fn,
-                    headers=headers,
-                    timeout=timeout,
-                    client=client,  # type: ignore
-                )
-            ### ASYNC COMPLETION
-            return self.async_completion(
-                model=model,
-                messages=messages,
-                data=data,  # type: ignore
-                api_base=url,
-                model_response=model_response,
-                print_verbose=print_verbose,
-                encoding=encoding,
-                logging_obj=logging_obj,
-                optional_params=optional_params,
-                stream=stream,
-                litellm_params=litellm_params,
-                logger_fn=logger_fn,
-                headers=headers,
-                timeout=timeout,
-                client=client,  # type: ignore
-            )
-
-        ## SYNC STREAMING CALL ##
         if stream is not None and stream is True:
             streaming_response = CustomStreamWrapper(
                 completion_stream=None,
@@ -1436,8 +1439,7 @@ class VertexLLM(BaseLLM):
                     make_sync_call,
                     client=None,
                     api_base=url,
-                    headers=headers,  # type: ignore
-                    data=json.dumps(data),
+                    data=data,
                     model=model,
                     messages=messages,
                     logging_obj=logging_obj,
@@ -1449,6 +1451,7 @@ class VertexLLM(BaseLLM):
 
             return streaming_response
         ## COMPLETION CALL ##
+
         if client is None or isinstance(client, AsyncHTTPHandler):
             _params = {}
             if timeout is not None:

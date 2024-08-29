@@ -2311,9 +2311,7 @@ import uuid
 
 @pytest.mark.parametrize(
     "sync_mode",
-    [
-        True,
-    ],  # False
+    [True, False],
 )
 @pytest.mark.asyncio
 async def test_gemini_context_caching_anthropic_format(sync_mode):

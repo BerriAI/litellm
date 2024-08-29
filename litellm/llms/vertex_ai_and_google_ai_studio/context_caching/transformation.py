@@ -11,7 +11,7 @@ from litellm.types.llms.vertex_ai import CachedContentRequestBody, SystemInstruc
 from litellm.utils import is_cached_message
 
 from ..common_utils import VertexAIError, get_supports_system_message
-from ..gemini.transformation import transform_system_message
+from ..gemini.transformation import _transform_system_message
 from ..gemini.vertex_and_google_ai_studio_gemini import (
     _gemini_convert_messages_with_history,
 )
@@ -75,7 +75,7 @@ def transform_openai_messages_to_gemini_context_caching(
         model=model, custom_llm_provider="gemini"
     )
 
-    transformed_system_messages, new_messages = transform_system_message(
+    transformed_system_messages, new_messages = _transform_system_message(
         supports_system_message=supports_system_message, messages=messages
     )
 
