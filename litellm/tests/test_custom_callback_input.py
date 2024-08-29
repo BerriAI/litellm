@@ -1297,3 +1297,53 @@ def test_aaastandard_logging_payload_cache_hit():
         assert standard_logging_object["cache_hit"] is True
         assert standard_logging_object["response_cost"] == 0
         assert standard_logging_object["saved_cache_cost"] > 0
+
+
+def test_logging_async_cache_hit_sync_call():
+    from litellm.types.utils import StandardLoggingPayload
+
+    litellm.cache = Cache()
+
+    response = litellm.completion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "Hey, how's it going?"}],
+        caching=True,
+        stream=True,
+    )
+    for chunk in response:
+        print(chunk)
+
+    time.sleep(3)
+    customHandler = CompletionCustomHandler()
+    litellm.callbacks = [customHandler]
+    litellm.success_callback = []
+
+    with patch.object(
+        customHandler, "log_success_event", new=MagicMock()
+    ) as mock_client:
+        resp = litellm.completion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+            caching=True,
+            stream=True,
+        )
+
+        for chunk in resp:
+            print(chunk)
+
+        time.sleep(2)
+        mock_client.assert_called_once()
+
+        assert "standard_logging_object" in mock_client.call_args.kwargs["kwargs"]
+        assert (
+            mock_client.call_args.kwargs["kwargs"]["standard_logging_object"]
+            is not None
+        )
+
+        standard_logging_object: StandardLoggingPayload = mock_client.call_args.kwargs[
+            "kwargs"
+        ]["standard_logging_object"]
+
+        assert standard_logging_object["cache_hit"] is True
+        assert standard_logging_object["response_cost"] == 0
+        assert standard_logging_object["saved_cache_cost"] > 0
