@@ -1,20 +1,20 @@
 model_list:
-  - model_name: fake-openai-endpoint
-    litellm_params:
-      model: openai/fake
-      api_key: fake-key
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/
-      tags: ["teamA"]
-    model_info:
-      id: "teama"
-  - model_name: fake-openai-endpoint
-    litellm_params:
-      model: openai/fake
-      api_key: fake-key
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/
-      tags: ["teamB"]
-    model_info:
-      id: "teamb"
+ - model_name: fake-openai-endpoint
+   litellm_params:
+     model: openai/fake
+     api_key: fake-key
+     api_base: https://exampleopenaiendpoint-production.up.railway.app/
+     tags: ["teamA"] # 👈 Key Change
+   model_info:
+     id: "team-a-model" # used for identifying model in response headers
+ - model_name: fake-openai-endpoint
+   litellm_params:
+     model: openai/fake
+     api_key: fake-key
+     api_base: https://exampleopenaiendpoint-production.up.railway.app/
+     tags: ["teamB"] # 👈 Key Change
+   model_info:
+     id: "team-b-model" # used for identifying model in response headers
   - model_name: rerank-english-v3.0
     litellm_params:
       model: cohere/rerank-english-v3.0
