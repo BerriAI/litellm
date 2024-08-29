@@ -1,28 +1,23 @@
 model_list:
-  - model_name: fake-openai-endpoint
-    litellm_params:
-      model: openai/fake
-      api_key: fake-key
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/
-      tags: ["teamA"]
-    model_info:
-      id: "teama"
-  - model_name: fake-openai-endpoint
-    litellm_params:
-      model: openai/fake
-      api_key: fake-key
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/
-      tags: ["teamB"]
-    model_info:
-      id: "teamb"
-    
+ - model_name: fake-openai-endpoint
+   litellm_params:
+     model: openai/fake
+     api_key: fake-key
+     api_base: https://exampleopenaiendpoint-production.up.railway.app/
+     tags: ["teamA"] # 👈 Key Change
+   model_info:
+     id: "team-a-model" # used for identifying model in response headers
+ - model_name: fake-openai-endpoint
+   litellm_params:
+     model: openai/fake
+     api_key: fake-key
+     api_base: https://exampleopenaiendpoint-production.up.railway.app/
+     tags: ["teamB"] # 👈 Key Change
+   model_info:
+     id: "team-b-model" # used for identifying model in response headers
 
 router_settings:
-  enable_tag_filtering: True # 👈 Key Change
+ enable_tag_filtering: True # 👈 Key Change
 
 general_settings: 
-  master_key: sk-1234 
-
-# default off mode
-litellm_settings:
-  set_verbose: True
+ master_key: sk-1234 
