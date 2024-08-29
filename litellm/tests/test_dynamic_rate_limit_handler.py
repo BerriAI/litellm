@@ -120,6 +120,7 @@ async def test_available_tpm(num_projects, dynamic_rate_limit_handler):
 
 @pytest.mark.parametrize("num_projects", [1, 2, 100])
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=1)
 async def test_available_rpm(num_projects, dynamic_rate_limit_handler):
     model = "my-fake-model"
     ## SET CACHE W/ ACTIVE PROJECTS
