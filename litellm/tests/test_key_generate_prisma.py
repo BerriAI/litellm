@@ -3033,3 +3033,62 @@ async def test_regenerate_api_key(prisma_client):
     assert new_key.key_name == f"sk-...{new_key.key[-4:]}"
 
     pass
+
+
+@pytest.mark.asyncio()
+async def test_team_tags(prisma_client):
+    """
+    - Test setting tags on a team
+    - Assert this is returned when calling /team/info
+    - Team/update with tags should update the tags
+    - Assert new tags are returned when calling /team/info
+    """
+    litellm.set_verbose = True
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    await litellm.proxy.proxy_server.prisma_client.connect()
+
+    _new_team = NewTeamRequest(
+        team_alias="test-teamA",
+        tags=["teamA"],
+    )
+
+    new_team_response = await new_team(
+        data=_new_team,
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        http_request=Request(scope={"type": "http"}),
+    )
+
+    print("new_team_response", new_team_response)
+
+    # call /team/info
+    team_info_response = await team_info(
+        team_id=new_team_response["team_id"],
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        http_request=Request(scope={"type": "http"}),
+    )
+    print("team_info_response", team_info_response)
+
+    assert team_info_response["team_info"].metadata["tags"] == ["teamA"]
+
+    # team update with tags
+    team_update_response = await update_team(
+        data=UpdateTeamRequest(
+            team_id=new_team_response["team_id"],
+            tags=["teamA", "teamB"],
+        ),
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        http_request=Request(scope={"type": "http"}),
+    )
+
+    print("team_update_response", team_update_response)
+
+    # call /team/info again
+    team_info_response = await team_info(
+        team_id=new_team_response["team_id"],
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        http_request=Request(scope={"type": "http"}),
+    )
+
+    print("team_info_response", team_info_response)
+    assert team_info_response["team_info"].metadata["tags"] == ["teamA", "teamB"]
