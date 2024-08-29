@@ -4028,8 +4028,71 @@
         "max_tokens": 8192, 
         "max_input_tokens": 8192, 
         "max_output_tokens": 8192, 
-        "input_cost_per_token": 0.0000004,
+        "input_cost_per_token": 0.0000003,
         "output_cost_per_token": 0.0000006,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "bedrock/us-east-1/meta.llama3-8b-instruct-v1:0": {
+        "max_tokens": 8192, 
+        "max_input_tokens": 8192, 
+        "max_output_tokens": 8192, 
+        "input_cost_per_token": 0.0000003,
+        "output_cost_per_token": 0.0000006,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "bedrock/us-west-1/meta.llama3-8b-instruct-v1:0": {
+        "max_tokens": 8192, 
+        "max_input_tokens": 8192, 
+        "max_output_tokens": 8192, 
+        "input_cost_per_token": 0.0000003,
+        "output_cost_per_token": 0.0000006,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "bedrock/ap-south-1/meta.llama3-8b-instruct-v1:0": {
+        "max_tokens": 8192, 
+        "max_input_tokens": 8192, 
+        "max_output_tokens": 8192, 
+        "input_cost_per_token": 0.00000036,
+        "output_cost_per_token": 0.00000072,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "bedrock/ca-central-1/meta.llama3-8b-instruct-v1:0": {
+        "max_tokens": 8192, 
+        "max_input_tokens": 8192, 
+        "max_output_tokens": 8192, 
+        "input_cost_per_token": 0.00000035,
+        "output_cost_per_token": 0.00000069,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "bedrock/eu-west-1/meta.llama3-8b-instruct-v1:0": {
+        "max_tokens": 8192, 
+        "max_input_tokens": 8192, 
+        "max_output_tokens": 8192, 
+        "input_cost_per_token": 0.00000032,
+        "output_cost_per_token": 0.00000065,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "bedrock/eu-west-2/meta.llama3-8b-instruct-v1:0": {
+        "max_tokens": 8192, 
+        "max_input_tokens": 8192, 
+        "max_output_tokens": 8192, 
+        "input_cost_per_token": 0.00000039,
+        "output_cost_per_token": 0.00000078,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "bedrock/sa-east-1/meta.llama3-8b-instruct-v1:0": {
+        "max_tokens": 8192, 
+        "max_input_tokens": 8192, 
+        "max_output_tokens": 8192, 
+        "input_cost_per_token": 0.0000005,
+        "output_cost_per_token": 0.00000101,
         "litellm_provider": "bedrock",
         "mode": "chat"
     },
@@ -4042,12 +4105,75 @@
         "litellm_provider": "bedrock",
         "mode": "chat"
     },
+    "bedrock/us-east-1/meta.llama3-70b-instruct-v1:0": {
+        "max_tokens": 8192, 
+        "max_input_tokens": 8192, 
+        "max_output_tokens": 8192, 
+        "input_cost_per_token": 0.00000265,
+        "output_cost_per_token": 0.0000035,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "bedrock/us-west-1/meta.llama3-70b-instruct-v1:0": {
+        "max_tokens": 8192, 
+        "max_input_tokens": 8192, 
+        "max_output_tokens": 8192, 
+        "input_cost_per_token": 0.00000265,
+        "output_cost_per_token": 0.0000035,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "bedrock/ap-south-1/meta.llama3-70b-instruct-v1:0": {
+        "max_tokens": 8192, 
+        "max_input_tokens": 8192, 
+        "max_output_tokens": 8192, 
+        "input_cost_per_token": 0.00000318,
+        "output_cost_per_token": 0.0000042,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "bedrock/ca-central-1/meta.llama3-70b-instruct-v1:0": {
+        "max_tokens": 8192, 
+        "max_input_tokens": 8192, 
+        "max_output_tokens": 8192, 
+        "input_cost_per_token": 0.00000305,
+        "output_cost_per_token": 0.00000403,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "bedrock/eu-west-1/meta.llama3-70b-instruct-v1:0": {
+        "max_tokens": 8192, 
+        "max_input_tokens": 8192, 
+        "max_output_tokens": 8192, 
+        "input_cost_per_token": 0.00000286,
+        "output_cost_per_token": 0.00000378,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "bedrock/eu-west-2/meta.llama3-70b-instruct-v1:0": {
+        "max_tokens": 8192, 
+        "max_input_tokens": 8192, 
+        "max_output_tokens": 8192, 
+        "input_cost_per_token": 0.00000345,
+        "output_cost_per_token": 0.00000455,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "bedrock/sa-east-1/meta.llama3-70b-instruct-v1:0": {
+        "max_tokens": 8192, 
+        "max_input_tokens": 8192, 
+        "max_output_tokens": 8192, 
+        "input_cost_per_token": 0.00000445,
+        "output_cost_per_token": 0.00000588,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
     "meta.llama3-1-8b-instruct-v1:0": {
         "max_tokens": 128000,
         "max_input_tokens": 128000,
         "max_output_tokens": 2048,
-        "input_cost_per_token": 0.0000004,
-        "output_cost_per_token": 0.0000006,
+        "input_cost_per_token": 0.00000022,
+        "output_cost_per_token": 0.00000022,
         "litellm_provider": "bedrock",
         "mode": "chat",
         "supports_function_calling": true, 
@@ -4057,8 +4183,8 @@
         "max_tokens": 128000,
         "max_input_tokens": 128000,
         "max_output_tokens": 2048,
-        "input_cost_per_token": 0.00000265,
-        "output_cost_per_token": 0.0000035,
+        "input_cost_per_token": 0.00000099,
+        "output_cost_per_token": 0.00000099,
         "litellm_provider": "bedrock",
         "mode": "chat",
         "supports_function_calling": true, 
