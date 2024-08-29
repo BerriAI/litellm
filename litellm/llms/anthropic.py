@@ -158,6 +158,12 @@ class AnthropicConfig:
             "extra_headers",
         ]
 
+    def get_cache_control_headers(self) -> dict:
+        return {
+            "anthropic-version": "2023-06-01",
+            "anthropic-beta": "prompt-caching-2024-07-31",
+        }
+
     def map_openai_params(self, non_default_params: dict, optional_params: dict):
         for param, value in non_default_params.items():
             if param == "max_tokens":
@@ -202,6 +208,20 @@ class AnthropicConfig:
             if param == "top_p":
                 optional_params["top_p"] = value
         return optional_params
+
+    def is_cache_control_set(self, messages: List[AllMessageValues]) -> bool:
+        """
+        Return if {"cache_control": ..} in message content block
+
+        Used to check if anthropic prompt caching headers need to be set.
+        """
+        for message in messages:
+            if message["content"] is not None and isinstance(message["content"], list):
+                for content in message["content"]:
+                    if "cache_control" in content:
+                        return True
+
+        return False
 
     ### FOR [BETA] `/v1/messages` endpoint support
 
@@ -563,19 +583,28 @@ class AnthropicConfig:
 
 
 # makes headers for API call
-def validate_environment(api_key, user_headers, model):
+def validate_environment(
+    api_key, user_headers, model, messages: List[AllMessageValues]
+):
+    cache_headers = {}
     if api_key is None:
         raise litellm.AuthenticationError(
             message="Missing Anthropic API Key - A call is being made to anthropic but no key is set either in the environment variables or via params. Please set `ANTHROPIC_API_KEY` in your environment vars",
             llm_provider="anthropic",
             model=model,
         )
+
+    if AnthropicConfig().is_cache_control_set(messages=messages):
+        cache_headers = AnthropicConfig().get_cache_control_headers()
     headers = {
         "accept": "application/json",
         "anthropic-version": "2023-06-01",
         "content-type": "application/json",
         "x-api-key": api_key,
     }
+
+    headers.update(cache_headers)
+
     if user_headers is not None and isinstance(user_headers, dict):
         headers = {**headers, **user_headers}
     return headers
@@ -891,7 +920,7 @@ class AnthropicChatCompletion(BaseLLM):
         headers={},
         client=None,
     ):
-        headers = validate_environment(api_key, headers, model)
+        headers = validate_environment(api_key, headers, model, messages=messages)
         _is_function_call = False
         messages = copy.deepcopy(messages)
         optional_params = copy.deepcopy(optional_params)

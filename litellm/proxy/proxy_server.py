@@ -205,6 +205,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     router as pass_through_router,
 )
+from litellm.proxy.rerank_endpoints.endpoints import router as rerank_router
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.secret_managers.aws_secret_manager import (
     load_aws_kms,
@@ -9881,6 +9882,7 @@ def cleanup_router_config_variables():
 
 
 app.include_router(router)
+app.include_router(rerank_router)
 app.include_router(fine_tuning_router)
 app.include_router(vertex_router)
 app.include_router(gemini_router)

@@ -587,6 +587,7 @@ class GenerateRequestBase(LiteLLMBase):
 
 class GenerateKeyRequest(GenerateRequestBase):
     key_alias: Optional[str] = None
+    key: Optional[str] = None
     duration: Optional[str] = None
     aliases: Optional[dict] = {}
     config: Optional[dict] = {}

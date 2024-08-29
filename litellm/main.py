@@ -126,11 +126,14 @@ from .llms.vertex_ai_and_google_ai_studio import (
     vertex_ai_anthropic,
     vertex_ai_non_gemini,
 )
-from .llms.vertex_ai_and_google_ai_studio.vertex_ai_partner_models import (
-    VertexAIPartnerModels,
+from .llms.vertex_ai_and_google_ai_studio.embeddings.batch_embed_content_handler import (
+    GoogleBatchEmbeddings,
 )
-from .llms.vertex_ai_and_google_ai_studio.vertex_and_google_ai_studio_gemini import (
+from .llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
     VertexLLM,
+)
+from .llms.vertex_ai_and_google_ai_studio.vertex_ai_partner_models.main import (
+    VertexAIPartnerModels,
 )
 from .llms.watsonx import IBMWatsonXAI
 from .types.llms.openai import HttpxBinaryResponseContent
@@ -172,6 +175,7 @@ triton_chat_completions = TritonChatCompletion()
 bedrock_chat_completion = BedrockLLM()
 bedrock_converse_chat_completion = BedrockConverseLLM()
 vertex_chat_completion = VertexLLM()
+google_batch_embeddings = GoogleBatchEmbeddings()
 vertex_partner_models_chat_completion = VertexAIPartnerModels()
 vertex_text_to_speech = VertexTextToSpeechAPI()
 watsonxai = IBMWatsonXAI()
@@ -452,7 +456,12 @@ async def _async_streaming(response, model, custom_llm_provider, args):
             print_verbose(f"line in async streaming: {line}")
             yield line
     except Exception as e:
-        raise e
+        custom_llm_provider = custom_llm_provider or "openai"
+        raise exception_type(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            original_exception=e,
+        )
 
 
 def mock_completion(
@@ -2075,6 +2084,7 @@ def completion(
                 model.startswith("meta/")
                 or model.startswith("mistral")
                 or model.startswith("codestral")
+                or model.startswith("jamba")
             ):
                 model_response = vertex_partner_models_chat_completion.completion(
                     model=model,
@@ -3128,6 +3138,7 @@ async def aembedding(*args, **kwargs) -> EmbeddingResponse:
             or custom_llm_provider == "fireworks_ai"
             or custom_llm_provider == "ollama"
             or custom_llm_provider == "vertex_ai"
+            or custom_llm_provider == "gemini"
             or custom_llm_provider == "databricks"
             or custom_llm_provider == "watsonx"
             or custom_llm_provider == "cohere"
@@ -3360,7 +3371,10 @@ def embedding(
             api_base = api_base or litellm.api_base or get_secret("AZURE_API_BASE")
 
             api_version = (
-                api_version or litellm.api_version or get_secret("AZURE_API_VERSION")
+                api_version
+                or litellm.api_version
+                or get_secret("AZURE_API_VERSION")
+                or litellm.AZURE_DEFAULT_API_VERSION
             )
 
             azure_ad_token = optional_params.pop("azure_ad_token", None) or get_secret(
@@ -3522,6 +3536,26 @@ def embedding(
                 client=client,
                 aembedding=aembedding,
             )
+        elif custom_llm_provider == "gemini":
+
+            gemini_api_key = api_key or get_secret("GEMINI_API_KEY") or litellm.api_key
+
+            response = google_batch_embeddings.batch_embeddings(  # type: ignore
+                model=model,
+                input=input,
+                encoding=encoding,
+                logging_obj=logging,
+                optional_params=optional_params,
+                model_response=EmbeddingResponse(),
+                vertex_project=None,
+                vertex_location=None,
+                vertex_credentials=None,
+                aembedding=aembedding,
+                print_verbose=print_verbose,
+                custom_llm_provider="gemini",
+                api_key=gemini_api_key,
+            )
+
         elif custom_llm_provider == "vertex_ai":
             vertex_ai_project = (
                 optional_params.pop("vertex_project", None)
@@ -3562,6 +3596,7 @@ def embedding(
                     vertex_credentials=vertex_credentials,
                     aembedding=aembedding,
                     print_verbose=print_verbose,
+                    custom_llm_provider="vertex_ai",
                 )
             else:
                 response = vertex_ai_non_gemini.embedding(
@@ -3765,7 +3800,7 @@ async def atext_completion(
         else:
             # Call the synchronous function using run_in_executor
             response = await loop.run_in_executor(None, func_with_context)
-        if kwargs.get("stream", False) == True:  # return an async generator
+        if kwargs.get("stream", False) is True:  # return an async generator
             return TextCompletionStreamWrapper(
                 completion_stream=_async_streaming(
                     response=response,
@@ -3774,6 +3809,7 @@ async def atext_completion(
                     args=args,
                 ),
                 model=model,
+                custom_llm_provider=custom_llm_provider,
             )
         else:
             transformed_logprobs = None
@@ -4047,11 +4083,14 @@ def text_completion(
         **kwargs,
         **optional_params,
     )
-    if kwargs.get("acompletion", False) == True:
+    if kwargs.get("acompletion", False) is True:
         return response
-    if stream == True or kwargs.get("stream", False) == True:
+    if stream is True or kwargs.get("stream", False) is True:
         response = TextCompletionStreamWrapper(
-            completion_stream=response, model=model, stream_options=stream_options
+            completion_stream=response,
+            model=model,
+            stream_options=stream_options,
+            custom_llm_provider=custom_llm_provider,
         )
         return response
     transformed_logprobs = None

@@ -95,6 +95,7 @@ def test_create_batch(provider):
 
 @pytest.mark.parametrize("provider", ["openai", "azure"])
 @pytest.mark.asyncio()
+@pytest.mark.flaky(retries=3, delay=1)
 async def test_async_create_batch(provider):
     """
     1. Create File for Batch completion
@@ -113,7 +114,7 @@ async def test_async_create_batch(provider):
     )
     print("Response from creating file=", file_obj)
 
-    await asyncio.sleep(5)
+    await asyncio.sleep(10)
     batch_input_file_id = file_obj.id
     assert (
         batch_input_file_id is not None

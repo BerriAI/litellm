@@ -55,6 +55,7 @@ async def generate_key_fn(
     Parameters:
     - duration: Optional[str] - Specify the length of time the token is valid for. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
     - key_alias: Optional[str] - User defined key alias
+    - key: Optional[str] - User defined key value. If not set, a 16-digit unique sk-key is created for you.
     - team_id: Optional[str] - The team id of the key
     - user_id: Optional[str] - The user id of the key
     - models: Optional[list] - Model_name's a user is allowed to call. (if empty, key is allowed to call all models)
@@ -728,6 +729,9 @@ async def generate_key_helper_fn(
     max_budget: Optional[float] = None,  # max_budget is used to Budget Per user
     budget_duration: Optional[str] = None,  # max_budget is used to Budget Per user
     token: Optional[str] = None,
+    key: Optional[
+        str
+    ] = None,  # dev-friendly alt param for 'token'. Exposed on `/key/generate` for setting key value yourself.
     user_id: Optional[str] = None,
     team_id: Optional[str] = None,
     user_email: Optional[str] = None,
@@ -763,7 +767,10 @@ async def generate_key_helper_fn(
         )
 
     if token is None:
-        token = f"sk-{secrets.token_urlsafe(16)}"
+        if key is not None:
+            token = key
+        else:
+            token = f"sk-{secrets.token_urlsafe(16)}"
 
     if duration is None:  # allow tokens that never expire
         expires = None

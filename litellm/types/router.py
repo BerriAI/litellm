@@ -549,3 +549,33 @@ class RouterGeneralSettings(BaseModel):
     pass_through_all_models: bool = Field(
         default=False
     )  # if passed a model not llm_router model list, pass through the request to litellm.acompletion/embedding
+
+
+class RouterRateLimitErrorBasic(ValueError):
+    """
+    Raise a basic error inside helper functions.
+    """
+
+    def __init__(
+        self,
+        model: str,
+    ):
+        self.model = model
+        _message = f"{RouterErrors.no_deployments_available.value}."
+        super().__init__(_message)
+
+
+class RouterRateLimitError(ValueError):
+    def __init__(
+        self,
+        model: str,
+        cooldown_time: float,
+        enable_pre_call_checks: bool,
+        cooldown_list: List,
+    ):
+        self.model = model
+        self.cooldown_time = cooldown_time
+        self.enable_pre_call_checks = enable_pre_call_checks
+        self.cooldown_list = cooldown_list
+        _message = f"{RouterErrors.no_deployments_available.value}, Try again in {cooldown_time} seconds. Passed model={model}. pre-call-checks={enable_pre_call_checks}, cooldown_list={cooldown_list}"
+        super().__init__(_message)

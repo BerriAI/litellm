@@ -1,6 +1,7 @@
 # What is this?
-## Handler for calling llama 3.1 API on Vertex AI
+## API Handler for calling Vertex AI Partner Models
 import types
+from enum import Enum
 from typing import Callable, Literal, Optional, Union
 
 import httpx  # type: ignore
@@ -8,7 +9,13 @@ import httpx  # type: ignore
 import litellm
 from litellm.utils import ModelResponse
 
-from ..base import BaseLLM
+from ...base import BaseLLM
+
+
+class VertexPartnerProvider(str, Enum):
+    mistralai = "mistralai"
+    llama = "llama"
+    ai21 = "ai21"
 
 
 class VertexAIError(Exception):
@@ -24,61 +31,6 @@ class VertexAIError(Exception):
         )  # Call the base class constructor with the parameters it needs
 
 
-class VertexAILlama3Config:
-    """
-    Reference:https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/llama#streaming
-
-    The class `VertexAILlama3Config` provides configuration for the VertexAI's Llama API interface. Below are the parameters:
-
-    - `max_tokens` Required (integer) max tokens,
-
-    Note: Please make sure to modify the default parameters as required for your use case.
-    """
-
-    max_tokens: Optional[int] = None
-
-    def __init__(
-        self,
-        max_tokens: Optional[int] = None,
-    ) -> None:
-        locals_ = locals()
-        for key, value in locals_.items():
-            if key == "max_tokens" and value is None:
-                value = self.max_tokens
-            if key != "self" and value is not None:
-                setattr(self.__class__, key, value)
-
-    @classmethod
-    def get_config(cls):
-        return {
-            k: v
-            for k, v in cls.__dict__.items()
-            if not k.startswith("__")
-            and not isinstance(
-                v,
-                (
-                    types.FunctionType,
-                    types.BuiltinFunctionType,
-                    classmethod,
-                    staticmethod,
-                ),
-            )
-            and v is not None
-        }
-
-    def get_supported_openai_params(self):
-        return litellm.OpenAIConfig().get_supported_openai_params(model="gpt-3.5-turbo")
-
-    def map_openai_params(
-        self, non_default_params: dict, optional_params: dict, model: str
-    ):
-        return litellm.OpenAIConfig().map_openai_params(
-            non_default_params=non_default_params,
-            optional_params=optional_params,
-            model=model,
-        )
-
-
 class VertexAIPartnerModels(BaseLLM):
     def __init__(self) -> None:
         pass
@@ -87,17 +39,22 @@ class VertexAIPartnerModels(BaseLLM):
         self,
         vertex_location: str,
         vertex_project: str,
-        partner: Literal["llama", "mistralai"],
+        partner: VertexPartnerProvider,
         stream: Optional[bool],
         model: str,
     ) -> str:
-        if partner == "llama":
+        if partner == VertexPartnerProvider.llama:
             return f"https://{vertex_location}-aiplatform.googleapis.com/v1beta1/projects/{vertex_project}/locations/{vertex_location}/endpoints/openapi"
-        elif partner == "mistralai":
+        elif partner == VertexPartnerProvider.mistralai:
             if stream:
                 return f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/mistralai/models/{model}:streamRawPredict"
             else:
                 return f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/mistralai/models/{model}:rawPredict"
+        elif partner == VertexPartnerProvider.ai21:
+            if stream:
+                return f"https://{vertex_location}-aiplatform.googleapis.com/v1beta1/projects/{vertex_project}/locations/{vertex_location}/publishers/ai21/models/{model}:streamRawPredict"
+            else:
+                return f"https://{vertex_location}-aiplatform.googleapis.com/v1beta1/projects/{vertex_project}/locations/{vertex_location}/publishers/ai21/models/{model}:rawPredict"
 
     def completion(
         self,
@@ -126,7 +83,7 @@ class VertexAIPartnerModels(BaseLLM):
             from litellm.llms.databricks import DatabricksChatCompletion
             from litellm.llms.openai import OpenAIChatCompletion
             from litellm.llms.text_completion_codestral import CodestralTextCompletion
-            from litellm.llms.vertex_ai_and_google_ai_studio.vertex_and_google_ai_studio_gemini import (
+            from litellm.llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
                 VertexLLM,
             )
         except Exception:
@@ -160,9 +117,12 @@ class VertexAIPartnerModels(BaseLLM):
             optional_params["stream"] = stream
 
             if "llama" in model:
-                partner = "llama"
+                partner = VertexPartnerProvider.llama
             elif "mistral" in model or "codestral" in model:
-                partner = "mistralai"
+                partner = VertexPartnerProvider.mistralai
+                optional_params["custom_endpoint"] = True
+            elif "jamba" in model:
+                partner = VertexPartnerProvider.ai21
                 optional_params["custom_endpoint"] = True
 
             api_base = self.create_vertex_url(

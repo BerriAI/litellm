@@ -232,9 +232,49 @@ Use Anthropic Prompt Caching
 
 [Relevant Anthropic API Docs](https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching)
 
+:::note
+
+Here's what a sample Raw Request from LiteLLM for Anthropic Context Caching looks like: 
+
+```bash
+POST Request Sent from LiteLLM:
+curl -X POST \
+https://api.anthropic.com/v1/messages \
+-H 'accept: application/json' -H 'anthropic-version: 2023-06-01' -H 'content-type: application/json' -H 'x-api-key: sk-...' -H 'anthropic-beta: prompt-caching-2024-07-31' \
+-d '{'model': 'claude-3-5-sonnet-20240620', [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "What are the key terms and conditions in this agreement?",
+          "cache_control": {
+            "type": "ephemeral"
+          }
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "Certainly! The key terms and conditions are the following: the contract is 1 year long for $10/mo"
+        }
+      ]
+    }
+  ],
+  "temperature": 0.2,
+  "max_tokens": 10
+}'
+```
+::: 
+
 ### Caching - Large Context Caching 
 
+
 This example demonstrates basic Prompt Caching usage, caching the full text of the legal agreement as a prefix while keeping the user instruction uncached.
+
 
 <Tabs>
 <TabItem value="sdk" label="LiteLLM SDK">
@@ -261,11 +301,7 @@ response = await litellm.acompletion(
             "role": "user",
             "content": "what are the key terms and conditions in this agreement?",
         },
-    ],
-    extra_headers={
-        "anthropic-version": "2023-06-01",
-        "anthropic-beta": "prompt-caching-2024-07-31",
-    },
+    ]
 )
 
 ```
@@ -311,11 +347,7 @@ response = await client.chat.completions.create(
             "role": "user",
             "content": "what are the key terms and conditions in this agreement?",
         },
-    ],
-    extra_headers={
-        "anthropic-version": "2023-06-01",
-        "anthropic-beta": "prompt-caching-2024-07-31",
-    },
+    ]
 )
 
 ```
@@ -358,11 +390,7 @@ response = await litellm.acompletion(
                 "cache_control": {"type": "ephemeral"}
             },
         }
-    ],
-    extra_headers={
-        "anthropic-version": "2023-06-01",
-        "anthropic-beta": "prompt-caching-2024-07-31",
-    },
+    ]
 )
 ```
 </TabItem>
@@ -408,11 +436,7 @@ response = await client.chat.completions.create(
                 "cache_control": {"type": "ephemeral"}
             },
         }
-    ],
-    extra_headers={
-        "anthropic-version": "2023-06-01",
-        "anthropic-beta": "prompt-caching-2024-07-31",
-    },
+    ]
 )
 ```
 
@@ -475,11 +499,7 @@ response = await litellm.acompletion(
                 }
             ],
         },
-    ],
-    extra_headers={
-        "anthropic-version": "2023-06-01",
-        "anthropic-beta": "prompt-caching-2024-07-31",
-    },
+    ]
 )
 ```
 </TabItem>
@@ -543,11 +563,7 @@ response = await client.chat.completions.create(
                 }
             ],
         },
-    ],
-    extra_headers={
-        "anthropic-version": "2023-06-01",
-        "anthropic-beta": "prompt-caching-2024-07-31",
-    },
+    ]
 )
 ```
 

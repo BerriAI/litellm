@@ -54,12 +54,19 @@ from litellm.types.llms.vertex_ai import (
 from litellm.types.utils import GenericStreamingChunk
 from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
 
-from ..base import BaseLLM
-from .common_utils import VertexAIError, get_supports_system_message
-from .context_caching.vertex_ai_context_caching import ContextCachingEndpoints
-from .gemini_transformation import transform_system_message
-
-context_caching_endpoints = ContextCachingEndpoints()
+from ...base import BaseLLM
+from ..common_utils import (
+    VertexAIError,
+    _get_gemini_url,
+    _get_vertex_url,
+    all_gemini_url_modes,
+    get_supports_system_message,
+)
+from .transformation import (
+    async_transform_request_body,
+    set_headers,
+    sync_transform_request_body,
+)
 
 
 class VertexAIConfig:
@@ -309,6 +316,7 @@ class GoogleAIStudioGeminiConfig:  # key diff from VertexAI - 'frequency_penalty
             "n",
             "stop",
         ]
+
     def _map_function(self, value: List[dict]) -> List[Tools]:
         gtool_func_declarations = []
         googleSearchRetrieval: Optional[dict] = None
@@ -817,7 +825,7 @@ class VertexLLM(BaseLLM):
         optional_params: dict,
         litellm_params: dict,
         api_key: str,
-        data: Union[dict, str],
+        data: Union[dict, str, RequestBody],
         messages: List,
         print_verbose,
         encoding,
@@ -1164,6 +1172,7 @@ class VertexLLM(BaseLLM):
         custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
         api_base: Optional[str],
         should_use_v1beta1_features: Optional[bool] = False,
+        mode: all_gemini_url_modes = "chat",
     ) -> Tuple[Optional[str], str]:
         """
         Internal function. Returns the token and url for the call.
@@ -1174,18 +1183,13 @@ class VertexLLM(BaseLLM):
             token, url
         """
         if custom_llm_provider == "gemini":
-            _gemini_model_name = "models/{}".format(model)
             auth_header = None
-            endpoint = "generateContent"
-            if stream is True:
-                endpoint = "streamGenerateContent"
-                url = "https://generativelanguage.googleapis.com/v1beta/{}:{}?key={}&alt=sse".format(
-                    _gemini_model_name, endpoint, gemini_api_key
-                )
-            else:
-                url = "https://generativelanguage.googleapis.com/v1beta/{}:{}?key={}".format(
-                    _gemini_model_name, endpoint, gemini_api_key
-                )
+            url, endpoint = _get_gemini_url(
+                mode=mode,
+                model=model,
+                stream=stream,
+                gemini_api_key=gemini_api_key,
+            )
         else:
             auth_header, vertex_project = self._ensure_access_token(
                 credentials=vertex_credentials, project_id=vertex_project
@@ -1193,23 +1197,17 @@ class VertexLLM(BaseLLM):
             vertex_location = self.get_vertex_region(vertex_region=vertex_location)
 
             ### SET RUNTIME ENDPOINT ###
-            version = "v1beta1" if should_use_v1beta1_features is True else "v1"
-            endpoint = "generateContent"
-            litellm.utils.print_verbose("vertex_project - {}".format(vertex_project))
-            if stream is True:
-                endpoint = "streamGenerateContent"
-                url = f"https://{vertex_location}-aiplatform.googleapis.com/{version}/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}?alt=sse"
-            else:
-                url = f"https://{vertex_location}-aiplatform.googleapis.com/{version}/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}"
-
-            # if model is only numeric chars then it's a fine tuned gemini model
-            # model = 4965075652664360960
-            # send to this url: url = f"https://{vertex_location}-aiplatform.googleapis.com/{version}/projects/{vertex_project}/locations/{vertex_location}/endpoints/{model}:{endpoint}"
-            if model.isdigit():
-                # It's a fine-tuned Gemini model
-                url = f"https://{vertex_location}-aiplatform.googleapis.com/{version}/projects/{vertex_project}/locations/{vertex_location}/endpoints/{model}:{endpoint}"
-                if stream is True:
-                    url += "?alt=sse"
+            version: Literal["v1beta1", "v1"] = (
+                "v1beta1" if should_use_v1beta1_features is True else "v1"
+            )
+            url, endpoint = _get_vertex_url(
+                mode=mode,
+                model=model,
+                stream=stream,
+                vertex_project=vertex_project,
+                vertex_location=vertex_location,
+                vertex_api_version=version,
+            )
 
         if (
             api_base is not None
@@ -1234,7 +1232,7 @@ class VertexLLM(BaseLLM):
         api_base: str,
         model_response: ModelResponse,
         print_verbose: Callable,
-        data: str,
+        data: dict,
         timeout: Optional[Union[float, httpx.Timeout]],
         encoding,
         logging_obj,
@@ -1245,6 +1243,9 @@ class VertexLLM(BaseLLM):
         headers={},
         client: Optional[AsyncHTTPHandler] = None,
     ) -> CustomStreamWrapper:
+        request_body = await async_transform_request_body(**data)  # type: ignore
+
+        request_body_str = json.dumps(request_body)
         streaming_response = CustomStreamWrapper(
             completion_stream=None,
             make_call=partial(
@@ -1252,7 +1253,7 @@ class VertexLLM(BaseLLM):
                 client=client,
                 api_base=api_base,
                 headers=headers,
-                data=data,
+                data=request_body_str,
                 model=model,
                 messages=messages,
                 logging_obj=logging_obj,
@@ -1270,17 +1271,19 @@ class VertexLLM(BaseLLM):
         api_base: str,
         model_response: ModelResponse,
         print_verbose: Callable,
-        data: str,
+        data: dict,
         timeout: Optional[Union[float, httpx.Timeout]],
         encoding,
         logging_obj,
         stream,
         optional_params: dict,
         litellm_params: dict,
+        headers: dict,
         logger_fn=None,
-        headers={},
         client: Optional[AsyncHTTPHandler] = None,
     ) -> Union[ModelResponse, CustomStreamWrapper]:
+
+        request_body = await async_transform_request_body(**data)  # type: ignore
         if client is None:
             _params = {}
             if timeout is not None:
@@ -1292,7 +1295,7 @@ class VertexLLM(BaseLLM):
             client = client  # type: ignore
 
         try:
-            response = await client.post(api_base, headers=headers, json=data)  # type: ignore
+            response = await client.post(api_base, headers=headers, json=request_body)  # type: ignore
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code = err.response.status_code
@@ -1306,7 +1309,7 @@ class VertexLLM(BaseLLM):
             model_response=model_response,
             logging_obj=logging_obj,
             api_key="",
-            data=data,
+            data=request_body,
             messages=messages,
             print_verbose=print_verbose,
             optional_params=optional_params,
@@ -1356,89 +1359,65 @@ class VertexLLM(BaseLLM):
             should_use_v1beta1_features=should_use_v1beta1_features,
         )
 
-        ## TRANSFORMATION ##
-        ### CHECK CONTEXT CACHING ###
-        if gemini_api_key is not None:
-            messages, cached_content = context_caching_endpoints.check_and_create_cache(
-                messages=messages,
-                api_key=gemini_api_key,
-                api_base=api_base,
-                model=model,
-                client=client,
-                timeout=timeout,
-                extra_headers=extra_headers,
-                cached_content=optional_params.pop("cached_content", None),
-                logging_obj=logging_obj,
-            )
-        else:  # [TODO] implement context caching for gemini as well
-            cached_content = optional_params.pop("cached_content", None)
-
-        # Separate system prompt from rest of message
-        supports_system_message = get_supports_system_message(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-        system_instructions, messages = transform_system_message(
-            supports_system_message=supports_system_message, messages=messages
-        )
-        # Checks for 'response_schema' support - if passed in
-        if "response_schema" in optional_params:
-            supports_response_schema = litellm.supports_response_schema(
-                model=model, custom_llm_provider="vertex_ai"
-            )
-            if supports_response_schema is False:
-                user_response_schema_message = response_schema_prompt(
-                    model=model, response_schema=optional_params.get("response_schema")  # type: ignore
-                )
-                messages.append(
-                    {"role": "user", "content": user_response_schema_message}
-                )
-                optional_params.pop("response_schema")
-
-        # Check for any 'litellm_param_*' set during optional param mapping
-
-        remove_keys = []
-        for k, v in optional_params.items():
-            if k.startswith("litellm_param_"):
-                litellm_params.update({k: v})
-                remove_keys.append(k)
-
-        optional_params = {
-            k: v for k, v in optional_params.items() if k not in remove_keys
+        transform_request_params = {
+            "gemini_api_key": gemini_api_key,
+            "messages": messages,
+            "api_base": api_base,
+            "model": model,
+            "client": client,
+            "timeout": timeout,
+            "extra_headers": extra_headers,
+            "optional_params": optional_params,
+            "logging_obj": logging_obj,
+            "custom_llm_provider": custom_llm_provider,
+            "litellm_params": litellm_params,
         }
 
-        try:
-            content = _gemini_convert_messages_with_history(messages=messages)
-            tools: Optional[Tools] = optional_params.pop("tools", None)
-            tool_choice: Optional[ToolConfig] = optional_params.pop("tool_choice", None)
-            safety_settings: Optional[List[SafetSettingsConfig]] = optional_params.pop(
-                "safety_settings", None
-            )  # type: ignore
-            generation_config: Optional[GenerationConfig] = GenerationConfig(
-                **optional_params
-            )
-            data = RequestBody(contents=content)
-            if system_instructions is not None:
-                data["system_instruction"] = system_instructions
-            if tools is not None:
-                data["tools"] = tools
-            if tool_choice is not None:
-                data["toolConfig"] = tool_choice
-            if safety_settings is not None:
-                data["safetySettings"] = safety_settings
-            if generation_config is not None:
-                data["generationConfig"] = generation_config
-            if cached_content is not None:
-                data["cachedContent"] = cached_content
+        headers = set_headers(auth_header=auth_header, extra_headers=extra_headers)
 
-            headers = {
-                "Content-Type": "application/json",
-            }
-            if auth_header is not None:
-                headers["Authorization"] = f"Bearer {auth_header}"
-            if extra_headers is not None:
-                headers.update(extra_headers)
-        except Exception as e:
-            raise e
+        ### ROUTING (ASYNC, STREAMING, SYNC)
+        if acompletion:
+            ### ASYNC STREAMING
+            if stream is True:
+                return self.async_streaming(
+                    model=model,
+                    messages=messages,
+                    api_base=url,
+                    model_response=model_response,
+                    print_verbose=print_verbose,
+                    encoding=encoding,
+                    logging_obj=logging_obj,
+                    optional_params=optional_params,
+                    stream=stream,
+                    litellm_params=litellm_params,
+                    logger_fn=logger_fn,
+                    timeout=timeout,
+                    client=client,  # type: ignore
+                    data=transform_request_params,
+                    headers=headers,
+                )
+            ### ASYNC COMPLETION
+            return self.async_completion(
+                model=model,
+                messages=messages,
+                data=transform_request_params,  # type: ignore
+                api_base=url,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                encoding=encoding,
+                logging_obj=logging_obj,
+                optional_params=optional_params,
+                stream=stream,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                timeout=timeout,
+                client=client,  # type: ignore
+                headers=headers,
+            )
+
+        ## SYNC STREAMING CALL ##
+        ## TRANSFORMATION ##
+        data = sync_transform_request_body(**transform_request_params)
 
         ## LOGGING
         logging_obj.pre_call(
@@ -1451,59 +1430,19 @@ class VertexLLM(BaseLLM):
             },
         )
 
-        ### ROUTING (ASYNC, STREAMING, SYNC)
-        if acompletion:
-            ### ASYNC STREAMING
-            if stream is True:
-                return self.async_streaming(
-                    model=model,
-                    messages=messages,
-                    data=json.dumps(data),  # type: ignore
-                    api_base=url,
-                    model_response=model_response,
-                    print_verbose=print_verbose,
-                    encoding=encoding,
-                    logging_obj=logging_obj,
-                    optional_params=optional_params,
-                    stream=stream,
-                    litellm_params=litellm_params,
-                    logger_fn=logger_fn,
-                    headers=headers,
-                    timeout=timeout,
-                    client=client,  # type: ignore
-                )
-            ### ASYNC COMPLETION
-            return self.async_completion(
-                model=model,
-                messages=messages,
-                data=data,  # type: ignore
-                api_base=url,
-                model_response=model_response,
-                print_verbose=print_verbose,
-                encoding=encoding,
-                logging_obj=logging_obj,
-                optional_params=optional_params,
-                stream=stream,
-                litellm_params=litellm_params,
-                logger_fn=logger_fn,
-                headers=headers,
-                timeout=timeout,
-                client=client,  # type: ignore
-            )
-
-        ## SYNC STREAMING CALL ##
         if stream is not None and stream is True:
+            request_data_str = json.dumps(data)
             streaming_response = CustomStreamWrapper(
                 completion_stream=None,
                 make_call=partial(
                     make_sync_call,
                     client=None,
                     api_base=url,
-                    headers=headers,  # type: ignore
-                    data=json.dumps(data),
+                    data=request_data_str,
                     model=model,
                     messages=messages,
                     logging_obj=logging_obj,
+                    headers=headers,
                 ),
                 model=model,
                 custom_llm_provider="vertex_ai_beta",
@@ -1512,6 +1451,7 @@ class VertexLLM(BaseLLM):
 
             return streaming_response
         ## COMPLETION CALL ##
+
         if client is None or isinstance(client, AsyncHTTPHandler):
             _params = {}
             if timeout is not None:
@@ -1793,8 +1733,10 @@ class VertexLLM(BaseLLM):
         input: Union[list, str],
         print_verbose,
         model_response: litellm.EmbeddingResponse,
+        custom_llm_provider: Literal["gemini", "vertex_ai"],
         optional_params: dict,
         api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
         logging_obj=None,
         encoding=None,
         vertex_project=None,
@@ -1804,6 +1746,18 @@ class VertexLLM(BaseLLM):
         timeout=300,
         client=None,
     ):
+        auth_header, url = self._get_token_and_url(
+            model=model,
+            gemini_api_key=api_key,
+            vertex_project=vertex_project,
+            vertex_location=vertex_location,
+            vertex_credentials=vertex_credentials,
+            stream=None,
+            custom_llm_provider=custom_llm_provider,
+            api_base=api_base,
+            should_use_v1beta1_features=False,
+            mode="embedding",
+        )
 
         if client is None:
             _params = {}
@@ -1818,11 +1772,6 @@ class VertexLLM(BaseLLM):
         else:
             sync_handler = client  # type: ignore
 
-        url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:predict"
-
-        auth_header, _ = self._ensure_access_token(
-            credentials=vertex_credentials, project_id=vertex_project
-        )
         optional_params = optional_params or {}
 
         request_data = VertexMultimodalEmbeddingRequest()
@@ -1840,29 +1789,21 @@ class VertexLLM(BaseLLM):
 
             request_data["instances"] = [vertex_request_instance]
 
-        request_str = f"\n curl -X POST \\\n -H \"Authorization: Bearer {auth_header[:10] + 'XXXXXXXXXX'}\" \\\n -H \"Content-Type: application/json; charset=utf-8\" \\\n -d {request_data} \\\n \"{url}\""
-        logging_obj.pre_call(
-            input=[],
-            api_key=None,
-            additional_args={
-                "complete_input_dict": optional_params,
-                "request_str": request_str,
-            },
-        )
-
-        logging_obj.pre_call(
-            input=[],
-            api_key=None,
-            additional_args={
-                "complete_input_dict": optional_params,
-                "request_str": request_str,
-            },
-        )
-
         headers = {
             "Content-Type": "application/json; charset=utf-8",
             "Authorization": f"Bearer {auth_header}",
         }
+
+        ## LOGGING
+        logging_obj.pre_call(
+            input=input,
+            api_key="",
+            additional_args={
+                "complete_input_dict": request_data,
+                "api_base": url,
+                "headers": headers,
+            },
+        )
 
         if aembedding is True:
             return self.async_multimodal_embedding(

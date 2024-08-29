@@ -226,31 +226,40 @@ def test_openai_azure_embedding_with_oidc_and_cf():
         os.environ["AZURE_API_KEY"] = old_key
 
 
-def test_openai_azure_embedding_optional_arg(mocker):
-    mocked_create_embeddings = mocker.patch.object(
-        openai.resources.embeddings.Embeddings,
-        "create",
-        return_value=openai.types.create_embedding_response.CreateEmbeddingResponse(
+def _openai_mock_response(*args, **kwargs):
+    new_response = MagicMock()
+    new_response.headers = {"hello": "world"}
+
+    new_response.parse.return_value = (
+        openai.types.create_embedding_response.CreateEmbeddingResponse(
             data=[],
             model="azure/test",
             object="list",
             usage=openai.types.create_embedding_response.Usage(
                 prompt_tokens=1, total_tokens=2
             ),
-        ),
+        )
     )
-    _ = litellm.embedding(
-        model="azure/test",
-        input=["test"],
-        api_version="test",
-        api_base="test",
-        azure_ad_token="test",
-    )
+    return new_response
 
-    assert mocked_create_embeddings.called_once_with(
-        model="test", input=["test"], timeout=600
-    )
-    assert "azure_ad_token" not in mocked_create_embeddings.call_args.kwargs
+
+def test_openai_azure_embedding_optional_arg():
+
+    with patch.object(
+        openai.resources.embeddings.Embeddings,
+        "create",
+        side_effect=_openai_mock_response,
+    ) as mock_client:
+        _ = litellm.embedding(
+            model="azure/test",
+            input=["test"],
+            api_version="test",
+            api_base="test",
+            azure_ad_token="test",
+        )
+
+        assert mock_client.called_once_with(model="test", input=["test"], timeout=600)
+        assert "azure_ad_token" not in mock_client.call_args.kwargs
 
 
 # test_openai_azure_embedding()
@@ -682,6 +691,33 @@ async def test_triton_embeddings():
 
         # stubbed endpoint is setup to return this
         assert response.data[0]["embedding"] == [0.1, 0.2]
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize(
+    "input", ["good morning from litellm", ["good morning from litellm"]]  #
+)
+@pytest.mark.asyncio
+async def test_gemini_embeddings(sync_mode, input):
+    try:
+        litellm.set_verbose = True
+        if sync_mode:
+            response = litellm.embedding(
+                model="gemini/text-embedding-004",
+                input=input,
+            )
+        else:
+            response = await litellm.aembedding(
+                model="gemini/text-embedding-004",
+                input=input,
+            )
+        print(f"response: {response}")
+
+        # stubbed endpoint is setup to return this
+        assert isinstance(response.data[0]["embedding"], list)
+        assert response.usage.prompt_tokens > 0
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 

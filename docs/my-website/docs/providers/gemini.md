@@ -539,6 +539,175 @@ content = response.get('choices', [{}])[0].get('message', {}).get('content')
 print(content)
 ```
 
+## Context Caching
+
+Use Google AI Studio context caching is supported by
+
+```bash
+{
+    ...,
+    "cache_control": {"type": "ephemeral"}
+}
+```
+
+in your message content block.
+
+:::note
+
+Gemini Context Caching only allows 1 block of continuous messages to be cached. 
+
+The raw request to Gemini looks like this: 
+```bash
+curl -X POST "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-001:generateContent?key=$GOOGLE_API_KEY" \
+-H 'Content-Type: application/json' \
+-d '{
+      "contents": [
+        {
+          "parts":[{
+            "text": "Please summarize this transcript"
+          }],
+          "role": "user"
+        },
+      ],
+      "cachedContent": "'$CACHE_NAME'"
+    }'
+
+```
+
+:::
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion 
+
+for _ in range(2): 
+    resp = completion(
+        model="gemini/gemini-1.5-pro",
+        messages=[
+        # System Message
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Here is the full text of a complex legal agreement" * 4000,
+                        "cache_control": {"type": "ephemeral"}, # 👈 KEY CHANGE
+                    }
+                ],
+            },
+            # marked for caching with the cache_control parameter, so that this checkpoint can read from the previous cache.
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "What are the key terms and conditions in this agreement?",
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            }]
+    )
+
+    print(resp.usage) # 👈 2nd usage block will be less, since cached tokens used
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+    - model_name: gemini-1.5-pro
+      litellm_params:
+        model: gemini/gemini-1.5-pro
+        api_key: os.environ/GEMINI_API_KEY
+```
+
+2. Start proxy 
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+[**See Langchain, OpenAI JS, Llamaindex, etc. examples**](../proxy/user_keys.md#request-format)
+
+<Tabs>
+<TabItem value="curl" label="Curl">
+
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --data '{
+    "model": "gemini-1.5-pro",
+    "messages": [
+        # System Message
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Here is the full text of a complex legal agreement" * 4000,
+                        "cache_control": {"type": "ephemeral"}, # 👈 KEY CHANGE
+                    }
+                ],
+            },
+            # marked for caching with the cache_control parameter, so that this checkpoint can read from the previous cache.
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "What are the key terms and conditions in this agreement?",
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            }],
+}'
+```
+</TabItem>
+<TabItem value="openai-python" label="OpenAI Python SDK">
+
+```python 
+import openai
+client = openai.AsyncOpenAI(
+    api_key="anything",            # litellm proxy api key
+    base_url="http://0.0.0.0:4000" # litellm proxy base url
+)
+
+
+response = await client.chat.completions.create(
+    model="gemini-1.5-pro",
+    messages=[
+        {
+            "role": "system",
+            "content": [
+                    {
+                        "type": "text",
+                        "text": "Here is the full text of a complex legal agreement" * 4000,
+                        "cache_control": {"type": "ephemeral"}, # 👈 KEY CHANGE
+                    }
+            ],
+        },
+        {
+            "role": "user",
+            "content": "what are the key terms and conditions in this agreement?",
+        },
+    ]
+)
+
+```
+
+</TabItem>
+</Tabs>
+
+</TabItem>
+</Tabs>
+
 ## Chat Models
 :::tip
 

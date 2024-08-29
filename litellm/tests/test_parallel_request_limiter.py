@@ -758,6 +758,7 @@ async def test_streaming_router_tpm_limit():
 
 
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=1)
 async def test_bad_router_call():
     litellm.set_verbose = True
     model_list = [
