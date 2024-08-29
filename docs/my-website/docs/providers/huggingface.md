@@ -8,6 +8,7 @@ LiteLLM supports the following types of Hugging Face models:
 
 - Serverless Inference API (free) - loaded and ready to use: https://huggingface.co/models?inference=warm&pipeline_tag=text-generation
 - Dedicated Inference Endpoints (paid) - manual deployment: https://ui.endpoints.huggingface.co/
+- All LLMs served via Hugging Face's Inference use [Text-generation-inference](https://huggingface.co/docs/text-generation-inference). 
 
 ## Usage
 
