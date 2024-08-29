@@ -917,7 +917,8 @@ async def team_info(
 
         ## GET ALL MEMBERSHIPS ##
         team_memberships = await prisma_client.db.litellm_teammembership.find_many(
-            where={"team_id": team_id}
+            where={"team_id": team_id},
+            include={"litellm_budget_table": True},
         )
         return {
             "team_id": team_id,
