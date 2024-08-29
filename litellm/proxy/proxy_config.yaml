@@ -1,15 +1,21 @@
 model_list:
-  - model_name: gpt-4
+  - model_name: fake-openai-endpoint
     litellm_params:
       model: openai/fake
       api_key: fake-key
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
-      tags: ["teamA"] # 👈 Key Change
-  - model_name: gpt-4
+      tags: ["teamA"]
+    model_info:
+      id: "teama"
+  - model_name: fake-openai-endpoint
     litellm_params:
-      model: openai/gpt-4o
-      api_key: os.environ/OPENAI_API_KEY
-      tags: ["teamB"] # 👈 Key Change
+      model: openai/fake
+      api_key: fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+      tags: ["teamB"]
+    model_info:
+      id: "teamb"
+    
 
 router_settings:
   enable_tag_filtering: True # 👈 Key Change

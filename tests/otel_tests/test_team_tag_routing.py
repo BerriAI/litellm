@@ -119,3 +119,14 @@ async def test_team_tag_routing():
             print(response_b)
             print(headers)
             assert headers["x-litellm-model-id"] == "teamb", "Model ID should be teamB"
+
+
+@pytest.mark.asyncio()
+async def test_chat_completion_with_no_tags():
+    async with aiohttp.ClientSession() as session:
+        key = LITELLM_MASTER_KEY
+        response, headers = await chat_completion(session, key)
+        headers = dict(headers)
+        print(response)
+        print(headers)
+        assert response is not None
