@@ -224,6 +224,13 @@ async def new_team(
         model_id=_model_id,
     )
 
+    # Set tags on the new team
+    if data.tags is not None:
+        if complete_team_data.metadata is None:
+            complete_team_data.metadata = {"tags": data.tags}
+        else:
+            complete_team_data.metadata["tags"] = data.tags
+
     # If budget_duration is set, set `budget_reset_at`
     if complete_team_data.budget_duration is not None:
         duration_s = _duration_in_seconds(duration=complete_team_data.budget_duration)
@@ -364,6 +371,15 @@ async def update_team(
 
         # set the budget_reset_at in DB
         updated_kv["budget_reset_at"] = reset_at
+
+    # check if user is trying to update tags for team
+    if "tags" in updated_kv and updated_kv["tags"] is not None:
+        # remove tags from updated_kv
+        _tags = updated_kv.pop("tags")
+        if "metadata" in updated_kv and updated_kv["metadata"] is not None:
+            updated_kv["metadata"]["tags"] = _tags
+        else:
+            updated_kv["metadata"] = {"tags": _tags}
 
     updated_kv = prisma_client.jsonify_object(data=updated_kv)
     team_row: Optional[
