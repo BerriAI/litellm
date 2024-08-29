@@ -1213,7 +1213,7 @@ class VertexLLM(BaseLLM):
             api_base is not None
         ):  # for cloudflare ai gateway - https://github.com/BerriAI/litellm/issues/4317
             if custom_llm_provider == "gemini":
-                url = "{}/{}".format(api_base, endpoint)
+                url = "{}:{}".format(api_base, endpoint)
                 auth_header = (
                     gemini_api_key  # cloudflare expects api key as bearer token
                 )
