@@ -4,6 +4,17 @@ model_list:
       model: openai/fake
       api_key: fake-key
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
+      tags: ["teamA"]
+    model_info:
+      id: "teama"
+  - model_name: fake-openai-endpoint
+    litellm_params:
+      model: openai/fake
+      api_key: fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+      tags: ["teamB"]
+    model_info:
+      id: "teamb"
   - model_name: rerank-english-v3.0
     litellm_params:
       model: cohere/rerank-english-v3.0
