@@ -379,12 +379,6 @@ async def add_litellm_data_to_request(
             # unpack callback_vars in data
             for k, v in callback_settings_obj.callback_vars.items():
                 data[k] = v
-    # Team based tags
-    add_team_based_tags_to_metadata(
-        data=data,
-        _metadata_variable_name=_metadata_variable_name,
-        user_api_key_dict=user_api_key_dict,
-    )
 
     # Guardrails
     move_guardrails_to_metadata(
@@ -394,24 +388,6 @@ async def add_litellm_data_to_request(
     )
 
     return data
-
-
-def add_team_based_tags_to_metadata(
-    data: dict,
-    _metadata_variable_name: str,
-    user_api_key_dict: UserAPIKeyAuth,
-):
-    from litellm.proxy.proxy_server import premium_user
-
-    if premium_user is True:
-        if (
-            user_api_key_dict.team_metadata is not None
-            and "tags" in user_api_key_dict.team_metadata
-        ):
-            _team_tags = user_api_key_dict.team_metadata["tags"]
-            _tags_in_metadata = data[_metadata_variable_name].get("tags", [])
-            _tags_in_metadata.extend(_team_tags)
-            data[_metadata_variable_name]["tags"] = _tags_in_metadata
 
 
 def move_guardrails_to_metadata(

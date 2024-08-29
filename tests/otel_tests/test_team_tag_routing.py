@@ -109,7 +109,9 @@ async def test_team_tag_routing():
             headers = dict(headers)
             print(response_a)
             print(headers)
-            assert headers["x-litellm-model-id"] == "teama", "Model ID should be teamA"
+            assert (
+                headers["x-litellm-model-id"] == "team-a-model"
+            ), "Model ID should be teamA"
 
         key_with_team_b = await create_key_with_team(session, key, team_b_id)
         _key_with_team_b = key_with_team_b["key"]
@@ -118,7 +120,9 @@ async def test_team_tag_routing():
             headers = dict(headers)
             print(response_b)
             print(headers)
-            assert headers["x-litellm-model-id"] == "teamb", "Model ID should be teamB"
+            assert (
+                headers["x-litellm-model-id"] == "team-b-model"
+            ), "Model ID should be teamB"
 
 
 @pytest.mark.asyncio()
