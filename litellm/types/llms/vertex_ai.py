@@ -171,9 +171,26 @@ class TTL(TypedDict, total=False):
     nano: float
 
 
+class UsageMetadata(TypedDict, total=False):
+    promptTokenCount: int
+    totalTokenCount: int
+    candidatesTokenCount: int
+
+
 class CachedContent(TypedDict, total=False):
     ttl: TTL
     expire_time: str
+    contents: List[ContentType]
+    tools: List[Tools]
+    createTime: str  # "2014-10-02T15:01:23Z" and "2014-10-02T15:01:23.045123456Z"
+    updateTime: str  # "2014-10-02T15:01:23Z" and "2014-10-02T15:01:23.045123456Z"
+    usageMetadata: UsageMetadata
+    expireTime: str  # "2014-10-02T15:01:23Z" and "2014-10-02T15:01:23.045123456Z"
+    name: str
+    displayName: str
+    model: str
+    systemInstruction: ContentType
+    toolConfig: ToolConfig
 
 
 class RequestBody(TypedDict, total=False):
@@ -193,8 +210,12 @@ class CachedContentRequestBody(TypedDict, total=False):
     toolConfig: ToolConfig
     model: Required[str]  # Format: models/{model}
     ttl: str  # ending in 's' - Example: "3.5s".
-    name: str  # Format: cachedContents/{id}
     displayName: str
+
+
+class CachedContentListAllResponseBody(TypedDict, total=False):
+    cachedContents: List[CachedContent]
+    nextPageToken: str
 
 
 class SafetyRatings(TypedDict):
@@ -259,12 +280,6 @@ class PromptFeedback(TypedDict):
     blockReason: str
     safetyRatings: List[SafetyRatings]
     blockReasonMessage: str
-
-
-class UsageMetadata(TypedDict, total=False):
-    promptTokenCount: int
-    totalTokenCount: int
-    candidatesTokenCount: int
 
 
 class GenerateContentResponseBody(TypedDict, total=False):
