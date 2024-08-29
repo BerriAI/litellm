@@ -363,6 +363,7 @@ ai21_models: List = []
 nlp_cloud_models: List = []
 aleph_alpha_models: List = []
 bedrock_models: List = []
+fireworks_ai_models: List = []
 deepinfra_models: List = []
 perplexity_models: List = []
 watsonx_models: List = []
@@ -423,6 +424,8 @@ for key, value in model_cost.items():
         watsonx_models.append(key)
     elif value.get("litellm_provider") == "gemini":
         gemini_models.append(key)
+    elif value.get("litellm_provider") == "fireworks_ai":
+        fireworks_ai_models.append(key)
 # known openai compatible endpoints - we'll eventually move this list to the model_prices_and_context_window.json dictionary
 openai_compatible_endpoints: List = [
     "api.perplexity.ai",
@@ -726,6 +729,7 @@ models_by_provider: dict = {
     "maritalk": maritalk_models,
     "watsonx": watsonx_models,
     "gemini": gemini_models,
+    "fireworks_ai": fireworks_ai_models,
 }
 
 # mapping for those models which have larger equivalents
