@@ -610,12 +610,23 @@ class Logging:
                             self.model_call_details["litellm_params"]["metadata"][
                                 "hidden_params"
                             ] = result._hidden_params
+                ## STANDARDIZED LOGGING PAYLOAD
+
+                self.model_call_details["standard_logging_object"] = (
+                    get_standard_logging_object_payload(
+                        kwargs=self.model_call_details,
+                        init_response_obj=result,
+                        start_time=start_time,
+                        end_time=end_time,
+                        logging_obj=self,
+                    )
+                )
             else:  # streaming chunks + image gen.
                 self.model_call_details["response_cost"] = None
 
             if (
                 litellm.max_budget
-                and self.stream == False
+                and self.stream is False
                 and result is not None
                 and "content" in result
             ):
@@ -628,17 +639,6 @@ class Logging:
                     total_time=float_diff,
                 )
 
-            ## STANDARDIZED LOGGING PAYLOAD
-
-            self.model_call_details["standard_logging_object"] = (
-                get_standard_logging_object_payload(
-                    kwargs=self.model_call_details,
-                    init_response_obj=result,
-                    start_time=start_time,
-                    end_time=end_time,
-                    logging_obj=self,
-                )
-            )
             return start_time, end_time, result
         except Exception as e:
             raise Exception(f"[Non-Blocking] LiteLLM.Success_Call Error: {str(e)}")
@@ -646,9 +646,7 @@ class Logging:
     def success_handler(
         self, result=None, start_time=None, end_time=None, cache_hit=None, **kwargs
     ):
-        verbose_logger.debug(
-            f"Logging Details LiteLLM-Success Call: Cache_hit={cache_hit}"
-        )
+        print_verbose(f"Logging Details LiteLLM-Success Call: Cache_hit={cache_hit}")
         start_time, end_time, result = self._success_handler_helper_fn(
             start_time=start_time,
             end_time=end_time,
@@ -695,6 +693,16 @@ class Logging:
                 self.model_call_details["response_cost"] = (
                     self._response_cost_calculator(result=complete_streaming_response)
                 )
+                ## STANDARDIZED LOGGING PAYLOAD
+                self.model_call_details["standard_logging_object"] = (
+                    get_standard_logging_object_payload(
+                        kwargs=self.model_call_details,
+                        init_response_obj=complete_streaming_response,
+                        start_time=start_time,
+                        end_time=end_time,
+                        logging_obj=self,
+                    )
+                )
             if self.dynamic_success_callbacks is not None and isinstance(
                 self.dynamic_success_callbacks, list
             ):
@@ -714,7 +722,6 @@ class Logging:
             )
 
             ## LOGGING HOOK ##
-
             for callback in callbacks:
                 if isinstance(callback, CustomLogger):
                     self.model_call_details, result = callback.logging_hook(
@@ -726,7 +733,7 @@ class Logging:
             for callback in callbacks:
                 try:
                     litellm_params = self.model_call_details.get("litellm_params", {})
-                    if litellm_params.get("no-log", False) == True:
+                    if litellm_params.get("no-log", False) is True:
                         # proxy cost tracking cal backs should run
                         if not (
                             isinstance(callback, CustomLogger)
@@ -1192,6 +1199,7 @@ class Logging:
                                     )
                                 )
                                 result = self.model_call_details["complete_response"]
+
                             callback.log_success_event(
                                 kwargs=self.model_call_details,
                                 response_obj=result,
@@ -1199,7 +1207,7 @@ class Logging:
                                 end_time=end_time,
                             )
                     if (
-                        callable(callback) == True
+                        callable(callback) is True
                         and self.model_call_details.get("litellm_params", {}).get(
                             "acompletion", False
                         )
@@ -1301,6 +1309,7 @@ class Logging:
                             result=complete_streaming_response
                         )
                     )
+
                 verbose_logger.debug(
                     f"Model={self.model}; cost={self.model_call_details['response_cost']}"
                 )
@@ -1310,6 +1319,16 @@ class Logging:
                 )
                 self.model_call_details["response_cost"] = None
 
+            ## STANDARDIZED LOGGING PAYLOAD
+            self.model_call_details["standard_logging_object"] = (
+                get_standard_logging_object_payload(
+                    kwargs=self.model_call_details,
+                    init_response_obj=complete_streaming_response,
+                    start_time=start_time,
+                    end_time=end_time,
+                    logging_obj=self,
+                )
+            )
         if self.dynamic_async_success_callbacks is not None and isinstance(
             self.dynamic_async_success_callbacks, list
         ):

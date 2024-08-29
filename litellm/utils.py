@@ -10548,8 +10548,8 @@ class CustomStreamWrapper:
         """
         self.logging_loop = loop
 
-    def run_success_logging_in_thread(self, processed_chunk):
-        if litellm.disable_streaming_logging == True:
+    def run_success_logging_in_thread(self, processed_chunk, cache_hit: bool):
+        if litellm.disable_streaming_logging is True:
             """
             [NOT RECOMMENDED]
             Set this via `litellm.disable_streaming_logging = True`.
@@ -10561,14 +10561,20 @@ class CustomStreamWrapper:
         # Create an event loop for the new thread
         if self.logging_loop is not None:
             future = asyncio.run_coroutine_threadsafe(
-                self.logging_obj.async_success_handler(processed_chunk),
+                self.logging_obj.async_success_handler(
+                    processed_chunk, None, None, cache_hit
+                ),
                 loop=self.logging_loop,
             )
             result = future.result()
         else:
-            asyncio.run(self.logging_obj.async_success_handler(processed_chunk))
+            asyncio.run(
+                self.logging_obj.async_success_handler(
+                    processed_chunk, None, None, cache_hit
+                )
+            )
         ## SYNC LOGGING
-        self.logging_obj.success_handler(processed_chunk)
+        self.logging_obj.success_handler(processed_chunk, None, None, cache_hit)
 
     def finish_reason_handler(self):
         model_response = self.model_response_creator()
@@ -10616,7 +10622,8 @@ class CustomStreamWrapper:
                         continue
                     ## LOGGING
                     threading.Thread(
-                        target=self.run_success_logging_in_thread, args=(response,)
+                        target=self.run_success_logging_in_thread,
+                        args=(response, cache_hit),
                     ).start()  # log response
                     self.response_uptil_now += (
                         response.choices[0].delta.get("content", "") or ""
@@ -10678,8 +10685,8 @@ class CustomStreamWrapper:
                     processed_chunk._hidden_params["usage"] = usage
                 ## LOGGING
                 threading.Thread(
-                    target=self.logging_obj.success_handler,
-                    args=(processed_chunk, None, None, cache_hit),
+                    target=self.run_success_logging_in_thread,
+                    args=(processed_chunk, cache_hit),
                 ).start()  # log response
                 return processed_chunk
         except Exception as e:
@@ -10775,6 +10782,7 @@ class CustomStreamWrapper:
                     )
                     if processed_chunk is None:
                         continue
+                    ## LOGGING
                     ## LOGGING
                     threading.Thread(
                         target=self.logging_obj.success_handler,
