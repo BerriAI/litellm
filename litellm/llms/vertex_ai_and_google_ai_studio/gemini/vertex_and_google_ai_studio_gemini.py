@@ -1417,8 +1417,7 @@ class VertexLLM(BaseLLM):
 
         ## SYNC STREAMING CALL ##
         ## TRANSFORMATION ##
-        request_data = sync_transform_request_body(**transform_request_params)
-        data = json.dumps(request_data)
+        data = sync_transform_request_body(**transform_request_params)
 
         ## LOGGING
         logging_obj.pre_call(
@@ -1432,16 +1431,18 @@ class VertexLLM(BaseLLM):
         )
 
         if stream is not None and stream is True:
+            request_data_str = json.dumps(data)
             streaming_response = CustomStreamWrapper(
                 completion_stream=None,
                 make_call=partial(
                     make_sync_call,
                     client=None,
                     api_base=url,
-                    data=data,
+                    data=request_data_str,
                     model=model,
                     messages=messages,
                     logging_obj=logging_obj,
+                    headers=headers,
                 ),
                 model=model,
                 custom_llm_provider="vertex_ai_beta",
