@@ -283,7 +283,6 @@ litellm_settings:
 
 **Covers all errors (429, 500, etc.)**
 
-[**See Code**]()
 
 **Set via config**
 ```yaml
