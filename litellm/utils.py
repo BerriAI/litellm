@@ -9832,8 +9832,8 @@ class CustomStreamWrapper:
                             "completion_tokens"
                         ],
                         total_tokens=anthropic_response_obj["usage"]["total_tokens"],
-                        cache_read_input_tokens=anthropic_response_obj['usage']['cache_read_input_tokens'],
-                        cache_creation_input_tokens=anthropic_response_obj['usage']['cache_creation_input_tokens']
+                        cache_read_input_tokens=anthropic_response_obj['usage'].get('cache_read_input_tokens'),
+                        cache_creation_input_tokens=anthropic_response_obj['usage'].get('cache_creation_input_tokens')
                     )
 
                 if (
