@@ -1181,7 +1181,7 @@ class ModelResponseIterator:
             tool_use: Optional[ChatCompletionToolCallChunk] = None
             is_finished = False
             finish_reason = ""
-            usage: Optional[ChatCompletionUsageBlock] = None
+            usage: Optional[Usage] = None
 
             index = int(chunk.get("index", 0))
             if type_chunk == "content_block_delta":
@@ -1248,7 +1248,7 @@ class ModelResponseIterator:
                     finish_reason=message_delta["delta"].get("stop_reason", "stop")
                     or "stop"
                 )
-                usage = ChatCompletionUsageBlock(
+                usage = Usage(
                     cache_creation_input_tokens=message_delta["usage"].get("cache_creation_input_tokens", None),
                     cache_read_input_tokens=message_delta["usage"].get("cache_read_input_tokens", None),
                     prompt_tokens=message_delta["usage"].get("input_tokens", 0),
@@ -1278,7 +1278,7 @@ class ModelResponseIterator:
                 }
                 """
                 message_start_block = MessageStartBlock(**chunk)  # type: ignore
-                usage = ChatCompletionUsageBlock(
+                usage = Usage(
                     cache_creation_input_tokens=message_start_block["message"]
                     .get("usage", {})
                     .get("cache_creation_input_tokens", None),
