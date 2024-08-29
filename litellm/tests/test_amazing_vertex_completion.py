@@ -28,7 +28,7 @@ from litellm import (
     completion_cost,
     embedding,
 )
-from litellm.llms.vertex_ai_and_google_ai_studio.vertex_and_google_ai_studio_gemini import (
+from litellm.llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
     _gemini_convert_messages_with_history,
 )
 from litellm.tests.test_streaming import streaming_format_tests
@@ -447,7 +447,9 @@ async def test_async_vertexai_response():
     test_models = random.sample(test_models, 1)
     test_models += litellm.vertex_language_models  # always test gemini-pro
     for model in test_models:
-        print(f"model being tested in async call: {model}")
+        print(
+            f"model being tested in async call: {model}, litellm.vertex_language_models: {litellm.vertex_language_models}"
+        )
         if model in VERTEX_MODELS_TO_NOT_TEST or (
             "gecko" in model or "32k" in model or "ultra" in model or "002" in model
         ):
@@ -2088,7 +2090,7 @@ def test_prompt_factory_nested():
 
 
 def test_get_token_url():
-    from litellm.llms.vertex_ai_and_google_ai_studio.vertex_and_google_ai_studio_gemini import (
+    from litellm.llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
         VertexLLM,
     )
 

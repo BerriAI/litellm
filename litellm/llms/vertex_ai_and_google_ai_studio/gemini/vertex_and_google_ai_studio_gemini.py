@@ -54,10 +54,16 @@ from litellm.types.llms.vertex_ai import (
 from litellm.types.utils import GenericStreamingChunk
 from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
 
-from ..base import BaseLLM
-from .common_utils import VertexAIError, get_supports_system_message
-from .context_caching.vertex_ai_context_caching import ContextCachingEndpoints
-from .gemini_transformation import transform_system_message
+from ...base import BaseLLM
+from ..common_utils import (
+    VertexAIError,
+    _get_gemini_url,
+    _get_vertex_url,
+    all_gemini_url_modes,
+    get_supports_system_message,
+)
+from ..context_caching.vertex_ai_context_caching import ContextCachingEndpoints
+from .transformation import transform_system_message
 
 context_caching_endpoints = ContextCachingEndpoints()
 
@@ -309,6 +315,7 @@ class GoogleAIStudioGeminiConfig:  # key diff from VertexAI - 'frequency_penalty
             "n",
             "stop",
         ]
+
     def _map_function(self, value: List[dict]) -> List[Tools]:
         gtool_func_declarations = []
         googleSearchRetrieval: Optional[dict] = None
@@ -1164,6 +1171,7 @@ class VertexLLM(BaseLLM):
         custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
         api_base: Optional[str],
         should_use_v1beta1_features: Optional[bool] = False,
+        mode: all_gemini_url_modes = "chat",
     ) -> Tuple[Optional[str], str]:
         """
         Internal function. Returns the token and url for the call.
@@ -1174,18 +1182,13 @@ class VertexLLM(BaseLLM):
             token, url
         """
         if custom_llm_provider == "gemini":
-            _gemini_model_name = "models/{}".format(model)
             auth_header = None
-            endpoint = "generateContent"
-            if stream is True:
-                endpoint = "streamGenerateContent"
-                url = "https://generativelanguage.googleapis.com/v1beta/{}:{}?key={}&alt=sse".format(
-                    _gemini_model_name, endpoint, gemini_api_key
-                )
-            else:
-                url = "https://generativelanguage.googleapis.com/v1beta/{}:{}?key={}".format(
-                    _gemini_model_name, endpoint, gemini_api_key
-                )
+            url, endpoint = _get_gemini_url(
+                mode=mode,
+                model=model,
+                stream=stream,
+                gemini_api_key=gemini_api_key,
+            )
         else:
             auth_header, vertex_project = self._ensure_access_token(
                 credentials=vertex_credentials, project_id=vertex_project
@@ -1193,23 +1196,17 @@ class VertexLLM(BaseLLM):
             vertex_location = self.get_vertex_region(vertex_region=vertex_location)
 
             ### SET RUNTIME ENDPOINT ###
-            version = "v1beta1" if should_use_v1beta1_features is True else "v1"
-            endpoint = "generateContent"
-            litellm.utils.print_verbose("vertex_project - {}".format(vertex_project))
-            if stream is True:
-                endpoint = "streamGenerateContent"
-                url = f"https://{vertex_location}-aiplatform.googleapis.com/{version}/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}?alt=sse"
-            else:
-                url = f"https://{vertex_location}-aiplatform.googleapis.com/{version}/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}"
-
-            # if model is only numeric chars then it's a fine tuned gemini model
-            # model = 4965075652664360960
-            # send to this url: url = f"https://{vertex_location}-aiplatform.googleapis.com/{version}/projects/{vertex_project}/locations/{vertex_location}/endpoints/{model}:{endpoint}"
-            if model.isdigit():
-                # It's a fine-tuned Gemini model
-                url = f"https://{vertex_location}-aiplatform.googleapis.com/{version}/projects/{vertex_project}/locations/{vertex_location}/endpoints/{model}:{endpoint}"
-                if stream is True:
-                    url += "?alt=sse"
+            version: Literal["v1beta1", "v1"] = (
+                "v1beta1" if should_use_v1beta1_features is True else "v1"
+            )
+            url, endpoint = _get_vertex_url(
+                mode=mode,
+                model=model,
+                stream=stream,
+                vertex_project=vertex_project,
+                vertex_location=vertex_location,
+                vertex_api_version=version,
+            )
 
         if (
             api_base is not None
@@ -1793,8 +1790,10 @@ class VertexLLM(BaseLLM):
         input: Union[list, str],
         print_verbose,
         model_response: litellm.EmbeddingResponse,
+        custom_llm_provider: Literal["gemini", "vertex_ai"],
         optional_params: dict,
         api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
         logging_obj=None,
         encoding=None,
         vertex_project=None,
@@ -1804,6 +1803,18 @@ class VertexLLM(BaseLLM):
         timeout=300,
         client=None,
     ):
+        auth_header, url = self._get_token_and_url(
+            model=model,
+            gemini_api_key=api_key,
+            vertex_project=vertex_project,
+            vertex_location=vertex_location,
+            vertex_credentials=vertex_credentials,
+            stream=None,
+            custom_llm_provider=custom_llm_provider,
+            api_base=api_base,
+            should_use_v1beta1_features=False,
+            mode="embedding",
+        )
 
         if client is None:
             _params = {}
@@ -1818,11 +1829,6 @@ class VertexLLM(BaseLLM):
         else:
             sync_handler = client  # type: ignore
 
-        url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:predict"
-
-        auth_header, _ = self._ensure_access_token(
-            credentials=vertex_credentials, project_id=vertex_project
-        )
         optional_params = optional_params or {}
 
         request_data = VertexMultimodalEmbeddingRequest()
@@ -1840,29 +1846,21 @@ class VertexLLM(BaseLLM):
 
             request_data["instances"] = [vertex_request_instance]
 
-        request_str = f"\n curl -X POST \\\n -H \"Authorization: Bearer {auth_header[:10] + 'XXXXXXXXXX'}\" \\\n -H \"Content-Type: application/json; charset=utf-8\" \\\n -d {request_data} \\\n \"{url}\""
-        logging_obj.pre_call(
-            input=[],
-            api_key=None,
-            additional_args={
-                "complete_input_dict": optional_params,
-                "request_str": request_str,
-            },
-        )
-
-        logging_obj.pre_call(
-            input=[],
-            api_key=None,
-            additional_args={
-                "complete_input_dict": optional_params,
-                "request_str": request_str,
-            },
-        )
-
         headers = {
             "Content-Type": "application/json; charset=utf-8",
             "Authorization": f"Bearer {auth_header}",
         }
+
+        ## LOGGING
+        logging_obj.pre_call(
+            input=input,
+            api_key="",
+            additional_args={
+                "complete_input_dict": request_data,
+                "api_base": url,
+                "headers": headers,
+            },
+        )
 
         if aembedding is True:
             return self.async_multimodal_embedding(
