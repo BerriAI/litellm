@@ -54,6 +54,7 @@ from litellm.proxy.auth.auth_checks import (
     get_org_object,
     get_team_object,
     get_user_object,
+    is_request_body_safe,
     log_to_opentelemetry,
 )
 from litellm.proxy.auth.auth_utils import (
@@ -63,6 +64,7 @@ from litellm.proxy.auth.auth_utils import (
     route_in_additonal_public_routes,
 )
 from litellm.proxy.auth.oauth2_check import check_oauth2_token
+from litellm.proxy.auth.oauth2_proxy_hook import handle_oauth2_proxy_request
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.proxy.utils import _to_ns
 
@@ -122,6 +124,9 @@ async def user_api_key_auth(
 
     try:
         route: str = get_request_route(request=request)
+        # get the request body
+        request_data = await _read_request_body(request=request)
+        is_request_body_safe(request_body=request_data)
 
         ### LiteLLM Enterprise Security Checks
         # Check 1. Check if request size is under max_request_size_mb
@@ -212,6 +217,9 @@ async def user_api_key_auth(
                 )
 
             return await check_oauth2_token(token=api_key)
+
+        if general_settings.get("enable_oauth2_proxy_auth", False) is True:
+            return await handle_oauth2_proxy_request(request=request)
 
         if general_settings.get("enable_jwt_auth", False) is True:
             is_jwt = jwt_handler.is_jwt(token=api_key)
@@ -353,9 +361,6 @@ async def user_api_key_auth(
                                 user_info=user_info,
                             )
                         )
-                # get the request body
-                request_data = await _read_request_body(request=request)
-
                 # run through common checks
                 _ = common_checks(
                     request_body=request_data,
@@ -448,7 +453,6 @@ async def user_api_key_auth(
                 )
 
         ## Check END-USER OBJECT
-        request_data = await _read_request_body(request=request)
         _end_user_object = None
         end_user_params = {}
         if "user" in request_data:

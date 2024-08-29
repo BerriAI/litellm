@@ -1768,7 +1768,7 @@ LiteLLM supports calling [Vertex AI Text to Speech API](https://console.cloud.go
 
 
 
-Usage
+### Usage - Basic
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
@@ -1839,6 +1839,150 @@ print("response from proxy", response)
 
 </TabItem>
 </Tabs>
+
+
+### Usage - `ssml` as input
+
+Pass your `ssml` as input to the `input` param, if it contains `<speak>`, it will be automatically detected and passed as `ssml` to the Vertex AI API
+
+If you need to force your `input` to be passed as `ssml`, set `use_ssml=True`
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+Vertex AI does not support passing a `model` param - so passing `model=vertex_ai/` is the only required param
+
+
+```python
+speech_file_path = Path(__file__).parent / "speech_vertex.mp3"
+
+
+ssml = """
+<speak>
+    <p>Hello, world!</p>
+    <p>This is a test of the <break strength="medium" /> text-to-speech API.</p>
+</speak>
+"""
+
+response = litellm.speech(
+    input=ssml,
+    model="vertex_ai/test",
+    voice={
+        "languageCode": "en-UK",
+        "name": "en-UK-Studio-O",
+    },
+    audioConfig={
+        "audioEncoding": "LINEAR22",
+        "speakingRate": "10",
+    },
+)
+response.stream_to_file(speech_file_path)
+```
+
+</TabItem>
+
+<TabItem value="proxy" label="LiteLLM PROXY (Unified Endpoint)">
+
+```python
+import openai
+
+client = openai.OpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+
+ssml = """
+<speak>
+    <p>Hello, world!</p>
+    <p>This is a test of the <break strength="medium" /> text-to-speech API.</p>
+</speak>
+"""
+
+# see supported values for "voice" on vertex here: 
+# https://console.cloud.google.com/vertex-ai/generative/speech/text-to-speech
+response = client.audio.speech.create(
+    model = "vertex-tts",
+    input=ssml,
+    voice={'languageCode': 'en-US', 'name': 'en-US-Studio-O'},
+)
+print("response from proxy", response)
+```
+
+</TabItem>
+</Tabs>
+
+
+### Forcing SSML Usage
+
+You can force the use of SSML by setting the `use_ssml` parameter to `True`. This is useful when you want to ensure that your input is treated as SSML, even if it doesn't contain the `<speak>` tags.
+
+Here are examples of how to force SSML usage:
+
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+Vertex AI does not support passing a `model` param - so passing `model=vertex_ai/` is the only required param
+
+
+```python
+speech_file_path = Path(__file__).parent / "speech_vertex.mp3"
+
+
+ssml = """
+<speak>
+    <p>Hello, world!</p>
+    <p>This is a test of the <break strength="medium" /> text-to-speech API.</p>
+</speak>
+"""
+
+response = litellm.speech(
+    input=ssml,
+    use_ssml=True,
+    model="vertex_ai/test",
+    voice={
+        "languageCode": "en-UK",
+        "name": "en-UK-Studio-O",
+    },
+    audioConfig={
+        "audioEncoding": "LINEAR22",
+        "speakingRate": "10",
+    },
+)
+response.stream_to_file(speech_file_path)
+```
+
+</TabItem>
+
+<TabItem value="proxy" label="LiteLLM PROXY (Unified Endpoint)">
+
+```python
+import openai
+
+client = openai.OpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+
+ssml = """
+<speak>
+    <p>Hello, world!</p>
+    <p>This is a test of the <break strength="medium" /> text-to-speech API.</p>
+</speak>
+"""
+
+# see supported values for "voice" on vertex here: 
+# https://console.cloud.google.com/vertex-ai/generative/speech/text-to-speech
+response = client.audio.speech.create(
+    model = "vertex-tts",
+    input=ssml, # pass as None since OpenAI SDK requires this param
+    voice={'languageCode': 'en-US', 'name': 'en-US-Studio-O'},
+    extra_body={"use_ssml": True},
+)
+print("response from proxy", response)
+```
+
+</TabItem>
+</Tabs>
+
+
+
+
+
 
 
 ## Extra
