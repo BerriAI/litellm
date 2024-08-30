@@ -25,6 +25,7 @@ from litellm.types.files import (
     is_gemini_1_5_accepted_file_type,
     is_video_file_type,
 )
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.llms.vertex_ai import *
 from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
 
@@ -123,7 +124,9 @@ def _process_gemini_image(image_url: str) -> PartType:
         raise e
 
 
-def _gemini_convert_messages_with_history(messages: list) -> List[ContentType]:
+def _gemini_convert_messages_with_history(
+    messages: List[AllMessageValues],
+) -> List[ContentType]:
     """
     Converts given messages from OpenAI format to Gemini format
 
@@ -145,23 +148,26 @@ def _gemini_convert_messages_with_history(messages: list) -> List[ContentType]:
             while (
                 msg_i < len(messages) and messages[msg_i]["role"] in user_message_types
             ):
-                if isinstance(messages[msg_i]["content"], list):
+                if messages[msg_i]["content"] is not None and isinstance(
+                    messages[msg_i]["content"], list
+                ):
                     _parts: List[PartType] = []
-                    for element in messages[msg_i]["content"]:
+                    for element in messages[msg_i]["content"]:  # type: ignore
                         if isinstance(element, dict):
-                            if element["type"] == "text" and len(element["text"]) > 0:
-                                _part = PartType(text=element["text"])
+                            if element["type"] == "text" and len(element["text"]) > 0:  # type: ignore
+                                _part = PartType(text=element["text"])  # type: ignore
                                 _parts.append(_part)
                             elif element["type"] == "image_url":
-                                image_url = element["image_url"]["url"]
+                                image_url = element["image_url"]["url"]  # type: ignore
                                 _part = _process_gemini_image(image_url=image_url)
                                 _parts.append(_part)  # type: ignore
                     user_content.extend(_parts)
                 elif (
-                    isinstance(messages[msg_i]["content"], str)
-                    and len(messages[msg_i]["content"]) > 0
+                    messages[msg_i]["content"] is not None
+                    and isinstance(messages[msg_i]["content"], str)
+                    and len(messages[msg_i]["content"]) > 0  # type: ignore
                 ):
-                    _part = PartType(text=messages[msg_i]["content"])
+                    _part = PartType(text=messages[msg_i]["content"])  # type: ignore
                     user_content.append(_part)
 
                 msg_i += 1
@@ -175,31 +181,32 @@ def _gemini_convert_messages_with_history(messages: list) -> List[ContentType]:
                     messages[msg_i]["content"], list
                 ):
                     _parts = []
-                    for element in messages[msg_i]["content"]:
+                    for element in messages[msg_i]["content"]:  # type: ignore
                         if isinstance(element, dict):
                             if element["type"] == "text":
-                                _part = PartType(text=element["text"])
+                                _part = PartType(text=element["text"])  # type: ignore
                                 _parts.append(_part)
                             elif element["type"] == "image_url":
-                                image_url = element["image_url"]["url"]
+                                image_url = element["image_url"]["url"]  # type: ignore
                                 _part = _process_gemini_image(image_url=image_url)
                                 _parts.append(_part)  # type: ignore
                     assistant_content.extend(_parts)
+                elif messages[msg_i].get("content", None) is not None and isinstance(
+                    messages[msg_i]["content"], str
+                ):
+                    assistant_text = messages[msg_i]["content"]  # either string or none
+                    assistant_content.append(PartType(text=assistant_text))  # type: ignore
                 elif messages[msg_i].get(
                     "tool_calls", []
                 ):  # support assistant tool invoke conversion
                     assistant_content.extend(
-                        convert_to_gemini_tool_call_invoke(
-                            messages[msg_i]["tool_calls"]
-                        )
+                        convert_to_gemini_tool_call_invoke(messages[msg_i])  # type: ignore
                     )
                     last_message_with_tool_calls = messages[msg_i]
-                else:
-                    assistant_text = (
-                        messages[msg_i].get("content") or ""
-                    )  # either string or none
-                    if assistant_text:
-                        assistant_content.append(PartType(text=assistant_text))
+                elif messages[msg_i].get("function_call") is not None:
+                    assistant_content.extend(
+                        convert_to_gemini_tool_call_invoke(messages[msg_i])  # type: ignore
+                    )
 
                 msg_i += 1
 
@@ -207,12 +214,16 @@ def _gemini_convert_messages_with_history(messages: list) -> List[ContentType]:
                 contents.append(ContentType(role="model", parts=assistant_content))
 
             ## APPEND TOOL CALL MESSAGES ##
-            if msg_i < len(messages) and messages[msg_i]["role"] == "tool":
+            if msg_i < len(messages) and (
+                messages[msg_i]["role"] == "tool"
+                or messages[msg_i]["role"] == "function"
+            ):
                 _part = convert_to_gemini_tool_call_result(
-                    messages[msg_i], last_message_with_tool_calls
+                    messages[msg_i], last_message_with_tool_calls  # type: ignore
                 )
                 contents.append(ContentType(parts=[_part]))  # type: ignore
                 msg_i += 1
+
             if msg_i == init_msg_i:  # prevent infinite loops
                 raise Exception(
                     "Invalid Message passed in - {}. File an issue https://github.com/BerriAI/litellm/issues".format(
