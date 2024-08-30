@@ -120,7 +120,6 @@ from .llms.prompt_templates.factory import (
 )
 from .llms.sagemaker.sagemaker import SagemakerLLM
 from .llms.text_completion_codestral import CodestralTextCompletion
-from .llms.text_to_speech.vertex_ai import VertexTextToSpeechAPI
 from .llms.triton import TritonChatCompletion
 from .llms.vertex_ai_and_google_ai_studio import (
     vertex_ai_anthropic,
@@ -134,6 +133,9 @@ from .llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gem
 )
 from .llms.vertex_ai_and_google_ai_studio.multimodal_embeddings.embedding_handler import (
     VertexMultimodalEmbedding,
+)
+from .llms.vertex_ai_and_google_ai_studio.text_to_speech.text_to_speech_handler import (
+    VertexTextToSpeechAPI,
 )
 from .llms.vertex_ai_and_google_ai_studio.vertex_ai_partner_models.main import (
     VertexAIPartnerModels,
