@@ -2103,7 +2103,7 @@ def supports_system_messages(model: str, custom_llm_provider: Optional[str]) -> 
         return False
     except Exception:
         raise Exception(
-            f"Model not in model_prices_and_context_window.json. You passed model={model}, custom_llm_provider={custom_llm_provider}."
+            f"Model not supports system messages. You passed model={model}, custom_llm_provider={custom_llm_provider}."
         )
 
 
@@ -2139,7 +2139,7 @@ def supports_response_schema(model: str, custom_llm_provider: Optional[str]) -> 
         return False
     except Exception:
         verbose_logger.error(
-            f"Model not in model_prices_and_context_window.json. You passed model={model}, custom_llm_provider={custom_llm_provider}."
+            f"Model not supports response_schema. You passed model={model}, custom_llm_provider={custom_llm_provider}."
         )
         return False
 
@@ -2165,7 +2165,7 @@ def supports_function_calling(model: str) -> bool:
         return False
     else:
         raise Exception(
-            f"Model not in model_prices_and_context_window.json. You passed model={model}."
+            f"Model not supports function calling. You passed model={model}."
         )
 
 
@@ -2211,7 +2211,7 @@ def supports_parallel_function_calling(model: str):
         return False
     else:
         raise Exception(
-            f"Model not in model_prices_and_context_window.json. You passed model={model}."
+            f"Model not supports parallel function calling. You passed model={model}."
         )
 
 
