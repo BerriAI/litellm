@@ -2555,3 +2555,7 @@ async def test_partner_models_httpx_ai21():
         assert response.usage.total_tokens == 194
 
         print(f"response: {response}")
+
+        print("hidden params from response=", response._hidden_params)
+
+        assert response._hidden_params["response_cost"] > 0
