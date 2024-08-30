@@ -1,19 +1,23 @@
 model_list:
-  - model_name: fake-openai-endpoint
-    litellm_params:
-      model: openai/fake
-      api_key: fake-key
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/
-  - model_name: Salesforce/Llama-Rank-V1
-    litellm_params:
-      model: together_ai/Salesforce/Llama-Rank-V1
-      api_key: os.environ/TOGETHERAI_API_KEY
-  - model_name: rerank-english-v3.0
-    litellm_params:
-      model: cohere/rerank-english-v3.0
-      api_key: os.environ/COHERE_API_KEY
+ - model_name: fake-openai-endpoint
+   litellm_params:
+     model: openai/fake
+     api_key: fake-key
+     api_base: https://exampleopenaiendpoint-production.up.railway.app/
+     tags: ["teamA"] # 👈 Key Change
+   model_info:
+     id: "team-a-model" # used for identifying model in response headers
+ - model_name: fake-openai-endpoint
+   litellm_params:
+     model: openai/fake
+     api_key: fake-key
+     api_base: https://exampleopenaiendpoint-production.up.railway.app/
+     tags: ["teamB"] # 👈 Key Change
+   model_info:
+     id: "team-b-model" # used for identifying model in response headers
 
+router_settings:
+ enable_tag_filtering: True # 👈 Key Change
 
-# default off mode
-litellm_settings:
-  set_verbose: True
+general_settings: 
+ master_key: sk-1234 

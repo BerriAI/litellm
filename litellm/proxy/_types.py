@@ -813,6 +813,7 @@ class TeamBase(LiteLLMBase):
 
 class NewTeamRequest(TeamBase):
     model_aliases: Optional[dict] = None
+    tags: Optional[list] = None
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -883,6 +884,7 @@ class UpdateTeamRequest(LiteLLMBase):
     models: Optional[list] = None
     blocked: Optional[bool] = None
     budget_duration: Optional[str] = None
+    tags: Optional[list] = None
 
 
 class ResetTeamBudgetRequest(LiteLLMBase):
