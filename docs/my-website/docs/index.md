@@ -399,6 +399,8 @@ The proxy provides:
 
 ### 📖 Proxy Endpoints - [Swagger Docs](https://litellm-api.up.railway.app/)
 
+Go here for a complete tutorial with keys + rate limits - [**here**](./proxy/docker_quick_start.md)
+
 ### Quick Start Proxy - CLI
 
 ```shell
@@ -433,4 +435,5 @@ print(response)
 
 - [exception mapping](./exception_mapping.md)
 - [retries + model fallbacks for completion()](./completion/reliable_completions.md)
-- [proxy virtual keys & spend management](./tutorials/fallbacks.md)
+- [proxy virtual keys & spend management](./proxy/virtual_keys.md)
+- [E2E Tutorial for LiteLLM Proxy Server](./proxy/docker_quick_start.md)
