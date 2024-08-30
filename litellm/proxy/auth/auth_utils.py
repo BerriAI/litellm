@@ -78,6 +78,17 @@ def is_llm_api_route(route: str) -> bool:
             if re.match(pattern, route):
                 return True
 
+    # Pass through Bedrock, VertexAI, and Cohere Routes
+    if "/bedrock/" in route:
+        return True
+    if "/vertex-ai/" in route:
+        return True
+    if "/gemini/" in route:
+        return True
+    if "/cohere/" in route:
+        return True
+    if "/langfuse/" in route:
+        return True
     return False
 
 
