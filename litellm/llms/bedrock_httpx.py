@@ -1456,7 +1456,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             client = client  # type: ignore
 
         try:
-            response = await client.post(api_base, headers=headers, data=data)  # type: ignore
+            response = await client.post(url=api_base, headers=headers, data=data)  # type: ignore
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code = err.response.status_code
