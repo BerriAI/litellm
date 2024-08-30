@@ -57,6 +57,23 @@ def load_vertex_ai_credentials():
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = os.path.abspath(temp_file.name)
 
 
+async def call_spend_logs_endpoint():
+    """
+    Call this
+    curl -X GET "http://0.0.0.0:4000/spend/logs?start_date={}" -H "Authorization: Bearer sk-1234"
+    """
+    import datetime
+    import requests
+
+    todays_date = datetime.datetime.now().strftime("%Y-%m-%d")
+    url = f"http://0.0.0.0:4000/spend/logs?start_date={todays_date}"
+    headers = {"Authorization": f"Bearer sk-1234"}
+    response = requests.get(url, headers=headers)
+    print("response from call_spend_logs_endpoint", response)
+
+    return response
+
+
 LITE_LLM_ENDPOINT = "http://localhost:4000"
 
 
@@ -73,5 +90,8 @@ async def test_basic_vertex_ai_pass_through_with_spendlog():
     response = model.generate_content("hi")
 
     print("response", response)
+
+    _spend_logs_response = await call_spend_logs_endpoint()
+    print("spend logs response", _spend_logs_response)
 
     pass
