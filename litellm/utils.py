@@ -3267,7 +3267,7 @@ def get_optional_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,
             )
-    elif custom_llm_provider == "vertex_ai" and model in litellm.ai21_models:
+    elif custom_llm_provider == "vertex_ai" and model in litellm.vertex_ai_ai21_models:
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider
         )
@@ -5181,6 +5181,8 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
             if "meta/" + model in litellm.vertex_llama3_models:
                 model = "meta/" + model
             elif model + "@latest" in litellm.vertex_mistral_models:
+                model = model + "@latest"
+            elif model + "@latest" in litellm.vertex_ai_ai21_models:
                 model = model + "@latest"
         ##########################
         if custom_llm_provider is None:
