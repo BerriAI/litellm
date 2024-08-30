@@ -7475,6 +7475,14 @@ def exception_type(
                         ),
                         litellm_debug_info=extra_information,
                     )
+                elif "API key not valid." in error_str:
+                    exception_mapping_worked = True
+                    raise AuthenticationError(
+                        message=f"{custom_llm_provider}Exception - {error_str}",
+                        model=model,
+                        llm_provider=custom_llm_provider,
+                        litellm_debug_info=extra_information,
+                    )
                 elif "403" in error_str:
                     exception_mapping_worked = True
                     raise BadRequestError(

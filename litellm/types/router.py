@@ -299,6 +299,8 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     custom_llm_provider: Optional[str]
     tpm: Optional[int]
     rpm: Optional[int]
+    order: Optional[int]
+    weight: Optional[int]
     api_key: Optional[str]
     api_base: Optional[str]
     api_version: Optional[str]
