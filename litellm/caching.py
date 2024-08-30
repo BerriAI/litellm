@@ -1276,10 +1276,12 @@ class QdrantSemanticCache(BaseCache):
             qdrant_api_base or os.getenv("QDRANT_URL") or os.getenv("QDRANT_API_BASE")
         )
         qdrant_api_key = qdrant_api_key or os.getenv("QDRANT_API_KEY")
-        headers = {"api-key": qdrant_api_key, "Content-Type": "application/json"}
+        headers = {"Content-Type": "application/json"}
+        if qdrant_api_key:
+            headers["api-key"] = qdrant_api_key
 
-        if qdrant_api_key is None or qdrant_api_base is None:
-            raise ValueError("Qdrant url and api_key must be")
+        if qdrant_api_base is None:
+            raise ValueError("Qdrant url must be provided")
 
         self.qdrant_api_base = qdrant_api_base
         self.qdrant_api_key = qdrant_api_key
