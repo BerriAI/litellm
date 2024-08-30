@@ -20,9 +20,6 @@ async def get_deployments_for_tag(
     request_kwargs: Optional[Dict[Any, Any]] = None,
     healthy_deployments: Optional[Union[List[Any], Dict[Any, Any]]] = None,
 ):
-    """
-    if request_kwargs contains {"metadata": {"tier": "free"}} or {"metadata": {"tier": "paid"}}, then routes the request to free/paid tier models
-    """
     if llm_router_instance.enable_tag_filtering is not True:
         return healthy_deployments
 
@@ -70,7 +67,7 @@ async def get_deployments_for_tag(
                     )
                     new_healthy_deployments.append(deployment)
 
-        return new_healthy_deployments
+            return new_healthy_deployments
 
     verbose_logger.debug(
         "no tier found in metadata, returning healthy_deployments: %s",
