@@ -163,7 +163,10 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     check_file_size_under_limit,
 )
-from litellm.proxy.common_utils.load_config_utils import get_file_contents_from_s3
+from litellm.proxy.common_utils.load_config_utils import (
+    get_config_file_contents_from_gcs,
+    get_file_contents_from_s3,
+)
 from litellm.proxy.common_utils.openai_endpoint_utils import (
     remove_sensitive_info_from_deployment,
 )
@@ -1493,12 +1496,18 @@ class ProxyConfig:
         if os.environ.get("LITELLM_CONFIG_BUCKET_NAME") is not None:
             bucket_name = os.environ.get("LITELLM_CONFIG_BUCKET_NAME")
             object_key = os.environ.get("LITELLM_CONFIG_BUCKET_OBJECT_KEY")
+            bucket_type = os.environ.get("LITELLM_CONFIG_BUCKET_TYPE")
             verbose_proxy_logger.debug(
                 "bucket_name: %s, object_key: %s", bucket_name, object_key
             )
-            config = get_file_contents_from_s3(
-                bucket_name=bucket_name, object_key=object_key
-            )
+            if bucket_type == "gcs":
+                config = await get_config_file_contents_from_gcs(
+                    bucket_name=bucket_name, object_key=object_key
+                )
+            else:
+                config = get_file_contents_from_s3(
+                    bucket_name=bucket_name, object_key=object_key
+                )
         else:
             # default to file
             config = await self.get_config(config_file_path=config_file_path)
