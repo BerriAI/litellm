@@ -78,15 +78,18 @@ class VertexAITextEmbeddingConfig(BaseModel):
         }
 
     def get_supported_openai_params(self):
-        return ["dimensions", "input_type"]
+        return ["dimensions"]
 
-    def map_openai_params(self, non_default_params: dict, optional_params: dict):
+    def map_openai_params(
+        self, non_default_params: dict, optional_params: dict, kwargs: dict
+    ):
         for param, value in non_default_params.items():
             if param == "dimensions":
                 optional_params["output_dimensionality"] = value
-            if param == "input_type":
-                optional_params["task_type"] = value
-        return optional_params
+
+        if "input_type" in kwargs:
+            optional_params["task_type"] = kwargs.pop("input_type")
+        return optional_params, kwargs
 
     def get_mapped_special_auth_params(self) -> dict:
         """
