@@ -5076,6 +5076,18 @@ async def ahealth_check(
                 model_params["prompt"] = prompt
                 await litellm.aimage_generation(**model_params)
                 response = {}
+            elif "*" in model:
+                from litellm.litellm_core_utils.llm_request_utils import (
+                    pick_cheapest_model_from_llm_provider,
+                )
+
+                # this is a wildcard model, we need to pick a random model from the provider
+                cheapest_model = pick_cheapest_model_from_llm_provider(
+                    custom_llm_provider=custom_llm_provider
+                )
+                model_params["model"] = cheapest_model
+                await acompletion(**model_params)
+                response = {}  # args like remaining ratelimit etc.
             else:  # default to completion calls
                 await acompletion(**model_params)
                 response = {}  # args like remaining ratelimit etc.

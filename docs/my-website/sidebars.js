@@ -29,6 +29,7 @@ const sidebars = {
       },
       items: [
         "proxy/quick_start",
+        "proxy/docker_quick_start",
         "proxy/deploy", 
         "proxy/prod", 
         {
