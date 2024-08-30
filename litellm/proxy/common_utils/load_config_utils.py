@@ -53,9 +53,9 @@ def get_file_contents_from_s3(bucket_name, object_key):
 
 async def get_config_file_contents_from_gcs(bucket_name, object_key):
     try:
-        from litellm.integrations.gcs_bucket import GCSBucketLogger
+        from litellm.integrations.gcs_bucket_base import GCSBucketBase
 
-        gcs_bucket = GCSBucketLogger(
+        gcs_bucket = GCSBucketBase(
             bucket_name=bucket_name,
         )
         file_contents = await gcs_bucket.download_gcs_object(object_key)
