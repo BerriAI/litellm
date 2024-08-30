@@ -102,10 +102,7 @@ async def vertex_proxy_route(
         vertex_location = match.group(1) if match else None
         base_target_url = f"https://{vertex_location}-aiplatform.googleapis.com/"
         headers.pop("content-length", None)
-        _new_headers = {
-            "Authorization": headers.get("authorization"),
-        }
-        headers = _new_headers
+        headers.pop("host", None)
     else:
         vertex_project = default_vertex_config.get("vertex_project")
         vertex_location = default_vertex_config.get("vertex_location")
