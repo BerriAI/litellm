@@ -21,7 +21,7 @@ from litellm.utils import (
     supports_httpx_timeout,
 )
 
-from ..llms.azure import AzureAssistantsAPI
+from ..llms.azure.azure import AzureAssistantsAPI
 from ..llms.openai import OpenAIAssistantsAPI
 from ..types.llms.openai import *
 from ..types.router import *

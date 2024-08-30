@@ -19,9 +19,9 @@ from litellm.utils import (
     convert_to_model_response_object,
 )
 
-from ..llms.openai import OpenAITextCompletion, OpenAITextCompletionConfig
-from .base import BaseLLM
-from .prompt_templates.factory import custom_prompt, prompt_factory
+from ...llms.openai import OpenAITextCompletion, OpenAITextCompletionConfig
+from ..base import BaseLLM
+from ..prompt_templates.factory import custom_prompt, prompt_factory
 
 openai_text_completion_config = OpenAITextCompletionConfig()
 

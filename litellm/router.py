@@ -47,7 +47,7 @@ from litellm._logging import verbose_router_logger
 from litellm.assistants.main import AssistantDeleted
 from litellm.caching import DualCache, InMemoryCache, RedisCache
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.llms.azure import get_azure_ad_token_from_oidc
+from litellm.llms.azure.azure import get_azure_ad_token_from_oidc
 from litellm.router_strategy.least_busy import LeastBusyLoggingHandler
 from litellm.router_strategy.lowest_cost import LowestCostLoggingHandler
 from litellm.router_strategy.lowest_latency import LowestLatencyLoggingHandler
