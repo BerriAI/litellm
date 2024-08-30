@@ -200,13 +200,13 @@ def set_client(litellm_router_instance: LitellmRouter, model: dict):
             if azure_ad_token is not None:
                 if azure_ad_token.startswith("oidc/"):
                     azure_ad_token = get_azure_ad_token_from_oidc(azure_ad_token)
-            elif azure_ad_token_provider is None:
-                try:
-                    azure_ad_token_provider = get_azure_ad_token_provider()
-                except ValueError:
-                    verbose_router_logger.debug(
-                        "Azure AD Token Provider could not be used."
-                    )
+                else:
+                    try:
+                        azure_ad_token_provider = get_azure_ad_token_provider()
+                    except ValueError:
+                        verbose_router_logger.debug(
+                            "Azure AD Token Provider could not be used."
+                        )
 
             if api_version is None:
                 api_version = os.getenv(
