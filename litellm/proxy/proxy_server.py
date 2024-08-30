@@ -167,6 +167,7 @@ from litellm.proxy.common_utils.load_config_utils import get_file_contents_from_
 from litellm.proxy.common_utils.openai_endpoint_utils import (
     remove_sensitive_info_from_deployment,
 )
+from litellm.proxy.common_utils.swagger_utils import ERROR_RESPONSES
 from litellm.proxy.fine_tuning_endpoints.endpoints import router as fine_tuning_router
 from litellm.proxy.fine_tuning_endpoints.endpoints import set_fine_tuning_config
 from litellm.proxy.guardrails.init_guardrails import (
@@ -3036,6 +3037,7 @@ def model_list(
     "/openai/deployments/{model:path}/chat/completions",
     dependencies=[Depends(user_api_key_auth)],
     tags=["chat/completions"],
+    responses={200: {"description": "Successful response"}, **ERROR_RESPONSES},
 )  # azure compatible endpoint
 @backoff.on_exception(
     backoff.expo,
