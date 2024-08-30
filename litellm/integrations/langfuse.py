@@ -300,8 +300,8 @@ class LangFuseLogger:
                 prompt=input,
                 completion=output,
                 usage={
-                    "prompt_tokens": response_obj["usage"]["prompt_tokens"],
-                    "completion_tokens": response_obj["usage"]["completion_tokens"],
+                    "prompt_tokens": response_obj.usage.prompt_tokens,
+                    "completion_tokens": response_obj.usage.completion_tokens,
                 },
                 metadata=metadata,
             )
@@ -526,8 +526,8 @@ class LangFuseLogger:
             if response_obj is not None and response_obj.get("id", None) is not None:
                 generation_id = litellm.utils.get_logging_id(start_time, response_obj)
                 usage = {
-                    "prompt_tokens": response_obj["usage"]["prompt_tokens"],
-                    "completion_tokens": response_obj["usage"]["completion_tokens"],
+                    "prompt_tokens": response_obj.usage.prompt_tokens,
+                    "completion_tokens": response_obj.usage.completion_tokens,
                     "total_cost": cost if supports_costs else None,
                 }
             generation_name = clean_metadata.pop("generation_name", None)
