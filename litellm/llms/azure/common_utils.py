@@ -129,8 +129,7 @@ def get_azure_ad_token_and_provider(
     if azure_ad_token is not None:
         if azure_ad_token.startswith("oidc/"):
             azure_ad_token = get_azure_ad_token_from_oidc(azure_ad_token)
-    else:
-        if azure_ad_token_provider is None:
+        else:
             try:
                 azure_ad_token_provider = get_azure_ad_token_provider()
             except ValueError:
