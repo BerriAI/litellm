@@ -3,7 +3,7 @@
 Route requests based on tags. 
 This is useful for 
 - Implementing free / paid tiers for users
-- Controlling model access per team, example Team A can access gpt-4 deployment A, Team B can access gpt-4 deployment B
+- Controlling model access per team, example Team A can access gpt-4 deployment A, Team B can access gpt-4 deployment B (LLM Access Control For Teams )
 
 ## Quick Start
 
@@ -138,8 +138,7 @@ Response
 
 ## ✨ Team based tag routing (Enterprise)
 
-LiteLLM Proxy supports team-based tag routing, allowing you to associate specific tags with teams and route requests accordingly. Example **Team A can access gpt-4 deployment A, Team B can access gpt-4 deployment B**
-
+LiteLLM Proxy supports team-based tag routing, allowing you to associate specific tags with teams and route requests accordingly. Example **Team A can access gpt-4 deployment A, Team B can access gpt-4 deployment B** (LLM Access Control For Teams)
 
 :::info
 
