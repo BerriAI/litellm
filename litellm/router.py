@@ -4700,6 +4700,31 @@ class Router:
                 )
             elif self.routing_strategy == "simple-shuffle":
                 # if users pass rpm or tpm, we do a random weighted pick - based on rpm/tpm
+
+                ############## Check if 'weight' param set for a weighted pick #################
+                weight = (
+                    healthy_deployments[0].get("litellm_params").get("weight", None)
+                )
+                if weight is not None:
+                    # use weight-random pick if rpms provided
+                    weights = [
+                        m["litellm_params"].get("weight", 0)
+                        for m in healthy_deployments
+                    ]
+                    verbose_router_logger.debug(f"\nweight {weights}")
+                    total_weight = sum(weights)
+                    weights = [weight / total_weight for weight in weights]
+                    verbose_router_logger.debug(f"\n weights {weights}")
+                    # Perform weighted random pick
+                    selected_index = random.choices(
+                        range(len(weights)), weights=weights
+                    )[0]
+                    verbose_router_logger.debug(f"\n selected index, {selected_index}")
+                    deployment = healthy_deployments[selected_index]
+                    verbose_router_logger.info(
+                        f"get_available_deployment for model: {model}, Selected deployment: {self.print_deployment(deployment) or deployment[0]} for model: {model}"
+                    )
+                    return deployment or deployment[0]
                 ############## Check if we can do a RPM/TPM based weighted pick #################
                 rpm = healthy_deployments[0].get("litellm_params").get("rpm", None)
                 if rpm is not None:
@@ -4847,6 +4872,25 @@ class Router:
             )
         elif self.routing_strategy == "simple-shuffle":
             # if users pass rpm or tpm, we do a random weighted pick - based on rpm/tpm
+            ############## Check 'weight' param set for weighted pick #################
+            weight = healthy_deployments[0].get("litellm_params").get("weight", None)
+            if weight is not None:
+                # use weight-random pick if rpms provided
+                weights = [
+                    m["litellm_params"].get("weight", 0) for m in healthy_deployments
+                ]
+                verbose_router_logger.debug(f"\nweight {weights}")
+                total_weight = sum(weights)
+                weights = [weight / total_weight for weight in weights]
+                verbose_router_logger.debug(f"\n weights {weights}")
+                # Perform weighted random pick
+                selected_index = random.choices(range(len(weights)), weights=weights)[0]
+                verbose_router_logger.debug(f"\n selected index, {selected_index}")
+                deployment = healthy_deployments[selected_index]
+                verbose_router_logger.info(
+                    f"get_available_deployment for model: {model}, Selected deployment: {self.print_deployment(deployment) or deployment[0]} for model: {model}"
+                )
+                return deployment or deployment[0]
             ############## Check if we can do a RPM/TPM based weighted pick #################
             rpm = healthy_deployments[0].get("litellm_params").get("rpm", None)
             if rpm is not None:

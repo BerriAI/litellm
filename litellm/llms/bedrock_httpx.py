@@ -48,13 +48,7 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import Choices
 from litellm.types.utils import GenericStreamingChunk as GChunk
 from litellm.types.utils import Message
-from litellm.utils import (
-    CustomStreamWrapper,
-    ModelResponse,
-    Usage,
-    get_secret,
-    print_verbose,
-)
+from litellm.utils import CustomStreamWrapper, ModelResponse, Usage, get_secret
 
 from .base import BaseLLM
 from .base_aws_llm import BaseAWSLLM
@@ -654,6 +648,7 @@ class BedrockLLM(BaseAWSLLM):
         self,
         model: str,
         messages: list,
+        api_base: Optional[str],
         custom_prompt_dict: dict,
         model_response: ModelResponse,
         print_verbose: Callable,
@@ -734,7 +729,9 @@ class BedrockLLM(BaseAWSLLM):
         ### SET RUNTIME ENDPOINT ###
         endpoint_url = ""
         env_aws_bedrock_runtime_endpoint = get_secret("AWS_BEDROCK_RUNTIME_ENDPOINT")
-        if aws_bedrock_runtime_endpoint is not None and isinstance(
+        if api_base is not None:
+            endpoint_url = api_base
+        elif aws_bedrock_runtime_endpoint is not None and isinstance(
             aws_bedrock_runtime_endpoint, str
         ):
             endpoint_url = aws_bedrock_runtime_endpoint
@@ -1459,7 +1456,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             client = client  # type: ignore
 
         try:
-            response = await client.post(api_base, headers=headers, data=data)  # type: ignore
+            response = await client.post(url=api_base, headers=headers, data=data)  # type: ignore
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code = err.response.status_code
@@ -1485,6 +1482,7 @@ class BedrockConverseLLM(BaseAWSLLM):
         self,
         model: str,
         messages: list,
+        api_base: Optional[str],
         custom_prompt_dict: dict,
         model_response: ModelResponse,
         print_verbose: Callable,
@@ -1565,7 +1563,9 @@ class BedrockConverseLLM(BaseAWSLLM):
         ### SET RUNTIME ENDPOINT ###
         endpoint_url = ""
         env_aws_bedrock_runtime_endpoint = get_secret("AWS_BEDROCK_RUNTIME_ENDPOINT")
-        if aws_bedrock_runtime_endpoint is not None and isinstance(
+        if api_base is not None:
+            endpoint_url = api_base
+        elif aws_bedrock_runtime_endpoint is not None and isinstance(
             aws_bedrock_runtime_endpoint, str
         ):
             endpoint_url = aws_bedrock_runtime_endpoint

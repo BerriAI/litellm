@@ -2342,3 +2342,55 @@ async def test_aaarouter_dynamic_cooldown_message_retry_time(sync_mode):
             assert e.cooldown_time == cooldown_time
 
         assert exception_raised
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio()
+async def test_router_weighted_pick(sync_mode):
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "weight": 2,
+                    "mock_response": "Hello world 1!",
+                },
+                "model_info": {"id": "1"},
+            },
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "weight": 1,
+                    "mock_response": "Hello world 2!",
+                },
+                "model_info": {"id": "2"},
+            },
+        ]
+    )
+
+    model_id_1_count = 0
+    model_id_2_count = 0
+    for _ in range(50):
+        # make 50 calls. expect model id 1 to be picked more than model id 2
+        if sync_mode:
+            response = router.completion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "Hello world!"}],
+            )
+        else:
+            response = await router.acompletion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "Hello world!"}],
+            )
+
+        model_id = int(response._hidden_params["model_id"])
+
+        if model_id == 1:
+            model_id_1_count += 1
+        elif model_id == 2:
+            model_id_2_count += 1
+        else:
+            raise Exception("invalid model id returned!")
+    assert model_id_1_count > model_id_2_count
