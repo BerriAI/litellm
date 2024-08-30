@@ -456,27 +456,36 @@ class Choices(OpenAIObject):
 
 
 class Usage(CompletionUsage):
-    cache_creation_input_tokens: int
-    cache_read_input_tokens: int
+    _cache_creation_input_tokens: int = PrivateAttr(
+        0
+    )  # hidden param for prompt caching. Might change, once openai introduces their equivalent.
+    _cache_read_input_tokens: int = PrivateAttr(
+        0
+    )  # hidden param for prompt caching. Might change, once openai introduces their equivalent.
 
     def __init__(
         self,
         prompt_tokens: Optional[int] = None,
         completion_tokens: Optional[int] = None,
         total_tokens: Optional[int] = None,
-        cache_creation_input_tokens: Optional[int] = None,
-        cache_read_input_tokens: Optional[int] = None,
         **params,
     ):
         data = {
             "prompt_tokens": prompt_tokens or 0,
             "completion_tokens": completion_tokens or 0,
             "total_tokens": total_tokens or 0,
-            "cache_creation_input_tokens": cache_creation_input_tokens or 0,
-            "cache_read_input_tokens": cache_read_input_tokens or 0,
         }
-
         super().__init__(**data)
+
+        if "cache_creation_input_tokens" in params and isinstance(
+            params["cache_creation_input_tokens"], int
+        ):
+            self._cache_creation_input_tokens = params["cache_creation_input_tokens"]
+
+        if "cache_read_input_tokens" in params and isinstance(
+            params["cache_read_input_tokens"], int
+        ):
+            self._cache_read_input_tokens = params["cache_read_input_tokens"]
 
         for k, v in params.items():
             setattr(self, k, v)

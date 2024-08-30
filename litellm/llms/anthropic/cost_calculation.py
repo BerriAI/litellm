@@ -28,12 +28,12 @@ def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
     prompt_cost: float = usage["prompt_tokens"] * model_info["input_cost_per_token"]
     if model_info.get("cache_creation_input_token_cost") is not None:
         prompt_cost += (
-            usage.cache_creation_input_tokens  # type: ignore
+            usage._cache_creation_input_tokens  # type: ignore
             * model_info["cache_creation_input_token_cost"]
         )
     if model_info.get("cache_read_input_token_cost") is not None:
         prompt_cost += (
-            usage.cache_read_input_tokens * model_info["cache_read_input_token_cost"]  # type: ignore
+            usage._cache_read_input_tokens * model_info["cache_read_input_token_cost"]  # type: ignore
         )
 
     ## CALCULATE OUTPUT COST

@@ -1106,6 +1106,8 @@ def test_completion_cost_anthropic_prompt_caching():
     from litellm.utils import Choices, Message, ModelResponse, Usage
 
     model = "anthropic/claude-3-5-sonnet-20240620"
+
+    ## WRITE TO CACHE ## (MORE EXPENSIVE)
     response_1 = ModelResponse(
         id="chatcmpl-3f427194-0840-4d08-b571-56bfe38a5424",
         choices=[
@@ -1133,6 +1135,7 @@ def test_completion_cost_anthropic_prompt_caching():
         ),
     )
 
+    ## READ FROM CACHE ## (LESS EXPENSIVE)
     response_2 = ModelResponse(
         id="chatcmpl-3f427194-0840-4d08-b571-56bfe38a5424",
         choices=[
@@ -1163,4 +1166,4 @@ def test_completion_cost_anthropic_prompt_caching():
     cost_1 = completion_cost(model=model, completion_response=response_1)
     cost_2 = completion_cost(model=model, completion_response=response_2)
 
-    assert cost_1 < cost_2
+    assert cost_1 > cost_2
