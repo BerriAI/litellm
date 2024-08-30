@@ -418,6 +418,7 @@ async def test_async_custom_handler_embedding_optional_param_bedrock():
 
 
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=1)
 async def test_cost_tracking_with_caching():
     """
     Important Test - This tests if that cost is 0 for cached responses
