@@ -1097,3 +1097,70 @@ def test_completion_cost_azure_common_deployment_name():
 
         print(f"mock_client.call_args: {mock_client.call_args.kwargs}")
         assert "azure/gpt-4" == mock_client.call_args.kwargs["model"]
+
+
+def test_completion_cost_anthropic_prompt_caching():
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    from litellm.utils import Choices, Message, ModelResponse, Usage
+
+    model = "anthropic/claude-3-5-sonnet-20240620"
+    response_1 = ModelResponse(
+        id="chatcmpl-3f427194-0840-4d08-b571-56bfe38a5424",
+        choices=[
+            Choices(
+                finish_reason="length",
+                index=0,
+                message=Message(
+                    content="Hello! I'm doing well, thank you for",
+                    role="assistant",
+                    tool_calls=None,
+                    function_call=None,
+                ),
+            )
+        ],
+        created=1725036547,
+        model="claude-3-5-sonnet-20240620",
+        object="chat.completion",
+        system_fingerprint=None,
+        usage=Usage(
+            completion_tokens=10,
+            prompt_tokens=14,
+            total_tokens=24,
+            cache_creation_input_tokens=100,
+            cache_read_input_tokens=0,
+        ),
+    )
+
+    response_2 = ModelResponse(
+        id="chatcmpl-3f427194-0840-4d08-b571-56bfe38a5424",
+        choices=[
+            Choices(
+                finish_reason="length",
+                index=0,
+                message=Message(
+                    content="Hello! I'm doing well, thank you for",
+                    role="assistant",
+                    tool_calls=None,
+                    function_call=None,
+                ),
+            )
+        ],
+        created=1725036547,
+        model="claude-3-5-sonnet-20240620",
+        object="chat.completion",
+        system_fingerprint=None,
+        usage=Usage(
+            completion_tokens=10,
+            prompt_tokens=14,
+            total_tokens=24,
+            cache_creation_input_tokens=0,
+            cache_read_input_tokens=100,
+        ),
+    )
+
+    cost_1 = completion_cost(model=model, completion_response=response_1)
+    cost_2 = completion_cost(model=model, completion_response=response_2)
+
+    assert cost_1 < cost_2

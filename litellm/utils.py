@@ -5339,6 +5339,12 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
                 max_input_tokens=_model_info.get("max_input_tokens", None),
                 max_output_tokens=_model_info.get("max_output_tokens", None),
                 input_cost_per_token=_input_cost_per_token,
+                cache_creation_input_token_cost=_model_info.get(
+                    "cache_creation_input_token_cost", None
+                ),
+                cache_read_input_token_cost=_model_info.get(
+                    "cache_read_input_token_cost", None
+                ),
                 input_cost_per_character=_model_info.get(
                     "input_cost_per_character", None
                 ),
