@@ -1531,28 +1531,103 @@ All models listed [here](https://github.com/BerriAI/litellm/blob/57f37f743886a02
 | text-embedding-preview-0409 | `embedding(model="vertex_ai/text-embedding-preview-0409", input)` |
 | text-multilingual-embedding-preview-0409 | `embedding(model="vertex_ai/text-multilingual-embedding-preview-0409", input)` | 
 
-### Advanced Use `task_type` and `title` (Vertex Specific Params)
+### Supported OpenAI (Unified) Params
 
-👉 `task_type` and `title` are vertex specific params
+| [param](../embedding/supported_embedding.md#input-params-for-litellmembedding) | type | [vertex equivalent](https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/text-embeddings-api) |
+|-------|-------------|--------------------|
+| `input` | **string or List[string]** | `instances` |
+| `dimensions` | **int** | `output_dimensionality` |
+| `input_type` | **Literal["RETRIEVAL_QUERY","RETRIEVAL_DOCUMENT", "SEMANTIC_SIMILARITY", "CLASSIFICATION", "CLUSTERING", "QUESTION_ANSWERING", "FACT_VERIFICATION"]** | `task_type` |
 
-LiteLLM Supported Vertex Specific Params
+#### Usage with OpenAI (Unified) Params
+
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
 
 ```python
-auto_truncate: Optional[bool] = None
-task_type: Optional[Literal["RETRIEVAL_QUERY","RETRIEVAL_DOCUMENT", "SEMANTIC_SIMILARITY", "CLASSIFICATION", "CLUSTERING", "QUESTION_ANSWERING", "FACT_VERIFICATION"]] = None
-title: Optional[str] = None # The title of the document to be embedded. (only valid with task_type=RETRIEVAL_DOCUMENT).
+response = litellm.embedding(
+    model="vertex_ai/text-embedding-004",
+    input=["good morning from litellm", "gm"]
+    input_type = "RETRIEVAL_DOCUMENT",
+    dimensions=1,
+)
 ```
+</TabItem>
+<TabItem value="proxy" label="LiteLLM PROXY">
 
-**Example Usage with LiteLLM**
+
+```python
+import openai
+
+client = openai.OpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+
+response = client.embeddings.create(
+    model="text-embedding-004", 
+    input = ["good morning from litellm", "gm"],
+    dimensions=1,
+    extra_body = {
+        "input_type": "RETRIEVAL_QUERY",
+    }
+)
+
+print(response)
+```
+</TabItem>
+</Tabs>
+
+
+### Supported Vertex Specific Params
+
+| param | type |
+|-------|-------------|
+| `auto_truncate` | **bool** |
+| `task_type` | **Literal["RETRIEVAL_QUERY","RETRIEVAL_DOCUMENT", "SEMANTIC_SIMILARITY", "CLASSIFICATION", "CLUSTERING", "QUESTION_ANSWERING", "FACT_VERIFICATION"]** |
+| `title` | **str** |
+
+#### Usage with Vertex Specific Params  (Use `task_type` and `title`)
+
+You can pass any vertex specific params to the embedding model. Just pass them to the embedding function like this: 
+
+[Relevant Vertex AI doc with all embedding params](https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/text-embeddings-api#request_body)
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
 ```python
 response = litellm.embedding(
     model="vertex_ai/text-embedding-004",
     input=["good morning from litellm", "gm"]
     task_type = "RETRIEVAL_DOCUMENT",
+    title = "test",
     dimensions=1,
     auto_truncate=True,
 )
 ```
+</TabItem>
+<TabItem value="proxy" label="LiteLLM PROXY">
+
+
+```python
+import openai
+
+client = openai.OpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+
+response = client.embeddings.create(
+    model="text-embedding-004", 
+    input = ["good morning from litellm", "gm"],
+    dimensions=1,
+    extra_body = {
+        "task_type": "RETRIEVAL_QUERY",
+        "auto_truncate": True,
+        "title": "test",
+    }
+)
+
+print(response)
+```
+</TabItem>
+</Tabs>
 
 ## **Multi-Modal Embeddings**
 
