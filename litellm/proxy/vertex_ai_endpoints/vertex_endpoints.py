@@ -84,31 +84,49 @@ async def vertex_proxy_route(
 ):
     encoded_endpoint = httpx.URL(endpoint).path
 
+    import re
+
     from litellm.fine_tuning.main import vertex_fine_tuning_apis_instance
 
+    verbose_proxy_logger.debug("requested endpoint %s", endpoint)
+    headers: dict = {}
+    # Use headers from the incoming request if default_vertex_config is not set
     if default_vertex_config is None:
-        raise ValueError(
-            "Vertex credentials not added on litellm proxy, please add `default_vertex_config` on your config.yaml"
+        headers = dict(request.headers) or {}
+        verbose_proxy_logger.debug(
+            "default_vertex_config  not set, incoming request headers %s", headers
         )
-    vertex_project = default_vertex_config.get("vertex_project", None)
-    vertex_location = default_vertex_config.get("vertex_location", None)
-    vertex_credentials = default_vertex_config.get("vertex_credentials", None)
-    base_target_url = f"https://{vertex_location}-aiplatform.googleapis.com/"
+        # extract location from endpoint, endpoint
+        # "v1beta1/projects/adroit-crow-413218/locations/us-central1/publishers/google/models/gemini-1.5-pro:generateContent"
+        match = re.search(r"/locations/([^/]+)", endpoint)
+        vertex_location = match.group(1) if match else None
+        base_target_url = f"https://{vertex_location}-aiplatform.googleapis.com/"
+        headers.pop("content-length", None)
+        _new_headers = {
+            "Authorization": headers.get("authorization"),
+        }
+        headers = _new_headers
+    else:
+        vertex_project = default_vertex_config.get("vertex_project")
+        vertex_location = default_vertex_config.get("vertex_location")
+        vertex_credentials = default_vertex_config.get("vertex_credentials")
 
-    auth_header, _ = vertex_fine_tuning_apis_instance._get_token_and_url(
-        model="",
-        gemini_api_key=None,
-        vertex_credentials=vertex_credentials,
-        vertex_project=vertex_project,
-        vertex_location=vertex_location,
-        stream=False,
-        custom_llm_provider="vertex_ai_beta",
-        api_base="",
-    )
+        base_target_url = f"https://{vertex_location}-aiplatform.googleapis.com/"
 
-    headers = {
-        "Authorization": f"Bearer {auth_header}",
-    }
+        auth_header, _ = vertex_fine_tuning_apis_instance._get_token_and_url(
+            model="",
+            gemini_api_key=None,
+            vertex_credentials=vertex_credentials,
+            vertex_project=vertex_project,
+            vertex_location=vertex_location,
+            stream=False,
+            custom_llm_provider="vertex_ai_beta",
+            api_base="",
+        )
+
+        headers = {
+            "Authorization": f"Bearer {auth_header}",
+        }
 
     request_route = encoded_endpoint
     verbose_proxy_logger.debug("request_route %s", request_route)
