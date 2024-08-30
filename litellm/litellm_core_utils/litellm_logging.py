@@ -279,9 +279,7 @@ class Logging:
                 # Find the position of "key=" in the string
                 key_index = api_base.find("key=") + 4
                 # Mask the last 5 characters after "key="
-                masked_api_base = (
-                    api_base[:key_index] + "*" * 5 + api_base[key_index + 5 :]
-                )
+                masked_api_base = api_base[:key_index] + "*" * 5 + api_base[-4:]
             else:
                 masked_api_base = api_base
             self.model_call_details["litellm_params"]["api_base"] = masked_api_base
