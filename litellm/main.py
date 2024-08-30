@@ -132,6 +132,9 @@ from .llms.vertex_ai_and_google_ai_studio.embeddings.batch_embed_content_handler
 from .llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
     VertexLLM,
 )
+from .llms.vertex_ai_and_google_ai_studio.multimodal_embeddings.embedding_handler import (
+    VertexMultimodalEmbedding,
+)
 from .llms.vertex_ai_and_google_ai_studio.vertex_ai_partner_models.main import (
     VertexAIPartnerModels,
 )
@@ -175,6 +178,7 @@ triton_chat_completions = TritonChatCompletion()
 bedrock_chat_completion = BedrockLLM()
 bedrock_converse_chat_completion = BedrockConverseLLM()
 vertex_chat_completion = VertexLLM()
+vertex_multimodal_embedding = VertexMultimodalEmbedding()
 google_batch_embeddings = GoogleBatchEmbeddings()
 vertex_partner_models_chat_completion = VertexAIPartnerModels()
 vertex_text_to_speech = VertexTextToSpeechAPI()
@@ -3581,10 +3585,11 @@ def embedding(
             if (
                 "image" in optional_params
                 or "video" in optional_params
-                or model in vertex_chat_completion.SUPPORTED_MULTIMODAL_EMBEDDING_MODELS
+                or model
+                in vertex_multimodal_embedding.SUPPORTED_MULTIMODAL_EMBEDDING_MODELS
             ):
                 # multimodal embedding is supported on vertex httpx
-                response = vertex_chat_completion.multimodal_embedding(
+                response = vertex_multimodal_embedding.multimodal_embedding(
                     model=model,
                     input=input,
                     encoding=encoding,
