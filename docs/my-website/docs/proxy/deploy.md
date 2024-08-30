@@ -721,13 +721,14 @@ LITELLM_CONFIG_BUCKET_NAME = "litellm-proxy"                    # your bucket na
 LITELLM_CONFIG_BUCKET_OBJECT_KEY = "proxy_config.yaml"         # object key on GCS
 ```
 
-Start litellm proxy with these env vars - litellm will read your config from s3 
+Start litellm proxy with these env vars - litellm will read your config from GCS 
 
 ```shell
 docker run --name litellm-proxy \
    -e DATABASE_URL=<database_url> \
    -e LITELLM_CONFIG_BUCKET_NAME=<bucket_name> \
    -e LITELLM_CONFIG_BUCKET_OBJECT_KEY="<object_key>> \
+   -e LITELLM_CONFIG_BUCKET_TYPE="gcs" \
    -p 4000:4000 \
    ghcr.io/berriai/litellm-database:main-latest --detailed_debug
 ```
