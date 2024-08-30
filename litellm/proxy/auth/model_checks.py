@@ -15,11 +15,12 @@ def _check_wildcard_routing(model: str) -> bool:
     if model == "*":
         return True
 
-    llm_provider, potential_wildcard = model.split("/", 1)
-    if (
-        llm_provider in litellm.provider_list and potential_wildcard == "*"
-    ):  # e.g. anthropic/*
-        return True
+    if "/" in model:
+        llm_provider, potential_wildcard = model.split("/", 1)
+        if (
+            llm_provider in litellm.provider_list and potential_wildcard == "*"
+        ):  # e.g. anthropic/*
+            return True
 
     return False
 
