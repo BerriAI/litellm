@@ -78,7 +78,7 @@ LITE_LLM_ENDPOINT = "http://localhost:4000"
 
 @pytest.mark.asyncio()
 async def test_basic_vertex_ai_pass_through_with_spendlog():
-
+    load_vertex_ai_credentials()
     vertexai.init(
         project="adroit-crow-413218",
         location="us-central1",
