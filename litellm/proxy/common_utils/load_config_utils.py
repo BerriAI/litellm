@@ -42,11 +42,30 @@ def get_file_contents_from_s3(bucket_name, object_key):
             config = yaml.safe_load(yaml_file)
 
         return config
-    except ImportError:
+    except ImportError as e:
         # this is most likely if a user is not using the litellm docker container
         verbose_proxy_logger.error(f"ImportError: {str(e)}")
         pass
     except Exception as e:
+        verbose_proxy_logger.error(f"Error retrieving file contents: {str(e)}")
+        return None
+
+
+async def get_config_file_contents_from_gcs(bucket_name, object_key):
+    try:
+        from litellm.integrations.gcs_bucket import GCSBucketLogger
+
+        gcs_bucket = GCSBucketLogger(
+            bucket_name=bucket_name,
+        )
+        file_contents = await gcs_bucket.download_gcs_object(object_key)
+        # file_contentis is a bytes object, so we need to convert it to yaml
+        file_contents = file_contents.decode("utf-8")
+        # convert to yaml
+        config = yaml.safe_load(file_contents)
+        return config
+
+    except:
         verbose_proxy_logger.error(f"Error retrieving file contents: {str(e)}")
         return None
 
