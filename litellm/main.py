@@ -79,7 +79,6 @@ from .llms import (
     aleph_alpha,
     anthropic_text,
     baseten,
-    bedrock,
     clarifai,
     cloudflare,
     gemini,
@@ -102,7 +101,9 @@ from .llms.anthropic import AnthropicChatCompletion
 from .llms.anthropic_text import AnthropicTextCompletion
 from .llms.azure import AzureChatCompletion, _check_dynamic_azure_params
 from .llms.azure_text import AzureTextCompletion
-from .llms.bedrock_httpx import BedrockConverseLLM, BedrockLLM
+from .llms.bedrock import embedding as bedrock_embedding  # type: ignore
+from .llms.bedrock import image_generation as bedrock_image_generation  # type: ignore
+from .llms.bedrock.chat import BedrockConverseLLM, BedrockLLM
 from .llms.cohere import chat as cohere_chat
 from .llms.cohere import completion as cohere_completion  # type: ignore
 from .llms.cohere import embed as cohere_embed
@@ -3513,7 +3514,7 @@ def embedding(
                 aembedding=aembedding,
             )
         elif custom_llm_provider == "bedrock":
-            response = bedrock.embedding(
+            response = bedrock_embedding.embedding(
                 model=model,
                 input=input,
                 encoding=encoding,
@@ -4485,7 +4486,7 @@ def image_generation(
         elif custom_llm_provider == "bedrock":
             if model is None:
                 raise Exception("Model needs to be set for bedrock")
-            model_response = bedrock.image_generation(
+            model_response = bedrock_image_generation.image_generation(
                 model=model,
                 prompt=prompt,
                 timeout=timeout,

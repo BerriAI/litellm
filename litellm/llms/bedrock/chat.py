@@ -29,7 +29,7 @@ import requests  # type: ignore
 
 import litellm
 from litellm import verbose_logger
-from litellm.caching import DualCache, InMemoryCache
+from litellm.caching import InMemoryCache
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.custom_httpx.http_handler import (
@@ -40,21 +40,16 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.types.llms.bedrock import *
 from litellm.types.llms.openai import (
-    ChatCompletionDeltaChunk,
     ChatCompletionResponseMessage,
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionUsageBlock,
 )
-from litellm.types.utils import Choices
 from litellm.types.utils import GenericStreamingChunk as GChunk
-from litellm.types.utils import Message
 from litellm.utils import CustomStreamWrapper, ModelResponse, Usage, get_secret
 
-from .base import BaseLLM
-from .base_aws_llm import BaseAWSLLM
-from .bedrock import BedrockError, ModelResponseIterator, convert_messages_to_prompt
-from .prompt_templates.factory import (
+from ..base_aws_llm import BaseAWSLLM
+from ..prompt_templates.factory import (
     _bedrock_converse_messages_pt,
     _bedrock_tools_pt,
     cohere_message_pt,
@@ -65,6 +60,7 @@ from .prompt_templates.factory import (
     parse_xml_params,
     prompt_factory,
 )
+from .common_utils import BedrockError, ModelResponseIterator
 
 BEDROCK_CONVERSE_MODELS = [
     "anthropic.claude-3-5-sonnet-20240620-v1:0",
