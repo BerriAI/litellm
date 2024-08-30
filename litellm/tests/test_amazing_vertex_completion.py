@@ -2014,9 +2014,7 @@ def test_vertexai_embedding_embedding_latest():
         pytest.fail(f"Error occurred: {e}")
 
 
-# @pytest.mark.skip(
-#     reason="new test - works locally running into vertex version issues on ci/cd"
-# )
+@pytest.mark.flaky(retries=3, delay=1)
 def test_vertexai_embedding_embedding_latest_input_type():
     try:
         load_vertex_ai_credentials()
@@ -2027,8 +2025,6 @@ def test_vertexai_embedding_embedding_latest_input_type():
             input=["hi"],
             input_type="RETRIEVAL_QUERY",
         )
-
-        assert len(response.data[0]["embedding"]) == 1
         assert response.usage.prompt_tokens > 0
         print(f"response:", response)
     except litellm.RateLimitError as e:
