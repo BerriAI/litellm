@@ -1,11 +1,16 @@
 #### What this tests ####
 #    This tests client initialization + reinitialization on the router
 
+import asyncio
+import os
+
 #### What this tests ####
 #    This tests caching on the router
-import sys, os, time
-import traceback, asyncio
-from unittest.mock import patch, MagicMock, PropertyMock
+import sys
+import time
+import traceback
+from typing import Dict
+from unittest.mock import MagicMock, PropertyMock, patch
 
 import pytest
 from openai.lib.azure import OpenAIError
@@ -14,7 +19,7 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import litellm
-from litellm import Router, APIConnectionError
+from litellm import APIConnectionError, Router
 
 
 async def test_router_init():
@@ -79,13 +84,15 @@ async def test_router_init():
 
 
 @patch("litellm.proxy.secret_managers.get_azure_ad_token_provider.os")
-def test_router_init_with_neither_api_key_nor_azure_service_principal_with_secret(mocked_os_lib: MagicMock) -> None:
+def test_router_init_with_neither_api_key_nor_azure_service_principal_with_secret(
+    mocked_os_lib: MagicMock,
+) -> None:
     """
     Test router initialization with neither API key nor using Azure Service Principal with Secret authentication
     workflow (having not provided environment variables).
     """
     # mock EMPTY environment variables
-    environment_variables_expected_to_use = {}
+    environment_variables_expected_to_use: Dict = {}
     mocked_environ = PropertyMock(return_value=environment_variables_expected_to_use)
     # Because of the way mock attributes are stored you can’t directly attach a PropertyMock to a mock object.
     # https://docs.python.org/3.11/library/unittest.mock.html#unittest.mock.PropertyMock
@@ -105,9 +112,7 @@ def test_router_init_with_neither_api_key_nor_azure_service_principal_with_secre
                 "api_version": "2024-01-01-preview",
                 "custom_llm_provider": "azure",
             },
-            "model_info": {
-                "mode": "completion"
-            },
+            "model_info": {"mode": "completion"},
         },
     ]
 
@@ -124,9 +129,9 @@ def test_router_init_with_neither_api_key_nor_azure_service_principal_with_secre
 @patch("azure.identity.ClientSecretCredential")
 @patch("litellm.proxy.secret_managers.get_azure_ad_token_provider.os")
 def test_router_init_azure_service_principal_with_secret_with_environment_variables(
-        mocked_os_lib: MagicMock,
-        mocked_credential: MagicMock,
-        mocked_get_bearer_token_provider: MagicMock,
+    mocked_os_lib: MagicMock,
+    mocked_credential: MagicMock,
+    mocked_get_bearer_token_provider: MagicMock,
 ) -> None:
     """
     Test router initialization and sample completion using Azure Service Principal with Secret authentication workflow,
@@ -164,9 +169,7 @@ def test_router_init_azure_service_principal_with_secret_with_environment_variab
                 "api_version": "2024-01-01-preview",
                 "custom_llm_provider": "azure",
             },
-            "model_info": {
-                "mode": "completion"
-            },
+            "model_info": {"mode": "completion"},
         },
     ]
 
@@ -176,11 +179,15 @@ def test_router_init_azure_service_principal_with_secret_with_environment_variab
     # first check if environment variables were used at all
     mocked_environ.assert_called()
     # then check if the client was initialized with the correct environment variables
-    mocked_credential.assert_called_with(**{
-        "client_id": environment_variables_expected_to_use["AZURE_CLIENT_ID"],
-        "client_secret": environment_variables_expected_to_use["AZURE_CLIENT_SECRET"],
-        "tenant_id": environment_variables_expected_to_use["AZURE_TENANT_ID"],
-    })
+    mocked_credential.assert_called_with(
+        **{
+            "client_id": environment_variables_expected_to_use["AZURE_CLIENT_ID"],
+            "client_secret": environment_variables_expected_to_use[
+                "AZURE_CLIENT_SECRET"
+            ],
+            "tenant_id": environment_variables_expected_to_use["AZURE_TENANT_ID"],
+        }
+    )
     # check if the token provider was called at all
     mocked_get_bearer_token_provider.assert_called()
     # then check if the token provider was initialized with the mocked credential
@@ -197,9 +204,10 @@ def test_router_init_azure_service_principal_with_secret_with_environment_variab
     ]
     with pytest.raises(APIConnectionError):
         # of course, it will raise an error, because URL is mocked
-        router.completion(model=model, messages=messages, temperature=1)
+        router.completion(model=model, messages=messages, temperature=1)  # type: ignore
 
     # finally verify if the mocked token was used by Azure SDK
     mocked_func_generating_token.assert_called()
+
 
 # asyncio.run(test_router_init())
