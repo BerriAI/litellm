@@ -251,7 +251,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv tests/ -x --junitxml=test-results/junit.xml --durations=5 --ignore=tests/otel_tests
+            python -m pytest -vv tests/ -x --junitxml=test-results/junit.xml --durations=5 --ignore=tests/otel_tests --ignore=tests/pass_through_tests
           no_output_timeout: 120m
 
       # Store test results
@@ -450,7 +450,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv tests/pass_through_tests/test_vertex_ai.py -x --junitxml=test-results/junit.xml --durations=5
+            python -m pytest -vv tests/pass_through_tests/ -x --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 120m
 
       # Store test results
