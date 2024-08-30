@@ -9,8 +9,7 @@ from vertexai.preview.generative_models import GenerativeModel
 import tempfile
 import json
 import os
-from google.oauth2 import service_account
-import google.auth.transport.requests
+import pytest
 
 
 # Path to your service account JSON file
@@ -77,6 +76,7 @@ async def call_spend_logs_endpoint():
 LITE_LLM_ENDPOINT = "http://localhost:4000"
 
 
+@pytest.mark.asyncio()
 async def test_basic_vertex_ai_pass_through_with_spendlog():
 
     vertexai.init(
