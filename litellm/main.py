@@ -2361,6 +2361,7 @@ def completion(
                     timeout=timeout,
                     acompletion=acompletion,
                     client=client,
+                    api_base=api_base,
                 )
             else:
                 response = bedrock_chat_completion.completion(
@@ -2378,6 +2379,7 @@ def completion(
                     timeout=timeout,
                     acompletion=acompletion,
                     client=client,
+                    api_base=api_base,
                 )
 
             if optional_params.get("stream", False):

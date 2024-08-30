@@ -1284,7 +1284,7 @@ class VertexLLM(BaseLLM):
     ) -> Union[ModelResponse, CustomStreamWrapper]:
 
         request_body = await async_transform_request_body(**data)  # type: ignore
-        if client is None:
+        if client is None or not isinstance(client, AsyncHTTPHandler):
             _params = {}
             if timeout is not None:
                 if isinstance(timeout, float) or isinstance(timeout, int):
@@ -1293,6 +1293,16 @@ class VertexLLM(BaseLLM):
             client = AsyncHTTPHandler(**_params)  # type: ignore
         else:
             client = client  # type: ignore
+        ## LOGGING
+        logging_obj.pre_call(
+            input=messages,
+            api_key="",
+            additional_args={
+                "complete_input_dict": request_body,
+                "api_base": api_base,
+                "headers": headers,
+            },
+        )
 
         try:
             response = await client.post(api_base, headers=headers, json=request_body)  # type: ignore
