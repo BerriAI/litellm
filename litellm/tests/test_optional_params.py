@@ -75,6 +75,16 @@ def test_bedrock_optional_params_embeddings():
     assert len(optional_params) == 0
 
 
+def test_google_ai_studio_optional_params_embeddings():
+    optional_params = get_optional_params_embeddings(
+        user="John",
+        encoding_format=None,
+        custom_llm_provider="gemini",
+        drop_params=True,
+    )
+    assert len(optional_params) == 0
+
+
 def test_openai_optional_params_embeddings():
     litellm.drop_params = True
     optional_params = get_optional_params_embeddings(

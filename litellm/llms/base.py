@@ -1,11 +1,14 @@
 ## This is a template base class to be used for adding new LLM providers via API calls
+from typing import Any, Optional, Union
+
+import httpx
+import requests
+
 import litellm
-import httpx, requests
-from typing import Optional, Union
-from litellm.litellm_core_utils.litellm_logging import Logging
 
 
 class BaseLLM:
+
     _client_session: Optional[httpx.Client] = None
 
     def process_response(
@@ -14,7 +17,7 @@ class BaseLLM:
         response: Union[requests.Response, httpx.Response],
         model_response: litellm.utils.ModelResponse,
         stream: bool,
-        logging_obj: Logging,
+        logging_obj: Any,
         optional_params: dict,
         api_key: str,
         data: Union[dict, str],
@@ -33,7 +36,7 @@ class BaseLLM:
         response: Union[requests.Response, httpx.Response],
         model_response: litellm.utils.TextCompletionResponse,
         stream: bool,
-        logging_obj: Logging,
+        logging_obj: Any,
         optional_params: dict,
         api_key: str,
         data: Union[dict, str],

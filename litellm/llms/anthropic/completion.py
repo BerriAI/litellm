@@ -1,3 +1,7 @@
+"""
+Translation logic for anthropic's `/v1/complete` endpoint
+"""
+
 import json
 import os
 import time
@@ -12,8 +16,8 @@ import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
 
-from .base import BaseLLM
-from .prompt_templates.factory import custom_prompt, prompt_factory
+from ..base import BaseLLM
+from ..prompt_templates.factory import custom_prompt, prompt_factory
 
 
 class AnthropicConstants(Enum):
