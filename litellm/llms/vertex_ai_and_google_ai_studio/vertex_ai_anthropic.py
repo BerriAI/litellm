@@ -267,17 +267,18 @@ def completion(
 ):
     try:
         import vertexai
-        from anthropic import AnthropicVertex
-
-        from litellm.llms.anthropic import AnthropicChatCompletion
-        from litellm.llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
-            VertexLLM,
-        )
     except:
         raise VertexAIError(
             status_code=400,
             message="""vertexai import failed please run `pip install -U google-cloud-aiplatform "anthropic[vertex]"`""",
         )
+
+    from anthropic import AnthropicVertex
+
+    from litellm.llms.anthropic.chat import AnthropicChatCompletion
+    from litellm.llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexLLM,
+    )
 
     if not (
         hasattr(vertexai, "preview") or hasattr(vertexai.preview, "language_models")
