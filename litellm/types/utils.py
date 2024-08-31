@@ -51,6 +51,8 @@ class ModelInfo(TypedDict, total=False):
     max_input_tokens: Required[Optional[int]]
     max_output_tokens: Required[Optional[int]]
     input_cost_per_token: Required[float]
+    cache_creation_input_token_cost: Optional[float]
+    cache_read_input_token_cost: Optional[float]
     input_cost_per_character: Optional[float]  # only for vertex ai models
     input_cost_per_token_above_128k_tokens: Optional[float]  # only for vertex ai models
     input_cost_per_character_above_128k_tokens: Optional[
@@ -454,6 +456,13 @@ class Choices(OpenAIObject):
 
 
 class Usage(CompletionUsage):
+    _cache_creation_input_tokens: int = PrivateAttr(
+        0
+    )  # hidden param for prompt caching. Might change, once openai introduces their equivalent.
+    _cache_read_input_tokens: int = PrivateAttr(
+        0
+    )  # hidden param for prompt caching. Might change, once openai introduces their equivalent.
+
     def __init__(
         self,
         prompt_tokens: Optional[int] = None,
@@ -466,8 +475,17 @@ class Usage(CompletionUsage):
             "completion_tokens": completion_tokens or 0,
             "total_tokens": total_tokens or 0,
         }
-
         super().__init__(**data)
+
+        if "cache_creation_input_tokens" in params and isinstance(
+            params["cache_creation_input_tokens"], int
+        ):
+            self._cache_creation_input_tokens = params["cache_creation_input_tokens"]
+
+        if "cache_read_input_tokens" in params and isinstance(
+            params["cache_read_input_tokens"], int
+        ):
+            self._cache_read_input_tokens = params["cache_read_input_tokens"]
 
         for k, v in params.items():
             setattr(self, k, v)
