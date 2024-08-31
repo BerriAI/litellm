@@ -2014,6 +2014,25 @@ def test_vertexai_embedding_embedding_latest():
         pytest.fail(f"Error occurred: {e}")
 
 
+@pytest.mark.flaky(retries=3, delay=1)
+def test_vertexai_embedding_embedding_latest_input_type():
+    try:
+        load_vertex_ai_credentials()
+        litellm.set_verbose = True
+
+        response = embedding(
+            model="vertex_ai/text-embedding-004",
+            input=["hi"],
+            input_type="RETRIEVAL_QUERY",
+        )
+        assert response.usage.prompt_tokens > 0
+        print(f"response:", response)
+    except litellm.RateLimitError as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
 @pytest.mark.asyncio
 @pytest.mark.flaky(retries=3, delay=1)
 async def test_vertexai_aembedding():
