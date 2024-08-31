@@ -21,4 +21,4 @@ router_settings:
 
 general_settings: 
  master_key: sk-1234 
- custom_auth: example_config_yaml.custom_auth.user_api_key_auth
+ custom_auth: example_config_yaml.custom_auth_basic.user_api_key_auth
