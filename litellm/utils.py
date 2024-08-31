@@ -1408,10 +1408,10 @@ def client(original_function):
             # MODEL CALL
             result = await original_function(*args, **kwargs)
             end_time = datetime.datetime.now()
-            if "stream" in kwargs and kwargs["stream"] == True:
+            if "stream" in kwargs and kwargs["stream"] is True:
                 if (
                     "complete_response" in kwargs
-                    and kwargs["complete_response"] == True
+                    and kwargs["complete_response"] is True
                 ):
                     chunks = []
                     for idx, chunk in enumerate(result):

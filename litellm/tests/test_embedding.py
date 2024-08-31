@@ -319,7 +319,9 @@ async def test_cohere_embedding3(custom_llm_provider):
         "bedrock/amazon.titan-embed-text-v2:0",
     ],
 )
-def test_bedrock_embedding_titan(model):
+@pytest.mark.parametrize("sync_mode", [True])
+@pytest.mark.asyncio
+async def test_bedrock_embedding_titan(model, sync_mode):
     try:
         # this tests if we support str input for bedrock embedding
         litellm.set_verbose = True
@@ -328,11 +330,18 @@ def test_bedrock_embedding_titan(model):
 
         current_time = str(time.time())
         # DO NOT MAKE THE INPUT A LIST in this test
-        response = embedding(
-            model=model,
-            input=f"good morning from litellm, attempting to embed data {current_time}",  # input should always be a string in this test
-            aws_region_name="us-west-2",
-        )
+        if sync_mode:
+            response = embedding(
+                model=model,
+                input=f"good morning from litellm, attempting to embed data {current_time}",  # input should always be a string in this test
+                aws_region_name="us-west-2",
+            )
+        else:
+            response = await litellm.aembedding(
+                model=model,
+                input=f"good morning from litellm, attempting to embed data {current_time}",  # input should always be a string in this test
+                aws_region_name="us-west-2",
+            )
         print("response:", response)
         assert isinstance(
             response["data"][0]["embedding"], list
@@ -347,13 +356,20 @@ def test_bedrock_embedding_titan(model):
 
         start_time = time.time()
 
-        response = embedding(
-            model=model,
-            input=f"good morning from litellm, attempting to embed data {current_time}",  # input should always be a string in this test
-        )
+        if sync_mode:
+            response = embedding(
+                model=model,
+                input=f"good morning from litellm, attempting to embed data {current_time}",  # input should always be a string in this test
+            )
+        else:
+            response = await litellm.aembedding(
+                model=model,
+                input=f"good morning from litellm, attempting to embed data {current_time}",  # input should always be a string in this test
+            )
         print(response)
 
         end_time = time.time()
+        print(response._hidden_params)
         print(f"Embedding 2 response time: {end_time - start_time} seconds")
 
         assert end_time - start_time < 0.1

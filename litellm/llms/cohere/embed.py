@@ -100,14 +100,33 @@ async def async_embedding(
     if client is None:
         client = AsyncHTTPHandler(concurrent_limit=1, timeout=timeout)
 
-    response = await client.post(api_base, headers=headers, data=json.dumps(data))
+    try:
+        response = await client.post(api_base, headers=headers, data=json.dumps(data))
+    except httpx.HTTPStatusError as e:
+        ## LOGGING
+        logging_obj.post_call(
+            input=input,
+            api_key=api_key,
+            additional_args={"complete_input_dict": data},
+            original_response=e.response.text,
+        )
+        raise e
+    except Exception as e:
+        ## LOGGING
+        logging_obj.post_call(
+            input=input,
+            api_key=api_key,
+            additional_args={"complete_input_dict": data},
+            original_response=str(e),
+        )
+        raise e
 
     ## LOGGING
     logging_obj.post_call(
         input=input,
         api_key=api_key,
         additional_args={"complete_input_dict": data},
-        original_response=response,
+        original_response=response.text,
     )
 
     embeddings = response.json()["embeddings"]
@@ -146,13 +165,6 @@ def embedding(
         # cohere v3 embedding models require input_type, if no input_type is provided, default to "search_document"
         data["input_type"] = "search_document"
 
-    ## LOGGING
-    logging_obj.pre_call(
-        input=input,
-        api_key=api_key,
-        additional_args={"complete_input_dict": data},
-    )
-
     ## ROUTING
     if aembedding is True:
         return async_embedding(
@@ -168,9 +180,18 @@ def embedding(
             headers=headers,
             encoding=encoding,
         )
+
+    ## LOGGING
+    logging_obj.pre_call(
+        input=input,
+        api_key=api_key,
+        additional_args={"complete_input_dict": data},
+    )
+
     ## COMPLETION CALL
     if client is None or not isinstance(client, HTTPHandler):
         client = HTTPHandler(concurrent_limit=1)
+
     response = client.post(embed_url, headers=headers, data=json.dumps(data))
     ## LOGGING
     logging_obj.post_call(

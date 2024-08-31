@@ -3147,6 +3147,7 @@ async def aembedding(*args, **kwargs) -> EmbeddingResponse:
             or custom_llm_provider == "watsonx"
             or custom_llm_provider == "cohere"
             or custom_llm_provider == "huggingface"
+            or custom_llm_provider == "bedrock"
         ):  # currently implemented aiohttp calls for just azure and openai, soon all.
             # Await normally
             init_response = await loop.run_in_executor(None, func_with_context)
