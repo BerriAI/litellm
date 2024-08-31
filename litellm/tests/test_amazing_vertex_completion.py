@@ -1934,6 +1934,61 @@ async def test_vertexai_multimodal_embedding():
         print("Response:", response)
 
 
+@pytest.mark.asyncio
+async def test_vertexai_multimodal_embedding_text_input():
+    load_vertex_ai_credentials()
+    mock_response = AsyncMock()
+
+    def return_val():
+        return {
+            "predictions": [
+                {
+                    "textEmbedding": [0.4, 0.5, 0.6],  # Simplified example
+                }
+            ]
+        }
+
+    mock_response.json = return_val
+    mock_response.status_code = 200
+
+    expected_payload = {
+        "instances": [
+            {
+                "text": "this is a unicorn",
+            }
+        ]
+    }
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=mock_response,
+    ) as mock_post:
+        # Act: Call the litellm.aembedding function
+        response = await litellm.aembedding(
+            model="vertex_ai/multimodalembedding@001",
+            input=[
+                "this is a unicorn",
+            ],
+        )
+
+        # Assert
+        mock_post.assert_called_once()
+        _, kwargs = mock_post.call_args
+        args_to_vertexai = kwargs["json"]
+
+        print("args to vertex ai call:", args_to_vertexai)
+
+        assert args_to_vertexai == expected_payload
+        assert response.model == "multimodalembedding@001"
+        assert len(response.data) == 1
+        response_data = response.data[0]
+        assert "textEmbedding" in response_data
+
+        # Optional: Print for debugging
+        print("Arguments passed to Vertex AI:", args_to_vertexai)
+        print("Response:", response)
+
+
 @pytest.mark.skip(
     reason="new test - works locally running into vertex version issues on ci/cd"
 )
@@ -1951,6 +2006,25 @@ def test_vertexai_embedding_embedding_latest():
         )
 
         assert len(response.data[0]["embedding"]) == 1
+        assert response.usage.prompt_tokens > 0
+        print(f"response:", response)
+    except litellm.RateLimitError as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.flaky(retries=3, delay=1)
+def test_vertexai_embedding_embedding_latest_input_type():
+    try:
+        load_vertex_ai_credentials()
+        litellm.set_verbose = True
+
+        response = embedding(
+            model="vertex_ai/text-embedding-004",
+            input=["hi"],
+            input_type="RETRIEVAL_QUERY",
+        )
         assert response.usage.prompt_tokens > 0
         print(f"response:", response)
     except litellm.RateLimitError as e:
@@ -2555,7 +2629,6 @@ async def test_partner_models_httpx_ai21():
         assert response.usage.total_tokens == 194
 
         print(f"response: {response}")
-
 
 def test_gemini_function_call_parameter_in_messages():
     litellm.set_verbose = True

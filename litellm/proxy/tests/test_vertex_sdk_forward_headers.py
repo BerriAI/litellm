@@ -11,4 +11,6 @@ vertexai.init(
 )
 
 model = GenerativeModel(model_name="gemini-1.0-pro")
-model.generate_content("hi")
+response = model.generate_content("hi")
+
+print("response", response)

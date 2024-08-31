@@ -358,6 +358,7 @@ vertex_code_text_models: List = []
 vertex_embedding_models: List = []
 vertex_anthropic_models: List = []
 vertex_llama3_models: List = []
+vertex_ai_ai21_models: List = []
 vertex_mistral_models: List = []
 ai21_models: List = []
 nlp_cloud_models: List = []
@@ -408,6 +409,9 @@ for key, value in model_cost.items():
     elif value.get("litellm_provider") == "vertex_ai-mistral_models":
         key = key.replace("vertex_ai/", "")
         vertex_mistral_models.append(key)
+    elif value.get("litellm_provider") == "vertex_ai-ai21_models":
+        key = key.replace("vertex_ai/", "")
+        vertex_ai_ai21_models.append(key)
     elif value.get("litellm_provider") == "ai21":
         ai21_models.append(key)
     elif value.get("litellm_provider") == "nlp_cloud":
@@ -837,10 +841,10 @@ ALL_LITELLM_RESPONSE_TYPES = [
 from .types.utils import ImageObject
 from .llms.custom_llm import CustomLLM
 from .llms.huggingface_restapi import HuggingfaceConfig
-from .llms.anthropic import AnthropicConfig
+from .llms.anthropic.chat import AnthropicConfig
+from .llms.anthropic.completion import AnthropicTextConfig
 from .llms.databricks import DatabricksConfig, DatabricksEmbeddingConfig
 from .llms.predibase import PredibaseConfig
-from .llms.anthropic_text import AnthropicTextConfig
 from .llms.replicate import ReplicateConfig
 from .llms.cohere.completion import CohereConfig
 from .llms.clarifai import ClarifaiConfig
@@ -857,7 +861,7 @@ from .llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gem
     GoogleAIStudioGeminiConfig,
     VertexAIConfig,
 )
-from .llms.vertex_ai_and_google_ai_studio.vertex_ai_non_gemini import (
+from .llms.vertex_ai_and_google_ai_studio.vertex_embeddings.embedding_handler import (
     VertexAITextEmbeddingConfig,
 )
 from .llms.vertex_ai_and_google_ai_studio.vertex_ai_anthropic import (

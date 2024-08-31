@@ -2103,7 +2103,7 @@ def supports_system_messages(model: str, custom_llm_provider: Optional[str]) -> 
         return False
     except Exception:
         raise Exception(
-            f"Model not in model_prices_and_context_window.json. You passed model={model}, custom_llm_provider={custom_llm_provider}."
+            f"Model not supports system messages. You passed model={model}, custom_llm_provider={custom_llm_provider}."
         )
 
 
@@ -2139,7 +2139,7 @@ def supports_response_schema(model: str, custom_llm_provider: Optional[str]) -> 
         return False
     except Exception:
         verbose_logger.error(
-            f"Model not in model_prices_and_context_window.json. You passed model={model}, custom_llm_provider={custom_llm_provider}."
+            f"Model not supports response_schema. You passed model={model}, custom_llm_provider={custom_llm_provider}."
         )
         return False
 
@@ -2165,7 +2165,7 @@ def supports_function_calling(model: str) -> bool:
         return False
     else:
         raise Exception(
-            f"Model not in model_prices_and_context_window.json. You passed model={model}."
+            f"Model not supports function calling. You passed model={model}."
         )
 
 
@@ -2211,7 +2211,7 @@ def supports_parallel_function_calling(model: str):
         return False
     else:
         raise Exception(
-            f"Model not in model_prices_and_context_window.json. You passed model={model}."
+            f"Model not supports parallel function calling. You passed model={model}."
         )
 
 
@@ -2628,8 +2628,11 @@ def get_optional_params_embeddings(
             request_type="embeddings",
         )
         _check_valid_arg(supported_params=supported_params)
-        optional_params = litellm.VertexAITextEmbeddingConfig().map_openai_params(
-            non_default_params=non_default_params, optional_params={}
+        (
+            optional_params,
+            kwargs,
+        ) = litellm.VertexAITextEmbeddingConfig().map_openai_params(
+            non_default_params=non_default_params, optional_params={}, kwargs=kwargs
         )
         final_params = {**optional_params, **kwargs}
         return final_params
@@ -3276,7 +3279,7 @@ def get_optional_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,
             )
-    elif custom_llm_provider == "vertex_ai" and model in litellm.ai21_models:
+    elif custom_llm_provider == "vertex_ai" and model in litellm.vertex_ai_ai21_models:
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider
         )
@@ -5191,6 +5194,8 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
                 model = "meta/" + model
             elif model + "@latest" in litellm.vertex_mistral_models:
                 model = model + "@latest"
+            elif model + "@latest" in litellm.vertex_ai_ai21_models:
+                model = model + "@latest"
         ##########################
         if custom_llm_provider is None:
             # Get custom_llm_provider
@@ -5339,6 +5344,12 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
                 max_input_tokens=_model_info.get("max_input_tokens", None),
                 max_output_tokens=_model_info.get("max_output_tokens", None),
                 input_cost_per_token=_input_cost_per_token,
+                cache_creation_input_token_cost=_model_info.get(
+                    "cache_creation_input_token_cost", None
+                ),
+                cache_read_input_token_cost=_model_info.get(
+                    "cache_read_input_token_cost", None
+                ),
                 input_cost_per_character=_model_info.get(
                     "input_cost_per_character", None
                 ),
