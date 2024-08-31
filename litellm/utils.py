@@ -2550,6 +2550,7 @@ def get_optional_params_embeddings(
     encoding_format=None,
     dimensions=None,
     custom_llm_provider="",
+    drop_params: Optional[bool] = None,
     additional_drop_params: Optional[bool] = None,
     **kwargs,
 ):
@@ -2560,6 +2561,7 @@ def get_optional_params_embeddings(
     for k, v in special_params.items():
         passed_params[k] = v
 
+    drop_params = passed_params.pop("drop_params", None)
     additional_drop_params = passed_params.pop("additional_drop_params", None)
 
     default_params = {"user": None, "encoding_format": None, "dimensions": None}
@@ -2571,11 +2573,16 @@ def get_optional_params_embeddings(
         for k in non_default_params.keys():
             if k not in supported_params:
                 unsupported_params[k] = non_default_params[k]
-        if unsupported_params and not litellm.drop_params:
-            raise UnsupportedParamsError(
-                status_code=500,
-                message=f"{custom_llm_provider} does not support parameters: {unsupported_params}, for model={model}. To drop these, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n",
-            )
+        if unsupported_params:
+            if litellm.drop_params is True or (
+                drop_params is not None and drop_params is True
+            ):
+                pass
+            else:
+                raise UnsupportedParamsError(
+                    status_code=500,
+                    message=f"{custom_llm_provider} does not support parameters: {unsupported_params}, for model={model}. To drop these, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n",
+                )
 
     non_default_params = _get_non_default_params(
         passed_params=passed_params,
@@ -2680,7 +2687,9 @@ def get_optional_params_embeddings(
         and custom_llm_provider not in litellm.openai_compatible_providers
     ):
         if len(non_default_params.keys()) > 0:
-            if litellm.drop_params is True:  # drop the unsupported non-default values
+            if (
+                litellm.drop_params is True or drop_params is True
+            ):  # drop the unsupported non-default values
                 keys = list(non_default_params.keys())
                 for k in keys:
                     non_default_params.pop(k, None)
@@ -5335,6 +5344,12 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
                 max_input_tokens=_model_info.get("max_input_tokens", None),
                 max_output_tokens=_model_info.get("max_output_tokens", None),
                 input_cost_per_token=_input_cost_per_token,
+                cache_creation_input_token_cost=_model_info.get(
+                    "cache_creation_input_token_cost", None
+                ),
+                cache_read_input_token_cost=_model_info.get(
+                    "cache_read_input_token_cost", None
+                ),
                 input_cost_per_character=_model_info.get(
                     "input_cost_per_character", None
                 ),
