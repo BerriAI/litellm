@@ -77,13 +77,10 @@ from .caching import disable_cache, enable_cache, update_cache
 from .llms import (
     ai21,
     aleph_alpha,
-    anthropic_text,
     baseten,
     bedrock,
     clarifai,
     cloudflare,
-    gemini,
-    huggingface_restapi,
     maritalk,
     nlp_cloud,
     ollama,
@@ -93,13 +90,10 @@ from .llms import (
     palm,
     petals,
     replicate,
-    together_ai,
-    triton,
     vllm,
-    watsonx,
 )
-from .llms.anthropic import AnthropicChatCompletion
-from .llms.anthropic_text import AnthropicTextCompletion
+from .llms.anthropic.chat import AnthropicChatCompletion
+from .llms.anthropic.completion import AnthropicTextCompletion
 from .llms.azure import AzureChatCompletion, _check_dynamic_azure_params
 from .llms.azure_text import AzureTextCompletion
 from .llms.bedrock_httpx import BedrockConverseLLM, BedrockLLM
