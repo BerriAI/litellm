@@ -58,6 +58,15 @@ http://localhost:4000/metrics
 
 ## 📈 Metrics Tracked 
 
+### Error Metrics
+
+| Metric Name          | Description                          |
+|----------------------|--------------------------------------|
+| `litellm_error_code_metric_total`             | Total number of errors by error code and model |
+
+This metric provides a count of errors encountered, categorized by error code and model. For example:
+
+
 
 ### Proxy Requests / Spend Metrics
 
@@ -66,7 +75,12 @@ http://localhost:4000/metrics
 | `litellm_requests_metric`             | Number of requests made, per `"user", "key", "model", "team", "end-user"`          |
 | `litellm_spend_metric`                | Total Spend, per `"user", "key", "model", "team", "end-user"`                 |
 | `litellm_total_tokens`         | input + output tokens per `"user", "key", "model", "team", "end-user"`     |
+
+### Error Monitoring Metrics
+
+| Metric Name          | Description                          |
 | `litellm_llm_api_failed_requests_metric`   | Number of failed LLM API requests per `"user", "key", "model", "team", "end-user"`    |
+| `litellm_error_code_metric_total`             | Total number of errors by error code and model |
 
 ### Request Latency Metrics 
 
