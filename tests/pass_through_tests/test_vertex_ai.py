@@ -10,6 +10,7 @@ import tempfile
 import json
 import os
 import pytest
+import asyncio
 
 
 # Path to your service account JSON file
@@ -59,13 +60,13 @@ def load_vertex_ai_credentials():
 async def call_spend_logs_endpoint():
     """
     Call this
-    curl -X GET "http://0.0.0.0:4000/spend/logs?start_date={}" -H "Authorization: Bearer sk-1234"
+    curl -X GET "http://0.0.0.0:4000/spend/logs" -H "Authorization: Bearer sk-1234"
     """
     import datetime
     import requests
 
     todays_date = datetime.datetime.now().strftime("%Y-%m-%d")
-    url = f"http://0.0.0.0:4000/spend/logs?start_date={todays_date}"
+    url = f"http://0.0.0.0:4000/global/spend/logs"
     headers = {"Authorization": f"Bearer sk-1234"}
     response = requests.get(url, headers=headers)
     print("response from call_spend_logs_endpoint", response)
@@ -91,6 +92,7 @@ async def test_basic_vertex_ai_pass_through_with_spendlog():
 
     print("response", response)
 
+    await asyncio.sleep(3)
     _spend_logs_response = await call_spend_logs_endpoint()
     print("spend logs response", _spend_logs_response)
 
