@@ -191,8 +191,10 @@ def _gemini_convert_messages_with_history(
                                 _part = _process_gemini_image(image_url=image_url)
                                 _parts.append(_part)  # type: ignore
                     assistant_content.extend(_parts)
-                elif messages[msg_i].get("content", None) is not None and isinstance(
-                    messages[msg_i]["content"], str
+                elif (
+                    messages[msg_i].get("content", None) is not None
+                    and isinstance(messages[msg_i]["content"], str)
+                    and messages[msg_i]["content"]
                 ):
                     assistant_text = messages[msg_i]["content"]  # either string or none
                     assistant_content.append(PartType(text=assistant_text))  # type: ignore

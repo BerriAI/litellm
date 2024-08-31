@@ -1146,7 +1146,11 @@ def convert_to_gemini_tool_call_result(
                 name = tool.get("function", {}).get("name", "")
 
     if not name:
-        raise Exception("Missing corresponding tool call for tool response message")
+        raise Exception(
+            "Missing corresponding tool call for tool response message. Received - message={}, last_message_with_tool_calls={}".format(
+                message, last_message_with_tool_calls
+            )
+        )
 
     # We can't determine from openai message format whether it's a successful or
     # error call result so default to the successful result template

@@ -906,6 +906,7 @@ async def test_gemini_pro_function_calling_httpx(model, sync_mode):
             "tools": tools,
             "tool_choice": "required",
         }
+        print(f"Model for call - {model}")
         if sync_mode:
             response = litellm.completion(**data)
         else:
@@ -2629,6 +2630,7 @@ async def test_partner_models_httpx_ai21():
         assert response.usage.total_tokens == 194
 
         print(f"response: {response}")
+
 
 def test_gemini_function_call_parameter_in_messages():
     litellm.set_verbose = True
