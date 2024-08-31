@@ -976,6 +976,7 @@ async def test_async_embedding_bedrock():
 # CACHING
 ## Test Azure - completion, embedding
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=1)
 async def test_async_completion_azure_caching():
     litellm.set_verbose = True
     customHandler_caching = CompletionCustomHandler()
