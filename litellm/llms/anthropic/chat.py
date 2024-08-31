@@ -1,3 +1,7 @@
+"""
+Calling + translation logic for anthropic's `/v1/messages` endpoint
+"""
+
 import copy
 import json
 import os
@@ -70,8 +74,8 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import Choices, GenericStreamingChunk
 from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
 
-from .base import BaseLLM
-from .prompt_templates.factory import custom_prompt, prompt_factory
+from ..base import BaseLLM
+from ..prompt_templates.factory import custom_prompt, prompt_factory
 
 
 class AnthropicConstants(Enum):
@@ -982,7 +986,7 @@ class AnthropicChatCompletion(BaseLLM):
                 )
             except Exception as e:
                 verbose_logger.exception(
-                    "litellm.llms.anthropic.py::completion() - Exception occurred - {}\nReceived Messages: {}".format(
+                    "litellm.llms.anthropic.chat.py::completion() - Exception occurred - {}\nReceived Messages: {}".format(
                         str(e), messages
                     )
                 )
