@@ -76,7 +76,7 @@ async def async_embedding(
     data: dict,
     input: list,
     model_response: litellm.utils.EmbeddingResponse,
-    timeout: Union[float, httpx.Timeout],
+    timeout: Optional[Union[float, httpx.Timeout]],
     logging_obj: LiteLLMLoggingObj,
     optional_params: dict,
     api_base: str,
@@ -98,7 +98,7 @@ async def async_embedding(
     )
     ## COMPLETION CALL
     if client is None:
-        client = AsyncHTTPHandler(concurrent_limit=1)
+        client = AsyncHTTPHandler(concurrent_limit=1, timeout=timeout)
 
     response = await client.post(api_base, headers=headers, data=json.dumps(data))
 
