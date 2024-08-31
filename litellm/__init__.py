@@ -452,6 +452,7 @@ openai_compatible_providers: List = [
     "mistral",
     "groq",
     "nvidia_nim",
+    "cerebras",
     "volcengine",
     "codestral",
     "deepseek",
@@ -690,6 +691,7 @@ provider_list: List = [
     "mistral",
     "groq",
     "nvidia_nim",
+    "cerebras",
     "volcengine",
     "codestral",
     "text-completion-codestral",
@@ -905,6 +907,7 @@ from .llms.openai import (
     AzureAIStudioConfig,
 )
 from .llms.nvidia_nim import NvidiaNimConfig
+from .llms.cerebras.chat import CerebrasConfig
 from .llms.fireworks_ai import FireworksAIConfig
 from .llms.volcengine import VolcEngineConfig
 from .llms.text_completion_codestral import MistralTextCompletionConfig
