@@ -59,7 +59,7 @@ class AmazonTitanV2Config:
     def _transform_request(
         self, input: str, inference_params: dict
     ) -> AmazonTitanV2EmbeddingRequest:
-        return AmazonTitanV2EmbeddingRequest(inputText=input, **inference_params)
+        return AmazonTitanV2EmbeddingRequest(inputText=input, **inference_params)  # type: ignore
 
     def _transform_response(
         self, response_list: List[dict], model: str

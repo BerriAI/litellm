@@ -28,7 +28,7 @@ def _transform_request(
         transformed_request = AmazonTitanMultimodalEmbeddingRequest(inputText=input)
 
     for k, v in inference_params.items():
-        transformed_request[k] = v
+        transformed_request[k] = v  # type: ignore
 
     return transformed_request
 

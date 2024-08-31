@@ -16,10 +16,10 @@ def _transform_request(
 ) -> CohereEmbeddingRequest:
     transformed_request = CohereEmbeddingRequest(
         texts=input,
-        input_type=litellm.COHERE_DEFAULT_EMBEDDING_INPUT_TYPE,  # default value to prevent failed requests
+        input_type=litellm.COHERE_DEFAULT_EMBEDDING_INPUT_TYPE,  # type: ignore
     )
 
     for k, v in inference_params.items():
-        transformed_request[k] = v
+        transformed_request[k] = v  # type: ignore
 
     return transformed_request

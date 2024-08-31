@@ -284,7 +284,11 @@ class BedrockEmbedding(BaseAWSLLM):
 
         if batch_data is not None:
             return self._single_func_embeddings(
-                client=client,
+                client=(
+                    client
+                    if client is not None and isinstance(client, HTTPHandler)
+                    else None
+                ),
                 timeout=timeout,
                 batch_data=batch_data,
                 credentials=credentials,
@@ -319,7 +323,7 @@ class BedrockEmbedding(BaseAWSLLM):
             logging_obj=logging_obj,
             optional_params=optional_params,
             encoding=encoding,
-            data=data,
+            data=data,  # type: ignore
             complete_api_base=prepped.url,
             api_key=None,
             aembedding=aembedding,
