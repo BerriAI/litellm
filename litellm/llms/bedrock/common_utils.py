@@ -725,6 +725,28 @@ def init_bedrock_client(
     return client
 
 
+def get_runtime_endpoint(
+    api_base: Optional[str],
+    aws_bedrock_runtime_endpoint: Optional[str],
+    aws_region_name: str,
+) -> str:
+    env_aws_bedrock_runtime_endpoint = get_secret("AWS_BEDROCK_RUNTIME_ENDPOINT")
+    if api_base is not None:
+        endpoint_url = api_base
+    elif aws_bedrock_runtime_endpoint is not None and isinstance(
+        aws_bedrock_runtime_endpoint, str
+    ):
+        endpoint_url = aws_bedrock_runtime_endpoint
+    elif env_aws_bedrock_runtime_endpoint and isinstance(
+        env_aws_bedrock_runtime_endpoint, str
+    ):
+        endpoint_url = env_aws_bedrock_runtime_endpoint
+    else:
+        endpoint_url = f"https://bedrock-runtime.{aws_region_name}.amazonaws.com"
+
+    return endpoint_url
+
+
 class ModelResponseIterator:
     def __init__(self, model_response):
         self.model_response = model_response

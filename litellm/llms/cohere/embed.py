@@ -130,15 +130,17 @@ def embedding(
     optional_params: dict,
     headers: dict,
     encoding: Any,
+    data: Optional[dict] = None,
+    complete_api_base: Optional[str] = None,
     api_key: Optional[str] = None,
     aembedding: Optional[bool] = None,
     timeout: Union[float, httpx.Timeout] = httpx.Timeout(None),
     client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
 ):
     headers = validate_environment(api_key, headers=headers)
-    embed_url = "https://api.cohere.ai/v1/embed"
+    embed_url = complete_api_base or "https://api.cohere.ai/v1/embed"
     model = model
-    data = {"model": model, "texts": input, **optional_params}
+    data = data or {"model": model, "texts": input, **optional_params}
 
     if "3" in model and "input_type" not in data:
         # cohere v3 embedding models require input_type, if no input_type is provided, default to "search_document"

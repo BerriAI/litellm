@@ -101,9 +101,9 @@ from .llms.anthropic import AnthropicChatCompletion
 from .llms.anthropic_text import AnthropicTextCompletion
 from .llms.azure import AzureChatCompletion, _check_dynamic_azure_params
 from .llms.azure_text import AzureTextCompletion
-from .llms.bedrock import embedding as bedrock_embedding  # type: ignore
 from .llms.bedrock import image_generation as bedrock_image_generation  # type: ignore
 from .llms.bedrock.chat import BedrockConverseLLM, BedrockLLM
+from .llms.bedrock.embed.embedding import BedrockEmbedding
 from .llms.cohere import chat as cohere_chat
 from .llms.cohere import completion as cohere_completion  # type: ignore
 from .llms.cohere import embed as cohere_embed
@@ -175,6 +175,7 @@ codestral_text_completions = CodestralTextCompletion()
 triton_chat_completions = TritonChatCompletion()
 bedrock_chat_completion = BedrockLLM()
 bedrock_converse_chat_completion = BedrockConverseLLM()
+bedrock_embedding = BedrockEmbedding()
 vertex_chat_completion = VertexLLM()
 google_batch_embeddings = GoogleBatchEmbeddings()
 vertex_partner_models_chat_completion = VertexAIPartnerModels()
@@ -3514,13 +3515,24 @@ def embedding(
                 aembedding=aembedding,
             )
         elif custom_llm_provider == "bedrock":
-            response = bedrock_embedding.embedding(
+            if isinstance(input, str):
+                transformed_input = [input]
+            else:
+                transformed_input = input
+            response = bedrock_embedding.embeddings(
                 model=model,
-                input=input,
+                input=transformed_input,
                 encoding=encoding,
                 logging_obj=logging,
                 optional_params=optional_params,
                 model_response=EmbeddingResponse(),
+                client=client,
+                timeout=timeout,
+                aembedding=aembedding,
+                litellm_params=litellm_params,
+                api_base=api_base,
+                print_verbose=print_verbose,
+                extra_headers=extra_headers,
             )
         elif custom_llm_provider == "triton":
             if api_base is None:

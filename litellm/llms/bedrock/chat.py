@@ -60,7 +60,7 @@ from ..prompt_templates.factory import (
     parse_xml_params,
     prompt_factory,
 )
-from .common_utils import BedrockError, ModelResponseIterator
+from .common_utils import BedrockError, ModelResponseIterator, get_runtime_endpoint
 
 BEDROCK_CONVERSE_MODELS = [
     "anthropic.claude-3-5-sonnet-20240620-v1:0",
@@ -724,22 +724,13 @@ class BedrockLLM(BaseAWSLLM):
         )
 
         ### SET RUNTIME ENDPOINT ###
-        endpoint_url = ""
-        env_aws_bedrock_runtime_endpoint = get_secret("AWS_BEDROCK_RUNTIME_ENDPOINT")
-        if api_base is not None:
-            endpoint_url = api_base
-        elif aws_bedrock_runtime_endpoint is not None and isinstance(
-            aws_bedrock_runtime_endpoint, str
-        ):
-            endpoint_url = aws_bedrock_runtime_endpoint
-        elif env_aws_bedrock_runtime_endpoint and isinstance(
-            env_aws_bedrock_runtime_endpoint, str
-        ):
-            endpoint_url = env_aws_bedrock_runtime_endpoint
-        else:
-            endpoint_url = f"https://bedrock-runtime.{aws_region_name}.amazonaws.com"
+        endpoint_url = get_runtime_endpoint(
+            api_base=api_base,
+            aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
+            aws_region_name=aws_region_name,
+        )
 
-        if (stream is not None and stream == True) and provider != "ai21":
+        if (stream is not None and stream is True) and provider != "ai21":
             endpoint_url = f"{endpoint_url}/model/{modelId}/invoke-with-response-stream"
         else:
             endpoint_url = f"{endpoint_url}/model/{modelId}/invoke"
@@ -1558,21 +1549,11 @@ class BedrockConverseLLM(BaseAWSLLM):
         )
 
         ### SET RUNTIME ENDPOINT ###
-        endpoint_url = ""
-        env_aws_bedrock_runtime_endpoint = get_secret("AWS_BEDROCK_RUNTIME_ENDPOINT")
-        if api_base is not None:
-            endpoint_url = api_base
-        elif aws_bedrock_runtime_endpoint is not None and isinstance(
-            aws_bedrock_runtime_endpoint, str
-        ):
-            endpoint_url = aws_bedrock_runtime_endpoint
-        elif env_aws_bedrock_runtime_endpoint and isinstance(
-            env_aws_bedrock_runtime_endpoint, str
-        ):
-            endpoint_url = env_aws_bedrock_runtime_endpoint
-        else:
-            endpoint_url = f"https://bedrock-runtime.{aws_region_name}.amazonaws.com"
-
+        endpoint_url = get_runtime_endpoint(
+            api_base=api_base,
+            aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
+            aws_region_name=aws_region_name,
+        )
         if (stream is not None and stream is True) and provider != "ai21":
             endpoint_url = f"{endpoint_url}/model/{modelId}/converse-stream"
         else:
