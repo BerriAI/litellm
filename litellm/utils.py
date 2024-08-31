@@ -2854,6 +2854,7 @@ def get_optional_params(
             and custom_llm_provider != "together_ai"
             and custom_llm_provider != "groq"
             and custom_llm_provider != "nvidia_nim"
+            and custom_llm_provider != "cerebras"
             and custom_llm_provider != "volcengine"
             and custom_llm_provider != "deepseek"
             and custom_llm_provider != "codestral"
@@ -3613,6 +3614,16 @@ def get_optional_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
         )
+    elif custom_llm_provider == "cerebras":
+        supported_params = get_supported_openai_params(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+        _check_valid_arg(supported_params=supported_params)
+        optional_params = litellm.CerebrasConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+        )
     elif custom_llm_provider == "fireworks_ai":
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider
@@ -4238,6 +4249,8 @@ def get_supported_openai_params(
         return litellm.FireworksAIConfig().get_supported_openai_params()
     elif custom_llm_provider == "nvidia_nim":
         return litellm.NvidiaNimConfig().get_supported_openai_params(model=model)
+    elif custom_llm_provider == "cerebras":
+        return litellm.CerebrasConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "volcengine":
         return litellm.VolcEngineConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "groq":
@@ -4665,6 +4678,13 @@ def get_llm_provider(
                     or "https://integrate.api.nvidia.com/v1"
                 )  # type: ignore
                 dynamic_api_key = api_key or get_secret("NVIDIA_NIM_API_KEY")
+            elif custom_llm_provider == "cerebras":
+                api_base = (
+                    api_base
+                    or get_secret("CEREBRAS_API_BASE")
+                    or "https://api.cerebras.ai/v1"
+                )  # type: ignore
+                dynamic_api_key = api_key or get_secret("CEREBRAS_API_KEY")
             elif custom_llm_provider == "volcengine":
                 # volcengine is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.endpoints.anyscale.com/v1
                 api_base = (
@@ -4815,6 +4835,9 @@ def get_llm_provider(
                     elif endpoint == "https://integrate.api.nvidia.com/v1":
                         custom_llm_provider = "nvidia_nim"
                         dynamic_api_key = get_secret("NVIDIA_NIM_API_KEY")
+                    elif endpoint == "https://api.cerebras.ai/v1":
+                        custom_llm_provider = "cerebras"
+                        dynamic_api_key = get_secret("CEREBRAS_API_KEY")
                     elif endpoint == "https://codestral.mistral.ai/v1":
                         custom_llm_provider = "codestral"
                         dynamic_api_key = get_secret("CODESTRAL_API_KEY")
@@ -5734,6 +5757,11 @@ def validate_environment(
                 keys_in_environment = True
             else:
                 missing_keys.append("NVIDIA_NIM_API_KEY")
+        elif custom_llm_provider == "cerebras":
+            if "CEREBRAS_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("CEREBRAS_API_KEY")
         elif custom_llm_provider == "volcengine":
             if "VOLCENGINE_API_KEY" in os.environ:
                 keys_in_environment = True
