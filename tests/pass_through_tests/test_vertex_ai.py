@@ -93,7 +93,7 @@ LITE_LLM_ENDPOINT = "http://localhost:4000"
 async def test_basic_vertex_ai_pass_through_with_spendlog():
 
     spend_before = await call_spend_logs_endpoint() or 0.0
-    # load_vertex_ai_credentials()
+    load_vertex_ai_credentials()
 
     vertexai.init(
         project="adroit-crow-413218",
