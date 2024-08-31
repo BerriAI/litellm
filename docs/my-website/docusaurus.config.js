@@ -48,6 +48,7 @@ const config = {
           { name: "Providers", pattern: "/docs/providers/**" },
           { name: "Proxy", pattern: "/docs/proxy/**" }
         ],
+        indexOnly: true,
       },
     ],
   ],
