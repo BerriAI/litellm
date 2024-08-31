@@ -134,7 +134,7 @@ def embedding(
     complete_api_base: Optional[str] = None,
     api_key: Optional[str] = None,
     aembedding: Optional[bool] = None,
-    timeout: Union[float, httpx.Timeout] = httpx.Timeout(None),
+    timeout: Optional[Union[float, httpx.Timeout]] = httpx.Timeout(None),
     client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
 ):
     headers = validate_environment(api_key, headers=headers)
