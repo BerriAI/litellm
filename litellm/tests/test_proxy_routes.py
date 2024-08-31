@@ -77,6 +77,9 @@ def test_routes_on_litellm_proxy():
         ("/v2/chat/completions", False),
         ("/threads/invalid/format", False),
         ("/v1/non_existent_endpoint", False),
+        # Bedrock Pass Through Routes
+        ("/bedrock/model/cohere.command-r-v1:0/converse", True),
+        ("/vertex-ai/model/text-embedding-004/embeddings", True),
     ],
 )
 def test_is_llm_api_route(route: str, expected: bool):
