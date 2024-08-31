@@ -3,6 +3,7 @@ import asyncio
 import json
 import traceback
 from base64 import b64encode
+from datetime import datetime
 from typing import AsyncIterable, List, Optional
 
 import httpx
@@ -20,6 +21,7 @@ from fastapi.responses import StreamingResponse
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import (
     ConfigFieldInfo,
     ConfigFieldUpdate,
@@ -30,7 +32,11 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
+from .success_handler import PassThroughEndpointLogging
+
 router = APIRouter()
+
+pass_through_endpoint_logging = PassThroughEndpointLogging()
 
 
 async def set_env_variables_in_header(custom_headers: dict):
@@ -330,7 +336,7 @@ async def pass_through_request(
         async_client = httpx.AsyncClient(timeout=600)
 
         # create logging object
-        start_time = time.time()
+        start_time = datetime.now()
         logging_obj = Logging(
             model="unknown",
             messages=[{"role": "user", "content": "no-message-pass-through-endpoint"}],
@@ -473,12 +479,15 @@ async def pass_through_request(
         content = await response.aread()
 
         ## LOG SUCCESS
-        end_time = time.time()
+        end_time = datetime.now()
 
-        await logging_obj.async_success_handler(
+        await pass_through_endpoint_logging.pass_through_async_success_handler(
+            httpx_response=response,
+            url_route=str(url),
             result="",
             start_time=start_time,
             end_time=end_time,
+            logging_obj=logging_obj,
             cache_hit=False,
         )
 
