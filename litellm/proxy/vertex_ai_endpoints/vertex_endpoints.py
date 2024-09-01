@@ -73,6 +73,45 @@ def exception_handler(e: Exception):
         )
 
 
+def construct_target_url(
+    base_url: str,
+    requested_route: str,
+    default_vertex_location: Optional[str],
+    default_vertex_project: Optional[str],
+) -> httpx.URL:
+    """
+    Allow user to specify their own project id / location.
+
+    If missing, use defaults
+
+    Handle cachedContent scenario - https://github.com/BerriAI/litellm/issues/5460
+
+    Constructed Url:
+    POST https://LOCATION-aiplatform.googleapis.com/{version}/projects/PROJECT_ID/locations/LOCATION/cachedContents
+    """
+    new_base_url = httpx.URL(base_url)
+    if "locations" in requested_route:  # contains the target project id + location
+        updated_url = new_base_url.copy_with(path=requested_route)
+        return updated_url
+    """
+    - Add endpoint version (e.g. v1beta for cachedContent, v1 for rest)
+    - Add default project id
+    - Add default location
+    """
+    vertex_version: Literal["v1", "v1beta1"] = "v1"
+    if "cachedContent" in requested_route:
+        vertex_version = "v1beta1"
+
+    base_requested_route = "{}/projects/{}/locations/{}".format(
+        vertex_version, default_vertex_project, default_vertex_location
+    )
+
+    updated_requested_route = "/" + base_requested_route + requested_route
+
+    updated_url = new_base_url.copy_with(path=updated_requested_route)
+    return updated_url
+
+
 @router.api_route(
     "/vertex-ai/{endpoint:path}", methods=["GET", "POST", "PUT", "DELETE"]
 )
@@ -85,8 +124,6 @@ async def vertex_proxy_route(
     encoded_endpoint = httpx.URL(endpoint).path
 
     import re
-
-    from litellm.fine_tuning.main import vertex_fine_tuning_apis_instance
 
     verbose_proxy_logger.debug("requested endpoint %s", endpoint)
     headers: dict = {}
@@ -133,8 +170,14 @@ async def vertex_proxy_route(
         encoded_endpoint = "/" + encoded_endpoint
 
     # Construct the full target URL using httpx
-    base_url = httpx.URL(base_target_url)
-    updated_url = base_url.copy_with(path=encoded_endpoint)
+    updated_url = construct_target_url(
+        base_url=base_target_url,
+        requested_route=encoded_endpoint,
+        default_vertex_location=vertex_location,
+        default_vertex_project=vertex_project,
+    )
+    # base_url = httpx.URL(base_target_url)
+    # updated_url = base_url.copy_with(path=encoded_endpoint)
 
     verbose_proxy_logger.debug("updated url %s", updated_url)
 
