@@ -699,7 +699,7 @@ class ModelResponse(OpenAIObject):
 class Embedding(OpenAIObject):
     embedding: Union[list, str] = []
     index: int
-    object: str
+    object: Literal["embedding"]
 
     def get(self, key, default=None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
@@ -721,7 +721,7 @@ class EmbeddingResponse(OpenAIObject):
     data: Optional[List] = None
     """The actual embedding value"""
 
-    object: str
+    object: Literal["list"]
     """The object type, which is always "embedding" """
 
     usage: Optional[Usage] = None
@@ -732,11 +732,10 @@ class EmbeddingResponse(OpenAIObject):
 
     def __init__(
         self,
-        model=None,
-        usage=None,
-        stream=False,
+        model: Optional[str] = None,
+        usage: Optional[Usage] = None,
         response_ms=None,
-        data=None,
+        data: Optional[List] = None,
         hidden_params=None,
         _response_headers=None,
         **params,
@@ -760,7 +759,7 @@ class EmbeddingResponse(OpenAIObject):
             self._response_headers = _response_headers
 
         model = model
-        super().__init__(model=model, object=object, data=data, usage=usage)
+        super().__init__(model=model, object=object, data=data, usage=usage)  # type: ignore
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
