@@ -1552,6 +1552,32 @@ class Logging:
             metadata.update(exception.headers)
         return start_time, end_time
 
+    async def special_failure_handlers(self, exception: Exception):
+        """
+        Custom events, emitted for specific failures.
+
+        Currently just for router model group rate limit error
+        """
+        from litellm.types.router import RouterErrors
+
+        ## check if special error ##
+        if RouterErrors.no_deployments_available.value not in str(exception):
+            return
+
+        ## get original model group ##
+
+        litellm_params: dict = self.model_call_details.get("litellm_params") or {}
+        metadata = litellm_params.get("metadata") or {}
+
+        model_group = metadata.get("model_group") or None
+        for callback in litellm._async_failure_callback:
+            if isinstance(callback, CustomLogger):  # custom logger class
+                await callback.log_model_group_rate_limit_error(
+                    exception=exception,
+                    original_model_group=model_group,
+                    kwargs=self.model_call_details,
+                )  # type: ignore
+
     def failure_handler(
         self, exception, traceback_exception, start_time=None, end_time=None
     ):
@@ -1799,6 +1825,7 @@ class Logging:
         """
         Implementing async callbacks, to handle asyncio event loop issues when custom integrations need to use async functions.
         """
+        await self.special_failure_handlers(exception=exception)
         start_time, end_time = self._failure_handler_helper_fn(
             exception=exception,
             traceback_exception=traceback_exception,
