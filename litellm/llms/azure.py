@@ -272,6 +272,8 @@ class AzureOpenAIConfig:
                     optional_params["tools"] = [_tool]
                     optional_params["tool_choice"] = _tool_choice
                     optional_params["json_mode"] = True
+                else:
+                    optional_params["response_format"] = value
             elif param in supported_openai_params:
                 optional_params[param] = value
 
