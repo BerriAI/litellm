@@ -118,6 +118,8 @@ in_memory_llm_clients_cache: dict = {}
 safe_memory_mode: bool = False
 ### DEFAULT AZURE API VERSION ###
 AZURE_DEFAULT_API_VERSION = "2024-07-01-preview"  # this is updated to the latest
+### COHERE EMBEDDINGS DEFAULT TYPE ###
+COHERE_DEFAULT_EMBEDDING_INPUT_TYPE = "search_document"
 ### GUARDRAILS ###
 llamaguard_model_name: Optional[str] = None
 openai_moderations_model_name: Optional[str] = None
@@ -880,13 +882,13 @@ from .llms.sagemaker.sagemaker import SagemakerConfig
 from .llms.ollama import OllamaConfig
 from .llms.ollama_chat import OllamaChatConfig
 from .llms.maritalk import MaritTalkConfig
-from .llms.bedrock_httpx import (
+from .llms.bedrock.chat import (
     AmazonCohereChatConfig,
     AmazonConverseConfig,
     BEDROCK_CONVERSE_MODELS,
     bedrock_tool_name_mappings,
 )
-from .llms.bedrock import (
+from .llms.bedrock.common_utils import (
     AmazonTitanConfig,
     AmazonAI21Config,
     AmazonAnthropicConfig,
