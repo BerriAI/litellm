@@ -364,14 +364,21 @@ class ChatCompletionUserMessage(TypedDict):
 class ChatCompletionAssistantMessage(TypedDict, total=False):
     role: Required[Literal["assistant"]]
     content: Optional[str]
-    name: str
-    tool_calls: List[ChatCompletionAssistantToolCall]
+    name: Optional[str]
+    tool_calls: Optional[List[ChatCompletionAssistantToolCall]]
+    function_call: Optional[ChatCompletionToolCallFunctionChunk]
 
 
 class ChatCompletionToolMessage(TypedDict):
     role: Literal["tool"]
     content: str
     tool_call_id: str
+
+
+class ChatCompletionFunctionMessage(TypedDict):
+    role: Literal["function"]
+    content: Optional[str]
+    name: str
 
 
 class ChatCompletionSystemMessage(TypedDict, total=False):
@@ -385,6 +392,7 @@ AllMessageValues = Union[
     ChatCompletionAssistantMessage,
     ChatCompletionToolMessage,
     ChatCompletionSystemMessage,
+    ChatCompletionFunctionMessage,
 ]
 
 

@@ -855,6 +855,7 @@ def client(original_function):
                     )
                     cached_result = litellm.cache.get_cache(*args, **kwargs)
                     if cached_result is not None:
+                        print_verbose("Cache Hit!")
                         if "detail" in cached_result:
                             # implies an error occurred
                             pass
@@ -936,7 +937,10 @@ def client(original_function):
                                 args=(cached_result, start_time, end_time, cache_hit),
                             ).start()
                             return cached_result
-
+                    else:
+                        print_verbose(
+                            "Cache Miss! on key - {}".format(preset_cache_key)
+                        )
             # CHECK MAX TOKENS
             if (
                 kwargs.get("max_tokens", None) is not None
@@ -1006,7 +1010,7 @@ def client(original_function):
                 litellm.cache is not None
                 and str(original_function.__name__)
                 in litellm.cache.supported_call_types
-            ) and (kwargs.get("cache", {}).get("no-store", False) != True):
+            ) and (kwargs.get("cache", {}).get("no-store", False) is not True):
                 litellm.cache.add_cache(result, *args, **kwargs)
 
             # LOG SUCCESS - handle streaming success logging in the _next_ object, remove `handle_success` once it's deprecated
@@ -1405,10 +1409,10 @@ def client(original_function):
             # MODEL CALL
             result = await original_function(*args, **kwargs)
             end_time = datetime.datetime.now()
-            if "stream" in kwargs and kwargs["stream"] == True:
+            if "stream" in kwargs and kwargs["stream"] is True:
                 if (
                     "complete_response" in kwargs
-                    and kwargs["complete_response"] == True
+                    and kwargs["complete_response"] is True
                 ):
                     chunks = []
                     for idx, chunk in enumerate(result):
@@ -2551,6 +2555,7 @@ def get_optional_params_embeddings(
     encoding_format=None,
     dimensions=None,
     custom_llm_provider="",
+    drop_params: Optional[bool] = None,
     additional_drop_params: Optional[bool] = None,
     **kwargs,
 ):
@@ -2561,6 +2566,7 @@ def get_optional_params_embeddings(
     for k, v in special_params.items():
         passed_params[k] = v
 
+    drop_params = passed_params.pop("drop_params", None)
     additional_drop_params = passed_params.pop("additional_drop_params", None)
 
     default_params = {"user": None, "encoding_format": None, "dimensions": None}
@@ -2572,11 +2578,16 @@ def get_optional_params_embeddings(
         for k in non_default_params.keys():
             if k not in supported_params:
                 unsupported_params[k] = non_default_params[k]
-        if unsupported_params and not litellm.drop_params:
-            raise UnsupportedParamsError(
-                status_code=500,
-                message=f"{custom_llm_provider} does not support parameters: {unsupported_params}, for model={model}. To drop these, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n",
-            )
+        if unsupported_params:
+            if litellm.drop_params is True or (
+                drop_params is not None and drop_params is True
+            ):
+                pass
+            else:
+                raise UnsupportedParamsError(
+                    status_code=500,
+                    message=f"{custom_llm_provider} does not support parameters: {unsupported_params}, for model={model}. To drop these, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n",
+                )
 
     non_default_params = _get_non_default_params(
         passed_params=passed_params,
@@ -2681,7 +2692,9 @@ def get_optional_params_embeddings(
         and custom_llm_provider not in litellm.openai_compatible_providers
     ):
         if len(non_default_params.keys()) > 0:
-            if litellm.drop_params is True:  # drop the unsupported non-default values
+            if (
+                litellm.drop_params is True or drop_params is True
+            ):  # drop the unsupported non-default values
                 keys = list(non_default_params.keys())
                 for k in keys:
                     non_default_params.pop(k, None)
@@ -2855,6 +2868,7 @@ def get_optional_params(
             and custom_llm_provider != "together_ai"
             and custom_llm_provider != "groq"
             and custom_llm_provider != "nvidia_nim"
+            and custom_llm_provider != "cerebras"
             and custom_llm_provider != "volcengine"
             and custom_llm_provider != "deepseek"
             and custom_llm_provider != "codestral"
@@ -3614,6 +3628,16 @@ def get_optional_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
         )
+    elif custom_llm_provider == "cerebras":
+        supported_params = get_supported_openai_params(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+        _check_valid_arg(supported_params=supported_params)
+        optional_params = litellm.CerebrasConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+        )
     elif custom_llm_provider == "fireworks_ai":
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider
@@ -4239,6 +4263,8 @@ def get_supported_openai_params(
         return litellm.FireworksAIConfig().get_supported_openai_params()
     elif custom_llm_provider == "nvidia_nim":
         return litellm.NvidiaNimConfig().get_supported_openai_params(model=model)
+    elif custom_llm_provider == "cerebras":
+        return litellm.CerebrasConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "volcengine":
         return litellm.VolcEngineConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "groq":
@@ -4666,6 +4692,13 @@ def get_llm_provider(
                     or "https://integrate.api.nvidia.com/v1"
                 )  # type: ignore
                 dynamic_api_key = api_key or get_secret("NVIDIA_NIM_API_KEY")
+            elif custom_llm_provider == "cerebras":
+                api_base = (
+                    api_base
+                    or get_secret("CEREBRAS_API_BASE")
+                    or "https://api.cerebras.ai/v1"
+                )  # type: ignore
+                dynamic_api_key = api_key or get_secret("CEREBRAS_API_KEY")
             elif custom_llm_provider == "volcengine":
                 # volcengine is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.endpoints.anyscale.com/v1
                 api_base = (
@@ -4816,6 +4849,9 @@ def get_llm_provider(
                     elif endpoint == "https://integrate.api.nvidia.com/v1":
                         custom_llm_provider = "nvidia_nim"
                         dynamic_api_key = get_secret("NVIDIA_NIM_API_KEY")
+                    elif endpoint == "https://api.cerebras.ai/v1":
+                        custom_llm_provider = "cerebras"
+                        dynamic_api_key = get_secret("CEREBRAS_API_KEY")
                     elif endpoint == "https://codestral.mistral.ai/v1":
                         custom_llm_provider = "codestral"
                         dynamic_api_key = get_secret("CODESTRAL_API_KEY")
@@ -5336,6 +5372,12 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
                 max_input_tokens=_model_info.get("max_input_tokens", None),
                 max_output_tokens=_model_info.get("max_output_tokens", None),
                 input_cost_per_token=_input_cost_per_token,
+                cache_creation_input_token_cost=_model_info.get(
+                    "cache_creation_input_token_cost", None
+                ),
+                cache_read_input_token_cost=_model_info.get(
+                    "cache_read_input_token_cost", None
+                ),
                 input_cost_per_character=_model_info.get(
                     "input_cost_per_character", None
                 ),
@@ -5735,6 +5777,11 @@ def validate_environment(
                 keys_in_environment = True
             else:
                 missing_keys.append("NVIDIA_NIM_API_KEY")
+        elif custom_llm_provider == "cerebras":
+            if "CEREBRAS_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("CEREBRAS_API_KEY")
         elif custom_llm_provider == "volcengine":
             if "VOLCENGINE_API_KEY" in os.environ:
                 keys_in_environment = True
@@ -11692,3 +11739,13 @@ def is_cached_message(message: AllMessageValues) -> bool:
             return True
 
     return False
+
+
+def is_base64_encoded(s: str) -> bool:
+    try:
+        # Try to decode the string
+        decoded_bytes = base64.b64decode(s, validate=True)
+        # Check if the original string can be re-encoded to the same string
+        return base64.b64encode(decoded_bytes).decode("utf-8") == s
+    except Exception:
+        return False

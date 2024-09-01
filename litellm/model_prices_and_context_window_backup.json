@@ -1273,6 +1273,26 @@
         "mode": "chat",
         "supports_function_calling": true
     },
+    "cerebras/llama3.1-8b": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000,
+        "input_cost_per_token": 0.0000001,
+        "output_cost_per_token": 0.0000001,
+        "litellm_provider": "cerebras",
+        "mode": "chat",
+        "supports_function_calling": true
+    },
+    "cerebras/llama3.1-70b": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000,
+        "input_cost_per_token": 0.0000006,
+        "output_cost_per_token": 0.0000006,
+        "litellm_provider": "cerebras",
+        "mode": "chat",
+        "supports_function_calling": true
+    },
     "friendliai/mixtral-8x7b-instruct-v0-1": {
         "max_tokens": 32768,
         "max_input_tokens": 32768,
@@ -1336,6 +1356,8 @@
         "max_output_tokens": 4096,
         "input_cost_per_token": 0.00000025,
         "output_cost_per_token": 0.00000125,
+        "cache_creation_input_token_cost": 0.0000003,
+        "cache_read_input_token_cost": 0.00000003,
         "litellm_provider": "anthropic",
         "mode": "chat",
         "supports_function_calling": true,
@@ -1349,6 +1371,8 @@
         "max_output_tokens": 4096,
         "input_cost_per_token": 0.000015,
         "output_cost_per_token": 0.000075,
+        "cache_creation_input_token_cost": 0.00001875,
+        "cache_read_input_token_cost": 0.0000015,
         "litellm_provider": "anthropic",
         "mode": "chat",
         "supports_function_calling": true,
@@ -1375,6 +1399,8 @@
         "max_output_tokens": 4096,
         "input_cost_per_token": 0.000003,
         "output_cost_per_token": 0.000015,
+        "cache_creation_input_token_cost": 0.00000375,
+        "cache_read_input_token_cost": 0.0000003,
         "litellm_provider": "anthropic",
         "mode": "chat",
         "supports_function_calling": true,

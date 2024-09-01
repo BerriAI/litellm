@@ -608,17 +608,17 @@ class Logging:
                             self.model_call_details["litellm_params"]["metadata"][
                                 "hidden_params"
                             ] = result._hidden_params
-                ## STANDARDIZED LOGGING PAYLOAD
+                    ## STANDARDIZED LOGGING PAYLOAD
 
-                self.model_call_details["standard_logging_object"] = (
-                    get_standard_logging_object_payload(
-                        kwargs=self.model_call_details,
-                        init_response_obj=result,
-                        start_time=start_time,
-                        end_time=end_time,
-                        logging_obj=self,
+                    self.model_call_details["standard_logging_object"] = (
+                        get_standard_logging_object_payload(
+                            kwargs=self.model_call_details,
+                            init_response_obj=result,
+                            start_time=start_time,
+                            end_time=end_time,
+                            logging_obj=self,
+                        )
                     )
-                )
             else:  # streaming chunks + image gen.
                 self.model_call_details["response_cost"] = None
 

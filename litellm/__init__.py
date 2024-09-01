@@ -118,6 +118,8 @@ in_memory_llm_clients_cache: dict = {}
 safe_memory_mode: bool = False
 ### DEFAULT AZURE API VERSION ###
 AZURE_DEFAULT_API_VERSION = "2024-07-01-preview"  # this is updated to the latest
+### COHERE EMBEDDINGS DEFAULT TYPE ###
+COHERE_DEFAULT_EMBEDDING_INPUT_TYPE = "search_document"
 ### GUARDRAILS ###
 llamaguard_model_name: Optional[str] = None
 openai_moderations_model_name: Optional[str] = None
@@ -452,6 +454,7 @@ openai_compatible_providers: List = [
     "mistral",
     "groq",
     "nvidia_nim",
+    "cerebras",
     "volcengine",
     "codestral",
     "deepseek",
@@ -690,6 +693,7 @@ provider_list: List = [
     "mistral",
     "groq",
     "nvidia_nim",
+    "cerebras",
     "volcengine",
     "codestral",
     "text-completion-codestral",
@@ -841,10 +845,10 @@ ALL_LITELLM_RESPONSE_TYPES = [
 from .types.utils import ImageObject
 from .llms.custom_llm import CustomLLM
 from .llms.huggingface_restapi import HuggingfaceConfig
-from .llms.anthropic import AnthropicConfig
+from .llms.anthropic.chat import AnthropicConfig
+from .llms.anthropic.completion import AnthropicTextConfig
 from .llms.databricks import DatabricksConfig, DatabricksEmbeddingConfig
 from .llms.predibase import PredibaseConfig
-from .llms.anthropic_text import AnthropicTextConfig
 from .llms.replicate import ReplicateConfig
 from .llms.cohere.completion import CohereConfig
 from .llms.clarifai import ClarifaiConfig
@@ -878,13 +882,13 @@ from .llms.sagemaker.sagemaker import SagemakerConfig
 from .llms.ollama import OllamaConfig
 from .llms.ollama_chat import OllamaChatConfig
 from .llms.maritalk import MaritTalkConfig
-from .llms.bedrock_httpx import (
+from .llms.bedrock.chat import (
     AmazonCohereChatConfig,
     AmazonConverseConfig,
     BEDROCK_CONVERSE_MODELS,
     bedrock_tool_name_mappings,
 )
-from .llms.bedrock import (
+from .llms.bedrock.common_utils import (
     AmazonTitanConfig,
     AmazonAI21Config,
     AmazonAnthropicConfig,
@@ -905,6 +909,7 @@ from .llms.openai import (
     AzureAIStudioConfig,
 )
 from .llms.nvidia_nim import NvidiaNimConfig
+from .llms.cerebras.chat import CerebrasConfig
 from .llms.fireworks_ai import FireworksAIConfig
 from .llms.volcengine import VolcEngineConfig
 from .llms.text_completion_codestral import MistralTextCompletionConfig

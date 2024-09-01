@@ -696,10 +696,10 @@ def load_from_azure_key_vault(use_azure_key_vault: bool = False):
 def cost_tracking():
     global prisma_client, custom_db_client
     if prisma_client is not None or custom_db_client is not None:
-        if isinstance(litellm.success_callback, list):
+        if isinstance(litellm._async_success_callback, list):
             verbose_proxy_logger.debug("setting litellm success callback to track cost")
-            if (_PROXY_track_cost_callback) not in litellm.success_callback:  # type: ignore
-                litellm.success_callback.append(_PROXY_track_cost_callback)  # type: ignore
+            if (_PROXY_track_cost_callback) not in litellm._async_success_callback:  # type: ignore
+                litellm._async_success_callback.append(_PROXY_track_cost_callback)  # type: ignore
 
 
 async def _PROXY_failure_handler(

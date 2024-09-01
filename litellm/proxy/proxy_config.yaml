@@ -3,21 +3,13 @@ model_list:
    litellm_params:
      model: openai/fake
      api_key: fake-key
-     api_base: https://exampleopenaiendpoint-production.up.railway.app/
-     tags: ["teamA"] # 👈 Key Change
    model_info:
      id: "team-a-model" # used for identifying model in response headers
- - model_name: fake-openai-endpoint
-   litellm_params:
-     model: openai/fake
-     api_key: fake-key
-     api_base: https://exampleopenaiendpoint-production.up.railway.app/
-     tags: ["teamB"] # 👈 Key Change
-   model_info:
-     id: "team-b-model" # used for identifying model in response headers
 
-router_settings:
- enable_tag_filtering: True # 👈 Key Change
+litellm_settings:
+  success_callback: ["prometheus"]
+  failure_callback: ["prometheus"]
 
 general_settings: 
  master_key: sk-1234 
+ custom_auth: example_config_yaml.custom_auth_basic.user_api_key_auth
