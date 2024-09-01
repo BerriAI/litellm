@@ -416,13 +416,13 @@ def test_demo_tokens_as_input_to_embeddings_fails_for_titan():
 
     with pytest.raises(
         litellm.BadRequestError,
-        match="BedrockException - Bedrock Embedding API input must be type str | List[str]",
+        match='litellm.BadRequestError: BedrockException - {"message":"Malformed input request: expected type: String, found: JSONArray, please reformat your input and try again."}',
     ):
         litellm.embedding(model="amazon.titan-embed-text-v1", input=[[1]])
 
     with pytest.raises(
         litellm.BadRequestError,
-        match="BedrockException - Bedrock Embedding API input must be type str | List[str]",
+        match='litellm.BadRequestError: BedrockException - {"message":"Malformed input request: expected type: String, found: Integer, please reformat your input and try again."}',
     ):
         litellm.embedding(
             model="amazon.titan-embed-text-v1",
