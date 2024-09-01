@@ -178,7 +178,7 @@ async def bedrock_proxy_route(
     updated_url = base_url.copy_with(path=encoded_endpoint)
 
     # Add or update query parameters
-    from litellm.llms.bedrock_httpx import BedrockConverseLLM
+    from litellm.llms.bedrock.chat import BedrockConverseLLM
 
     credentials: Credentials = BedrockConverseLLM().get_credentials()
     sigv4 = SigV4Auth(credentials, "bedrock", aws_region_name)
