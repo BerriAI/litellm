@@ -59,6 +59,11 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         pass
 
     #### Fallback Events - router/proxy only ####
+    async def log_model_group_rate_limit_error(
+        self, exception: Exception, original_model_group: Optional[str], kwargs: dict
+    ):
+        pass
+
     async def log_success_fallback_event(self, original_model_group: str, kwargs: dict):
         pass
 

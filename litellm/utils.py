@@ -394,6 +394,7 @@ def function_setup(
             print_verbose(
                 f"Initialized litellm callbacks, Async Success Callbacks: {litellm._async_success_callback}"
             )
+
         if (
             len(litellm.input_callback) > 0
             or len(litellm.success_callback) > 0

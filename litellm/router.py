@@ -4792,10 +4792,12 @@ class Router:
 
             return deployment
         except Exception as e:
+
             traceback_exception = traceback.format_exc()
             # if router rejects call -> log to langfuse/otel/etc.
             if request_kwargs is not None:
                 logging_obj = request_kwargs.get("litellm_logging_obj", None)
+
                 if logging_obj is not None:
                     ## LOGGING
                     threading.Thread(
