@@ -1433,7 +1433,7 @@ class VertexLLM(BaseLLM):
             },
         )
 
-        if stream is not None and stream is True:
+        if stream is True:
             request_data_str = json.dumps(data)
             streaming_response = CustomStreamWrapper(
                 completion_stream=None,
