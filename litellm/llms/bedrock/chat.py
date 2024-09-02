@@ -1310,7 +1310,7 @@ class BedrockConverseLLM(BaseAWSLLM):
                 additional_args={"complete_input_dict": data},
             )
         print_verbose(f"raw model_response: {response.text}")
-        json_mode: Optional[bool] = optional_params.pop("json_mode")
+        json_mode: Optional[bool] = optional_params.pop("json_mode", None)
         ## RESPONSE OBJECT
         try:
             completion_response = ConverseResponseBlock(**response.json())  # type: ignore
@@ -1389,7 +1389,7 @@ class BedrockConverseLLM(BaseAWSLLM):
                     tools.append(_tool_response_chunk)
         chat_completion_message["content"] = content_str
 
-        if json_mode and tools is not None and len(tools) == 1:
+        if json_mode is True and tools is not None and len(tools) == 1:
             # to support 'json_schema' logic on bedrock models
             json_mode_content_str: Optional[str] = tools[0]["function"].get("arguments")
             if json_mode_content_str is not None:
@@ -1642,7 +1642,7 @@ class BedrockConverseLLM(BaseAWSLLM):
         supported_tool_call_params = ["tools", "tool_choice"]
         supported_guardrail_params = ["guardrailConfig"]
         json_mode: Optional[bool] = inference_params.pop(
-            "json_mode"
+            "json_mode", None
         )  # used for handling json_schema
         ## TRANSFORMATION ##
 
