@@ -127,6 +127,9 @@ async def vertex_proxy_route(
 
     verbose_proxy_logger.debug("requested endpoint %s", endpoint)
     headers: dict = {}
+
+    vertex_project = None
+    vertex_location = None
     # Use headers from the incoming request if default_vertex_config is not set
     if default_vertex_config is None:
         headers = dict(request.headers) or {}
