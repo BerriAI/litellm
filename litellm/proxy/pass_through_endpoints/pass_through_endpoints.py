@@ -426,6 +426,8 @@ async def pass_through_request(
                     litellm_logging_obj=logging_obj,
                     iterator_type=ModelIteratorType.VERTEX_AI,
                     start_time=start_time,
+                    passthrough_success_handler_obj=pass_through_endpoint_logging,
+                    url_route=str(url),
                 ):
                     yield chunk
 
@@ -468,6 +470,8 @@ async def pass_through_request(
                     litellm_logging_obj=logging_obj,
                     iterator_type=ModelIteratorType.VERTEX_AI,
                     start_time=start_time,
+                    passthrough_success_handler_obj=pass_through_endpoint_logging,
+                    url_route=str(url),
                 ):
                     yield chunk
 
