@@ -363,6 +363,7 @@ vertex_llama3_models: List = []
 vertex_ai_ai21_models: List = []
 vertex_mistral_models: List = []
 ai21_models: List = []
+ai21_chat_models: List = []
 nlp_cloud_models: List = []
 aleph_alpha_models: List = []
 bedrock_models: List = []
@@ -415,7 +416,10 @@ for key, value in model_cost.items():
         key = key.replace("vertex_ai/", "")
         vertex_ai_ai21_models.append(key)
     elif value.get("litellm_provider") == "ai21":
-        ai21_models.append(key)
+        if value.get("mode") == "chat":
+            ai21_chat_models.append(key)
+        else:
+            ai21_models.append(key)
     elif value.get("litellm_provider") == "nlp_cloud":
         nlp_cloud_models.append(key)
     elif value.get("litellm_provider") == "aleph_alpha":
@@ -644,6 +648,7 @@ model_list = (
     + vertex_chat_models
     + vertex_text_models
     + ai21_models
+    + ai21_chat_models
     + together_ai_models
     + baseten_models
     + aleph_alpha_models

@@ -4958,6 +4958,14 @@ def get_llm_provider(
         ## ai21
         elif model in litellm.ai21_models:
             custom_llm_provider = "ai21"
+        elif model in litellm.ai21_chat_models:
+            custom_llm_provider = "ai21_chat"
+            api_base = (
+                api_base
+                or get_secret("AI21_API_BASE")
+                or "https://api.ai21.com/studio/v1"
+            )  # type: ignore
+            dynamic_api_key = api_key or get_secret("AI21_API_KEY")
         ## aleph_alpha
         elif model in litellm.aleph_alpha_models:
             custom_llm_provider = "aleph_alpha"
