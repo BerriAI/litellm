@@ -364,6 +364,7 @@ vertex_llama3_models: List = []
 vertex_ai_ai21_models: List = []
 vertex_mistral_models: List = []
 ai21_models: List = []
+ai21_chat_models: List = []
 nlp_cloud_models: List = []
 aleph_alpha_models: List = []
 bedrock_models: List = []
@@ -416,7 +417,10 @@ for key, value in model_cost.items():
         key = key.replace("vertex_ai/", "")
         vertex_ai_ai21_models.append(key)
     elif value.get("litellm_provider") == "ai21":
-        ai21_models.append(key)
+        if value.get("mode") == "chat":
+            ai21_chat_models.append(key)
+        else:
+            ai21_models.append(key)
     elif value.get("litellm_provider") == "nlp_cloud":
         nlp_cloud_models.append(key)
     elif value.get("litellm_provider") == "aleph_alpha":
@@ -456,6 +460,7 @@ openai_compatible_providers: List = [
     "groq",
     "nvidia_nim",
     "cerebras",
+    "ai21_chat",
     "volcengine",
     "codestral",
     "deepseek",
@@ -644,6 +649,7 @@ model_list = (
     + vertex_chat_models
     + vertex_text_models
     + ai21_models
+    + ai21_chat_models
     + together_ai_models
     + baseten_models
     + aleph_alpha_models
@@ -695,6 +701,7 @@ provider_list: List = [
     "groq",
     "nvidia_nim",
     "cerebras",
+    "ai21_chat",
     "volcengine",
     "codestral",
     "text-completion-codestral",
@@ -853,7 +860,8 @@ from .llms.predibase import PredibaseConfig
 from .llms.replicate import ReplicateConfig
 from .llms.cohere.completion import CohereConfig
 from .llms.clarifai import ClarifaiConfig
-from .llms.ai21 import AI21Config
+from .llms.AI21.completion import AI21Config
+from .llms.AI21.chat import AI21ChatConfig
 from .llms.together_ai import TogetherAIConfig
 from .llms.cloudflare import CloudflareConfig
 from .llms.palm import PalmConfig
@@ -919,6 +927,7 @@ from .llms.openai import (
 )
 from .llms.nvidia_nim import NvidiaNimConfig
 from .llms.cerebras.chat import CerebrasConfig
+from .llms.AI21.chat import AI21ChatConfig
 from .llms.fireworks_ai import FireworksAIConfig
 from .llms.volcengine import VolcEngineConfig
 from .llms.text_completion_codestral import MistralTextCompletionConfig
