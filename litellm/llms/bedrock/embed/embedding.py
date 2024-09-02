@@ -26,13 +26,10 @@ from ...base_aws_llm import BaseAWSLLM
 from ..common_utils import BedrockError, get_runtime_endpoint
 from .amazon_titan_g1_transformation import AmazonTitanG1Config
 from .amazon_titan_multimodal_transformation import (
-    _transform_request as amazon_multimodal_transform_request,
-)
-from .amazon_titan_multimodal_transformation import (
-    _transform_response as amazon_multimodal_transform_response,
+    AmazonTitanMultimodalEmbeddingG1Config,
 )
 from .amazon_titan_v2_transformation import AmazonTitanV2Config
-from .cohere_transformation import _transform_request as cohere_transform_request
+from .cohere_transformation import BedrockCohereEmbeddingConfig
 
 
 class BedrockEmbedding(BaseAWSLLM):
@@ -216,8 +213,10 @@ class BedrockEmbedding(BaseAWSLLM):
 
         ## TRANSFORM RESPONSE ##
         if model == "amazon.titan-embed-image-v1":
-            returned_response = amazon_multimodal_transform_response(
-                response_list=responses, model=model
+            returned_response = (
+                AmazonTitanMultimodalEmbeddingG1Config()._transform_response(
+                    response_list=responses, model=model
+                )
             )
         elif model == "amazon.titan-embed-text-v1":
             returned_response = AmazonTitanG1Config()._transform_response(
@@ -305,8 +304,10 @@ class BedrockEmbedding(BaseAWSLLM):
 
         ## TRANSFORM RESPONSE ##
         if model == "amazon.titan-embed-image-v1":
-            returned_response = amazon_multimodal_transform_response(
-                response_list=responses, model=model
+            returned_response = (
+                AmazonTitanMultimodalEmbeddingG1Config()._transform_response(
+                    response_list=responses, model=model
+                )
             )
         elif model == "amazon.titan-embed-text-v1":
             returned_response = AmazonTitanG1Config()._transform_response(
@@ -365,7 +366,7 @@ class BedrockEmbedding(BaseAWSLLM):
         data: Optional[CohereEmbeddingRequest] = None
         batch_data: Optional[List] = None
         if provider == "cohere":
-            data = cohere_transform_request(
+            data = BedrockCohereEmbeddingConfig()._transform_request(
                 input=input, inference_params=inference_params
             )
         elif provider == "amazon" and model in [
@@ -376,10 +377,10 @@ class BedrockEmbedding(BaseAWSLLM):
             batch_data = []
             for i in input:
                 if model == "amazon.titan-embed-image-v1":
-                    transformed_request: AmazonEmbeddingRequest = (
-                        amazon_multimodal_transform_request(
-                            input=i, inference_params=inference_params
-                        )
+                    transformed_request: (
+                        AmazonEmbeddingRequest
+                    ) = AmazonTitanMultimodalEmbeddingG1Config()._transform_request(
+                        input=i, inference_params=inference_params
                     )
                 elif model == "amazon.titan-embed-text-v1":
                     transformed_request = AmazonTitanG1Config()._transform_request(

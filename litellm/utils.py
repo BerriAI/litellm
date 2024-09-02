@@ -2550,7 +2550,7 @@ def get_optional_params_image_gen(
 
 def get_optional_params_embeddings(
     # 2 optional params
-    model=None,
+    model: str,
     user=None,
     encoding_format=None,
     dimensions=None,
@@ -2606,7 +2606,7 @@ def get_optional_params_embeddings(
         ):
             raise UnsupportedParamsError(
                 status_code=500,
-                message=f"Setting dimensions is not supported for OpenAI `text-embedding-3` and later models. To drop it from the call, set `litellm.drop_params = True`.",
+                message="Setting dimensions is not supported for OpenAI `text-embedding-3` and later models. To drop it from the call, set `litellm.drop_params = True`.",
             )
     if custom_llm_provider == "triton":
         keys = list(non_default_params.keys())
@@ -2641,39 +2641,57 @@ def get_optional_params_embeddings(
         )
         final_params = {**optional_params, **kwargs}
         return final_params
-    if custom_llm_provider == "vertex_ai":
-        if len(non_default_params.keys()) > 0:
-            if litellm.drop_params is True:  # drop the unsupported non-default values
-                keys = list(non_default_params.keys())
-                for k in keys:
-                    non_default_params.pop(k, None)
-                final_params = {**non_default_params, **kwargs}
-                return final_params
-            raise UnsupportedParamsError(
-                status_code=500,
-                message=f"Setting user/encoding format is not supported by {custom_llm_provider}. To drop it from the call, set `litellm.drop_params = True`.",
-            )
     if custom_llm_provider == "bedrock":
         # if dimensions is in non_default_params -> pass it for model=bedrock/amazon.titan-embed-text-v2
-        if (
-            "dimensions" in non_default_params.keys()
-            and "amazon.titan-embed-text-v2" in model
-        ):
-            kwargs["dimensions"] = non_default_params["dimensions"]
-            non_default_params.pop("dimensions", None)
+        if "amazon.titan-embed-text-v1" in model:
+            object: Any = litellm.AmazonTitanG1Config()
+        elif "amazon.titan-embed-image-v1" in model:
+            object = litellm.AmazonTitanMultimodalEmbeddingG1Config()
+        elif "amazon.titan-embed-text-v2:0" in model:
+            object = litellm.AmazonTitanV2Config()
+        elif "cohere.embed-multilingual-v3" in model:
+            object = litellm.BedrockCohereEmbeddingConfig()
+        else:  # unmapped model
+            supported_params = []
+            _check_valid_arg(supported_params=supported_params)
+            final_params = {**kwargs}
+            return final_params
 
-        if len(non_default_params.keys()) > 0:
-            if litellm.drop_params is True:  # drop the unsupported non-default values
-                keys = list(non_default_params.keys())
-                for k in keys:
-                    non_default_params.pop(k, None)
-                final_params = {**non_default_params, **kwargs}
-                return final_params
-            raise UnsupportedParamsError(
-                status_code=500,
-                message=f"Setting user/encoding format is not supported by {custom_llm_provider}. To drop it from the call, set `litellm.drop_params = True`.",
-            )
-        return {**non_default_params, **kwargs}
+        supported_params = object.get_supported_openai_params()
+        _check_valid_arg(supported_params=supported_params)
+        optional_params = object.map_openai_params(
+            non_default_params=non_default_params, optional_params={}
+        )
+        final_params = {**optional_params, **kwargs}
+        return final_params
+        # elif model == "amazon.titan-embed-image-v1":
+        #     supported_params = litellm.AmazonTitanG1Config().get_supported_openai_params()
+        #     _check_valid_arg(supported_params=supported_params)
+        #     optional_params = litellm.AmazonTitanG1Config().map_openai_params(
+        #         non_default_params=non_default_params, optional_params={}
+        #     )
+        #     final_params = {**optional_params, **kwargs}
+        #     return final_params
+
+        # if (
+        #     "dimensions" in non_default_params.keys()
+        #     and "amazon.titan-embed-text-v2" in model
+        # ):
+        #     kwargs["dimensions"] = non_default_params["dimensions"]
+        #     non_default_params.pop("dimensions", None)
+
+        # if len(non_default_params.keys()) > 0:
+        #     if litellm.drop_params is True:  # drop the unsupported non-default values
+        #         keys = list(non_default_params.keys())
+        #         for k in keys:
+        #             non_default_params.pop(k, None)
+        #         final_params = {**non_default_params, **kwargs}
+        #         return final_params
+        #     raise UnsupportedParamsError(
+        #         status_code=500,
+        #         message=f"Setting user/encoding format is not supported by {custom_llm_provider}. To drop it from the call, set `litellm.drop_params = True`.",
+        #     )
+        # return {**non_default_params, **kwargs}
     if custom_llm_provider == "mistral":
         supported_params = get_supported_openai_params(
             model=model,
