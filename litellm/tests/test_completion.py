@@ -4485,6 +4485,12 @@ async def test_completion_ai21_chat():
         user="ishaan",
         tool_choice="auto",
         seed=123,
-        messages=[{"role": "user", "content": "hi my name is ishaan"}],
+        messages=[{"role": "user", "content": "what does the document say"}],
+        documents=[
+            {
+                "content": "hello world",
+                "metadata": {"source": "google", "author": "ishaan"},
+            }
+        ],
     )
     pass
