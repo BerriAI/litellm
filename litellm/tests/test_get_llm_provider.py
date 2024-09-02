@@ -77,3 +77,19 @@ def test_get_llm_provider_ai21_chat():
     assert custom_llm_provider == "ai21_chat"
     assert model == "jamba-1.5-large"
     assert api_base == "https://api.ai21.com/studio/v1"
+
+
+def test_get_llm_provider_ai21_chat_test2():
+    """
+    if user prefix with ai21/ but calls jamba-1.5-large then it should be ai21_chat provider
+    """
+    model, custom_llm_provider, dynamic_api_key, api_base = litellm.get_llm_provider(
+        model="ai21/jamba-1.5-large",
+    )
+
+    print("model=", model)
+    print("custom_llm_provider=", custom_llm_provider)
+    print("api_base=", api_base)
+    assert custom_llm_provider == "ai21_chat"
+    assert model == "jamba-1.5-large"
+    assert api_base == "https://api.ai21.com/studio/v1"
