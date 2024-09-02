@@ -2086,8 +2086,14 @@ class MockResponseIterator:  # for returning ai21 streaming responses
                 text=chunk_data.choices[0].message.content or "",  # type: ignore
                 tool_use=None,
                 is_finished=True,
-                finish_reason=chunk_data.choices[0].finish_reason,  # type: ignore
-                usage=chunk_usage,  # type: ignore
+                finish_reason=map_finish_reason(
+                    finish_reason=chunk_data.choices[0].finish_reason or ""
+                ),
+                usage=ChatCompletionUsageBlock(
+                    prompt_tokens=chunk_usage.prompt_tokens,
+                    completion_tokens=chunk_usage.completion_tokens,
+                    total_tokens=chunk_usage.total_tokens,
+                ),
                 index=0,
             )
             return processed_chunk
