@@ -455,6 +455,7 @@ openai_compatible_providers: List = [
     "groq",
     "nvidia_nim",
     "cerebras",
+    "ai21_chat",
     "volcengine",
     "codestral",
     "deepseek",
@@ -694,6 +695,7 @@ provider_list: List = [
     "groq",
     "nvidia_nim",
     "cerebras",
+    "ai21_chat",
     "volcengine",
     "codestral",
     "text-completion-codestral",
@@ -852,7 +854,8 @@ from .llms.predibase import PredibaseConfig
 from .llms.replicate import ReplicateConfig
 from .llms.cohere.completion import CohereConfig
 from .llms.clarifai import ClarifaiConfig
-from .llms.ai21 import AI21Config
+from .llms.AI21.completion import AI21Config
+from .llms.AI21.chat import AI21ChatConfig
 from .llms.together_ai import TogetherAIConfig
 from .llms.cloudflare import CloudflareConfig
 from .llms.palm import PalmConfig
@@ -910,6 +913,7 @@ from .llms.openai import (
 )
 from .llms.nvidia_nim import NvidiaNimConfig
 from .llms.cerebras.chat import CerebrasConfig
+from .llms.AI21.chat import AI21ChatConfig
 from .llms.fireworks_ai import FireworksAIConfig
 from .llms.volcengine import VolcEngineConfig
 from .llms.text_completion_codestral import MistralTextCompletionConfig
