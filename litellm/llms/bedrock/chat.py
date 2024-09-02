@@ -1249,7 +1249,7 @@ class AmazonConverseConfig:
                     optional_params["json_mode"] = True
                 else:
                     if litellm.drop_params is True or drop_params is True:
-                        return None
+                        pass
                     else:
                         raise litellm.utils.UnsupportedParamsError(
                             message="Bedrock doesn't support response_format={}. To drop it from the call, set `litellm.drop_params = True.".format(

@@ -30,6 +30,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.types.llms.anthropic import (
     AnthopicMessagesAssistantMessageParam,
+    AnthropicChatCompletionUsageBlock,
     AnthropicFinishReason,
     AnthropicMessagesRequest,
     AnthropicMessagesTool,
@@ -1177,19 +1178,27 @@ class ModelResponseIterator:
             return True
         return False
 
-    def _handle_usage(self, anthropic_usage_chunk: dict) -> ChatCompletionUsageBlock:
+    def _handle_usage(
+        self, anthropic_usage_chunk: dict
+    ) -> AnthropicChatCompletionUsageBlock:
         special_fields = ["input_tokens", "output_tokens"]
 
-        usage_block = ChatCompletionUsageBlock(
+        usage_block = AnthropicChatCompletionUsageBlock(
             prompt_tokens=anthropic_usage_chunk.get("input_tokens", 0),
             completion_tokens=anthropic_usage_chunk.get("output_tokens", 0),
             total_tokens=anthropic_usage_chunk.get("input_tokens", 0)
             + anthropic_usage_chunk.get("output_tokens", 0),
         )
 
-        for k, v in anthropic_usage_chunk.items():
-            if k not in special_fields:  # return provider-specific fields
-                usage_block[k] = v
+        if "cache_creation_input_tokens" in anthropic_usage_chunk:
+            usage_block["cache_creation_input_tokens"] = anthropic_usage_chunk[
+                "cache_creation_input_tokens"
+            ]
+
+        if "cache_read_input_tokens" in anthropic_usage_chunk:
+            usage_block["cache_read_input_tokens"] = anthropic_usage_chunk[
+                "cache_read_input_tokens"
+            ]
 
         return usage_block
 
