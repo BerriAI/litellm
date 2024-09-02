@@ -54,6 +54,7 @@ from litellm.router_strategy.lowest_latency import LowestLatencyLoggingHandler
 from litellm.router_strategy.lowest_tpm_rpm import LowestTPMLoggingHandler
 from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2
 from litellm.router_strategy.tag_based_routing import get_deployments_for_tag
+from litellm.router_utils.batch_utils import replace_model_in_jsonl
 from litellm.router_utils.client_initalization_utils import (
     set_client,
     should_initialize_sync_client,
@@ -109,6 +110,7 @@ from litellm.utils import (
     _is_region_eu,
     calculate_max_parallel_requests,
     create_proxy_transport_and_mounts,
+    get_llm_provider,
     get_utc_datetime,
 )
 
@@ -2308,6 +2310,12 @@ class Router:
                 model_client = potential_model_client
             self.total_calls[model_name] += 1
 
+            ## REPLACE MODEL IN FILE WITH SELECTED DEPLOYMENT ##
+            stripped_model, _, _, _ = get_llm_provider(model=data["model"])
+            kwargs["file"] = replace_model_in_jsonl(
+                file_content=kwargs["file"], new_model_name=stripped_model
+            )
+
             response = litellm.acreate_file(
                 **{
                     **data,
@@ -2346,12 +2354,129 @@ class Router:
             )
             return response  # type: ignore
         except Exception as e:
-            verbose_router_logger.info(
-                f"litellm.acreate_file(model={model})\033[31m Exception {str(e)}\033[0m"
+            verbose_router_logger.exception(
+                f"litellm.acreate_file(model={model}, {kwargs})\033[31m Exception {str(e)}\033[0m"
             )
             if model is not None:
                 self.fail_calls[model] += 1
             raise e
+
+    # async def acreate_batch(
+    #     self,
+    #     model: str,
+    #     **kwargs,
+    # ) -> Batch:
+    #     try:
+    #         kwargs["model"] = model
+    #         kwargs["original_function"] = self._acreate_batch
+    #         kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
+    #         timeout = kwargs.get("request_timeout", self.timeout)
+    #         kwargs.setdefault("metadata", {}).update({"model_group": model})
+    #         response = await self.async_function_with_fallbacks(**kwargs)
+
+    #         return response
+    #     except Exception as e:
+    #         asyncio.create_task(
+    #             send_llm_exception_alert(
+    #                 litellm_router_instance=self,
+    #                 request_kwargs=kwargs,
+    #                 error_traceback_str=traceback.format_exc(),
+    #                 original_exception=e,
+    #             )
+    #         )
+    #         raise e
+
+    # async def _acreate_batch(
+    #     self,
+    #     model: str,
+    #     **kwargs,
+    # ) -> Batch:
+    #     try:
+    #         verbose_router_logger.debug(
+    #             f"Inside _acreate_batch()- model: {model}; kwargs: {kwargs}"
+    #         )
+    #         deployment = await self.async_get_available_deployment(
+    #             model=model,
+    #             messages=[{"role": "user", "content": "files-api-fake-text"}],
+    #             specific_deployment=kwargs.pop("specific_deployment", None),
+    #         )
+    #         kwargs.setdefault("metadata", {}).update(
+    #             {
+    #                 "deployment": deployment["litellm_params"]["model"],
+    #                 "model_info": deployment.get("model_info", {}),
+    #                 "api_base": deployment.get("litellm_params", {}).get("api_base"),
+    #             }
+    #         )
+    #         kwargs["model_info"] = deployment.get("model_info", {})
+    #         data = deployment["litellm_params"].copy()
+    #         model_name = data["model"]
+    #         for k, v in self.default_litellm_params.items():
+    #             if (
+    #                 k not in kwargs
+    #             ):  # prioritize model-specific params > default router params
+    #                 kwargs[k] = v
+    #             elif k == "metadata":
+    #                 kwargs[k].update(v)
+
+    #         potential_model_client = self._get_client(
+    #             deployment=deployment, kwargs=kwargs, client_type="async"
+    #         )
+    #         # check if provided keys == client keys #
+    #         dynamic_api_key = kwargs.get("api_key", None)
+    #         if (
+    #             dynamic_api_key is not None
+    #             and potential_model_client is not None
+    #             and dynamic_api_key != potential_model_client.api_key
+    #         ):
+    #             model_client = None
+    #         else:
+    #             model_client = potential_model_client
+    #         self.total_calls[model_name] += 1
+
+    #         response = litellm.acreate_batch(
+    #             **{
+    #                 **data,
+    #                 "caching": self.cache_responses,
+    #                 "client": model_client,
+    #                 "timeout": self.timeout,
+    #                 **kwargs,
+    #             }
+    #         )
+
+    #         rpm_semaphore = self._get_client(
+    #             deployment=deployment,
+    #             kwargs=kwargs,
+    #             client_type="max_parallel_requests",
+    #         )
+
+    #         if rpm_semaphore is not None and isinstance(
+    #             rpm_semaphore, asyncio.Semaphore
+    #         ):
+    #             async with rpm_semaphore:
+    #                 """
+    #                 - Check rpm limits before making the call
+    #                 - If allowed, increment the rpm limit (allows global value to be updated, concurrency-safe)
+    #                 """
+    #                 await self.async_routing_strategy_pre_call_checks(
+    #                     deployment=deployment
+    #                 )
+    #                 response = await response  # type: ignore
+    #         else:
+    #             await self.async_routing_strategy_pre_call_checks(deployment=deployment)
+    #             response = await response  # type: ignore
+
+    #         self.success_calls[model_name] += 1
+    #         verbose_router_logger.info(
+    #             f"litellm.acreate_file(model={model_name})\033[32m 200 OK\033[0m"
+    #         )
+    #         return response  # type: ignore
+    #     except Exception as e:
+    #         verbose_router_logger.exception(
+    #             f"litellm._acreate_batch(model={model}, {kwargs})\033[31m Exception {str(e)}\033[0m"
+    #         )
+    #         if model is not None:
+    #             self.fail_calls[model] += 1
+    #         raise e
 
     #### ASSISTANTS API ####
 
