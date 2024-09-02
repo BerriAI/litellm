@@ -4666,6 +4666,7 @@ def get_llm_provider(
         ):
             custom_llm_provider = model.split("/", 1)[0]
             model = model.split("/", 1)[1]
+
             if custom_llm_provider == "perplexity":
                 # perplexity is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.perplexity.ai
                 api_base = api_base or get_secret("PERPLEXITY_API_BASE") or "https://api.perplexity.ai"  # type: ignore
@@ -4712,13 +4713,16 @@ def get_llm_provider(
                     or "https://api.cerebras.ai/v1"
                 )  # type: ignore
                 dynamic_api_key = api_key or get_secret("CEREBRAS_API_KEY")
-            elif custom_llm_provider == "ai21_chat":
+            elif (custom_llm_provider == "ai21_chat") or (
+                custom_llm_provider == "ai21" and model in litellm.ai21_chat_models
+            ):
                 api_base = (
                     api_base
                     or get_secret("AI21_API_BASE")
                     or "https://api.ai21.com/studio/v1"
                 )  # type: ignore
                 dynamic_api_key = api_key or get_secret("AI21_API_KEY")
+                custom_llm_provider = "ai21_chat"
             elif custom_llm_provider == "volcengine":
                 # volcengine is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.endpoints.anyscale.com/v1
                 api_base = (
