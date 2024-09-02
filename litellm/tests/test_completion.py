@@ -4474,3 +4474,13 @@ async def test_dynamic_azure_params(stream, sync_mode):
         except Exception as e:
             traceback.print_stack()
             raise e
+
+
+@pytest.mark.asyncio()
+async def test_completion_ai21():
+    litellm.set_verbose = True
+    response = await litellm.acompletion(
+        model="ai21_chat/jamba-1.5-large",
+        messages=[{"role": "user", "content": "hi my name is ishaan"}],
+    )
+    pass
