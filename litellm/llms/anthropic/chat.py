@@ -1177,6 +1177,22 @@ class ModelResponseIterator:
             return True
         return False
 
+    def _handle_usage(self, anthropic_usage_chunk: dict) -> ChatCompletionUsageBlock:
+        special_fields = ["input_tokens", "output_tokens"]
+
+        usage_block = ChatCompletionUsageBlock(
+            prompt_tokens=anthropic_usage_chunk.get("input_tokens", 0),
+            completion_tokens=anthropic_usage_chunk.get("output_tokens", 0),
+            total_tokens=anthropic_usage_chunk.get("input_tokens", 0)
+            + anthropic_usage_chunk.get("output_tokens", 0),
+        )
+
+        for k, v in anthropic_usage_chunk.items():
+            if k not in special_fields:  # return provider-specific fields
+                usage_block[k] = v
+
+        return usage_block
+
     def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
         try:
             type_chunk = chunk.get("type", "") or ""
@@ -1252,12 +1268,7 @@ class ModelResponseIterator:
                     finish_reason=message_delta["delta"].get("stop_reason", "stop")
                     or "stop"
                 )
-                usage = ChatCompletionUsageBlock(
-                    prompt_tokens=message_delta["usage"].get("input_tokens", 0),
-                    completion_tokens=message_delta["usage"].get("output_tokens", 0),
-                    total_tokens=message_delta["usage"].get("input_tokens", 0)
-                    + message_delta["usage"].get("output_tokens", 0),
-                )
+                usage = self._handle_usage(anthropic_usage_chunk=message_delta["usage"])
                 is_finished = True
             elif type_chunk == "message_start":
                 """
@@ -1280,19 +1291,8 @@ class ModelResponseIterator:
                 }
                 """
                 message_start_block = MessageStartBlock(**chunk)  # type: ignore
-                usage = ChatCompletionUsageBlock(
-                    prompt_tokens=message_start_block["message"]
-                    .get("usage", {})
-                    .get("input_tokens", 0),
-                    completion_tokens=message_start_block["message"]
-                    .get("usage", {})
-                    .get("output_tokens", 0),
-                    total_tokens=message_start_block["message"]
-                    .get("usage", {})
-                    .get("input_tokens", 0)
-                    + message_start_block["message"]
-                    .get("usage", {})
-                    .get("output_tokens", 0),
+                usage = self._handle_usage(
+                    anthropic_usage_chunk=message_start_block["message"]["usage"]
                 )
             elif type_chunk == "error":
                 """

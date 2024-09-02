@@ -9888,11 +9888,7 @@ class CustomStreamWrapper:
 
                 if anthropic_response_obj["usage"] is not None:
                     model_response.usage = litellm.Usage(
-                        prompt_tokens=anthropic_response_obj["usage"]["prompt_tokens"],
-                        completion_tokens=anthropic_response_obj["usage"][
-                            "completion_tokens"
-                        ],
-                        total_tokens=anthropic_response_obj["usage"]["total_tokens"],
+                        **anthropic_response_obj["usage"]
                     )
 
                 if (
@@ -10507,10 +10503,10 @@ class CustomStreamWrapper:
                             original_chunk.system_fingerprint
                         )
                         print_verbose(f"self.sent_first_chunk: {self.sent_first_chunk}")
-                        if self.sent_first_chunk == False:
+                        if self.sent_first_chunk is False:
                             model_response.choices[0].delta["role"] = "assistant"
                             self.sent_first_chunk = True
-                        elif self.sent_first_chunk == True and hasattr(
+                        elif self.sent_first_chunk is True and hasattr(
                             model_response.choices[0].delta, "role"
                         ):
                             _initial_delta = model_response.choices[
@@ -10575,7 +10571,7 @@ class CustomStreamWrapper:
                 model_response.choices[0].delta.tool_calls is not None
                 or model_response.choices[0].delta.function_call is not None
             ):
-                if self.sent_first_chunk == False:
+                if self.sent_first_chunk is False:
                     model_response.choices[0].delta["role"] = "assistant"
                     self.sent_first_chunk = True
                 return model_response
