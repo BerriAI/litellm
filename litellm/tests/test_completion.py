@@ -4481,7 +4481,7 @@ async def test_dynamic_azure_params(stream, sync_mode):
 async def test_completion_ai21():
     litellm.set_verbose = True
     response = await litellm.acompletion(
-        model="ai21_chat/jamba-1.5-large",
+        model="jamba-1.5-large",
         user="ishaan",
         tool_choice="auto",
         seed=123,

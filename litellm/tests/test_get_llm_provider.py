@@ -68,3 +68,12 @@ def test_get_llm_provider_deepseek_custom_api_base():
     assert api_base == "MY-FAKE-BASE"
 
     os.environ.pop("DEEPSEEK_API_BASE")
+
+
+def test_get_llm_provider_ai21_chat():
+    model, custom_llm_provider, dynamic_api_key, api_base = litellm.get_llm_provider(
+        model="jamba-1.5-large",
+    )
+    assert custom_llm_provider == "ai21_chat"
+    assert model == "jamba-1.5-large"
+    assert api_base == "https://api.ai21.com/studio/v1"
