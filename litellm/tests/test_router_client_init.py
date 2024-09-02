@@ -91,6 +91,7 @@ def test_router_init_with_neither_api_key_nor_azure_service_principal_with_secre
     Test router initialization with neither API key nor using Azure Service Principal with Secret authentication
     workflow (having not provided environment variables).
     """
+    litellm.enable_azure_ad_token_refresh = True
     # mock EMPTY environment variables
     environment_variables_expected_to_use: Dict = {}
     mocked_environ = PropertyMock(return_value=environment_variables_expected_to_use)
