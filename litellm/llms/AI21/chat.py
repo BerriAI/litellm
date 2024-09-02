@@ -10,33 +10,36 @@ from typing import Optional, Union
 
 class AI21ChatConfig:
     """
-    Reference: https://inference-docs.cerebras.ai/api-reference/chat-completions
+    Reference: https://docs.ai21.com/reference/jamba-15-api-ref#request-parameters
 
     Below are the parameters:
     """
 
-    max_tokens: Optional[int] = None
-    response_format: Optional[dict] = None
-    seed: Optional[int] = None
-    stop: Optional[str] = None
-    stream: Optional[bool] = None
-    temperature: Optional[float] = None
-    top_p: Optional[int] = None
-    tool_choice: Optional[str] = None
     tools: Optional[list] = None
+    response_format: Optional[dict] = None
+    documents: Optional[list] = None
+    max_tokens: Optional[int] = None
+    temperature: Optional[float] = None
+    top_p: Optional[float] = None
+    stop: Optional[Union[str, list]] = None
+    n: Optional[int] = None
+    stream: Optional[bool] = None
+    seed: Optional[int] = None
+    tool_choice: Optional[str] = None
     user: Optional[str] = None
 
     def __init__(
         self,
-        max_tokens: Optional[int] = None,
-        response_format: Optional[dict] = None,
-        seed: Optional[int] = None,
-        stop: Optional[str] = None,
-        stream: Optional[bool] = None,
-        temperature: Optional[float] = None,
-        top_p: Optional[int] = None,
-        tool_choice: Optional[str] = None,
         tools: Optional[list] = None,
+        response_format: Optional[dict] = None,
+        max_tokens: Optional[int] = None,
+        temperature: Optional[float] = None,
+        top_p: Optional[float] = None,
+        stop: Optional[Union[str, list]] = None,
+        n: Optional[int] = None,
+        stream: Optional[bool] = None,
+        seed: Optional[int] = None,
+        tool_choice: Optional[str] = None,
         user: Optional[str] = None,
     ) -> None:
         locals_ = locals().copy()
@@ -69,15 +72,16 @@ class AI21ChatConfig:
         """
 
         return [
-            "max_tokens",
+            "tools",
             "response_format",
-            "seed",
-            "stop",
-            "stream",
+            "max_tokens",
             "temperature",
             "top_p",
+            "stop",
+            "n",
+            "stream",
+            "seed",
             "tool_choice",
-            "tools",
             "user",
         ]
 
