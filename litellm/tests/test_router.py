@@ -2436,14 +2436,14 @@ async def test_router_batch_endpoints(provider):
         batch_input_file_id is not None
     ), "Failed to create file, expected a non null file_id but got {batch_input_file_id}"
 
-    # create_batch_response = await router.acreate_batch(
-    #     model="my-custom-name",
-    #     completion_window="24h",
-    #     endpoint="/v1/chat/completions",
-    #     input_file_id=batch_input_file_id,
-    #     custom_llm_provider=provider,
-    #     metadata={"key1": "value1", "key2": "value2"},
-    # )
+    create_batch_response = await router.acreate_batch(
+        model="my-custom-name",
+        completion_window="24h",
+        endpoint="/v1/chat/completions",
+        input_file_id=batch_input_file_id,
+        custom_llm_provider=provider,
+        metadata={"key1": "value1", "key2": "value2"},
+    )
 
     # print("response from router.create_batch=", create_batch_response)
 

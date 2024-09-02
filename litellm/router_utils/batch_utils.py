@@ -41,3 +41,17 @@ def replace_model_in_jsonl(
 
     except (json.JSONDecodeError, UnicodeDecodeError, TypeError) as e:
         return None
+
+
+def _get_router_metadata_variable_name(function_name) -> str:
+    """
+    Helper to return what the "metadata" field should be called in the request data
+
+    For all /thread or /assistant endpoints we need to call this "litellm_metadata"
+
+    For ALL other endpoints we call this "metadata
+    """
+    if "batch" in function_name:
+        return "litellm_metadata"
+    else:
+        return "metadata"
