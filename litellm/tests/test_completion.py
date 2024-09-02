@@ -4481,6 +4481,9 @@ async def test_completion_ai21():
     litellm.set_verbose = True
     response = await litellm.acompletion(
         model="ai21_chat/jamba-1.5-large",
+        user="ishaan",
+        tool_choice="auto",
+        seed=123,
         messages=[{"role": "user", "content": "hi my name is ishaan"}],
     )
     pass
