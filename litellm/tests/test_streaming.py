@@ -586,6 +586,37 @@ async def test_completion_predibase_streaming(sync_mode):
         pytest.fail(f"Error occurred: {e}")
 
 
+@pytest.mark.asyncio()
+@pytest.mark.flaky(retries=3, delay=1)
+async def test_completion_ai21_stream():
+    litellm.set_verbose = True
+    response = await litellm.acompletion(
+        model="ai21_chat/jamba-1.5-large",
+        user="ishaan",
+        stream=True,
+        seed=123,
+        messages=[{"role": "user", "content": "hi my name is ishaan"}],
+    )
+    complete_response = ""
+    idx = 0
+    async for init_chunk in response:
+        chunk, finished = streaming_format_tests(idx, init_chunk)
+        complete_response += chunk
+        custom_llm_provider = init_chunk._hidden_params["custom_llm_provider"]
+        print(f"custom_llm_provider: {custom_llm_provider}")
+        assert custom_llm_provider == "ai21_chat"
+        idx += 1
+        if finished:
+            assert isinstance(init_chunk.choices[0], litellm.utils.StreamingChoices)
+            break
+    if complete_response.strip() == "":
+        raise Exception("Empty response received")
+
+    print(f"complete_response: {complete_response}")
+
+    pass
+
+
 def test_completion_azure_function_calling_stream():
     try:
         litellm.set_verbose = False
