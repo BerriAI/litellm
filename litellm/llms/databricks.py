@@ -703,8 +703,16 @@ class ModelResponseIterator:
                 is_finished = True
                 finish_reason = processed_chunk.choices[0].finish_reason
 
-            if hasattr(processed_chunk, "usage"):
-                usage = processed_chunk.usage  # type: ignore
+            if hasattr(processed_chunk, "usage") and isinstance(
+                processed_chunk.usage, litellm.Usage
+            ):
+                usage_chunk: litellm.Usage = processed_chunk.usage
+
+                usage = ChatCompletionUsageBlock(
+                    prompt_tokens=usage_chunk.prompt_tokens,
+                    completion_tokens=usage_chunk.completion_tokens,
+                    total_tokens=usage_chunk.total_tokens,
+                )
 
             return GenericStreamingChunk(
                 text=text,
