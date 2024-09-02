@@ -141,6 +141,7 @@ def test_router_init_azure_service_principal_with_secret_with_environment_variab
     To allow for local testing without real credentials, first must mock Azure SDK authentication functions
     and environment variables.
     """
+    litellm.enable_azure_ad_token_refresh = True
     # mock the token provider function
     mocked_func_generating_token = MagicMock(return_value="test_token")
     mocked_get_bearer_token_provider.return_value = mocked_func_generating_token
