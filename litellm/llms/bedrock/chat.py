@@ -43,6 +43,10 @@ from litellm.types.llms.openai import (
     ChatCompletionResponseMessage,
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
+    ChatCompletionToolChoiceFunctionParam,
+    ChatCompletionToolChoiceObjectParam,
+    ChatCompletionToolParam,
+    ChatCompletionToolParamFunctionChunk,
     ChatCompletionUsageBlock,
 )
 from litellm.types.utils import GenericStreamingChunk as GChunk
@@ -1152,6 +1156,7 @@ class AmazonConverseConfig:
             "temperature",
             "top_p",
             "extra_headers",
+            "response_format",
         ]
 
         if (
@@ -1210,6 +1215,48 @@ class AmazonConverseConfig:
         drop_params: bool,
     ) -> dict:
         for param, value in non_default_params.items():
+            if param == "response_format":
+                json_schema: Optional[dict] = None
+                schema_name: str = ""
+                if "response_schema" in value:
+                    json_schema = value["response_schema"]
+                    schema_name = "json_tool_call"
+                elif "json_schema" in value:
+                    json_schema = value["json_schema"]["schema"]
+                    schema_name = value["json_schema"]["name"]
+                """
+                Follow similar approach to anthropic - translate to a single tool call. 
+
+                When using tools in this way: - https://docs.anthropic.com/en/docs/build-with-claude/tool-use#json-mode
+                - You usually want to provide a single tool
+                - You should set tool_choice (see Forcing tool use) to instruct the model to explicitly use that tool
+                - Remember that the model will pass the input to the tool, so the name of the tool and description should be from the model’s perspective.
+                """
+                if json_schema is not None:
+                    _tool_choice = self.map_tool_choice_values(
+                        model=model, tool_choice="required", drop_params=drop_params  # type: ignore
+                    )
+
+                    _tool = ChatCompletionToolParam(
+                        type="function",
+                        function=ChatCompletionToolParamFunctionChunk(
+                            name=schema_name, parameters=json_schema
+                        ),
+                    )
+
+                    optional_params["tools"] = [_tool]
+                    optional_params["tool_choice"] = _tool_choice
+                    optional_params["json_mode"] = True
+                else:
+                    if litellm.drop_params is True or drop_params is True:
+                        pass
+                    else:
+                        raise litellm.utils.UnsupportedParamsError(
+                            message="Bedrock doesn't support response_format={}. To drop it from the call, set `litellm.drop_params = True.".format(
+                                value
+                            ),
+                            status_code=400,
+                        )
             if param == "max_tokens":
                 optional_params["maxTokens"] = value
             if param == "stream":
@@ -1263,7 +1310,7 @@ class BedrockConverseLLM(BaseAWSLLM):
                 additional_args={"complete_input_dict": data},
             )
         print_verbose(f"raw model_response: {response.text}")
-
+        json_mode: Optional[bool] = optional_params.pop("json_mode", None)
         ## RESPONSE OBJECT
         try:
             completion_response = ConverseResponseBlock(**response.json())  # type: ignore
@@ -1332,6 +1379,7 @@ class BedrockConverseLLM(BaseAWSLLM):
                         name=response_tool_name,
                         arguments=json.dumps(content["toolUse"]["input"]),
                     )
+
                     _tool_response_chunk = ChatCompletionToolCallChunk(
                         id=content["toolUse"]["toolUseId"],
                         type="function",
@@ -1340,7 +1388,14 @@ class BedrockConverseLLM(BaseAWSLLM):
                     )
                     tools.append(_tool_response_chunk)
         chat_completion_message["content"] = content_str
-        chat_completion_message["tool_calls"] = tools
+
+        if json_mode is True and tools is not None and len(tools) == 1:
+            # to support 'json_schema' logic on bedrock models
+            json_mode_content_str: Optional[str] = tools[0]["function"].get("arguments")
+            if json_mode_content_str is not None:
+                chat_completion_message["content"] = json_mode_content_str
+        else:
+            chat_completion_message["tool_calls"] = tools
 
         ## CALCULATING USAGE - bedrock returns usage in the headers
         input_tokens = completion_response["usage"]["inputTokens"]
@@ -1586,6 +1641,9 @@ class BedrockConverseLLM(BaseAWSLLM):
         supported_converse_params = AmazonConverseConfig.__annotations__.keys()
         supported_tool_call_params = ["tools", "tool_choice"]
         supported_guardrail_params = ["guardrailConfig"]
+        json_mode: Optional[bool] = inference_params.pop(
+            "json_mode", None
+        )  # used for handling json_schema
         ## TRANSFORMATION ##
 
         bedrock_messages: List[MessageBlock] = _bedrock_converse_messages_pt(
@@ -2028,8 +2086,14 @@ class MockResponseIterator:  # for returning ai21 streaming responses
                 text=chunk_data.choices[0].message.content or "",  # type: ignore
                 tool_use=None,
                 is_finished=True,
-                finish_reason=chunk_data.choices[0].finish_reason,  # type: ignore
-                usage=chunk_usage,  # type: ignore
+                finish_reason=map_finish_reason(
+                    finish_reason=chunk_data.choices[0].finish_reason or ""
+                ),
+                usage=ChatCompletionUsageBlock(
+                    prompt_tokens=chunk_usage.prompt_tokens,
+                    completion_tokens=chunk_usage.completion_tokens,
+                    total_tokens=chunk_usage.total_tokens,
+                ),
                 index=0,
             )
             return processed_chunk

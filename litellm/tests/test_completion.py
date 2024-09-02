@@ -2172,7 +2172,14 @@ def test_completion_openai():
         pytest.fail(f"Error occurred: {e}")
 
 
-@pytest.mark.parametrize("model", ["gpt-4o-2024-08-06", "azure/chatgpt-v-2"])
+@pytest.mark.parametrize(
+    "model",
+    [
+        "gpt-4o-2024-08-06",
+        "azure/chatgpt-v-2",
+        "bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+    ],
+)
 def test_completion_openai_pydantic(model):
     try:
         litellm.set_verbose = True
@@ -2201,7 +2208,7 @@ def test_completion_openai_pydantic(model):
                 )
                 break
             except litellm.JSONSchemaValidationError:
-                print("ERROR OCCURRED! INVALID JSON")
+                pytest.fail("ERROR OCCURRED! INVALID JSON")
 
         print("This is the response object\n", response)
 
