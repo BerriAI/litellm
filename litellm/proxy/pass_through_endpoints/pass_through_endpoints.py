@@ -35,8 +35,9 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
-from .streaming_handler import ModelIteratorType, chunk_processor
+from .streaming_handler import chunk_processor
 from .success_handler import PassThroughEndpointLogging
+from .types import EndpointType
 
 router = APIRouter()
 
@@ -288,6 +289,12 @@ def get_response_headers(headers: httpx.Headers) -> dict:
     return return_headers
 
 
+def get_endpoint_type(url: str) -> EndpointType:
+    if ("generateContent") in url or ("streamGenerateContent") in url:
+        return EndpointType.VERTEX_AI
+    return EndpointType.GENERIC
+
+
 async def pass_through_request(
     request: Request,
     target: str,
@@ -310,6 +317,8 @@ async def pass_through_request(
         headers = forward_headers_from_request(
             request=request, headers=headers, forward_headers=forward_headers
         )
+
+        endpoint_type: EndpointType = get_endpoint_type(str(url))
 
         _parsed_body = None
         if custom_body:
@@ -424,7 +433,7 @@ async def pass_through_request(
                 async for chunk in chunk_processor(
                     response.aiter_bytes(),
                     litellm_logging_obj=logging_obj,
-                    iterator_type=ModelIteratorType.VERTEX_AI,
+                    endpoint_type=endpoint_type,
                     start_time=start_time,
                     passthrough_success_handler_obj=pass_through_endpoint_logging,
                     url_route=str(url),
@@ -468,7 +477,7 @@ async def pass_through_request(
                 async for chunk in chunk_processor(
                     response.aiter_bytes(),
                     litellm_logging_obj=logging_obj,
-                    iterator_type=ModelIteratorType.VERTEX_AI,
+                    endpoint_type=endpoint_type,
                     start_time=start_time,
                     passthrough_success_handler_obj=pass_through_endpoint_logging,
                     url_route=str(url),
