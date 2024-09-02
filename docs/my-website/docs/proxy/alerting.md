@@ -190,6 +190,36 @@ curl -i http://localhost:4000/v1/chat/completions \
 ```
 
 
+## Advanced - provide multiple slack channels for a given alert type
+
+Just add it like this - `alert_type: [<hook_url_channel_1>, <hook_url_channel_2>]`. 
+
+1. Setup config.yaml
+
+```yaml
+general_settings: 
+  master_key: sk-1234
+  alerting: ["slack"]
+  alert_to_webhook_url: {
+    "spend_reports": ["https://webhook.site/7843a980-a494-4967-80fb-d502dbc16886", "https://webhook.site/28cfb179-f4fb-4408-8129-729ff55cf213"]
+  }
+```
+
+2. Start proxy 
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+```bash
+curl -X GET 'http://0.0.0.0:4000/health/services?service=slack' \
+-H 'Authorization: Bearer sk-1234'
+```
+
+In case of error, check server logs for the error message!
+
 ## Advanced - Using MS Teams Webhooks
 
 MS Teams provides a slack compatible webhook url that you can use for alerting

@@ -900,6 +900,14 @@ from .llms.bedrock.common_utils import (
     AmazonMistralConfig,
     AmazonBedrockGlobalConfig,
 )
+from .llms.bedrock.embed.amazon_titan_g1_transformation import AmazonTitanG1Config
+from .llms.bedrock.embed.amazon_titan_multimodal_transformation import (
+    AmazonTitanMultimodalEmbeddingG1Config,
+)
+from .llms.bedrock.embed.amazon_titan_v2_transformation import (
+    AmazonTitanV2Config,
+)
+from .llms.bedrock.embed.cohere_transformation import BedrockCohereEmbeddingConfig
 from .llms.openai import (
     OpenAIConfig,
     OpenAITextCompletionConfig,
