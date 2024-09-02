@@ -117,3 +117,37 @@ async def test_basic_vertex_ai_pass_through_with_spendlog():
     )
 
     pass
+
+
+@pytest.mark.asyncio()
+async def test_basic_vertex_ai_pass_through_streaming_with_spendlog():
+
+    spend_before = await call_spend_logs_endpoint() or 0.0
+    print("spend_before", spend_before)
+    load_vertex_ai_credentials()
+
+    vertexai.init(
+        project="adroit-crow-413218",
+        location="us-central1",
+        api_endpoint=f"{LITE_LLM_ENDPOINT}/vertex-ai",
+        api_transport="rest",
+    )
+
+    model = GenerativeModel(model_name="gemini-1.0-pro")
+    response = model.generate_content("hi", stream=True)
+
+    for chunk in response:
+        print("chunk", chunk)
+
+    print("response", response)
+
+    await asyncio.sleep(20)
+    spend_after = await call_spend_logs_endpoint()
+    print("spend_after", spend_after)
+    assert (
+        spend_after > spend_before
+    ), "Spend should be greater than before. spend_before: {}, spend_after: {}".format(
+        spend_before, spend_after
+    )
+
+    pass
