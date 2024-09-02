@@ -78,6 +78,17 @@ def is_llm_api_route(route: str) -> bool:
             if re.match(pattern, route):
                 return True
 
+    # Pass through Bedrock, VertexAI, and Cohere Routes
+    if "/bedrock/" in route:
+        return True
+    if "/vertex-ai/" in route:
+        return True
+    if "/gemini/" in route:
+        return True
+    if "/cohere/" in route:
+        return True
+    if "/langfuse/" in route:
+        return True
     return False
 
 
@@ -227,3 +238,24 @@ def get_key_model_tpm_limit(user_api_key_dict: UserAPIKeyAuth) -> Optional[dict]
             return user_api_key_dict.metadata["model_tpm_limit"]
 
     return None
+
+
+def is_pass_through_provider_route(route: str) -> bool:
+    PROVIDER_SPECIFIC_PASS_THROUGH_ROUTES = [
+        "vertex-ai",
+    ]
+
+    # check if any of the prefixes are in the route
+    for prefix in PROVIDER_SPECIFIC_PASS_THROUGH_ROUTES:
+        if prefix in route:
+            return True
+
+    return False
+
+
+def should_run_auth_on_pass_through_provider_route(route: str) -> bool:
+    """
+    Use this to decide if the rest of the LiteLLM Virtual Key auth checks should run on /vertex-ai/{endpoint} routes
+    """
+    # by default we do not run virtual key auth checks on /vertex-ai/{endpoint} routes
+    return False

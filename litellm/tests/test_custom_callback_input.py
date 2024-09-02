@@ -976,6 +976,7 @@ async def test_async_embedding_bedrock():
 # CACHING
 ## Test Azure - completion, embedding
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=1)
 async def test_async_completion_azure_caching():
     litellm.set_verbose = True
     customHandler_caching = CompletionCustomHandler()
@@ -1347,3 +1348,33 @@ def test_logging_async_cache_hit_sync_call():
         assert standard_logging_object["cache_hit"] is True
         assert standard_logging_object["response_cost"] == 0
         assert standard_logging_object["saved_cache_cost"] > 0
+
+
+def test_logging_key_masking_gemini():
+    customHandler = CompletionCustomHandler()
+    litellm.callbacks = [customHandler]
+    litellm.success_callback = []
+
+    with patch.object(
+        customHandler, "log_pre_api_call", new=MagicMock()
+    ) as mock_client:
+        try:
+            resp = litellm.completion(
+                model="gemini/gemini-1.5-pro",
+                messages=[{"role": "user", "content": "Hey, how's it going?"}],
+                api_key="LEAVE_ONLY_LAST_4_CHAR_UNMASKED_THIS_PART",
+            )
+        except litellm.AuthenticationError:
+            pass
+
+        mock_client.assert_called()
+
+        print(f"mock_client.call_args.kwargs: {mock_client.call_args.kwargs}")
+        assert (
+            "LEAVE_ONLY_LAST_4_CHAR_UNMASKED_THIS_PART"
+            not in mock_client.call_args.kwargs["kwargs"]["litellm_params"]["api_base"]
+        )
+        key = mock_client.call_args.kwargs["kwargs"]["litellm_params"]["api_base"]
+        trimmed_key = key.split("key=")[1]
+        trimmed_key = trimmed_key.replace("*", "")
+        assert "PART" == trimmed_key

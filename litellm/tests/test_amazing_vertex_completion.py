@@ -906,6 +906,7 @@ async def test_gemini_pro_function_calling_httpx(model, sync_mode):
             "tools": tools,
             "tool_choice": "required",
         }
+        print(f"Model for call - {model}")
         if sync_mode:
             response = litellm.completion(**data)
         else:
@@ -1934,6 +1935,61 @@ async def test_vertexai_multimodal_embedding():
         print("Response:", response)
 
 
+@pytest.mark.asyncio
+async def test_vertexai_multimodal_embedding_text_input():
+    load_vertex_ai_credentials()
+    mock_response = AsyncMock()
+
+    def return_val():
+        return {
+            "predictions": [
+                {
+                    "textEmbedding": [0.4, 0.5, 0.6],  # Simplified example
+                }
+            ]
+        }
+
+    mock_response.json = return_val
+    mock_response.status_code = 200
+
+    expected_payload = {
+        "instances": [
+            {
+                "text": "this is a unicorn",
+            }
+        ]
+    }
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=mock_response,
+    ) as mock_post:
+        # Act: Call the litellm.aembedding function
+        response = await litellm.aembedding(
+            model="vertex_ai/multimodalembedding@001",
+            input=[
+                "this is a unicorn",
+            ],
+        )
+
+        # Assert
+        mock_post.assert_called_once()
+        _, kwargs = mock_post.call_args
+        args_to_vertexai = kwargs["json"]
+
+        print("args to vertex ai call:", args_to_vertexai)
+
+        assert args_to_vertexai == expected_payload
+        assert response.model == "multimodalembedding@001"
+        assert len(response.data) == 1
+        response_data = response.data[0]
+        assert "textEmbedding" in response_data
+
+        # Optional: Print for debugging
+        print("Arguments passed to Vertex AI:", args_to_vertexai)
+        print("Response:", response)
+
+
 @pytest.mark.skip(
     reason="new test - works locally running into vertex version issues on ci/cd"
 )
@@ -1951,6 +2007,25 @@ def test_vertexai_embedding_embedding_latest():
         )
 
         assert len(response.data[0]["embedding"]) == 1
+        assert response.usage.prompt_tokens > 0
+        print(f"response:", response)
+    except litellm.RateLimitError as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.flaky(retries=3, delay=1)
+def test_vertexai_embedding_embedding_latest_input_type():
+    try:
+        load_vertex_ai_credentials()
+        litellm.set_verbose = True
+
+        response = embedding(
+            model="vertex_ai/text-embedding-004",
+            input=["hi"],
+            input_type="RETRIEVAL_QUERY",
+        )
         assert response.usage.prompt_tokens > 0
         print(f"response:", response)
     except litellm.RateLimitError as e:
@@ -2555,3 +2630,130 @@ async def test_partner_models_httpx_ai21():
         assert response.usage.total_tokens == 194
 
         print(f"response: {response}")
+
+
+def test_gemini_function_call_parameter_in_messages():
+    litellm.set_verbose = True
+    load_vertex_ai_credentials()
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "search",
+                "description": "Executes searches.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "queries": {
+                            "type": "array",
+                            "description": "A list of queries to search for.",
+                            "items": {"type": "string"},
+                        },
+                    },
+                    "required": ["queries"],
+                },
+            },
+        },
+    ]
+
+    # Set up the messages
+    messages = [
+        {"role": "system", "content": """Use search for most queries."""},
+        {"role": "user", "content": """search for weather in boston (use `search`)"""},
+        {
+            "role": "assistant",
+            "content": None,
+            "function_call": {
+                "name": "search",
+                "arguments": '{"queries": ["weather in boston"]}',
+            },
+        },
+        {
+            "role": "function",
+            "name": "search",
+            "content": "The current weather in Boston is 22°F.",
+        },
+    ]
+
+    client = HTTPHandler(concurrent_limit=1)
+
+    with patch.object(client, "post", new=MagicMock()) as mock_client:
+        try:
+            response_stream = completion(
+                model="vertex_ai/gemini-1.5-pro",
+                messages=messages,
+                tools=tools,
+                tool_choice="auto",
+                client=client,
+            )
+        except Exception as e:
+            print(e)
+
+        # mock_client.assert_any_call()
+        assert {
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [{"text": "search for weather in boston (use `search`)"}],
+                },
+                {
+                    "role": "model",
+                    "parts": [
+                        {
+                            "function_call": {
+                                "name": "search",
+                                "args": {
+                                    "fields": {
+                                        "key": "queries",
+                                        "value": {"list_value": ["weather in boston"]},
+                                    }
+                                },
+                            }
+                        }
+                    ],
+                },
+                {
+                    "parts": [
+                        {
+                            "function_response": {
+                                "name": "search",
+                                "response": {
+                                    "fields": {
+                                        "key": "content",
+                                        "value": {
+                                            "string_value": "The current weather in Boston is 22°F."
+                                        },
+                                    }
+                                },
+                            }
+                        }
+                    ]
+                },
+            ],
+            "system_instruction": {"parts": [{"text": "Use search for most queries."}]},
+            "tools": [
+                {
+                    "function_declarations": [
+                        {
+                            "name": "search",
+                            "description": "Executes searches.",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "queries": {
+                                        "type": "array",
+                                        "description": "A list of queries to search for.",
+                                        "items": {"type": "string"},
+                                    }
+                                },
+                                "required": ["queries"],
+                            },
+                        }
+                    ]
+                }
+            ],
+            "toolConfig": {"functionCallingConfig": {"mode": "AUTO"}},
+            "generationConfig": {},
+        } == mock_client.call_args.kwargs["json"]

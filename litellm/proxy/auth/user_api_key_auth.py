@@ -61,7 +61,9 @@ from litellm.proxy.auth.auth_utils import (
     check_if_request_size_is_safe,
     get_request_route,
     is_llm_api_route,
+    is_pass_through_provider_route,
     route_in_additonal_public_routes,
+    should_run_auth_on_pass_through_provider_route,
 )
 from litellm.proxy.auth.oauth2_check import check_oauth2_token
 from litellm.proxy.auth.oauth2_proxy_hook import handle_oauth2_proxy_request
@@ -204,7 +206,11 @@ async def user_api_key_auth(
         ):
             # check if public endpoint
             return UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY)
-
+        elif is_pass_through_provider_route(route=route):
+            if should_run_auth_on_pass_through_provider_route(route=route) is False:
+                return UserAPIKeyAuth(
+                    user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
+                )
         if general_settings.get("enable_oauth2_auth", False) is True:
             # return UserAPIKeyAuth object
             # helper to check if the api_key is a valid oauth2 token

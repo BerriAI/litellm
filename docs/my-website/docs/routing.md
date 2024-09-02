@@ -315,6 +315,33 @@ router_settings:
 
 If `rpm` or `tpm` is not provided, it randomly picks a deployment
 
+You can also set a `weight` param, to specify which model should get picked when.
+
+<Tabs>
+<TabItem value="rpm" label="RPM-based shuffling">
+
+##### **LiteLLM Proxy Config.yaml**
+
+```yaml
+model_list:
+	- model_name: gpt-3.5-turbo
+	  litellm_params:
+	  	model: azure/chatgpt-v-2
+		api_key: os.environ/AZURE_API_KEY
+		api_version: os.environ/AZURE_API_VERSION
+		api_base: os.environ/AZURE_API_BASE
+		rpm: 900 
+	- model_name: gpt-3.5-turbo
+	  litellm_params:
+	  	model: azure/chatgpt-functioncalling
+		api_key: os.environ/AZURE_API_KEY
+		api_version: os.environ/AZURE_API_VERSION
+		api_base: os.environ/AZURE_API_BASE
+		rpm: 10 
+```
+
+##### **Python SDK**
+
 ```python
 from litellm import Router 
 import asyncio
@@ -337,12 +364,68 @@ model_list = [{ # list of model deployments
 		"api_base": os.getenv("AZURE_API_BASE"),
 		"rpm": 10,
 	}
+},]
+
+# init router
+router = Router(model_list=model_list, routing_strategy="simple-shuffle")
+async def router_acompletion():
+	response = await router.acompletion(
+		model="gpt-3.5-turbo", 
+		messages=[{"role": "user", "content": "Hey, how's it going?"}]
+	)
+	print(response)
+	return response
+
+asyncio.run(router_acompletion())
+```
+
+</TabItem>
+<TabItem value="weight" label="Weight-based shuffling">
+
+##### **LiteLLM Proxy Config.yaml**
+
+```yaml
+model_list:
+	- model_name: gpt-3.5-turbo
+	  litellm_params:
+	  	model: azure/chatgpt-v-2
+		api_key: os.environ/AZURE_API_KEY
+		api_version: os.environ/AZURE_API_VERSION
+		api_base: os.environ/AZURE_API_BASE
+		weight: 9
+	- model_name: gpt-3.5-turbo
+	  litellm_params:
+	  	model: azure/chatgpt-functioncalling
+		api_key: os.environ/AZURE_API_KEY
+		api_version: os.environ/AZURE_API_VERSION
+		api_base: os.environ/AZURE_API_BASE
+		weight: 1 
+```
+
+
+##### **Python SDK**
+
+```python
+from litellm import Router 
+import asyncio
+
+model_list = [{
+	"model_name": "gpt-3.5-turbo", # model alias 
+	"litellm_params": { 
+		"model": "azure/chatgpt-v-2", # actual model name
+		"api_key": os.getenv("AZURE_API_KEY"),
+		"api_version": os.getenv("AZURE_API_VERSION"),
+		"api_base": os.getenv("AZURE_API_BASE"),
+		"weight": 9, # pick this 90% of the time
+	}
 }, {
     "model_name": "gpt-3.5-turbo", 
-	"litellm_params": { # params for litellm completion/embedding call 
-		"model": "gpt-3.5-turbo", 
-		"api_key": os.getenv("OPENAI_API_KEY"),
-		"rpm": 10,
+	"litellm_params": { 
+		"model": "azure/chatgpt-functioncalling", 
+		"api_key": os.getenv("AZURE_API_KEY"),
+		"api_version": os.getenv("AZURE_API_VERSION"),
+		"api_base": os.getenv("AZURE_API_BASE"),
+		"weight": 1,
 	}
 }]
 
@@ -358,6 +441,10 @@ async def router_acompletion():
 
 asyncio.run(router_acompletion())
 ```
+
+</TabItem>
+</Tabs>
+
 </TabItem>
 <TabItem value="usage-based" label="Rate-Limit Aware">
 

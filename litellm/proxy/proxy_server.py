@@ -163,10 +163,14 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     check_file_size_under_limit,
 )
-from litellm.proxy.common_utils.load_config_utils import get_file_contents_from_s3
+from litellm.proxy.common_utils.load_config_utils import (
+    get_config_file_contents_from_gcs,
+    get_file_contents_from_s3,
+)
 from litellm.proxy.common_utils.openai_endpoint_utils import (
     remove_sensitive_info_from_deployment,
 )
+from litellm.proxy.common_utils.swagger_utils import ERROR_RESPONSES
 from litellm.proxy.fine_tuning_endpoints.endpoints import router as fine_tuning_router
 from litellm.proxy.fine_tuning_endpoints.endpoints import set_fine_tuning_config
 from litellm.proxy.guardrails.init_guardrails import (
@@ -692,10 +696,10 @@ def load_from_azure_key_vault(use_azure_key_vault: bool = False):
 def cost_tracking():
     global prisma_client, custom_db_client
     if prisma_client is not None or custom_db_client is not None:
-        if isinstance(litellm.success_callback, list):
+        if isinstance(litellm._async_success_callback, list):
             verbose_proxy_logger.debug("setting litellm success callback to track cost")
-            if (_PROXY_track_cost_callback) not in litellm.success_callback:  # type: ignore
-                litellm.success_callback.append(_PROXY_track_cost_callback)  # type: ignore
+            if (_PROXY_track_cost_callback) not in litellm._async_success_callback:  # type: ignore
+                litellm._async_success_callback.append(_PROXY_track_cost_callback)  # type: ignore
 
 
 async def _PROXY_failure_handler(
@@ -1492,12 +1496,18 @@ class ProxyConfig:
         if os.environ.get("LITELLM_CONFIG_BUCKET_NAME") is not None:
             bucket_name = os.environ.get("LITELLM_CONFIG_BUCKET_NAME")
             object_key = os.environ.get("LITELLM_CONFIG_BUCKET_OBJECT_KEY")
+            bucket_type = os.environ.get("LITELLM_CONFIG_BUCKET_TYPE")
             verbose_proxy_logger.debug(
                 "bucket_name: %s, object_key: %s", bucket_name, object_key
             )
-            config = get_file_contents_from_s3(
-                bucket_name=bucket_name, object_key=object_key
-            )
+            if bucket_type == "gcs":
+                config = await get_config_file_contents_from_gcs(
+                    bucket_name=bucket_name, object_key=object_key
+                )
+            else:
+                config = get_file_contents_from_s3(
+                    bucket_name=bucket_name, object_key=object_key
+                )
         else:
             # default to file
             config = await self.get_config(config_file_path=config_file_path)
@@ -3036,6 +3046,7 @@ def model_list(
     "/openai/deployments/{model:path}/chat/completions",
     dependencies=[Depends(user_api_key_auth)],
     tags=["chat/completions"],
+    responses={200: {"description": "Successful response"}, **ERROR_RESPONSES},
 )  # azure compatible endpoint
 @backoff.on_exception(
     backoff.expo,

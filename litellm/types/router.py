@@ -5,11 +5,12 @@ litellm.Router Types - includes RouterConfig, UpdateRouterConfig, ModelInfo etc
 import datetime
 import enum
 import uuid
-from typing import Dict, List, Literal, Optional, Tuple, TypedDict, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple, TypedDict, Union
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
+from ..exceptions import RateLimitError
 from .completion import CompletionRequest
 from .embedding import EmbeddingRequest
 from .utils import ModelResponse
@@ -299,6 +300,8 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     custom_llm_provider: Optional[str]
     tpm: Optional[int]
     rpm: Optional[int]
+    order: Optional[int]
+    weight: Optional[int]
     api_key: Optional[str]
     api_base: Optional[str]
     api_version: Optional[str]
@@ -565,7 +568,7 @@ class RouterRateLimitErrorBasic(ValueError):
         super().__init__(_message)
 
 
-class RouterRateLimitError(ValueError):
+class RouterRateLimitError(RateLimitError):
     def __init__(
         self,
         model: str,
@@ -578,4 +581,4 @@ class RouterRateLimitError(ValueError):
         self.enable_pre_call_checks = enable_pre_call_checks
         self.cooldown_list = cooldown_list
         _message = f"{RouterErrors.no_deployments_available.value}, Try again in {cooldown_time} seconds. Passed model={model}. pre-call-checks={enable_pre_call_checks}, cooldown_list={cooldown_list}"
-        super().__init__(_message)
+        super().__init__(_message, llm_provider="", model=model)

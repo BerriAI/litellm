@@ -1,21 +1,25 @@
-import sys, os, uuid
+import os
+import sys
 import time
 import traceback
+import uuid
+
 from dotenv import load_dotenv
 
 load_dotenv()
 import os
-from uuid import uuid4
 import tempfile
+from uuid import uuid4
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import pytest
+
 from litellm import get_secret
-from litellm.proxy.secret_managers.aws_secret_manager import load_aws_secret_manager
 from litellm.llms.azure import get_azure_ad_token_from_oidc
-from litellm.llms.bedrock_httpx import BedrockLLM, BedrockConverseLLM
+from litellm.llms.bedrock.chat import BedrockConverseLLM, BedrockLLM
+from litellm.proxy.secret_managers.aws_secret_manager import load_aws_secret_manager
 
 
 @pytest.mark.skip(reason="AWS Suspended Account")
@@ -63,9 +67,7 @@ def test_oidc_github():
     reason="Cannot run without being in CircleCI Runner",
 )
 def test_oidc_circleci():
-    secret_val = get_secret(
-        "oidc/circleci/"
-    )
+    secret_val = get_secret("oidc/circleci/")
 
     print(f"secret_val: {redact_oidc_signature(secret_val)}")
 
@@ -103,9 +105,7 @@ def test_oidc_circle_v1_with_amazon():
     # The purpose of this test is to get logs using the older v1 of the CircleCI OIDC token
 
     # TODO: This is using ai.moda's IAM role, we should use LiteLLM's IAM role eventually
-    aws_role_name = (
-        "arn:aws:iam::335785316107:role/litellm-github-unit-tests-circleci-v1-assume-only"
-    )
+    aws_role_name = "arn:aws:iam::335785316107:role/litellm-github-unit-tests-circleci-v1-assume-only"
     aws_web_identity_token = "oidc/circleci/"
 
     bllm = BedrockLLM()
@@ -116,6 +116,7 @@ def test_oidc_circle_v1_with_amazon():
         aws_session_name="assume-v1-session",
     )
 
+
 @pytest.mark.skipif(
     os.environ.get("CIRCLE_OIDC_TOKEN") is None,
     reason="Cannot run without being in CircleCI Runner",
@@ -124,9 +125,7 @@ def test_oidc_circle_v1_with_amazon_fips():
     # The purpose of this test is to validate that we can assume a role in a FIPS region
 
     # TODO: This is using ai.moda's IAM role, we should use LiteLLM's IAM role eventually
-    aws_role_name = (
-        "arn:aws:iam::335785316107:role/litellm-github-unit-tests-circleci-v1-assume-only"
-    )
+    aws_role_name = "arn:aws:iam::335785316107:role/litellm-github-unit-tests-circleci-v1-assume-only"
     aws_web_identity_token = "oidc/circleci/"
 
     bllm = BedrockConverseLLM()
@@ -143,9 +142,7 @@ def test_oidc_env_variable():
     # Create a unique environment variable name
     env_var_name = "OIDC_TEST_PATH_" + uuid4().hex
     os.environ[env_var_name] = "secret-" + uuid4().hex
-    secret_val = get_secret(
-        f"oidc/env/{env_var_name}"
-    )
+    secret_val = get_secret(f"oidc/env/{env_var_name}")
 
     print(f"secret_val: {redact_oidc_signature(secret_val)}")
 
@@ -157,15 +154,13 @@ def test_oidc_env_variable():
 
 def test_oidc_file():
     # Create a temporary file
-    with tempfile.NamedTemporaryFile(mode='w+') as temp_file:
+    with tempfile.NamedTemporaryFile(mode="w+") as temp_file:
         secret_value = "secret-" + uuid4().hex
         temp_file.write(secret_value)
         temp_file.flush()
         temp_file_path = temp_file.name
 
-        secret_val = get_secret(
-            f"oidc/file/{temp_file_path}"
-        )
+        secret_val = get_secret(f"oidc/file/{temp_file_path}")
 
         print(f"secret_val: {redact_oidc_signature(secret_val)}")
 
@@ -174,7 +169,7 @@ def test_oidc_file():
 
 def test_oidc_env_path():
     # Create a temporary file
-    with tempfile.NamedTemporaryFile(mode='w+') as temp_file:
+    with tempfile.NamedTemporaryFile(mode="w+") as temp_file:
         secret_value = "secret-" + uuid4().hex
         temp_file.write(secret_value)
         temp_file.flush()
@@ -187,9 +182,7 @@ def test_oidc_env_path():
         os.environ[env_var_name] = temp_file_path
 
         # Test getting the secret using the environment variable
-        secret_val = get_secret(
-            f"oidc/env_path/{env_var_name}"
-        )
+        secret_val = get_secret(f"oidc/env_path/{env_var_name}")
 
         print(f"secret_val: {redact_oidc_signature(secret_val)}")
 
