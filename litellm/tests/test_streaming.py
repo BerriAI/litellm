@@ -1545,6 +1545,7 @@ def test_completion_bedrock_claude_stream():
 # test_completion_bedrock_claude_stream()
 
 
+@pytest.mark.skip(reason="Model end of life.")
 def test_completion_bedrock_ai21_stream():
     try:
         litellm.set_verbose = False
