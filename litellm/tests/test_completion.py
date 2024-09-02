@@ -4478,7 +4478,7 @@ async def test_dynamic_azure_params(stream, sync_mode):
 
 @pytest.mark.asyncio()
 @pytest.mark.flaky(retries=3, delay=1)
-async def test_completion_ai21():
+async def test_completion_ai21_chat():
     litellm.set_verbose = True
     response = await litellm.acompletion(
         model="jamba-1.5-large",
