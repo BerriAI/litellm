@@ -281,3 +281,33 @@ async def async_embedding(
     )
     setattr(model_response, "usage", usage)
     return model_response
+
+
+async def transform_vertex_response_to_openai(
+    response: dict, model: str, model_response: litellm.EmbeddingResponse
+) -> litellm.EmbeddingResponse:
+
+    _predictions = response["predictions"]
+
+    embedding_response = []
+    input_tokens: int = 0
+    for idx, element in enumerate(_predictions):
+
+        embedding = element["embeddings"]
+        embedding_response.append(
+            {
+                "object": "embedding",
+                "index": idx,
+                "embedding": embedding["values"],
+            }
+        )
+        input_tokens += embedding["statistics"]["token_count"]
+
+    model_response.object = "list"
+    model_response.data = embedding_response
+    model_response.model = model
+    usage = Usage(
+        prompt_tokens=input_tokens, completion_tokens=0, total_tokens=input_tokens
+    )
+    setattr(model_response, "usage", usage)
+    return model_response
