@@ -121,7 +121,7 @@ spec:
             - name: DATABASE_HOST
               value: {{ .Release.Name }}-postgresql
             - name: STORE_MODEL_IN_DB
-              value: true
+              value: "true"
             - name: DATABASE_NAME
               value: litellm
             {{- else if .Values.db.useExisting }}
