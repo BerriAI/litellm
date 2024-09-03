@@ -1064,10 +1064,17 @@ class VertexLLM(BaseLLM):
                 os.getcwd(),
             )
 
-            if os.path.exists(credentials):
-                json_obj = json.load(open(credentials))
-            else:
-                json_obj = json.loads(credentials)
+            try:
+                if os.path.exists(credentials):
+                    json_obj = json.load(open(credentials))
+                else:
+                    json_obj = json.loads(credentials)
+            except Exception:
+                raise Exception(
+                    "Unable to load vertex credentials from environment. Got={}".format(
+                        credentials
+                    )
+                )
 
             # Check if the JSON object contains Workload Identity Federation configuration
             if "type" in json_obj and json_obj["type"] == "external_account":

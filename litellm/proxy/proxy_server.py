@@ -8010,8 +8010,13 @@ async def google_login(request: Request):
             # SSO providers do not allow stateless verification
             redirect_params = {}
             state = os.getenv("GENERIC_CLIENT_STATE", None)
+
             if state:
                 redirect_params["state"] = state
+            elif "okta" in generic_authorization_endpoint:
+                redirect_params["state"] = (
+                    uuid.uuid4().hex
+                )  # set state param for okta - required
             return await generic_sso.get_login_redirect(**redirect_params)  # type: ignore
     elif ui_username is not None:
         # No Google, Microsoft SSO
