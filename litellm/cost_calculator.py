@@ -24,7 +24,7 @@ from litellm.llms.anthropic.cost_calculation import (
 )
 from litellm.types.llms.openai import HttpxBinaryResponseContent
 from litellm.types.router import SPECIAL_MODEL_INFO_PARAMS
-from litellm.types.utils import Usage
+from litellm.types.utils import PassthroughCallTypes, Usage
 from litellm.utils import (
     CallTypes,
     CostPerToken,
@@ -625,6 +625,7 @@ def completion_cost(
         if (
             call_type == CallTypes.image_generation.value
             or call_type == CallTypes.aimage_generation.value
+            or call_type == PassthroughCallTypes.passthrough_image_generation.value
         ):
             ### IMAGE GENERATION COST CALCULATION ###
             if custom_llm_provider == "vertex_ai":
