@@ -126,6 +126,9 @@ from .llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gem
 from .llms.vertex_ai_and_google_ai_studio.gemini_embeddings.batch_embed_content_handler import (
     GoogleBatchEmbeddings,
 )
+from .llms.vertex_ai_and_google_ai_studio.image_generation.image_generation_handler import (
+    VertexImageGeneration,
+)
 from .llms.vertex_ai_and_google_ai_studio.multimodal_embeddings.embedding_handler import (
     VertexMultimodalEmbedding,
 )
@@ -180,6 +183,7 @@ bedrock_converse_chat_completion = BedrockConverseLLM()
 bedrock_embedding = BedrockEmbedding()
 vertex_chat_completion = VertexLLM()
 vertex_multimodal_embedding = VertexMultimodalEmbedding()
+vertex_image_generation = VertexImageGeneration()
 google_batch_embeddings = GoogleBatchEmbeddings()
 vertex_partner_models_chat_completion = VertexAIPartnerModels()
 vertex_text_to_speech = VertexTextToSpeechAPI()
@@ -4538,7 +4542,7 @@ def image_generation(
                 or optional_params.pop("vertex_ai_credentials", None)
                 or get_secret("VERTEXAI_CREDENTIALS")
             )
-            model_response = vertex_chat_completion.image_generation(
+            model_response = vertex_image_generation.image_generation(
                 model=model,
                 prompt=prompt,
                 timeout=timeout,
