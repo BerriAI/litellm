@@ -68,3 +68,10 @@ def test_get_llm_provider_deepseek_custom_api_base():
     assert api_base == "MY-FAKE-BASE"
 
     os.environ.pop("DEEPSEEK_API_BASE")
+
+
+def test_get_llm_provider_vertex_ai_image_models():
+    model, custom_llm_provider, dynamic_api_key, api_base = litellm.get_llm_provider(
+        model="imagegeneration@006",
+    )
+    assert custom_llm_provider == "vertex_ai"
