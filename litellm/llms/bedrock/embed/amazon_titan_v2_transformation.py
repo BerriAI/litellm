@@ -56,6 +56,17 @@ class AmazonTitanV2Config:
             and v is not None
         }
 
+    def get_supported_openai_params(self) -> List[str]:
+        return ["dimensions"]
+
+    def map_openai_params(
+        self, non_default_params: dict, optional_params: dict
+    ) -> dict:
+        for k, v in non_default_params.items():
+            if k == "dimensions":
+                optional_params["dimensions"] = v
+        return optional_params
+
     def _transform_request(
         self, input: str, inference_params: dict
     ) -> AmazonTitanV2EmbeddingRequest:

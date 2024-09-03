@@ -1632,6 +1632,16 @@ class AllCallbacks(LiteLLMBase):
         ui_callback_name="Langsmith",
     )
 
+    lago: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="lago",
+        litellm_callback_params=[
+            "LAGO_API_BASE",
+            "LAGO_API_KEY",
+            "LAGO_API_EVENT_CODE",
+        ],
+        ui_callback_name="Lago Billing",
+    )
+
 
 class SpendLogsMetadata(TypedDict):
     """
