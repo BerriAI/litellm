@@ -844,7 +844,7 @@ async def _PROXY_track_cost_callback(
                 kwargs["stream"] == True and "complete_streaming_response" in kwargs
             ):
                 raise Exception(
-                    f"Model not in litellm model cost map. Add custom pricing - https://docs.litellm.ai/docs/proxy/custom_pricing"
+                    f"Model not in litellm model cost map. Passed model = {kwargs.get('model')} - Add custom pricing - https://docs.litellm.ai/docs/proxy/custom_pricing"
                 )
     except Exception as e:
         error_msg = f"error in tracking cost callback - {traceback.format_exc()}"

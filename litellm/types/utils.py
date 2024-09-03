@@ -119,6 +119,10 @@ class CallTypes(Enum):
     speech = "speech"
 
 
+class PassthroughCallTypes(Enum):
+    passthrough_image_generation = "passthrough-image-generation"
+
+
 class TopLogprob(OpenAIObject):
     token: str
     """The token."""

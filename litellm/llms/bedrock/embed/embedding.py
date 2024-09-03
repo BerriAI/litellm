@@ -16,6 +16,7 @@ from litellm.llms.cohere.embed import embedding as cohere_embedding
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
+    _get_async_httpx_client,
     _get_httpx_client,
 )
 from litellm.types.llms.bedrock import AmazonEmbeddingRequest, CohereEmbeddingRequest
@@ -25,13 +26,10 @@ from ...base_aws_llm import BaseAWSLLM
 from ..common_utils import BedrockError, get_runtime_endpoint
 from .amazon_titan_g1_transformation import AmazonTitanG1Config
 from .amazon_titan_multimodal_transformation import (
-    _transform_request as amazon_multimodal_transform_request,
-)
-from .amazon_titan_multimodal_transformation import (
-    _transform_response as amazon_multimodal_transform_response,
+    AmazonTitanMultimodalEmbeddingG1Config,
 )
 from .amazon_titan_v2_transformation import AmazonTitanV2Config
-from .cohere_transformation import _transform_request as cohere_transform_request
+from .cohere_transformation import BedrockCohereEmbeddingConfig
 
 
 class BedrockEmbedding(BaseAWSLLM):
@@ -118,6 +116,35 @@ class BedrockEmbedding(BaseAWSLLM):
 
         return response.json()
 
+    async def _make_async_call(
+        self,
+        client: Optional[AsyncHTTPHandler],
+        timeout: Optional[Union[float, httpx.Timeout]],
+        api_base: str,
+        headers: dict,
+        data: dict,
+    ) -> dict:
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            _params = {}
+            if timeout is not None:
+                if isinstance(timeout, float) or isinstance(timeout, int):
+                    timeout = httpx.Timeout(timeout)
+                _params["timeout"] = timeout
+            client = _get_async_httpx_client(_params)  # type: ignore
+        else:
+            client = client
+
+        try:
+            response = await client.post(url=api_base, headers=headers, data=json.dumps(data))  # type: ignore
+            response.raise_for_status()
+        except httpx.HTTPStatusError as err:
+            error_code = err.response.status_code
+            raise BedrockError(status_code=error_code, message=response.text)
+        except httpx.TimeoutException:
+            raise BedrockError(status_code=408, message="Timeout error occurred.")
+
+        return response.json()
+
     def _single_func_embeddings(
         self,
         client: Optional[HTTPHandler],
@@ -186,8 +213,101 @@ class BedrockEmbedding(BaseAWSLLM):
 
         ## TRANSFORM RESPONSE ##
         if model == "amazon.titan-embed-image-v1":
-            returned_response = amazon_multimodal_transform_response(
+            returned_response = (
+                AmazonTitanMultimodalEmbeddingG1Config()._transform_response(
+                    response_list=responses, model=model
+                )
+            )
+        elif model == "amazon.titan-embed-text-v1":
+            returned_response = AmazonTitanG1Config()._transform_response(
                 response_list=responses, model=model
+            )
+        elif model == "amazon.titan-embed-text-v2:0":
+            returned_response = AmazonTitanV2Config()._transform_response(
+                response_list=responses, model=model
+            )
+
+        if returned_response is None:
+            raise Exception(
+                "Unable to map model response to known provider format. model={}".format(
+                    model
+                )
+            )
+
+        return returned_response
+
+    async def _async_single_func_embeddings(
+        self,
+        client: Optional[AsyncHTTPHandler],
+        timeout: Optional[Union[float, httpx.Timeout]],
+        batch_data: List[dict],
+        credentials: Any,
+        extra_headers: Optional[dict],
+        endpoint_url: str,
+        aws_region_name: str,
+        model: str,
+        logging_obj: Any,
+    ):
+        try:
+            import boto3
+            from botocore.auth import SigV4Auth
+            from botocore.awsrequest import AWSRequest
+            from botocore.credentials import Credentials
+        except ImportError:
+            raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
+
+        responses: List[dict] = []
+        for data in batch_data:
+            sigv4 = SigV4Auth(credentials, "bedrock", aws_region_name)
+            headers = {"Content-Type": "application/json"}
+            if extra_headers is not None:
+                headers = {"Content-Type": "application/json", **extra_headers}
+            request = AWSRequest(
+                method="POST", url=endpoint_url, data=json.dumps(data), headers=headers
+            )
+            sigv4.add_auth(request)
+            if (
+                extra_headers is not None and "Authorization" in extra_headers
+            ):  # prevent sigv4 from overwriting the auth header
+                request.headers["Authorization"] = extra_headers["Authorization"]
+            prepped = request.prepare()
+
+            ## LOGGING
+            logging_obj.pre_call(
+                input=data,
+                api_key="",
+                additional_args={
+                    "complete_input_dict": data,
+                    "api_base": prepped.url,
+                    "headers": prepped.headers,
+                },
+            )
+            response = await self._make_async_call(
+                client=client,
+                timeout=timeout,
+                api_base=prepped.url,
+                headers=prepped.headers,
+                data=data,
+            )
+
+            ## LOGGING
+            logging_obj.post_call(
+                input=data,
+                api_key="",
+                original_response=response,
+                additional_args={"complete_input_dict": data},
+            )
+
+            responses.append(response)
+
+        returned_response: Optional[EmbeddingResponse] = None
+
+        ## TRANSFORM RESPONSE ##
+        if model == "amazon.titan-embed-image-v1":
+            returned_response = (
+                AmazonTitanMultimodalEmbeddingG1Config()._transform_response(
+                    response_list=responses, model=model
+                )
             )
         elif model == "amazon.titan-embed-text-v1":
             returned_response = AmazonTitanG1Config()._transform_response(
@@ -246,7 +366,7 @@ class BedrockEmbedding(BaseAWSLLM):
         data: Optional[CohereEmbeddingRequest] = None
         batch_data: Optional[List] = None
         if provider == "cohere":
-            data = cohere_transform_request(
+            data = BedrockCohereEmbeddingConfig()._transform_request(
                 input=input, inference_params=inference_params
             )
         elif provider == "amazon" and model in [
@@ -257,10 +377,10 @@ class BedrockEmbedding(BaseAWSLLM):
             batch_data = []
             for i in input:
                 if model == "amazon.titan-embed-image-v1":
-                    transformed_request: AmazonEmbeddingRequest = (
-                        amazon_multimodal_transform_request(
-                            input=i, inference_params=inference_params
-                        )
+                    transformed_request: (
+                        AmazonEmbeddingRequest
+                    ) = AmazonTitanMultimodalEmbeddingG1Config()._transform_request(
+                        input=i, inference_params=inference_params
                     )
                 elif model == "amazon.titan-embed-text-v1":
                     transformed_request = AmazonTitanG1Config()._transform_request(
@@ -283,6 +403,22 @@ class BedrockEmbedding(BaseAWSLLM):
         endpoint_url = f"{endpoint_url}/model/{modelId}/invoke"
 
         if batch_data is not None:
+            if aembedding:
+                return self._async_single_func_embeddings(  # type: ignore
+                    client=(
+                        client
+                        if client is not None and isinstance(client, AsyncHTTPHandler)
+                        else None
+                    ),
+                    timeout=timeout,
+                    batch_data=batch_data,
+                    credentials=credentials,
+                    extra_headers=extra_headers,
+                    endpoint_url=endpoint_url,
+                    aws_region_name=aws_region_name,
+                    model=model,
+                    logging_obj=logging_obj,
+                )
             return self._single_func_embeddings(
                 client=(
                     client
