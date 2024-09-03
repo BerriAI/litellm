@@ -1765,6 +1765,15 @@ class ProxyConfig:
                     load_aws_secret_manager(use_aws_secret_manager=True)
                 elif key_management_system == KeyManagementSystem.AWS_KMS.value:
                     load_aws_kms(use_aws_kms=True)
+                elif (
+                    key_management_system
+                    == KeyManagementSystem.GOOGLE_SECRET_MANAGER.value
+                ):
+                    from litellm.proxy.secret_managers.google_secret_manager import (
+                        GoogleSecretManager,
+                    )
+
+                    GoogleSecretManager()
                 else:
                     raise ValueError("Invalid Key Management System selected")
             key_management_settings = general_settings.get(

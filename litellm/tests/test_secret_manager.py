@@ -16,10 +16,10 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import pytest
 
-from litellm import get_secret
 from litellm.llms.azure import get_azure_ad_token_from_oidc
 from litellm.llms.bedrock.chat import BedrockConverseLLM, BedrockLLM
 from litellm.proxy.secret_managers.aws_secret_manager import load_aws_secret_manager
+from litellm.secret_managers.main import get_secret
 
 
 @pytest.mark.skip(reason="AWS Suspended Account")
