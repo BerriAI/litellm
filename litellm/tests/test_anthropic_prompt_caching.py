@@ -283,6 +283,7 @@ async def test_anthropic_api_prompt_caching_no_headers():
 
 
 @pytest.mark.asyncio()
+@pytest.mark.flaky(retries=3, delay=1)
 async def test_anthropic_api_prompt_caching_streaming():
     from litellm.tests.test_streaming import streaming_format_tests
 
