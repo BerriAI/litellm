@@ -399,7 +399,7 @@ class BedrockLLM(BaseAWSLLM):
         encoding,
     ) -> Union[ModelResponse, CustomStreamWrapper]:
         
-        if provider.startswith("eu.") or provider.startswith("us."):
+        if model.startswith("eu.") or model.startswith("us."):
             provider = model.split(".")[1]
         else:
             provider = model.split(".")[0]
@@ -684,7 +684,7 @@ class BedrockLLM(BaseAWSLLM):
         else:
             modelId = model
 
-        if provider.startswith("eu.") or provider.startswith("us."):
+        if model.startswith("eu.") or model.startswith("us."):
             provider = model.split(".")[1]
         else:
             provider = model.split(".")[0]
@@ -1563,7 +1563,7 @@ class BedrockConverseLLM(BaseAWSLLM):
         else:
             modelId = model
 
-        if provider.startswith("eu.") or provider.startswith("us."):
+        if model.startswith("eu.") or model.startswith("us."):
             provider = model.split(".")[1]
         else:
             provider = model.split(".")[0]
