@@ -3111,6 +3111,8 @@ async def test_admin_only_routes(prisma_client):
     }
     from litellm.proxy import proxy_server
 
+    initial_general_settings = getattr(proxy_server, "general_settings")
+
     setattr(proxy_server, "general_settings", general_settings)
 
     admin_user = await new_user(
@@ -3156,3 +3158,5 @@ async def test_admin_only_routes(prisma_client):
         error_str = str(e.message)
         assert "Route" in error_str and "admin only route" in error_str
         pass
+
+    setattr(proxy_server, "general_settings", initial_general_settings)
