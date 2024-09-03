@@ -104,7 +104,7 @@ spec:
             - name: HOST
               valueFrom:
                 fieldRef:
-                  fieldPath: status.hostIP
+                  fieldPath: status.podIP
             - name: PORT
               value: {{ .Values.service.port | quote}}
             {{- if .Values.db.deployStandalone }}
@@ -120,6 +120,8 @@ spec:
                   key: password
             - name: DATABASE_HOST
               value: {{ .Release.Name }}-postgresql
+            - name: STORE_MODEL_IN_DB
+              value: "true"
             - name: DATABASE_NAME
               value: litellm
             {{- else if .Values.db.useExisting }}
