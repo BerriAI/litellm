@@ -17,7 +17,7 @@ Features:
     - ✅ [Audit Logs with retention policy](#audit-logs)
     - ✅ [JWT-Auth](../docs/proxy/token_auth.md)
     - ✅ [Control available public, private routes](#control-available-public-private-routes)
-    - ✅ [[BETA] AWS Key Manager v2 - Key Decryption](#beta-aws-key-manager---key-decryption)
+    - ✅ [**Secret Managers** AWS Key Manager, Google Secret Manager, Azure Key](../secret)
     - ✅ IP address‑based access control lists
     - ✅ Track Request IP Address
     - ✅ [Use LiteLLM keys/authentication on Pass Through Endpoints](pass_through#✨-enterprise---use-litellm-keysauthentication-on-pass-through-endpoints)

@@ -16,10 +16,10 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import pytest
 
-from litellm import get_secret
 from litellm.llms.azure import get_azure_ad_token_from_oidc
 from litellm.llms.bedrock.chat import BedrockConverseLLM, BedrockLLM
-from litellm.proxy.secret_managers.aws_secret_manager import load_aws_secret_manager
+from litellm.secret_managers.aws_secret_manager import load_aws_secret_manager
+from litellm.secret_managers.main import get_secret
 
 
 @pytest.mark.skip(reason="AWS Suspended Account")
@@ -189,3 +189,54 @@ def test_oidc_env_path():
         assert secret_val == secret_value
 
         del os.environ[env_var_name]
+
+
+def test_google_secret_manager():
+    """
+    Test that we can get a secret from Google Secret Manager
+    """
+    os.environ["GOOGLE_SECRET_MANAGER_PROJECT_ID"] = "adroit-crow-413218"
+    from test_amazing_vertex_completion import load_vertex_ai_credentials
+
+    from litellm.secret_managers.google_secret_manager import GoogleSecretManager
+
+    # load_vertex_ai_credentials()
+    secret_manager = GoogleSecretManager()
+
+    secret_val = secret_manager.get_secret_from_google_secret_manager(
+        secret_name="OPENAI_API_KEY"
+    )
+    print("secret_val: {}".format(secret_val))
+
+    assert (
+        secret_val == "anything"
+    ), "did not get expected secret value. expect 'anything', got '{}'".format(
+        secret_val
+    )
+
+
+def test_google_secret_manager_read_in_memory():
+    """
+    Test that Google Secret manager returs in memory value when it exists
+    """
+    from test_amazing_vertex_completion import load_vertex_ai_credentials
+
+    from litellm.secret_managers.google_secret_manager import GoogleSecretManager
+
+    # load_vertex_ai_credentials()
+    os.environ["GOOGLE_SECRET_MANAGER_PROJECT_ID"] = "adroit-crow-413218"
+    secret_manager = GoogleSecretManager()
+    secret_manager.cache.cache_dict["UNIQUE_KEY"] = None
+    secret_manager.cache.cache_dict["UNIQUE_KEY_2"] = "lite-llm"
+
+    secret_val = secret_manager.get_secret_from_google_secret_manager(
+        secret_name="UNIQUE_KEY"
+    )
+    print("secret_val: {}".format(secret_val))
+    assert secret_val == None
+
+    secret_val = secret_manager.get_secret_from_google_secret_manager(
+        secret_name="UNIQUE_KEY_2"
+    )
+    print("secret_val: {}".format(secret_val))
+    assert secret_val == "lite-llm"
