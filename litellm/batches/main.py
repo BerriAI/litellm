@@ -240,7 +240,6 @@ async def aretrieve_batch(
             extra_body,
             **kwargs,
         )
-
         # Add the context to the function
         ctx = contextvars.copy_context()
         func_with_context = partial(ctx.run, func)
