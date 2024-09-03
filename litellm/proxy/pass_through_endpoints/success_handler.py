@@ -118,13 +118,13 @@ class PassThroughEndpointLogging:
             model = self.extract_model_from_url(url_route)
             _json_response = httpx_response.json()
 
-            litellm_model_response: Union[
+            litellm_prediction_response: Union[
                 litellm.ModelResponse, litellm.EmbeddingResponse, litellm.ImageResponse
             ] = litellm.ModelResponse()
             if vertex_image_generation_class.is_image_generation_response(
                 _json_response
             ):
-                litellm_model_response = (
+                litellm_prediction_response = (
                     vertex_image_generation_class.process_image_generation_response(
                         _json_response,
                         model_response=litellm.ImageResponse(),
@@ -136,18 +136,19 @@ class PassThroughEndpointLogging:
                     PassthroughCallTypes.passthrough_image_generation.value
                 )
             else:
-                litellm_model_response = await transform_vertex_response_to_openai(
+                litellm_prediction_response = await transform_vertex_response_to_openai(
                     response=_json_response,
                     model=model,
                     model_response=litellm.EmbeddingResponse(),
                 )
+            if isinstance(litellm_prediction_response, litellm.EmbeddingResponse):
+                litellm_prediction_response.model = model
 
-            litellm_model_response.model = model
-            logging_obj.model = litellm_model_response.model
+            logging_obj.model = model
             logging_obj.model_call_details["model"] = logging_obj.model
 
             await logging_obj.async_success_handler(
-                result=litellm_model_response,
+                result=litellm_prediction_response,
                 start_time=start_time,
                 end_time=end_time,
                 cache_hit=cache_hit,
