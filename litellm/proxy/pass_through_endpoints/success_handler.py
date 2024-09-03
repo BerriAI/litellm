@@ -104,18 +104,35 @@ class PassThroughEndpointLogging:
                 cache_hit=cache_hit,
             )
         elif "predict" in url_route:
+            from litellm.llms.vertex_ai_and_google_ai_studio.image_generation.image_generation_handler import (
+                VertexImageGeneration,
+            )
             from litellm.llms.vertex_ai_and_google_ai_studio.vertex_embeddings.embedding_handler import (
                 transform_vertex_response_to_openai,
             )
 
+            vertex_image_generation_class = VertexImageGeneration()
+
             model = self.extract_model_from_url(url_route)
             _json_response = httpx_response.json()
 
-            litellm_model_response = await transform_vertex_response_to_openai(
-                response=_json_response,
-                model=model,
-                model_response=litellm.EmbeddingResponse(),
-            )
+            litellm_model_response = litellm.ModelResponse()
+            if vertex_image_generation_class.is_image_generation_response(
+                _json_response
+            ):
+                litellm_model_response = (
+                    vertex_image_generation_class.process_image_generation_response(
+                        _json_response,
+                        model_response=litellm.ImageResponse(),
+                        model=model,
+                    )
+                )
+            else:
+                litellm_model_response = await transform_vertex_response_to_openai(
+                    response=_json_response,
+                    model=model,
+                    model_response=litellm.EmbeddingResponse(),
+                )
 
             litellm_model_response.model = model
             logging_obj.model = litellm_model_response.model
