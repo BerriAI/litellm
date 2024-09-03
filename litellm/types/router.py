@@ -568,7 +568,7 @@ class RouterRateLimitErrorBasic(ValueError):
         super().__init__(_message)
 
 
-class RouterRateLimitError(RateLimitError):
+class RouterRateLimitError(ValueError):
     def __init__(
         self,
         model: str,
@@ -581,4 +581,4 @@ class RouterRateLimitError(RateLimitError):
         self.enable_pre_call_checks = enable_pre_call_checks
         self.cooldown_list = cooldown_list
         _message = f"{RouterErrors.no_deployments_available.value}, Try again in {cooldown_time} seconds. Passed model={model}. pre-call-checks={enable_pre_call_checks}, cooldown_list={cooldown_list}"
-        super().__init__(_message, llm_provider="", model=model)
+        super().__init__(_message)
