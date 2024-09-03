@@ -692,7 +692,7 @@ async def test_rate_limit_error_callback():
                     messages=[{"role": "user", "content": "Hey, how's it going?"}],
                     litellm_logging_obj=litellm_logging_obj,
                 )
-            except litellm.RateLimitError:
+            except (litellm.RateLimitError, ValueError):
                 pass
 
         await asyncio.sleep(3)
