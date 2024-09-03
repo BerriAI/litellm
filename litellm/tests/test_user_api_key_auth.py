@@ -268,6 +268,8 @@ async def test_auth_with_allowed_routes(route, should_raise_error):
 
     from litellm.proxy import proxy_server
 
+    initial_general_settings = getattr(proxy_server, "general_settings")
+
     setattr(proxy_server, "master_key", "sk-1234")
     setattr(proxy_server, "general_settings", general_settings)
 
@@ -285,3 +287,5 @@ async def test_auth_with_allowed_routes(route, should_raise_error):
             pass
     else:
         await user_api_key_auth(request=request, api_key="Bearer " + user_key)
+
+    setattr(proxy_server, "general_settings", initial_general_settings)
