@@ -25,7 +25,7 @@ from litellm import (
     completion_cost,
     embedding,
 )
-from litellm.llms.bedrock_httpx import BedrockLLM, ToolBlock
+from litellm.llms.bedrock.chat import BedrockLLM, ToolBlock
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.prompt_templates.factory import _bedrock_tools_pt
 

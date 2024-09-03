@@ -287,3 +287,11 @@ class AnthropicResponse(BaseModel):
 
     usage: AnthropicResponseUsageBlock
     """Billing and rate-limit usage."""
+
+
+class AnthropicChatCompletionUsageBlock(TypedDict, total=False):
+    prompt_tokens: Required[int]
+    completion_tokens: Required[int]
+    total_tokens: Required[int]
+    cache_creation_input_tokens: int
+    cache_read_input_tokens: int
