@@ -1833,6 +1833,19 @@ response = await litellm.aimage_generation(
 )
 ```
 
+### Supported Image Generation Models
+
+| Model Name                   | FUsage                                            |
+|------------------------------|--------------------------------------------------------------|
+| `imagen-3.0-generate-001`      | `litellm.image_generation('vertex_ai/imagen-3.0-generate-001', prompt)` |
+| `imagen-3.0-fast-generate-001` | `litellm.image_generation('vertex_ai/imagen-3.0-fast-generate-001', prompt)` |
+| `imagegeneration@006`          | `litellm.image_generation('vertex_ai/imagegeneration@006', prompt)`  |
+| `imagegeneration@005`          | `litellm.image_generation('vertex_ai/imagegeneration@005', prompt)`  |
+| `imagegeneration@002`          | `litellm.image_generation('vertex_ai/imagegeneration@002', prompt)`  |
+
+
+
+
 ## **Text to Speech APIs**
 
 :::info
