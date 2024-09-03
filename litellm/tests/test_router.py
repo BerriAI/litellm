@@ -2461,7 +2461,6 @@ async def test_router_batch_endpoints(provider):
     await asyncio.sleep(1)
 
     retrieved_batch = await router.aretrieve_batch(
-        model="my-custom-name",
         batch_id=create_batch_response.id,
         custom_llm_provider=provider,
     )
@@ -2475,33 +2474,3 @@ async def test_router_batch_endpoints(provider):
         model="my-custom-name", custom_llm_provider=provider, limit=2
     )
     print("list_batches=", list_batches)
-
-    # # try to get file content for our original file
-
-    # file_content = await router.afile_content(
-    #     file_id=batch_input_file_id, custom_llm_provider=provider
-    # )
-
-    # print("file content = ", file_content)
-
-    # # file obj
-    # file_obj = await router.afile_retrieve(
-    #     file_id=batch_input_file_id, custom_llm_provider=provider
-    # )
-    # print("file obj = ", file_obj)
-    # assert file_obj.id == batch_input_file_id
-
-    # # delete file
-    # delete_file_response = await router.afile_delete(
-    #     file_id=batch_input_file_id, custom_llm_provider=provider
-    # )
-
-    # print("delete file response = ", delete_file_response)
-
-    # assert delete_file_response.id == batch_input_file_id
-
-    # all_files_list = await router.afile_list(
-    #     custom_llm_provider=provider,
-    # )
-
-    # print("all_files_list = ", all_files_list)

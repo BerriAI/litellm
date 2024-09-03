@@ -5103,15 +5103,30 @@ async def retrieve_batch(
     global proxy_logging_obj
     data: Dict = {}
     try:
+        ## check if model is a loadbalanced model
+        router_model: Optional[str] = None
+        is_router_model = False
+
         _retrieve_batch_request = RetrieveBatchRequest(
             batch_id=batch_id,
         )
 
-        if provider is None:
-            provider = "openai"
-        response = await litellm.aretrieve_batch(
-            custom_llm_provider=provider, **_retrieve_batch_request  # type: ignore
-        )
+        if litellm.enable_loadbalancing_on_batch_endpoints is True:
+            if llm_router is None:
+                raise HTTPException(
+                    status_code=500,
+                    detail={
+                        "error": "LLM Router not initialized. Ensure models added to proxy."
+                    },
+                )
+
+            response = await llm_router.aretrieve_batch(**_retrieve_batch_request)  # type: ignore
+        else:
+            if provider is None:
+                provider = "openai"
+            response = await litellm.aretrieve_batch(
+                custom_llm_provider=provider, **_retrieve_batch_request  # type: ignore
+            )
 
         ### ALERTING ###
         asyncio.create_task(
@@ -5143,7 +5158,7 @@ async def retrieve_batch(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        verbose_proxy_logger.error(
+        verbose_proxy_logger.exception(
             "litellm.proxy.proxy_server.retrieve_batch(): Exception occured - {}".format(
                 str(e)
             )

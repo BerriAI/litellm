@@ -2494,7 +2494,6 @@ class Router:
 
     async def aretrieve_batch(
         self,
-        model: str,
         **kwargs,
     ) -> Batch:
         """
@@ -2504,7 +2503,7 @@ class Router:
         """
         try:
 
-            filtered_model_list = self.get_model_list(model_name=model)
+            filtered_model_list = self.get_model_list()
             if filtered_model_list is None:
                 raise Exception("Router not yet initialized.")
 
@@ -2513,8 +2512,15 @@ class Router:
             async def try_retrieve_batch(model_name):
                 try:
                     # Update kwargs with the current model name or any other model-specific adjustments
-                    kwargs["model"] = model_name
-                    return await litellm.aretrieve_batch(**kwargs)
+                    ## SET CUSTOM PROVIDER TO SELECTED DEPLOYMENT ##
+                    _, custom_llm_provider, _, _ = get_llm_provider(
+                        model=model_name["litellm_params"]["model"]
+                    )
+                    new_kwargs = copy.deepcopy(kwargs)
+                    new_kwargs.pop("custom_llm_provider", None)
+                    return await litellm.aretrieve_batch(
+                        custom_llm_provider=custom_llm_provider, **new_kwargs
+                    )
                 except Exception as e:
                     receieved_exceptions.append(e)
                     return None
