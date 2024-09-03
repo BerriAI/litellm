@@ -2314,7 +2314,9 @@ class Router:
             self.total_calls[model_name] += 1
 
             ## REPLACE MODEL IN FILE WITH SELECTED DEPLOYMENT ##
-            stripped_model, _, _, _ = get_llm_provider(model=data["model"])
+            stripped_model, custom_llm_provider, _, _ = get_llm_provider(
+                model=data["model"]
+            )
             kwargs["file"] = replace_model_in_jsonl(
                 file_content=kwargs["file"], new_model_name=stripped_model
             )
@@ -2322,6 +2324,7 @@ class Router:
             response = litellm.acreate_file(
                 **{
                     **data,
+                    "custom_llm_provider": custom_llm_provider,
                     "caching": self.cache_responses,
                     "client": model_client,
                     "timeout": self.timeout,

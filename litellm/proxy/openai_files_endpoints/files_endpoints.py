@@ -176,16 +176,23 @@ async def create_file(
         file_data = (file.filename, file_content, file.content_type)
 
         ## check if model is a loadbalanced model
-        json_obj = get_first_json_object(file_content_bytes=file_content)
-        is_router_model = False
         router_model: Optional[str] = None
-        if json_obj:
-            router_model = get_model_from_json_obj(json_object=json_obj)
-            is_router_model = is_known_model(model=router_model, llm_router=llm_router)
+        if litellm.enable_loadbalancing_on_batch_endpoints is True:
+            json_obj = get_first_json_object(file_content_bytes=file_content)
+            is_router_model = False
+            if json_obj:
+                router_model = get_model_from_json_obj(json_object=json_obj)
+                is_router_model = is_known_model(
+                    model=router_model, llm_router=llm_router
+                )
 
         _create_file_request = CreateFileRequest(file=file_data, **data)
 
-        if is_router_model and router_model is not None:
+        if (
+            litellm.enable_loadbalancing_on_batch_endpoints is True
+            and is_router_model
+            and router_model is not None
+        ):
             if llm_router is None:
                 raise HTTPException(
                     status_code=500,
@@ -193,6 +200,7 @@ async def create_file(
                         "error": "LLM Router not initialized. Ensure models added to proxy."
                     },
                 )
+
             response = await llm_router.acreate_file(
                 model=router_model, **_create_file_request
             )

@@ -137,6 +137,7 @@ return_response_headers: bool = (
 enable_json_schema_validation: bool = False
 ##################
 logging: bool = True
+enable_loadbalancing_on_batch_endpoints: Optional[bool] = None
 enable_caching_on_provider_specific_optional_params: bool = (
     False  # feature-flag for caching on optional params - e.g. 'top_k'
 )

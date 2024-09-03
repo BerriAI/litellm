@@ -1,6 +1,6 @@
 import io
 import json
-from typing import IO, Optional, Union
+from typing import IO, Optional, Tuple, Union
 
 
 class InMemoryFile(io.BytesIO):
@@ -10,13 +10,15 @@ class InMemoryFile(io.BytesIO):
 
 
 def replace_model_in_jsonl(
-    file_content: Union[bytes, IO], new_model_name: str
+    file_content: Union[bytes, IO, Tuple[str, bytes, str]], new_model_name: str
 ) -> Optional[InMemoryFile]:
     try:
         # Decode the bytes to a string and split into lines
         # If file_content is a file-like object, read the bytes
         if hasattr(file_content, "read"):
-            file_content_bytes = file_content.read()
+            file_content_bytes = file_content.read()  # type: ignore
+        elif isinstance(file_content, tuple):
+            file_content_bytes = file_content[1]
         else:
             file_content_bytes = file_content
 
@@ -37,7 +39,7 @@ def replace_model_in_jsonl(
 
         # Reassemble the modified lines and return as bytes
         modified_file_content = "\n".join(modified_lines).encode("utf-8")
-        return InMemoryFile(modified_file_content, name="modified_file.jsonl")
+        return InMemoryFile(modified_file_content, name="modified_file.jsonl")  # type: ignore
 
     except (json.JSONDecodeError, UnicodeDecodeError, TypeError) as e:
         return None
