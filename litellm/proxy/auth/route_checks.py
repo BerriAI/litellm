@@ -133,7 +133,7 @@ def custom_admin_only_route_check(route: str):
         if route in general_settings["admin_only_routes"]:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="user not allowed to access this route. This is an admin only route",
+                detail=f"user not allowed to access this route. Route={route} is an admin only route",
             )
     pass
 
