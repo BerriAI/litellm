@@ -72,7 +72,7 @@ def test_completion_bedrock_claude_completion_auth():
 
         # Second call to test cross-region inference
         response = completion(
-            model="eu.anthropic.claude-3-5-sonnet-20240620-v1:0",
+            model="bedrock/eu.anthropic.claude-3-5-sonnet-20240620-v1:0",
             messages=messages,
             max_tokens=10,
             temperature=0.1,
