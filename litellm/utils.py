@@ -4645,6 +4645,8 @@ def get_llm_provider(
     For router -> Can also give the whole litellm param dict -> this function will extract the relevant details
 
     Raises Error - if unable to map model to a provider
+
+    Return model, custom_llm_provider, dynamic_api_key, api_base
     """
     try:
         ## IF LITELLM PARAMS GIVEN ##
