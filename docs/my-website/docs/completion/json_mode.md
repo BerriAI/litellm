@@ -74,6 +74,7 @@ Works for:
 - Azure OpenAI models
 - Google AI Studio - Gemini models
 - Vertex AI models (Gemini + Anthropic)
+- Bedrock Models
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
