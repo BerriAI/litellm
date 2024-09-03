@@ -70,6 +70,18 @@ def test_completion_bedrock_claude_completion_auth():
         # Add any assertions here to check the response
         print(response)
 
+        # Second call to test cross-region inference
+        response = completion(
+            model="eu.anthropic.claude-3-5-sonnet-20240620-v1:0",
+            messages=messages,
+            max_tokens=10,
+            temperature=0.1,
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
+            aws_region_name="eu-west-3",
+        )
+        print(response)
+
         os.environ["AWS_ACCESS_KEY_ID"] = aws_access_key_id
         os.environ["AWS_SECRET_ACCESS_KEY"] = aws_secret_access_key
         os.environ["AWS_REGION_NAME"] = aws_region_name
@@ -1222,3 +1234,4 @@ def test_not_found_error():
                 }
             ],
         )
+
