@@ -475,7 +475,7 @@ def run_server(
 
         ### DECRYPT ENV VAR ###
 
-        from litellm.proxy.secret_managers.aws_secret_manager import decrypt_env_var
+        from litellm.secret_managers.aws_secret_manager import decrypt_env_var
 
         if (
             os.getenv("USE_AWS_KMS", None) is not None
@@ -548,7 +548,7 @@ def run_server(
                         key_management_system
                         == KeyManagementSystem.GOOGLE_SECRET_MANAGER.value
                     ):
-                        from litellm.proxy.secret_managers.google_secret_manager import (
+                        from litellm.secret_managers.google_secret_manager import (
                             GoogleSecretManager,
                         )
 
