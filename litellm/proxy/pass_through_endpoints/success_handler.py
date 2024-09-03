@@ -1,5 +1,6 @@
 import re
 from datetime import datetime
+from typing import Union
 
 import httpx
 
@@ -117,7 +118,9 @@ class PassThroughEndpointLogging:
             model = self.extract_model_from_url(url_route)
             _json_response = httpx_response.json()
 
-            litellm_model_response = litellm.ModelResponse()
+            litellm_model_response: Union[
+                litellm.ModelResponse, litellm.EmbeddingResponse, litellm.ImageResponse
+            ] = litellm.ModelResponse()
             if vertex_image_generation_class.is_image_generation_response(
                 _json_response
             ):

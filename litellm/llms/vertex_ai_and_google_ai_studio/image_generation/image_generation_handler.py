@@ -16,7 +16,7 @@ class VertexImageGeneration(VertexLLM):
         self,
         json_response: Dict[str, Any],
         model_response: litellm.ImageResponse,
-        model: str,
+        model: Optional[str] = None,
     ) -> litellm.ImageResponse:
         if "predictions" not in json_response:
             raise litellm.InternalServerError(
