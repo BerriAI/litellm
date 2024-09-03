@@ -2470,9 +2470,11 @@ async def test_router_batch_endpoints(provider):
 
     assert retrieved_batch.id == create_batch_response.id
 
-    # # list all batches
-    # list_batches = await router.alist_batches(custom_llm_provider=provider, limit=2)
-    # print("list_batches=", list_batches)
+    # list all batches
+    list_batches = await router.alist_batches(
+        model="my-custom-name", custom_llm_provider=provider, limit=2
+    )
+    print("list_batches=", list_batches)
 
     # # try to get file content for our original file
 

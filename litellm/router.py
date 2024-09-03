@@ -2544,6 +2544,55 @@ class Router:
             )
             raise e
 
+    async def alist_batches(
+        self,
+        model: str,
+        **kwargs,
+    ):
+        """
+        Return all the batches across all deployments of a model group.
+        """
+
+        filtered_model_list = self.get_model_list(model_name=model)
+        if filtered_model_list is None:
+            raise Exception("Router not yet initialized.")
+
+        async def try_retrieve_batch(model: DeploymentTypedDict):
+            try:
+                # Update kwargs with the current model name or any other model-specific adjustments
+                return await litellm.alist_batches(
+                    **{**model["litellm_params"], **kwargs}
+                )
+            except Exception as e:
+                return None
+
+        # Check all models in parallel
+        results = await asyncio.gather(
+            *[try_retrieve_batch(model) for model in filtered_model_list]
+        )
+
+        final_results = {
+            "object": "list",
+            "data": [],
+            "first_id": None,
+            "last_id": None,
+            "has_more": False,
+        }
+
+        for result in results:
+            if result is not None:
+                ## check batch id
+                if final_results["first_id"] is None:
+                    final_results["first_id"] = result.first_id
+                final_results["last_id"] = result.last_id
+                final_results["data"].extend(result.data)  # type: ignore
+
+                ## check 'has_more'
+                if result.has_more is True:
+                    final_results["has_more"] = True
+
+        return final_results
+
     #### ASSISTANTS API ####
 
     async def acreate_assistants(
