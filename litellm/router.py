@@ -2485,6 +2485,65 @@ class Router:
                 self.fail_calls[model] += 1
             raise e
 
+    async def aretrieve_batch(
+        self,
+        model: str,
+        **kwargs,
+    ) -> Batch:
+        """
+        Iterate through all models in a model group to check for batch
+
+        Future Improvement - cache the result.
+        """
+        try:
+
+            filtered_model_list = self.get_model_list(model_name=model)
+            if filtered_model_list is None:
+                raise Exception("Router not yet initialized.")
+
+            receieved_exceptions = []
+
+            async def try_retrieve_batch(model_name):
+                try:
+                    # Update kwargs with the current model name or any other model-specific adjustments
+                    kwargs["model"] = model_name
+                    return await litellm.aretrieve_batch(**kwargs)
+                except Exception as e:
+                    receieved_exceptions.append(e)
+                    return None
+
+            # Check all models in parallel
+            results = await asyncio.gather(
+                *[try_retrieve_batch(model) for model in filtered_model_list],
+                return_exceptions=True,
+            )
+
+            # Check for successful responses and handle exceptions
+            for result in results:
+                if isinstance(result, Batch):
+                    return result
+
+            # If no valid Batch response was found, raise the first encountered exception
+            if receieved_exceptions:
+                raise receieved_exceptions[0]  # Raising the first exception encountered
+
+            # If no exceptions were encountered, raise a generic exception
+            raise Exception(
+                "Unable to find batch in any model. Received errors - {}".format(
+                    receieved_exceptions
+                )
+            )
+        except Exception as e:
+            asyncio.create_task(
+                send_llm_exception_alert(
+                    litellm_router_instance=self,
+                    request_kwargs=kwargs,
+                    error_traceback_str=traceback.format_exc(),
+                    original_exception=e,
+                )
+            )
+            raise e
+
     #### ASSISTANTS API ####
 
     async def acreate_assistants(
@@ -4389,9 +4448,18 @@ class Router:
     def get_model_names(self) -> List[str]:
         return self.model_names
 
-    def get_model_list(self):
+    def get_model_list(
+        self, model_name: Optional[str] = None
+    ) -> Optional[List[DeploymentTypedDict]]:
         if hasattr(self, "model_list"):
-            return self.model_list
+            if model_name is None:
+                return self.model_list
+
+            returned_models: List[DeploymentTypedDict] = []
+            for model in self.model_list:
+                if model["model_name"] == model_name:
+                    returned_models.append(model)
+            return returned_models
         return None
 
     def get_model_access_groups(self):
