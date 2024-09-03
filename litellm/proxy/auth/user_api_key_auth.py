@@ -54,14 +54,15 @@ from litellm.proxy.auth.auth_checks import (
     get_org_object,
     get_team_object,
     get_user_object,
-    is_request_body_safe,
     log_to_opentelemetry,
 )
 from litellm.proxy.auth.auth_utils import (
+    _get_request_ip_address,
     check_if_request_size_is_safe,
     get_request_route,
     is_llm_api_route,
     is_pass_through_provider_route,
+    pre_db_read_auth_checks,
     route_in_additonal_public_routes,
     should_run_auth_on_pass_through_provider_route,
 )
@@ -128,25 +129,11 @@ async def user_api_key_auth(
         route: str = get_request_route(request=request)
         # get the request body
         request_data = await _read_request_body(request=request)
-        is_request_body_safe(request_body=request_data)
-
-        ### LiteLLM Enterprise Security Checks
-        # Check 1. Check if request size is under max_request_size_mb
-        # Check 2. FILTER IP ADDRESS
-        await check_if_request_size_is_safe(request=request)
-
-        is_valid_ip, passed_in_ip = _check_valid_ip(
-            allowed_ips=general_settings.get("allowed_ips", None),
-            use_x_forwarded_for=general_settings.get("use_x_forwarded_for", False),
+        await pre_db_read_auth_checks(
+            request_data=request_data,
             request=request,
+            route=route,
         )
-
-        if not is_valid_ip:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Access forbidden: IP address {passed_in_ip} not allowed.",
-            )
-
         pass_through_endpoints: Optional[List[dict]] = general_settings.get(
             "pass_through_endpoints", None
         )
@@ -200,6 +187,7 @@ async def user_api_key_auth(
         ```
         """
 
+        ######## Route Checks Before Reading DB / Cache for "token" ################
         if (
             route in LiteLLMRoutes.public_routes.value
             or route_in_additonal_public_routes(current_route=route)
@@ -211,6 +199,9 @@ async def user_api_key_auth(
                 return UserAPIKeyAuth(
                     user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
                 )
+
+        ########## End of Route Checks Before Reading DB / Cache for "token" ########
+
         if general_settings.get("enable_oauth2_auth", False) is True:
             # return UserAPIKeyAuth object
             # helper to check if the api_key is a valid oauth2 token
@@ -1280,44 +1271,6 @@ def _get_user_role(
         return LitellmUserRoles.INTERNAL_USER
 
     return role
-
-
-def _get_request_ip_address(
-    request: Request, use_x_forwarded_for: Optional[bool] = False
-) -> Optional[str]:
-
-    client_ip = None
-    if use_x_forwarded_for is True and "x-forwarded-for" in request.headers:
-        client_ip = request.headers["x-forwarded-for"]
-    elif request.client is not None:
-        client_ip = request.client.host
-    else:
-        client_ip = ""
-
-    return client_ip
-
-
-def _check_valid_ip(
-    allowed_ips: Optional[List[str]],
-    request: Request,
-    use_x_forwarded_for: Optional[bool] = False,
-) -> Tuple[bool, Optional[str]]:
-    """
-    Returns if ip is allowed or not
-    """
-    if allowed_ips is None:  # if not set, assume true
-        return True, None
-
-    # if general_settings.get("use_x_forwarded_for") is True then use x-forwarded-for
-    client_ip = _get_request_ip_address(
-        request=request, use_x_forwarded_for=use_x_forwarded_for
-    )
-
-    # Check if IP address is allowed
-    if client_ip not in allowed_ips:
-        return False, client_ip
-
-    return True, client_ip
 
 
 def get_api_key_from_custom_header(
