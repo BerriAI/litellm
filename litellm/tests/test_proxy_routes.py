@@ -21,7 +21,8 @@ from starlette.datastructures import URL, Headers, QueryParams
 
 import litellm
 from litellm.proxy._types import LiteLLMRoutes
-from litellm.proxy.auth.auth_utils import get_request_route, is_llm_api_route
+from litellm.proxy.auth.auth_utils import get_request_route
+from litellm.proxy.auth.route_checks import is_llm_api_route
 from litellm.proxy.proxy_server import app
 
 # Configure logging

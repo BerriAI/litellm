@@ -26,7 +26,7 @@ from litellm.proxy._types import (
     LitellmUserRoles,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_utils import is_llm_api_route
+from litellm.proxy.auth.route_checks import is_llm_api_route
 from litellm.proxy.utils import PrismaClient, ProxyLogging, log_to_opentelemetry
 from litellm.types.services import ServiceLoggerPayload, ServiceTypes
 
