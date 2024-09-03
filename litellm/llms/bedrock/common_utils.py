@@ -10,7 +10,7 @@ from typing import List, Optional, Union
 import httpx
 
 import litellm
-from litellm import get_secret
+from litellm.secret_managers.main import get_secret
 
 
 class BedrockError(Exception):

@@ -4,10 +4,10 @@ from functools import partial
 from typing import Any, Coroutine, Dict, List, Literal, Optional, Union
 
 import litellm
-from litellm import get_secret
 from litellm._logging import verbose_logger
 from litellm.llms.cohere.rerank import CohereRerank
 from litellm.llms.togetherai.rerank import TogetherAIRerank
+from litellm.secret_managers.main import get_secret
 from litellm.types.router import *
 from litellm.utils import supports_httpx_timeout
 
