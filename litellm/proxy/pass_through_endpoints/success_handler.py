@@ -110,6 +110,7 @@ class PassThroughEndpointLogging:
             from litellm.llms.vertex_ai_and_google_ai_studio.vertex_embeddings.embedding_handler import (
                 transform_vertex_response_to_openai,
             )
+            from litellm.types.utils import PassthroughCallTypes
 
             vertex_image_generation_class = VertexImageGeneration()
 
@@ -126,6 +127,10 @@ class PassThroughEndpointLogging:
                         model_response=litellm.ImageResponse(),
                         model=model,
                     )
+                )
+
+                logging_obj.call_type = (
+                    PassthroughCallTypes.passthrough_image_generation.value
                 )
             else:
                 litellm_model_response = await transform_vertex_response_to_openai(

@@ -72,6 +72,6 @@ def test_get_llm_provider_deepseek_custom_api_base():
 
 def test_get_llm_provider_vertex_ai_image_models():
     model, custom_llm_provider, dynamic_api_key, api_base = litellm.get_llm_provider(
-        model="imagegeneration@006",
+        model="imagegeneration@006", custom_llm_provider=None
     )
     assert custom_llm_provider == "vertex_ai"
