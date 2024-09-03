@@ -3712,6 +3712,7 @@ def test_unit_test_custom_stream_wrapper_function_call():
         "vertex_ai/claude-3-5-sonnet@20240620",
     ],
 )
+@pytest.mark.flaky(retries=3, delay=1)
 def test_streaming_tool_calls_valid_json_str(model):
     if "vertex_ai" in model:
         from litellm.tests.test_amazing_vertex_completion import (
