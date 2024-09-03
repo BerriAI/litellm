@@ -2443,9 +2443,13 @@ class Router:
                 model_client = potential_model_client
             self.total_calls[model_name] += 1
 
+            ## SET CUSTOM PROVIDER TO SELECTED DEPLOYMENT ##
+            _, custom_llm_provider, _, _ = get_llm_provider(model=data["model"])
+
             response = litellm.acreate_batch(
                 **{
                     **data,
+                    "custom_llm_provider": custom_llm_provider,
                     "caching": self.cache_responses,
                     "client": model_client,
                     "timeout": self.timeout,

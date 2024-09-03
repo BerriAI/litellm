@@ -177,9 +177,9 @@ async def create_file(
 
         ## check if model is a loadbalanced model
         router_model: Optional[str] = None
+        is_router_model = False
         if litellm.enable_loadbalancing_on_batch_endpoints is True:
             json_obj = get_first_json_object(file_content_bytes=file_content)
-            is_router_model = False
             if json_obj:
                 router_model = get_model_from_json_obj(json_object=json_obj)
                 is_router_model = is_known_model(
