@@ -52,6 +52,27 @@ class GCSBucketBase(CustomLogger):
 
         return headers
 
+    def sync_construct_request_headers(self) -> Dict[str, str]:
+        from litellm import vertex_chat_completion
+
+        auth_header, _ = vertex_chat_completion._get_token_and_url(
+            model="gcs-bucket",
+            vertex_credentials=self.path_service_account_json,
+            vertex_project=None,
+            vertex_location=None,
+            gemini_api_key=None,
+            stream=None,
+            custom_llm_provider="vertex_ai",
+            api_base=None,
+        )
+        verbose_logger.debug("constructed auth_header %s", auth_header)
+        headers = {
+            "Authorization": f"Bearer {auth_header}",  # auth_header
+            "Content-Type": "application/json",
+        }
+
+        return headers
+
     async def download_gcs_object(self, object_name):
         """
         Download an object from GCS.
