@@ -356,6 +356,7 @@ vertex_language_models: List = []
 vertex_vision_models: List = []
 vertex_chat_models: List = []
 vertex_code_chat_models: List = []
+vertex_ai_image_models: List = []
 vertex_text_models: List = []
 vertex_code_text_models: List = []
 vertex_embedding_models: List = []
@@ -416,6 +417,9 @@ for key, value in model_cost.items():
     elif value.get("litellm_provider") == "vertex_ai-ai21_models":
         key = key.replace("vertex_ai/", "")
         vertex_ai_ai21_models.append(key)
+    elif value.get("litellm_provider") == "vertex_ai-image-models":
+        key = key.replace("vertex_ai/", "")
+        vertex_ai_image_models.append(key)
     elif value.get("litellm_provider") == "ai21":
         if value.get("mode") == "chat":
             ai21_chat_models.append(key)
