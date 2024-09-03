@@ -95,9 +95,9 @@ async def chunk_processor(
             except json.JSONDecodeError:
                 pass
 
-        complete_streaming_response: litellm.ModelResponse = (
-            litellm.stream_chunk_builder(chunks=all_chunks)
-        )
+        complete_streaming_response: Optional[
+            Union[litellm.ModelResponse, litellm.TextCompletionResponse]
+        ] = litellm.stream_chunk_builder(chunks=all_chunks)
         end_time = datetime.now()
 
         if passthrough_success_handler_obj.is_vertex_route(url_route):
