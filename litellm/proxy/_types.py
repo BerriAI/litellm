@@ -1638,6 +1638,7 @@ class AllCallbacks(LiteLLMBase):
             "LAGO_API_BASE",
             "LAGO_API_KEY",
             "LAGO_API_EVENT_CODE",
+            "LAGO_API_CHARGE_BY",
         ],
         ui_callback_name="Lago Billing",
     )
