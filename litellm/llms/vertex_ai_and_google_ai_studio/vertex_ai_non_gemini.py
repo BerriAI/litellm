@@ -25,7 +25,7 @@ from litellm.types.files import (
     is_gemini_1_5_accepted_file_type,
     is_video_file_type,
 )
-from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionAssistantMessage
 from litellm.types.llms.vertex_ai import *
 from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
 
@@ -177,38 +177,34 @@ def _gemini_convert_messages_with_history(
             assistant_content = []
             ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
             while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
-                if messages[msg_i].get("content", None) is not None and isinstance(
-                    messages[msg_i]["content"], list
+                assistant_msg = ChatCompletionAssistantMessage(**messages[msg_i])  # type: ignore
+                if assistant_msg.get("content", None) is not None and isinstance(
+                    assistant_msg["content"], list
                 ):
                     _parts = []
-                    for element in messages[msg_i]["content"]:  # type: ignore
+                    for element in assistant_msg["content"]:
                         if isinstance(element, dict):
                             if element["type"] == "text":
                                 _part = PartType(text=element["text"])  # type: ignore
                                 _parts.append(_part)
-                            elif element["type"] == "image_url":
-                                image_url = element["image_url"]["url"]  # type: ignore
-                                _part = _process_gemini_image(image_url=image_url)
-                                _parts.append(_part)  # type: ignore
                     assistant_content.extend(_parts)
                 elif (
-                    messages[msg_i].get("content", None) is not None
-                    and isinstance(messages[msg_i]["content"], str)
-                    and messages[msg_i]["content"]
+                    assistant_msg.get("content", None) is not None
+                    and isinstance(assistant_msg["content"], str)
+                    and assistant_msg["content"]
                 ):
-                    assistant_text = messages[msg_i]["content"]  # either string or none
+                    assistant_text = assistant_msg["content"]  # either string or none
                     assistant_content.append(PartType(text=assistant_text))  # type: ignore
-                elif messages[msg_i].get(
-                    "tool_calls", []
+
+                ## HANDLE ASSISTANT FUNCTION CALL
+                if (
+                    assistant_msg.get("tool_calls", []) is not None
+                    or assistant_msg.get("function_call") is not None
                 ):  # support assistant tool invoke conversion
                     assistant_content.extend(
-                        convert_to_gemini_tool_call_invoke(messages[msg_i])  # type: ignore
+                        convert_to_gemini_tool_call_invoke(assistant_msg)
                     )
-                    last_message_with_tool_calls = messages[msg_i]
-                elif messages[msg_i].get("function_call") is not None:
-                    assistant_content.extend(
-                        convert_to_gemini_tool_call_invoke(messages[msg_i])  # type: ignore
-                    )
+                    last_message_with_tool_calls = assistant_msg
 
                 msg_i += 1
 

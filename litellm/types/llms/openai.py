@@ -363,7 +363,7 @@ class ChatCompletionUserMessage(TypedDict):
 
 class ChatCompletionAssistantMessage(TypedDict, total=False):
     role: Required[Literal["assistant"]]
-    content: Optional[str]
+    content: Optional[Union[str, Iterable[ChatCompletionTextObject]]]
     name: Optional[str]
     tool_calls: Optional[List[ChatCompletionAssistantToolCall]]
     function_call: Optional[ChatCompletionToolCallFunctionChunk]
